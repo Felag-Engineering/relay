@@ -1,0 +1,31 @@
+# Rust (daemon)
+/daemon/target/
+**/*.rs.bk
+
+# Go (relay)
+/relay/bin/
+*.test
+*.out
+
+# Generated proto code (regenerate with `make proto`)
+/relay/internal/proto/
+/daemon/src/gen/
+
+# Build artifacts
+/dist/
+/build/
+
+# Local secrets, certs, policy, and state — never commit
+*.pem
+*.key
+*.crt
+*.csr
+/relay/*.db
+/relay/*.sqlite
+*.local.yaml
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

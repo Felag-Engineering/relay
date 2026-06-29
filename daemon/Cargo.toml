@@ -1,0 +1,36 @@
+[package]
+name = "gleipnir-relay-daemon"
+version = "0.0.1"
+edition = "2021"
+description = "The Gleipnir Relay relay-daemon: the non-AI daemon that runs on each managed Node."
+license = "Proprietary"
+
+[[bin]]
+name = "relay-daemon"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tonic = { version = "0.12", features = ["tls"] }
+prost = "0.13"
+# mTLS / crypto
+rustls = "0.23"
+# config / policy
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+# regex gating for Raw Exec (ADR-0001)
+regex = "1"
+# logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[profile.release]
+# Small static binary for the fleet (ADR-0007). Build target: musl.
+opt-level = "z"
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"

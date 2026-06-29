@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+// The Gleipnir Relay contract: the single source of truth for the wire protocol
+// between the Relay and relay-daemons, and for the Operation vocabulary. Both the
+// Go Relay and the Rust relay-daemon generate their types from this file. See
+// ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
+//
+// This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
+// captures the shapes implied by ADRs 0001-0007, not a frozen API.
+package gleipnir.v1;
+
+// ---------------------------------------------------------------------------
+// Enrollment (ADR-0006): a daemon presents a reusable, scoped Enrollment Token
+// over server-authenticated TLS and submits a CSR; the Relay CA returns a
+// per-Node client certificate. Subsequent connections use mTLS.
+// ---------------------------------------------------------------------------
+service Enrollment {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+}
+
+message EnrollRequest {
+  string enrollment_token = 1;   // reusable, scoped, expiring, revocable
+  bytes  csr              = 2;    // PEM-encoded certificate signing request
+  repeated Label self_labels = 3; // node-space labels the daemon self-reports
+  Facts  facts           = 4;     // descriptive, self-reported
+}
+
+message EnrollResponse {
+  string node_id          = 1;
+  bytes  certificate      = 2;    // PEM client cert; the Node's identity
+  bytes  ca_bundle        = 3;    // PEM CA chain the daemon pins the Relay against
+  repeated Label assigned_labels = 4; // relay-space labels stamped from token scope
+}
+
+// ---------------------------------------------------------------------------
+// The persistent bidirectional stream (ADR-0005). The daemon opens it after
+// mTLS; the Relay pushes RelayMessages down, the daemon sends DaemonMessages up.
+// ---------------------------------------------------------------------------
+service Tunnel {
+  rpc Connect(stream DaemonMessage) returns (stream RelayMessage);
+}
+
+message DaemonMessage {
+  oneof body {
+    Hello       hello       = 1;
+    Heartbeat   heartbeat   = 2;
+    TaskResult  task_result = 3;
+    StreamChunk stream_chunk = 4; // reserved for future live output
+    PolicySnapshot policy   = 5;   // effective Policy, for the Relay to display only
+  }
+}
+
+message RelayMessage {
+  oneof body {
+    Ping        ping        = 1;
+    TaskRequest task        = 2;
+  }
+}
+
+message Hello {
+  string node_id          = 1;
+  string daemon_version   = 2;
+  Facts  facts            = 3;
+  repeated Label labels   = 4;   // node-space + relay-space (relay-space is authoritative)
+}
+
+message Heartbeat { int64 unix_millis = 1; }
+message Ping      { int64 unix_millis = 1; }
+
+// ---------------------------------------------------------------------------
+// Execution (ADR-0001, ADR-0004). A Task is one Operation or Raw Exec on one
+// Node, carrying a unique id for at-most-once execution.
+// ---------------------------------------------------------------------------
+message TaskRequest {
+  string task_id          = 1;   // unique; daemon dedups on it
+  oneof action {
+    Operation operation   = 2;   // structured, typed, native (argv, no shell)
+    RawExec   raw_exec    = 3;   // arbitrary command, gated by Policy regex
+  }
+  int32  timeout_seconds  = 4;   // Policy may cap the effective value
+}
+
+message Operation {
+  string name             = 1;   // e.g. "system.facts", "service.restart"
+  map<string, string> args = 2;   // typed per Operation; validated against schema
+}
+
+message RawExec {
+  repeated string argv    = 1;   // no implicit shell unless argv explicitly invokes one
+}
+
+message TaskResult {
+  string task_id          = 1;
+  Outcome outcome         = 2;
+  int32  exit_code        = 3;
+  bytes  stdout           = 4;   // size-capped
+  bytes  stderr           = 5;   // size-capped
+  bool   truncated        = 6;
+  int64  duration_millis  = 7;
+}
+
+enum Outcome {
+  OUTCOME_UNSPECIFIED   = 0;
+  OUTCOME_SUCCESS       = 1;
+  OUTCOME_FAILURE       = 2;
+  OUTCOME_TIMEOUT       = 3;
+  OUTCOME_DENIED_BY_POLICY = 4;
+}
+
+message StreamChunk {
+  string task_id          = 1;
+  bytes  data             = 2;
+  bool   is_stderr        = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Shared value types.
+// ---------------------------------------------------------------------------
+message Label {
+  string key   = 1;   // includes namespace prefix: "node:role" or "relay:env"
+  string value = 2;
+}
+
+message Facts {
+  string hostname = 1;
+  string os       = 2;
+  string kernel   = 3;
+  string arch     = 4;
+  repeated string ip_addresses = 5;
+}
+
+// Effective Policy is reported by the daemon for display only; it is enforced
+// solely on the daemon and is never settable over the wire (ADR-0002).
+message PolicySnapshot {
+  bool raw_exec_enabled        = 1;
+  repeated string raw_allow_patterns = 2;
+  repeated string raw_deny_patterns  = 3;
+  repeated string allowed_operations = 4; // operation names permitted on this Node
+}
