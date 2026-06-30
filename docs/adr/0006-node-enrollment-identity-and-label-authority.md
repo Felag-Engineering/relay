@@ -58,3 +58,20 @@ and authoritative for routine targeting; `relay:` labels are the Relay-set, Node
 security lane. Rationale: Nodes should own their own identity out-of-band like Policy (ADR-0002),
 so a careless Relay edit can't mislabel a Node and changes flow through reviewed config
 management, while the security-sensitive cases keep an un-evadable `relay:` lane.
+
+## Amendment 2 — 2026-06-30: certless Enroll path
+
+The `Enrollment.Enroll` unary RPC is served over **server-authenticated TLS without a client
+certificate**. This is the only method in the certless allowlist
+(`Enrollment_Enroll_FullMethodName`); all other RPCs — including the Tunnel stream — remain
+strictly mTLS-required and are unaffected.
+
+The transport layer (`tls.VerifyClientCertIfGiven`) already permits certless connections at the
+TLS level; the per-RPC interceptors enforce the default-deny rule and consult the allowlist to
+pass Enroll through without a verified client cert. Any presented (but unverified) client cert
+is still cryptographically rejected at the TLS layer.
+
+The `node_id` assigned to an enrolling Node and the CN in the issued certificate are both
+**Relay-generated at enrollment time**. The CSR subject submitted by the daemon is discarded;
+`SignCSR` sets `CN = node_id` authoritatively. A daemon cannot choose or influence its own
+identity. This is a hard security invariant (ADR-0006) that must not be relaxed.
