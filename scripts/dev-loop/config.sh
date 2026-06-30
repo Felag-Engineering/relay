@@ -38,6 +38,14 @@ IMPL_REPAIR_ATTEMPTS="${IMPL_REPAIR_ATTEMPTS:-1}"  # extra claude tries to reach
 MAX_AUTO_MERGE_LINES="${MAX_AUTO_MERGE_LINES:-600}" # diffs bigger than this escalate
 CLAUDE_TIMEOUT_SECS="${CLAUDE_TIMEOUT_SECS:-2400}"  # per claude -p call
 
+# Treat issue order as a dependency chain: only ever work the LOWEST-numbered open
+# issue in the milestone, and only if it's ready. This stops the loop starting a
+# dependent issue (e.g. the Relay) before its predecessor's escalated PR (e.g. the
+# proto codegen) is merged into main — the loop branches off main, so it would
+# otherwise build against a tree missing the dependency. Set 0 for the looser
+# "pick the lowest READY issue, skipping blocked/escalated ones" behaviour.
+LOOP_STRICT_ORDER="${LOOP_STRICT_ORDER:-1}"
+
 # --- Cost / billing controls --------------------------------------------------
 # IMPORTANT: with this machine's OAuth (subscription) auth, claude -p draws from
 # your plan, not metered API billing. To keep that true and keep rate-limit

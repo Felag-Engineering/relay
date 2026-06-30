@@ -177,7 +177,9 @@ escalate() { # escalate <issue> <branch> <log> <reasons-text> <added> <review-js
   if git rev-parse --verify --quiet "$branch" >/dev/null && \
      [[ -n "$(git log "${MAIN_BRANCH}..${branch}" --oneline 2>/dev/null)" ]]; then
     git push --quiet -u origin "$branch" 2>/dev/null || warn "push failed"
-    local body; body="$(printf '**Needs human review** (gate: ESCALATE)\n\nReasons:\n%s\n\nReview verdict:\n```json\n%s\n```\n\n_Do not merge until a human has reviewed the security-sensitive surface._' "$reasons" "${review:-{}}")"
+    # "Closes #n" so merging this human-review PR closes the issue and unblocks
+    # the next one (strict-order selection waits on the lowest open issue).
+    local body; body="$(printf 'Closes #%s\n\n**Needs human review** (gate: ESCALATE)\n\nReasons:\n%s\n\nReview verdict:\n```json\n%s\n```\n\n_Do not merge until a human has reviewed the security-sensitive surface._' "$issue" "$reasons" "${review:-{}}")"
     gh_ pr create --base "$MAIN_BRANCH" --head "$branch" \
        --title "[needs-human] $(issue_title "$issue") (#$issue)" --body "$body" \
        --label "$LABEL_NEEDS_HUMAN" >/dev/null 2>&1 || true

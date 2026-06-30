@@ -56,9 +56,16 @@ _open_issues() {
 }
 
 select_next_issue() {
-  _open_issues | jq -r --arg lbl "$LABEL_READY" --arg ms "$ACTIVE_MILESTONE" '
-    [ .[] | select((.milestone.title==$ms) and (any(.labels[]; .name==$lbl))) ]
-    | sort_by(.number) | .[0].number // empty'
+  # With LOOP_STRICT_ORDER=1 (default): the lowest-numbered open issue, but only
+  # if it's ready — so a not-yet-merged escalated predecessor blocks the rest.
+  # With 0: the lowest-numbered ready issue, skipping blocked/escalated ones.
+  _open_issues | jq -r --arg lbl "$LABEL_READY" --arg ms "$ACTIVE_MILESTONE" \
+    --argjson strict "${LOOP_STRICT_ORDER:-1}" '
+    [ .[] | select(.milestone.title==$ms) ] | sort_by(.number)
+    | if $strict==1
+      then ( .[0] // {} | if (.labels|any(.name==$lbl)) then .number else empty end )
+      else ( [ .[] | select(.labels|any(.name==$lbl)) ] | .[0].number // empty )
+      end'
 }
 
 # Count of open issues still in the active milestone (any loop state).
@@ -123,18 +130,24 @@ run_claude() { # run_claude <logfile> [model]
   return "${PIPESTATUS[0]}"
 }
 
-# run_claude_json <logfile> [model] — like run_claude but extracts the last JSON
-# object printed by the model (used by the review step). Prints JSON to stdout.
+# extract_last_json — read text on stdin, print the LAST line containing a valid
+# JSON object (nothing if none). Pure (no claude); unit-tested in parse.test.sh.
+# Always exits 0 — emptiness is signalled by empty output, never a non-zero exit,
+# so it's safe under `set -e`/pipefail (a no-match grep must not abort the loop).
+extract_last_json() {
+  local _line _result=""
+  while IFS= read -r _line; do
+    printf '%s' "$_line" | jq -e 'type=="object"' >/dev/null 2>&1 && _result="$_line"
+  done < <(tr -d '\r' | grep -oE '\{.*\}' || true)
+  printf '%s' "$_result"
+}
+
+# run_claude_json — run the review model and return its JSON verdict (empty ⇒ the
+# caller fails closed). Tolerates prose / ```json fences via extract_last_json.
 run_claude_json() {
   local logfile="$1" model="${2:-$CLAUDE_REVIEW_MODEL}" out
   out="$(run_claude "$logfile" "$model")" || true
-  # Pull the last {...} block; tolerant of surrounding prose / code fences.
-  printf '%s' "$out" \
-    | tr -d '\r' \
-    | sed -n '/^```/d; p' \
-    | awk 'BEGIN{d=0} { if (match($0,/{/)) cap=1 } cap{buf=buf $0 "\n"}' \
-    | jq -c 'if type=="object" then . else empty end' 2>/dev/null \
-    | tail -n1
+  printf '%s\n' "$out" | extract_last_json
 }
 
 # --- Build / verify -----------------------------------------------------------

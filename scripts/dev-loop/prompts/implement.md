@@ -21,7 +21,9 @@ Body / acceptance criteria:
    invariants in CLAUDE.md are load-bearing and OVERRIDE convenience.
 2. **Stay in scope.** Implement *only* this issue, within milestone
    **{{ACTIVE_MILESTONE}}**. Do not pull future milestones forward. Do not
-   refactor unrelated code.
+   refactor unrelated code. Do not change toolchain versions (the `go` directive
+   in `go.mod`, the Rust `edition`, dependency versions) or other scaffolding
+   unless this issue explicitly requires it — match what is already there.
 3. **Contract-first.** If this touches the wire protocol or the Operation
    vocabulary, change `/proto` first, then regenerate, then implement both sides.
 4. **Security posture.** Never weaken Policy, never add an implicit shell to an
