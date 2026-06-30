@@ -38,6 +38,12 @@ check "oversized diff"                    ESCALATE "relay/internal/foo.go"      
 check "review high severity"              ESCALATE "relay/internal/foo.go"            10 1 '{"max_severity":"high"}'
 check "review medium severity"            AUTO     "relay/internal/foo.go"            10 1 '{"max_severity":"medium"}'
 check "no files (anomaly)"                ESCALATE ""                                   0 1
+# Regression for #9: transport code whose path has no telltale keyword.
+check "daemon client (main.rs)"           ESCALATE "daemon/src/main.rs"               159 1 '{"max_severity":"medium"}'
+check "daemon Cargo.toml dep"             ESCALATE "daemon/Cargo.toml"                 3 1
+check "relay binary entrypoint"           ESCALATE "relay/cmd/relay/main.go"          80 1 '{"max_severity":"low"}'
+check "relay tunnel handler"              ESCALATE "relay/cmd/relay/tunnel.go"        62 1
+check "relay plumbing still auto-merges"  AUTO     "relay/internal/registry/store.go" 120 1 '{"max_severity":"low"}'
 
 echo "—— $pass passed, $fail failed ——"
 [[ "$fail" -eq 0 ]]

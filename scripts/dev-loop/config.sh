@@ -79,11 +79,19 @@ SECURITY_GLOBS=(
   '^Makefile$'              # build integrity
   '^\.github/'              # CI / automation integrity
   '^scripts/dev-loop/'      # the loop must never self-modify its own gate unattended
+  # Whole privileged/transport components, by DIRECTORY — because security-relevant
+  # code does not always advertise itself in its filename. (Lesson from #9: the
+  # daemon's gRPC client lived in daemon/src/main.rs and the keyword globs below
+  # missed it, so transport code auto-merged.) The daemon is the privileged
+  # executor end-to-end (Policy enforcement, exec, mTLS), so ALL of it is sensitive;
+  # the relay binary's main package wires up transport/serving/CA/auth.
+  '^daemon/'                # the entire privileged daemon (ADR-0001,0002,0005)
+  '^relay/cmd/'             # the relay binary entrypoint: transport + serving wiring
   # security-relevant code, matched by keyword anywhere in the path so it survives
   # files that do not exist yet:
   '([Pp]olicy)'             # daemon Policy engine (ADR-0002)
   '(exec)'                  # Operation executors / Raw Exec (ADR-0001)
-  '(transport|grpc|tonic)'  # the wire (ADR-0005)
+  '(transport|grpc|tonic|tunnel)' # the wire / Tunnel stream (ADR-0005)
   '([Mm]tls|[Tt]ls|cert|_ca_|/ca/|[Cc]rypto)' # mTLS / CA (ADR-0005,0006)
   '(enroll|[Aa]uth|token|secret|cred)'         # enrollment & auth (ADR-0006)
 )
