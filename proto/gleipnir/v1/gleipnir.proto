@@ -39,7 +39,10 @@ message EnrollResponse {
 // mTLS; the Relay pushes RelayMessages down, the daemon sends DaemonMessages up.
 // ---------------------------------------------------------------------------
 service Tunnel {
-  rpc Connect(stream DaemonMessage) returns (stream RelayMessage);
+  // Named Open, not Connect: tonic generates a client constructor `connect()`, so an
+  // RPC named Connect collides with it in the generated Rust client (E0592). Do not
+  // rename back to Connect without solving that on the daemon side. (ADR-0005)
+  rpc Open(stream DaemonMessage) returns (stream RelayMessage);
 }
 
 message DaemonMessage {

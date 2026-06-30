@@ -1227,9 +1227,9 @@ const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
 	"\x18OUTCOME_DENIED_BY_POLICY\x10\x042O\n" +
 	"\n" +
 	"Enrollment\x12A\n" +
-	"\x06Enroll\x12\x1a.gleipnir.v1.EnrollRequest\x1a\x1b.gleipnir.v1.EnrollResponse2N\n" +
-	"\x06Tunnel\x12D\n" +
-	"\aConnect\x12\x1a.gleipnir.v1.DaemonMessage\x1a\x19.gleipnir.v1.RelayMessage(\x010\x01BSZQgithub.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1;gleipnirv1b\x06proto3"
+	"\x06Enroll\x12\x1a.gleipnir.v1.EnrollRequest\x1a\x1b.gleipnir.v1.EnrollResponse2K\n" +
+	"\x06Tunnel\x12A\n" +
+	"\x04Open\x12\x1a.gleipnir.v1.DaemonMessage\x1a\x19.gleipnir.v1.RelayMessage(\x010\x01BSZQgithub.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1;gleipnirv1b\x06proto3"
 
 var (
 	file_gleipnir_v1_gleipnir_proto_rawDescOnce sync.Once
@@ -1282,9 +1282,9 @@ var file_gleipnir_v1_gleipnir_proto_depIdxs = []int32{
 	16, // 14: gleipnir.v1.Operation.args:type_name -> gleipnir.v1.Operation.ArgsEntry
 	0,  // 15: gleipnir.v1.TaskResult.outcome:type_name -> gleipnir.v1.Outcome
 	1,  // 16: gleipnir.v1.Enrollment.Enroll:input_type -> gleipnir.v1.EnrollRequest
-	3,  // 17: gleipnir.v1.Tunnel.Connect:input_type -> gleipnir.v1.DaemonMessage
+	3,  // 17: gleipnir.v1.Tunnel.Open:input_type -> gleipnir.v1.DaemonMessage
 	2,  // 18: gleipnir.v1.Enrollment.Enroll:output_type -> gleipnir.v1.EnrollResponse
-	4,  // 19: gleipnir.v1.Tunnel.Connect:output_type -> gleipnir.v1.RelayMessage
+	4,  // 19: gleipnir.v1.Tunnel.Open:output_type -> gleipnir.v1.RelayMessage
 	18, // [18:20] is the sub-list for method output_type
 	16, // [16:18] is the sub-list for method input_type
 	16, // [16:16] is the sub-list for extension type_name

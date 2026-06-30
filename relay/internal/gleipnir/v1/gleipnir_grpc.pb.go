@@ -141,7 +141,7 @@ var Enrollment_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Tunnel_Connect_FullMethodName = "/gleipnir.v1.Tunnel/Connect"
+	Tunnel_Open_FullMethodName = "/gleipnir.v1.Tunnel/Open"
 )
 
 // TunnelClient is the client API for Tunnel service.
@@ -153,7 +153,10 @@ const (
 // mTLS; the Relay pushes RelayMessages down, the daemon sends DaemonMessages up.
 // ---------------------------------------------------------------------------
 type TunnelClient interface {
-	Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DaemonMessage, RelayMessage], error)
+	// Named Open, not Connect: tonic generates a client constructor `connect()`, so an
+	// RPC named Connect collides with it in the generated Rust client (E0592). Do not
+	// rename back to Connect without solving that on the daemon side. (ADR-0005)
+	Open(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DaemonMessage, RelayMessage], error)
 }
 
 type tunnelClient struct {
@@ -164,9 +167,9 @@ func NewTunnelClient(cc grpc.ClientConnInterface) TunnelClient {
 	return &tunnelClient{cc}
 }
 
-func (c *tunnelClient) Connect(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DaemonMessage, RelayMessage], error) {
+func (c *tunnelClient) Open(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[DaemonMessage, RelayMessage], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Tunnel_ServiceDesc.Streams[0], Tunnel_Connect_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &Tunnel_ServiceDesc.Streams[0], Tunnel_Open_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +178,7 @@ func (c *tunnelClient) Connect(ctx context.Context, opts ...grpc.CallOption) (gr
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Tunnel_ConnectClient = grpc.BidiStreamingClient[DaemonMessage, RelayMessage]
+type Tunnel_OpenClient = grpc.BidiStreamingClient[DaemonMessage, RelayMessage]
 
 // TunnelServer is the server API for Tunnel service.
 // All implementations must embed UnimplementedTunnelServer
@@ -186,7 +189,10 @@ type Tunnel_ConnectClient = grpc.BidiStreamingClient[DaemonMessage, RelayMessage
 // mTLS; the Relay pushes RelayMessages down, the daemon sends DaemonMessages up.
 // ---------------------------------------------------------------------------
 type TunnelServer interface {
-	Connect(grpc.BidiStreamingServer[DaemonMessage, RelayMessage]) error
+	// Named Open, not Connect: tonic generates a client constructor `connect()`, so an
+	// RPC named Connect collides with it in the generated Rust client (E0592). Do not
+	// rename back to Connect without solving that on the daemon side. (ADR-0005)
+	Open(grpc.BidiStreamingServer[DaemonMessage, RelayMessage]) error
 	mustEmbedUnimplementedTunnelServer()
 }
 
@@ -197,8 +203,8 @@ type TunnelServer interface {
 // pointer dereference when methods are called.
 type UnimplementedTunnelServer struct{}
 
-func (UnimplementedTunnelServer) Connect(grpc.BidiStreamingServer[DaemonMessage, RelayMessage]) error {
-	return status.Errorf(codes.Unimplemented, "method Connect not implemented")
+func (UnimplementedTunnelServer) Open(grpc.BidiStreamingServer[DaemonMessage, RelayMessage]) error {
+	return status.Errorf(codes.Unimplemented, "method Open not implemented")
 }
 func (UnimplementedTunnelServer) mustEmbedUnimplementedTunnelServer() {}
 func (UnimplementedTunnelServer) testEmbeddedByValue()                {}
@@ -221,12 +227,12 @@ func RegisterTunnelServer(s grpc.ServiceRegistrar, srv TunnelServer) {
 	s.RegisterService(&Tunnel_ServiceDesc, srv)
 }
 
-func _Tunnel_Connect_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(TunnelServer).Connect(&grpc.GenericServerStream[DaemonMessage, RelayMessage]{ServerStream: stream})
+func _Tunnel_Open_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(TunnelServer).Open(&grpc.GenericServerStream[DaemonMessage, RelayMessage]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Tunnel_ConnectServer = grpc.BidiStreamingServer[DaemonMessage, RelayMessage]
+type Tunnel_OpenServer = grpc.BidiStreamingServer[DaemonMessage, RelayMessage]
 
 // Tunnel_ServiceDesc is the grpc.ServiceDesc for Tunnel service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -237,8 +243,8 @@ var Tunnel_ServiceDesc = grpc.ServiceDesc{
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Connect",
-			Handler:       _Tunnel_Connect_Handler,
+			StreamName:    "Open",
+			Handler:       _Tunnel_Open_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},
