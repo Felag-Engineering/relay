@@ -36,18 +36,34 @@ gh_() { gh "$@" --repo "$REPO_SLUG"; }
 
 # Lowest-numbered open issue in ACTIVE_MILESTONE carrying LABEL_READY.
 # Prints the issue number, or nothing if the queue is empty.
+#
+# NOTE: we deliberately do NOT use `gh issue list --label/--milestone`. Those
+# server-side filters go through GitHub's *search* index, which lags issue
+# creation by seconds-to-minutes — a freshly decomposed backlog could look empty
+# and stall the loop. We fetch the open issues directly and filter client-side
+# with jq, which is immediate and deterministic.
+_open_issues() {
+  gh_ issue list --state open --limit 200 \
+    --json number,labels,milestone 2>/dev/null
+}
+
 select_next_issue() {
-  gh_ issue list \
-    --state open \
-    --label "$LABEL_READY" \
-    --milestone "$ACTIVE_MILESTONE" \
-    --json number --jq 'sort_by(.number) | .[0].number // empty' 2>/dev/null
+  _open_issues | jq -r --arg lbl "$LABEL_READY" --arg ms "$ACTIVE_MILESTONE" '
+    [ .[] | select((.milestone.title==$ms) and (any(.labels[]; .name==$lbl))) ]
+    | sort_by(.number) | .[0].number // empty'
 }
 
 # Count of open issues still in the active milestone (any loop state).
 open_issues_in_milestone() {
-  gh_ issue list --state open --milestone "$ACTIVE_MILESTONE" \
-    --json number --jq 'length' 2>/dev/null || echo 0
+  _open_issues | jq --arg ms "$ACTIVE_MILESTONE" \
+    '[ .[] | select(.milestone.title==$ms) ] | length' 2>/dev/null || echo 0
+}
+
+# Issue numbers (newline-separated) carrying a given label, in the active
+# milestone. Used by the serial stale-lock guard. Client-side filtered.
+issues_with_label() { # issues_with_label <label>
+  _open_issues | jq -r --arg lbl "$1" --arg ms "$ACTIVE_MILESTONE" \
+    '.[] | select((.milestone.title==$ms) and (any(.labels[]; .name==$lbl))) | .number'
 }
 
 issue_title() { gh_ issue view "$1" --json title --jq .title; }

@@ -37,7 +37,7 @@ main() {
   # Serial invariant: never run two issues at once. A lingering in-progress label
   # means a previous tick crashed mid-flight — stop and let a human inspect.
   local stuck
-  stuck="$(gh_ issue list --state open --label "$LABEL_INPROGRESS" --json number --jq '.[].number' 2>/dev/null || true)"
+  stuck="$(issues_with_label "$LABEL_INPROGRESS" | tr '\n' ' ' | sed 's/ *$//')"
   [[ -n "$stuck" ]] && die "issue(s) #$stuck still labelled $LABEL_INPROGRESS (stale lock); resolve before running"
 
   # --- SELECT ---------------------------------------------------------------
