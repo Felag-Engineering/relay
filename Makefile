@@ -3,12 +3,12 @@
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
 .PHONY: build test lint proto proto-tools build-relay build-daemon test-relay test-daemon \
-        lint-relay lint-daemon clean \
+        lint-relay lint-daemon clean test-integration \
         loop loop-dry loop-bootstrap loop-decompose loop-gate-test
 
 build: build-relay build-daemon
 
-test: test-relay test-daemon
+test: test-relay test-daemon test-integration
 
 lint: lint-relay lint-daemon
 
@@ -47,6 +47,12 @@ build-daemon-release:
 
 test-daemon:
 	cd daemon && cargo test
+
+## --- End-to-end smoke test ---
+# Boots both binaries and asserts the Hello→Ping handshake (ADR-0005, ADR-0007).
+# Depends on build so binaries exist before the script runs.
+test-integration: build
+	bash scripts/smoke-test.sh
 
 lint-daemon:
 	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
