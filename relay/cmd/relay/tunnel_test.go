@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -139,5 +140,68 @@ func TestTunnelOpen_FailClosed(t *testing.T) {
 	}
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Errorf("expected codes.Unauthenticated, got %v", code)
+	}
+}
+
+// TestTunnelOpen_RevokeTearsDownLiveStream verifies that calling
+// conns.Disconnect on a currently-open stream causes the client's next Recv
+// to return codes.Unauthenticated. This exercises "immediate disconnect" —
+// the live Tunnel stream is actively torn down, not merely blocked on reconnect.
+func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
+	const nodeID = "node-live"
+
+	conns := revocation.NewConnections()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	// Send Hello to advance the handler past the initial recv.
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Hello{
+			Hello: &gleipnirv1.Hello{NodeId: nodeID},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	// Recv the Ping — confirms the handler is live and the stream is tracked.
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+
+	// Disconnect the node — this cancels the handler's derived context, which
+	// causes the goroutine-fed select in Open to return Unauthenticated.
+	conns.Disconnect(nodeID)
+
+	// The next Recv from the client must fail with Unauthenticated within a
+	// reasonable timeout, confirming the live stream was torn down.
+	done := make(chan error, 1)
+	go func() {
+		_, err := stream.Recv()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected Unauthenticated after Disconnect, got nil")
+		}
+		if code := status.Code(err); code != codes.Unauthenticated {
+			t.Errorf("expected codes.Unauthenticated, got %v", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: live stream was not torn down after Disconnect")
 	}
 }

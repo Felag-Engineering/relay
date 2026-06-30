@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -14,6 +16,7 @@ import (
 
 type tunnelServer struct {
 	gleipnirv1.UnimplementedTunnelServer
+	conns *revocation.Connections
 }
 
 func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMessage, gleipnirv1.RelayMessage]) error {
@@ -57,6 +60,18 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		"hostname", hostname,
 	)
 
+	// Register this stream with the live-connection tracker so it can be torn
+	// down immediately on revocation. The nil-guard keeps existing tunnel tests
+	// (which construct &tunnelServer{} without conns) working unchanged.
+	var cctx context.Context
+	var release func()
+	if s.conns != nil {
+		cctx, release = s.conns.Track(stream.Context(), nodeID)
+		defer release()
+	} else {
+		cctx = stream.Context()
+	}
+
 	if err := stream.Send(&gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Ping{
 			Ping: &gleipnirv1.Ping{UnixMillis: time.Now().UnixMilli()},
@@ -65,16 +80,45 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		return status.Errorf(codes.Internal, "send ping: %v", err)
 	}
 
+	// Run Recv in a goroutine so the select below can observe cctx cancellation.
+	// grpc.ServerStream.Recv() does not unblock when a derived context is
+	// cancelled; the select on cctx.Done() is the only way to deliver an
+	// immediate revocation teardown signal.
+	//
+	// recvErr is buffered(1): when the handler returns the gRPC framework closes
+	// the stream, which eventually causes stream.Recv() to return an error. The
+	// goroutine must be able to send that error without blocking, otherwise it
+	// would leak until the gRPC framework finalises the stream.
+	recvErr := make(chan error, 1)
+	recvMsg := make(chan *gleipnirv1.DaemonMessage)
+	go func() {
+		for {
+			m, err := stream.Recv()
+			if err != nil {
+				recvErr <- err
+				return
+			}
+			select {
+			case recvMsg <- m:
+			case <-cctx.Done():
+				return
+			}
+		}
+	}()
+
 	for {
-		msg, err := stream.Recv()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
+		select {
+		case <-cctx.Done():
+			return status.Error(codes.Unauthenticated, "node revoked")
+		case err := <-recvErr:
+			if err == io.EOF {
+				return nil
+			}
 			return err
-		}
-		if hb := msg.GetHeartbeat(); hb != nil {
-			slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
+		case m := <-recvMsg:
+			if hb := m.GetHeartbeat(); hb != nil {
+				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
+			}
 		}
 	}
 }

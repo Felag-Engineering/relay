@@ -11,6 +11,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 )
@@ -49,7 +50,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	creds := transport.ServerCredentials(serverCert, clientCAs)
+	// denylist and conns implement immediate Node revocation (ADR-0006).
+	// denylist.Add is never called at runtime in this binary until the admin
+	// trigger RPC is wired — that requires a proto change and is out of scope
+	// for this milestone. The plumbing is live; revocation.Service is exercised
+	// by tests.
+	denylist := revocation.NewDenylist()
+	conns := revocation.NewConnections()
+
+	creds := transport.ServerCredentials(serverCert, clientCAs, denylist)
 
 	// Enrollment_Enroll is the only certless RPC: daemons call it before they have
 	// a client certificate. All other RPCs (including Tunnel) remain mTLS-required.
@@ -69,10 +78,10 @@ func main() {
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
 	)
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{})
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
 	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
 
 	slog.Info("relay listening", "addr", *addr, "mtls", true, "ca_dir", *caDir)
