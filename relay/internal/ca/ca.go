@@ -9,12 +9,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -160,6 +162,52 @@ func (c *CA) SignCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 	}
 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), nil
+}
+
+// IssueServerCertificate mints a server certificate chained to this CA, with
+// ExtKeyUsageServerAuth and the given DNS names and IP SANs. The certificate is
+// signed by the CA so daemons can verify it against the ca_bundle they receive
+// at enrollment (ADR-0006).
+func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("ca: generate server key: %w", err)
+	}
+
+	serial, err := newSerial()
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("ca: generate serial: %w", err)
+	}
+
+	now := time.Now()
+	leaf := x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "Gleipnir Relay"},
+		NotBefore:             now.Add(-clockSkew),
+		NotAfter:              now.Add(LeafValidity),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:              dnsNames,
+		IPAddresses:           ipAddresses,
+		BasicConstraintsValid: true,
+		IsCA:                  false,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, &leaf, c.cert, &key.PublicKey, c.key)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("ca: sign server certificate: %w", err)
+	}
+
+	leafCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return tls.Certificate{}, fmt.Errorf("ca: parse server certificate: %w", err)
+	}
+
+	return tls.Certificate{
+		Certificate: [][]byte{der},
+		PrivateKey:  key,
+		Leaf:        leafCert,
+	}, nil
 }
 
 // create generates a fresh ECDSA P-256 CA key and self-signed certificate,
