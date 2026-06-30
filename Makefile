@@ -2,13 +2,17 @@
 # Go builds the Relay (/relay); Cargo builds the relay-daemon (/daemon);
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
+# Prepend toolchain dirs so `make` works in non-login shells (mirrors lib.sh TOOLCHAIN_PATHS).
+# Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go/buf may be absent.
+export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
+
 .PHONY: build test lint proto proto-tools build-relay build-daemon test-relay test-daemon \
-        lint-relay lint-daemon clean \
+        lint-relay lint-daemon clean test-integration \
         loop loop-dry loop-bootstrap loop-decompose loop-gate-test
 
 build: build-relay build-daemon
 
-test: test-relay test-daemon
+test: test-relay test-daemon test-integration
 
 lint: lint-relay lint-daemon
 
@@ -47,6 +51,12 @@ build-daemon-release:
 
 test-daemon:
 	cd daemon && cargo test
+
+## --- End-to-end smoke test ---
+# Boots both binaries and asserts the Hello→Ping handshake (ADR-0005, ADR-0007).
+# Depends on build so binaries exist before the script runs.
+test-integration: build
+	bash scripts/smoke-test.sh
 
 lint-daemon:
 	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
