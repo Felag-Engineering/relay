@@ -130,14 +130,6 @@ run_claude() { # run_claude <logfile> [model]
   return "${PIPESTATUS[0]}"
 }
 
-# run_claude_json <logfile> [model] — like run_claude but extracts the model's
-# JSON verdict (used by the review step). Prints the JSON object to stdout, or
-# nothing if the model emitted no parseable object (caller then fails closed).
-#
-# Strategy: take the LAST line that contains a valid JSON object. Tolerant of
-# surrounding prose and ```json code fences, since models append both. The review
-# prompt asks for a single-line object as the last line, so per-line scanning is
-# sufficient and robust (an empty result is the fail-closed signal).
 # extract_last_json — read text on stdin, print the LAST line containing a valid
 # JSON object (nothing if none). Pure (no claude); unit-tested in parse.test.sh.
 # Always exits 0 — emptiness is signalled by empty output, never a non-zero exit,
@@ -150,6 +142,8 @@ extract_last_json() {
   printf '%s' "$_result"
 }
 
+# run_claude_json — run the review model and return its JSON verdict (empty ⇒ the
+# caller fails closed). Tolerates prose / ```json fences via extract_last_json.
 run_claude_json() {
   local logfile="$1" model="${2:-$CLAUDE_REVIEW_MODEL}" out
   out="$(run_claude "$logfile" "$model")" || true
