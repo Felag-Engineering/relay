@@ -24,6 +24,12 @@
 /relay/*.sqlite
 *.local.yaml
 
+# Dev-loop run logs and issue drafts (transient)
+/scripts/dev-loop/logs/
+
+# Implementer's escalation marker (never merged)
+/DECISION_NEEDED.md
+
 # Editor / OS
 .DS_Store
 .idea/
