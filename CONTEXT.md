@@ -64,15 +64,18 @@ _Avoid_: filter, query, target spec
 
 **Label**:
 A key/value tag on a Node used by Selectors to target it. Lives in one of two
-non-overlapping namespaces: **node-space** (`node:…`, self-reported by the daemon, trusted
-only as much as the Node) or **relay-space** (`relay:…`, authoritative, set by the Relay).
-Security-sensitive Selectors target `relay:` labels.
+non-overlapping namespaces, each immutable from the other side: **node-space** (`node:…`,
+rooted on the Node and set out-of-band via config management; the Relay records but never
+modifies or removes them; authoritative for routine targeting, trusted only as much as the
+Node) or **relay-space** (`relay:…`, set by the Relay and immutable to the Node; reserved for
+the security-sensitive lane). Remediation/quarantine and secret-distribution Selectors target
+`relay:` labels.
 _Avoid_: tag, attribute, annotation
 
 **Facts**:
 Descriptive properties a daemon self-reports about its Node (OS, kernel, hostname, IP,
-installed packages). Inform decisions but never used as authoritative targeting — that is
-the role of relay-space Labels.
+installed packages). Inform decisions but are never used for targeting — that is the role of
+Labels (see Label).
 _Avoid_: metadata, attributes, properties
 
 **Enrollment Token**:
