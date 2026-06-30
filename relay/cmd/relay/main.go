@@ -8,7 +8,9 @@ import (
 	"os"
 
 	ca "github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 )
@@ -49,13 +51,15 @@ func main() {
 
 	creds := transport.ServerCredentials(serverCert, clientCAs)
 
-	// certless is the set of RPC FullMethod strings reachable without a client
-	// certificate. It is intentionally empty today. When the Enrollment handler
-	// lands (issue #25), register it here AND add
-	// gleipnirv1.Enrollment_Enroll_FullMethodName
-	// ("/gleipnir.v1.Enrollment/Enroll") to this set so Enrollment is reachable
-	// certless. Do NOT register the Enrollment handler without updating this set.
-	certless := map[string]struct{}{}
+	// Enrollment_Enroll is the only certless RPC: daemons call it before they have
+	// a client certificate. All other RPCs (including Tunnel) remain mTLS-required.
+	certless := map[string]struct{}{
+		gleipnirv1.Enrollment_Enroll_FullMethodName: {},
+	}
+
+	reg := registry.NewInMemory()
+	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
+	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg)
 
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -69,6 +73,7 @@ func main() {
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
 	)
 	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{})
+	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
 
 	slog.Info("relay listening", "addr", *addr, "mtls", true, "ca_dir", *caDir)
 	if err := srv.Serve(lis); err != nil {
