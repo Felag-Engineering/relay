@@ -1,0 +1,17 @@
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    # Service names follow domain vocabulary (Enrollment, Tunnel) without the redundant
+    # "Service" suffix — the meaning is unambiguous in context (CONTEXT.md).
+    - SERVICE_SUFFIX
+    # The Tunnel.Connect RPC uses DaemonMessage/RelayMessage (role-based names,
+    # per ADR-0005) rather than the ConnectRequest/ConnectResponse convention.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE
