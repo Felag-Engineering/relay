@@ -56,9 +56,16 @@ _open_issues() {
 }
 
 select_next_issue() {
-  _open_issues | jq -r --arg lbl "$LABEL_READY" --arg ms "$ACTIVE_MILESTONE" '
-    [ .[] | select((.milestone.title==$ms) and (any(.labels[]; .name==$lbl))) ]
-    | sort_by(.number) | .[0].number // empty'
+  # With LOOP_STRICT_ORDER=1 (default): the lowest-numbered open issue, but only
+  # if it's ready — so a not-yet-merged escalated predecessor blocks the rest.
+  # With 0: the lowest-numbered ready issue, skipping blocked/escalated ones.
+  _open_issues | jq -r --arg lbl "$LABEL_READY" --arg ms "$ACTIVE_MILESTONE" \
+    --argjson strict "${LOOP_STRICT_ORDER:-1}" '
+    [ .[] | select(.milestone.title==$ms) ] | sort_by(.number)
+    | if $strict==1
+      then ( .[0] // {} | if (.labels|any(.name==$lbl)) then .number else empty end )
+      else ( [ .[] | select(.labels|any(.name==$lbl)) ] | .[0].number // empty )
+      end'
 }
 
 # Count of open issues still in the active milestone (any loop state).

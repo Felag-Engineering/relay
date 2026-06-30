@@ -13,6 +13,15 @@ DEV_LOOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib.sh
 source "$DEV_LOOP_DIR/lib.sh"
 
+# Single-instance lock: a scheduled run must not collide with a manual one (two
+# loops sharing one working tree would corrupt each other's branch/checkout).
+mkdir -p "$DEV_LOOP_DIR/logs"
+exec 9>"$DEV_LOOP_DIR/logs/.loop.lock"
+if ! flock -n 9; then
+  log "another dev-loop run already holds the lock — exiting cleanly"
+  exit 0
+fi
+
 notify_milestone_complete() {
   # Best-effort heads-up. Customize for your channel of choice.
   log "🎉 Milestone $ACTIVE_MILESTONE has no open issues left. A human should run"
