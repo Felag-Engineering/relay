@@ -4,6 +4,8 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info};
 
+mod enroll;
+
 #[allow(dead_code, unused_imports, clippy::all)]
 mod gen {
     include!(concat!(env!("OUT_DIR"), "/gleipnir.v1.rs"));
@@ -55,6 +57,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kernel: String::new(),
         ip_addresses: vec![],
     };
+
+    // Enrollment bootstrap: if configured, obtain and persist a Node identity
+    // before dialling the Tunnel. When unconfigured (no token / no CA bundle)
+    // this is a no-op and the daemon proceeds on the existing plaintext path —
+    // which the Relay rejects at the TLS handshake (#26 mTLS-rejection semantics).
+    // mTLS Tunnel connect will be wired in #28.
+    if let Some(cfg) = enroll::EnrollConfig::from_env()? {
+        enroll::ensure_enrolled(&cfg).await?;
+    }
 
     let mut client = TunnelClient::connect(addr).await?;
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
