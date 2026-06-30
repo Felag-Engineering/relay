@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -31,16 +32,41 @@ import (
 // package-local type prevents collisions with keys from other packages.
 type ctxKey struct{}
 
+// RevocationChecker reports whether a node_id has been revoked. *revocation.Denylist
+// satisfies this interface. The interface lives here so the transport package has no
+// dependency on the revocation package — the concrete type is injected by main.
+type RevocationChecker interface {
+	IsRevoked(nodeID string) bool
+}
+
 // ServerCredentials builds TLS transport credentials for the Relay's gRPC
 // server. ClientAuth is VerifyClientCertIfGiven: presented certs are verified
 // against clientCAs, but the handshake succeeds with no cert too — enabling
 // the certless Enrollment seam. TLS 1.3 is the minimum version.
-func ServerCredentials(serverCert tls.Certificate, clientCAs *x509.CertPool) credentials.TransportCredentials {
+//
+// When checker is non-nil, VerifyConnection is set to reject any client whose
+// verified cert CN appears in the denylist. Certless connections (no verified
+// chain) skip the check so the Enrollment seam is unaffected. This is the
+// handshake-level rejection mandated by ADR-0006.
+func ServerCredentials(serverCert tls.Certificate, clientCAs *x509.CertPool, checker RevocationChecker) credentials.TransportCredentials {
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{serverCert},
 		ClientCAs:    clientCAs,
 		ClientAuth:   tls.VerifyClientCertIfGiven,
 		MinVersion:   tls.VersionTLS13,
+	}
+	if checker != nil {
+		cfg.VerifyConnection = func(cs tls.ConnectionState) error {
+			// No verified chain means this is the certless Enroll path — skip check.
+			if len(cs.VerifiedChains) == 0 || len(cs.VerifiedChains[0]) == 0 {
+				return nil
+			}
+			cn := cs.VerifiedChains[0][0].Subject.CommonName
+			if cn != "" && checker.IsRevoked(cn) {
+				return errors.New("client certificate revoked")
+			}
+			return nil
+		}
 	}
 	return credentials.NewTLS(cfg)
 }
@@ -100,7 +126,12 @@ func (w wrappedStream) Context() context.Context { return w.ctx }
 // default-deny mTLS: methods not in certless must supply a verified client
 // certificate. The CN of that certificate is stored as node_id in the stream
 // context before calling the handler.
-func StreamServerInterceptor(certless map[string]struct{}) grpc.StreamServerInterceptor {
+//
+// When checker is non-nil, a revoked node_id is rejected with
+// codes.Unauthenticated even on an already-established connection (defense in
+// depth: blocks new RPCs on pre-revocation connections, covers any TLS
+// session-resumption gap).
+func StreamServerInterceptor(certless map[string]struct{}, checker RevocationChecker) grpc.StreamServerInterceptor {
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if _, ok := certless[info.FullMethod]; ok {
 			return handler(srv, ss)
@@ -111,14 +142,18 @@ func StreamServerInterceptor(certless map[string]struct{}) grpc.StreamServerInte
 			return err
 		}
 
+		if checker != nil && checker.IsRevoked(nodeID) {
+			return status.Error(codes.Unauthenticated, "node revoked")
+		}
+
 		enriched := NewContextWithNodeID(ss.Context(), nodeID)
 		return handler(srv, wrappedStream{ServerStream: ss, ctx: enriched})
 	}
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor that enforces the
-// same default-deny mTLS policy as StreamServerInterceptor.
-func UnaryServerInterceptor(certless map[string]struct{}) grpc.UnaryServerInterceptor {
+// same default-deny mTLS policy and revocation check as StreamServerInterceptor.
+func UnaryServerInterceptor(certless map[string]struct{}, checker RevocationChecker) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if _, ok := certless[info.FullMethod]; ok {
 			return handler(ctx, req)
@@ -127,6 +162,10 @@ func UnaryServerInterceptor(certless map[string]struct{}) grpc.UnaryServerInterc
 		nodeID, err := nodeIDFromPeer(ctx)
 		if err != nil {
 			return nil, err
+		}
+
+		if checker != nil && checker.IsRevoked(nodeID) {
+			return nil, status.Error(codes.Unauthenticated, "node revoked")
 		}
 
 		enriched := NewContextWithNodeID(ctx, nodeID)

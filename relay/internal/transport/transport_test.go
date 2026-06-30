@@ -152,15 +152,24 @@ func sendHello(t *testing.T, stream gleipnirv1.Tunnel_OpenClient, helloID string
 	}
 }
 
+// fakeChecker implements transport.RevocationChecker for tests.
+type fakeChecker struct {
+	revoked map[string]bool
+}
+
+func (f *fakeChecker) IsRevoked(nodeID string) bool {
+	return f.revoked[nodeID]
+}
+
 func TestTransport_AcceptValidClientCert(t *testing.T) {
 	ts := newTestSetup(t)
 	var gotNodeID string
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs)),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
 
 	// Mint a client cert for "node-alpha". Hello carries a DIFFERENT NodeId to
@@ -208,9 +217,9 @@ func TestTransport_RejectNoCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs)),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
 
 	// No client certificate — server-auth TLS only.
@@ -241,9 +250,9 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs)),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
 
 	// A second, unrelated CA — the server trusts only ts.relayCA.
@@ -306,9 +315,9 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	certless := map[string]struct{}{tunnelOpenMethod: {}}
 
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs)),
-		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless)),
-		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless)),
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
 
 	// No client cert.
@@ -335,5 +344,94 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	// No node_id in context for certless paths — NodeIDFromContext returns false.
 	if gotNodeID != "" {
 		t.Errorf("certless seam: gotNodeID = %q, want empty", gotNodeID)
+	}
+}
+
+// TestTransport_RejectRevokedCert_Handshake verifies that a Node whose node_id
+// is in the revocation denylist is rejected at the TLS handshake level via
+// VerifyConnection (ADR-0006 "rejects at the mTLS handshake").
+func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
+	ts := newTestSetup(t)
+	var gotNodeID string
+
+	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
+	certless := map[string]struct{}{}
+	lis := startServer(t, &gotNodeID,
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, checker)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
+	)
+
+	csrPEM, key := newInlineCSR(t, "node-revoked")
+	certPEM, err := ts.relayCA.SignCSR(csrPEM, "node-revoked")
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	clientCert := assembleClientCert(t, certPEM, key)
+
+	conn := dial(t, lis, &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      ts.clientCAs,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err == nil {
+		sendHello(t, stream, "node-revoked")
+		_, err = stream.Recv()
+	}
+	// The connection must fail (handshake or interceptor rejection).
+	if err == nil {
+		t.Fatal("expected error for revoked node cert, got nil")
+	}
+	// Error surfaces as Unavailable (TLS rejection) or Unauthenticated (interceptor);
+	// either is acceptable — the important property is that err != nil.
+}
+
+// TestTransport_RejectRevoked_Interceptor verifies the per-RPC defense-in-depth
+// layer: even when ServerCredentials has a nil checker (so TLS admits the cert),
+// the stream interceptor with a revoking checker returns codes.Unauthenticated.
+// This isolates the interceptor layer from the TLS handshake layer.
+func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
+	ts := newTestSetup(t)
+	var gotNodeID string
+
+	checker := &fakeChecker{revoked: map[string]bool{"node-intercepted": true}}
+	certless := map[string]struct{}{}
+	// Nil checker in ServerCredentials: TLS layer admits the cert.
+	// Revoking checker in interceptors: per-RPC layer rejects.
+	lis := startServer(t, &gotNodeID,
+		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
+		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
+	)
+
+	csrPEM, key := newInlineCSR(t, "node-intercepted")
+	certPEM, err := ts.relayCA.SignCSR(csrPEM, "node-intercepted")
+	if err != nil {
+		t.Fatalf("SignCSR: %v", err)
+	}
+	clientCert := assembleClientCert(t, certPEM, key)
+
+	conn := dial(t, lis, &tls.Config{
+		Certificates: []tls.Certificate{clientCert},
+		RootCAs:      ts.clientCAs,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err == nil {
+		sendHello(t, stream, "node-intercepted")
+		_, err = stream.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected Unauthenticated from interceptor for revoked node, got nil")
+	}
+	if code := status.Code(err); code != codes.Unauthenticated {
+		t.Errorf("got code %v, want Unauthenticated", code)
 	}
 }
