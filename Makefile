@@ -26,8 +26,10 @@ proto-tools:
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 ## --- Relay (Go) ---
+# Emit the actual `relay` binary (into the gitignored relay/bin/), not just a
+# compile check. `go build ./...` validates but produces no artifact.
 build-relay:
-	cd relay && go build ./...
+	cd relay && go build -o bin/relay ./cmd/relay
 
 test-relay:
 	cd relay && go test ./...
