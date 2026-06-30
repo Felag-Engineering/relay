@@ -13,6 +13,7 @@ path = "src/main.rs"
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.12", features = ["tls"] }
 prost = "0.13"
+tokio-stream = "0.1"
 # mTLS / crypto
 rustls = "0.23"
 # config / policy
@@ -22,7 +23,7 @@ serde_yaml = "0.9"
 regex = "1"
 # logging
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [build-dependencies]
 tonic-build = "0.12"
