@@ -62,6 +62,7 @@ loop:
 loop-dry:
 	DRY_RUN=1 bash scripts/dev-loop/loop.sh
 
-# Sanity-check the deterministic gate against sample diffs.
+# Unit-test the deterministic loop internals (gate decisions + review parser).
 loop-gate-test:
 	bash scripts/dev-loop/gate.test.sh
+	bash scripts/dev-loop/parse.test.sh

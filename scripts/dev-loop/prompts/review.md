@@ -26,14 +26,13 @@ is remote-code-execution-as-a-service; weigh findings accordingly.
 Medium = real but contained (sloppy error handling, weak test coverage). Low =
 style/nits. None = clean.
 
-## Output — STRICT JSON, nothing else after it
+## Output — one JSON object, on a SINGLE line, as the very last line
 
-Print exactly one JSON object as the LAST thing in your response, no code fence:
+Keep prose to a minimum. End your response with exactly one JSON object on a
+single line — no code fence, no text after it:
 
-{"max_severity":"none|low|medium|high",
- "summary":"one sentence",
- "findings":[{"severity":"...","where":"path:line","what":"...","why":"..."}]}
+{"max_severity":"none|low|medium|high","summary":"one sentence","findings":[{"severity":"...","where":"path:line","what":"...","why":"..."}]}
 
-If you cannot complete the review, output
+If you cannot complete the review, end with
 {"max_severity":"high","summary":"review incomplete","findings":[]}
 so the change is escalated rather than waved through.
