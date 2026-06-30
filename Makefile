@@ -16,7 +16,7 @@ lint: lint-relay lint-daemon
 # Generates Go types into relay/internal/proto and Rust types into daemon/src/gen.
 # Recommended: buf. Until wired, this is the single place to define codegen.
 proto:
-	@echo "TODO(v0.0.1): wire proto codegen (buf) for Go + tonic/prost from ./proto"
+	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
 ## --- Relay (Go) ---
 build-relay:
