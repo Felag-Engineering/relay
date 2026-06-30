@@ -3,7 +3,8 @@
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
 .PHONY: build test lint proto build-relay build-daemon test-relay test-daemon \
-        lint-relay lint-daemon clean
+        lint-relay lint-daemon clean \
+        loop loop-dry loop-bootstrap loop-decompose loop-gate-test
 
 build: build-relay build-daemon
 
@@ -44,3 +45,23 @@ lint-daemon:
 clean:
 	cd relay && go clean ./... || true
 	cd daemon && cargo clean || true
+
+## --- Autonomous dev-loop (scripts/dev-loop) ---
+# One-time setup: create loop:* labels and roadmap milestones on GitHub.
+loop-bootstrap:
+	bash scripts/dev-loop/bootstrap.sh
+
+# Human seam #1: draft issues for the active milestone (review before --apply).
+# Apply with: bash scripts/dev-loop/decompose.sh <milestone> --apply
+loop-decompose:
+	bash scripts/dev-loop/decompose.sh
+
+# Run one issue end-to-end. DRY_RUN variant does everything except push/merge.
+loop:
+	bash scripts/dev-loop/loop.sh
+loop-dry:
+	DRY_RUN=1 bash scripts/dev-loop/loop.sh
+
+# Sanity-check the deterministic gate against sample diffs.
+loop-gate-test:
+	bash scripts/dev-loop/gate.test.sh
