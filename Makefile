@@ -2,13 +2,12 @@
 # Go builds the Relay (/relay); Cargo builds the relay-daemon (/daemon);
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
-# Prepend toolchain dirs so `make` works in non-login shells (mirrors lib.sh TOOLCHAIN_PATHS).
+# Prepend toolchain dirs so `make` works in non-login shells.
 # Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go/buf may be absent.
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
 .PHONY: build test lint proto proto-tools build-relay build-daemon test-relay test-daemon \
-        lint-relay lint-daemon clean test-integration \
-        loop loop-dry loop-bootstrap loop-decompose loop-gate-test
+        lint-relay lint-daemon clean test-integration
 
 build: build-relay build-daemon
 
@@ -64,24 +63,3 @@ lint-daemon:
 clean:
 	cd relay && go clean ./... || true
 	cd daemon && cargo clean || true
-
-## --- Autonomous dev-loop (scripts/dev-loop) ---
-# One-time setup: create loop:* labels and roadmap milestones on GitHub.
-loop-bootstrap:
-	bash scripts/dev-loop/bootstrap.sh
-
-# Human seam #1: draft issues for the active milestone (review before --apply).
-# Apply with: bash scripts/dev-loop/decompose.sh <milestone> --apply
-loop-decompose:
-	bash scripts/dev-loop/decompose.sh
-
-# Run one issue end-to-end. DRY_RUN variant does everything except push/merge.
-loop:
-	bash scripts/dev-loop/loop.sh
-loop-dry:
-	DRY_RUN=1 bash scripts/dev-loop/loop.sh
-
-# Unit-test the deterministic loop internals (gate decisions + review parser).
-loop-gate-test:
-	bash scripts/dev-loop/gate.test.sh
-	bash scripts/dev-loop/parse.test.sh

@@ -57,7 +57,6 @@ it needs an ADR, not a quiet workaround.
 /relay/        Go: gRPC server, MCP server, Job engine, CA, registry, store.   (cd relay)
 /daemon/       Rust: connection, Policy engine, Operation executors, exec.      (cd daemon)
 /docs/adr/     architecture decision records.
-/scripts/dev-loop/  the autonomous development loop (see its README).
 CONTEXT.md     the glossary.   ROADMAP.md   the plan.
 ```
 
@@ -93,23 +92,20 @@ Two toolchains. The `Makefile` wraps both — prefer it.
    secrets (tokens, private keys), never make the Relay able to mutate Node Policy. When in doubt on
    the daemon (privileged) side, prefer the more restrictive option and flag it.
 
-## The autonomous dev-loop
+## How this repo is developed
 
-Much of this repo is built by a self-driving loop in [`scripts/dev-loop/`](scripts/dev-loop/README.md):
-it turns the active ROADMAP milestone into GitHub issues, implements them one at a time on a branch,
-runs `make build/test/lint`, has a model review the diff, then a **deterministic, non-LLM gate**
-decides whether to auto-merge or **escalate to a human**. If you are an agent implementing an issue,
-the rules in `scripts/dev-loop/prompts/implement.md` bind you (stay in scope, no merge authority,
-flag hard decisions via `DECISION_NEEDED.md`).
+This repo is **product-only.** It is built largely by an external, Claude-driven agentic dev-loop
+(a user-level `/dev-loop` command, intentionally *not* checked in here) that works one ROADMAP issue
+at a time on a branch, runs `make build/test/lint`, has a separate agent review the diff, and opens a
+PR for a human to merge. **It never merges autonomously** — a person is always the merge authority.
 
-What the gate **escalates to a human** (deny-beats-allow): anything touching `proto/`, `docs/adr/`,
-Policy/exec/transport/mTLS/auth code, `CLAUDE.md`/`CONTEXT.md`, the `Makefile`, CI, or the loop's own
-scripts; any failed build; any high-severity review finding; any oversized diff. So **changes to the
-security surface or the architecture invariants above are never merged autonomously** — they always
-land in front of a person. Issue order is a dependency chain: the loop works the lowest-numbered open
-issue and waits for its escalated PR to merge before starting the next. Operate it with `make loop`;
-see the README for the human seams (approve the issue breakdown, review escalations, milestone
-acceptance) and the cost/billing model.
+If you are an agent implementing an issue: **stay in scope**, you have **no merge authority** (open a
+PR; a human merges), and **stop and flag** the human rather than guess on a hard call.
+
+**Always escalate to a human — never try to land without review** — anything touching `proto/`,
+`docs/adr/`, Policy/exec/transport/mTLS/auth code, `CLAUDE.md`/`CONTEXT.md`, the `Makefile`, or CI;
+any failed build; any high-severity review finding. These are the security surface and the
+architecture invariants above; they always land in front of a person.
 
 ## Current target
 
