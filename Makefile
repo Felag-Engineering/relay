@@ -2,7 +2,7 @@
 # Go builds the Relay (/relay); Cargo builds the relay-daemon (/daemon);
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
-.PHONY: build test lint proto build-relay build-daemon test-relay test-daemon \
+.PHONY: build test lint proto proto-tools build-relay build-daemon test-relay test-daemon \
         lint-relay lint-daemon clean \
         loop loop-dry loop-bootstrap loop-decompose loop-gate-test
 
@@ -12,11 +12,18 @@ test: test-relay test-daemon
 
 lint: lint-relay lint-daemon
 
-## --- proto codegen (wire up in v0.0.1) ---
-# Generates Go types into relay/internal/proto and Rust types into daemon/src/gen.
-# Recommended: buf. Until wired, this is the single place to define codegen.
+## --- proto codegen ---
+# Go types are generated (via buf) into relay/internal/gleipnir/v1/ and committed,
+# so CI needs neither buf nor the plugins. Rust types are generated at cargo-build
+# time by daemon/build.rs (tonic-build), so there is no Rust step here.
+# Run `make proto-tools` once to install the Go plugins before regenerating.
 proto:
 	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
+
+# Dev-only: install the protoc plugins `make proto` needs (into $(go env GOPATH)/bin).
+proto-tools:
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
 
 ## --- Relay (Go) ---
 build-relay:
