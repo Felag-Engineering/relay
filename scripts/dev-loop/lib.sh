@@ -8,6 +8,14 @@ REPO_ROOT="$(cd "$DEV_LOOP_DIR/../.." && pwd)"
 # shellcheck source=./config.sh
 source "$DEV_LOOP_DIR/config.sh"
 
+# Make toolchains resolvable under non-login shells (cron/scheduler) — prepend
+# any configured toolchain dir that exists and isn't already on PATH.
+_old_ifs="$IFS"; IFS=':'
+for _d in $TOOLCHAIN_PATHS; do
+  [[ -d "$_d" && ":$PATH:" != *":$_d:"* ]] && PATH="$_d:$PATH"
+done
+IFS="$_old_ifs"; export PATH; unset _old_ifs _d
+
 # --- Logging ------------------------------------------------------------------
 # Structured, timestamped, to stderr so stdout stays parseable when needed.
 _ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }

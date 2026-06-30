@@ -13,6 +13,13 @@
 REPO_SLUG="${REPO_SLUG:-Felag-Engineering/gleipnir-relay}"
 MAIN_BRANCH="${MAIN_BRANCH:-main}"
 
+# --- Toolchain PATH -----------------------------------------------------------
+# Schedulers (cron, systemd timers, Claude routines) run NON-login shells that
+# don't source ~/.profile or ~/.cargo/env, so `make` can't find go/cargo/buf even
+# when they're installed. lib.sh prepends any of these that exist to PATH, so the
+# loop is self-sufficient. Add locations here if your toolchains live elsewhere.
+TOOLCHAIN_PATHS="${TOOLCHAIN_PATHS:-/usr/local/go/bin:$HOME/.cargo/bin:$HOME/go/bin:$HOME/.local/bin}"
+
 # --- What milestone is the loop working? --------------------------------------
 # Matches a GitHub milestone title. Only issues in this milestone are worked.
 # Advance this by hand after a human milestone-acceptance review (human seam #3).
