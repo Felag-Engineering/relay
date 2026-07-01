@@ -5,6 +5,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info};
 
 mod enroll;
+mod identity;
 mod renew;
 mod tunnel;
 
@@ -116,7 +117,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
     let identity = match enroll::EnrollConfig::from_env()? {
         Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
-        None => enroll::load_identity(&state_dir)?.ok_or(
+        None => identity::load_identity(&state_dir)?.ok_or(
             "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",
         )?,
     };

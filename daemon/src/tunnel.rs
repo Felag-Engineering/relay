@@ -1,6 +1,6 @@
 //! mTLS Tunnel connection. Isolated so subsequent milestones (#29, #31) can build on it.
 
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity as TlsIdentity};
+use tonic::transport::{Channel, Identity as TlsIdentity};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -16,29 +16,16 @@ type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 pub async fn connect_mtls(
     endpoint: String,
     domain: Option<String>,
-    id: &crate::enroll::Identity,
+    id: &crate::identity::Identity,
 ) -> Result<Channel> {
-    // Fail closed: no path to a plaintext channel regardless of how the
-    // endpoint was constructed (mirrors the defense-in-depth in enroll.rs).
-    crate::enroll::validate_endpoint_scheme(&endpoint)?;
-
-    let mut tls = ClientTlsConfig::new()
-        .ca_certificate(Certificate::from_pem(id.ca_bundle_pem.as_bytes()))
-        .identity(TlsIdentity::from_pem(
-            id.cert_pem.as_bytes(),
-            id.key_pem.as_bytes(),
-        ));
-
-    if let Some(d) = domain {
-        tls = tls.domain_name(d);
-    }
-
-    let channel = Channel::from_shared(endpoint)?
-        .tls_config(tls)?
-        .connect()
-        .await?;
-
-    Ok(channel)
+    let client_identity = TlsIdentity::from_pem(id.cert_pem.as_bytes(), id.key_pem.as_bytes());
+    crate::identity::build_channel(
+        endpoint,
+        domain,
+        id.ca_bundle_pem.as_bytes(),
+        Some(client_identity),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -62,9 +49,9 @@ mod tests {
     /// Build a throwaway `Identity` whose `ca_bundle_pem` is set to `ca_pem`.
     /// The client cert/key are a fresh self-signed pair; the server uses
     /// `with_no_client_auth` so they are never verified.
-    fn make_identity_with_ca(ca_pem: &str) -> crate::enroll::Identity {
+    fn make_identity_with_ca(ca_pem: &str) -> crate::identity::Identity {
         let (key_pem, cert_pem) = make_self_signed("client");
-        crate::enroll::Identity {
+        crate::identity::Identity {
             node_id: "test-node".to_string(),
             key_pem,
             cert_pem,
