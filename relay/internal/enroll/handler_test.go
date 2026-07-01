@@ -346,6 +346,115 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 	}
 }
 
+// fakeDenylister implements NodeDenylister and records every RevokeNode call for
+// assertion in tests. It does not interact with any real denylist.
+type fakeDenylister struct{ revoked []string }
+
+func (f *fakeDenylister) RevokeNode(nodeID string) { f.revoked = append(f.revoked, nodeID) }
+
+// buildRaceServer is a test helper that wires a Server with a real CA, registry,
+// and the given token Service plus a fakeDenylister and WithPostEnrollRevocationCheck.
+// It returns the server, the registry, and the denylister for assertions.
+func buildRaceServer(t *testing.T, svc *Service) (*Server, *registry.InMemory, *fakeDenylister) {
+	t.Helper()
+	realCA, err := ca.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("ca.Open: %v", err)
+	}
+	reg := registry.NewInMemory()
+	den := &fakeDenylister{}
+	srv := NewServer(svc, realCA, reg, WithPostEnrollRevocationCheck(svc, den))
+	return srv, reg, den
+}
+
+// TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow is the primary DoD test for
+// issue #57. It simulates the escape window: Validate succeeds (token valid), then
+// the token is revoked before Upsert (mimicking a concurrent RevokeToken cascade
+// completing its bounded re-scan), and the post-check must catch and close the gap.
+//
+// Assertions:
+//   - Enroll returns codes.PermissionDenied (fail-closed).
+//   - The fakeDenylister recorded a RevokeNode call for the minted node id
+//     (self-denylist ran). Note: this is verified via the fake recorder, not the
+//     real Denylist.
+//   - The Node IS present in the registry (Upsert ran before the post-check),
+//     confirming the bounded cascade scan would have missed it.
+func TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg, den := buildRaceServer(t, svc)
+
+	tok, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	// Inject newID to simulate the race: revoke the token mid-enrollment (after
+	// Validate succeeds, before Upsert) and return a deterministic node id.
+	srv.newID = func() (string, error) {
+		if err := svc.Revoke(context.Background(), tok.ID); err != nil {
+			t.Errorf("race hook Revoke: %v", err)
+		}
+		return "node-race-1", nil
+	}
+
+	req := &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "bogus-cn"),
+	}
+	_, err := srv.Enroll(context.Background(), req)
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("race window: want PermissionDenied, got %v", err)
+	}
+
+	// The minted node must have been self-denylisted.
+	if len(den.revoked) != 1 || den.revoked[0] != "node-race-1" {
+		t.Errorf("denylist: want [node-race-1], got %v", den.revoked)
+	}
+
+	// The Node must be in the registry — Upsert ran; the cascade would have missed it.
+	if _, ok := reg.Get("node-race-1"); !ok {
+		t.Error("registry: node-race-1 must be present (Upsert ran before post-check)")
+	}
+}
+
+// TestEnroll_PostUpsertRevocationCheck_AllowsCleanEnroll verifies no false positive:
+// when the token is still valid at post-check time, Enroll succeeds and the
+// denylister records no calls.
+func TestEnroll_PostUpsertRevocationCheck_AllowsCleanEnroll(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, _, den := buildRaceServer(t, svc)
+
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	req := &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "bogus-cn"),
+	}
+	_, err := srv.Enroll(context.Background(), req)
+	if err != nil {
+		t.Errorf("clean enroll: want nil error, got %v", err)
+	}
+	if len(den.revoked) != 0 {
+		t.Errorf("clean enroll: denylist must be empty, got %v", den.revoked)
+	}
+}
+
+// TestEnroll_NoPostCheck_BackwardCompatible verifies that NewServer without any
+// option (revocationChecker == nil) still handles a happy-path enrollment
+// correctly — the post-check is skipped entirely.
+func TestEnroll_NoPostCheck_BackwardCompatible(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, _, _ := newEnrollServer(t, svc) // plain NewServer, no option
+
+	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
+
+	req := &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "bogus-cn"),
+	}
+	_, err := srv.Enroll(context.Background(), req)
+	if err != nil {
+		t.Errorf("backward compat: want nil error, got %v", err)
+	}
+}
+
 // TestEnroll_EmptyTokenOrCSR verifies that missing token or CSR returns InvalidArgument.
 func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 	svc := NewService(NewMemoryRepository())

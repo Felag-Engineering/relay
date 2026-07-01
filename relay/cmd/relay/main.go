@@ -51,10 +51,10 @@ func main() {
 	}
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
-	// denylist.Add is never called at runtime in this binary until the admin
-	// trigger RPC is wired — that requires a proto change and is out of scope
-	// for this milestone. The plumbing is live; revocation.Service is exercised
-	// by tests.
+	// denylist.Add is now reachable at runtime via the post-enroll revocation
+	// recheck: if a token is revoked mid-enrollment the handler calls
+	// revocationSvc.RevokeNode, which calls denylist.Add. An admin-trigger RPC
+	// to revoke nodes on demand still requires a proto change (future milestone).
 	denylist := revocation.NewDenylist()
 	conns := revocation.NewConnections()
 
@@ -70,7 +70,9 @@ func main() {
 
 	reg := registry.NewInMemory()
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
-	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg)
+	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
+	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
+		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc))
 
 	lis, err := net.Listen("tcp", *addr)
 	if err != nil {

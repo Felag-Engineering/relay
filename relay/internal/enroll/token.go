@@ -282,3 +282,25 @@ func (s *Service) Revoke(ctx context.Context, id string) error {
 	t.Revoked = true
 	return s.repo.Save(ctx, t)
 }
+
+// IsRevoked reports whether the token with the given id is currently revoked.
+// An unknown id returns (false, nil): a token that never existed cannot have
+// minted the Node under revocation, so it is treated as not-revoked. Any other
+// repository error is returned to the caller, which must fail closed.
+//
+// Note: this takes the exclusive mutex (matching the existing Validate/Revoke
+// precedent) rather than a read lock. A future persistent store must not
+// silently inherit this serialization — revisit when adding persistence.
+func (s *Service) IsRevoked(ctx context.Context, id string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, err := s.repo.ByID(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return t.Revoked, nil
+}

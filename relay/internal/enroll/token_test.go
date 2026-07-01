@@ -400,6 +400,47 @@ func TestRevoke_Idempotent(t *testing.T) {
 	}
 }
 
+// TestService_IsRevoked covers the three cases of IsRevoked: unknown id, existing
+// not-revoked token, and existing revoked token.
+func TestService_IsRevoked(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	// Unknown id: a token that never existed is treated as not-revoked.
+	revoked, err := svc.IsRevoked(ctx, "doesnotexist")
+	if err != nil {
+		t.Fatalf("IsRevoked unknown: unexpected error: %v", err)
+	}
+	if revoked {
+		t.Error("IsRevoked unknown: want false, got true")
+	}
+
+	// Existing, not-revoked token.
+	tok, _, err := svc.Create(ctx, testScope, time.Hour)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	revoked, err = svc.IsRevoked(ctx, tok.ID)
+	if err != nil {
+		t.Fatalf("IsRevoked not-revoked: unexpected error: %v", err)
+	}
+	if revoked {
+		t.Error("IsRevoked not-revoked: want false, got true")
+	}
+
+	// After Revoke: must return true.
+	if err := svc.Revoke(ctx, tok.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	revoked, err = svc.IsRevoked(ctx, tok.ID)
+	if err != nil {
+		t.Fatalf("IsRevoked revoked: unexpected error: %v", err)
+	}
+	if !revoked {
+		t.Error("IsRevoked revoked: want true, got false")
+	}
+}
+
 // TestNoSecretInLogs verifies that neither the plaintext secret nor the SecretHash
 // appears in log or fmt output.
 //
