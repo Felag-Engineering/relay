@@ -4,10 +4,10 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"strings"
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
@@ -88,7 +88,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		if _, err := s.reg.Upsert(registry.Report{
 			NodeID:          nodeID,
 			CertFingerprint: fp,
-			Facts:           factsFromProto(hello.Facts),
+			Facts:           protoconv.FactsFromProto(hello.Facts),
 			NodeLabels:      nodeLabelsFromHello(hello.GetLabels()),
 		}); err != nil {
 			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
@@ -153,22 +153,6 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 	}
 }
 
-// factsFromProto converts a proto Facts message to registry.Facts.
-// Nil-safe: returns a zero-value registry.Facts when pf is nil.
-// Mirrors enroll/handler.go:126-135.
-func factsFromProto(pf *gleipnirv1.Facts) registry.Facts {
-	if pf == nil {
-		return registry.Facts{}
-	}
-	return registry.Facts{
-		Hostname:    pf.GetHostname(),
-		OS:          pf.GetOs(),
-		Kernel:      pf.GetKernel(),
-		Arch:        pf.GetArch(),
-		IPAddresses: append([]string(nil), pf.GetIpAddresses()...),
-	}
-}
-
 // nodeLabelsFromHello extracts node-space labels from Hello labels, returning a
 // map with bare keys (the "node:" prefix is stripped). Only keys with a "node:"
 // prefix and a non-empty bare key are accepted; all other keys are silently
@@ -182,14 +166,11 @@ func factsFromProto(pf *gleipnirv1.Facts) registry.Facts {
 func nodeLabelsFromHello(labels []*gleipnirv1.Label) map[string]string {
 	result := make(map[string]string)
 	for _, l := range labels {
-		if !strings.HasPrefix(l.GetKey(), "node:") {
-			continue
+		bare, ok := protoconv.ParseNodeLabel(l.GetKey())
+		if !ok {
+			continue // silently drop non-node: labels (see WHY above)
 		}
-		bareKey := strings.TrimPrefix(l.GetKey(), "node:")
-		if bareKey == "" {
-			continue
-		}
-		result[bareKey] = l.GetValue()
+		result[bare] = l.GetValue()
 	}
 	return result
 }
