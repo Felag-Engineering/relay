@@ -12,9 +12,10 @@ var _ Repository = (*InMemory)(nil)
 
 // InMemory is a thread-safe, in-memory implementation of Repository.
 type InMemory struct {
-	mu    sync.RWMutex
-	nodes map[string]*Node
-	now   func() time.Time
+	mu       sync.RWMutex
+	nodes    map[string]*Node
+	now      func() time.Time
+	maxNodes int // 0 = unlimited
 }
 
 // Option is a functional option for NewInMemory.
@@ -25,6 +26,16 @@ type Option func(*InMemory)
 func WithClock(now func() time.Time) Option {
 	return func(r *InMemory) {
 		r.now = now
+	}
+}
+
+// WithMaxNodes sets a cap on the number of Nodes the registry will accept via
+// INSERT. When the cap is reached, Upsert returns ErrAtCapacity for new Nodes;
+// updates to existing Nodes are always allowed. Pass 0 (the default) to leave
+// the registry unbounded.
+func WithMaxNodes(n int) Option {
+	return func(r *InMemory) {
+		r.maxNodes = n
 	}
 }
 
@@ -63,7 +74,10 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 
 	existing, ok := r.nodes[rep.NodeID]
 	if !ok {
-		// Insert path.
+		// Insert path. Check the cap before allocating anything.
+		if r.maxNodes > 0 && len(r.nodes) >= r.maxNodes {
+			return Node{}, ErrAtCapacity
+		}
 		nl := maps.Clone(rep.NodeLabels)
 		if nl == nil {
 			nl = map[string]string{}

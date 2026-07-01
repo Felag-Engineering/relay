@@ -244,6 +244,50 @@ func TestGetReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestUpsert_AtCapacity(t *testing.T) {
+	// Cap of 2: node-a and node-b succeed; node-c is rejected.
+	reg := NewInMemory(WithMaxNodes(2))
+
+	if _, err := reg.Upsert(Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("insert node-a: %v", err)
+	}
+	if _, err := reg.Upsert(Report{NodeID: "node-b"}); err != nil {
+		t.Fatalf("insert node-b: %v", err)
+	}
+
+	// Third insert must fail with ErrAtCapacity.
+	_, err := reg.Upsert(Report{NodeID: "node-c"})
+	if !errors.Is(err, ErrAtCapacity) {
+		t.Errorf("third insert: want ErrAtCapacity, got %v", err)
+	}
+	// Registry must still contain exactly 2 nodes.
+	if got := len(reg.List()); got != 2 {
+		t.Errorf("after rejected insert: List() len = %d, want 2", got)
+	}
+
+	// UPDATE path (node-a already exists) must succeed even at capacity.
+	if _, err := reg.Upsert(Report{NodeID: "node-a", CertFingerprint: "fp-new"}); err != nil {
+		t.Errorf("update node-a at capacity: %v", err)
+	}
+	n, _ := reg.Get("node-a")
+	if n.CertFingerprint != "fp-new" {
+		t.Errorf("update at capacity: CertFingerprint = %q, want fp-new", n.CertFingerprint)
+	}
+
+	// Default (no WithMaxNodes) stays unbounded: a 3rd insert into an uncapped
+	// registry must succeed.
+	unbound := NewInMemory()
+	if _, err := unbound.Upsert(Report{NodeID: "n1"}); err != nil {
+		t.Fatalf("unbound insert 1: %v", err)
+	}
+	if _, err := unbound.Upsert(Report{NodeID: "n2"}); err != nil {
+		t.Fatalf("unbound insert 2: %v", err)
+	}
+	if _, err := unbound.Upsert(Report{NodeID: "n3"}); err != nil {
+		t.Errorf("unbound insert 3: %v", err)
+	}
+}
+
 func TestUpsert_NilNodeLabels(t *testing.T) {
 	reg := NewInMemory()
 

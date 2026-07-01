@@ -8,14 +8,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -452,6 +455,196 @@ func TestEnroll_NoPostCheck_BackwardCompatible(t *testing.T) {
 	_, err := srv.Enroll(context.Background(), req)
 	if err != nil {
 		t.Errorf("backward compat: want nil error, got %v", err)
+	}
+}
+
+// ctxFromIP wraps context.Background with a gRPC peer carrying the given IP
+// on port 40000. All rate-limit tests must use this helper so they don't share
+// the "unknown" bucket that peerIP returns when no peer is set.
+func ctxFromIP(ip string) context.Context {
+	ctx := context.Background()
+	return peer.NewContext(ctx, &peer.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 40000},
+	})
+}
+
+// newLimitedServer wires a Server with a ratelimit.Limiter built from cfg plus a
+// real CA and an optionally capped registry. Returns the server and the registry.
+func newLimitedServer(t *testing.T, svc *Service, cfg ratelimit.Config, regOpts ...registry.Option) (*Server, *registry.InMemory) {
+	t.Helper()
+	realCA, err := ca.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("ca.Open: %v", err)
+	}
+	reg := registry.NewInMemory(regOpts...)
+	srv := NewServer(svc, realCA, reg, WithRateLimiter(ratelimit.New(cfg)))
+	return srv, reg
+}
+
+// TestEnroll_RateLimited_PerIP verifies that the per-IP gate fires independently:
+// two enrolls from one IP succeed (burst=2), the third is denied, while a fresh
+// IP is still allowed.
+func TestEnroll_RateLimited_PerIP(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, reg := newLimitedServer(t, svc, ratelimit.Config{
+		PerIPRatePerMin:  60,
+		PerIPBurst:       2,
+		GlobalRatePerMin: 6000,
+		GlobalBurst:      1000,
+		MaxTrackedIPs:    100,
+	})
+
+	_, plaintext1 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext2 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext3 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, plaintext4 := mintToken(t, svc, []string{"relay:env=prod"})
+
+	ctx1 := ctxFromIP("10.0.0.1")
+	ctx2 := ctxFromIP("10.0.0.2")
+
+	// First two calls from IP-1 succeed (burst=2).
+	if _, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext1, Csr: genCSR(t, "cn"),
+	}); err != nil {
+		t.Errorf("IP-1 call 1: want nil, got %v", err)
+	}
+	if _, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext2, Csr: genCSR(t, "cn"),
+	}); err != nil {
+		t.Errorf("IP-1 call 2: want nil, got %v", err)
+	}
+
+	// Third call from IP-1 is denied.
+	_, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext3, Csr: genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("IP-1 call 3: want ResourceExhausted, got %v", err)
+	}
+
+	// Fresh IP-2 is still allowed.
+	if _, err := srv.Enroll(ctx2, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: plaintext4, Csr: genCSR(t, "cn"),
+	}); err != nil {
+		t.Errorf("IP-2 call 1: want nil, got %v", err)
+	}
+
+	// Registry should have 3 entries (2 from IP-1, 1 from IP-2; throttled call left no entry).
+	if got := len(reg.List()); got != 3 {
+		t.Errorf("registry len: got %d, want 3", got)
+	}
+}
+
+// TestEnroll_RateLimited_NoTokenOracle verifies the no-oracle property: when the
+// per-IP bucket is empty (PerIPBurst=0), BOTH a call with a valid Enrollment Token
+// and a call with a garbage token return codes.ResourceExhausted with identical
+// error codes. Neither should add a registry entry.
+func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	// PerIPBurst=0: the very first call from any IP is denied — no drain phase needed.
+	srv, reg := newLimitedServer(t, svc, ratelimit.Config{
+		PerIPRatePerMin:  0,
+		PerIPBurst:       0,
+		GlobalRatePerMin: 6000,
+		GlobalBurst:      1000,
+		MaxTrackedIPs:    100,
+	})
+
+	_, validPlaintext := mintToken(t, svc, []string{"relay:env=prod"})
+	ctx := ctxFromIP("10.0.0.42")
+
+	// Valid token — denied at the rate-limit gate before any token validation.
+	_, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: validPlaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("valid token: want ResourceExhausted, got %v", err)
+	}
+
+	// Garbage token — must produce identical ResourceExhausted (no validity oracle).
+	_, err = srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: "garbage.notvalid",
+		Csr:             genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("garbage token: want ResourceExhausted, got %v", err)
+	}
+
+	// Neither call must have produced a registry entry.
+	if got := len(reg.List()); got != 0 {
+		t.Errorf("registry must be empty after rate-limited calls, got %d entries", got)
+	}
+}
+
+// TestEnroll_RateLimited_Global verifies that the global gate fires independently
+// of the per-IP gate: GlobalBurst=1 means the second enroll from a fresh IP is
+// denied even though that IP's per-IP bucket is full.
+func TestEnroll_RateLimited_Global(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	srv, _ := newLimitedServer(t, svc, ratelimit.Config{
+		PerIPRatePerMin:  6000,
+		PerIPBurst:       1000,
+		GlobalRatePerMin: 60,
+		GlobalBurst:      1, // only 1 global token
+		MaxTrackedIPs:    100,
+	})
+
+	_, pt1 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
+
+	// First enroll (IP-a) consumes the sole global token.
+	if _, err := srv.Enroll(ctxFromIP("10.0.0.1"), &gleipnirv1.EnrollRequest{
+		EnrollmentToken: pt1, Csr: genCSR(t, "cn"),
+	}); err != nil {
+		t.Errorf("IP-a: want nil, got %v", err)
+	}
+
+	// Second enroll (fresh IP-b) denied — global budget exhausted.
+	_, err := srv.Enroll(ctxFromIP("10.0.0.2"), &gleipnirv1.EnrollRequest{
+		EnrollmentToken: pt2, Csr: genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("IP-b: want ResourceExhausted, got %v", err)
+	}
+}
+
+// TestEnroll_RegistryAtCapacity verifies that when the registry is full the
+// handler returns codes.ResourceExhausted and the registry size stays unchanged.
+func TestEnroll_RegistryAtCapacity(t *testing.T) {
+	svc := NewService(NewMemoryRepository())
+	// Generous limiter so the rate-limit gate never fires.
+	srv, reg := newLimitedServer(t, svc, ratelimit.Config{
+		PerIPRatePerMin:  6000,
+		PerIPBurst:       1000,
+		GlobalRatePerMin: 6000,
+		GlobalBurst:      1000,
+		MaxTrackedIPs:    100,
+	}, registry.WithMaxNodes(1))
+
+	_, pt1 := mintToken(t, svc, []string{"relay:env=prod"})
+	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
+	ctx := ctxFromIP("10.0.0.1")
+
+	// First enroll fills the cap.
+	if _, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: pt1, Csr: genCSR(t, "cn"),
+	}); err != nil {
+		t.Fatalf("first enroll: %v", err)
+	}
+	if got := len(reg.List()); got != 1 {
+		t.Fatalf("after first enroll: want 1, got %d", got)
+	}
+
+	// Second enroll must be rejected with ResourceExhausted.
+	_, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+		EnrollmentToken: pt2, Csr: genCSR(t, "cn"),
+	})
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Errorf("at capacity: want ResourceExhausted, got %v", err)
+	}
+	if got := len(reg.List()); got != 1 {
+		t.Errorf("after rejected enroll: want 1, got %d", got)
 	}
 }
 
