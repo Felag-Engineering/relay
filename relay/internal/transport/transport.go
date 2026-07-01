@@ -3,7 +3,7 @@
 //
 // Design: a single listener uses tls.VerifyClientCertIfGiven rather than
 // tls.RequireAndVerifyClientCert. This keeps the TLS handshake open to
-// certless connections, which is required for a future Enrollment endpoint
+// certless connections, which is required for the certless Enrollment endpoint
 // (ADR-0005: one daemon-initiated connection; ADR-0006: identity = client cert).
 // Any presented certificate is still cryptographically verified against
 // ClientCAs at the TLS layer, so untrusted certs are rejected there.
@@ -11,8 +11,8 @@
 // The interceptors enforce default-deny per-RPC: every method must present a
 // verified client cert and have its CN injected as node_id into the context,
 // UNLESS its FullMethod string appears in the `certless` allowlist. The
-// allowlist is the documented seam for Enrollment: when that handler lands
-// (issue #25), add gleipnirv1.Enrollment_Enroll_FullMethodName to the set.
+// allowlist is the seam for Enrollment: Enroll is the one certless method, and
+// main.go adds gleipnirv1.Enrollment_Enroll_FullMethodName to the set.
 package transport
 
 import (

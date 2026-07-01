@@ -74,8 +74,9 @@ test-daemon:
 	cd daemon && cargo test
 
 ## --- End-to-end smoke test ---
-# Boots both binaries and asserts the Hello→Ping handshake (ADR-0005, ADR-0007).
-# Depends on build so binaries exist before the script runs.
+# Boots both binaries and asserts the mTLS Relay refuses the certless daemon
+# (ADR-0005/0006). A positive enroll→mTLS→Hello/Ping lifecycle test is tracked
+# separately (see the e2e lifecycle issue). Depends on build so binaries exist.
 test-integration: build
 	bash scripts/smoke-test.sh
 

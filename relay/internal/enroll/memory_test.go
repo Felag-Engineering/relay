@@ -29,8 +29,8 @@ func TestMemoryRepository_Create_Duplicate(t *testing.T) {
 	if err := repo.Create(context.Background(), tok); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
-	if err := repo.Create(context.Background(), tok); err == nil {
-		t.Error("duplicate Create: want error, got nil")
+	if err := repo.Create(context.Background(), tok); !errors.Is(err, ErrDuplicateID) {
+		t.Errorf("duplicate Create: want ErrDuplicateID, got %v", err)
 	}
 }
 

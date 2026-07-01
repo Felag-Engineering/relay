@@ -18,14 +18,14 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{tokens: make(map[string]*Token)}
 }
 
-// Create inserts a copy of t. Returns an error if a token with the same ID already
-// exists.
+// Create inserts a copy of t. Returns ErrDuplicateID if a token with the same ID
+// already exists.
 func (r *MemoryRepository) Create(_ context.Context, t *Token) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, exists := r.tokens[t.ID]; exists {
-		return ErrInvalidToken
+		return ErrDuplicateID
 	}
 	r.tokens[t.ID] = cloneToken(t)
 	return nil
