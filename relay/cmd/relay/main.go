@@ -61,7 +61,9 @@ func main() {
 	creds := transport.ServerCredentials(serverCert, clientCAs, denylist)
 
 	// Enrollment_Enroll is the only certless RPC: daemons call it before they have
-	// a client certificate. All other RPCs (including Tunnel) remain mTLS-required.
+	// a client certificate. All other RPCs (including Tunnel and Enrollment_Renew)
+	// remain mTLS-required. Renew is intentionally absent here: it is authenticated
+	// by the caller's existing mTLS client cert, not a token.
 	certless := map[string]struct{}{
 		gleipnirv1.Enrollment_Enroll_FullMethodName: {},
 	}

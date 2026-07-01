@@ -28,6 +28,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	Enrollment_Enroll_FullMethodName = "/gleipnir.v1.Enrollment/Enroll"
+	Enrollment_Renew_FullMethodName  = "/gleipnir.v1.Enrollment/Renew"
 )
 
 // EnrollmentClient is the client API for Enrollment service.
@@ -38,9 +39,15 @@ const (
 // Enrollment (ADR-0006): a daemon presents a reusable, scoped Enrollment Token
 // over server-authenticated TLS and submits a CSR; the Relay CA returns a
 // per-Node client certificate. Subsequent connections use mTLS.
+//
+// Auth model note: Enroll is token-authenticated and certless (no client cert).
+// Renew is cert-authenticated over mTLS (different auth models, same service).
+// Renew is intentionally absent from the certless allowlist, making it
+// mTLS-required with no interceptor changes needed.
 // ---------------------------------------------------------------------------
 type EnrollmentClient interface {
 	Enroll(ctx context.Context, in *EnrollRequest, opts ...grpc.CallOption) (*EnrollResponse, error)
+	Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error)
 }
 
 type enrollmentClient struct {
@@ -61,6 +68,16 @@ func (c *enrollmentClient) Enroll(ctx context.Context, in *EnrollRequest, opts .
 	return out, nil
 }
 
+func (c *enrollmentClient) Renew(ctx context.Context, in *RenewRequest, opts ...grpc.CallOption) (*RenewResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenewResponse)
+	err := c.cc.Invoke(ctx, Enrollment_Renew_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EnrollmentServer is the server API for Enrollment service.
 // All implementations must embed UnimplementedEnrollmentServer
 // for forward compatibility.
@@ -69,9 +86,15 @@ func (c *enrollmentClient) Enroll(ctx context.Context, in *EnrollRequest, opts .
 // Enrollment (ADR-0006): a daemon presents a reusable, scoped Enrollment Token
 // over server-authenticated TLS and submits a CSR; the Relay CA returns a
 // per-Node client certificate. Subsequent connections use mTLS.
+//
+// Auth model note: Enroll is token-authenticated and certless (no client cert).
+// Renew is cert-authenticated over mTLS (different auth models, same service).
+// Renew is intentionally absent from the certless allowlist, making it
+// mTLS-required with no interceptor changes needed.
 // ---------------------------------------------------------------------------
 type EnrollmentServer interface {
 	Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error)
+	Renew(context.Context, *RenewRequest) (*RenewResponse, error)
 	mustEmbedUnimplementedEnrollmentServer()
 }
 
@@ -84,6 +107,9 @@ type UnimplementedEnrollmentServer struct{}
 
 func (UnimplementedEnrollmentServer) Enroll(context.Context, *EnrollRequest) (*EnrollResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Enroll not implemented")
+}
+func (UnimplementedEnrollmentServer) Renew(context.Context, *RenewRequest) (*RenewResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Renew not implemented")
 }
 func (UnimplementedEnrollmentServer) mustEmbedUnimplementedEnrollmentServer() {}
 func (UnimplementedEnrollmentServer) testEmbeddedByValue()                    {}
@@ -124,6 +150,24 @@ func _Enrollment_Enroll_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Enrollment_Renew_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EnrollmentServer).Renew(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Enrollment_Renew_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EnrollmentServer).Renew(ctx, req.(*RenewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Enrollment_ServiceDesc is the grpc.ServiceDesc for Enrollment service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -134,6 +178,10 @@ var Enrollment_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Enroll",
 			Handler:    _Enrollment_Enroll_Handler,
+		},
+		{
+			MethodName: "Renew",
+			Handler:    _Enrollment_Renew_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

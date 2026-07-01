@@ -5,6 +5,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info};
 
 mod enroll;
+mod renew;
 mod tunnel;
 
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -63,7 +64,7 @@ fn heartbeat_delay(interval: Duration, jitter_frac: f64, sample: f64) -> Duratio
 /// process ID. The XOR with `std::process::id()` ensures that a bulk-restarted
 /// fleet whose daemons all start within the same second produces distinct jitter
 /// values rather than reconverging on the same send time.
-fn rand_unit() -> f64 {
+pub(crate) fn rand_unit() -> f64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -107,12 +108,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = relay_addr();
 
+    // Hoist state_dir so it feeds both the enrollment load and the renewal task below.
+    let state_dir = enroll::state_dir_from_env();
+
     // Acquire the enrolled identity before proceeding. Fail closed: if no
     // token is configured and no persisted identity exists, refuse to connect
     // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
     let identity = match enroll::EnrollConfig::from_env()? {
         Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
-        None => enroll::load_identity(&enroll::state_dir_from_env())?.ok_or(
+        None => enroll::load_identity(&state_dir)?.ok_or(
             "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",
         )?,
     };
@@ -135,6 +139,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let endpoint = addr.replacen("http://", "https://", 1);
     let domain = std::env::var("RELAY_DOMAIN").ok();
     let channel = tunnel::connect_mtls(endpoint, domain, &identity).await?;
+
+    // Spawn the cert-renewal background task. It rides the same mTLS channel so
+    // the Relay authenticates it via the current client cert (no token). The renewed
+    // cert is written atomically to state_dir and adopted on the next connect_mtls
+    // (process restart or reconnect). The live session continues with the old cert —
+    // TLS does not re-validate certs mid-session and the renewal margin (3.5–7 days)
+    // ensures no connectivity gap (ADR-0006 Amendment 3).
+    tokio::spawn(renew::run(
+        channel.clone(),
+        state_dir.clone(),
+        identity.clone(),
+    ));
+
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
 

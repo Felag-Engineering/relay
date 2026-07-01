@@ -21,6 +21,7 @@ type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 // ---------------------------------------------------------------------------
 
 /// The persisted Node identity produced by a successful enrollment.
+#[derive(Clone)]
 pub struct Identity {
     pub node_id: String,
     /// PKCS#8 PEM private key — never logged.
@@ -190,12 +191,44 @@ pub(crate) fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
 ///
 /// Returns `(key_pem, csr_pem)`. The CSR subject is intentionally empty:
 /// the Relay CA ignores it and sets `CN = node_id` authoritatively (ADR-0006).
-fn build_keypair_and_csr() -> Result<(String, String)> {
+pub(crate) fn build_keypair_and_csr() -> Result<(String, String)> {
     let key_pair = rcgen::KeyPair::generate()?;
     let mut params = rcgen::CertificateParams::new(vec![])?;
     params.distinguished_name = rcgen::DistinguishedName::new();
     let csr = params.serialize_request(&key_pair)?;
     Ok((key_pair.serialize_pem(), csr.pem()?))
+}
+
+/// Verifies that `cert_pem`'s SubjectPublicKeyInfo (SPKI) corresponds to the private key
+/// in `key_pem` by comparing their raw SPKI DER bytes.
+///
+/// A mismatch indicates a torn-write (crash between the key.pem and cert.pem atomic
+/// renames) or a misbehaving/compromised Relay that returned a cert whose public key
+/// does not match the freshly generated keypair. Either way the caller must fail closed —
+/// do not use a mismatched identity for a TLS handshake that would fail silently.
+pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<()> {
+    // rcgen loads the private key and returns its SubjectPublicKeyInfo as DER bytes.
+    let kp = rcgen::KeyPair::from_pem(key_pem)
+        .map_err(|e| format!("cert_pubkey_matches_key: load key_pem: {e}"))?;
+    let key_spki_der = kp.public_key_der();
+
+    // x509-parser parses the cert and exposes the raw SPKI DER via .raw (RFC 5280 §4.1).
+    let ders: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| format!("cert_pubkey_matches_key: read cert PEM: {e}"))?;
+    let der = ders
+        .first()
+        .ok_or("cert_pubkey_matches_key: cert_pem contains no certificate")?;
+    let (_, cert) = x509_parser::parse_x509_certificate(der)
+        .map_err(|e| format!("cert_pubkey_matches_key: parse cert: {e:?}"))?;
+    let cert_spki_raw = cert.tbs_certificate.subject_pki.raw;
+
+    if key_spki_der.as_slice() != cert_spki_raw {
+        return Err(
+            "cert public key (SubjectPublicKeyInfo) does not correspond to private key".into(),
+        );
+    }
+    Ok(())
 }
 
 /// Checks whether a valid persisted identity exists in `dir`.
@@ -204,6 +237,9 @@ fn build_keypair_and_csr() -> Result<(String, String)> {
 /// `ca_bundle.pem`, `node_id`) exist and both the cert and key parse
 /// successfully via `rustls_pemfile`. "Valid" means present-and-well-formed;
 /// expiry checking is a separate ROADMAP item (v0.0.2 cert rotation).
+///
+/// Returns `Err` if the cert's public key does not correspond to the private key,
+/// converting a torn-write lockout into a diagnosable error (FIX A, FIND-1).
 pub fn load_identity(dir: &Path) -> Result<Option<Identity>> {
     let key_path = dir.join("key.pem");
     let cert_path = dir.join("cert.pem");
@@ -236,6 +272,12 @@ pub fn load_identity(dir: &Path) -> Result<Option<Identity>> {
         return Ok(None);
     }
 
+    // FIX A (FIND-1): Verify the cert's SPKI corresponds to the private key.
+    // A crash between the individual key.pem/cert.pem atomic renames leaves
+    // new-key+old-cert (or old-key+new-cert) on disk; rather than silently
+    // presenting a broken identity to TLS, return a clear error here.
+    cert_pubkey_matches_key(&cert_pem, &key_pem)?;
+
     Ok(Some(Identity {
         node_id,
         key_pem,
@@ -250,7 +292,7 @@ pub fn load_identity(dir: &Path) -> Result<Option<Identity>> {
 /// The directory is created at mode 0700 if absent.
 /// Each file is written atomically: a `.tmp` sibling with the target mode is
 /// written first, then renamed into place.
-fn persist_identity(dir: &Path, id: &Identity) -> Result<()> {
+pub(crate) fn persist_identity(dir: &Path, id: &Identity) -> Result<()> {
     // Create the state dir (mode 0700) if it doesn't exist yet.
     fs::DirBuilder::new()
         .recursive(true)
@@ -637,28 +679,31 @@ mod tests {
     async fn fresh_enroll_persists_identity() {
         let dir = TempDir::new("fresh");
 
-        // Build a canned valid cert using rcgen so load_identity validation passes.
-        let kp = rcgen::KeyPair::generate().expect("keygen");
-        let canned_cert = rcgen::CertificateParams::new(vec![])
-            .expect("params")
-            .self_signed(&kp)
-            .expect("self_signed")
-            .pem();
-        let canned_ca = canned_cert.clone();
         let canned_node_id = "node-fresh-001122".to_string();
-
         let nid = canned_node_id.clone();
-        let cert = canned_cert.clone();
-        let ca = canned_ca.clone();
 
-        let result = ensure_enrolled_with(dir.path(), "test-host", 2, move |_csr_pem| async move {
-            Ok((nid, cert, ca))
+        // The enroller signs the CSR with a test CA so the issued cert's public key
+        // matches the freshly generated keypair — required for load_identity to pass
+        // the key/cert correspondence check (FIX A, FIND-1).
+        let result = ensure_enrolled_with(dir.path(), "test-host", 2, move |csr_pem| async move {
+            let ca_kp = rcgen::KeyPair::generate().expect("ca keygen");
+            let ca_cert = rcgen::CertificateParams::new(vec![])
+                .expect("ca params")
+                .self_signed(&ca_kp)
+                .expect("ca cert");
+            let csr_params =
+                rcgen::CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse CSR");
+            let issued = csr_params.signed_by(&ca_cert, &ca_kp).expect("sign CSR");
+            Ok((nid, issued.pem(), ca_cert.pem()))
         })
         .await
         .expect("ensure_enrolled_with should succeed");
 
         assert_eq!(result.node_id, canned_node_id);
-        assert_eq!(result.cert_pem, canned_cert);
+        assert!(
+            result.cert_pem.contains("BEGIN CERTIFICATE"),
+            "cert_pem must be a valid PEM certificate block"
+        );
 
         // Files must be persisted with correct permissions.
         assert_eq!(
@@ -675,10 +720,51 @@ mod tests {
             );
         }
 
-        // load_identity must see the freshly written identity.
+        // load_identity must see the freshly written identity (key/cert match passes).
         let loaded = load_identity(dir.path())
             .expect("load_identity error")
             .expect("load_identity should return Some");
         assert_eq!(loaded.node_id, canned_node_id);
+    }
+
+    // -----------------------------------------------------------------------
+    // FIX A (FIND-1): load_identity with mismatched key/cert returns Err
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_identity_key_cert_mismatch_returns_err() {
+        let dir = TempDir::new("key-cert-mismatch");
+
+        // kp1's private key + kp2's self-signed cert → mismatched pair.
+        // Simulates a torn-write where a crash left new-key and old-cert on disk.
+        let kp1 = rcgen::KeyPair::generate().expect("keygen1");
+        let kp2 = rcgen::KeyPair::generate().expect("keygen2");
+        let cert2 = rcgen::CertificateParams::new(vec![])
+            .expect("params")
+            .self_signed(&kp2)
+            .expect("cert2");
+
+        let id = Identity {
+            node_id: "node-mismatch-test".to_string(),
+            key_pem: kp1.serialize_pem(),
+            cert_pem: cert2.pem(),
+            ca_bundle_pem: cert2.pem(),
+        };
+        persist_identity(dir.path(), &id).expect("persist mismatched identity");
+
+        let result = load_identity(dir.path());
+        assert!(
+            result.is_err(),
+            "load_identity with mismatched key/cert must return Err"
+        );
+        // Avoid unwrap_err() which requires Identity: Debug; use match instead.
+        let err_msg = match result {
+            Err(e) => e.to_string(),
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            err_msg.contains("public key"),
+            "error must mention public key mismatch, got: {err_msg}"
+        );
     }
 }

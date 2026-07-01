@@ -23,6 +23,8 @@ rustls = "0.23"
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
 # PEM parsing for idempotency check and future mTLS identity loading (#28).
 rustls-pemfile = "2"
+# Parse cert NotBefore/NotAfter for renewal scheduling (issue #31).
+x509-parser = "0.18"
 # config / policy
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
@@ -36,6 +38,15 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
 # ABI-matched to the rustls = "0.23" runtime dependency.
 tokio-rustls = "0.26"
+# Used by renew.rs tests to construct rcgen certs with specific validity windows.
+# (rcgen's not_before/not_after fields are time::OffsetDateTime.)
+time = "0.3"
+# Enables rcgen's CSR-parsing API (CertificateSigningRequestParams::from_pem /
+# from_der) in tests so renewers can sign the CSR with a test CA, producing a
+# cert whose public key matches the freshly generated keypair (FIX A tests).
+# x509-parser is already a runtime dependency; this just enables rcgen's optional
+# gate for it during test builds without affecting the production binary.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring", "x509-parser"] }
 
 [build-dependencies]
 tonic-build = "0.12"
