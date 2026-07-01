@@ -43,6 +43,11 @@ var (
 	// ErrNotFound is returned by Revoke and by Repository when the id is unknown.
 	ErrNotFound = errors.New("enroll: not found")
 
+	// ErrDuplicateID is returned by Repository.Create when a token with the same
+	// id already exists. Distinct from ErrInvalidToken: it signals a store-level
+	// id collision, not a validation failure on a presented credential.
+	ErrDuplicateID = errors.New("enroll: token id already exists")
+
 	// ErrInvalidScope is returned when the scope is empty or any entry lacks a
 	// "relay:" prefix (ADR-0006 invariant #7).
 	ErrInvalidScope = errors.New("enroll: scope must contain at least one relay:-prefixed label")
@@ -84,7 +89,7 @@ func (t *Token) LogValue() slog.Value {
 // Repository is the storage layer for Tokens. It is pure persistence; all domain
 // rules (expiry, revocation, max-uses) live in Service.
 type Repository interface {
-	// Create inserts t. Returns an error if a token with the same ID already exists.
+	// Create inserts t. Returns ErrDuplicateID if a token with the same ID already exists.
 	Create(ctx context.Context, t *Token) error
 	// ByID returns a defensive copy of the stored token or ErrNotFound.
 	ByID(ctx context.Context, id string) (*Token, error)

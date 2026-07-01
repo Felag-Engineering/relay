@@ -425,7 +425,7 @@ where
 ///
 /// Idempotent: if a valid identity is already on disk in `cfg.state_dir`, returns
 /// it immediately without generating a new CSR or contacting the Relay.
-/// mTLS Tunnel connect is out of scope here (#28).
+/// The mTLS Tunnel connection lives separately in `tunnel::connect_mtls`.
 pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
     // Clone the fields call_enroll_owned needs so the async closure captures
     // owned data and avoids a lifetime tangle with &EnrollConfig.

@@ -25,11 +25,6 @@ rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"]
 rustls-pemfile = "2"
 # Parse cert NotBefore/NotAfter for renewal scheduling (issue #31).
 x509-parser = "0.18"
-# config / policy
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
-# regex gating for Raw Exec (ADR-0001)
-regex = "1"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
