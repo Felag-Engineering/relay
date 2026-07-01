@@ -1,0 +1,43 @@
+// Package protoconv is the single proto-aware seam that translates gleipnirv1
+// wire types into registry domain types. It lives outside registry because
+// registry intentionally carries no proto dependency (registry.go:25-26).
+package protoconv
+
+import (
+	"strings"
+
+	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+)
+
+// FactsFromProto converts a proto Facts message to registry.Facts.
+// Nil-safe: returns a zero-value registry.Facts when pf is nil.
+// IPAddresses is copied into a fresh slice (never aliases the proto slice).
+func FactsFromProto(pf *gleipnirv1.Facts) registry.Facts {
+	if pf == nil {
+		return registry.Facts{}
+	}
+	return registry.Facts{
+		Hostname:    pf.GetHostname(),
+		OS:          pf.GetOs(),
+		Kernel:      pf.GetKernel(),
+		Arch:        pf.GetArch(),
+		IPAddresses: append([]string(nil), pf.GetIpAddresses()...),
+	}
+}
+
+// ParseNodeLabel applies the two-namespace label-authority rule (ADR-0006):
+// a label key is a node-space label iff it has a "node:" prefix and a non-empty
+// bare key. On success it returns the bare key (prefix stripped) and true.
+// Otherwise it returns "" and false. It does NOT decide what to do on failure —
+// callers keep their own drop-vs-reject policy.
+func ParseNodeLabel(key string) (bare string, ok bool) {
+	if !strings.HasPrefix(key, "node:") {
+		return "", false
+	}
+	bare = strings.TrimPrefix(key, "node:")
+	if bare == "" {
+		return "", false
+	}
+	return bare, true
+}

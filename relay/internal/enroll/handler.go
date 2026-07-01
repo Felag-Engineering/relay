@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
@@ -75,14 +76,11 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 	//    labels (ADR-0006 two-namespace invariant).
 	nodeLabels := make(map[string]string, len(req.GetSelfLabels()))
 	for _, l := range req.GetSelfLabels() {
-		if !strings.HasPrefix(l.GetKey(), "node:") {
+		bare, ok := protoconv.ParseNodeLabel(l.GetKey())
+		if !ok {
 			return nil, status.Error(codes.InvalidArgument, "self_labels must be node:-prefixed")
 		}
-		bareKey := strings.TrimPrefix(l.GetKey(), "node:")
-		if bareKey == "" {
-			return nil, status.Error(codes.InvalidArgument, "self_labels must be node:-prefixed")
-		}
-		nodeLabels[bareKey] = l.GetValue()
+		nodeLabels[bare] = l.GetValue()
 	}
 
 	// c. Extract the public token ID from the credential for provenance storage.
@@ -123,17 +121,8 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		fp = hex.EncodeToString(sum[:])
 	}
 
-	// h. Map proto Facts → registry.Facts; nil-safe.
-	var facts registry.Facts
-	if pf := req.GetFacts(); pf != nil {
-		facts = registry.Facts{
-			Hostname:    pf.GetHostname(),
-			OS:          pf.GetOs(),
-			Kernel:      pf.GetKernel(),
-			Arch:        pf.GetArch(),
-			IPAddresses: append([]string(nil), pf.GetIpAddresses()...),
-		}
-	}
+	// h. Map proto Facts -> registry.Facts; nil-safe.
+	facts := protoconv.FactsFromProto(req.GetFacts())
 
 	// i. Record the Node. This is the only write path for node-space labels + Facts.
 	if _, err := s.registry.Upsert(registry.Report{
