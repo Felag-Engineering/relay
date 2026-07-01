@@ -416,6 +416,12 @@ where
         cert_pem,
         ca_bundle_pem,
     };
+    // Fail closed: verify the Relay-returned certificate's public key corresponds
+    // to the key we just generated, *before* persisting. Mirrors the renewal path
+    // (renew.rs); a cert whose SPKI doesn't match our private key is unusable and
+    // must never be written to disk (a misbehaving/compromised Relay otherwise
+    // locks the Node out until the next boot's load-time check catches it).
+    cert_pubkey_matches_key(&identity.cert_pem, &identity.key_pem)?;
     persist_identity(state_dir, &identity)?;
     info!(node_id = %node_id, hostname, label_count, "enrollment complete");
     Ok(identity)
@@ -725,6 +731,43 @@ mod tests {
             .expect("load_identity error")
             .expect("load_identity should return Some");
         assert_eq!(loaded.node_id, canned_node_id);
+    }
+
+    #[tokio::test]
+    async fn fresh_enroll_fails_closed_on_key_cert_mismatch() {
+        let dir = TempDir::new("fresh-mismatch");
+
+        // A misbehaving/compromised Relay returns a certificate whose public key
+        // does NOT correspond to the key the daemon just generated. Enrollment must
+        // fail closed BEFORE persisting anything — parity with the renewal path,
+        // which already enforces this (see perform_renewal_with in renew.rs).
+        let result = ensure_enrolled_with(dir.path(), "test-host", 0, move |_csr_pem| async move {
+            // Cert for an unrelated keypair, ignoring the daemon's CSR.
+            let other_kp = rcgen::KeyPair::generate().expect("other keygen");
+            let other_cert = rcgen::CertificateParams::new(vec![])
+                .expect("other params")
+                .self_signed(&other_kp)
+                .expect("other cert")
+                .pem();
+            Ok(("node-mismatch".to_string(), other_cert.clone(), other_cert))
+        })
+        .await;
+
+        assert!(
+            result.is_err(),
+            "a cert whose SPKI does not match the generated key must fail closed"
+        );
+        // Nothing may be written to disk on a failed enrollment.
+        assert!(
+            !dir.path().join("key.pem").exists(),
+            "no key.pem may be persisted when enrollment fails closed"
+        );
+        assert!(
+            load_identity(dir.path())
+                .expect("load_identity error")
+                .is_none(),
+            "no identity may be persisted when enrollment fails closed"
+        );
     }
 
     // -----------------------------------------------------------------------
