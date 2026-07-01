@@ -17,8 +17,10 @@ package transport
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 
 	"google.golang.org/grpc"
@@ -84,6 +86,32 @@ func NodeIDFromContext(ctx context.Context) (string, bool) {
 // is exactly one place that injects node identity into a context.
 func NewContextWithNodeID(ctx context.Context, nodeID string) context.Context {
 	return context.WithValue(ctx, ctxKey{}, nodeID)
+}
+
+// PeerCertFingerprint returns the SHA-256 fingerprint (hex-encoded) of the
+// verified TLS leaf certificate carried in ctx, and true. Returns ("", false)
+// when ctx carries no verified TLS peer — for example in interceptor-based
+// unit tests that inject node_id without real TLS.
+//
+// The value matches the fingerprint the Enrollment handler stores
+// (enroll/handler.go:119-123): both hash the raw DER bytes of the leaf cert.
+// A Hello Upsert that recomputes the fingerprint from the same cert therefore
+// never blanks the enrollment-set value (registry.Upsert always overwrites
+// CertFingerprint, so producing the same value is essential for consistency).
+func PeerCertFingerprint(ctx context.Context) (string, bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", false
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return "", false
+	}
+	if len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.VerifiedChains[0]) == 0 {
+		return "", false
+	}
+	sum := sha256.Sum256(tlsInfo.State.VerifiedChains[0][0].Raw)
+	return hex.EncodeToString(sum[:]), true
 }
 
 // nodeIDFromPeer extracts the verified client certificate CN from the gRPC

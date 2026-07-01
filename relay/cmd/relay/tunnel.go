@@ -4,9 +4,11 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
@@ -17,6 +19,7 @@ import (
 type tunnelServer struct {
 	gleipnirv1.UnimplementedTunnelServer
 	conns *revocation.Connections
+	reg   registry.Repository
 }
 
 func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMessage, gleipnirv1.RelayMessage]) error {
@@ -72,6 +75,28 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		cctx = stream.Context()
 	}
 
+	// Record the Node's identity, facts, and node: labels in the registry.
+	// CertFingerprint is recomputed from the verified leaf so the Upsert does
+	// not blank the value that Enrollment stored (Upsert always overwrites it;
+	// same cert → same fingerprint → no information loss).
+	// EnrollingTokenID is intentionally omitted: Upsert's update path preserves
+	// existing provenance (memory.go:93-94).
+	// Nil-guard mirrors the conns nil-guard above so tests that build
+	// &tunnelServer{} without a registry keep compiling and passing.
+	if s.reg != nil {
+		fp, _ := transport.PeerCertFingerprint(stream.Context())
+		if _, err := s.reg.Upsert(registry.Report{
+			NodeID:          nodeID,
+			CertFingerprint: fp,
+			Facts:           factsFromProto(hello.Facts),
+			NodeLabels:      nodeLabelsFromHello(hello.GetLabels()),
+		}); err != nil {
+			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
+		}
+	}
+
+	// Send Ping after the registry Upsert so a client that receives the Ping is
+	// guaranteed the registration is complete — tests use Ping as the sync point.
 	if err := stream.Send(&gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Ping{
 			Ping: &gleipnirv1.Ping{UnixMillis: time.Now().UnixMilli()},
@@ -118,7 +143,53 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		case m := <-recvMsg:
 			if hb := m.GetHeartbeat(); hb != nil {
 				slog.Debug("heartbeat", "unix_millis", hb.UnixMillis)
+				if s.reg != nil {
+					if err := s.reg.UpdateLastSeen(nodeID, time.Now()); err != nil {
+						slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)
+					}
+				}
 			}
 		}
 	}
+}
+
+// factsFromProto converts a proto Facts message to registry.Facts.
+// Nil-safe: returns a zero-value registry.Facts when pf is nil.
+// Mirrors enroll/handler.go:126-135.
+func factsFromProto(pf *gleipnirv1.Facts) registry.Facts {
+	if pf == nil {
+		return registry.Facts{}
+	}
+	return registry.Facts{
+		Hostname:    pf.GetHostname(),
+		OS:          pf.GetOs(),
+		Kernel:      pf.GetKernel(),
+		Arch:        pf.GetArch(),
+		IPAddresses: append([]string(nil), pf.GetIpAddresses()...),
+	}
+}
+
+// nodeLabelsFromHello extracts node-space labels from Hello labels, returning a
+// map with bare keys (the "node:" prefix is stripped). Only keys with a "node:"
+// prefix and a non-empty bare key are accepted; all other keys are silently
+// dropped.
+//
+// WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,
+// the Relay is the sole authority for relay: labels. A relay-daemon can never set
+// relay-space labels, regardless of what it sends on the wire. Dropping (rather
+// than rejecting with an error) keeps the tunnel resilient — a stray relay: label
+// never tears down a long-lived connection.
+func nodeLabelsFromHello(labels []*gleipnirv1.Label) map[string]string {
+	result := make(map[string]string)
+	for _, l := range labels {
+		if !strings.HasPrefix(l.GetKey(), "node:") {
+			continue
+		}
+		bareKey := strings.TrimPrefix(l.GetKey(), "node:")
+		if bareKey == "" {
+			continue
+		}
+		result[bareKey] = l.GetValue()
+	}
+	return result
 }

@@ -99,9 +99,7 @@ impl EnrollConfig {
 
         let relay_domain = std::env::var("RELAY_DOMAIN").ok();
         let state_dir = state_dir_from_env();
-        let node_labels = std::env::var("RELAY_NODE_LABELS")
-            .map(|v| parse_node_labels(&v))
-            .unwrap_or_default();
+        let node_labels = node_labels_from_env();
 
         let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-node".to_string());
         let facts = Facts {
@@ -143,10 +141,32 @@ pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
     Err(format!("enroll endpoint must use https (got: {})", scheme).into())
 }
 
+/// Reads `RELAY_NODE_LABELS` from the environment and returns bare (key, value)
+/// pairs. The `node:` prefix is stripped here and re-applied at send time by
+/// `node_labels_to_proto`, so there is exactly one prefixing site.
+pub(crate) fn node_labels_from_env() -> Vec<(String, String)> {
+    std::env::var("RELAY_NODE_LABELS")
+        .map(|v| parse_node_labels(&v))
+        .unwrap_or_default()
+}
+
+/// Converts bare (key, value) label pairs to proto Labels, adding the mandatory
+/// `node:` prefix. This is the single prefixing site for node-space labels
+/// (ADR-0006 two-namespace invariant: a daemon can never inject relay: labels).
+pub(crate) fn node_labels_to_proto(labels: &[(String, String)]) -> Vec<Label> {
+    labels
+        .iter()
+        .map(|(k, v)| Label {
+            key: format!("node:{}", k),
+            value: v.clone(),
+        })
+        .collect()
+}
+
 /// Parses a comma-separated `key=value` label list into bare pairs, stripping
 /// any `node:` prefix that would otherwise be double-applied at send time.
 /// Malformed or empty entries are silently skipped.
-fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_node_labels(raw: &str) -> Vec<(String, String)> {
     raw.split(',')
         .filter_map(|entry| {
             let entry = entry.trim();
@@ -302,15 +322,7 @@ async fn call_enroll_owned(
         .connect()
         .await?;
 
-    let self_labels: Vec<Label> = node_labels
-        .iter()
-        .map(|(k, v)| Label {
-            // Re-apply the "node:" prefix enforced by handler.go:77 (ADR-0006
-            // two-namespace invariant: a daemon can never inject relay: labels).
-            key: format!("node:{}", k),
-            value: v.clone(),
-        })
-        .collect();
+    let self_labels = node_labels_to_proto(&node_labels);
 
     let req = EnrollRequest {
         enrollment_token: token,

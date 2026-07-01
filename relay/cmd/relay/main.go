@@ -81,7 +81,7 @@ func main() {
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
 	)
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns, reg: reg})
 	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
 
 	slog.Info("relay listening", "addr", *addr, "mtls", true, "ca_dir", *caDir)
