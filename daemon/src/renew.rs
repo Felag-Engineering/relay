@@ -14,10 +14,11 @@ use std::time::{Duration, SystemTime};
 use tonic::transport::Channel;
 use tracing::{error, info};
 
+use crate::enroll::EnrollError;
 use crate::gen::{enrollment_client::EnrollmentClient, RenewRequest};
-use crate::identity::{build_keypair_and_csr, cert_pubkey_matches_key, persist_identity, Identity};
-
-type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+use crate::identity::{
+    build_keypair_and_csr, cert_pubkey_matches_key, persist_identity, Identity, IdentityError,
+};
 
 // Renewal is triggered at a random fraction of [50%, 75%] through the cert lifetime.
 // For a 336h (14-day) cert this means renewal at [168h, 252h], leaving [84h, 168h]
@@ -42,24 +43,23 @@ const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(3600);
 ///
 /// Uses `ASN1Time::timestamp()` from x509-parser so there is no direct dependency
 /// on the `time` crate in this file.
-pub(crate) fn cert_validity(cert_pem: &str) -> Result<(SystemTime, SystemTime)> {
+pub(crate) fn cert_validity(
+    cert_pem: &str,
+) -> std::result::Result<(SystemTime, SystemTime), IdentityError> {
     // Collect the first DER-encoded certificate block from the PEM.
     let der_certs: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to read cert PEM: {}", e))?;
-    let der = der_certs
-        .first()
-        .ok_or("cert_pem contains no certificate")?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let der = der_certs.first().ok_or(IdentityError::NoCertificate)?;
 
     let (_, cert) = x509_parser::parse_x509_certificate(der)
-        .map_err(|e| format!("x509 parse error: {:?}", e))?;
+        .map_err(|e| IdentityError::CertParse(format!("{e:?}")))?;
 
     // ASN1Time::timestamp() returns Unix seconds as i64 — no `time` crate dependency needed.
-    let ts_to_system_time = |ts: i64| -> Result<SystemTime> {
+    let ts_to_system_time = |ts: i64| -> std::result::Result<SystemTime, IdentityError> {
         if ts >= 0 {
             Ok(SystemTime::UNIX_EPOCH + Duration::from_secs(ts as u64))
         } else {
-            Err(format!("certificate has a pre-epoch timestamp: {}", ts).into())
+            Err(IdentityError::PreEpoch { ts })
         }
     };
 
@@ -104,14 +104,12 @@ pub(crate) async fn perform_renewal_with<F, Fut>(
     state_dir: &Path,
     current: &Identity,
     renewer: F,
-) -> Result<Identity>
+) -> std::result::Result<Identity, EnrollError>
 where
     F: FnOnce(String) -> Fut,
-    Fut: Future<Output = Result<(String, String, String)>>,
+    Fut: Future<Output = std::result::Result<(String, String, String), EnrollError>>,
 {
-    // build_keypair_and_csr returns identity.rs's Box<dyn Error> (not Send+Sync);
-    // convert to string so the error satisfies our Send+Sync bound.
-    let (key_pem, csr_pem) = build_keypair_and_csr().map_err(|e| e.to_string())?;
+    let (key_pem, csr_pem) = build_keypair_and_csr()?;
     let (node_id, cert_pem, ca_bundle_pem) = renewer(csr_pem).await?;
 
     // Defense in depth: the Relay sets node_id from the verified TLS peer cert CN,
@@ -123,11 +121,10 @@ where
             received = %node_id,
             "renewal response node_id does not match persisted node_id; refusing to persist"
         );
-        return Err(format!(
-            "node_id mismatch: expected {}, got {}",
-            current.node_id, node_id
-        )
-        .into());
+        return Err(EnrollError::NodeIdMismatch {
+            expected: current.node_id.clone(),
+            received: node_id,
+        });
     }
 
     // FIX A (FIND-1 + FIND-3): Verify the returned cert's SubjectPublicKeyInfo
@@ -139,7 +136,7 @@ where
             error = %e,
             "renewal cert public key does not correspond to new keypair; refusing to persist"
         );
-        return Err(format!("public key mismatch in renewal response: {e}").into());
+        return Err(EnrollError::Identity(e));
     }
 
     // If the Relay returned an empty ca_bundle, keep the current one.
@@ -156,8 +153,7 @@ where
         ca_bundle_pem: ca_bundle,
     };
 
-    // persist_identity returns identity.rs's Box<dyn Error> (not Send+Sync); convert to string.
-    persist_identity(state_dir, &new_identity).map_err(|e| e.to_string())?;
+    persist_identity(state_dir, &new_identity)?;
     Ok(new_identity)
 }
 
@@ -216,22 +212,18 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
                 };
                 let resp = EnrollmentClient::new(ch)
                     .renew(tonic::Request::new(req))
-                    .await
-                    .map_err(|e| format!("Renew RPC failed: {}", e))?
+                    .await?
                     .into_inner();
 
-                let cert_pem = String::from_utf8(resp.certificate)
-                    .map_err(|e| format!("cert PEM is not valid UTF-8: {}", e))?;
-                let ca_bundle_pem = String::from_utf8(resp.ca_bundle)
-                    .map_err(|e| format!("ca_bundle PEM is not valid UTF-8: {}", e))?;
+                let cert_pem = String::from_utf8(resp.certificate)?;
+                let ca_bundle_pem = String::from_utf8(resp.ca_bundle)?;
 
                 // Sanity-check: resp.node_id should match the identity we presented.
                 if !resp.node_id.is_empty() && resp.node_id != node_id {
-                    return Err(format!(
-                        "Relay returned unexpected node_id: {} (expected {})",
-                        resp.node_id, node_id
-                    )
-                    .into());
+                    return Err(EnrollError::NodeIdMismatch {
+                        expected: node_id,
+                        received: resp.node_id,
+                    });
                 }
 
                 Ok((resp.node_id, cert_pem, ca_bundle_pem))
@@ -277,7 +269,8 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use crate::identity::{load_identity, persist_identity};
+    use crate::enroll::EnrollError;
+    use crate::identity::{load_identity, persist_identity, IdentityError};
 
     /// A temp dir that removes itself on drop, for test isolation.
     struct TempDir(PathBuf);
@@ -471,7 +464,7 @@ mod tests {
             let csr_params =
                 rcgen::CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse CSR");
             let issued = csr_params.signed_by(&ca_cert, &ca_kp).expect("sign CSR");
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((nid, issued.pem(), ca_cert.pem()))
+            Ok::<_, EnrollError>((nid, issued.pem(), ca_cert.pem()))
         })
         .await
         .expect("perform_renewal_with should succeed");
@@ -526,7 +519,7 @@ mod tests {
                 .expect("self_signed")
                 .pem();
             // Correct node_id so only the pubkey check (not the node_id check) fires.
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
+            Ok::<_, EnrollError>((
                 "node-pubkey-check".to_string(),
                 foreign_cert.clone(),
                 foreign_cert,
@@ -535,14 +528,19 @@ mod tests {
         .await;
 
         assert!(result.is_err(), "pubkey mismatch must return Err, got Ok");
-        // Avoid unwrap_err() which requires Identity: Debug; use match instead.
-        let err_msg = match result {
-            Err(e) => e.to_string(),
+        // Avoid unwrap_err(), which requires the Ok type (Identity) to be Debug;
+        // Identity intentionally does not derive Debug (it holds a private key).
+        let e = match result {
+            Err(e) => e,
             Ok(_) => unreachable!(),
         };
         assert!(
-            err_msg.contains("public key"),
-            "error must mention public key mismatch, got: {err_msg}"
+            matches!(&e, EnrollError::Identity(IdentityError::PubkeyMismatch)),
+            "expected Identity(PubkeyMismatch) variant"
+        );
+        assert!(
+            e.to_string().contains("public key"),
+            "error must mention public key mismatch, got: {e}"
         );
 
         // The on-disk identity must be UNCHANGED — fail closed.
@@ -582,16 +580,22 @@ mod tests {
                     .expect("self_signed")
                     .pem();
                 // Return a DIFFERENT node_id — simulates a Relay misbehaving.
-                Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
-                    "node-DIFFERENT-999".to_string(),
-                    cert.clone(),
-                    cert,
-                ))
+                Ok::<_, EnrollError>(("node-DIFFERENT-999".to_string(), cert.clone(), cert))
             }
         })
         .await;
 
         assert!(result.is_err(), "node_id mismatch must return Err, got Ok");
+        // Avoid unwrap_err(), which requires the Ok type (Identity) to be Debug;
+        // Identity intentionally does not derive Debug (it holds a private key).
+        let e = match result {
+            Err(e) => e,
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            matches!(e, EnrollError::NodeIdMismatch { .. }),
+            "expected NodeIdMismatch variant"
+        );
         assert!(
             renewer_called.load(Ordering::SeqCst),
             "renewer should have been called"

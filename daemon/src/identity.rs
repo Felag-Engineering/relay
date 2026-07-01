@@ -10,13 +10,37 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity as TlsIdentity};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity as TlsIdentity};
 
-type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+type Result<T, E = IdentityError> = std::result::Result<T, E>;
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
+
+/// Typed error for identity primitives.
+///
+/// All variants are `Send + Sync` so `renew::run` (a `tokio::spawn`-ed task)
+/// can carry them across `.await` without a `.to_string()` bridge.
+#[derive(Debug, thiserror::Error)]
+pub enum IdentityError {
+    #[error("enroll endpoint must use https (got: {scheme})")]
+    EndpointScheme { scheme: String },
+    #[error(transparent)]
+    Crypto(#[from] rcgen::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("cert_pem contains no certificate")]
+    NoCertificate,
+    #[error("cert parse error: {0}")]
+    CertParse(String),
+    #[error("cert public key (SubjectPublicKeyInfo) does not correspond to private key")]
+    PubkeyMismatch,
+    #[error("certificate has a pre-epoch timestamp: {ts}")]
+    PreEpoch { ts: i64 },
+    #[error(transparent)]
+    Channel(#[from] tonic::transport::Error),
+}
 
 /// The persisted Node identity produced by a successful enrollment.
 #[derive(Clone)]
@@ -46,7 +70,9 @@ pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
         .find("://")
         .map(|i| &endpoint[..i])
         .unwrap_or("(none)");
-    Err(format!("enroll endpoint must use https (got: {})", scheme).into())
+    Err(IdentityError::EndpointScheme {
+        scheme: scheme.to_string(),
+    })
 }
 
 /// Generates an ECDSA P-256 keypair and a PEM CSR for it.
@@ -70,25 +96,19 @@ pub(crate) fn build_keypair_and_csr() -> Result<(String, String)> {
 /// do not use a mismatched identity for a TLS handshake that would fail silently.
 pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<()> {
     // rcgen loads the private key and returns its SubjectPublicKeyInfo as DER bytes.
-    let kp = rcgen::KeyPair::from_pem(key_pem)
-        .map_err(|e| format!("cert_pubkey_matches_key: load key_pem: {e}"))?;
+    let kp = rcgen::KeyPair::from_pem(key_pem)?;
     let key_spki_der = kp.public_key_der();
 
     // x509-parser parses the cert and exposes the raw SPKI DER via .raw (RFC 5280 §4.1).
     let ders: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|e| format!("cert_pubkey_matches_key: read cert PEM: {e}"))?;
-    let der = ders
-        .first()
-        .ok_or("cert_pubkey_matches_key: cert_pem contains no certificate")?;
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let der = ders.first().ok_or(IdentityError::NoCertificate)?;
     let (_, cert) = x509_parser::parse_x509_certificate(der)
-        .map_err(|e| format!("cert_pubkey_matches_key: parse cert: {e:?}"))?;
+        .map_err(|e| IdentityError::CertParse(format!("{e:?}")))?;
     let cert_spki_raw = cert.tbs_certificate.subject_pki.raw;
 
     if key_spki_der.as_slice() != cert_spki_raw {
-        return Err(
-            "cert public key (SubjectPublicKeyInfo) does not correspond to private key".into(),
-        );
+        return Err(IdentityError::PubkeyMismatch);
     }
     Ok(())
 }
@@ -215,7 +235,7 @@ pub(crate) async fn build_channel(
     if let Some(d) = domain {
         tls = tls.domain_name(d);
     }
-    Ok(Channel::from_shared(endpoint)?
+    Ok(Endpoint::from_shared(endpoint)?
         .tls_config(tls)?
         .connect()
         .await?)
@@ -230,6 +250,12 @@ mod tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
     use std::path::PathBuf;
+
+    // Compile-time Send+Sync assertion for IdentityError.
+    fn _assert_identity_error_send_sync() {
+        fn _assert<T: Send + Sync>() {}
+        _assert::<IdentityError>();
+    }
 
     // A temp dir that removes itself on drop, for test isolation.
     struct TempDir(PathBuf);
@@ -292,6 +318,11 @@ mod tests {
             "error message should mention the bad scheme, got: {}",
             err
         );
+        assert!(
+            matches!(err, IdentityError::EndpointScheme { .. }),
+            "expected EndpointScheme variant, got: {:?}",
+            err
+        );
     }
 
     #[test]
@@ -301,6 +332,11 @@ mod tests {
         assert!(
             err.to_string().contains("none"),
             "error message should say (none) for a schemeless endpoint, got: {}",
+            err
+        );
+        assert!(
+            matches!(err, IdentityError::EndpointScheme { .. }),
+            "expected EndpointScheme variant, got: {:?}",
             err
         );
     }
@@ -313,6 +349,11 @@ mod tests {
         assert!(
             err.to_string().contains("grpc"),
             "error message should mention the bad scheme, got: {}",
+            err
+        );
+        assert!(
+            matches!(err, IdentityError::EndpointScheme { .. }),
+            "expected EndpointScheme variant, got: {:?}",
             err
         );
     }
@@ -407,14 +448,18 @@ mod tests {
             result.is_err(),
             "load_identity with mismatched key/cert must return Err"
         );
-        // Avoid unwrap_err() which requires Identity: Debug; use match instead.
-        let err_msg = match result {
-            Err(e) => e.to_string(),
+        let e = match result {
+            Err(e) => e,
             Ok(_) => unreachable!(),
         };
         assert!(
-            err_msg.contains("public key"),
-            "error must mention public key mismatch, got: {err_msg}"
+            matches!(&e, IdentityError::PubkeyMismatch),
+            "expected PubkeyMismatch variant, got: {:?}",
+            e
+        );
+        assert!(
+            e.to_string().contains("public key"),
+            "error must mention public key mismatch, got: {e}"
         );
     }
 }
