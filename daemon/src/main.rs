@@ -101,8 +101,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    // rustls 0.23 requires an explicit process-level CryptoProvider because both
-    // ring and aws-lc-rs are compiled in; install ring to match rcgen's backend.
+    // rustls 0.23 requires an explicit process-level CryptoProvider. ring is the
+    // only compiled provider (aws-lc-rs excluded in Cargo.toml); install it here
+    // as the explicit process default, matching rcgen's ring backend.
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("rustls CryptoProvider installation must succeed at startup");

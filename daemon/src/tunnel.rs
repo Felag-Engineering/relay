@@ -71,10 +71,10 @@ mod tests {
         use rustls::ServerConfig;
         use tokio_rustls::TlsAcceptor;
 
-        // rustls 0.23 requires an explicit process-level CryptoProvider when
-        // multiple provider crate features are compiled in (aws-lc-rs from
-        // rustls defaults + ring from rcgen). Use ring, consistent with rcgen.
-        // `install_default` is idempotent: Err means another test won first.
+        // rustls 0.23 requires an explicit process-level CryptoProvider. ring is
+        // the only compiled provider (aws-lc-rs excluded in Cargo.toml), matching
+        // rcgen's backend. `install_default` is idempotent: Err means another test
+        // won first.
         let _ = rustls::crypto::ring::default_provider().install_default();
 
         // CA-A: the server will present this self-signed cert.
