@@ -1,0 +1,71 @@
+name: Security (nightly)
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+
+  scan:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: relay/go.mod
+
+      # Pin govulncheck to a known-good version (full module path required).
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-audit-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-audit-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.2 --locked # pinned for supply-chain reproducibility
+
+      # Non-blocking: capture output and exit code; report step decides what to file.
+      # NOTE: GH Actions `run:` runs under `bash -e`, so when a scan exits non-zero
+      # the `echo $? > *.rc` line is never reached and no .rc file is written.
+      # The report script's `|| echo 1` fallback (cat *.rc || echo 1) treats a
+      # missing .rc as rc=1, which is correct — missing file means findings detected.
+      - name: Scan Relay (govulncheck)
+        id: vuln_relay
+        continue-on-error: true
+        run: |
+          make vuln-relay > vuln-relay.txt 2>&1
+          echo $? > vuln-relay.rc
+
+      - name: Scan Daemon (cargo audit)
+        id: vuln_daemon
+        continue-on-error: true
+        run: |
+          make vuln-daemon > vuln-daemon.txt 2>&1
+          echo $? > vuln-daemon.rc
+
+      # Always runs; creates or updates the single security-scan tracking issue.
+      - name: Report findings
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/security-nightly-report.sh
