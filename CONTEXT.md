@@ -120,3 +120,10 @@ _Avoid_: link, edge, relation
 Free-text notes attached to any System Model entity by the AI-agent or a human, carrying
 provenance. Descriptive context only, never used for targeting.
 _Avoid_: comment, note, tag
+
+**Admin Console**:
+The human-facing web UI for operators to monitor the fleet and drive the control plane
+(enrollment, revocation, Operations, Raw Exec). A thin adapter over the same operator
+capability layer as the MCP surface (ADR-0003, ADR-0009); it never bypasses Selectors →
+Policy → blast cap → audit. Distinct from the **AI-agent**, which drives the Relay over MCP.
+_Avoid_: dashboard, portal, admin panel, "the UI"

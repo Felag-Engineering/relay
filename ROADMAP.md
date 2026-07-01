@@ -88,6 +88,9 @@ Make it drivable by an AI-agent across the fleet.
 - **SQLite** persistence behind a repository interface: Node registry, Jobs, Tasks, audit.
 - **Audit**: every Job/Task recorded (principal, selector, op, args, result, timestamps).
 - Minimal **Relay-side authz**: single admin principal via a static token on the MCP endpoint.
+- Structure the control path as a **reusable capability layer** (Selector → Policy →
+  blast-cap → audit) with MCP as its first adapter, so a future CLI and Admin Console are
+  thin adapters rather than parallel control paths (ADR-0009).
 - Add `pkg.install` Native Operation.
 
 **Acceptance**
@@ -144,6 +147,35 @@ the beta so the vertical slice stays focused on the execution path.
   Policy + blast cap.
 
 **ADRs:** 0008 (System Model); reuses 0003 (Selectors), 0004 (Jobs).
+
+---
+
+## `v0.3.0` — Admin Console (post-beta)
+
+A human-facing web **Admin Console** for operators to monitor the fleet and drive the
+control plane — for the humans who aren't the AI-agent. Built as a **thin adapter** over
+the v0.0.4 operator capability layer (ADR-0009), reusing Selector → Policy → blast-cap →
+audit rather than re-implementing control. Sequenced after v0.0.4 (needs the capability
+layer + audit) and the beta (needs a working system to operate); it draws on the v0.2.0
+System Model for richer monitoring. Full-control scope, built in reviewable phases.
+
+**Deliverables**
+- Monitoring: live Node registry (facts, `node:`/`relay:` labels, liveness), Enrollment
+  Token inventory, CA/cert lifecycle, Jobs/Tasks, and the audit trail.
+- Control: mint/revoke Enrollment Tokens, revoke Nodes, `run_operation`, and `raw_exec`
+  (break-glass) — all through the shared capability layer.
+- Human auth: SSO/OIDC login, RBAC (`viewer` / `operator` / `admin`), per-action step-up
+  re-auth for Raw Exec, and per-human audit attribution.
+- Internal-only serving (not internet-facing); server-rendered Go + HTMX (ADR-0009).
+
+**Acceptance**
+- An operator logs in via SSO, views live fleet state, mints a scoped Enrollment Token,
+  runs a Selector-targeted Operation, and sees their own action attributed in the audit
+  trail — with RBAC preventing a `viewer` from executing.
+- `raw_exec` requires `admin` + step-up re-auth and is refused otherwise.
+
+**ADRs:** 0009 (Admin Console); builds on 0003 (capability surface), 0004 (Jobs, blast
+radius), 0006 (identity), 0002 (Policy read-only).
 
 ---
 
