@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
@@ -203,5 +204,199 @@ func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout: live stream was not torn down after Disconnect")
+	}
+}
+
+// TestTunnelOpen_HelloRegistersNode verifies that sending a Hello with Facts and
+// labels causes the handler to upsert the Node into the registry with correct
+// facts and node: labels, and that relay: labels supplied on the stream are
+// structurally dropped (acceptance criterion for issue #29).
+func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
+	const certNodeID = "cert-node-1"
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Hello{
+			Hello: &gleipnirv1.Hello{
+				NodeId:        certNodeID,
+				DaemonVersion: "0.0.1-test",
+				Facts:         &gleipnirv1.Facts{Hostname: "h", Os: "linux"},
+				Labels: []*gleipnirv1.Label{
+					{Key: "node:role", Value: "web"},
+					{Key: "relay:env", Value: "prod"}, // must be dropped: stream cannot set relay: labels
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	// Recv the Ping — registration is guaranteed complete at this point because
+	// the handler Upserts before sending the Ping (ordering invariant).
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+
+	n, ok := reg.Get(certNodeID)
+	if !ok {
+		t.Fatal("node not found in registry after Hello")
+	}
+	if n.Facts.Hostname != "h" {
+		t.Errorf("Facts.Hostname: got %q, want %q", n.Facts.Hostname, "h")
+	}
+	// node:role=web is accepted; bare key stored without prefix.
+	if n.NodeLabels["role"] != "web" {
+		t.Errorf("NodeLabels[role]: got %q, want web", n.NodeLabels["role"])
+	}
+	// relay:env must have been dropped — only "role" should be in NodeLabels.
+	if len(n.NodeLabels) != 1 {
+		t.Errorf("NodeLabels should have exactly 1 entry, got %v", n.NodeLabels)
+	}
+	// Stream can never set relay-space labels.
+	if len(n.RelayLabels) != 0 {
+		t.Errorf("RelayLabels should be empty after Hello, got %v", n.RelayLabels)
+	}
+}
+
+// TestTunnelOpen_HeartbeatUpdatesLastSeen verifies that receiving a Heartbeat
+// causes the handler to advance the Node's LastSeen timestamp in the registry.
+// The registry is seeded with a fixed old clock so Hello records LastSeen=oldTime;
+// UpdateLastSeen is called with the handler's real time.Now(), which is strictly
+// after oldTime, so the advance is observable.
+func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
+	const certNodeID = "cert-node-hb"
+	oldTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Hello{
+			Hello: &gleipnirv1.Hello{NodeId: certNodeID},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	// Recv the Ping — confirms the Node is registered with LastSeen=oldTime.
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+
+	// Verify Hello recorded LastSeen as oldTime (the fixed clock).
+	n, ok := reg.Get(certNodeID)
+	if !ok {
+		t.Fatal("node not found in registry after Hello")
+	}
+	if !n.LastSeen.Equal(oldTime) {
+		t.Fatalf("LastSeen after Hello: got %v, want %v", n.LastSeen, oldTime)
+	}
+
+	// Send a Heartbeat — the handler will call UpdateLastSeen(nodeID, time.Now()).
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Heartbeat{
+			Heartbeat: &gleipnirv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+		},
+	}); err != nil {
+		t.Fatalf("send heartbeat: %v", err)
+	}
+
+	// Poll for LastSeen to advance past oldTime. The handler processes the
+	// Heartbeat asynchronously; a select-with-timeout loop with a small sleep
+	// avoids a busy-spin while bounding the test's wall-clock cost.
+	found := make(chan struct{}, 1)
+	go func() {
+		for {
+			n, ok := reg.Get(certNodeID)
+			if ok && n.LastSeen.After(oldTime) {
+				found <- struct{}{}
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-found:
+		// LastSeen advanced past oldTime — UpdateLastSeen was called.
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: LastSeen was not updated after Heartbeat")
+	}
+}
+
+// TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello helper.
+func TestNodeLabelsFromHello(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []*gleipnirv1.Label
+		want  map[string]string
+	}{
+		{
+			name:  "node: prefix is accepted; bare key is stored",
+			input: []*gleipnirv1.Label{{Key: "node:role", Value: "web"}},
+			want:  map[string]string{"role": "web"},
+		},
+		{
+			name:  "relay: prefix is dropped (stream cannot set relay: labels)",
+			input: []*gleipnirv1.Label{{Key: "relay:env", Value: "prod"}},
+			want:  map[string]string{},
+		},
+		{
+			name:  "node: with empty bare key is dropped",
+			input: []*gleipnirv1.Label{{Key: "node:", Value: "val"}},
+			want:  map[string]string{},
+		},
+		{
+			name:  "no namespace prefix is dropped",
+			input: []*gleipnirv1.Label{{Key: "role", Value: "web"}},
+			want:  map[string]string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := nodeLabelsFromHello(tc.input)
+			if len(got) != len(tc.want) {
+				t.Errorf("len: got %d, want %d; got=%v, want=%v",
+					len(got), len(tc.want), got, tc.want)
+				return
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("key %q: got %q, want %q", k, got[k], v)
+				}
+			}
+		})
 	}
 }
