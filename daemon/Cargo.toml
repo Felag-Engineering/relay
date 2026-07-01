@@ -16,6 +16,13 @@ prost = "0.13"
 tokio-stream = "0.1"
 # mTLS / crypto
 rustls = "0.23"
+# CSR / keypair generation for enrollment bootstrap (ADR-0006).
+# `ring` backend keeps crypto internally consistent with rustls' ring path.
+# NOTE: aws-lc-rs is already in the tree via rustls 0.23 — this is not a
+# size/aws-lc-rs-avoidance decision; it is a crypto-path consistency choice.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+# PEM parsing for idempotency check and future mTLS identity loading (#28).
+rustls-pemfile = "2"
 # config / policy
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
