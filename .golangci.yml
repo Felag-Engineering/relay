@@ -1,0 +1,12 @@
+# Minimal golangci-lint config (repo-root; golangci-lint searches upward from relay/).
+# disable-all + curated enabled set keeps lint predictable and avoids noise on
+# existing code (e.g. errcheck false-positives on conn.Close() in test cleanups).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
