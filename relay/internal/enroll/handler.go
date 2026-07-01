@@ -30,24 +30,63 @@ type Registrar interface {
 	SetRelayLabels(nodeID string, labels map[string]string) error
 }
 
+// TokenRevocationChecker reports whether an Enrollment Token is revoked.
+// *Service satisfies this interface.
+type TokenRevocationChecker interface {
+	IsRevoked(ctx context.Context, id string) (bool, error)
+}
+
+// NodeDenylister adds a Node to the Relay-side denylist and tears down any live
+// connection (ADR-0006). *revocation.Service satisfies this interface.
+type NodeDenylister interface {
+	RevokeNode(nodeID string)
+}
+
+// ServerOption configures a Server at construction.
+type ServerOption func(*Server)
+
+// WithPostEnrollRevocationCheck enables the post-Upsert recheck that closes the
+// in-flight-enroll vs token-cascade-revocation race (issue #57). When set, after a
+// Node is recorded the handler re-reads the enrolling token's revocation state and,
+// if it was revoked mid-enrollment, self-denylists the freshly minted node_id and
+// rejects the enrollment (fail-closed).
+//
+// Panics if either argument is nil.
+func WithPostEnrollRevocationCheck(checker TokenRevocationChecker, denylister NodeDenylister) ServerOption {
+	if checker == nil || denylister == nil {
+		panic("enroll: WithPostEnrollRevocationCheck: checker and denylister must not be nil")
+	}
+	return func(s *Server) {
+		s.revocationChecker = checker
+		s.nodeDenylister = denylister
+	}
+}
+
 // Server implements gleipnirv1.EnrollmentServer. It validates Enrollment Tokens,
 // signs CSRs, and records Nodes in the registry (ADR-0006).
 type Server struct {
 	gleipnirv1.UnimplementedEnrollmentServer
-	tokens   *Service
-	signer   Signer
-	registry Registrar
-	newID    func() (string, error)
+	tokens            *Service
+	signer            Signer
+	registry          Registrar
+	newID             func() (string, error)
+	revocationChecker TokenRevocationChecker
+	nodeDenylister    NodeDenylister
 }
 
 // NewServer creates a Server backed by the given token Service, Signer (CA), and Registrar.
-func NewServer(tokens *Service, signer Signer, reg Registrar) *Server {
-	return &Server{
+// Optional opts (e.g. WithPostEnrollRevocationCheck) are applied after construction.
+func NewServer(tokens *Service, signer Signer, reg Registrar, opts ...ServerOption) *Server {
+	s := &Server{
 		tokens:   tokens,
 		signer:   signer,
 		registry: reg,
 		newID:    randomNodeID,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // randomNodeID generates a random 16-byte node_id, hex-encoded with a "node-" prefix.
@@ -148,6 +187,37 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 	}
 	if err := s.registry.SetRelayLabels(nodeID, relayBare); err != nil {
 		return nil, status.Error(codes.Internal, "enrollment failed")
+	}
+
+	// Post-Upsert recheck (issue #57): the Validate→Upsert sequence is not atomic,
+	// so a concurrent RevokeToken cascade can complete its bounded re-scan in the
+	// window between our Validate and this Upsert, missing this Node. Re-read the
+	// enrolling token's state now that the Node is durably recorded; if it was
+	// revoked mid-flight, self-denylist this node_id and fail closed. Skipped when
+	// the check is not wired (revocationChecker == nil) to preserve existing behavior.
+	if s.revocationChecker != nil {
+		revoked, err := s.revocationChecker.IsRevoked(ctx, tokenID)
+		if err != nil || revoked {
+			// Fail closed: on an indeterminate check OR a confirmed revocation,
+			// revoke the just-minted identity. RevokeNode is idempotent and the
+			// Node has no live Tunnel yet, so Disconnect is a harmless no-op; the
+			// denylist entry blocks the daemon's later Tunnel dial (ADR-0006).
+			//
+			// Invariant: WithPostEnrollRevocationCheck sets revocationChecker and
+			// nodeDenylister together and panics if either is nil, so nodeDenylister
+			// is non-nil whenever revocationChecker is. The guard is defensive only
+			// against direct struct construction (e.g. in tests) and keeps the denial
+			// path from silently skipping the denylist.
+			if s.nodeDenylister != nil {
+				s.nodeDenylister.RevokeNode(nodeID)
+			}
+			// Log the raw check error (nil on the confirmed-revocation path) so the
+			// denial reason is unambiguous once a persistent store makes err != nil
+			// reachable. err is a repository error, never credential material.
+			slog.Warn("enrollment denied: token revoked mid-enrollment",
+				"node_id", nodeID, "token_id", tokenID, "check_err", err)
+			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
+		}
 	}
 
 	// k. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
