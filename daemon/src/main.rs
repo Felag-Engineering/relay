@@ -5,6 +5,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info};
 
 mod enroll;
+mod tunnel;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 mod gen {
@@ -33,7 +34,10 @@ fn relay_addr() -> String {
     std::env::var("RELAY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7654".to_string())
 }
 
-fn node_id() -> String {
+/// Returns the Node's hostname for use in Facts. This is a human-readable
+/// descriptor, not the Relay-assigned identity. Do not substitute
+/// `identity.node_id` here — that is a UUID assigned by the Relay (ADR-0006).
+fn hostname() -> String {
     std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-node".to_string())
 }
 
@@ -46,34 +50,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
+    // rustls 0.23 requires an explicit process-level CryptoProvider because both
+    // ring and aws-lc-rs are compiled in; install ring to match rcgen's backend.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("rustls CryptoProvider installation must succeed at startup");
+
     let addr = relay_addr();
-    let id = node_id();
-    info!(relay = %addr, node_id = %id, "relay-daemon starting");
+
+    // Acquire the enrolled identity before proceeding. Fail closed: if no
+    // token is configured and no persisted identity exists, refuse to connect
+    // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
+    let identity = match enroll::EnrollConfig::from_env()? {
+        Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
+        None => enroll::load_identity(&enroll::state_dir_from_env())?.ok_or(
+            "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",
+        )?,
+    };
+
+    info!(relay = %addr, node_id = %identity.node_id, "relay-daemon starting");
 
     let facts = Facts {
-        hostname: id.clone(),
+        // Facts.hostname is a human-readable hostname descriptor, not the
+        // Relay-assigned identity UUID (see node_id field on Hello below).
+        hostname: hostname(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         kernel: String::new(),
         ip_addresses: vec![],
     };
 
-    // Enrollment bootstrap: if configured, obtain and persist a Node identity
-    // before dialling the Tunnel. When unconfigured (no token / no CA bundle)
-    // this is a no-op and the daemon proceeds on the existing plaintext path —
-    // which the Relay rejects at the TLS handshake (#26 mTLS-rejection semantics).
-    // mTLS Tunnel connect will be wired in #28.
-    if let Some(cfg) = enroll::EnrollConfig::from_env()? {
-        enroll::ensure_enrolled(&cfg).await?;
-    }
-
-    let mut client = TunnelClient::connect(addr).await?;
+    // Force http:// → https:// so existing --relay/RELAY_ADDR inputs work;
+    // https:// endpoints pass through unchanged. validate_endpoint_scheme
+    // inside connect_mtls is the authoritative fail-closed check.
+    let endpoint = addr.replacen("http://", "https://", 1);
+    let domain = std::env::var("RELAY_DOMAIN").ok();
+    let channel = tunnel::connect_mtls(endpoint, domain, &identity).await?;
+    let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
 
     // Send Hello as the first outbound message on the bidi stream.
+    // node_id is the Relay-assigned identity (from the enrolled cert CN),
+    // aligning the app-layer identity with the transport-layer client cert
+    // (ADR-0006 amendment 2).
     tx.send(DaemonMessage {
         body: Some(daemon_message::Body::Hello(Hello {
-            node_id: id,
+            node_id: identity.node_id.clone(),
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             facts: Some(facts),
             labels: vec![],

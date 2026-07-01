@@ -52,6 +52,16 @@ pub struct EnrollConfig {
     pub facts: Facts,
 }
 
+/// Returns the daemon's state directory: `RELAY_STATE_DIR` env var or the
+/// default `/var/lib/relay-daemon`. Used by both `EnrollConfig::from_env`
+/// (enrollment bootstrap) and `main` (Tunnel identity load) so the two paths
+/// always agree on the state directory without a second read.
+pub fn state_dir_from_env() -> PathBuf {
+    PathBuf::from(
+        std::env::var("RELAY_STATE_DIR").unwrap_or_else(|_| "/var/lib/relay-daemon".to_string()),
+    )
+}
+
 impl EnrollConfig {
     /// Reads enrollment configuration from environment variables.
     ///
@@ -88,10 +98,7 @@ impl EnrollConfig {
         validate_endpoint_scheme(&endpoint)?;
 
         let relay_domain = std::env::var("RELAY_DOMAIN").ok();
-        let state_dir = PathBuf::from(
-            std::env::var("RELAY_STATE_DIR")
-                .unwrap_or_else(|_| "/var/lib/relay-daemon".to_string()),
-        );
+        let state_dir = state_dir_from_env();
         let node_labels = std::env::var("RELAY_NODE_LABELS")
             .map(|v| parse_node_labels(&v))
             .unwrap_or_default();
@@ -125,7 +132,7 @@ impl EnrollConfig {
 /// error. Called early in `from_env` and again defensively in
 /// `call_enroll_owned` so there is no path to building a plaintext gRPC
 /// channel regardless of how `EnrollConfig` was constructed.
-fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
+pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<()> {
     if endpoint.starts_with("https://") {
         return Ok(());
     }
@@ -177,7 +184,7 @@ fn build_keypair_and_csr() -> Result<(String, String)> {
 /// `ca_bundle.pem`, `node_id`) exist and both the cert and key parse
 /// successfully via `rustls_pemfile`. "Valid" means present-and-well-formed;
 /// expiry checking is a separate ROADMAP item (v0.0.2 cert rotation).
-fn load_identity(dir: &Path) -> Result<Option<Identity>> {
+pub fn load_identity(dir: &Path) -> Result<Option<Identity>> {
     let key_path = dir.join("key.pem");
     let cert_path = dir.join("cert.pem");
     let ca_bundle_path = dir.join("ca_bundle.pem");
