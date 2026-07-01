@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime};
 use tonic::transport::Channel;
 use tracing::{error, info};
 
-use crate::enroll::{self, build_keypair_and_csr, persist_identity, Identity};
 use crate::gen::{enrollment_client::EnrollmentClient, RenewRequest};
+use crate::identity::{build_keypair_and_csr, cert_pubkey_matches_key, persist_identity, Identity};
 
 type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
@@ -109,7 +109,7 @@ where
     F: FnOnce(String) -> Fut,
     Fut: Future<Output = Result<(String, String, String)>>,
 {
-    // build_keypair_and_csr returns enroll.rs's Box<dyn Error> (not Send+Sync);
+    // build_keypair_and_csr returns identity.rs's Box<dyn Error> (not Send+Sync);
     // convert to string so the error satisfies our Send+Sync bound.
     let (key_pem, csr_pem) = build_keypair_and_csr().map_err(|e| e.to_string())?;
     let (node_id, cert_pem, ca_bundle_pem) = renewer(csr_pem).await?;
@@ -134,7 +134,7 @@ where
     // corresponds to the freshly generated keypair. A mismatch would mean the Relay
     // returned a cert for a different key — which would lock this Node out of mTLS.
     // Fail closed: keep the current working identity rather than persisting a broken one.
-    if let Err(e) = enroll::cert_pubkey_matches_key(&cert_pem, &key_pem) {
+    if let Err(e) = cert_pubkey_matches_key(&cert_pem, &key_pem) {
         error!(
             error = %e,
             "renewal cert public key does not correspond to new keypair; refusing to persist"
@@ -156,7 +156,7 @@ where
         ca_bundle_pem: ca_bundle,
     };
 
-    // persist_identity returns enroll.rs's Box<dyn Error> (not Send+Sync); convert to string.
+    // persist_identity returns identity.rs's Box<dyn Error> (not Send+Sync); convert to string.
     persist_identity(state_dir, &new_identity).map_err(|e| e.to_string())?;
     Ok(new_identity)
 }
@@ -277,7 +277,7 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
-    use crate::enroll::{load_identity, persist_identity};
+    use crate::identity::{load_identity, persist_identity};
 
     /// A temp dir that removes itself on drop, for test isolation.
     struct TempDir(PathBuf);
@@ -307,14 +307,14 @@ mod tests {
     }
 
     /// Build a well-formed self-signed Identity for tests.
-    fn make_test_identity(node_id: &str) -> crate::enroll::Identity {
+    fn make_test_identity(node_id: &str) -> crate::identity::Identity {
         let kp = rcgen::KeyPair::generate().expect("keygen");
         let cert_pem = rcgen::CertificateParams::new(vec![])
             .expect("params")
             .self_signed(&kp)
             .expect("self_signed")
             .pem();
-        crate::enroll::Identity {
+        crate::identity::Identity {
             node_id: node_id.to_string(),
             key_pem: kp.serialize_pem(),
             cert_pem: cert_pem.clone(),
