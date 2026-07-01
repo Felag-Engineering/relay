@@ -75,3 +75,55 @@ The `node_id` assigned to an enrolling Node and the CN in the issued certificate
 **Relay-generated at enrollment time**. The CSR subject submitted by the daemon is discarded;
 `SignCSR` sets `CN = node_id` authoritatively. A daemon cannot choose or influence its own
 identity. This is a hard security invariant (ADR-0006) that must not be relaxed.
+
+## Amendment 3 — 2026-06-30: cert renewal over mTLS
+
+Short-lived identity certificates (~14 days) are renewed before expiry over the Node's
+**existing mTLS connection** via a dedicated `Enrollment.Renew` unary RPC — no enrollment
+token, same `node_id`, same registry entry and provenance.
+
+### Protocol
+
+`RenewRequest` carries only a PEM CSR. The CSR supplies **only the new public key**; `node_id`
+and the certificate CN are derived exclusively from the **verified TLS peer cert CN** (via
+`transport.NodeIDFromContext`) and never from the CSR subject. `SignCSR` sets `CN = node_id`
+authoritatively as it does for enrollment. The daemon cannot choose or influence its renewed
+identity.
+
+`RenewResponse` echoes `node_id`, the new PEM certificate, and the CA bundle. The daemon
+asserts `resp.node_id == persisted node_id` and **refuses to persist** if they differ — the
+more restrictive option on the privileged side.
+
+### Auth model
+
+`Enrollment.Renew` is **not** in the certless allowlist (`certless` map in `main.go`). The
+per-RPC interceptor (`UnaryServerInterceptor`) therefore requires a verified client certificate,
+making Renew automatically mTLS-required with no interceptor changes. Enroll (token-authenticated,
+certless) and Renew (cert-authenticated over mTLS) are different auth models sharing one service.
+
+### Registry
+
+The registry is **not touched** by Renew: no `Upsert`, no label changes, no new
+`EnrollingTokenID`. This structurally preserves provenance and relay-space labels from initial
+enrollment. The registry's `CertFingerprint` reflects the renewed cert only after the daemon's
+**next Hello `Upsert`** (on reconnect). During the renewal margin (~3.5–7 days before expiry)
+the fingerprint is stale relative to the live client cert. **Operators must not treat the
+registry fingerprint as a liveness assertion of the current live client cert.**
+
+### Jittered scheduling
+
+The daemon schedules renewal at a random fraction **[50%, 75%]** of the cert lifetime:
+
+- For a 14-day (336 h) cert: renewal fires at [168 h, 252 h] after issuance.
+- This leaves [84 h, 168 h] (3.5–7 days) of margin for retries and failure recovery.
+- 100 k+ nodes spread their renewals over ~3.5 days rather than hitting the Relay simultaneously.
+
+On RPC failure, the daemon retries with bounded jittered backoff (up to ~1 hour cap). It never
+stops retrying while the cert is still valid — the large margin absorbs extended outages.
+
+### Deferred: live-connection reconnect
+
+The renewed cert is adopted on the **next `connect_mtls`** (process restart or reconnect). The
+live mTLS session continues with the old cert until then. This is safe: TLS does not re-validate
+a cert mid-session, and the renewal fires with days of margin before expiry. Forcing an immediate
+reconnect to adopt the new cert on the live connection is **out of scope** for this milestone.

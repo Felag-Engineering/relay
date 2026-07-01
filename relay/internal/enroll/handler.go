@@ -12,6 +12,7 @@ import (
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -188,5 +189,46 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		Certificate:    certPEM,
 		CaBundle:       s.signer.Bundle(),
 		AssignedLabels: assigned,
+	}, nil
+}
+
+// Renew issues a fresh certificate for the same node_id authenticated via the
+// caller's existing mTLS identity. The CSR supplies only the new public key;
+// node_id and CN are derived exclusively from the verified TLS peer cert
+// (ADR-0006 invariant: identity = client cert, never the CSR subject).
+//
+// The registry is NOT touched: no Upsert, no label changes, no new EnrollingTokenID.
+// This structurally preserves provenance and labels from initial enrollment.
+// The registry's CertFingerprint reflects the renewed cert only after the daemon's
+// next Hello Upsert (on reconnect). Operators must not treat the fingerprint as a
+// liveness assertion of the current live client cert.
+func (s *Server) Renew(ctx context.Context, req *gleipnirv1.RenewRequest) (*gleipnirv1.RenewResponse, error) {
+	// a. Reject an empty CSR immediately.
+	if len(req.GetCsr()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "csr is required")
+	}
+
+	// b. Derive node_id solely from the verified TLS peer cert CN injected by
+	//    UnaryServerInterceptor. Fail closed: if the context carries no node
+	//    identity the caller has no valid mTLS cert (ADR-0006).
+	nodeID, ok := transport.NodeIDFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no node identity")
+	}
+
+	// c. Sign the new CSR. SignCSR sets CN=nodeID authoritatively and ignores the
+	//    CSR subject/SANs (ADR-0006). Any parse error means a bad CSR from the caller.
+	certPEM, err := s.signer.SignCSR(req.GetCsr(), nodeID)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
+	}
+
+	// d. Audit log: node_id only — no key material, no CSR contents.
+	slog.Info("node cert renewed", "node_id", nodeID)
+
+	return &gleipnirv1.RenewResponse{
+		NodeId:      nodeID,
+		Certificate: certPEM,
+		CaBundle:    s.signer.Bundle(),
 	}, nil
 }

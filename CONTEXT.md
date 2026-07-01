@@ -85,6 +85,15 @@ relay-space Labels; the certificate is the resulting *identity*. Can only enroll
 Operations.
 _Avoid_: API key, secret, join key
 
+**Certificate renewal**:
+A Node rotating its short-lived identity certificate before expiry over its existing mTLS
+identity — no Enrollment Token — via the Relay's cert-authenticated `Renew` RPC. The Relay
+issues a fresh certificate for the *same* node_id (derived from the verified peer cert, never
+the CSR), preserving provenance; renewals are jittered to spread the fleet over time. Distinct
+from *enrollment*: enrollment is token-authenticated and mints the first identity; renewal is
+cert-authenticated and refreshes the existing one. (ADR-0006)
+_Avoid_: re-enroll, reissue, cert refresh
+
 **Relay-side authorization**:
 The central rules deciding which principal (a human or an AI-agent) may send which
 Operations to which Nodes. Distinct from Policy: authorization governs *who may ask*,

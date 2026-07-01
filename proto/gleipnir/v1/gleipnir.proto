@@ -15,9 +15,15 @@ option go_package = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/
 // Enrollment (ADR-0006): a daemon presents a reusable, scoped Enrollment Token
 // over server-authenticated TLS and submits a CSR; the Relay CA returns a
 // per-Node client certificate. Subsequent connections use mTLS.
+//
+// Auth model note: Enroll is token-authenticated and certless (no client cert).
+// Renew is cert-authenticated over mTLS (different auth models, same service).
+// Renew is intentionally absent from the certless allowlist, making it
+// mTLS-required with no interceptor changes needed.
 // ---------------------------------------------------------------------------
 service Enrollment {
   rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc Renew(RenewRequest) returns (RenewResponse);
 }
 
 message EnrollRequest {
@@ -32,6 +38,22 @@ message EnrollResponse {
   bytes  certificate      = 2;    // PEM client cert; the Node's identity
   bytes  ca_bundle        = 3;    // PEM CA chain the daemon pins the Relay against
   repeated Label assigned_labels = 4; // relay-space labels stamped from token scope
+}
+
+// RenewRequest carries a PEM CSR. The CSR supplies ONLY the new public key;
+// node_id and CN are derived from the verified TLS peer cert (never the CSR).
+// Requires an active mTLS connection — the certless allowlist does not include Renew.
+message RenewRequest {
+  bytes csr = 1;
+}
+
+// RenewResponse mirrors the certificate/ca_bundle shape of EnrollResponse.
+// node_id is echoed from the verified peer cert so the daemon can assert it
+// equals its persisted node_id and refuse a mismatched cert (defense in depth).
+message RenewResponse {
+  string node_id     = 1;
+  bytes  certificate = 2;   // PEM renewed client cert; same node_id, new public key
+  bytes  ca_bundle   = 3;   // PEM CA bundle (unchanged, but included for completeness)
 }
 
 // ---------------------------------------------------------------------------
