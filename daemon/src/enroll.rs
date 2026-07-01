@@ -55,30 +55,30 @@ pub struct EnrollConfig {
 impl EnrollConfig {
     /// Reads enrollment configuration from environment variables.
     ///
-    /// Returns `Ok(None)` when `GLEIPNIR_ENROLLMENT_TOKEN` or
-    /// `GLEIPNIR_CA_BUNDLE_PATH` are absent or empty, so callers can skip the
+    /// Returns `Ok(None)` when `RELAY_ENROLLMENT_TOKEN` or
+    /// `RELAY_CA_BUNDLE_PATH` are absent or empty, so callers can skip the
     /// enrollment step and fall through to the existing Tunnel path.
     ///
     /// Environment keys:
-    /// - `GLEIPNIR_ENROLLMENT_TOKEN` — required; never logged
-    /// - `GLEIPNIR_ENROLL_ENDPOINT`  — default: derive `https://` from `RELAY_ADDR`
-    /// - `GLEIPNIR_RELAY_DOMAIN`     — optional TLS SNI override
-    /// - `GLEIPNIR_CA_BUNDLE_PATH`   — required; path to pinned bootstrap CA
-    /// - `GLEIPNIR_STATE_DIR`        — default: `/var/lib/gleipnir-relay-daemon`
-    /// - `GLEIPNIR_NODE_LABELS`      — comma-separated `key=value` pairs
+    /// - `RELAY_ENROLLMENT_TOKEN` — required; never logged
+    /// - `RELAY_ENROLL_ENDPOINT`  — default: derive `https://` from `RELAY_ADDR`
+    /// - `RELAY_DOMAIN`           — optional TLS SNI override
+    /// - `RELAY_CA_BUNDLE_PATH`   — required; path to pinned bootstrap CA
+    /// - `RELAY_STATE_DIR`        — default: `/var/lib/relay-daemon`
+    /// - `RELAY_NODE_LABELS`      — comma-separated `key=value` pairs
     pub fn from_env() -> Result<Option<EnrollConfig>> {
-        let token = match std::env::var("GLEIPNIR_ENROLLMENT_TOKEN") {
+        let token = match std::env::var("RELAY_ENROLLMENT_TOKEN") {
             Ok(v) if !v.is_empty() => v,
             _ => return Ok(None),
         };
-        let ca_bundle_str = match std::env::var("GLEIPNIR_CA_BUNDLE_PATH") {
+        let ca_bundle_str = match std::env::var("RELAY_CA_BUNDLE_PATH") {
             Ok(v) if !v.is_empty() => v,
             _ => return Ok(None),
         };
 
         let relay_addr =
             std::env::var("RELAY_ADDR").unwrap_or_else(|_| "http://127.0.0.1:7654".to_string());
-        let endpoint = std::env::var("GLEIPNIR_ENROLL_ENDPOINT")
+        let endpoint = std::env::var("RELAY_ENROLL_ENDPOINT")
             .unwrap_or_else(|_| relay_addr.replacen("http://", "https://", 1));
 
         // Fail closed: TLS (and therefore CA pinning) is only active when the
@@ -87,12 +87,12 @@ impl EnrollConfig {
         // root to a MITM.
         validate_endpoint_scheme(&endpoint)?;
 
-        let relay_domain = std::env::var("GLEIPNIR_RELAY_DOMAIN").ok();
+        let relay_domain = std::env::var("RELAY_DOMAIN").ok();
         let state_dir = PathBuf::from(
-            std::env::var("GLEIPNIR_STATE_DIR")
-                .unwrap_or_else(|_| "/var/lib/gleipnir-relay-daemon".to_string()),
+            std::env::var("RELAY_STATE_DIR")
+                .unwrap_or_else(|_| "/var/lib/relay-daemon".to_string()),
         );
-        let node_labels = std::env::var("GLEIPNIR_NODE_LABELS")
+        let node_labels = std::env::var("RELAY_NODE_LABELS")
             .map(|v| parse_node_labels(&v))
             .unwrap_or_default();
 
@@ -415,7 +415,7 @@ mod tests {
                 .unwrap()
                 .as_nanos();
             let path = std::env::temp_dir().join(format!(
-                "gleipnir-test-{}-{}-{}",
+                "relay-test-{}-{}-{}",
                 label,
                 std::process::id(),
                 nanos
