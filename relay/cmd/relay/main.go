@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -18,7 +19,45 @@ import (
 	"google.golang.org/grpc"
 )
 
-func main() {
+// Config holds all Relay startup parameters resolved from flags and environment.
+type Config struct {
+	Addr                string
+	CADir               string
+	Hostname            string
+	EnrollIPRate        int
+	EnrollIPBurst       int
+	EnrollGlobalRate    int
+	EnrollGlobalBurst   int
+	EnrollMaxTrackedIPs int
+	MaxNodes            int
+}
+
+// appDeps holds the constructed collaborators that tests and lifecycle hooks need
+// to reach without starting a listener.
+type appDeps struct {
+	ca         *ca.CA
+	registry   registry.Repository
+	tokens     *enroll.Service
+	denylist   *revocation.Denylist
+	conns      *revocation.Connections
+	revocation *revocation.Service
+	limiter    *ratelimit.Limiter
+}
+
+// envOr returns the value of environment variable key if it is non-empty, or
+// fallback otherwise.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// parseConfig resolves all Relay startup parameters from CLI flags and
+// environment. RELAY_-prefixed env vars override the corresponding CLI flags
+// for string fields. For integer fields, non-integer env values are silently
+// ignored and the flag default is kept.
+func parseConfig() Config {
 	addr := flag.String("addr", ":7654", "gRPC listen address")
 	caDir := flag.String("ca-dir", "./ca-data", "directory for CA key and certificate")
 	hostname := flag.String("hostname", "localhost", "hostname for the server certificate SAN")
@@ -34,74 +73,80 @@ func main() {
 
 	flag.Parse()
 
-	if env := os.Getenv("RELAY_ADDR"); env != "" {
-		*addr = env
-	}
-	if env := os.Getenv("RELAY_CA_DIR"); env != "" {
-		*caDir = env
-	}
-	if env := os.Getenv("RELAY_HOSTNAME"); env != "" {
-		*hostname = env
-	}
+	var cfg Config
+	cfg.Addr = envOr("RELAY_ADDR", *addr)
+	cfg.CADir = envOr("RELAY_CA_DIR", *caDir)
+	cfg.Hostname = envOr("RELAY_HOSTNAME", *hostname)
+
+	cfg.EnrollIPRate = *enrollIPRate
 	if env := os.Getenv("RELAY_ENROLL_IP_RATE"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*enrollIPRate = v
+			cfg.EnrollIPRate = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_ENROLL_IP_RATE", "value", env)
 		}
 	}
+	cfg.EnrollIPBurst = *enrollIPBurst
 	if env := os.Getenv("RELAY_ENROLL_IP_BURST"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*enrollIPBurst = v
+			cfg.EnrollIPBurst = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_ENROLL_IP_BURST", "value", env)
 		}
 	}
+	cfg.EnrollGlobalRate = *enrollGlobalRate
 	if env := os.Getenv("RELAY_ENROLL_GLOBAL_RATE"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*enrollGlobalRate = v
+			cfg.EnrollGlobalRate = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_ENROLL_GLOBAL_RATE", "value", env)
 		}
 	}
+	cfg.EnrollGlobalBurst = *enrollGlobalBurst
 	if env := os.Getenv("RELAY_ENROLL_GLOBAL_BURST"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*enrollGlobalBurst = v
+			cfg.EnrollGlobalBurst = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_ENROLL_GLOBAL_BURST", "value", env)
 		}
 	}
+	cfg.EnrollMaxTrackedIPs = *enrollMaxTrackedIPs
 	if env := os.Getenv("RELAY_ENROLL_MAX_TRACKED_IPS"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*enrollMaxTrackedIPs = v
+			cfg.EnrollMaxTrackedIPs = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_ENROLL_MAX_TRACKED_IPS", "value", env)
 		}
 	}
+	cfg.MaxNodes = *maxNodes
 	if env := os.Getenv("RELAY_MAX_NODES"); env != "" {
 		if v, err := strconv.Atoi(env); err == nil {
-			*maxNodes = v
+			cfg.MaxNodes = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_MAX_NODES", "value", env)
 		}
 	}
 
-	relayCA, err := ca.Open(*caDir)
+	return cfg
+}
+
+// newServer constructs and wires the gRPC server and all its dependencies from
+// cfg. It does not create a listener or call Serve — those belong to main so
+// that tests can construct the server without binding a port.
+func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
+	relayCA, err := ca.Open(cfg.CADir)
 	if err != nil {
-		slog.Error("open CA failed", "ca_dir", *caDir, "err", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("open CA: %w", err)
 	}
 
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(relayCA.Bundle()) {
-		slog.Error("failed to parse CA bundle into cert pool")
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("parse CA bundle into cert pool")
 	}
 
-	serverCert, err := relayCA.IssueServerCertificate([]string{*hostname}, nil)
+	serverCert, err := relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
 	if err != nil {
-		slog.Error("issue server certificate failed", "err", err)
-		os.Exit(1)
+		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
 	}
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
@@ -123,24 +168,18 @@ func main() {
 	}
 
 	limiter := ratelimit.New(ratelimit.Config{
-		PerIPRatePerMin:  float64(*enrollIPRate),
-		PerIPBurst:       float64(*enrollIPBurst),
-		GlobalRatePerMin: float64(*enrollGlobalRate),
-		GlobalBurst:      float64(*enrollGlobalBurst),
-		MaxTrackedIPs:    *enrollMaxTrackedIPs,
+		PerIPRatePerMin:  float64(cfg.EnrollIPRate),
+		PerIPBurst:       float64(cfg.EnrollIPBurst),
+		GlobalRatePerMin: float64(cfg.EnrollGlobalRate),
+		GlobalBurst:      float64(cfg.EnrollGlobalBurst),
+		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
 	})
-	reg := registry.NewInMemory(registry.WithMaxNodes(*maxNodes))
+	reg := registry.NewInMemory(registry.WithMaxNodes(cfg.MaxNodes))
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
 		enroll.WithRateLimiter(limiter))
-
-	lis, err := net.Listen("tcp", *addr)
-	if err != nil {
-		slog.Error("listen failed", "addr", *addr, "err", err)
-		os.Exit(1)
-	}
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -150,16 +189,40 @@ func main() {
 	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns, reg: reg})
 	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
 
+	deps := &appDeps{
+		ca:         relayCA,
+		registry:   reg,
+		tokens:     tokenSvc,
+		denylist:   denylist,
+		conns:      conns,
+		revocation: revocationSvc,
+		limiter:    limiter,
+	}
+	return srv, deps, nil
+}
+
+func main() {
+	cfg := parseConfig()
+	srv, _, err := newServer(cfg)
+	if err != nil {
+		slog.Error("build server failed", "err", err)
+		os.Exit(1)
+	}
+	lis, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		slog.Error("listen failed", "addr", cfg.Addr, "err", err)
+		os.Exit(1)
+	}
 	slog.Info("relay listening",
-		"addr", *addr,
+		"addr", cfg.Addr,
 		"mtls", true,
-		"ca_dir", *caDir,
-		"enroll_ip_rate_per_min", *enrollIPRate,
-		"enroll_ip_burst", *enrollIPBurst,
-		"enroll_global_rate_per_min", *enrollGlobalRate,
-		"enroll_global_burst", *enrollGlobalBurst,
-		"enroll_max_tracked_ips", *enrollMaxTrackedIPs,
-		"max_nodes", *maxNodes,
+		"ca_dir", cfg.CADir,
+		"enroll_ip_rate_per_min", cfg.EnrollIPRate,
+		"enroll_ip_burst", cfg.EnrollIPBurst,
+		"enroll_global_rate_per_min", cfg.EnrollGlobalRate,
+		"enroll_global_burst", cfg.EnrollGlobalBurst,
+		"enroll_max_tracked_ips", cfg.EnrollMaxTrackedIPs,
+		"max_nodes", cfg.MaxNodes,
 	)
 	if err := srv.Serve(lis); err != nil {
 		slog.Error("serve failed", "err", err)
