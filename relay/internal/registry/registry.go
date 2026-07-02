@@ -20,6 +20,16 @@ var ErrNotFound = errors.New("registry: node not found")
 // ErrEmptyNodeID is returned when an operation is given an empty node ID.
 var ErrEmptyNodeID = errors.New("registry: empty node id")
 
+// ErrAtCapacity is returned by Upsert on the INSERT path when the registry has
+// reached its configured maxNodes cap. Updates to existing Nodes always succeed
+// (reconnect and Hello Upserts must never be throttled by the cap).
+//
+// Note: after a Relay restart the in-memory registry is empty, so every
+// reconnecting relay-daemon's Hello Upsert hits the INSERT path and is subject
+// to the cap. The default cap (110 000) is intentionally 10 % above the 100 000
+// Node target to leave headroom for this cold-start re-insertion window.
+var ErrAtCapacity = errors.New("registry: at capacity")
+
 // Facts are descriptive properties a relay-daemon self-reports about its Node.
 // They inform decisions but are never used for targeting — that is the role of Labels.
 // This is a domain mirror of gleipnirv1.Facts; the registry package carries no
@@ -60,9 +70,13 @@ type Report struct {
 
 // Repository is the interface for the Node registry.
 type Repository interface {
-	// Upsert registers or updates a Node from a daemon's own report. This is the
-	// only write path for node-space labels and Facts. It cannot write relay-space
-	// labels — Report has no such field.
+	// Upsert registers or updates a Node from a relay-daemon's own report. This is
+	// the only write path for node-space labels and Facts. It cannot write
+	// relay-space labels — Report has no such field.
+	//
+	// On INSERT (new Node): returns ErrAtCapacity when a max-nodes cap is set and
+	// reached. On UPDATE (existing Node): the cap is never checked — reconnects
+	// and Hello Upserts must never be throttled.
 	Upsert(r Report) (Node, error)
 
 	// UpdateLastSeen records the most recent contact time for a Node. Returns

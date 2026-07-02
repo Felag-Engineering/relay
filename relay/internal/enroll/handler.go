@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"net"
 	"strings"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
@@ -15,6 +16,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -42,6 +44,13 @@ type NodeDenylister interface {
 	RevokeNode(nodeID string)
 }
 
+// RateLimiter gates Enrollment requests. *ratelimit.Limiter satisfies this
+// interface. Kept as an interface so the enroll package carries no compile-time
+// dependency on the ratelimit package.
+type RateLimiter interface {
+	Allow(ip string) bool
+}
+
 // ServerOption configures a Server at construction.
 type ServerOption func(*Server)
 
@@ -62,6 +71,24 @@ func WithPostEnrollRevocationCheck(checker TokenRevocationChecker, denylister No
 	}
 }
 
+// WithRateLimiter attaches a per-IP + global rate limiter to the Server. The
+// limiter is checked as the very first statement in Enroll — before any token
+// validation or CSR signing — so a throttled caller cannot use error distinctions
+// to test whether an Enrollment Token is valid (no oracle). The rejection is
+// identical regardless of token validity (codes.ResourceExhausted).
+//
+// Panics if l is nil (matching the WithPostEnrollRevocationCheck convention).
+// Pass a nil limiter field (the default) to skip rate-limiting, preserving
+// backward compatibility for servers constructed without this option.
+func WithRateLimiter(l RateLimiter) ServerOption {
+	if l == nil {
+		panic("enroll: WithRateLimiter: limiter must not be nil")
+	}
+	return func(s *Server) {
+		s.limiter = l
+	}
+}
+
 // Server implements gleipnirv1.EnrollmentServer. It validates Enrollment Tokens,
 // signs CSRs, and records Nodes in the registry (ADR-0006).
 type Server struct {
@@ -72,6 +99,7 @@ type Server struct {
 	newID             func() (string, error)
 	revocationChecker TokenRevocationChecker
 	nodeDenylister    NodeDenylister
+	limiter           RateLimiter
 }
 
 // NewServer creates a Server backed by the given token Service, Signer (CA), and Registrar.
@@ -98,6 +126,26 @@ func randomNodeID() (string, error) {
 	return "node-" + hex.EncodeToString(b), nil
 }
 
+// peerIP extracts the source IP from the gRPC peer Addr in ctx, stripping the
+// port so all connections from one host share a rate-limit bucket.
+//
+// Returns "unknown" when the context carries no peer Addr — unreachable in
+// production (the certless Enroll always arrives over TCP with a peer), but
+// possible in tests that omit the peer context. Tests must use ctxFromIP to
+// inject a peer so they do not all share the "unknown" bucket.
+func peerIP(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return "unknown"
+	}
+	host, _, err := net.SplitHostPort(p.Addr.String())
+	if err != nil {
+		// Addr string is not host:port (e.g. a Unix socket path). Use raw string.
+		return p.Addr.String()
+	}
+	return host
+}
+
 // Enroll validates the Enrollment Token, signs the CSR with a Relay-assigned node_id,
 // records the Node in the registry, and returns the issued certificate, CA bundle, and
 // relay-space labels stamped from the token scope.
@@ -105,12 +153,20 @@ func randomNodeID() (string, error) {
 // Sign and registry writes happen ONLY after the token validates; any rejection leaves
 // no certificate and no registry entry (fail-closed).
 func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gleipnirv1.EnrollResponse, error) {
-	// a. Reject empty token or empty CSR.
+	// a. Rate-limit check: runs BEFORE any token validation or CSR signing so that
+	//    a throttled rejection cannot be used to probe whether an Enrollment Token
+	//    is valid (no oracle). Nil limiter is skipped to preserve backward
+	//    compatibility for servers constructed without WithRateLimiter.
+	if s.limiter != nil && !s.limiter.Allow(peerIP(ctx)) {
+		return nil, status.Error(codes.ResourceExhausted, "enrollment rate limit exceeded")
+	}
+
+	// b. Reject empty token or empty CSR.
 	if req.GetEnrollmentToken() == "" || len(req.GetCsr()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "enrollment_token and csr are required")
 	}
 
-	// b. Parse self_labels (no side effects). Require "node:" prefix and a non-empty
+	// c. Parse self_labels (no side effects). Require "node:" prefix and a non-empty
 	//    bare key to enforce the structural boundary: a daemon can never inject relay-space
 	//    labels (ADR-0006 two-namespace invariant).
 	nodeLabels := make(map[string]string, len(req.GetSelfLabels()))
@@ -122,14 +178,14 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		nodeLabels[bare] = l.GetValue()
 	}
 
-	// c. Extract the public token ID from the credential for provenance storage.
+	// d. Extract the public token ID from the credential for provenance storage.
 	//    This is the non-secret half of "id.secret"; used only after Validate succeeds.
 	var tokenID string
 	if parts := strings.SplitN(req.GetEnrollmentToken(), secretSep, 2); len(parts) == 2 {
 		tokenID = parts[0]
 	}
 
-	// d. Validate the token. Collapse all sentinel rejection errors into a single
+	// e. Validate the token. Collapse all sentinel rejection errors into a single
 	//    PermissionDenied so the caller cannot use error distinctions as a state oracle.
 	scope, err := s.tokens.Validate(ctx, req.GetEnrollmentToken())
 	if err != nil {
@@ -140,19 +196,19 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
-	// e. Generate a Relay-assigned node_id; the CSR subject is never trusted (ADR-0006).
+	// f. Generate a Relay-assigned node_id; the CSR subject is never trusted (ADR-0006).
 	nodeID, err := s.newID()
 	if err != nil {
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
-	// f. Sign the CSR. SignCSR ignores the CSR subject and sets CN=nodeID authoritatively.
+	// g. Sign the CSR. SignCSR ignores the CSR subject and sets CN=nodeID authoritatively.
 	certPEM, err := s.signer.SignCSR(req.GetCsr(), nodeID)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
 	}
 
-	// g. Compute SHA-256 cert fingerprint (hex of DER bytes) for the registry record.
+	// h. Compute SHA-256 cert fingerprint (hex of DER bytes) for the registry record.
 	//    The nil-block branch is unreachable: SignCSR guarantees valid PEM on success.
 	var fp string
 	if block, _ := pem.Decode(certPEM); block != nil {
@@ -160,10 +216,10 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		fp = hex.EncodeToString(sum[:])
 	}
 
-	// h. Map proto Facts -> registry.Facts; nil-safe.
+	// i. Map proto Facts -> registry.Facts; nil-safe.
 	facts := protoconv.FactsFromProto(req.GetFacts())
 
-	// i. Record the Node. This is the only write path for node-space labels + Facts.
+	// j. Record the Node. This is the only write path for node-space labels + Facts.
 	if _, err := s.registry.Upsert(registry.Report{
 		NodeID:           nodeID,
 		CertFingerprint:  fp,
@@ -171,10 +227,13 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		NodeLabels:       nodeLabels,
 		EnrollingTokenID: tokenID,
 	}); err != nil {
+		if errors.Is(err, registry.ErrAtCapacity) {
+			return nil, status.Error(codes.ResourceExhausted, "fleet registry at capacity")
+		}
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
-	// j. Parse the token scope into bare relay-space keys and stamp them on the Node.
+	// k. Parse the token scope into bare relay-space keys and stamp them on the Node.
 	relayBare := make(map[string]string, len(scope))
 	for _, entry := range scope {
 		bare := strings.TrimPrefix(entry, "relay:")
@@ -220,7 +279,7 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		}
 	}
 
-	// k. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
+	// l. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
 	assigned := make([]*gleipnirv1.Label, 0, len(scope))
 	for _, entry := range scope {
 		bare := strings.TrimPrefix(entry, "relay:")
@@ -232,7 +291,7 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		assigned = append(assigned, l)
 	}
 
-	// l. Log one audit line. tokenID is the public half of the credential — safe to log.
+	// m. Log one audit line. tokenID is the public half of the credential — safe to log.
 	//    Never log the secret half or the full plaintext credential.
 	slog.Info("node enrolled",
 		"node_id", nodeID,
@@ -242,7 +301,7 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 		"relay_label_count", len(relayBare),
 	)
 
-	// m. Return the response.
+	// n. Return the response.
 	return &gleipnirv1.EnrollResponse{
 		NodeId:         nodeID,
 		Certificate:    certPEM,
