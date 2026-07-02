@@ -12,10 +12,37 @@ use tracing::info;
 use crate::gen::{enrollment_client::EnrollmentClient, EnrollRequest, Facts, Label};
 use crate::identity::{
     build_channel, build_keypair_and_csr, cert_pubkey_matches_key, load_identity, persist_identity,
-    validate_endpoint_scheme, Identity,
+    validate_endpoint_scheme, Identity, IdentityError,
 };
 
-type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
+type Result<T, E = EnrollError> = std::result::Result<T, E>;
+
+/// Typed error for enrollment and renewal RPC paths.
+///
+/// Wraps `IdentityError` via `#[from]` so the Send+Sync guarantee propagates
+/// through `renew::run` (a `tokio::spawn`-ed task) without a `.to_string()` bridge.
+#[derive(Debug, thiserror::Error)]
+pub enum EnrollError {
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    // Boxed to keep the enum size reasonable (tonic::Status is ~176 bytes).
+    #[error(transparent)]
+    Rpc(Box<tonic::Status>),
+    #[error(transparent)]
+    Utf8(#[from] std::string::FromUtf8Error),
+    #[error("node_id mismatch: expected {expected}, got {received}")]
+    NodeIdMismatch { expected: String, received: String },
+}
+
+// Manual From impl because #[from] on Box<tonic::Status> would generate
+// From<Box<tonic::Status>>, not From<tonic::Status>.
+impl From<tonic::Status> for EnrollError {
+    fn from(s: tonic::Status) -> Self {
+        EnrollError::Rpc(Box::new(s))
+    }
+}
 
 /// Configuration for the enrollment bootstrap step, read from environment variables.
 ///
@@ -283,10 +310,16 @@ pub async fn ensure_enrolled(cfg: &EnrollConfig) -> Result<Identity> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::{load_identity, persist_identity, Identity};
+    use crate::identity::{load_identity, persist_identity, Identity, IdentityError};
     use std::os::unix::fs::MetadataExt;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+
+    // Compile-time Send+Sync assertion for EnrollError.
+    fn _assert_enroll_error_send_sync() {
+        fn _assert<T: Send + Sync>() {}
+        _assert::<EnrollError>();
+    }
 
     // A temp dir that removes itself on drop, for test isolation.
     struct TempDir(PathBuf);
@@ -317,17 +350,22 @@ mod tests {
 
     /// Build a well-formed self-signed Identity using rcgen, so that
     /// `load_identity`'s `rustls_pemfile` validation passes.
-    fn make_test_identity() -> Result<Identity> {
-        let kp = rcgen::KeyPair::generate()?;
-        let cert_pem = rcgen::CertificateParams::new(vec![])?
-            .self_signed(&kp)?
+    ///
+    /// Returns `Identity` directly (panics on failure) because the module
+    /// `Result` alias is `EnrollError` and rcgen errors don't belong there.
+    fn make_test_identity() -> Identity {
+        let kp = rcgen::KeyPair::generate().expect("keygen");
+        let cert_pem = rcgen::CertificateParams::new(vec![])
+            .expect("params")
+            .self_signed(&kp)
+            .expect("self_signed")
             .pem();
-        Ok(Identity {
+        Identity {
             node_id: "node-test-aabbccdd".to_string(),
             key_pem: kp.serialize_pem(),
             cert_pem: cert_pem.clone(),
             ca_bundle_pem: cert_pem,
-        })
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -367,7 +405,7 @@ mod tests {
     #[tokio::test]
     async fn idempotency_no_op_when_identity_present() {
         let dir = TempDir::new("idempotent");
-        let id = make_test_identity().expect("make_test_identity");
+        let id = make_test_identity();
         persist_identity(dir.path(), &id).expect("persist_identity");
 
         let enroller_called = Arc::new(AtomicBool::new(false));
@@ -468,6 +506,14 @@ mod tests {
         assert!(
             result.is_err(),
             "a cert whose SPKI does not match the generated key must fail closed"
+        );
+        let e = match result {
+            Err(e) => e,
+            Ok(_) => unreachable!(),
+        };
+        assert!(
+            matches!(&e, EnrollError::Identity(IdentityError::PubkeyMismatch)),
+            "expected Identity(PubkeyMismatch) variant"
         );
         // Nothing may be written to disk on a failed enrollment.
         assert!(

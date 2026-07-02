@@ -31,6 +31,9 @@ x509-parser = "0.18"
 # logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Typed error enums for the identity/enroll/renew paths (Send+Sync across the
+# renewal spawn boundary). No transitive deps; keeps the musl binary small.
+thiserror = "2"
 
 [dev-dependencies]
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
