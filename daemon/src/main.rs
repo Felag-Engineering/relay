@@ -1,7 +1,9 @@
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
+use tonic::transport::Channel;
 use tracing::{error, info};
 
 mod enroll;
@@ -92,74 +94,34 @@ fn hostname() -> String {
     std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-node".to_string())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
-
-    // rustls 0.23 requires an explicit process-level CryptoProvider. ring is the
-    // only compiled provider (aws-lc-rs excluded in Cargo.toml); install it here
-    // as the explicit process default, matching rcgen's ring backend.
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("rustls CryptoProvider installation must succeed at startup");
-
-    let addr = relay_addr();
-
-    // Hoist state_dir so it feeds both the enrollment load and the renewal task below.
-    let state_dir = enroll::state_dir_from_env();
-
-    // Acquire the enrolled identity before proceeding. Fail closed: if no
-    // token is configured and no persisted identity exists, refuse to connect
-    // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
+/// Acquires an enrolled identity before connecting to the Relay.
+///
+/// Fail closed: if no enrollment token is configured and no persisted identity
+/// exists in state_dir, this returns an error rather than falling back to a
+/// plaintext dial (ADR-0005, invariant #6).
+async fn acquire_identity(
+    state_dir: &Path,
+) -> Result<crate::identity::Identity, Box<dyn std::error::Error>> {
     let identity = match enroll::EnrollConfig::from_env()? {
         Some(cfg) => enroll::ensure_enrolled(&cfg).await?,
-        None => identity::load_identity(&state_dir)?.ok_or(
+        None => identity::load_identity(state_dir)?.ok_or(
             "no enrolled identity in state dir; refusing to connect (fail closed, no plaintext)",
         )?,
     };
+    Ok(identity)
+}
 
-    info!(relay = %addr, node_id = %identity.node_id, "relay-daemon starting");
-
-    let facts = Facts {
-        // Facts.hostname is a human-readable hostname descriptor, not the
-        // Relay-assigned identity UUID (see node_id field on Hello below).
-        hostname: hostname(),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        kernel: String::new(),
-        ip_addresses: vec![],
-    };
-
-    // Force http:// → https:// so existing --relay/RELAY_ADDR inputs work;
-    // https:// endpoints pass through unchanged. validate_endpoint_scheme
-    // inside connect_mtls is the authoritative fail-closed check.
-    let endpoint = addr.replacen("http://", "https://", 1);
-    let domain = std::env::var("RELAY_DOMAIN").ok();
-    let channel = tunnel::connect_mtls(endpoint, domain, &identity).await?;
-
-    // Spawn the cert-renewal background task. It rides the same mTLS channel so
-    // the Relay authenticates it via the current client cert (no token). The renewed
-    // cert is written atomically to state_dir and adopted on the next connect_mtls
-    // (process restart or reconnect). The live session continues with the old cert —
-    // TLS does not re-validate certs mid-session and the renewal margin (3.5–7 days)
-    // ensures no connectivity gap (ADR-0006 Amendment 3).
-    tokio::spawn(renew::run(
-        channel.clone(),
-        state_dir.clone(),
-        identity.clone(),
-    ));
-
+/// Sends the initial Hello, drives the heartbeat loop, and processes inbound
+/// messages from the Relay until the stream closes or errors.
+async fn run_tunnel(
+    channel: Channel,
+    identity: &crate::identity::Identity,
+    facts: Facts,
+    node_labels: Vec<(String, String)>,
+    interval: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
-
-    // Populate node: labels from the env so the Relay's Hello Upsert records
-    // the correct node-space labels (node-rooted authority, ADR-0006).
-    let node_labels = enroll::node_labels_from_env();
 
     // Send Hello as the first outbound message on the bidi stream.
     // node_id is the Relay-assigned identity (from the enrolled cert CN),
@@ -180,7 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // all arrive at the Relay simultaneously. RELAY_HEARTBEAT_INTERVAL_SECS
     // configures the base interval (default 30 s); each iteration re-samples so
     // the spread is maintained over the lifetime of the connection.
-    let interval = heartbeat_interval();
     let tx_hb = tx.clone();
     tokio::spawn(async move {
         loop {
@@ -229,6 +190,70 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    // rustls 0.23 requires an explicit process-level CryptoProvider. ring is the
+    // only compiled provider (aws-lc-rs excluded in Cargo.toml); install it here
+    // as the explicit process default, matching rcgen's ring backend.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("rustls CryptoProvider installation must succeed at startup");
+
+    let addr = relay_addr();
+
+    // Hoist state_dir so it feeds both the enrollment load and the renewal task below.
+    let state_dir = enroll::state_dir_from_env();
+
+    // Acquire the enrolled identity before proceeding. Fail closed: if no
+    // token is configured and no persisted identity exists, refuse to connect
+    // rather than fall back to a plaintext dial (ADR-0005, invariant #6).
+    let identity = acquire_identity(&state_dir).await?;
+
+    info!(relay = %addr, node_id = %identity.node_id, "relay-daemon starting");
+
+    let facts = Facts {
+        // Facts.hostname is a human-readable hostname descriptor, not the
+        // Relay-assigned identity UUID (see node_id field on Hello below).
+        hostname: hostname(),
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        kernel: String::new(),
+        ip_addresses: vec![],
+    };
+
+    // Force http:// → https:// so existing --relay/RELAY_ADDR inputs work;
+    // https:// endpoints pass through unchanged. validate_endpoint_scheme
+    // inside connect_mtls is the authoritative fail-closed check.
+    let endpoint = addr.replacen("http://", "https://", 1);
+    let domain = std::env::var("RELAY_DOMAIN").ok();
+    let channel = tunnel::connect_mtls(endpoint, domain, &identity).await?;
+
+    // Spawn the cert-renewal background task. It rides the same mTLS channel so
+    // the Relay authenticates it via the current client cert (no token). The renewed
+    // cert is written atomically to state_dir and adopted on the next connect_mtls
+    // (process restart or reconnect). The live session continues with the old cert —
+    // TLS does not re-validate certs mid-session and the renewal margin (3.5–7 days)
+    // ensures no connectivity gap (ADR-0006 Amendment 3).
+    tokio::spawn(renew::run(
+        channel.clone(),
+        state_dir.clone(),
+        identity.clone(),
+    ));
+
+    let node_labels = enroll::node_labels_from_env();
+    let interval = heartbeat_interval();
+    run_tunnel(channel, &identity, facts, node_labels, interval).await?;
 
     Ok(())
 }
