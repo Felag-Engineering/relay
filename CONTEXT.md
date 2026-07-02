@@ -95,10 +95,33 @@ cert-authenticated and refreshes the existing one. (ADR-0006)
 _Avoid_: re-enroll, reissue, cert refresh
 
 **Relay-side authorization**:
-The central rules deciding which principal (a human or an AI-agent) may send which
-Operations to which Nodes. Distinct from Policy: authorization governs *who may ask*,
-Policy governs *what a Node will ever do*.
+The central rules deciding which Account may send which Operations to which Nodes.
+Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
+will ever do*.
 _Avoid_: permissions, RBAC (when ambiguous with Policy)
+
+**Account**:
+A named identity — human or machine — with a role (`viewer`, `operator`, `admin`), to
+which every credential binds: a human's password or OIDC identity, a machine's API
+Tokens. The AI-agent authenticates as a machine Account. The unit of Relay-side
+authorization and of audit attribution across all three surfaces (ADR-0010).
+_Avoid_: user, principal, service account (say "machine Account")
+
+**API Token**:
+A bearer credential bound to an Account, used by machines (and the AI-agent via MCP) to
+call the Control API. Named, revocable, optionally expiring, stored only as a hash, and
+inheriting its Account's role. Distinct from an **Enrollment Token**, which joins Nodes
+to the fleet and can never call the API.
+_Avoid_: API key, PAT, bearer token (unqualified)
+
+**Control API**:
+The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooling and
+machines drive the control plane — both administration and execution. One of the three
+user-facing surfaces (with the MCP surface and the Admin Console), all thin adapters
+over the same capability layer; the Control API is the programmable superset
+(ADR-0010). It never reaches the Relay's own configuration, which is a root-owned
+local file.
+_Avoid_: REST API (unqualified), admin API, "the API" (in docs; fine in speech)
 
 **System Model**:
 The Relay-maintained graph that links Nodes and Labels into higher-order Services,
@@ -122,8 +145,10 @@ provenance. Descriptive context only, never used for targeting.
 _Avoid_: comment, note, tag
 
 **Admin Console**:
-The human-facing web UI for operators to monitor the fleet and drive the control plane
-(enrollment, revocation, Operations, Raw Exec). A thin adapter over the same operator
-capability layer as the MCP surface (ADR-0003, ADR-0009); it never bypasses Selectors →
-Policy → blast cap → audit. Distinct from the **AI-agent**, which drives the Relay over MCP.
+The human-facing web UI for operators to observe the fleet and administer the control
+plane (enrollment lifecycle, revocation, registry/audit views). Admin + observability
+only: it has **no execution surface** — Operations and Raw Exec never run from the
+Console (ADR-0009). A thin adapter over the same operator capability layer as the MCP
+surface (ADR-0003, ADR-0009). Distinct from the **AI-agent**, which drives the Relay
+over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"

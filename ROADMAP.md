@@ -87,10 +87,16 @@ Make it drivable by an AI-agent across the fleet.
   `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
 - **SQLite** persistence behind a repository interface: Node registry, Jobs, Tasks, audit.
 - **Audit**: every Job/Task recorded (principal, selector, op, args, result, timestamps).
-- Minimal **Relay-side authz**: single admin principal via a static token on the MCP endpoint.
+- **Relay-side authz** via the Account model (ADR-0010): the MCP endpoint authenticates a
+  machine Account's API Token; the Account's role gates Raw Exec centrally.
+- First **Control API** slice (ADR-0010), REST under `/api/v1`: seeded admin Account
+  (credential hash in the Relay config, plaintext in the operator's vault), bearer-token
+  auth, mint/revoke Enrollment Tokens, revoke Nodes. The control plane is REST from day
+  one; the full surface lands in v0.3.0.
 - Structure the control path as a **reusable capability layer** (Selector → Policy →
-  blast-cap → audit) with MCP as its first adapter, so a future CLI and Admin Console are
-  thin adapters rather than parallel control paths (ADR-0009).
+  blast-cap → audit) with MCP as its first adapter, so the Control API, the Admin
+  Console, and a future CLI are thin adapters rather than parallel control paths
+  (ADR-0009, ADR-0010).
 - Add `pkg.install` Native Operation.
 
 **Acceptance**
@@ -98,6 +104,8 @@ Make it drivable by an AI-agent across the fleet.
 - A Selector matching more Nodes than the blast cap is rejected before any Task runs.
 - Every dispatch produces a queryable audit record.
 - `describe_node` shows the Node's effective Policy.
+- The seeded admin Account mints a scoped Enrollment Token over `/api/v1`; a revoked
+  token can no longer enroll.
 
 **ADRs:** 0003 (MCP surface, Selectors), 0004 (Jobs, blast radius).
 
@@ -150,29 +158,60 @@ the beta so the vertical slice stays focused on the execution path.
 
 ---
 
-## `v0.3.0` — Admin Console (post-beta)
+## `v0.3.0` — Control API (post-beta)
 
-A human-facing web **Admin Console** for operators to monitor the fleet and drive the
-control plane — for the humans who aren't the AI-agent. Built as a **thin adapter** over
-the v0.0.4 operator capability layer (ADR-0009), reusing Selector → Policy → blast-cap →
-audit rather than re-implementing control. Sequenced after v0.0.4 (needs the capability
-layer + audit) and the beta (needs a working system to operate); it draws on the v0.2.0
-System Model for richer monitoring. Full-control scope, built in reviewable phases.
+Complete the REST control-plane surface begun pre-beta (ADR-0010): the programmable
+superset — administration *and* execution — for IaC tooling, CLIs, and extensions built
+on Gleipnir. Sequenced before the Admin Console: plumbing before porcelain — the Console
+renders what this API manages.
+
+**Deliverables**
+- Execution endpoints through the shared capability layer: `run_operation`, `raw_exec`
+  (requires `admin` role), Job/Task status and result queries.
+- Account CRUD and API Token lifecycle (mint, revoke, expiry, last-used).
+- MCP endpoint authenticates via Account API Tokens (retiring any interim static token).
+- Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
+  vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
+- Audit attribution by Account on every endpoint.
+
+**Acceptance**
+- An Ansible playbook stands up the Relay and enrolls Nodes end-to-end with no manual
+  steps, using the vault-managed bootstrap Account.
+- `run_operation` via `/api/v1` returns per-Node results consistent with MCP's;
+  `raw_exec` requires `admin` and is refused for an `operator` Account.
+- Every API action appears in the audit trail attributed to its Account (and token).
+
+**ADRs:** 0010 (Control API + Account model); builds on 0003 (capability surface),
+0004 (Jobs, blast radius).
+
+---
+
+## `v0.4.0` — Admin Console (post-beta)
+
+A human-facing web **Admin Console** for operators to observe the fleet and administer
+the control plane — for the humans who aren't the AI-agent. Built as a **thin adapter**
+over the v0.0.4 operator capability layer (ADR-0009). **Admin + observability only: the
+Console has no execution surface** — Operations and Raw Exec run only via MCP or the
+Control API. Sequenced after the Control API (v0.3.0): the Console renders what the API
+manages (Accounts, tokens, audit), and reuses its Account model for login; it draws on
+the v0.2.0 System Model for richer monitoring. Built in reviewable phases: monitoring
+first, lifecycle control second.
 
 **Deliverables**
 - Monitoring: live Node registry (facts, `node:`/`relay:` labels, liveness), Enrollment
   Token inventory, CA/cert lifecycle, Jobs/Tasks, and the audit trail.
-- Control: mint/revoke Enrollment Tokens, revoke Nodes, `run_operation`, and `raw_exec`
-  (break-glass) — all through the shared capability layer.
-- Human auth: SSO/OIDC login, RBAC (`viewer` / `operator` / `admin`), per-action step-up
-  re-auth for Raw Exec, and per-human audit attribution.
+- Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes — through the shared
+  capability layer. No `run_operation`, no `raw_exec` (ADR-0009).
+- Human auth: username/password login (hashed at rest) with optional OIDC, the shared
+  Account roles (ADR-0010), per-human audit attribution.
 - Internal-only serving (not internet-facing); server-rendered Go + HTMX (ADR-0009).
 
 **Acceptance**
-- An operator logs in via SSO, views live fleet state, mints a scoped Enrollment Token,
-  runs a Selector-targeted Operation, and sees their own action attributed in the audit
-  trail — with RBAC preventing a `viewer` from executing.
-- `raw_exec` requires `admin` + step-up re-auth and is refused otherwise.
+- An operator logs in, views live fleet state, mints a scoped Enrollment Token,
+  revokes a Node, and sees their own actions attributed in the audit trail — with RBAC
+  preventing a `viewer` from minting or revoking.
+- The Console offers no path to dispatch an Operation or Raw Exec (verified by review,
+  not by RBAC).
 
 **ADRs:** 0009 (Admin Console); builds on 0003 (capability surface), 0004 (Jobs, blast
 radius), 0006 (identity), 0002 (Policy read-only).
