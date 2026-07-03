@@ -72,6 +72,11 @@ v0.1.0-beta vertical slice.
   on existing Nodes. Still serious — the Console keeps a high review bar and a threat
   model before any lifecycle-control action ships — but the consequence ceiling is
   structurally lower.
+- Once the Console manages Accounts and roles, a hijacked admin session can *indirectly*
+  reach execution by elevating a machine Account it controls. Mitigation: all
+  privilege-granting actions (create Account, change role, mint API Token) require
+  **step-up re-authentication** (sudo-mode: re-enter password / OIDC re-prompt), and
+  every such change is audited and, as always, bounded by Node Policy.
 - Human-action audit must attribute the human principal end-to-end (login → action →
   audit record), extending v0.0.4's audit schema.
 - v0.0.4 is influenced now: build the operator capability layer MCP-independent so the

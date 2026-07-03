@@ -109,6 +109,10 @@ Make it drivable by an AI-agent across the fleet.
 - First **Control API** slice (ADR-0010), REST under `/api/v1`: bearer-token auth,
   mint/revoke Enrollment Tokens, revoke Nodes. The control plane is REST from day
   one; the full surface lands in v0.3.0.
+- **Listener separation** (Relay config): the control plane (MCP, `/api/v1`) binds
+  separately from the node-plane gRPC listener, so exposing the node plane to enrolling
+  Nodes never exposes the control plane. (The Console, later, is internal-only per
+  ADR-0009.)
 - Structure the control path as a **reusable capability layer** (Selector → Policy →
   blast-cap → audit) with MCP as its first adapter, so the Control API, the Admin
   Console, and a future CLI are thin adapters rather than parallel control paths
@@ -146,6 +150,9 @@ Harden the end-to-end path into something deployable for real testing.
   (SSH/Ansible) — never over the wire (ADR-0002); registry fingerprints confirm rollout.
 - Reconnect resilience, graceful daemon shutdown, basic observability (logs/metrics).
 - Hardening pass on the privileged daemon (restricted user, no implicit shell, output limits).
+- Decide the **audit output-retention posture**: captured stdout/stderr can contain
+  secrets (`file.read`), so choose what the audit store persists (full output vs
+  metadata + truncated output vs configurable) before real fleets depend on it.
 
 **Acceptance**
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted Operation
@@ -194,6 +201,8 @@ renders what this API manages.
   (requires `admin` role), Job/Task status and result queries.
 - Account CRUD and API Token lifecycle (mint, revoke, expiry, last-used).
 - MCP endpoint authenticates via Account API Tokens (retiring any interim static token).
+- System Model read/write endpoints (capability parity with the v0.2.0 MCP tools,
+  per ADR-0010's parity rule).
 - Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
   vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
 - Audit attribution by Account on every endpoint.
@@ -226,6 +235,10 @@ first, lifecycle control second.
   Token inventory, CA/cert lifecycle, Jobs/Tasks, and the audit trail.
 - Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes — through the shared
   capability layer. No `run_operation`, no `raw_exec` (ADR-0009).
+- **Access management**: view/create/disable Accounts (incl. machine Accounts for
+  AI-agents), assign roles, revoke API Tokens — the human seam for governing what may
+  drive the fleet over MCP/API. Privilege-granting actions require step-up re-auth
+  (ADR-0009).
 - Human auth: username/password login (hashed at rest) with optional OIDC, the shared
   Account roles (ADR-0010), per-human audit attribution.
 - Internal-only serving (not internet-facing); server-rendered Go + HTMX (ADR-0009).
@@ -247,7 +260,10 @@ radius), 0006 (identity), 0002 (Policy read-only).
 - **HA / horizontal Relay scaling** — Node→instance routing registry (ADR-0005 caveat).
 - **Multi-principal RBAC & Grants** — per-Account authorization rules (Operations ×
   Selectors) managed via the Control API/Console; a Grant only ever narrows what Node
-  Policy allows, never widens it (see CONTEXT.md "Grant", ADR-0010).
+  Policy allows, never widens it (see CONTEXT.md "Grant", ADR-0010). Design rule when
+  built: a Grant used as a *security boundary* must scope by `relay:` labels — a
+  `node:`-scoped Grant's reach is partly Node-controlled, since Nodes own their
+  `node:` labels (ADR-0006).
 - **Staged rollout & approval (post-1.0, shape decided 2026-07-02)** — first-class
   rollout spec on Jobs: canary stage (count/percent) → gate (`all-success` or
   `manual-approval` via Control API/Console) → remainder, executed and audited as one

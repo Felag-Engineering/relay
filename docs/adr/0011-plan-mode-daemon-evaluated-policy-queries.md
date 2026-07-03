@@ -19,6 +19,10 @@ boundaries by triggering real executions.
   has no execution code path at all. `PolicyQuery` carries no Task ID and cannot be
   deduped into or confused with a Task.
 - **Offline Nodes yield `unknown(offline)`,** never a guess from cached state.
+- **A Plan never hard-fails on guardrails — it reports.** A fan-out exceeding the
+  applicable blast cap returns `would-be-rejected: exceeds cap` with the resolved
+  count, rather than an error: the entire point is telling the caller what *would*
+  happen.
 
 ## Considered Options
 
