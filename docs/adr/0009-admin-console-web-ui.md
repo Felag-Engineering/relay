@@ -11,7 +11,7 @@ Scope (v1): **admin + observability only — the Console has no execution surfac
 Monitoring (registry, labels, liveness, facts, Enrollment Tokens, cert lifecycle,
 Jobs/Tasks, audit) and lifecycle control (mint/revoke tokens, revoke Nodes). It cannot
 dispatch Operations or Raw Exec; execution is reserved for the MCP surface (the
-AI-agent's hands) and the general API. It is sequenced as its own milestone after v0.0.4,
+AI-agent's hands) and the general API. It is sequenced as its own milestones after the orchestration work,
 once the capability layer and audit trail exist; it is deliberately out of scope for the
 v0.1.0-beta vertical slice.
 
@@ -20,7 +20,7 @@ v0.1.0-beta vertical slice.
 - **Thin adapter over a shared capability layer.** The Console calls the same internal
   control API as MCP and a CLI. Node dispatch, blast-radius enforcement, effective-Policy
   read, and audit live in that layer once. This is the load-bearing decision: it prevents
-  authz/audit/blast-cap drift on the most dangerous surface in the system. v0.0.4's MCP
+  authz/audit/blast-cap drift on the most dangerous surface in the system. the MCP milestone's
   work must therefore be built as a **reusable capability layer**, not MCP-specific
   plumbing.
 - **Human auth uses the unified Account model (ADR-0010).** Humans log in with a local
@@ -78,8 +78,8 @@ v0.1.0-beta vertical slice.
   **step-up re-authentication** (sudo-mode: re-enter password / OIDC re-prompt), and
   every such change is audited and, as always, bounded by Node Policy.
 - Human-action audit must attribute the human principal end-to-end (login → action →
-  audit record), extending v0.0.4's audit schema.
-- v0.0.4 is influenced now: build the operator capability layer MCP-independent so the
+  audit record), extending the Job-engine milestone's audit schema.
+- The Job-engine milestone is influenced now: build the operator capability layer MCP-independent so the
   Console and the general API are cheap adapters later.
 - A phased build remains natural: monitoring (read-only) first, token/Node lifecycle
   second — each separately reviewable.

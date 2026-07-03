@@ -41,9 +41,9 @@ know which requests are safe to fan out.
 
 ## Consequences
 
-- Class declarations land with the v0.0.3 vocabulary (three Operations today —
+- Class declarations land with the Policy & Native Operations milestone (three Operations today —
   `system.facts`/`file.read` are `read`, `service.restart` is `mutate`); the split cap
-  lands with the v0.0.4 Job engine.
+  lands with the Job-engine milestone.
 - Misclassifying a new Operation as `read` weakens the mutate guardrail — vocabulary
   review must treat the class as security-relevant (it is part of the `/proto`
   contract, which always escalates to a human in the dev-loop).

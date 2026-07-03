@@ -39,9 +39,9 @@ assume a human can always regain control.
 
 ## Consequences
 
-- Proto: `TaskCancel` + `OUTCOME_CANCELLED` land with the v0.0.3 executor work
+- Proto: `TaskCancel` + `OUTCOME_CANCELLED` land with the executor milestone's work
   (daemon must kill process groups and report honestly); Job cancel and Freeze land
-  with the v0.0.4 Job engine. Both ship before the beta — a beta on real machines
+  with the Job-engine milestone. Both ship before the beta — a beta on real machines
   with no stop button is not a beta.
 - The daemon must supervise Tasks in killable process groups (also required for
   timeouts) — cancellation shares that machinery.

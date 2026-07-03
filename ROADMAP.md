@@ -8,9 +8,13 @@ the agentic development loop always has an end-to-end target with a pass/fail si
 Every milestone lists **acceptance criteria** (the loop's definition of done) and the **ADRs**
 it realizes.
 
+> **Renumbered 2026-07-02** (milestones split for manageability). Mapping from older docs/ADRs:
+> old v0.0.3 → v0.0.3 + v0.0.4 · old v0.0.4 → v0.0.5 + v0.0.6 · old v0.3.0 → v0.3.0 + v0.4.0 ·
+> old v0.4.0 → v0.5.0 + v0.6.0. ADRs cite milestones by name where possible.
+
 ---
 
-## `v0.0.1` — Walking Skeleton
+## `v0.0.1` — Walking Skeleton ✅
 
 Make the two halves exist, build, and talk over the simplest possible channel.
 
@@ -30,7 +34,7 @@ Make the two halves exist, build, and talk over the simplest possible channel.
 
 ---
 
-## `v0.0.2` — Secure Channel & Identity
+## `v0.0.2` — Secure Channel & Identity ✅
 
 Replace plaintext with real mutual auth and give Nodes identities.
 
@@ -53,135 +57,191 @@ Replace plaintext with real mutual auth and give Nodes identities.
 
 ---
 
-## `v0.0.3` — Policy & Execution
+## `v0.0.3` — Policy Engine & Native Operations
 
-Teach the daemon to refuse and to do, safely.
+Teach the daemon to refuse and to do, safely. Pure daemon milestone: the enforcement
+engine and the execution primitives.
 
 **Deliverables**
 - **Policy engine** in the daemon: loaded from a root-owned local file, deny-by-default,
   deny-beats-allow, argument-level constraints, regex gating for Raw Exec. Remotely-immutable.
-- **Native Operations** (argv, no shell): `system.facts`, `service.restart`, `file.read` —
-  each declaring its risk class in `/proto` (`read` / `mutate`, ADR-0012).
-- **Raw Exec** path, gated by Policy regex.
+- **Executor framework**: argv spawn (never `/bin/sh`), Tasks in **killable process groups**,
+  per-Task timeouts, size-capped captured output, structured per-Task results.
+- **Native Operations**: `system.facts`, `file.read` (`read` class), `service.restart`
+  (`mutate` class) — risk classes declared in `/proto` (ADR-0012).
+- **Raw Exec** path, gated by Policy regex; always `mutate` class.
 - **At-most-once** Task execution: unique Task IDs, daemon-side dedup across reconnects.
-- Per-Task timeouts; captured output with size cap; structured per-Task results.
-- **`relay-daemon policy check <file>`** subcommand: parse + lint a Policy file (invalid
-  regex, unknown Operation names, allow rules shadowed by denies) and answer
-  hypotheticals (`--would-allow`), so IaC pipelines can validate before deploying.
-- **Policy fingerprint**: the daemon reports a hash of its loaded Policy in
-  Hello/PolicySnapshot; the registry records it (fleet-wide Policy drift visibility).
-- **`PolicyQuery`/`PolicyVerdict`** wire messages (ADR-0011): the daemon answers
-  "would Policy allow this?" from its live engine — read-only, no Task ID, no
-  execution path. (Powers v0.0.4 plan mode.)
-- **`TaskCancel` + `OUTCOME_CANCELLED`** (ADR-0013): Tasks run in killable process
-  groups; on cancel the daemon kills the group and reports honestly (a Task that
-  won the race reports `success`, never a retroactive `cancelled`).
-- **Per-Node concurrency by risk class** (ADR-0004/0012): `mutate` Tasks serial,
-  `read` Tasks parallel under a small fixed bound; queued Tasks' timeout clocks run
-  while waiting.
 
 **Acceptance**
 - An Operation allowed by Policy runs and returns a correct result; one denied by Policy returns
   `denied-by-policy` without executing.
 - `service.restart` constrained to `{nginx}` refuses `sshd`.
-- Re-sending a Task with a seen ID does not run it twice.
+- Re-sending a Task with a seen ID does not run it twice (including across a reconnect).
 - The Relay cannot alter a Node's Policy over the wire (verified by attempt).
-- `policy check` rejects a malformed file with a useful error and answers
-  `--would-allow` consistently with the live engine.
+- A Task exceeding its timeout is killed (whole process group) and reports `timeout`.
 
-**ADRs:** 0001 (Operations + Raw Exec), 0002 (Policy), 0004 (at-most-once).
+**ADRs:** 0001 (Operations + Raw Exec), 0002 (Policy), 0004 (at-most-once), 0012 (risk
+classes in the vocabulary).
 
 ---
 
-## `v0.0.4` — Orchestration & MCP
+## `v0.0.4` — Execution Control & Policy Tooling
 
-Make it drivable by an AI-agent across the fleet.
+Give the daemon its control seams (cancel, hypotheticals, scheduling) and operators
+their Policy tooling. Still a daemon-centric milestone.
 
 **Deliverables**
-- **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node results.
-  Schema constraint: a Job is modeled as *stages of Task batches* — always exactly one
-  stage in v1 — so post-1.0 staged rollout lands without a data migration.
-- **Offline Nodes fail fast** (ADR-0004): connectivity checked at dispatch; disconnected
-  Nodes report `OUTCOME_UNREACHABLE` (new proto enum value) — no store-and-forward.
-- **Job cancel + emergency Freeze** (ADR-0013): Job-level cancellation; a Relay-wide
-  Freeze halting all new dispatch (Plans still work), engaged by `operator`+ via API or
-  locally on the Relay host, released by `admin` with an audited reason; persisted
-  across Relay restarts.
-- **Blast-radius hard caps** (Relay config, file-only) enforced before dispatch: a
-  generous read-cap and a small mutate-cap, chosen by the Operation's risk class;
-  Raw Exec always takes the mutate-cap (ADR-0012).
-- **MCP server** exposing the five meta-tools: `list_nodes`, `describe_node`, `list_operations`,
-  `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
+- **`TaskCancel` + `OUTCOME_CANCELLED`** (ADR-0013): on cancel the daemon kills the
+  Task's process group and reports honestly (a Task that won the race reports
+  `success`, never a retroactive `cancelled`).
+- **Per-Node concurrency by risk class** (ADR-0004/0012): `mutate` Tasks serial,
+  `read` Tasks parallel under a small fixed bound; queued Tasks' timeout clocks run
+  while waiting.
+- **`PolicyQuery`/`PolicyVerdict`** wire messages (ADR-0011): the daemon answers
+  "would Policy allow this?" from its live engine — read-only, no Task ID, no
+  execution path. (Powers plan mode in the Control Surfaces milestone.)
+- **`relay-daemon policy check <file>`** subcommand: parse + lint a Policy file (invalid
+  regex, unknown Operation names, allow rules shadowed by denies) and answer
+  hypotheticals (`--would-allow`), so IaC pipelines can validate before deploying.
+- **Policy fingerprint**: the daemon reports a hash of its loaded Policy in
+  Hello/PolicySnapshot; the registry records it (fleet-wide Policy drift visibility).
+
+**Acceptance**
+- Cancelling an in-flight Task kills its process group and reports `cancelled`; a Task
+  that completed in the race window reports `success`.
+- Two `mutate` Tasks sent together never overlap; `read` Tasks run concurrently.
+- `PolicyQuery` verdicts match what real execution then does on an unchanged Policy.
+- `policy check` rejects a malformed file with a useful error and answers
+  `--would-allow` consistently with the live engine.
+- The registry shows a Node's Policy fingerprint after (re)connect.
+
+**ADRs:** 0011 (Policy queries), 0013 (cancellation, daemon half), 0004/0012
+(concurrency by class).
+
+---
+
+## `v0.0.5` — Job Engine & Persistence
+
+The Relay learns fleets: fan-out, guardrails, memory, and the stop button. Driven by
+tests/harness — the user-facing surfaces arrive next milestone.
+
+**Deliverables**
 - **SQLite** persistence behind a repository interface: Node registry, Jobs, Tasks, audit.
+- The control path structured as a **reusable capability layer** (Selector → authz →
+  blast-cap → dispatch → audit), so MCP, the Control API, the Admin Console, and a
+  future CLI are thin adapters — never parallel control paths (ADR-0009, ADR-0010).
+- **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node
+  results. Schema constraint: a Job is modeled as *stages of Task batches* — always
+  exactly one stage in v1 — so post-1.0 staged rollout lands without a data migration.
+- **Offline Nodes fail fast** (ADR-0004): connectivity checked at dispatch; disconnected
+  Nodes report `OUTCOME_UNREACHABLE` — no store-and-forward.
+- **Blast-radius hard caps** (Relay config, file-only): a generous read-cap and a small
+  mutate-cap, chosen by the Operation's risk class; Raw Exec always takes the
+  mutate-cap (ADR-0012).
+- **Job cancel + emergency Freeze** (ADR-0013): Job-level cancellation; a Relay-wide
+  Freeze halting all new dispatch (Policy queries still work), engaged/released locally
+  on the Relay host in this milestone (API paths arrive with the Control Surfaces
+  milestone); persisted across Relay restarts.
 - **Audit**: every Job/Task recorded (principal, selector, op, args, result, timestamps).
-- Minimal **Relay-side authz** (ADR-0010, staged): one seeded admin credential —
-  hash in the Relay config, plaintext in the operator's vault — is the bearer token
-  for both the MCP endpoint and the Control API slice. No Account tables or roles yet;
-  the full Account model lands in v0.3.0.
-- First **Control API** slice (ADR-0010), REST under `/api/v1`: bearer-token auth,
-  mint/revoke Enrollment Tokens, revoke Nodes. The control plane is REST from day
-  one; the full surface lands in v0.3.0.
-- **Listener separation** (Relay config): the control plane (MCP, `/api/v1`) binds
-  separately from the node-plane gRPC listener, so exposing the node plane to enrolling
-  Nodes never exposes the control plane. (The Console, later, is internal-only per
-  ADR-0009.)
-- Structure the control path as a **reusable capability layer** (Selector → Policy →
-  blast-cap → audit) with MCP as its first adapter, so the Control API, the Admin
-  Console, and a future CLI are thin adapters rather than parallel control paths
-  (ADR-0009, ADR-0010).
+
+**Acceptance**
+- A Selector matching more Nodes than the applicable cap is rejected before any Task runs.
+- A Job spanning an offline Node reports `unreachable` for it and real results for the rest.
+- Engaging the Freeze stops a subsequent dispatch before any Task is sent; cancelling
+  a Job kills its in-flight Tasks (which report `cancelled`) and stops undispatched ones.
+- Every dispatch produces a queryable audit record; Jobs/Tasks survive a Relay restart.
+
+**ADRs:** 0004 (Jobs, blast radius), 0012 (split caps), 0013 (Freeze), 0009/0010
+(capability layer).
+
+---
+
+## `v0.0.6` — Control Surfaces: MCP & First API Slice
+
+Make it drivable — by an AI-agent over MCP and by tooling over the first REST slice.
+
+**Deliverables**
+- **MCP server** exposing the five meta-tools: `list_nodes`, `describe_node`,
+  `list_operations`, `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
 - **Plan mode** (ADR-0011): `plan=true` on `run_operation`/`raw_exec` returns the
-  resolved fan-out and per-Node daemon-evaluated Policy verdicts
-  (`allow | deny(rule) | unknown(offline)`) without executing.
-- Add `pkg.install` Native Operation.
+  resolved fan-out and per-Node daemon-evaluated verdicts
+  (`allow | deny(rule) | unknown(offline)`) without executing; over-cap Plans report
+  `would-be-rejected` rather than erroring.
+- Minimal **Relay-side authz** (ADR-0010, staged): one seeded admin credential — hash in
+  the Relay config, plaintext in the operator's vault — is the bearer token for both the
+  MCP endpoint and the API slice. No Account tables or roles yet (Accounts & Access
+  milestone).
+- First **Control API** slice (ADR-0010), REST under `/api/v1`: mint/revoke Enrollment
+  Tokens, revoke Nodes, engage/release the Freeze. The control plane is REST from day one.
+- **Listener separation** (Relay config): the control plane (MCP, `/api/v1`) binds
+  separately from the node-plane gRPC listener.
+- Add `pkg.install` Native Operation (`mutate`).
 
 **Acceptance**
 - An MCP client calls `run_operation(selector, "system.facts")` and gets per-Node results.
-- A Selector matching more Nodes than the blast cap is rejected before any Task runs.
 - `run_operation(…, plan=true)` returns per-Node verdicts and executes nothing; a
   subsequent real run on an unchanged fleet matches the plan's verdicts.
-- Engaging the Freeze stops a subsequent dispatch before any Task is sent; cancelling
-  a Job kills its in-flight Tasks (which report `cancelled`) and stops undispatched ones.
-- Every dispatch produces a queryable audit record.
 - `describe_node` shows the Node's effective Policy.
-- The seeded admin Account mints a scoped Enrollment Token over `/api/v1`; a revoked
-  token can no longer enroll.
+- The seeded admin credential mints a scoped Enrollment Token over `/api/v1`; a revoked
+  token can no longer enroll; the Freeze can be engaged and released over the API.
+- A request to either surface without the credential is refused.
 
-**ADRs:** 0003 (MCP surface, Selectors), 0004 (Jobs, blast radius).
+**ADRs:** 0003 (MCP surface, Selectors), 0010 (staged authz + API slice), 0011 (plan
+mode surface).
+
+---
+
+## `v0.0.7` — Hardening & Daemon Lifecycle
+
+Make the path robust enough to put on machines that matter.
+
+**Deliverables**
+- Reconnect resilience, graceful daemon shutdown, basic observability (logs/metrics)
+  on both sides.
+- Hardening pass on the privileged daemon (restricted user, no implicit shell, output
+  limits).
+- **Daemon lifecycle** (ADR-0014): minimum-daemon-version dispatch gate (`outdated`
+  flag in the registry, file-only config); CI enforces additive-only proto changes
+  (buf breaking checks).
+- Implement the **audit output-retention posture** (decided in review: full output vs
+  metadata + truncated output vs configurable) so secrets in captured output have a
+  deliberate story before real fleets depend on it.
+
+**Acceptance**
+- Killing and restarting the Relay: daemons reconnect, dedup holds, no Task double-runs.
+- A below-minimum-version daemon connects and appears `outdated` in the registry, but
+  dispatch to it is refused per-Task.
+- A proto change that breaks wire compatibility fails CI.
+
+**ADRs:** 0014 (lifecycle); hardening consequences of 0001/0002.
 
 ---
 
 ## `v0.1.0-beta` — Vertical Slice
 
-Harden the end-to-end path into something deployable for real testing.
+Prove the end-to-end path on real machines, documented well enough for a stranger.
 
 **Deliverables**
-- Full path proven on a real (small) fleet: enroll → connect → dispatch → enforce → execute →
-  report, over mTLS, with audit.
-- Install/run docs for daemon and Relay; example Policy file; example enrollment workflow
-  (incl. bulk enrollment via config management).
+- Full path proven on a real (small) fleet: enroll → connect → dispatch → enforce →
+  execute → report, over mTLS, with audit.
+- Install/run docs for daemon and Relay; example Policy file; example enrollment
+  workflow (incl. bulk enrollment via config management); IaC upgrade workflow
+  consuming the CD artifacts (ADR-0014).
 - **Policy-as-code workflow documented**: Node Policy files live in the customer's IaC
   repo, are validated with `policy check`, and are distributed by config management
   (SSH/Ansible) — never over the wire (ADR-0002); registry fingerprints confirm rollout.
-- Reconnect resilience, graceful daemon shutdown, basic observability (logs/metrics).
-- Hardening pass on the privileged daemon (restricted user, no implicit shell, output limits).
-- **Daemon lifecycle** (ADR-0014): minimum-daemon-version dispatch gate (`outdated`
-  flag in the registry, file-only config); documented IaC upgrade workflow consuming
-  the CD artifacts; CI enforces additive-only proto changes (buf breaking checks).
 - **CA & disaster posture documented**: CA key backup/permissions, compromise runbook —
   "burn it down" recovery is re-running the enrollment playbook against a fresh CA.
-- Decide the **audit output-retention posture**: captured stdout/stderr can contain
-  secrets (`file.read`), so choose what the audit store persists (full output vs
-  metadata + truncated output vs configurable) before real fleets depend on it.
 - **LICENSE**: publish as source-available under the **Business Source License (BSL)**
-  — parameters (change date, change license, additional-use grant) to be set before
-  the repo gets public attention.
+  — parameters (change date, change license, additional-use grant) set before the repo
+  gets public attention.
 
 **Acceptance**
-- Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted Operation
-  from an MCP client, and read the audit trail — on real machines.
+- Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted
+  Operation from an MCP client, and read the audit trail — on real machines.
 - Documented, repeatable setup from a clean environment.
 
-**ADRs:** all of 0001–0007.
+**ADRs:** all of 0001–0014.
 
 ---
 
@@ -211,69 +271,105 @@ the beta so the vertical slice stays focused on the execution path.
 
 ---
 
-## `v0.3.0` — Control API (post-beta)
+## `v0.3.0` — Accounts & Access (post-beta)
 
-Complete the REST control-plane surface begun pre-beta (ADR-0010): the programmable
-superset — administration *and* execution — for IaC tooling, CLIs, and extensions built
-on Gleipnir. Sequenced before the Admin Console: plumbing before porcelain — the Console
-renders what this API manages.
+The unified identity layer (ADR-0010) replaces the single seeded credential: named
+Accounts, roles, and revocable API Tokens — the substrate the full Control API and the
+Admin Console both render.
+
+**Deliverables**
+- **Account model**: Accounts (human and machine) with roles
+  (`viewer` / `operator` / `admin`); the config-seeded credential becomes the first
+  admin Account.
+- **API Token lifecycle**: mint (shown once, hashed at rest, `glp_` prefix), revoke,
+  expiry, last-used; tokens bound to Accounts and inheriting their role.
+- Account CRUD + token endpoints on `/api/v1`.
+- **MCP endpoint authenticates via Account API Tokens** (retiring the interim shared
+  credential); the AI-agent becomes a machine Account whose role gates Raw Exec
+  centrally.
+- **Audit attribution by Account** (and token) on every action, every surface.
+
+**Acceptance**
+- An `operator` machine Account's token drives `run_operation` via MCP but is refused
+  `raw_exec`; an `admin` token is not.
+- Revoking a token immediately cuts its access; the audit trail attributes each action
+  to its Account.
+- The seeded credential still works and appears in audit as the founding admin Account.
+
+**ADRs:** 0010 (Account model); builds on 0003.
+
+---
+
+## `v0.4.0` — Control API: Execution & OpenAPI (post-beta)
+
+Complete the REST control plane (ADR-0010): the programmable superset — administration
+*and* execution — for IaC tooling, CLIs, and extensions built on Relay. Plumbing before
+porcelain: the Console renders what this API manages.
 
 **Deliverables**
 - Execution endpoints through the shared capability layer: `run_operation`, `raw_exec`
-  (requires `admin` role), Job/Task status and result queries.
-- Account CRUD and API Token lifecycle (mint, revoke, expiry, last-used).
-- MCP endpoint authenticates via Account API Tokens (retiring any interim static token).
-- System Model read/write endpoints (capability parity with the v0.2.0 MCP tools,
-  per ADR-0010's parity rule).
+  (requires `admin` role), plan mode, Job/Task status and result queries.
+- System Model read/write endpoints (capability parity with the System Model
+  milestone's MCP tools, per ADR-0010's parity rule).
 - Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
   vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
-- Audit attribution by Account on every endpoint.
 
 **Acceptance**
 - An Ansible playbook stands up the Relay and enrolls Nodes end-to-end with no manual
   steps, using the vault-managed bootstrap Account.
 - `run_operation` via `/api/v1` returns per-Node results consistent with MCP's;
   `raw_exec` requires `admin` and is refused for an `operator` Account.
-- Every API action appears in the audit trail attributed to its Account (and token).
+- A client generated from the OpenAPI spec can drive the fleet.
 
-**ADRs:** 0010 (Control API + Account model); builds on 0003 (capability surface),
-0004 (Jobs, blast radius).
+**ADRs:** 0010 (Control API); builds on 0003 (capability surface), 0004 (Jobs).
 
 ---
 
-## `v0.4.0` — Admin Console (post-beta)
+## `v0.5.0` — Admin Console: Monitoring (post-beta)
 
-A human-facing web **Admin Console** for operators to observe the fleet and administer
-the control plane — for the humans who aren't the AI-agent. Built as a **thin adapter**
-over the v0.0.4 operator capability layer (ADR-0009). **Admin + observability only: the
-Console has no execution surface** — Operations and Raw Exec run only via MCP or the
-Control API. Sequenced after the Control API (v0.3.0): the Console renders what the API
-manages (Accounts, tokens, audit), and reuses its Account model for login; it draws on
-the v0.2.0 System Model for richer monitoring. Built in reviewable phases: monitoring
-first, lifecycle control second.
+The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
+(ADR-0009), logging in against the v0.3.0 Account model.
 
 **Deliverables**
-- Monitoring: live Node registry (facts, `node:`/`relay:` labels, liveness), Enrollment
-  Token inventory, CA/cert lifecycle, Jobs/Tasks, and the audit trail.
-- Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes — through the shared
-  capability layer. No `run_operation`, no `raw_exec` (ADR-0009).
-- **Access management**: view/create/disable Accounts (incl. machine Accounts for
-  AI-agents), assign roles, revoke API Tokens — the human seam for governing what may
-  drive the fleet over MCP/API. Privilege-granting actions require step-up re-auth
-  (ADR-0009).
-- Human auth: username/password login (hashed at rest) with optional OIDC, the shared
-  Account roles (ADR-0010), per-human audit attribution.
-- Internal-only serving (not internet-facing); server-rendered Go + HTMX (ADR-0009).
+- Human auth: username/password login (hashed at rest) with optional OIDC; per-human
+  audit attribution; `viewer` role enforced.
+- Monitoring views: live Node registry (facts, `node:`/`relay:` labels, liveness,
+  Policy fingerprints, `outdated` flags), Enrollment Token inventory, CA/cert
+  lifecycle, Jobs/Tasks, Freeze state, and the audit trail.
+- Internal-only serving; live updates via SSE.
 
 **Acceptance**
-- An operator logs in, views live fleet state, mints a scoped Enrollment Token,
-  revokes a Node, and sees their own actions attributed in the audit trail — with RBAC
-  preventing a `viewer` from minting or revoking.
+- An operator logs in and watches fleet state, Jobs, and audit live — with zero
+  mutating routes in the Console (verified by review).
+- A `viewer` Account sees everything and can change nothing.
+
+**ADRs:** 0009 (Console, monitoring phase); renders 0010's Account model.
+
+---
+
+## `v0.6.0` — Admin Console: Administration (post-beta)
+
+Phase two: the keys — lifecycle control and access management. Still **no execution
+surface** (ADR-0009): Operations and Raw Exec run only via MCP or the Control API.
+
+**Deliverables**
+- Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes, engage/release the
+  Freeze — through the shared capability layer.
+- **Access management**: view/create/disable Accounts (incl. machine Accounts for
+  AI-agents), assign roles, revoke API Tokens — the human seam for governing what may
+  drive the fleet over MCP/API.
+- **Step-up re-authentication** on privilege-granting actions (create Account, change
+  role, mint API Token) per ADR-0009.
+- Draws on the System Model for richer monitoring context where available.
+
+**Acceptance**
+- An `admin` logs in, mints a scoped Enrollment Token, revokes a Node, creates an
+  `operator` machine Account (passing step-up re-auth), and sees every action
+  attributed in the audit trail — while a `viewer` is refused all of it.
 - The Console offers no path to dispatch an Operation or Raw Exec (verified by review,
   not by RBAC).
 
-**ADRs:** 0009 (Admin Console); builds on 0003 (capability surface), 0004 (Jobs, blast
-radius), 0006 (identity), 0002 (Policy read-only).
+**ADRs:** 0009 (Console, admin phase), 0010 (Accounts).
 
 ---
 
@@ -339,3 +435,5 @@ trust), 0012 (risk classes).
   source of truth (ADR-0008 note).
 - **System Model entry locking** — pin declared entries so the AI-agent cannot change them
   (ADR-0008 note).
+- **Per-Account rate limits** — throttle Job creation per Account so a runaway AI-agent
+  loop is bounded in time as well as blast radius.
