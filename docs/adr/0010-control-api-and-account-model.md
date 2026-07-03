@@ -69,8 +69,8 @@ capability parity is a review rule, not a runtime dependency between surfaces.
 
 ## Consequences
 
-- v0.0.4 stays minimal: one vault-managed credential, no auth tables. The Account
-  model is the *documented destination*, so v0.3.0 adds rows and roles instead of
+- The MCP milestone stays minimal: one vault-managed credential, no auth tables. The Account
+  model is the *documented destination*, so the Accounts & Access milestone adds rows and roles instead of
   redesigning auth.
 - The Relay stores password hashes (Console local login) and token hashes; it still
   never stores plaintext secrets at rest.

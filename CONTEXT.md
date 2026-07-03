@@ -105,6 +105,13 @@ from *enrollment*: enrollment is token-authenticated and mints the first identit
 cert-authenticated and refreshes the existing one. (ADR-0006)
 _Avoid_: re-enroll, reissue, cert refresh
 
+**Freeze**:
+The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
+leaving in-flight Tasks running and Plans available. Cheap to engage (`operator`+ via
+the Control API, or locally on the Relay host), deliberate to release (`admin`, with an
+audited reason). Persisted across Relay restarts (ADR-0013).
+_Avoid_: pause, maintenance mode, lockdown, kill switch
+
 **Plan**:
 The no-execution preview of a Job: the Relay resolves the Selector, checks
 authorization and the blast-radius cap, and each matched daemon's live Policy engine

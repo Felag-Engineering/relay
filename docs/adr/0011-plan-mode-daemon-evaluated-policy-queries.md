@@ -19,6 +19,10 @@ boundaries by triggering real executions.
   has no execution code path at all. `PolicyQuery` carries no Task ID and cannot be
   deduped into or confused with a Task.
 - **Offline Nodes yield `unknown(offline)`,** never a guess from cached state.
+- **A Plan never hard-fails on guardrails — it reports.** A fan-out exceeding the
+  applicable blast cap returns `would-be-rejected: exceeds cap` with the resolved
+  count, rather than an error: the entire point is telling the caller what *would*
+  happen.
 
 ## Considered Options
 
@@ -31,9 +35,9 @@ boundaries by triggering real executions.
 
 ## Consequences
 
-- Proto: `PolicyQuery`/`PolicyVerdict` land with the v0.0.3 Policy engine (a second
-  entry point into it); the `plan` option on the tool surface lands with the v0.0.4
-  Job engine.
+- Proto: `PolicyQuery`/`PolicyVerdict` land with the Policy-engine milestone (a second
+  entry point into it); the `plan` option on the tool surface lands with the Control
+  Surfaces milestone.
 - Verdicts are point-in-time advice, not reservations: Policy may change between plan
   and apply. A Plan is advisory, like the System Model (ADR-0008) — it never gates or
   substitutes for enforcement at execution time.
