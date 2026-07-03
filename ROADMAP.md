@@ -95,6 +95,8 @@ Make it drivable by an AI-agent across the fleet.
 - **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node results.
   Schema constraint: a Job is modeled as *stages of Task batches* — always exactly one
   stage in v1 — so post-1.0 staged rollout lands without a data migration.
+- **Offline Nodes fail fast** (ADR-0004): connectivity checked at dispatch; disconnected
+  Nodes report `OUTCOME_UNREACHABLE` (new proto enum value) — no store-and-forward.
 - **Blast-radius hard caps** (Relay config, file-only) enforced before dispatch: a
   generous read-cap and a small mutate-cap, chosen by the Operation's risk class;
   Raw Exec always takes the mutate-cap (ADR-0012).
@@ -153,6 +155,9 @@ Harden the end-to-end path into something deployable for real testing.
 - Decide the **audit output-retention posture**: captured stdout/stderr can contain
   secrets (`file.read`), so choose what the audit store persists (full output vs
   metadata + truncated output vs configurable) before real fleets depend on it.
+- **LICENSE**: publish as source-available under the **Business Source License (BSL)**
+  — parameters (change date, change license, additional-use grant) to be set before
+  the repo gets public attention.
 
 **Acceptance**
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted Operation

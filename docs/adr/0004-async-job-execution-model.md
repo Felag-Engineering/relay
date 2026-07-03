@@ -3,8 +3,8 @@
 A `run_operation` or `raw_exec` call creates a **Job** composed of one **Task** per
 matched Node. Execution is asynchronous: the call returns a Job ID (optionally blocking
 up to a short `wait` budget) and the AI-agent polls for results. Each Task reports an
-independent outcome (`success | failure | timeout | denied-by-policy`) with exit code,
-captured output (size-capped), and duration.
+independent outcome (`success | failure | timeout | denied-by-policy | unreachable`)
+with exit code, captured output (size-capped), and duration.
 
 ## Decision details
 
@@ -20,6 +20,14 @@ captured output (size-capped), and duration.
 - **Output is final-only for v1**, but the transport must support streaming so live output
   can be added without re-architecting.
 - **Per-Task timeouts**, with Node Policy able to cap the maximum.
+- **Offline Nodes fail fast; there is no store-and-forward queue (2026-07-02).**
+  Connectivity is checked against the live connection registry per matched Node at
+  dispatch time: not connected → the Task immediately reports `unreachable`, and a Node
+  connecting a second later gets nothing. No grace windows — a delayed queue would mean
+  Tasks that fire with no intentional actor behind them, breaking the premise every
+  guardrail (Plan, caps, Policy, audit attribution) rests on: *someone decided this
+  action, now*. Stragglers are the caller's decision to re-target; Plan mode's
+  `unknown(offline)` verdicts are exactly that retry list.
 
 ## Consequences
 
