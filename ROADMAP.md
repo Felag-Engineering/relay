@@ -10,7 +10,8 @@ it realizes.
 
 > **Renumbered 2026-07-02** (milestones split for manageability). Mapping from older docs/ADRs:
 > old v0.0.3 → v0.0.3 + v0.0.4 · old v0.0.4 → v0.0.5 + v0.0.6 · old v0.3.0 → v0.3.0 + v0.4.0 ·
-> old v0.4.0 → v0.5.0 + v0.6.0. ADRs cite milestones by name where possible.
+> old v0.4.0 → v0.5.0 + v0.6.0. New: v0.0.7 (hardening), v0.0.8 (security pass), v1.0.0
+> (production release). ADRs cite milestones by name where possible.
 
 ---
 
@@ -130,6 +131,10 @@ tests/harness — the user-facing surfaces arrive next milestone.
 - The control path structured as a **reusable capability layer** (Selector → authz →
   blast-cap → dispatch → audit), so MCP, the Control API, the Admin Console, and a
   future CLI are thin adapters — never parallel control paths (ADR-0009, ADR-0010).
+  **Enforced mechanically, not by review discipline**: the capability layer is the only
+  package that can construct a dispatch (unexported constructor / internal-only type),
+  so a surface reaching around it fails to compile rather than failing review. This is
+  the load-bearing structural guarantee of the whole multi-surface design.
 - **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node
   results. Schema constraint: a Job is modeled as *stages of Task batches* — always
   exactly one stage in v1 — so post-1.0 staged rollout lands without a data migration.
@@ -143,6 +148,10 @@ tests/harness — the user-facing surfaces arrive next milestone.
   on the Relay host in this milestone (API paths arrive with the Control Surfaces
   milestone); persisted across Relay restarts.
 - **Audit**: every Job/Task recorded (principal, selector, op, args, result, timestamps).
+- **At-most-once across a Relay restart** designed explicitly (not just asserted): where
+  Task IDs are generated, how in-flight dispatch state is persisted, and what the Relay
+  believes about a Task whose result never arrived before a crash. A partition or crash
+  mid-Job must never turn into a double-run when the daemon reconnects (ADR-0004).
 
 **Acceptance**
 - A Selector matching more Nodes than the applicable cap is rejected before any Task runs.
@@ -150,6 +159,10 @@ tests/harness — the user-facing surfaces arrive next milestone.
 - Engaging the Freeze stops a subsequent dispatch before any Task is sent; cancelling
   a Job kills its in-flight Tasks (which report `cancelled`) and stops undispatched ones.
 - Every dispatch produces a queryable audit record; Jobs/Tasks survive a Relay restart.
+- **Crash-mid-Job test**: kill the Relay after dispatch but before results land; on
+  restart+reconnect the Task is not re-run and the Job reconciles to a truthful outcome.
+- A route in any surface that attempts to dispatch without going through the capability
+  layer does not compile (structural test).
 
 **ADRs:** 0004 (Jobs, blast radius), 0012 (split caps), 0013 (Freeze), 0009/0010
 (capability layer).
@@ -163,6 +176,13 @@ Make it drivable — by an AI-agent over MCP and by tooling over the first REST 
 **Deliverables**
 - **MCP server** exposing the five meta-tools: `list_nodes`, `describe_node`,
   `list_operations`, `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
+- **Vocabulary legibility** (ADR-0001): tool and Operation descriptions, and
+  `list_operations` output, written so the AI-agent *prefers* structured Operations and
+  reaches for Raw Exec only when the vocabulary genuinely can't express the task. This
+  is a security-relevant deliverable, not cosmetics — the safety model assumes the AI
+  takes the typed path by default. Each Operation's schema advertises its risk class and
+  argument constraints legibly enough to choose without trial-and-error (plan mode is
+  the fallback probe, not the primary path).
 - **Plan mode** (ADR-0011): `plan=true` on `run_operation`/`raw_exec` returns the
   resolved fan-out and per-Node daemon-evaluated verdicts
   (`allow | deny(rule) | unknown(offline)`) without executing; over-cap Plans report
@@ -217,6 +237,44 @@ Make the path robust enough to put on machines that matter.
 
 ---
 
+## `v0.0.8` — Threat Model & Security Pass
+
+The one milestone driven by *an adversary trying to break this*, not by a feature. For
+an RCE-as-a-service product, an adversarial pass before real machines is not optional —
+and this is the milestone the autonomous loop must **not** drive alone (human-led, loop
+assists). It also discharges the security debt ADR-0006 explicitly deferred "to a
+pre-launch security pass" (node-origin label trust, the daemon privilege model).
+
+**Deliverables**
+- **Written threat model**: trust boundaries, assumed adversaries (compromised Node,
+  stolen API credential, jailbroken AI-agent, malicious Relay, network attacker),
+  and the defense each boundary provides. Committed as a doc, kept current.
+- **Raw Exec gate red-team**: adversarial attempt to defeat the regex allow/deny gating
+  (quoting tricks, argv smuggling, encoding, symlink/path games) — the highest-risk
+  path (ADR-0001). Findings become tests.
+- **Proto/wire fuzzing**: malformed and hostile messages against both the Relay's gRPC
+  handlers and the daemon's, including the certless Enroll path.
+- **Privileged-daemon audit**: the daemon's actual capability/syscall surface as run
+  (user, filesystem reach, process-spawn boundaries, resource limits); close the gap
+  between "documented restricted user" and what the process can actually touch.
+- **node-origin label trust** (ADR-0006 deferred item): decide and document how far
+  `node:` labels are trusted, and whether CM-signed node attributes are needed before
+  launch.
+- **Secret-handling audit**: confirm no tokens/keys/password-hashes reach logs, audit
+  output, or error messages across every surface.
+
+**Acceptance**
+- A threat-model document exists and every architecture invariant maps to a boundary
+  in it.
+- The Raw Exec red-team produces a regression test suite; no known bypass survives.
+- Fuzzers run in CI (bounded) and the known-crash count is zero.
+- The daemon runs with a documented, audited, least-privilege profile.
+
+**ADRs:** discharges the ADR-0006 pre-launch-security-pass debt; may spawn new ADRs
+from findings.
+
+---
+
 ## `v0.1.0-beta` — Vertical Slice
 
 Prove the end-to-end path on real machines, documented well enough for a stranger.
@@ -241,7 +299,7 @@ Prove the end-to-end path on real machines, documented well enough for a strange
   Operation from an MCP client, and read the audit trail — on real machines.
 - Documented, repeatable setup from a clean environment.
 
-**ADRs:** all of 0001–0014.
+**ADRs:** all of 0001–0014; security posture proven in v0.0.8.
 
 ---
 
@@ -370,6 +428,42 @@ surface** (ADR-0009): Operations and Raw Exec run only via MCP or the Control AP
   not by RBAC).
 
 **ADRs:** 0009 (Console, admin phase), 0010 (Accounts).
+
+---
+
+## `v1.0.0` — Production Release
+
+The stability promise. Not new surface — the point where everything built so far is
+declared production-grade, the wire/API contracts are frozen under a compatibility
+promise, and the **BSL change-date clock starts** (ADR: licensing). 1.0 is
+*earned by hardening and commitment*, not by adding features.
+
+**Scope (what "1.0" means here)**
+- The full stack in production shape: execution path (v0.0.3–v0.0.8), System Model
+  (v0.2.0), Accounts & Access (v0.3.0), Control API + OpenAPI (v0.4.0), and the Admin
+  Console (v0.5.0–v0.6.0) — each beyond prototype, with the security pass (v0.0.8)
+  re-run against the accumulated surface.
+- **Contract stability commitment**: `gleipnir.v1` proto and `/api/v1` OpenAPI are
+  frozen — additive-only from here, breaking changes require a new version served in
+  parallel (ADR-0010, ADR-0014). This is the promise fleet operators build against.
+- **Operational maturity**: documented upgrade path across a 1.x series, backup/restore
+  for the Relay store and the System Model git tree, and a supported deployment
+  reference (not just "it runs on my machine").
+- **Second security pass** over the complete multi-surface system, since v0.0.8 predated
+  the Control API, Accounts, and the Console.
+
+**Acceptance**
+- A documented, supported production deployment stands up from clean infrastructure and
+  survives a full upgrade cycle without data loss.
+- Contract-compatibility CI gates are green and the freeze is enforced mechanically.
+- The second security pass has no open high-severity findings.
+- The `LICENSE` (BSL) is published with finalized parameters and the change-date clock
+  is running.
+
+**Decision still open:** whether the System Model (v0.2.0) and the Admin Console
+(v0.5.0–v0.6.0) are *required* for 1.0 or may trail into 1.x. Resolve before cutting the
+release; the execution path + Control API are non-negotiable for 1.0, the rest is a
+scoping call.
 
 ---
 
