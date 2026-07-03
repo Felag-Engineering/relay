@@ -112,6 +112,31 @@ message Operation {
   map<string, string> args = 2;   // typed per Operation; validated against schema
 }
 
+// Risk class of an Operation, used only for blast-radius control (ADR-0012):
+// read = cannot change Node state, mutate = can. NOT a trust/Policy substitute —
+// Policy (deny-by-default, argument-level) applies identically to both classes.
+enum RiskClass {
+  RISK_CLASS_UNSPECIFIED = 0;
+  RISK_CLASS_READ        = 1;   // cannot change Node state (e.g. system.facts, file.read)
+  RISK_CLASS_MUTATE      = 2;   // can change Node state (e.g. service.restart); Raw Exec is always mutate
+}
+
+// OperationDescriptor is the wire-visible declaration of one Operation in the
+// vocabulary: its name and its risk class. Forward-compatible — it will feed
+// list_operations in v0.0.6 (do not build that here). Field 3 onwards is
+// intentionally unassigned; earmarked for a future argument-schema description.
+//
+// The v1 Operation vocabulary and its classes:
+//   system.facts     -> RISK_CLASS_READ    (self-reported Node facts; no state change)
+//   file.read        -> RISK_CLASS_READ    (reads file contents; no state change)
+//   service.restart  -> RISK_CLASS_MUTATE  (changes Node state)
+// Raw Exec is not an Operation and has no descriptor; it is ALWAYS mutate by
+// definition (arbitrary commands are unclassifiable, so they take the strict lane).
+message OperationDescriptor {
+  string    name       = 1;   // Operation name, e.g. "system.facts"
+  RiskClass risk_class = 2;
+}
+
 message RawExec {
   repeated string argv    = 1;   // no implicit shell unless argv explicitly invokes one
 }
