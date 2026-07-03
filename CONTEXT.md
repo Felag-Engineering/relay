@@ -30,7 +30,10 @@ _Avoid_: host, machine, target
 
 **Operation**:
 A structured, typed administrative action from a fixed vocabulary (e.g. restart a
-service, read a file, install a package). The primary execution primitive.
+service, read a file, install a package). The primary execution primitive. Every
+Operation declares a **risk class** — `read` (cannot change Node state) or `mutate` —
+used for blast-radius control, never as a substitute for Policy (ADR-0012). Raw Exec
+is always `mutate`.
 _Avoid_: command, task
 
 **Raw Exec**:

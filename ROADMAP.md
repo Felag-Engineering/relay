@@ -60,7 +60,8 @@ Teach the daemon to refuse and to do, safely.
 **Deliverables**
 - **Policy engine** in the daemon: loaded from a root-owned local file, deny-by-default,
   deny-beats-allow, argument-level constraints, regex gating for Raw Exec. Remotely-immutable.
-- **Native Operations** (argv, no shell): `system.facts`, `service.restart`, `file.read`.
+- **Native Operations** (argv, no shell): `system.facts`, `service.restart`, `file.read` —
+  each declaring its risk class in `/proto` (`read` / `mutate`, ADR-0012).
 - **Raw Exec** path, gated by Policy regex.
 - **At-most-once** Task execution: unique Task IDs, daemon-side dedup across reconnects.
 - Per-Task timeouts; captured output with size cap; structured per-Task results.
@@ -94,7 +95,9 @@ Make it drivable by an AI-agent across the fleet.
 - **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node results.
   Schema constraint: a Job is modeled as *stages of Task batches* — always exactly one
   stage in v1 — so post-1.0 staged rollout lands without a data migration.
-- **Blast-radius hard cap** (Relay config) enforced before dispatch.
+- **Blast-radius hard caps** (Relay config, file-only) enforced before dispatch: a
+  generous read-cap and a small mutate-cap, chosen by the Operation's risk class;
+  Raw Exec always takes the mutate-cap (ADR-0012).
 - **MCP server** exposing the five meta-tools: `list_nodes`, `describe_node`, `list_operations`,
   `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
 - **SQLite** persistence behind a repository interface: Node registry, Jobs, Tasks, audit.
