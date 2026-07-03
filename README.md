@@ -1,10 +1,14 @@
-# Gleipnir Relay
+# Relay
 
 A fleet-administration control plane. A lightweight, non-AI daemon (the **relay-daemon**)
 runs on every managed Linux server, dials home to a central **Relay**, and holds a
 persistent connection open. Through that connection the Relay runs typed administrative
 **Operations** on the fleet, and an **AI-agent** drives the whole thing by using the Relay
 as a tool — while per-Node **Policy** restricts what may actually run. Defense in depth.
+
+> **Naming:** the product is **Relay**. **Gleipnir** is the first-party AI-agent system
+> that will drive Relay — a separate project and a consumer of Relay's MCP/API surfaces,
+> with no special privileges. The repo name `gleipnir-relay` is historical.
 
 ```
 ┌─────────────┐   MCP    ┌──────────────────┐  gRPC/mTLS   ┌────────────────────┐

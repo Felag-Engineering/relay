@@ -1,10 +1,15 @@
-# Gleipnir Relay
+# Relay
 
-Gleipnir Relay is a fleet-administration control plane. Non-AI daemons on managed
-Linux servers dial home to a central server and hold a persistent connection open;
-through that connection the central server can run administrative actions on the
+**Relay** is a fleet-administration control plane — this project. Non-AI daemons on
+managed Linux servers dial home to a central server and hold a persistent connection
+open; through that connection the central server can run administrative actions on the
 servers. An AI orchestrator drives the whole fleet by using the Relay as a tool,
 while per-server policy restricts what may actually run — defense in depth.
+
+**Gleipnir** is a different project: the first-party AI-agent system that will drive
+Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of
+it. The repo name `gleipnir-relay` is historical; the product here is Relay (see
+issue #39 for the internals rename).
 
 ## Language
 
@@ -21,8 +26,11 @@ _Avoid_: agent, thrall, client, minion
 
 **AI-agent**:
 The AI orchestrator that administers the fleet by using the Relay as one of its
-tools. Explicitly *not* the relay-daemon.
-_Avoid_: agent (unqualified), AI, brain, operator
+tools. Explicitly *not* the relay-daemon. **Gleipnir** is the first-party AI-agent
+system; from Relay's perspective it is simply an AI-agent authenticating as a machine
+Account — Relay grants it nothing other AI-agents can't have.
+_Avoid_: agent (unqualified), AI, brain, operator, Gleipnir (for the role — Gleipnir
+is one AI-agent system, not the role itself)
 
 **Node**:
 A managed Linux server that runs a relay-daemon.

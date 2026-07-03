@@ -31,6 +31,14 @@ the existing MCP surface (ADR-0003).
 
 ## Considered / deferred
 
+- **Desired-state reconciliation: rejected permanently (2026-07-02).** The System Model
+  is never a spec the Relay converges the fleet toward. An auto-reconciler is a
+  standing, unattended executor — incompatible with per-Job intent, Account
+  attribution, and the guardrail chain (Plan → caps → Policy); it is also the crowded
+  market (Puppet/Chef/K8s operators) rather than Relay's differentiator. Judgment lives
+  outside: the AI-agent is the reconciler. If drift *detection* is ever wanted, the
+  shape would be advisory Expectations (read-only checks surfaced to the AI-agent and
+  operators, acted on only through normal guarded Jobs) — possible, but not planned.
 - **DB-backed storage** rejected for now: git gives audit/diff/revert for free for a
   low-write, high-stakes representation. (Revisit if write frequency grows.)
 - **Graphic representation** is anticipated as a future *view* layered over the YAML — YAML

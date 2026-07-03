@@ -4,10 +4,12 @@ Instructions for AI agents working in this repository. Read this fully before ma
 
 ## What this is
 
-Gleipnir Relay is a **fleet-administration control plane** — a system that runs administrative
+Relay is a **fleet-administration control plane** — a system that runs administrative
 commands on a fleet of Linux servers, drivable by an AI orchestrator. It is **security-critical
 by nature: it is remote code execution as a service.** Treat every change to the execution,
-Policy, transport, or auth paths as security-sensitive.
+Policy, transport, or auth paths as security-sensitive. (The product is **Relay**;
+**Gleipnir** is the separate first-party AI-agent system that drives it. The repo name is
+historical — see CONTEXT.md.)
 
 Start with [README.md](README.md) for the shape, then [CONTEXT.md](CONTEXT.md) for the language,
 then the relevant [ADRs](docs/adr/) for the *why*.
