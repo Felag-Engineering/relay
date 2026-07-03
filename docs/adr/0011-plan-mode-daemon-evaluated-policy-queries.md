@@ -36,8 +36,8 @@ boundaries by triggering real executions.
 ## Consequences
 
 - Proto: `PolicyQuery`/`PolicyVerdict` land with the Policy-engine milestone (a second
-  entry point into it); the `plan` option on the tool surface lands with the Control Surfaces
-  Job engine.
+  entry point into it); the `plan` option on the tool surface lands with the Control
+  Surfaces milestone.
 - Verdicts are point-in-time advice, not reservations: Policy may change between plan
   and apply. A Plan is advisory, like the System Model (ADR-0008) — it never gates or
   substitutes for enforcement at execution time.
