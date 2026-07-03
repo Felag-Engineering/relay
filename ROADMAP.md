@@ -164,6 +164,11 @@ Harden the end-to-end path into something deployable for real testing.
   (SSH/Ansible) — never over the wire (ADR-0002); registry fingerprints confirm rollout.
 - Reconnect resilience, graceful daemon shutdown, basic observability (logs/metrics).
 - Hardening pass on the privileged daemon (restricted user, no implicit shell, output limits).
+- **Daemon lifecycle** (ADR-0014): minimum-daemon-version dispatch gate (`outdated`
+  flag in the registry, file-only config); documented IaC upgrade workflow consuming
+  the CD artifacts; CI enforces additive-only proto changes (buf breaking checks).
+- **CA & disaster posture documented**: CA key backup/permissions, compromise runbook —
+  "burn it down" recovery is re-running the enrollment playbook against a fresh CA.
 - Decide the **audit output-retention posture**: captured stdout/stderr can contain
   secrets (`file.read`), so choose what the audit store persists (full output vs
   metadata + truncated output vs configurable) before real fleets depend on it.
