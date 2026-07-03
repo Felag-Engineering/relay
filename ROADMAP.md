@@ -69,6 +69,9 @@ Teach the daemon to refuse and to do, safely.
   hypotheticals (`--would-allow`), so IaC pipelines can validate before deploying.
 - **Policy fingerprint**: the daemon reports a hash of its loaded Policy in
   Hello/PolicySnapshot; the registry records it (fleet-wide Policy drift visibility).
+- **`PolicyQuery`/`PolicyVerdict`** wire messages (ADR-0011): the daemon answers
+  "would Policy allow this?" from its live engine — read-only, no Task ID, no
+  execution path. (Powers v0.0.4 plan mode.)
 
 **Acceptance**
 - An Operation allowed by Policy runs and returns a correct result; one denied by Policy returns
@@ -105,11 +108,16 @@ Make it drivable by an AI-agent across the fleet.
   blast-cap → audit) with MCP as its first adapter, so the Control API, the Admin
   Console, and a future CLI are thin adapters rather than parallel control paths
   (ADR-0009, ADR-0010).
+- **Plan mode** (ADR-0011): `plan=true` on `run_operation`/`raw_exec` returns the
+  resolved fan-out and per-Node daemon-evaluated Policy verdicts
+  (`allow | deny(rule) | unknown(offline)`) without executing.
 - Add `pkg.install` Native Operation.
 
 **Acceptance**
 - An MCP client calls `run_operation(selector, "system.facts")` and gets per-Node results.
 - A Selector matching more Nodes than the blast cap is rejected before any Task runs.
+- `run_operation(…, plan=true)` returns per-Node verdicts and executes nothing; a
+  subsequent real run on an unchanged fleet matches the plan's verdicts.
 - Every dispatch produces a queryable audit record.
 - `describe_node` shows the Node's effective Policy.
 - The seeded admin Account mints a scoped Enrollment Token over `/api/v1`; a revoked

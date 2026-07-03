@@ -94,6 +94,13 @@ from *enrollment*: enrollment is token-authenticated and mints the first identit
 cert-authenticated and refreshes the existing one. (ADR-0006)
 _Avoid_: re-enroll, reissue, cert refresh
 
+**Plan**:
+The no-execution preview of a Job: the Relay resolves the Selector, checks
+authorization and the blast-radius cap, and each matched daemon's live Policy engine
+answers whether it *would* allow the action (ADR-0011). Advisory and point-in-time —
+never a reservation, never a substitute for enforcement at execution.
+_Avoid_: dry-run, simulation, preview, check mode
+
 **Relay-side authorization**:
 The central rules deciding which Account may send which Operations to which Nodes.
 Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
