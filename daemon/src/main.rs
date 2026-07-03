@@ -6,6 +6,8 @@ use tonic::transport::Channel;
 use tracing::{error, info};
 
 mod config;
+#[allow(dead_code)]
+mod dedup;
 mod enroll;
 #[allow(dead_code)]
 mod executor;
