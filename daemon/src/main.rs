@@ -10,6 +10,7 @@ mod enroll;
 #[allow(dead_code)]
 mod executor;
 mod identity;
+mod policy;
 mod renew;
 mod tunnel;
 
