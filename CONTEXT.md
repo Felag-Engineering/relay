@@ -1,10 +1,15 @@
-# Gleipnir Relay
+# Relay
 
-Gleipnir Relay is a fleet-administration control plane. Non-AI daemons on managed
-Linux servers dial home to a central server and hold a persistent connection open;
-through that connection the central server can run administrative actions on the
+**Relay** is a fleet-administration control plane — this project. Non-AI daemons on
+managed Linux servers dial home to a central server and hold a persistent connection
+open; through that connection the central server can run administrative actions on the
 servers. An AI orchestrator drives the whole fleet by using the Relay as a tool,
 while per-server policy restricts what may actually run — defense in depth.
+
+**Gleipnir** is a different project: the first-party AI-agent system that will drive
+Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of
+it. The repo name `gleipnir-relay` is historical; the product here is Relay (see
+issue #39 for the internals rename).
 
 ## Language
 
@@ -21,8 +26,11 @@ _Avoid_: agent, thrall, client, minion
 
 **AI-agent**:
 The AI orchestrator that administers the fleet by using the Relay as one of its
-tools. Explicitly *not* the relay-daemon.
-_Avoid_: agent (unqualified), AI, brain, operator
+tools. Explicitly *not* the relay-daemon. **Gleipnir** is the first-party AI-agent
+system; from Relay's perspective it is simply an AI-agent authenticating as a machine
+Account — Relay grants it nothing other AI-agents can't have.
+_Avoid_: agent (unqualified), AI, brain, operator, Gleipnir (for the role — Gleipnir
+is one AI-agent system, not the role itself)
 
 **Node**:
 A managed Linux server that runs a relay-daemon.
@@ -30,7 +38,10 @@ _Avoid_: host, machine, target
 
 **Operation**:
 A structured, typed administrative action from a fixed vocabulary (e.g. restart a
-service, read a file, install a package). The primary execution primitive.
+service, read a file, install a package). The primary execution primitive. Every
+Operation declares a **risk class** — `read` (cannot change Node state) or `mutate` —
+used for blast-radius control, never as a substitute for Policy (ADR-0012). Raw Exec
+is always `mutate`.
 _Avoid_: command, task
 
 **Raw Exec**:
@@ -94,11 +105,51 @@ from *enrollment*: enrollment is token-authenticated and mints the first identit
 cert-authenticated and refreshes the existing one. (ADR-0006)
 _Avoid_: re-enroll, reissue, cert refresh
 
+**Plan**:
+The no-execution preview of a Job: the Relay resolves the Selector, checks
+authorization and the blast-radius cap, and each matched daemon's live Policy engine
+answers whether it *would* allow the action (ADR-0011). Advisory and point-in-time —
+never a reservation, never a substitute for enforcement at execution.
+_Avoid_: dry-run, simulation, preview, check mode
+
 **Relay-side authorization**:
-The central rules deciding which principal (a human or an AI-agent) may send which
-Operations to which Nodes. Distinct from Policy: authorization governs *who may ask*,
-Policy governs *what a Node will ever do*.
+The central rules deciding which Account may send which Operations to which Nodes.
+Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
+will ever do*.
 _Avoid_: permissions, RBAC (when ambiguous with Policy)
+
+**Grant**:
+A Relay-side authorization rule: which Account may request which Operations (or Raw
+Exec) against which Selector. Deny-by-default. Grants are runtime objects managed via
+the Control API and Admin Console — unlike **Policy**, which is Node-rooted and never
+managed centrally. A Grant can only *narrow* what may run, never widen it: execution
+requires both a Grant (Relay-side, "may this Account ask") and Policy allowance
+(Node-side, "will this Node ever do it"), and the Node's Policy always has the last
+word.
+_Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
+
+**Account**:
+A named identity — human or machine — with a role (`viewer`, `operator`, `admin`), to
+which every credential binds: a human's password or OIDC identity, a machine's API
+Tokens. The AI-agent authenticates as a machine Account. The unit of Relay-side
+authorization and of audit attribution across all three surfaces (ADR-0010).
+_Avoid_: user, principal, service account (say "machine Account")
+
+**API Token**:
+A bearer credential bound to an Account, used by machines (and the AI-agent via MCP) to
+call the Control API. Named, revocable, optionally expiring, stored only as a hash, and
+inheriting its Account's role. Distinct from an **Enrollment Token**, which joins Nodes
+to the fleet and can never call the API.
+_Avoid_: API key, PAT, bearer token (unqualified)
+
+**Control API**:
+The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooling and
+machines drive the control plane — both administration and execution. One of the three
+user-facing surfaces (with the MCP surface and the Admin Console), all thin adapters
+over the same capability layer; the Control API is the programmable superset
+(ADR-0010). It never reaches the Relay's own configuration, which is a root-owned
+local file.
+_Avoid_: REST API (unqualified), admin API, "the API" (in docs; fine in speech)
 
 **System Model**:
 The Relay-maintained graph that links Nodes and Labels into higher-order Services,
@@ -122,8 +173,10 @@ provenance. Descriptive context only, never used for targeting.
 _Avoid_: comment, note, tag
 
 **Admin Console**:
-The human-facing web UI for operators to monitor the fleet and drive the control plane
-(enrollment, revocation, Operations, Raw Exec). A thin adapter over the same operator
-capability layer as the MCP surface (ADR-0003, ADR-0009); it never bypasses Selectors →
-Policy → blast cap → audit. Distinct from the **AI-agent**, which drives the Relay over MCP.
+The human-facing web UI for operators to observe the fleet and administer the control
+plane (enrollment lifecycle, revocation, registry/audit views). Admin + observability
+only: it has **no execution surface** — Operations and Raw Exec never run from the
+Console (ADR-0009). A thin adapter over the same operator capability layer as the MCP
+surface (ADR-0003, ADR-0009). Distinct from the **AI-agent**, which drives the Relay
+over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"
