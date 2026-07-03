@@ -73,6 +73,9 @@ Teach the daemon to refuse and to do, safely.
 - **`PolicyQuery`/`PolicyVerdict`** wire messages (ADR-0011): the daemon answers
   "would Policy allow this?" from its live engine — read-only, no Task ID, no
   execution path. (Powers v0.0.4 plan mode.)
+- **`TaskCancel` + `OUTCOME_CANCELLED`** (ADR-0013): Tasks run in killable process
+  groups; on cancel the daemon kills the group and reports honestly (a Task that
+  won the race reports `success`, never a retroactive `cancelled`).
 
 **Acceptance**
 - An Operation allowed by Policy runs and returns a correct result; one denied by Policy returns
@@ -97,6 +100,10 @@ Make it drivable by an AI-agent across the fleet.
   stage in v1 — so post-1.0 staged rollout lands without a data migration.
 - **Offline Nodes fail fast** (ADR-0004): connectivity checked at dispatch; disconnected
   Nodes report `OUTCOME_UNREACHABLE` (new proto enum value) — no store-and-forward.
+- **Job cancel + emergency Freeze** (ADR-0013): Job-level cancellation; a Relay-wide
+  Freeze halting all new dispatch (Plans still work), engaged by `operator`+ via API or
+  locally on the Relay host, released by `admin` with an audited reason; persisted
+  across Relay restarts.
 - **Blast-radius hard caps** (Relay config, file-only) enforced before dispatch: a
   generous read-cap and a small mutate-cap, chosen by the Operation's risk class;
   Raw Exec always takes the mutate-cap (ADR-0012).
@@ -129,6 +136,8 @@ Make it drivable by an AI-agent across the fleet.
 - A Selector matching more Nodes than the blast cap is rejected before any Task runs.
 - `run_operation(…, plan=true)` returns per-Node verdicts and executes nothing; a
   subsequent real run on an unchanged fleet matches the plan's verdicts.
+- Engaging the Freeze stops a subsequent dispatch before any Task is sent; cancelling
+  a Job kills its in-flight Tasks (which report `cancelled`) and stops undispatched ones.
 - Every dispatch produces a queryable audit record.
 - `describe_node` shows the Node's effective Policy.
 - The seeded admin Account mints a scoped Enrollment Token over `/api/v1`; a revoked
