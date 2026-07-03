@@ -277,6 +277,46 @@ radius), 0006 (identity), 0002 (Policy read-only).
 
 ---
 
+## `v1.1.0` — Template Operations (post-v1.0.0)
+
+The extensibility tier from ADR-0001, promoted from the deferred list (2026-07-02):
+**locally-authored shell templates with typed, validated parameters** that grow
+app-specific vocabulary (nginx, Postgres, Docker, …) per Node — with zero daemon
+releases. The trust story mirrors Policy: root-owned template files beside the Policy
+file, distributed only via the customer's IaC pipeline; the wire can fill validated
+parameter slots but never alter command structure. The daemon binary stays app-agnostic
+forever; only OS-generic verbs are ever Native. Requires its own ADR before build
+(template format, substitution/quoting safety, discovery).
+
+**Deliverables**
+- Template file format: command template with named parameter slots; per-parameter
+  typed validation (type, regex, path constraints); **mandatory `risk_class`
+  declaration** (ADR-0012) — no default.
+- Substitution safety: validated parameters can never change which command runs —
+  quoting/escaping rules specified in the ADR, enforced by the daemon.
+- Daemon-side loading/linting like Policy (`policy check` extended to templates);
+  template-set fingerprint reported alongside the Policy fingerprint.
+- Per-Node vocabulary discovery: `list_operations`/`describe_node` show which Nodes
+  define which Template Operations; a Selector-targeted Job reports a distinct
+  per-Node outcome (e.g. `unsupported`) on Nodes lacking the template.
+- Policy still governs: Template Operations are subject to allow/deny and
+  argument-level constraints exactly like Native Operations; deny beats allow.
+- **Template packs**: a documented convention for shareable per-app packs
+  (installed deliberately via IaC — an ecosystem surface that costs the security
+  model nothing).
+
+**Acceptance**
+- An operator ships `nginx.test_config` to web Nodes via IaC; the AI-agent discovers
+  it on those Nodes, runs it via `run_operation`, and a Node without the template
+  reports `unsupported` rather than failing opaquely.
+- A parameter violating its validation is refused daemon-side without executing;
+  a Policy deny on the template beats any template-level allow.
+
+**ADRs:** new ADR at pickup (realizes ADR-0001 tier 2); builds on 0002 (node-rooted
+trust), 0012 (risk classes).
+
+---
+
 ## Deferred (post-beta, each its own ADR when picked up)
 
 - **HA / horizontal Relay scaling** — Node→instance routing registry (ADR-0005 caveat).
@@ -293,7 +333,6 @@ radius), 0006 (identity), 0002 (Policy read-only).
   Node-count threshold — a deterministic guardrail the AI-agent cannot skip. The
   AI-agent's standard arc becomes Plan (ADR-0011) → canary → fleet. Subsumes
   human-in-the-loop approval and overridable blast radius (ADR-0004 caveat).
-- **Template Operations** — the shell-template extensibility tier (ADR-0001 caveat).
 - **Live output streaming** — transport already supports it (ADR-0004 caveat).
 - **Postgres store** — swap behind the repository interface when HA lands.
 - **Graphic System Model view** — a visual representation layered over the git-backed YAML
