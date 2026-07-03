@@ -46,6 +46,13 @@ capability parity is a review rule, not a runtime dependency between surfaces.
   any Node's Policy is consulted.
 - **Audit attributes the Account** (and which token) on every action, uniformly,
   regardless of entry surface.
+- **Staged adoption — one credential first.** Pre-beta there are no Account tables,
+  roles, or CRUD: the single seeded admin credential is the bearer token for both the
+  MCP endpoint and the first Control API slice (authenticated = admin). The full model
+  (Accounts, API Tokens, roles) lands in the Control API milestone; the seeded
+  credential simply becomes the first admin Account. Known, accepted gap until then:
+  audit cannot distinguish consumers sharing the credential, and Node Policy is the
+  only gate on AI-agent Raw Exec.
 
 ## Considered Options
 
@@ -62,9 +69,9 @@ capability parity is a review rule, not a runtime dependency between surfaces.
 
 ## Consequences
 
-- v0.0.4's "minimal authz: single static token" becomes "Accounts table seeded with one
-  admin" — slightly more work up front, but the Control API and Console then reuse it
-  instead of rewriting auth.
+- v0.0.4 stays minimal: one vault-managed credential, no auth tables. The Account
+  model is the *documented destination*, so v0.3.0 adds rows and roles instead of
+  redesigning auth.
 - The Relay stores password hashes (Console local login) and token hashes; it still
   never stores plaintext secrets at rest.
 - An OpenAPI document must be maintained and published; it doubles as the

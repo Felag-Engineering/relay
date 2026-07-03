@@ -94,11 +94,12 @@ Make it drivable by an AI-agent across the fleet.
   `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
 - **SQLite** persistence behind a repository interface: Node registry, Jobs, Tasks, audit.
 - **Audit**: every Job/Task recorded (principal, selector, op, args, result, timestamps).
-- **Relay-side authz** via the Account model (ADR-0010): the MCP endpoint authenticates a
-  machine Account's API Token; the Account's role gates Raw Exec centrally.
-- First **Control API** slice (ADR-0010), REST under `/api/v1`: seeded admin Account
-  (credential hash in the Relay config, plaintext in the operator's vault), bearer-token
-  auth, mint/revoke Enrollment Tokens, revoke Nodes. The control plane is REST from day
+- Minimal **Relay-side authz** (ADR-0010, staged): one seeded admin credential —
+  hash in the Relay config, plaintext in the operator's vault — is the bearer token
+  for both the MCP endpoint and the Control API slice. No Account tables or roles yet;
+  the full Account model lands in v0.3.0.
+- First **Control API** slice (ADR-0010), REST under `/api/v1`: bearer-token auth,
+  mint/revoke Enrollment Tokens, revoke Nodes. The control plane is REST from day
   one; the full surface lands in v0.3.0.
 - Structure the control path as a **reusable capability layer** (Selector → Policy →
   blast-cap → audit) with MCP as its first adapter, so the Control API, the Admin
