@@ -100,6 +100,16 @@ Distinct from Policy: authorization governs *who may ask*, Policy governs *what 
 will ever do*.
 _Avoid_: permissions, RBAC (when ambiguous with Policy)
 
+**Grant**:
+A Relay-side authorization rule: which Account may request which Operations (or Raw
+Exec) against which Selector. Deny-by-default. Grants are runtime objects managed via
+the Control API and Admin Console — unlike **Policy**, which is Node-rooted and never
+managed centrally. A Grant can only *narrow* what may run, never widen it: execution
+requires both a Grant (Relay-side, "may this Account ask") and Policy allowance
+(Node-side, "will this Node ever do it"), and the Node's Policy always has the last
+word.
+_Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
+
 **Account**:
 A named identity — human or machine — with a role (`viewer`, `operator`, `admin`), to
 which every credential binds: a human's password or OIDC identity, a machine's API

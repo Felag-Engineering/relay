@@ -71,3 +71,8 @@ capability parity is a review rule, not a runtime dependency between surfaces.
   extension-builder documentation.
 - Roles are coarse in v1. The pressure valve for finer grain is more Accounts, not
   more mechanism; per-token scoping gets revisited only with real demand.
+- The finer-grained future is **Grants** (see CONTEXT.md): per-Account rules over
+  Operations × Selectors, managed as runtime objects via the Control API and Console.
+  Grants can only narrow what Node Policy would allow, never widen it — the Node file
+  is the root; the Relay layer only subtracts. Sequenced with the multi-principal RBAC
+  milestone, not v1.

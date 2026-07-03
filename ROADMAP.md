@@ -64,6 +64,11 @@ Teach the daemon to refuse and to do, safely.
 - **Raw Exec** path, gated by Policy regex.
 - **At-most-once** Task execution: unique Task IDs, daemon-side dedup across reconnects.
 - Per-Task timeouts; captured output with size cap; structured per-Task results.
+- **`relay-daemon policy check <file>`** subcommand: parse + lint a Policy file (invalid
+  regex, unknown Operation names, allow rules shadowed by denies) and answer
+  hypotheticals (`--would-allow`), so IaC pipelines can validate before deploying.
+- **Policy fingerprint**: the daemon reports a hash of its loaded Policy in
+  Hello/PolicySnapshot; the registry records it (fleet-wide Policy drift visibility).
 
 **Acceptance**
 - An Operation allowed by Policy runs and returns a correct result; one denied by Policy returns
@@ -71,6 +76,8 @@ Teach the daemon to refuse and to do, safely.
 - `service.restart` constrained to `{nginx}` refuses `sshd`.
 - Re-sending a Task with a seen ID does not run it twice.
 - The Relay cannot alter a Node's Policy over the wire (verified by attempt).
+- `policy check` rejects a malformed file with a useful error and answers
+  `--would-allow` consistently with the live engine.
 
 **ADRs:** 0001 (Operations + Raw Exec), 0002 (Policy), 0004 (at-most-once).
 
@@ -120,6 +127,9 @@ Harden the end-to-end path into something deployable for real testing.
   report, over mTLS, with audit.
 - Install/run docs for daemon and Relay; example Policy file; example enrollment workflow
   (incl. bulk enrollment via config management).
+- **Policy-as-code workflow documented**: Node Policy files live in the customer's IaC
+  repo, are validated with `policy check`, and are distributed by config management
+  (SSH/Ansible) — never over the wire (ADR-0002); registry fingerprints confirm rollout.
 - Reconnect resilience, graceful daemon shutdown, basic observability (logs/metrics).
 - Hardening pass on the privileged daemon (restricted user, no implicit shell, output limits).
 
@@ -221,7 +231,9 @@ radius), 0006 (identity), 0002 (Policy read-only).
 ## Deferred (post-beta, each its own ADR when picked up)
 
 - **HA / horizontal Relay scaling** — Node→instance routing registry (ADR-0005 caveat).
-- **Multi-principal RBAC** — full Relay-side authorization model.
+- **Multi-principal RBAC & Grants** — per-Account authorization rules (Operations ×
+  Selectors) managed via the Control API/Console; a Grant only ever narrows what Node
+  Policy allows, never widens it (see CONTEXT.md "Grant", ADR-0010).
 - **Human-in-the-loop approval & richer guardrails** — staged rollout, canaries, overridable
   blast radius (ADR-0004 caveat).
 - **Template Operations** — the shell-template extensibility tier (ADR-0001 caveat).
