@@ -6,6 +6,9 @@ persistent connection open. Through that connection the Relay runs typed adminis
 **Operations** on the fleet, and an **AI-agent** drives the whole thing by using the Relay
 as a tool — while per-Node **Policy** restricts what may actually run. Defense in depth.
 
+**Relay lets you hand your fleet to an AI without handing it trust.** Other tools answer
+"what if the operator goes rogue?" with procedure; Relay answers with architecture.
+
 > **Naming:** the product is **Relay**. **Gleipnir** is the first-party AI-agent system
 > that will drive Relay — a separate project and a consumer of Relay's MCP/API surfaces,
 > with no special privileges. The repo name `gleipnir-relay` is historical.
@@ -18,6 +21,28 @@ as a tool — while per-Node **Policy** restricts what may actually run. Defense
                                                                   │ enforce local Policy
                                                                   ▼ execute Operation / Raw Exec
 ```
+
+## Why Relay
+
+Fleet tools like Ansible, Salt, and Chef were designed around a **trusted human
+operator** — the control plane faithfully amplifies whatever the operator says, and
+safety is procedure layered on top. Relay's founding assumption is the opposite: the
+operator may be wrong, compromised, or not human. Distrust of the operator is the
+architecture:
+
+- **Typed, not shell.** The execution primitive is a fixed vocabulary of structured
+  Operations whose arguments cannot change what runs; arbitrary commands are a
+  conspicuous, regex-gated exception.
+- **The Node distrusts the Relay.** Every server enforces its own root-owned Policy
+  that nothing on the wire can widen — a fully compromised Relay or jailbroken AI-agent
+  still cannot exceed it.
+- **Every action is a bounded, attributed, previewable Job.** Blast-radius caps sized
+  by risk class, plan-before-apply, and a per-Account audit trail — guardrails the
+  caller cannot skip, because they live in the control plane, not in the caller's
+  goodwill.
+
+The pitch improves the more you distrust AI — which is precisely the right mood for
+giving one your fleet.
 
 ## Core ideas
 

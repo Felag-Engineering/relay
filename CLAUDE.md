@@ -53,7 +53,21 @@ it needs an ADR, not a quiet workaround.
 9. **The System Model is advisory; its grounding facts are AI-immutable.** The AI-agent may
    freely create/update/delete Services, Dependencies, and Annotations (with provenance,
    audited via git commits), but may never edit Nodes or `relay:` labels through it, and the
-   model never bypasses Selectors → Policy → blast cap. (ADR-0008)
+   model never bypasses Selectors → Policy → blast cap. It is never a desired-state spec:
+   Relay does not auto-reconcile, ever. (ADR-0008)
+10. **One capability layer, three thin surfaces.** MCP, the Control API, and the Admin
+    Console all adapt the same control-plane capability layer; never build a parallel
+    control path. The Console has **no execution surface** (admin + observability only).
+    (ADR-0009, ADR-0010)
+11. **The Control API manages runtime objects, never Relay configuration.** Relay config
+    (listeners, CA/TLS, auth bootstrap, blast caps) is a root-owned local file; the API
+    can never raise its own limits. (ADR-0010)
+12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
+    (`PolicyQuery`, plan mode). Never reimplement Policy evaluation on the Relay side.
+    (ADR-0011)
+13. **Every Operation declares a risk class (`read` | `mutate`)**; blast caps are chosen by
+    class, Raw Exec always takes the mutate-cap, and the class is security-relevant contract
+    (`/proto`). (ADR-0012)
 
 ## Repository layout
 
