@@ -11,6 +11,7 @@ mod enroll;
 mod executor;
 mod identity;
 mod policy;
+mod raw_exec;
 mod renew;
 mod tunnel;
 
