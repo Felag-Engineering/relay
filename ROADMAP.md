@@ -76,6 +76,9 @@ Teach the daemon to refuse and to do, safely.
 - **`TaskCancel` + `OUTCOME_CANCELLED`** (ADR-0013): Tasks run in killable process
   groups; on cancel the daemon kills the group and reports honestly (a Task that
   won the race reports `success`, never a retroactive `cancelled`).
+- **Per-Node concurrency by risk class** (ADR-0004/0012): `mutate` Tasks serial,
+  `read` Tasks parallel under a small fixed bound; queued Tasks' timeout clocks run
+  while waiting.
 
 **Acceptance**
 - An Operation allowed by Policy runs and returns a correct result; one denied by Policy returns

@@ -20,6 +20,13 @@ with exit code, captured output (size-capped), and duration.
 - **Output is final-only for v1**, but the transport must support streaming so live output
   can be added without re-architecting.
 - **Per-Task timeouts**, with Node Policy able to cap the maximum.
+- **Per-Node concurrency follows risk class (2026-07-02, ADR-0012).** The daemon runs
+  `mutate` Tasks strictly serially and `read` Tasks in parallel under a small fixed
+  bound (not configurable in v1). A Task queued behind a running mutate waits with its
+  timeout clock already running (started at daemon receipt), so it can time out while
+  waiting — the queue is self-limiting and the caller sees an honest `timeout`. This is
+  serialization of live, dispatched work by seconds, not store-and-forward. Raw Exec is
+  always `mutate`, so arbitrary commands are automatically serialized.
 - **Offline Nodes fail fast; there is no store-and-forward queue (2026-07-02).**
   Connectivity is checked against the live connection registry per matched Node at
   dispatch time: not connected → the Task immediately reports `unreachable`, and a Node
