@@ -7,6 +7,8 @@ use tracing::{error, info};
 
 mod config;
 mod enroll;
+#[allow(dead_code)]
+mod executor;
 mod identity;
 mod policy;
 mod renew;

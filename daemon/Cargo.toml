@@ -48,6 +48,11 @@ regex = "1"
 # Already transitive (rustix 1.1.4); only the `process` feature is added here.
 # Using rustix instead of libc keeps the code safe (no `unsafe` block needed).
 rustix = { version = "1", features = ["process"] }
+# Process-group signalling for the Task executor: kill(-pgid, SIG..) to
+# SIGTERM/SIGKILL a Task's whole process tree (ADR-0013 killable groups).
+# Already present transitively via tokio -> signal-hook-registry, so this
+# adds zero new crates to the musl build.
+libc = "0.2"
 
 [dev-dependencies]
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
