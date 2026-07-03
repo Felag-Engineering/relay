@@ -430,6 +430,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::PermissionsExt;
 
     // The fixture is the example policy file checked into the repo. Tests
     // use it directly so the documented examples stay honest.
@@ -470,6 +471,11 @@ mod tests {
                 .open(&path)
                 .unwrap();
             f.write_all(content).unwrap();
+            // OpenOptions::mode() is masked by the process umask, so on a
+            // runner with umask 022 a requested 0o664 lands as 0o644 and the
+            // group/world-writable rejection tests would spuriously pass the
+            // file. chmod is not umask-masked, so force the exact mode here.
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
             TempFile(path)
         }
 
