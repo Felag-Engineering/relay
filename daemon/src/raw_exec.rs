@@ -54,6 +54,7 @@ pub async fn run_raw_exec(
         Decision::Allow(rule) => {
             tracing::info!(
                 task_id = %task_id,
+                command = %raw.argv.join(" "),
                 rule = ?rule,
                 "raw exec allowed by policy"
             );
