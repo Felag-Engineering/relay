@@ -92,6 +92,8 @@ Make it drivable by an AI-agent across the fleet.
 
 **Deliverables**
 - **Job engine**: Selector → fan-out → one Task per matched Node → aggregated per-Node results.
+  Schema constraint: a Job is modeled as *stages of Task batches* — always exactly one
+  stage in v1 — so post-1.0 staged rollout lands without a data migration.
 - **Blast-radius hard cap** (Relay config) enforced before dispatch.
 - **MCP server** exposing the five meta-tools: `list_nodes`, `describe_node`, `list_operations`,
   `run_operation`, `raw_exec`. `describe_node` returns effective Policy.
@@ -243,8 +245,13 @@ radius), 0006 (identity), 0002 (Policy read-only).
 - **Multi-principal RBAC & Grants** — per-Account authorization rules (Operations ×
   Selectors) managed via the Control API/Console; a Grant only ever narrows what Node
   Policy allows, never widens it (see CONTEXT.md "Grant", ADR-0010).
-- **Human-in-the-loop approval & richer guardrails** — staged rollout, canaries, overridable
-  blast radius (ADR-0004 caveat).
+- **Staged rollout & approval (post-1.0, shape decided 2026-07-02)** — first-class
+  rollout spec on Jobs: canary stage (count/percent) → gate (`all-success` or
+  `manual-approval` via Control API/Console) → remainder, executed and audited as one
+  Job. Relay config (file-only, like the blast cap) can mandate a canary stage above a
+  Node-count threshold — a deterministic guardrail the AI-agent cannot skip. The
+  AI-agent's standard arc becomes Plan (ADR-0011) → canary → fleet. Subsumes
+  human-in-the-loop approval and overridable blast radius (ADR-0004 caveat).
 - **Template Operations** — the shell-template extensibility tier (ADR-0001 caveat).
 - **Live output streaming** — transport already supports it (ADR-0004 caveat).
 - **Postgres store** — swap behind the repository interface when HA lands.
