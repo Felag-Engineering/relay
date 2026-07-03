@@ -1,0 +1,104 @@
+# Gleipnir Relay — Node Policy file
+#
+# SECURITY INVARIANTS (ADR-0002):
+#   - Node-rooted and remotely-immutable: this file is edited by a human on the
+#     Node (or by config management). The Relay may query it but may NEVER modify
+#     it over the wire.
+#   - Root-owned: this file must be owned by root (uid 0) or the relay-daemon's
+#     effective uid.
+#   - Not group- or world-writable: if the group- or world-write bit is set the
+#     daemon refuses to load this file and fails closed (no Operation may run).
+#   - Deny-by-default: any Operation or Raw Exec command not covered by an allow
+#     rule is denied.
+#   - Deny-beats-allow: if both a deny and an allow rule match, the deny wins.
+#
+# VACUOUS-DENY SEMANTICS:
+#   A [[deny]] rule lists positions to constrain. If an invocation has FEWER
+#   arguments than the rule lists, the unlisted/trailing positions are vacuously
+#   satisfied (i.e. the deny still fires). This is the more-restrictive reading:
+#   a deny written for N args blocks shorter invocations too, so callers cannot
+#   sneak under a deny by omitting trailing arguments.
+#
+# ARGUMENT POSITIONS:
+#   `allowed_args[i]` / `args[i]` correspond to argv[i] (0-indexed after the
+#   operation name). The special value "*" in an allow rule matches any value at
+#   that position (wildcard). Deny rules do not support wildcards; list each
+#   denied value explicitly.
+#
+# FILE PLACEMENT (example):
+#   /etc/relay-daemon/policy.toml   (chmod 600 or 640, owned by root)
+
+# ---------------------------------------------------------------------------
+# [[operation]] — per-Operation allow rules
+#
+# Each [[operation]] block names one Operation and its allowed argument sets.
+#
+#   name         — the Operation type name as dispatched by the Relay.
+#   allowed_args — list of positional allowed-value sets.
+#                  allowed_args[i] = the set of values permitted at position i.
+#                  An empty outer list (allowed_args = []) means the Operation
+#                  requires zero arguments ("no-arg allow").
+#                  "*" at any inner position matches any value (wildcard).
+# ---------------------------------------------------------------------------
+
+# Allow `service.restart` only for nginx and php-fpm.
+# Attempts to restart any other service (e.g. sshd) are denied.
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+# Allow `system.facts` with no arguments.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Allow `file.read` for any path (wildcard). The [[deny]] rule below for
+# /etc/shadow overrides this allow for that specific path (deny-beats-allow).
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+# ---------------------------------------------------------------------------
+# [[deny]] — explicit deny rules (deny-beats-allow)
+#
+# Each [[deny]] block names one Operation and the argument values that are
+# denied, regardless of any overlapping allow rule.
+#
+#   name — the Operation type name.
+#   args — positional denied-value sets; same indexing as allowed_args.
+#           An empty outer list (args = []) blocks the Operation entirely,
+#           regardless of arguments.
+# ---------------------------------------------------------------------------
+
+# Deny `file.read /etc/shadow` even though [[operation]] file.read allows "*".
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+# ---------------------------------------------------------------------------
+# [raw_exec] — Raw Exec regex gate (ADR-0001)
+#
+# Raw Exec is the only path for arbitrary commands and is gated by this
+# regex list. The daemon joins argv with a single space and tests the result.
+#
+#   allow — list of RE2-compatible regexes; the joined command must match at
+#            least one to be considered. Anchored (^...$) is recommended.
+#   deny  — list of RE2-compatible regexes tested against the joined command
+#            AND against each individual argv element. Any match → deny, even
+#            if an allow regex also matched (deny-beats-allow).
+#
+# No allow regex → all Raw Exec commands denied (deny-by-default).
+# ---------------------------------------------------------------------------
+[raw_exec]
+# Allow `systemctl status|restart <unit>` where the unit name is alphanumeric
+# (plus @, ., _, -). Anchored to prevent prefix/suffix injection.
+allow = [
+    "^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$",
+]
+
+# Deny --force and the word "rm" anywhere in the command (element or joined),
+# even if an allow regex matched.
+deny = [
+    "--force",
+    "\\brm\\b",
+]

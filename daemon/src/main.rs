@@ -8,6 +8,7 @@ use tracing::{error, info};
 mod config;
 mod enroll;
 mod identity;
+mod policy;
 mod renew;
 mod tunnel;
 

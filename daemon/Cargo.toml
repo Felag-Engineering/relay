@@ -34,6 +34,20 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Typed error enums for the identity/enroll/renew paths (Send+Sync across the
 # renewal spawn boundary). No transitive deps; keeps the musl binary small.
 thiserror = "2"
+# Derive Deserialize/Default on the Policy on-disk structs (ADR-0002).
+serde = { version = "1", features = ["derive"] }
+# Deserialize-only TOML for the Policy file; default-features=false drops the
+# serializer half, keeping the musl binary small (ADR-0007). The Relay may never
+# modify the Policy file over the wire (ADR-0002 remotely-immutable invariant).
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+# Regex gating for Raw Exec (ADR-0001): RE2-style linear-time engine, no ReDoS.
+# Already transitive (regex 1.12.4 via the dependency tree); promoting to a
+# direct dep makes the Raw Exec gate explicit without adding a new crate.
+regex = "1"
+# Safe geteuid() for the Policy-file owner check (uid must be 0 or daemon euid).
+# Already transitive (rustix 1.1.4); only the `process` feature is added here.
+# Using rustix instead of libc keeps the code safe (no `unsafe` block needed).
+rustix = { version = "1", features = ["process"] }
 
 [dev-dependencies]
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
