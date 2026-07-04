@@ -17,12 +17,15 @@ use std::time::Duration;
 
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
-use crate::gen::{task_request, Outcome, TaskRequest, TaskResult};
+use crate::gen::{
+    policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, TaskRequest,
+    TaskResult,
+};
 use crate::operations;
 use crate::operations::file_read::file_read;
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::gather_facts;
-use crate::policy::{Decision, Policy};
+use crate::policy::{Decision, Policy, Rule};
 use crate::raw_exec::run_raw_exec;
 
 // ---------------------------------------------------------------------------
@@ -105,6 +108,104 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Read-only PolicyQuery evaluator (ADR-0011)
+// ---------------------------------------------------------------------------
+
+/// Evaluate a hypothetical `Operation` or `RawExec` against the loaded Policy.
+///
+/// This function takes **no** `DedupStore` and never reaches the executor — it
+/// is structurally incapable of recording a marker or spawning a process
+/// (ADR-0011). It calls the exact same `policy.evaluate` /
+/// `policy.evaluate_raw_exec` entry points that the execution path uses (via
+/// `operation_positional_args`), so the verdict can never diverge from what a
+/// real Task dispatch would decide (ADR-0011 invariant 12).
+pub fn evaluate_policy_query(query: &PolicyQuery, policy: &Policy) -> PolicyVerdict {
+    let query_id = query.query_id.clone();
+    match &query.action {
+        Some(policy_query::Action::Operation(op)) => {
+            let positional = operation_positional_args(op);
+            let decision = policy.evaluate(&op.name, &positional);
+            decision_to_verdict(query_id, decision)
+        }
+        Some(policy_query::Action::RawExec(raw)) => {
+            let decision = policy.evaluate_raw_exec(&raw.argv);
+            decision_to_verdict(query_id, decision)
+        }
+        // Malformed query with no action: deny with a non-empty deciding_rule so
+        // the caller can distinguish a protocol error from a Policy deny.
+        None => PolicyVerdict {
+            query_id,
+            allowed: false,
+            deciding_rule: "empty policy query action".to_string(),
+        },
+    }
+}
+
+/// Convert an engine `Decision` into a `PolicyVerdict`.
+///
+/// Derives the `deciding_rule` string from the engine's own `Rule` / `reason`,
+/// so a deny verdict names the same rule a real denial would attribute — no
+/// re-decision, no parallel evaluator.
+fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
+    match decision {
+        Decision::Allow(_) => PolicyVerdict {
+            query_id,
+            allowed: true,
+            deciding_rule: String::new(),
+        },
+        Decision::Deny { reason, rule } => {
+            let deciding_rule = match rule {
+                Some(Rule::OperationDeny { operation }) => {
+                    format!("operation deny: {operation}")
+                }
+                Some(Rule::RawExecDeny { pattern }) => format!("raw_exec deny: {pattern}"),
+                // These two variants are unreachable on a Deny decision but are
+                // required for exhaustive matching — the compiler cannot prove
+                // Allow-only variants never appear inside Deny.
+                Some(Rule::OperationAllow { operation }) => {
+                    format!("operation allow: {operation}")
+                }
+                Some(Rule::RawExecAllow { pattern }) => format!("raw_exec allow: {pattern}"),
+                // Deny-by-default: no specific rule fired; use the engine's
+                // reason string, which is always non-empty.
+                None => reason,
+            };
+            PolicyVerdict {
+                query_id,
+                allowed: false,
+                deciding_rule,
+            }
+        }
+    }
+}
+
+/// Map an `Operation`'s named args to the positional arg vector the Policy engine expects.
+///
+/// This is the **single definition** of the arg-map → positional mapping used by
+/// both the execution path (`handle_operation`) and the query path
+/// (`evaluate_policy_query`). Both paths MUST call this function; duplicating
+/// the match would risk silent drift between "would allow" and "actually allows"
+/// (ADR-0011).
+///
+/// Unknown operation names receive an empty positional list, which causes
+/// deny-by-default to fire in the Policy engine — identical to what execution
+/// would report.
+fn operation_positional_args(op: &Operation) -> Vec<String> {
+    match op.name.as_str() {
+        operations::SYSTEM_FACTS => vec![],
+        operations::FILE_READ => {
+            let path = op.args.get(OP_ARG_PATH).cloned().unwrap_or_default();
+            vec![path]
+        }
+        operations::SERVICE_RESTART => {
+            let unit = op.args.get(OP_ARG_UNIT).cloned().unwrap_or_default();
+            vec![unit]
+        }
+        _ => vec![], // deny-by-default will catch this
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Policy gate and handler dispatch
 // ---------------------------------------------------------------------------
 
@@ -133,7 +234,7 @@ where
 
 async fn handle_operation<R, Fut>(
     task_id: String,
-    op: &crate::gen::Operation,
+    op: &Operation,
     timeout: Duration,
     policy: &Policy,
     run: R,
@@ -145,18 +246,9 @@ where
     // Build the positional arg vector from the named args map (v1 arg-key contract).
     // Unknown operations receive an empty positional list and are denied by
     // Policy's deny-by-default (no allow rule can exist for an unknown name).
-    let positional: Vec<String> = match op.name.as_str() {
-        operations::SYSTEM_FACTS => vec![],
-        operations::FILE_READ => {
-            let path = op.args.get(OP_ARG_PATH).cloned().unwrap_or_default();
-            vec![path]
-        }
-        operations::SERVICE_RESTART => {
-            let unit = op.args.get(OP_ARG_UNIT).cloned().unwrap_or_default();
-            vec![unit]
-        }
-        _ => vec![], // deny-by-default will catch this
-    };
+    // Shared with evaluate_policy_query via operation_positional_args so query
+    // and execution derive args through the same function (ADR-0011: no drift).
+    let positional = operation_positional_args(op);
 
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
     match policy.evaluate(&op.name, &positional) {
@@ -766,5 +858,305 @@ allowed_args = []
     #[test]
     fn effective_timeout_exact_max() {
         assert_eq!(effective_timeout(300), MAX_TIMEOUT);
+    }
+
+    // -----------------------------------------------------------------------
+    // PolicyQuery tests (acceptance criteria for issue #92)
+    // -----------------------------------------------------------------------
+
+    /// Policy used by query tests: explicit allow/deny rules covering all five
+    /// matrix cases without reaching the filesystem or spawning real services.
+    fn make_query_test_policy() -> crate::policy::Policy {
+        from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+[raw_exec]
+allow = ["^/bin/echo .+$"]
+deny = ["secret"]
+"#,
+        )
+        .expect("query test policy must parse")
+    }
+
+    fn make_policy_query_operation(
+        query_id: &str,
+        name: &str,
+        key: &str,
+        val: &str,
+    ) -> crate::gen::PolicyQuery {
+        let mut args = std::collections::HashMap::new();
+        if !key.is_empty() {
+            args.insert(key.to_string(), val.to_string());
+        }
+        crate::gen::PolicyQuery {
+            query_id: query_id.to_string(),
+            action: Some(policy_query::Action::Operation(crate::gen::Operation {
+                name: name.to_string(),
+                args,
+            })),
+        }
+    }
+
+    fn make_policy_query_raw_exec(query_id: &str, argv: Vec<String>) -> crate::gen::PolicyQuery {
+        crate::gen::PolicyQuery {
+            query_id: query_id.to_string(),
+            action: Some(policy_query::Action::RawExec(crate::gen::RawExec { argv })),
+        }
+    }
+
+    /// Policy query verdict must match the outcome of actually dispatching the same
+    /// action (ADR-0011: the same engine methods are called; no divergence possible).
+    ///
+    /// The matrix covers five distinct cases: allowed operation, denied operation
+    /// (deny-by-default), denied operation (deny-beats-allow), allowed raw exec,
+    /// denied raw exec (deny-beats-allow). Each case is checked against BOTH the
+    /// query verdict and the dispatch result so a single test enforces consistency.
+    #[tokio::test]
+    async fn policy_query_verdict_matches_execution() {
+        let policy = make_query_test_policy();
+        let state_dir = TempDir::new("pq-matrix");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+
+        // Fake runner: always returns Success — hermetic for service.restart.
+        // Raw exec goes through run_raw_exec → execute() internally, not this closure.
+        let fake_run = move |req: ExecRequest| {
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        struct Case {
+            label: &'static str,
+            query: crate::gen::PolicyQuery,
+            task: TaskRequest,
+            expected_allowed: bool,
+        }
+
+        let cases = vec![
+            // (1) service.restart nginx -> allowed
+            Case {
+                label: "service.restart nginx",
+                query: make_policy_query_operation(
+                    "q1",
+                    operations::SERVICE_RESTART,
+                    OP_ARG_UNIT,
+                    "nginx",
+                ),
+                task: make_task_service_restart("pq-t1", "nginx"),
+                expected_allowed: true,
+            },
+            // (2) service.restart sshd -> deny-by-default
+            Case {
+                label: "service.restart sshd",
+                query: make_policy_query_operation(
+                    "q2",
+                    operations::SERVICE_RESTART,
+                    OP_ARG_UNIT,
+                    "sshd",
+                ),
+                task: make_task_service_restart("pq-t2", "sshd"),
+                expected_allowed: false,
+            },
+            // (3) file.read /etc/shadow -> deny-beats-allow
+            Case {
+                label: "file.read /etc/shadow",
+                query: make_policy_query_operation(
+                    "q3",
+                    operations::FILE_READ,
+                    OP_ARG_PATH,
+                    "/etc/shadow",
+                ),
+                task: make_task_file_read("pq-t3", "/etc/shadow"),
+                expected_allowed: false,
+            },
+            // (4) /bin/echo hi -> allowed raw exec
+            Case {
+                label: "/bin/echo hi (allowed)",
+                query: make_policy_query_raw_exec("q4", vec!["/bin/echo".into(), "hi".into()]),
+                task: make_task_raw_exec("pq-t4", vec!["/bin/echo".into(), "hi".into()]),
+                expected_allowed: true,
+            },
+            // (5) /bin/echo secret -> deny-beats-allow (deny pattern "secret")
+            Case {
+                label: "/bin/echo secret (denied)",
+                query: make_policy_query_raw_exec("q5", vec!["/bin/echo".into(), "secret".into()]),
+                task: make_task_raw_exec("pq-t5", vec!["/bin/echo".into(), "secret".into()]),
+                expected_allowed: false,
+            },
+        ];
+
+        for case in &cases {
+            let verdict = evaluate_policy_query(&case.query, &policy);
+            let result = dispatch_with_runner(&case.task, &policy, &dedup, fake_run.clone()).await;
+
+            // Core assertion: verdict matches execution outcome.
+            let exec_allowed = result.outcome != Outcome::DeniedByPolicy as i32;
+            assert_eq!(
+                verdict.allowed,
+                exec_allowed,
+                "[{label}] verdict.allowed ({}) != exec_allowed ({})",
+                verdict.allowed,
+                exec_allowed,
+                label = case.label,
+            );
+            assert_eq!(
+                verdict.allowed,
+                case.expected_allowed,
+                "[{label}] verdict.allowed ({}) != expected ({})",
+                verdict.allowed,
+                case.expected_allowed,
+                label = case.label,
+            );
+
+            // Deny verdicts must carry a non-empty deciding_rule.
+            if !verdict.allowed {
+                assert!(
+                    !verdict.deciding_rule.is_empty(),
+                    "[{}] deny verdict must have a non-empty deciding_rule",
+                    case.label,
+                );
+            }
+        }
+
+        // Case (3): file.read /etc/shadow — deny-beats-allow; deciding_rule must name the rule.
+        {
+            let verdict = evaluate_policy_query(&cases[2].query, &policy);
+            assert!(
+                verdict.deciding_rule.contains("file.read"),
+                "case (3) deciding_rule must name the file.read deny rule; got {:?}",
+                verdict.deciding_rule,
+            );
+        }
+
+        // Case (5): /bin/echo secret — deny-beats-allow; deciding_rule must name the deny pattern.
+        {
+            let verdict = evaluate_policy_query(&cases[4].query, &policy);
+            assert!(
+                verdict.deciding_rule.contains("secret"),
+                "case (5) deciding_rule must name the deny pattern; got {:?}",
+                verdict.deciding_rule,
+            );
+        }
+    }
+
+    /// A PolicyQuery allowed by Policy must not spawn any process and must not
+    /// record a dedup marker — the query path is structurally incapable of both
+    /// (it takes no DedupStore and never reaches the executor).
+    ///
+    /// The absence of a `DedupStore` parameter on `evaluate_policy_query` is the
+    /// compile-time proof that it cannot record a dedup marker.
+    #[test]
+    fn policy_query_spawns_no_process_and_records_no_dedup() {
+        // Policy that allows /bin/sh so the verdict is "allowed" — proving the
+        // test exercises the allow path, not the deny path.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/sh"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // Marker file: would be created by the shell if anything were spawned.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let marker = std::env::temp_dir().join(format!(
+            "relay-pq-spawn-marker-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let marker_str = marker.to_string_lossy().into_owned();
+
+        let cmd = format!("echo x > {marker_str}");
+        let query =
+            make_policy_query_raw_exec("pq-no-spawn", vec!["/bin/sh".into(), "-c".into(), cmd]);
+
+        let verdict = evaluate_policy_query(&query, &policy);
+
+        // Verdict must be "allowed" so we know the policy gate passed.
+        assert!(
+            verdict.allowed,
+            "verdict must be allowed; policy allows /bin/sh"
+        );
+        // Nothing was spawned — the marker must not exist.
+        assert!(
+            !marker.exists(),
+            "marker must not exist — evaluate_policy_query must never spawn a process"
+        );
+        let _ = fs::remove_file(&marker);
+
+        // No-dedup: build a fresh DedupStore and verify the seen-tasks dir has
+        // zero entries after calling evaluate_policy_query (which takes no store).
+        let state_dir = TempDir::new("pq-no-dedup");
+        // evaluate_policy_query is a sync fn; call it — compile-time proof that
+        // it does not accept a DedupStore parameter.
+        let _verdict2 = evaluate_policy_query(&query, &policy);
+
+        // The seen-tasks dir may not even exist (DedupStore was never opened).
+        // Treat "absent or empty" as pass.
+        let seen_dir = state_dir.path().join("seen-tasks");
+        if seen_dir.exists() {
+            let entries: Vec<_> = fs::read_dir(&seen_dir).expect("read seen-tasks").collect();
+            assert!(
+                entries.is_empty(),
+                "seen-tasks dir must be empty; evaluate_policy_query must not record any dedup markers"
+            );
+        }
+    }
+
+    /// Malformed PolicyQuery actions must always produce a deny verdict with a
+    /// non-empty deciding_rule — never a panic, never a dropped message.
+    #[test]
+    fn policy_query_malformed_action_denies() {
+        let policy = from_toml_str("").expect("empty policy must parse");
+
+        // (a) action: None — protocol error; must deny with deciding_rule set.
+        let query_none = crate::gen::PolicyQuery {
+            query_id: "pq-malformed-none".to_string(),
+            action: None,
+        };
+        let verdict = evaluate_policy_query(&query_none, &policy);
+        assert!(!verdict.allowed, "None action must be denied");
+        assert!(
+            !verdict.deciding_rule.is_empty(),
+            "None action deny must carry a non-empty deciding_rule; got {:?}",
+            verdict.deciding_rule,
+        );
+
+        // (b) Unknown operation name — deny-by-default, no panic.
+        let query_unknown =
+            make_policy_query_operation("pq-malformed-op", "completely.unknown.operation", "", "");
+        let verdict_unknown = evaluate_policy_query(&query_unknown, &policy);
+        assert!(
+            !verdict_unknown.allowed,
+            "unknown operation must be denied by default"
+        );
+        assert!(
+            !verdict_unknown.deciding_rule.is_empty(),
+            "unknown operation deny must carry a non-empty deciding_rule; got {:?}",
+            verdict_unknown.deciding_rule,
+        );
     }
 }

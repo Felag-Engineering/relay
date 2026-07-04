@@ -182,21 +182,37 @@ async fn run_tunnel(
     loop {
         match inbound.message().await {
             Ok(Some(msg)) => {
-                if let Some(relay_message::Body::Task(task_req)) = msg.body {
-                    let result: TaskResult = dispatch::dispatch(&task_req, policy, dedup).await;
-                    if tx
-                        .send(DaemonMessage {
-                            body: Some(daemon_message::Body::TaskResult(result)),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        error!("outbound channel closed while sending TaskResult");
-                        break;
+                match msg.body {
+                    Some(relay_message::Body::Task(task_req)) => {
+                        let result: TaskResult = dispatch::dispatch(&task_req, policy, dedup).await;
+                        if tx
+                            .send(DaemonMessage {
+                                body: Some(daemon_message::Body::TaskResult(result)),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            error!("outbound channel closed while sending TaskResult");
+                            break;
+                        }
                     }
+                    Some(relay_message::Body::PolicyQuery(query)) => {
+                        let verdict = dispatch::evaluate_policy_query(&query, policy);
+                        if tx
+                            .send(DaemonMessage {
+                                body: Some(daemon_message::Body::PolicyVerdict(verdict)),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            error!("outbound channel closed while sending PolicyVerdict");
+                            break;
+                        }
+                    }
+                    // Other inbound message types (e.g. TaskCancel, future relay
+                    // extensions) are silently ignored — forward-compatibility.
+                    _ => {}
                 }
-                // Other inbound message types (e.g. future relay extensions) are
-                // silently ignored — forward-compatibility.
             }
             Ok(None) => {
                 info!("Relay closed stream, shutting down");
