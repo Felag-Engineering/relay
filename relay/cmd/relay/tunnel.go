@@ -16,10 +16,24 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// taskSink is a test-only seam for capturing Task dispatch and results in
+// hermetic unit tests. It is nil in production (newServer never sets it).
+//
+// register is called after the Ping handshake completes; it records the
+// outbound send function for the node and returns a cleanup func. deliver is
+// called when a TaskResult arrives on the inbound stream.
+type taskSink interface {
+	register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func())
+	deliver(nodeID string, result *gleipnirv1.TaskResult)
+}
+
 type tunnelServer struct {
 	gleipnirv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
+	// sink is nil in production; only set in tests to inject Tasks and capture
+	// results. Never set by newServer.
+	sink taskSink
 }
 
 func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMessage, gleipnirv1.RelayMessage]) error {
@@ -105,6 +119,13 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		return status.Errorf(codes.Internal, "send ping: %v", err)
 	}
 
+	// Register the outbound send function with the test sink (if set).
+	// In production s.sink is always nil; this block is a zero-cost no-op.
+	if s.sink != nil {
+		unregister := s.sink.register(nodeID, stream.Send)
+		defer unregister()
+	}
+
 	// Run Recv in a goroutine so the select below can observe cctx cancellation.
 	// grpc.ServerStream.Recv() does not unblock when a derived context is
 	// cancelled; the select on cctx.Done() is the only way to deliver an
@@ -147,6 +168,13 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 					if err := s.reg.UpdateLastSeen(nodeID, time.Now()); err != nil {
 						slog.Warn("update last-seen failed", "node_id", nodeID, "err", err)
 					}
+				}
+			}
+			// Deliver TaskResult to the test sink (if set). In production
+			// s.sink is always nil; this block is a zero-cost no-op.
+			if s.sink != nil {
+				if tr := m.GetTaskResult(); tr != nil {
+					s.sink.deliver(nodeID, tr)
 				}
 			}
 		}

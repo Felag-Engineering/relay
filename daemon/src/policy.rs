@@ -18,12 +18,6 @@
 //! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
 //! wiring lands in a later v0.0.3 issue.
 
-// Not-yet-wired public API; task-dispatch wiring lands in a later v0.0.3 issue.
-// Suppresses dead_code for the whole module at the source so that
-// `cargo clippy -- -D warnings` stays green without requiring a blanket #[allow]
-// on the `mod policy` declaration in main.rs.
-#![allow(dead_code)]
-
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;

@@ -15,8 +15,6 @@
 //! no fragile `/proc/net` parsing). The single `unsafe` block is bounded and
 //! safety-annotated below.
 
-#![allow(dead_code)]
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ptr;
 

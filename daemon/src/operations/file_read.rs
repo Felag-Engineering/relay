@@ -18,8 +18,6 @@
 //! A missing or unreadable file maps to `OUTCOME_FAILURE` (not
 //! `OUTCOME_DENIED_BY_POLICY`), which is a separate Policy-engine concern.
 
-#![allow(dead_code)]
-
 use std::io::Read;
 
 use crate::gen::{Outcome, TaskResult};
