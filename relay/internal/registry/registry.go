@@ -48,35 +48,41 @@ type Facts struct {
 // RelayLabels holds relay-space labels. Each is written exclusively by its own
 // method on Repository; neither can reach the other's map.
 type Node struct {
-	NodeID           string
-	CertFingerprint  string // cert identity used for Node authentication
-	Facts            Facts
-	NodeLabels       map[string]string // node: namespace, bare keys; node-rooted, Relay-immutable
-	RelayLabels      map[string]string // relay: namespace, bare keys; Relay-set, Node-immutable
-	LastSeen         time.Time
-	EnrollingTokenID string // provenance: the Enrollment Token ID used at first enrollment
+	NodeID            string
+	CertFingerprint   string // cert identity used for Node authentication
+	Facts             Facts
+	NodeLabels        map[string]string // node: namespace, bare keys; node-rooted, Relay-immutable
+	RelayLabels       map[string]string // relay: namespace, bare keys; Relay-set, Node-immutable
+	LastSeen          time.Time
+	EnrollingTokenID  string // provenance: the Enrollment Token ID used at first enrollment
+	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, reported on Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
 }
 
 // Report is the input to Upsert. It deliberately carries no relay-label field —
 // this is the structural half of the node-side immutability boundary. A relay-daemon
 // can never supply relay-space labels through this type, regardless of what it sends.
 type Report struct {
-	NodeID           string
-	CertFingerprint  string
-	Facts            Facts
-	NodeLabels       map[string]string
-	EnrollingTokenID string
+	NodeID            string
+	CertFingerprint   string
+	Facts             Facts
+	NodeLabels        map[string]string
+	EnrollingTokenID  string
+	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, sourced from Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
 }
 
 // Repository is the interface for the Node registry.
 type Repository interface {
 	// Upsert registers or updates a Node from a relay-daemon's own report. This is
-	// the only write path for node-space labels and Facts. It cannot write
-	// relay-space labels — Report has no such field.
+	// the only write path for node-space labels, Facts, and PolicyFingerprint. It
+	// cannot write relay-space labels — Report has no such field.
 	//
 	// On INSERT (new Node): returns ErrAtCapacity when a max-nodes cap is set and
 	// reached. On UPDATE (existing Node): the cap is never checked — reconnects
 	// and Hello Upserts must never be throttled.
+	//
+	// PolicyFingerprint is overwritten on both INSERT and UPDATE (like Facts and
+	// NodeLabels), so each (re)connect refreshes the stored value to the currently
+	// loaded Policy. RelayLabels and EnrollingTokenID provenance are never touched.
 	Upsert(r Report) (Node, error)
 
 	// UpdateLastSeen records the most recent contact time for a Node. Returns

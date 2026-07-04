@@ -18,6 +18,7 @@
 //! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
 //! wiring lands in a later v0.0.3 issue.
 
+use std::fmt::Write as _;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
@@ -104,6 +105,7 @@ pub struct Policy {
     denies: Vec<DenyRuleRaw>,
     raw_allow: Vec<CompiledRe>,
     raw_deny: Vec<CompiledRe>,
+    fingerprint: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +187,32 @@ pub enum PolicyError {
 // Parse API (pure, no filesystem access)
 // ---------------------------------------------------------------------------
 
+/// Compute the SHA-256 fingerprint of raw Policy file bytes.
+///
+/// Returns a 64-character lowercase-hex string with no prefix — the same
+/// format used for cert fingerprints in `transport.go`.
+///
+/// **Canonical form:** the fingerprint is over the **raw file bytes**, not a
+/// canonicalized or compiled form. Consequences:
+/// - Identical bytes → identical fingerprint (strict byte-identity).
+/// - Cosmetic edits (whitespace, comments, key reorder) **change** the
+///   fingerprint — intended; policy-as-code pushes the same file everywhere,
+///   so byte-identity is exactly the drift signal an operator needs.
+/// - An empty / deny-all Policy produces the SHA-256 of the empty string:
+///   `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+///
+/// The TOML serializer is excluded from the daemon binary for musl size
+/// (ADR-0007); re-adding it plus a stable field-ordering round-trip for
+/// canonicalization adds weight on a security-adjacent path for no gain.
+fn policy_fingerprint(bytes: &[u8]) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let mut s = String::with_capacity(64);
+    for b in digest.as_ref() {
+        write!(&mut s, "{b:02x}").expect("write to String is infallible");
+    }
+    s
+}
+
 /// Parse and compile a Policy from a TOML string.
 ///
 /// Pure function — no filesystem access. Used by `load_policy` and directly
@@ -203,6 +231,7 @@ pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
         denies: file.deny,
         raw_allow,
         raw_deny,
+        fingerprint: policy_fingerprint(s.as_bytes()),
     })
 }
 
@@ -279,6 +308,12 @@ pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
 // ---------------------------------------------------------------------------
 
 impl Policy {
+    /// The SHA-256 fingerprint of the raw Policy file bytes, as a 64-character
+    /// lowercase-hex string. Safe to log; the Policy body is not (ADR-0002).
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+
     /// Evaluate whether `operation_name` may run with the given `args`.
     ///
     /// Semantics (ADR-0002):
@@ -741,6 +776,76 @@ deny = []
         assert!(
             matches!(result, Err(PolicyError::InvalidRegex { .. })),
             "malformed regex pattern must cause InvalidRegex error; got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Policy fingerprint tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fingerprint_is_deterministic() {
+        let p1 = from_toml_str(FIXTURE).expect("fixture must parse");
+        let p2 = from_toml_str(FIXTURE).expect("fixture must parse");
+        assert_eq!(
+            p1.fingerprint(),
+            p2.fingerprint(),
+            "same input bytes must always produce the same fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_on_edit() {
+        let p1 = from_toml_str(FIXTURE).expect("fixture must parse");
+        // Append a comment — changes the bytes, must change the fingerprint.
+        let modified = format!("{FIXTURE}\n# cosmetic edit");
+        let p2 = from_toml_str(&modified).expect("modified fixture must parse");
+        assert_ne!(
+            p1.fingerprint(),
+            p2.fingerprint(),
+            "different bytes must produce a different fingerprint"
+        );
+    }
+
+    #[test]
+    fn fingerprint_is_64_hex_lowercase() {
+        let p = from_toml_str(FIXTURE).expect("fixture must parse");
+        let fp = p.fingerprint();
+        assert_eq!(
+            fp.len(),
+            64,
+            "SHA-256 hex must be 64 characters; got {fp:?}"
+        );
+        assert!(
+            fp.chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, 'a'..='f')),
+            "fingerprint must be lowercase hex [0-9a-f]; got {fp:?}"
+        );
+    }
+
+    #[test]
+    fn fingerprint_empty_policy_is_known_sha256() {
+        // SHA-256 of the empty string is the well-known constant.
+        let p = from_toml_str("").expect("empty TOML must parse as deny-all");
+        assert_eq!(
+            p.fingerprint(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "empty policy fingerprint must equal SHA-256 of the empty string"
+        );
+    }
+
+    #[test]
+    fn load_policy_fingerprint_matches_from_toml_str() {
+        // Prove byte-identity: loading from a file produces the same fingerprint
+        // as parsing the string directly. This is the seam the `policy check`
+        // subcommand (#93) will rely on.
+        let tmp = TempFile::new("fingerprint-eq", FIXTURE.as_bytes(), 0o600);
+        let file_policy = load_policy(tmp.path()).expect("secure-mode fixture must load");
+        let str_policy = from_toml_str(FIXTURE).expect("fixture must parse");
+        assert_eq!(
+            file_policy.fingerprint(),
+            str_policy.fingerprint(),
+            "load_policy and from_toml_str must produce the same fingerprint for the same bytes"
         );
     }
 }
