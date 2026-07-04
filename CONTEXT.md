@@ -89,6 +89,14 @@ installed packages). Inform decisions but are never used for targeting — that 
 Labels (see Label).
 _Avoid_: metadata, attributes, properties
 
+**Policy fingerprint**:
+A hash of a Node's loaded Policy that the daemon reports (in `Hello` and every
+`PolicySnapshot`) and the Relay records in the registry — fleet-wide Policy *drift visibility*
+without the Policy itself ever traveling. Report-only: the Relay observes it but never sets a
+Node's Policy (ADR-0002). Lets an operator confirm a Policy rollout landed everywhere by string
+comparison against the registry (ADR-0002, ADR-0006).
+_Avoid_: policy hash, checksum, policy version
+
 **Enrollment Token**:
 The reusable, scoped, expiring, revocable credential a daemon presents to join the fleet.
 Distinct from a Node's identity certificate: the token authorizes *enrollment* and stamps
@@ -111,6 +119,14 @@ leaving in-flight Tasks running and Plans available. Cheap to engage (`operator`
 the Control API, or locally on the Relay host), deliberate to release (`admin`, with an
 audited reason). Persisted across Relay restarts (ADR-0013).
 _Avoid_: pause, maintenance mode, lockdown, kill switch
+
+**Cancellation**:
+Stopping a single in-flight Task by its ID (`TaskCancel`): the daemon kills the Task's
+process group and reports `OUTCOME_CANCELLED`. Best-effort and honest — a Task that already
+finished reports its real outcome, never a retroactive cancel, and the cancelled Task ID stays
+deduped, so at-most-once still holds. Narrower than Freeze, which halts *all* new dispatch
+fleet-wide (ADR-0013).
+_Avoid_: abort, kill, stop, interrupt
 
 **Plan**:
 The no-execution preview of a Job: the Relay resolves the Selector, checks

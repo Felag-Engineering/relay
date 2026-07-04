@@ -10,7 +10,7 @@
 // ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
 //
 // This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
-// captures the shapes implied by ADRs 0001-0007, not a frozen API.
+// captures the shapes implied by ADRs 0001-0013, not a frozen API.
 
 package gleipnirv1
 
@@ -89,6 +89,7 @@ const (
 	Outcome_OUTCOME_FAILURE          Outcome = 2
 	Outcome_OUTCOME_TIMEOUT          Outcome = 3
 	Outcome_OUTCOME_DENIED_BY_POLICY Outcome = 4
+	Outcome_OUTCOME_CANCELLED        Outcome = 5 // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
 )
 
 // Enum value maps for Outcome.
@@ -99,6 +100,7 @@ var (
 		2: "OUTCOME_FAILURE",
 		3: "OUTCOME_TIMEOUT",
 		4: "OUTCOME_DENIED_BY_POLICY",
+		5: "OUTCOME_CANCELLED",
 	}
 	Outcome_value = map[string]int32{
 		"OUTCOME_UNSPECIFIED":      0,
@@ -106,6 +108,7 @@ var (
 		"OUTCOME_FAILURE":          2,
 		"OUTCOME_TIMEOUT":          3,
 		"OUTCOME_DENIED_BY_POLICY": 4,
+		"OUTCOME_CANCELLED":        5,
 	}
 )
 
@@ -391,6 +394,7 @@ type DaemonMessage struct {
 	//	*DaemonMessage_TaskResult
 	//	*DaemonMessage_StreamChunk
 	//	*DaemonMessage_Policy
+	//	*DaemonMessage_PolicyVerdict
 	Body          isDaemonMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -478,6 +482,15 @@ func (x *DaemonMessage) GetPolicy() *PolicySnapshot {
 	return nil
 }
 
+func (x *DaemonMessage) GetPolicyVerdict() *PolicyVerdict {
+	if x != nil {
+		if x, ok := x.Body.(*DaemonMessage_PolicyVerdict); ok {
+			return x.PolicyVerdict
+		}
+	}
+	return nil
+}
+
 type isDaemonMessage_Body interface {
 	isDaemonMessage_Body()
 }
@@ -502,6 +515,10 @@ type DaemonMessage_Policy struct {
 	Policy *PolicySnapshot `protobuf:"bytes,5,opt,name=policy,proto3,oneof"` // effective Policy, for the Relay to display only
 }
 
+type DaemonMessage_PolicyVerdict struct {
+	PolicyVerdict *PolicyVerdict `protobuf:"bytes,6,opt,name=policy_verdict,json=policyVerdict,proto3,oneof"` // daemon's answer to a PolicyQuery; evaluated by the real enforcement engine (ADR-0011)
+}
+
 func (*DaemonMessage_Hello) isDaemonMessage_Body() {}
 
 func (*DaemonMessage_Heartbeat) isDaemonMessage_Body() {}
@@ -512,12 +529,16 @@ func (*DaemonMessage_StreamChunk) isDaemonMessage_Body() {}
 
 func (*DaemonMessage_Policy) isDaemonMessage_Body() {}
 
+func (*DaemonMessage_PolicyVerdict) isDaemonMessage_Body() {}
+
 type RelayMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Body:
 	//
 	//	*RelayMessage_Ping
 	//	*RelayMessage_Task
+	//	*RelayMessage_TaskCancel
+	//	*RelayMessage_PolicyQuery
 	Body          isRelayMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -578,6 +599,24 @@ func (x *RelayMessage) GetTask() *TaskRequest {
 	return nil
 }
 
+func (x *RelayMessage) GetTaskCancel() *TaskCancel {
+	if x != nil {
+		if x, ok := x.Body.(*RelayMessage_TaskCancel); ok {
+			return x.TaskCancel
+		}
+	}
+	return nil
+}
+
+func (x *RelayMessage) GetPolicyQuery() *PolicyQuery {
+	if x != nil {
+		if x, ok := x.Body.(*RelayMessage_PolicyQuery); ok {
+			return x.PolicyQuery
+		}
+	}
+	return nil
+}
+
 type isRelayMessage_Body interface {
 	isRelayMessage_Body()
 }
@@ -590,18 +629,31 @@ type RelayMessage_Task struct {
 	Task *TaskRequest `protobuf:"bytes,2,opt,name=task,proto3,oneof"`
 }
 
+type RelayMessage_TaskCancel struct {
+	TaskCancel *TaskCancel `protobuf:"bytes,3,opt,name=task_cancel,json=taskCancel,proto3,oneof"` // cancel an in-flight Task by id; Relay→daemon; best-effort (ADR-0013)
+}
+
+type RelayMessage_PolicyQuery struct {
+	PolicyQuery *PolicyQuery `protobuf:"bytes,4,opt,name=policy_query,json=policyQuery,proto3,oneof"` // read-only "would Policy allow" probe; executes nothing (ADR-0011)
+}
+
 func (*RelayMessage_Ping) isRelayMessage_Body() {}
 
 func (*RelayMessage_Task) isRelayMessage_Body() {}
 
+func (*RelayMessage_TaskCancel) isRelayMessage_Body() {}
+
+func (*RelayMessage_PolicyQuery) isRelayMessage_Body() {}
+
 type Hello struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	DaemonVersion string                 `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
-	Facts         *Facts                 `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
-	Labels        []*Label               `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"` // node-space + relay-space (relay-space is authoritative)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	DaemonVersion     string                 `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	Facts             *Facts                 `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
+	Labels            []*Label               `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"`                                                // node-space + relay-space (relay-space is authoritative)
+	PolicyFingerprint string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"` // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Hello) Reset() {
@@ -660,6 +712,13 @@ func (x *Hello) GetLabels() []*Label {
 		return x.Labels
 	}
 	return nil
+}
+
+func (x *Hello) GetPolicyFingerprint() string {
+	if x != nil {
+		return x.PolicyFingerprint
+	}
+	return ""
 }
 
 type Heartbeat struct {
@@ -852,6 +911,54 @@ func (*TaskRequest_Operation) isTaskRequest_Action() {}
 
 func (*TaskRequest_RawExec) isTaskRequest_Action() {}
 
+// TaskCancel asks the daemon to stop an in-flight Task and kill its process
+// group; the daemon then reports OUTCOME_CANCELLED. Best-effort by definition
+// (ADR-0013): carries only the id — cancellation has no execution payload, and
+// is NOT a Task (at-most-once dedup treats the cancelled id as still seen).
+type TaskCancel struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,1,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"` // id of the Task to cancel
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskCancel) Reset() {
+	*x = TaskCancel{}
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskCancel) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskCancel) ProtoMessage() {}
+
+func (x *TaskCancel) ProtoReflect() protoreflect.Message {
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskCancel.ProtoReflect.Descriptor instead.
+func (*TaskCancel) Descriptor() ([]byte, []int) {
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *TaskCancel) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
 type Operation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                                                           // e.g. "system.facts", "service.restart"
@@ -862,7 +969,7 @@ type Operation struct {
 
 func (x *Operation) Reset() {
 	*x = Operation{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[10]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -874,7 +981,7 @@ func (x *Operation) String() string {
 func (*Operation) ProtoMessage() {}
 
 func (x *Operation) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[10]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -887,7 +994,7 @@ func (x *Operation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Operation.ProtoReflect.Descriptor instead.
 func (*Operation) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{10}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Operation) GetName() string {
@@ -927,7 +1034,7 @@ type OperationDescriptor struct {
 
 func (x *OperationDescriptor) Reset() {
 	*x = OperationDescriptor{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[11]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -939,7 +1046,7 @@ func (x *OperationDescriptor) String() string {
 func (*OperationDescriptor) ProtoMessage() {}
 
 func (x *OperationDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[11]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -952,7 +1059,7 @@ func (x *OperationDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationDescriptor.ProtoReflect.Descriptor instead.
 func (*OperationDescriptor) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{11}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *OperationDescriptor) GetName() string {
@@ -978,7 +1085,7 @@ type RawExec struct {
 
 func (x *RawExec) Reset() {
 	*x = RawExec{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[12]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -990,7 +1097,7 @@ func (x *RawExec) String() string {
 func (*RawExec) ProtoMessage() {}
 
 func (x *RawExec) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[12]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1003,7 +1110,7 @@ func (x *RawExec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RawExec.ProtoReflect.Descriptor instead.
 func (*RawExec) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{12}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RawExec) GetArgv() []string {
@@ -1028,7 +1135,7 @@ type TaskResult struct {
 
 func (x *TaskResult) Reset() {
 	*x = TaskResult{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[13]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1040,7 +1147,7 @@ func (x *TaskResult) String() string {
 func (*TaskResult) ProtoMessage() {}
 
 func (x *TaskResult) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[13]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1053,7 +1160,7 @@ func (x *TaskResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TaskResult.ProtoReflect.Descriptor instead.
 func (*TaskResult) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{13}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TaskResult) GetTaskId() string {
@@ -1116,7 +1223,7 @@ type StreamChunk struct {
 
 func (x *StreamChunk) Reset() {
 	*x = StreamChunk{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[14]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1128,7 +1235,7 @@ func (x *StreamChunk) String() string {
 func (*StreamChunk) ProtoMessage() {}
 
 func (x *StreamChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[14]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1141,7 +1248,7 @@ func (x *StreamChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamChunk.ProtoReflect.Descriptor instead.
 func (*StreamChunk) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{14}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *StreamChunk) GetTaskId() string {
@@ -1178,7 +1285,7 @@ type Label struct {
 
 func (x *Label) Reset() {
 	*x = Label{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[15]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1190,7 +1297,7 @@ func (x *Label) String() string {
 func (*Label) ProtoMessage() {}
 
 func (x *Label) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[15]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1203,7 +1310,7 @@ func (x *Label) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Label.ProtoReflect.Descriptor instead.
 func (*Label) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{15}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Label) GetKey() string {
@@ -1233,7 +1340,7 @@ type Facts struct {
 
 func (x *Facts) Reset() {
 	*x = Facts{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[16]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1245,7 +1352,7 @@ func (x *Facts) String() string {
 func (*Facts) ProtoMessage() {}
 
 func (x *Facts) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[16]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1258,7 +1365,7 @@ func (x *Facts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Facts.ProtoReflect.Descriptor instead.
 func (*Facts) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{16}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *Facts) GetHostname() string {
@@ -1304,13 +1411,14 @@ type PolicySnapshot struct {
 	RawAllowPatterns  []string               `protobuf:"bytes,2,rep,name=raw_allow_patterns,json=rawAllowPatterns,proto3" json:"raw_allow_patterns,omitempty"`
 	RawDenyPatterns   []string               `protobuf:"bytes,3,rep,name=raw_deny_patterns,json=rawDenyPatterns,proto3" json:"raw_deny_patterns,omitempty"`
 	AllowedOperations []string               `protobuf:"bytes,4,rep,name=allowed_operations,json=allowedOperations,proto3" json:"allowed_operations,omitempty"` // operation names permitted on this Node
+	PolicyFingerprint string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"` // hash of the effective Policy this snapshot describes; display-only (ADR-0002)
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *PolicySnapshot) Reset() {
 	*x = PolicySnapshot{}
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[17]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1322,7 +1430,7 @@ func (x *PolicySnapshot) String() string {
 func (*PolicySnapshot) ProtoMessage() {}
 
 func (x *PolicySnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[17]
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1335,7 +1443,7 @@ func (x *PolicySnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicySnapshot.ProtoReflect.Descriptor instead.
 func (*PolicySnapshot) Descriptor() ([]byte, []int) {
-	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{17}
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PolicySnapshot) GetRawExecEnabled() bool {
@@ -1366,6 +1474,174 @@ func (x *PolicySnapshot) GetAllowedOperations() []string {
 	return nil
 }
 
+func (x *PolicySnapshot) GetPolicyFingerprint() string {
+	if x != nil {
+		return x.PolicyFingerprint
+	}
+	return ""
+}
+
+// PolicyQuery asks the daemon whether its Policy WOULD allow an action —
+// executing nothing (ADR-0011). Deliberately not a flag on TaskRequest and
+// deliberately carries no task_id: query_id is correlation-only and cannot
+// collide with at-most-once dedup or trigger execution. Read-only: it can
+// never set or change Policy (ADR-0002).
+type PolicyQuery struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	QueryId string                 `protobuf:"bytes,1,opt,name=query_id,json=queryId,proto3" json:"query_id,omitempty"` // correlation only; NOT a task_id
+	// Types that are valid to be assigned to Action:
+	//
+	//	*PolicyQuery_Operation
+	//	*PolicyQuery_RawExec
+	Action        isPolicyQuery_Action `protobuf_oneof:"action"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyQuery) Reset() {
+	*x = PolicyQuery{}
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyQuery) ProtoMessage() {}
+
+func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyQuery.ProtoReflect.Descriptor instead.
+func (*PolicyQuery) Descriptor() ([]byte, []int) {
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PolicyQuery) GetQueryId() string {
+	if x != nil {
+		return x.QueryId
+	}
+	return ""
+}
+
+func (x *PolicyQuery) GetAction() isPolicyQuery_Action {
+	if x != nil {
+		return x.Action
+	}
+	return nil
+}
+
+func (x *PolicyQuery) GetOperation() *Operation {
+	if x != nil {
+		if x, ok := x.Action.(*PolicyQuery_Operation); ok {
+			return x.Operation
+		}
+	}
+	return nil
+}
+
+func (x *PolicyQuery) GetRawExec() *RawExec {
+	if x != nil {
+		if x, ok := x.Action.(*PolicyQuery_RawExec); ok {
+			return x.RawExec
+		}
+	}
+	return nil
+}
+
+type isPolicyQuery_Action interface {
+	isPolicyQuery_Action()
+}
+
+type PolicyQuery_Operation struct {
+	Operation *Operation `protobuf:"bytes,2,opt,name=operation,proto3,oneof"` // structured, typed, native (argv, no shell)
+}
+
+type PolicyQuery_RawExec struct {
+	RawExec *RawExec `protobuf:"bytes,3,opt,name=raw_exec,json=rawExec,proto3,oneof"` // arbitrary command, gated by Policy regex
+}
+
+func (*PolicyQuery_Operation) isPolicyQuery_Action() {}
+
+func (*PolicyQuery_RawExec) isPolicyQuery_Action() {}
+
+// PolicyVerdict is the daemon's answer, from the same enforcement engine that
+// decides at execution time (ADR-0011). `allowed` is a plain bool so the wire
+// can express only allow/deny; unknown(offline) is a Relay-side conclusion
+// about a disconnected Node, never a wire value. On deny, deciding_rule names
+// the Policy rule that denied (acceptable extra detail per ADR-0011, since
+// describe_node already exposes effective Policy to authorized callers).
+type PolicyVerdict struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	QueryId       string                 `protobuf:"bytes,1,opt,name=query_id,json=queryId,proto3" json:"query_id,omitempty"`                // echoes the PolicyQuery
+	Allowed       bool                   `protobuf:"varint,2,opt,name=allowed,proto3" json:"allowed,omitempty"`                              // allow = true, deny = false
+	DecidingRule  string                 `protobuf:"bytes,3,opt,name=deciding_rule,json=decidingRule,proto3" json:"deciding_rule,omitempty"` // set only on deny; empty on allow
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PolicyVerdict) Reset() {
+	*x = PolicyVerdict{}
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PolicyVerdict) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PolicyVerdict) ProtoMessage() {}
+
+func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
+	mi := &file_gleipnir_v1_gleipnir_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PolicyVerdict.ProtoReflect.Descriptor instead.
+func (*PolicyVerdict) Descriptor() ([]byte, []int) {
+	return file_gleipnir_v1_gleipnir_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PolicyVerdict) GetQueryId() string {
+	if x != nil {
+		return x.QueryId
+	}
+	return ""
+}
+
+func (x *PolicyVerdict) GetAllowed() bool {
+	if x != nil {
+		return x.Allowed
+	}
+	return false
+}
+
+func (x *PolicyVerdict) GetDecidingRule() string {
+	if x != nil {
+		return x.DecidingRule
+	}
+	return ""
+}
+
 var File_gleipnir_v1_gleipnir_proto protoreflect.FileDescriptor
 
 const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
@@ -1387,24 +1663,29 @@ const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
 	"\rRenewResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\vcertificate\x18\x02 \x01(\fR\vcertificate\x12\x1b\n" +
-	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\xad\x02\n" +
+	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\xf2\x02\n" +
 	"\rDaemonMessage\x12*\n" +
 	"\x05hello\x18\x01 \x01(\v2\x12.gleipnir.v1.HelloH\x00R\x05hello\x126\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x16.gleipnir.v1.HeartbeatH\x00R\theartbeat\x12:\n" +
 	"\vtask_result\x18\x03 \x01(\v2\x17.gleipnir.v1.TaskResultH\x00R\n" +
 	"taskResult\x12=\n" +
 	"\fstream_chunk\x18\x04 \x01(\v2\x18.gleipnir.v1.StreamChunkH\x00R\vstreamChunk\x125\n" +
-	"\x06policy\x18\x05 \x01(\v2\x1b.gleipnir.v1.PolicySnapshotH\x00R\x06policyB\x06\n" +
-	"\x04body\"o\n" +
+	"\x06policy\x18\x05 \x01(\v2\x1b.gleipnir.v1.PolicySnapshotH\x00R\x06policy\x12C\n" +
+	"\x0epolicy_verdict\x18\x06 \x01(\v2\x1a.gleipnir.v1.PolicyVerdictH\x00R\rpolicyVerdictB\x06\n" +
+	"\x04body\"\xea\x01\n" +
 	"\fRelayMessage\x12'\n" +
 	"\x04ping\x18\x01 \x01(\v2\x11.gleipnir.v1.PingH\x00R\x04ping\x12.\n" +
-	"\x04task\x18\x02 \x01(\v2\x18.gleipnir.v1.TaskRequestH\x00R\x04taskB\x06\n" +
-	"\x04body\"\x9d\x01\n" +
+	"\x04task\x18\x02 \x01(\v2\x18.gleipnir.v1.TaskRequestH\x00R\x04task\x12:\n" +
+	"\vtask_cancel\x18\x03 \x01(\v2\x17.gleipnir.v1.TaskCancelH\x00R\n" +
+	"taskCancel\x12=\n" +
+	"\fpolicy_query\x18\x04 \x01(\v2\x18.gleipnir.v1.PolicyQueryH\x00R\vpolicyQueryB\x06\n" +
+	"\x04body\"\xcc\x01\n" +
 	"\x05Hello\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12%\n" +
 	"\x0edaemon_version\x18\x02 \x01(\tR\rdaemonVersion\x12(\n" +
 	"\x05facts\x18\x03 \x01(\v2\x12.gleipnir.v1.FactsR\x05facts\x12*\n" +
-	"\x06labels\x18\x04 \x03(\v2\x12.gleipnir.v1.LabelR\x06labels\",\n" +
+	"\x06labels\x18\x04 \x03(\v2\x12.gleipnir.v1.LabelR\x06labels\x12-\n" +
+	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\",\n" +
 	"\tHeartbeat\x12\x1f\n" +
 	"\vunix_millis\x18\x01 \x01(\x03R\n" +
 	"unixMillis\"'\n" +
@@ -1416,7 +1697,10 @@ const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
 	"\toperation\x18\x02 \x01(\v2\x16.gleipnir.v1.OperationH\x00R\toperation\x121\n" +
 	"\braw_exec\x18\x03 \x01(\v2\x14.gleipnir.v1.RawExecH\x00R\arawExec\x12'\n" +
 	"\x0ftimeout_seconds\x18\x04 \x01(\x05R\x0etimeoutSecondsB\b\n" +
-	"\x06action\"\x8e\x01\n" +
+	"\x06action\"%\n" +
+	"\n" +
+	"TaskCancel\x12\x17\n" +
+	"\atask_id\x18\x01 \x01(\tR\x06taskId\"\x8e\x01\n" +
 	"\tOperation\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x124\n" +
 	"\x04args\x18\x02 \x03(\v2 .gleipnir.v1.Operation.ArgsEntryR\x04args\x1a7\n" +
@@ -1450,22 +1734,33 @@ const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
 	"\x06kernel\x18\x03 \x01(\tR\x06kernel\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12!\n" +
-	"\fip_addresses\x18\x05 \x03(\tR\vipAddresses\"\xc3\x01\n" +
+	"\fip_addresses\x18\x05 \x03(\tR\vipAddresses\"\xf2\x01\n" +
 	"\x0ePolicySnapshot\x12(\n" +
 	"\x10raw_exec_enabled\x18\x01 \x01(\bR\x0erawExecEnabled\x12,\n" +
 	"\x12raw_allow_patterns\x18\x02 \x03(\tR\x10rawAllowPatterns\x12*\n" +
 	"\x11raw_deny_patterns\x18\x03 \x03(\tR\x0frawDenyPatterns\x12-\n" +
-	"\x12allowed_operations\x18\x04 \x03(\tR\x11allowedOperations*S\n" +
+	"\x12allowed_operations\x18\x04 \x03(\tR\x11allowedOperations\x12-\n" +
+	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\"\x9d\x01\n" +
+	"\vPolicyQuery\x12\x19\n" +
+	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x126\n" +
+	"\toperation\x18\x02 \x01(\v2\x16.gleipnir.v1.OperationH\x00R\toperation\x121\n" +
+	"\braw_exec\x18\x03 \x01(\v2\x14.gleipnir.v1.RawExecH\x00R\arawExecB\b\n" +
+	"\x06action\"i\n" +
+	"\rPolicyVerdict\x12\x19\n" +
+	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x12\x18\n" +
+	"\aallowed\x18\x02 \x01(\bR\aallowed\x12#\n" +
+	"\rdeciding_rule\x18\x03 \x01(\tR\fdecidingRule*S\n" +
 	"\tRiskClass\x12\x1a\n" +
 	"\x16RISK_CLASS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fRISK_CLASS_READ\x10\x01\x12\x15\n" +
-	"\x11RISK_CLASS_MUTATE\x10\x02*\x7f\n" +
+	"\x11RISK_CLASS_MUTATE\x10\x02*\x96\x01\n" +
 	"\aOutcome\x12\x17\n" +
 	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOUTCOME_SUCCESS\x10\x01\x12\x13\n" +
 	"\x0fOUTCOME_FAILURE\x10\x02\x12\x13\n" +
 	"\x0fOUTCOME_TIMEOUT\x10\x03\x12\x1c\n" +
-	"\x18OUTCOME_DENIED_BY_POLICY\x10\x042\x8f\x01\n" +
+	"\x18OUTCOME_DENIED_BY_POLICY\x10\x04\x12\x15\n" +
+	"\x11OUTCOME_CANCELLED\x10\x052\x8f\x01\n" +
 	"\n" +
 	"Enrollment\x12A\n" +
 	"\x06Enroll\x12\x1a.gleipnir.v1.EnrollRequest\x1a\x1b.gleipnir.v1.EnrollResponse\x12>\n" +
@@ -1486,7 +1781,7 @@ func file_gleipnir_v1_gleipnir_proto_rawDescGZIP() []byte {
 }
 
 var file_gleipnir_v1_gleipnir_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_gleipnir_v1_gleipnir_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_gleipnir_v1_gleipnir_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_gleipnir_v1_gleipnir_proto_goTypes = []any{
 	(RiskClass)(0),              // 0: gleipnir.v1.RiskClass
 	(Outcome)(0),                // 1: gleipnir.v1.Outcome
@@ -1500,45 +1795,53 @@ var file_gleipnir_v1_gleipnir_proto_goTypes = []any{
 	(*Heartbeat)(nil),           // 9: gleipnir.v1.Heartbeat
 	(*Ping)(nil),                // 10: gleipnir.v1.Ping
 	(*TaskRequest)(nil),         // 11: gleipnir.v1.TaskRequest
-	(*Operation)(nil),           // 12: gleipnir.v1.Operation
-	(*OperationDescriptor)(nil), // 13: gleipnir.v1.OperationDescriptor
-	(*RawExec)(nil),             // 14: gleipnir.v1.RawExec
-	(*TaskResult)(nil),          // 15: gleipnir.v1.TaskResult
-	(*StreamChunk)(nil),         // 16: gleipnir.v1.StreamChunk
-	(*Label)(nil),               // 17: gleipnir.v1.Label
-	(*Facts)(nil),               // 18: gleipnir.v1.Facts
-	(*PolicySnapshot)(nil),      // 19: gleipnir.v1.PolicySnapshot
-	nil,                         // 20: gleipnir.v1.Operation.ArgsEntry
+	(*TaskCancel)(nil),          // 12: gleipnir.v1.TaskCancel
+	(*Operation)(nil),           // 13: gleipnir.v1.Operation
+	(*OperationDescriptor)(nil), // 14: gleipnir.v1.OperationDescriptor
+	(*RawExec)(nil),             // 15: gleipnir.v1.RawExec
+	(*TaskResult)(nil),          // 16: gleipnir.v1.TaskResult
+	(*StreamChunk)(nil),         // 17: gleipnir.v1.StreamChunk
+	(*Label)(nil),               // 18: gleipnir.v1.Label
+	(*Facts)(nil),               // 19: gleipnir.v1.Facts
+	(*PolicySnapshot)(nil),      // 20: gleipnir.v1.PolicySnapshot
+	(*PolicyQuery)(nil),         // 21: gleipnir.v1.PolicyQuery
+	(*PolicyVerdict)(nil),       // 22: gleipnir.v1.PolicyVerdict
+	nil,                         // 23: gleipnir.v1.Operation.ArgsEntry
 }
 var file_gleipnir_v1_gleipnir_proto_depIdxs = []int32{
-	17, // 0: gleipnir.v1.EnrollRequest.self_labels:type_name -> gleipnir.v1.Label
-	18, // 1: gleipnir.v1.EnrollRequest.facts:type_name -> gleipnir.v1.Facts
-	17, // 2: gleipnir.v1.EnrollResponse.assigned_labels:type_name -> gleipnir.v1.Label
+	18, // 0: gleipnir.v1.EnrollRequest.self_labels:type_name -> gleipnir.v1.Label
+	19, // 1: gleipnir.v1.EnrollRequest.facts:type_name -> gleipnir.v1.Facts
+	18, // 2: gleipnir.v1.EnrollResponse.assigned_labels:type_name -> gleipnir.v1.Label
 	8,  // 3: gleipnir.v1.DaemonMessage.hello:type_name -> gleipnir.v1.Hello
 	9,  // 4: gleipnir.v1.DaemonMessage.heartbeat:type_name -> gleipnir.v1.Heartbeat
-	15, // 5: gleipnir.v1.DaemonMessage.task_result:type_name -> gleipnir.v1.TaskResult
-	16, // 6: gleipnir.v1.DaemonMessage.stream_chunk:type_name -> gleipnir.v1.StreamChunk
-	19, // 7: gleipnir.v1.DaemonMessage.policy:type_name -> gleipnir.v1.PolicySnapshot
-	10, // 8: gleipnir.v1.RelayMessage.ping:type_name -> gleipnir.v1.Ping
-	11, // 9: gleipnir.v1.RelayMessage.task:type_name -> gleipnir.v1.TaskRequest
-	18, // 10: gleipnir.v1.Hello.facts:type_name -> gleipnir.v1.Facts
-	17, // 11: gleipnir.v1.Hello.labels:type_name -> gleipnir.v1.Label
-	12, // 12: gleipnir.v1.TaskRequest.operation:type_name -> gleipnir.v1.Operation
-	14, // 13: gleipnir.v1.TaskRequest.raw_exec:type_name -> gleipnir.v1.RawExec
-	20, // 14: gleipnir.v1.Operation.args:type_name -> gleipnir.v1.Operation.ArgsEntry
-	0,  // 15: gleipnir.v1.OperationDescriptor.risk_class:type_name -> gleipnir.v1.RiskClass
-	1,  // 16: gleipnir.v1.TaskResult.outcome:type_name -> gleipnir.v1.Outcome
-	2,  // 17: gleipnir.v1.Enrollment.Enroll:input_type -> gleipnir.v1.EnrollRequest
-	4,  // 18: gleipnir.v1.Enrollment.Renew:input_type -> gleipnir.v1.RenewRequest
-	6,  // 19: gleipnir.v1.Tunnel.Open:input_type -> gleipnir.v1.DaemonMessage
-	3,  // 20: gleipnir.v1.Enrollment.Enroll:output_type -> gleipnir.v1.EnrollResponse
-	5,  // 21: gleipnir.v1.Enrollment.Renew:output_type -> gleipnir.v1.RenewResponse
-	7,  // 22: gleipnir.v1.Tunnel.Open:output_type -> gleipnir.v1.RelayMessage
-	20, // [20:23] is the sub-list for method output_type
-	17, // [17:20] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	16, // 5: gleipnir.v1.DaemonMessage.task_result:type_name -> gleipnir.v1.TaskResult
+	17, // 6: gleipnir.v1.DaemonMessage.stream_chunk:type_name -> gleipnir.v1.StreamChunk
+	20, // 7: gleipnir.v1.DaemonMessage.policy:type_name -> gleipnir.v1.PolicySnapshot
+	22, // 8: gleipnir.v1.DaemonMessage.policy_verdict:type_name -> gleipnir.v1.PolicyVerdict
+	10, // 9: gleipnir.v1.RelayMessage.ping:type_name -> gleipnir.v1.Ping
+	11, // 10: gleipnir.v1.RelayMessage.task:type_name -> gleipnir.v1.TaskRequest
+	12, // 11: gleipnir.v1.RelayMessage.task_cancel:type_name -> gleipnir.v1.TaskCancel
+	21, // 12: gleipnir.v1.RelayMessage.policy_query:type_name -> gleipnir.v1.PolicyQuery
+	19, // 13: gleipnir.v1.Hello.facts:type_name -> gleipnir.v1.Facts
+	18, // 14: gleipnir.v1.Hello.labels:type_name -> gleipnir.v1.Label
+	13, // 15: gleipnir.v1.TaskRequest.operation:type_name -> gleipnir.v1.Operation
+	15, // 16: gleipnir.v1.TaskRequest.raw_exec:type_name -> gleipnir.v1.RawExec
+	23, // 17: gleipnir.v1.Operation.args:type_name -> gleipnir.v1.Operation.ArgsEntry
+	0,  // 18: gleipnir.v1.OperationDescriptor.risk_class:type_name -> gleipnir.v1.RiskClass
+	1,  // 19: gleipnir.v1.TaskResult.outcome:type_name -> gleipnir.v1.Outcome
+	13, // 20: gleipnir.v1.PolicyQuery.operation:type_name -> gleipnir.v1.Operation
+	15, // 21: gleipnir.v1.PolicyQuery.raw_exec:type_name -> gleipnir.v1.RawExec
+	2,  // 22: gleipnir.v1.Enrollment.Enroll:input_type -> gleipnir.v1.EnrollRequest
+	4,  // 23: gleipnir.v1.Enrollment.Renew:input_type -> gleipnir.v1.RenewRequest
+	6,  // 24: gleipnir.v1.Tunnel.Open:input_type -> gleipnir.v1.DaemonMessage
+	3,  // 25: gleipnir.v1.Enrollment.Enroll:output_type -> gleipnir.v1.EnrollResponse
+	5,  // 26: gleipnir.v1.Enrollment.Renew:output_type -> gleipnir.v1.RenewResponse
+	7,  // 27: gleipnir.v1.Tunnel.Open:output_type -> gleipnir.v1.RelayMessage
+	25, // [25:28] is the sub-list for method output_type
+	22, // [22:25] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_gleipnir_v1_gleipnir_proto_init() }
@@ -1552,14 +1855,21 @@ func file_gleipnir_v1_gleipnir_proto_init() {
 		(*DaemonMessage_TaskResult)(nil),
 		(*DaemonMessage_StreamChunk)(nil),
 		(*DaemonMessage_Policy)(nil),
+		(*DaemonMessage_PolicyVerdict)(nil),
 	}
 	file_gleipnir_v1_gleipnir_proto_msgTypes[5].OneofWrappers = []any{
 		(*RelayMessage_Ping)(nil),
 		(*RelayMessage_Task)(nil),
+		(*RelayMessage_TaskCancel)(nil),
+		(*RelayMessage_PolicyQuery)(nil),
 	}
 	file_gleipnir_v1_gleipnir_proto_msgTypes[9].OneofWrappers = []any{
 		(*TaskRequest_Operation)(nil),
 		(*TaskRequest_RawExec)(nil),
+	}
+	file_gleipnir_v1_gleipnir_proto_msgTypes[19].OneofWrappers = []any{
+		(*PolicyQuery_Operation)(nil),
+		(*PolicyQuery_RawExec)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1567,7 +1877,7 @@ func file_gleipnir_v1_gleipnir_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_gleipnir_v1_gleipnir_proto_rawDesc), len(file_gleipnir_v1_gleipnir_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   19,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

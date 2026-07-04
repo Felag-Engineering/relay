@@ -10,7 +10,7 @@
 // ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
 //
 // This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
-// captures the shapes implied by ADRs 0001-0007, not a frozen API.
+// captures the shapes implied by ADRs 0001-0013, not a frozen API.
 
 package gleipnirv1
 
