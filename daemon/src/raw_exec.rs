@@ -10,6 +10,8 @@
 
 use std::time::Duration;
 
+use tokio::sync::oneshot;
+
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{Outcome, RawExec, RiskClass, TaskResult};
 use crate::policy::{Decision, Policy};
@@ -29,18 +31,22 @@ pub const RAW_EXEC_RISK_CLASS: RiskClass = RiskClass::Mutate;
 ///
 /// The Policy gate is evaluated **first**, before constructing any `ExecRequest`
 /// or spawning any process (fail-closed, ADR-0002 invariant #3). If the Policy
-/// denies, returns `OUTCOME_DENIED_BY_POLICY` without touching the executor.
+/// denies, `cancel` is dropped (no process spawned) and `OUTCOME_DENIED_BY_POLICY`
+/// is returned. On allow, `cancel` is threaded into the [`ExecRequest`] so the
+/// executor can kill the process group on an in-flight cancel signal (ADR-0013).
 pub async fn run_raw_exec(
     task_id: String,
     raw: &RawExec,
     timeout: Duration,
     max_output_bytes: usize,
     policy: &Policy,
+    cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult {
     let decision = policy.evaluate_raw_exec(&raw.argv);
 
     match decision {
         Decision::Deny { reason, rule } => {
+            // cancel drops naturally here — denied before any process spawned.
             tracing::warn!(
                 task_id = %task_id,
                 command = %raw.argv.join(" "),
@@ -62,6 +68,7 @@ pub async fn run_raw_exec(
                 argv: raw.argv.clone(),
                 timeout,
                 max_output_bytes,
+                cancel,
             })
             .await
         }
@@ -121,6 +128,7 @@ allow = ["^/bin/echo hello$"]
             Duration::from_secs(5),
             big_cap(),
             &policy,
+            None, // cancel: uncancellable in tests
         )
         .await;
 
@@ -167,6 +175,7 @@ allow = ["^/bin/echo"]
             Duration::from_secs(5),
             big_cap(),
             &policy,
+            None, // cancel: uncancellable in tests
         )
         .await;
 
@@ -211,6 +220,7 @@ deny = ["secret"]
             Duration::from_secs(5),
             big_cap(),
             &policy,
+            None, // cancel: uncancellable in tests
         )
         .await;
 
@@ -244,6 +254,7 @@ allow = ["^/bin/echo"]
             Duration::from_secs(5),
             big_cap(),
             &policy,
+            None, // cancel: uncancellable in tests
         )
         .await;
 
