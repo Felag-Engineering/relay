@@ -129,6 +129,9 @@ async fn run_tunnel(
             daemon_version: env!("CARGO_PKG_VERSION").to_string(),
             facts: Some(facts),
             labels: enroll::node_labels_to_proto(&node_labels),
+            // policy_fingerprint implementation is deferred to the v0.0.4
+            // Policy-fingerprint issue; the field is present on the wire now (ADR-0002).
+            policy_fingerprint: String::new(),
         })),
     })
     .await?;
