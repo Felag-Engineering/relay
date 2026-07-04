@@ -6,10 +6,9 @@ use tonic::transport::Channel;
 use tracing::{error, info};
 
 mod config;
-#[allow(dead_code)]
 mod dedup;
+mod dispatch;
 mod enroll;
-#[allow(dead_code)]
 mod executor;
 mod identity;
 mod operations;
@@ -27,7 +26,7 @@ mod gen {
 
 use gen::{
     daemon_message, relay_message, tunnel_client::TunnelClient, DaemonMessage, Facts, Heartbeat,
-    Hello,
+    Hello, TaskResult,
 };
 
 fn now_millis() -> i64 {
@@ -105,12 +104,17 @@ async fn acquire_identity(
 
 /// Sends the initial Hello, drives the heartbeat loop, and processes inbound
 /// messages from the Relay until the stream closes or errors.
+///
+/// Inbound `RelayMessage.task` messages are dispatched through the pipeline:
+/// dedup → Policy → execute → `DaemonMessage.task_result` (ADR-0001/0002/0004).
 async fn run_tunnel(
     channel: Channel,
     identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
     interval: Duration,
+    policy: &policy::Policy,
+    dedup: &dedup::DedupStore,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
@@ -151,7 +155,8 @@ async fn run_tunnel(
             }
         }
     });
-    drop(tx);
+    // Keep tx alive for the inbound loop (Task results are sent on it).
+    // The heartbeat task has its own tx_hb clone; this tx is for Task results.
 
     let response = client.open(ReceiverStream::new(rx)).await?;
     let mut inbound = response.into_inner();
@@ -168,10 +173,28 @@ async fn run_tunnel(
         None => error!("stream ended before receiving Ping"),
     }
 
-    // Drive the inbound stream; Task dispatch will be handled here in future milestones.
+    // Drive the inbound stream. Task messages are dispatched through the
+    // dedup → Policy → execute pipeline (ADR-0001/0002/0004).
+    // Single-flight: per-Node concurrency is v0.0.4 (blast-radius cap, ADR-0004).
     loop {
         match inbound.message().await {
-            Ok(Some(_)) => {}
+            Ok(Some(msg)) => {
+                if let Some(relay_message::Body::Task(task_req)) = msg.body {
+                    let result: TaskResult = dispatch::dispatch(&task_req, policy, dedup).await;
+                    if tx
+                        .send(DaemonMessage {
+                            body: Some(daemon_message::Body::TaskResult(result)),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        error!("outbound channel closed while sending TaskResult");
+                        break;
+                    }
+                }
+                // Other inbound message types (e.g. future relay extensions) are
+                // silently ignored — forward-compatibility.
+            }
             Ok(None) => {
                 info!("Relay closed stream, shutting down");
                 break;
@@ -233,6 +256,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         identity.clone(),
     ));
 
+    // Open the dedup store before connecting (fail closed: must be writable).
+    let dedup = dedup::DedupStore::open(&config.state_dir)?;
+
+    // Load Policy from the configured path (fail closed on any error).
+    // If the file is absent or unreadable, fall back to a deny-all Policy
+    // with a warning rather than refusing to start. A daemon with no policy
+    // file denies every Task, which is the most restrictive safe default.
+    let policy = match policy::load_policy(&config.policy_path) {
+        Ok(p) => {
+            info!(path = %config.policy_path.display(), "policy loaded");
+            p
+        }
+        Err(e) => {
+            tracing::warn!(
+                path = %config.policy_path.display(),
+                error = %e,
+                "policy load failed; using deny-all policy (fail closed)"
+            );
+            // from_toml_str("") produces a valid deny-all Policy: no allow
+            // rules → every evaluate call returns Deny{rule: None}.
+            policy::from_toml_str("").expect("empty TOML must produce deny-all Policy")
+        }
+    };
+
     let interval = heartbeat_interval();
     run_tunnel(
         channel,
@@ -240,6 +287,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.facts.clone(),
         config.node_labels.clone(),
         interval,
+        &policy,
+        &dedup,
     )
     .await?;
 

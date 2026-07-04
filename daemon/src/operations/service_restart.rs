@@ -10,8 +10,6 @@
 //! accepts an injectable `run` closure so the end-to-end async path is also testable
 //! without touching real services.
 
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use crate::executor::ExecRequest;

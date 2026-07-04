@@ -42,6 +42,9 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
+	// tunnel is the registered tunnelServer. Exposed so integration tests can
+	// inject a taskSink (tests only — never set in production).
+	tunnel *tunnelServer
 }
 
 // envOr returns the value of environment variable key if it is non-empty, or
@@ -181,12 +184,16 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
 		enroll.WithRateLimiter(limiter))
 
+	ts := &tunnelServer{conns: conns, reg: reg}
+	// ts.sink is intentionally left nil — the production Relay never sets it.
+	// Only integration tests inject a taskSink after calling newServer.
+
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
 	)
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns, reg: reg})
+	gleipnirv1.RegisterTunnelServer(srv, ts)
 	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
 
 	deps := &appDeps{
@@ -197,6 +204,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		conns:      conns,
 		revocation: revocationSvc,
 		limiter:    limiter,
+		tunnel:     ts,
 	}
 	return srv, deps, nil
 }

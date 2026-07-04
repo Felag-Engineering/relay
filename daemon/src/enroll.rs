@@ -374,6 +374,7 @@ mod tests {
             endpoint: "https://relay:7654".to_string(),
             relay_domain: None,
             state_dir: PathBuf::from("/var/lib/relay-daemon"),
+            policy_path: PathBuf::from("/etc/relay-daemon/policy.toml"),
             node_labels: vec![],
             facts: Facts {
                 hostname: "test-node".to_string(),

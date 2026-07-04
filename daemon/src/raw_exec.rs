@@ -8,12 +8,6 @@
 //! This module is a pure handler. Task-dispatch / tunnel wiring is deferred to
 //! issue #82.
 
-// Not-yet-wired public API; Task-dispatch wiring lands in issue #82.
-// Suppresses dead_code for the whole module at the source so that
-// `cargo clippy -- -D warnings` stays green without requiring a blanket #[allow]
-// on the `mod raw_exec` declaration in main.rs.
-#![allow(dead_code)]
-
 use std::time::Duration;
 
 use crate::executor::{execute, ExecRequest};
@@ -24,6 +18,11 @@ use crate::policy::{Decision, Policy};
 ///
 /// Arbitrary commands are unclassifiable, so Raw Exec always takes the strict
 /// mutate lane by definition — never conditional on the command content.
+///
+/// Only referenced in tests (blast-radius classification); dispatch routes via
+/// Policy, not this constant. Suppressed individually rather than blanket so
+/// that future production uses lift the suppress as needed.
+#[allow(dead_code)]
 pub const RAW_EXEC_RISK_CLASS: RiskClass = RiskClass::Mutate;
 
 /// Evaluate and execute a Raw Exec task.

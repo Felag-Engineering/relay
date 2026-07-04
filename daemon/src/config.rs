@@ -19,6 +19,12 @@ pub struct Config {
     pub relay_domain: Option<String>,
     /// `RELAY_STATE_DIR` — where identity files are persisted.
     pub state_dir: PathBuf,
+    /// `RELAY_POLICY_PATH` — path to the Node's Policy TOML file.
+    ///
+    /// Defaults to `/etc/relay-daemon/policy.toml` when the env var is absent.
+    /// The daemon loads the Policy at startup via `policy::load_policy`. Absent or
+    /// unreadable file → warn and fall back to deny-all (fail-closed for dispatch).
+    pub policy_path: PathBuf,
     /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs; `node:` prefix is
     /// added at send time by `enroll::node_labels_to_proto` (ADR-0006 §7).
     pub node_labels: Vec<(String, String)>,
@@ -51,11 +57,16 @@ impl Config {
             ip_addresses: vec![],
         };
 
+        let policy_path = std::env::var("RELAY_POLICY_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/etc/relay-daemon/policy.toml"));
+
         Config {
             relay_addr,
             endpoint,
             relay_domain,
             state_dir,
+            policy_path,
             node_labels,
             facts,
         }
@@ -130,6 +141,7 @@ mod tests {
         std::env::remove_var("HOSTNAME");
         std::env::remove_var("RELAY_STATE_DIR");
         std::env::remove_var("RELAY_NODE_LABELS");
+        std::env::remove_var("RELAY_POLICY_PATH");
 
         let cfg = Config::from_env();
         assert_eq!(cfg.relay_addr, "http://127.0.0.1:7654");
@@ -137,7 +149,22 @@ mod tests {
         assert_eq!(cfg.relay_domain, None);
         assert_eq!(cfg.facts.hostname, "unknown-node");
         assert_eq!(cfg.state_dir, PathBuf::from("/var/lib/relay-daemon"));
+        assert_eq!(
+            cfg.policy_path,
+            PathBuf::from("/etc/relay-daemon/policy.toml")
+        );
         assert!(cfg.node_labels.is_empty());
+    }
+
+    #[test]
+    fn config_policy_path_override() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("RELAY_POLICY_PATH", "/custom/policy.toml");
+
+        let cfg = Config::from_env();
+        assert_eq!(cfg.policy_path, PathBuf::from("/custom/policy.toml"));
+
+        std::env::remove_var("RELAY_POLICY_PATH");
     }
 
     // --- Config::from_env overrides -----------------------------------------

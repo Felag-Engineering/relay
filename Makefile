@@ -12,7 +12,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 
 build: build-relay build-daemon
 
-test: test-relay test-daemon test-integration
+test: test-relay test-daemon
 
 lint: lint-relay lint-daemon
 
@@ -73,12 +73,15 @@ build-daemon-release:
 test-daemon:
 	cd daemon && cargo test
 
-## --- End-to-end smoke test ---
-# Boots both binaries and asserts the mTLS Relay refuses the certless daemon
-# (ADR-0005/0006). A positive enroll→mTLS→Hello/Ping lifecycle test is tracked
-# separately (see the e2e lifecycle issue). Depends on build so binaries exist.
+## --- End-to-end integration tests ---
+# test-integration is NOT part of the make test gate (hermetic suites only).
+# Run explicitly: make test-integration
+# Runs the mTLS smoke test (certless rejection) then the real-wire Go integration
+# tests (//go:build integration) with the actual relay-daemon binary.
+# Depends on build so both binaries exist before running.
 test-integration: build
 	bash scripts/smoke-test.sh
+	cd relay && RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon go test -tags integration ./cmd/relay/...
 
 lint-daemon:
 	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
