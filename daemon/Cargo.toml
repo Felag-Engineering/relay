@@ -21,6 +21,10 @@ tokio-stream = "0.1"
 # main.rs / tunnel.rs. Deliberate exclusion of aws-lc-rs: crypto-path consistency
 # and small static musl fleet binary (ADR-0007).
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# SHA-256 for Policy fingerprinting (ADR-0002 drift visibility). Already
+# transitive via rustls + rcgen ring features (Cargo.lock), so promoting here
+# adds zero new crates to the musl build.
+ring = "0.17"
 # CSR / keypair generation for enrollment bootstrap (ADR-0006).
 # `ring` backend keeps crypto internally consistent with the rustls ring path above.
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }

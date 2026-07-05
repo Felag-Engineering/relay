@@ -57,7 +57,8 @@ func NewInMemory(opts ...Option) *InMemory {
 // On insert: stores all report fields; EnrollingTokenID is set from the report
 // and RelayLabels is initialized to an empty map.
 //
-// On update: overwrites CertFingerprint, Facts, NodeLabels, and LastSeen.
+// On update: overwrites CertFingerprint, Facts, NodeLabels, PolicyFingerprint,
+// and LastSeen.
 // RelayLabels is never touched (the node side cannot reach it). EnrollingTokenID
 // is preserved from the first enrollment — a reconnecting Hello cannot rewrite
 // provenance.
@@ -83,13 +84,14 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 			nl = map[string]string{}
 		}
 		n := &Node{
-			NodeID:           rep.NodeID,
-			CertFingerprint:  rep.CertFingerprint,
-			Facts:            cloneFacts(rep.Facts),
-			NodeLabels:       nl,
-			RelayLabels:      map[string]string{},
-			LastSeen:         r.now(),
-			EnrollingTokenID: rep.EnrollingTokenID,
+			NodeID:            rep.NodeID,
+			CertFingerprint:   rep.CertFingerprint,
+			Facts:             cloneFacts(rep.Facts),
+			NodeLabels:        nl,
+			RelayLabels:       map[string]string{},
+			LastSeen:          r.now(),
+			EnrollingTokenID:  rep.EnrollingTokenID,
+			PolicyFingerprint: rep.PolicyFingerprint,
 		}
 		r.nodes[rep.NodeID] = n
 		return copyNode(n), nil
@@ -104,6 +106,7 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	existing.Facts = cloneFacts(rep.Facts)
 	existing.NodeLabels = nl
 	existing.LastSeen = r.now()
+	existing.PolicyFingerprint = rep.PolicyFingerprint
 	// existing.RelayLabels: unchanged — node report cannot overwrite relay space.
 	// existing.EnrollingTokenID: unchanged — provenance is set once at first enrollment.
 	return copyNode(existing), nil
@@ -182,13 +185,14 @@ func copyNode(n *Node) Node {
 		rl = map[string]string{}
 	}
 	return Node{
-		NodeID:           n.NodeID,
-		CertFingerprint:  n.CertFingerprint,
-		Facts:            cloneFacts(n.Facts),
-		NodeLabels:       nl,
-		RelayLabels:      rl,
-		LastSeen:         n.LastSeen,
-		EnrollingTokenID: n.EnrollingTokenID,
+		NodeID:            n.NodeID,
+		CertFingerprint:   n.CertFingerprint,
+		Facts:             cloneFacts(n.Facts),
+		NodeLabels:        nl,
+		RelayLabels:       rl,
+		LastSeen:          n.LastSeen,
+		EnrollingTokenID:  n.EnrollingTokenID,
+		PolicyFingerprint: n.PolicyFingerprint,
 	}
 }
 

@@ -100,10 +100,11 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 	if s.reg != nil {
 		fp, _ := transport.PeerCertFingerprint(stream.Context())
 		if _, err := s.reg.Upsert(registry.Report{
-			NodeID:          nodeID,
-			CertFingerprint: fp,
-			Facts:           protoconv.FactsFromProto(hello.Facts),
-			NodeLabels:      nodeLabelsFromHello(hello.GetLabels()),
+			NodeID:            nodeID,
+			CertFingerprint:   fp,
+			Facts:             protoconv.FactsFromProto(hello.Facts),
+			NodeLabels:        nodeLabelsFromHello(hello.GetLabels()),
+			PolicyFingerprint: hello.GetPolicyFingerprint(),
 		}); err != nil {
 			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
 		}

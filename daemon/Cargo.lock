@@ -377,6 +377,7 @@ dependencies = [
  "protoc-bin-vendored",
  "rcgen",
  "regex",
+ "ring",
  "rustix",
  "rustls",
  "rustls-pemfile",

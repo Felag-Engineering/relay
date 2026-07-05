@@ -16,18 +16,20 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	reg := NewInMemory(fixedClock(ts))
 
 	rep1 := Report{
-		NodeID:           "node-a",
-		CertFingerprint:  "fp-a",
-		Facts:            Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
-		NodeLabels:       map[string]string{"role": "web"},
-		EnrollingTokenID: "tok-1",
+		NodeID:            "node-a",
+		CertFingerprint:   "fp-a",
+		Facts:             Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
+		NodeLabels:        map[string]string{"role": "web"},
+		EnrollingTokenID:  "tok-1",
+		PolicyFingerprint: "abc123",
 	}
 	rep2 := Report{
-		NodeID:           "node-b",
-		CertFingerprint:  "fp-b",
-		Facts:            Facts{Hostname: "host-b", OS: "linux"},
-		NodeLabels:       map[string]string{"role": "db"},
-		EnrollingTokenID: "tok-2",
+		NodeID:            "node-b",
+		CertFingerprint:   "fp-b",
+		Facts:             Facts{Hostname: "host-b", OS: "linux"},
+		NodeLabels:        map[string]string{"role": "db"},
+		EnrollingTokenID:  "tok-2",
+		PolicyFingerprint: "def456",
 	}
 
 	n1, err := reg.Upsert(rep1)
@@ -49,6 +51,9 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	if !n1.LastSeen.Equal(ts) {
 		t.Errorf("LastSeen: got %v, want %v", n1.LastSeen, ts)
 	}
+	if n1.PolicyFingerprint != "abc123" {
+		t.Errorf("PolicyFingerprint: got %q, want %q", n1.PolicyFingerprint, "abc123")
+	}
 
 	if _, err := reg.Upsert(rep2); err != nil {
 		t.Fatalf("upsert node-b: %v", err)
@@ -61,6 +66,9 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	if got.NodeID != "node-a" {
 		t.Errorf("Get NodeID: got %q, want %q", got.NodeID, "node-a")
 	}
+	if got.PolicyFingerprint != "abc123" {
+		t.Errorf("Get PolicyFingerprint: got %q, want abc123", got.PolicyFingerprint)
+	}
 
 	list := reg.List()
 	if len(list) != 2 {
@@ -70,6 +78,12 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 	if list[0].NodeID != "node-a" || list[1].NodeID != "node-b" {
 		t.Errorf("List order: got [%q, %q], want [node-a, node-b]",
 			list[0].NodeID, list[1].NodeID)
+	}
+	if list[0].PolicyFingerprint != "abc123" {
+		t.Errorf("List[0] PolicyFingerprint: got %q, want abc123", list[0].PolicyFingerprint)
+	}
+	if list[1].PolicyFingerprint != "def456" {
+		t.Errorf("List[1] PolicyFingerprint: got %q, want def456", list[1].PolicyFingerprint)
 	}
 }
 
@@ -306,4 +320,57 @@ func TestUpsert_NilNodeLabels(t *testing.T) {
 	// Write to returned maps must not panic.
 	n.NodeLabels["x"] = "y"
 	n.RelayLabels["x"] = "y"
+}
+
+// TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance verifies that:
+//   - PolicyFingerprint is stored on INSERT and returned by Get/List.
+//   - A second Upsert (reconnect) with a new fingerprint overwrites the stored value.
+//   - RelayLabels and EnrollingTokenID are not disturbed by the fingerprint overwrite.
+func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T) {
+	reg := NewInMemory()
+
+	// INSERT: first connect with fingerprint v1.
+	_, err := reg.Upsert(Report{
+		NodeID:            "node-fp",
+		EnrollingTokenID:  "tok-fp",
+		PolicyFingerprint: "fingerprint-v1",
+	})
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	// Relay sets a label so we can verify it survives the update.
+	if err := reg.SetRelayLabels("node-fp", map[string]string{"quarantine": "true"}); err != nil {
+		t.Fatalf("SetRelayLabels: %v", err)
+	}
+
+	n, _ := reg.Get("node-fp")
+	if n.PolicyFingerprint != "fingerprint-v1" {
+		t.Errorf("after insert: PolicyFingerprint = %q, want fingerprint-v1", n.PolicyFingerprint)
+	}
+
+	// UPDATE: node reconnects (daemon reload) with a new Policy file → new fingerprint.
+	_, err = reg.Upsert(Report{
+		NodeID:            "node-fp",
+		EnrollingTokenID:  "tok-ignored", // must not overwrite provenance
+		PolicyFingerprint: "fingerprint-v2",
+	})
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+
+	n, _ = reg.Get("node-fp")
+
+	// PolicyFingerprint must be overwritten with the new value.
+	if n.PolicyFingerprint != "fingerprint-v2" {
+		t.Errorf("after update: PolicyFingerprint = %q, want fingerprint-v2", n.PolicyFingerprint)
+	}
+	// EnrollingTokenID provenance must be preserved from the first insert.
+	if n.EnrollingTokenID != "tok-fp" {
+		t.Errorf("after update: EnrollingTokenID = %q, want tok-fp (provenance must be immutable)", n.EnrollingTokenID)
+	}
+	// RelayLabels must survive the reconnect Upsert unchanged.
+	if n.RelayLabels["quarantine"] != "true" {
+		t.Errorf("after update: RelayLabels[quarantine] = %q, want true (relay labels must survive reconnect)", n.RelayLabels["quarantine"])
+	}
 }
