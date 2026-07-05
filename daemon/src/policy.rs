@@ -141,6 +141,15 @@ pub enum Decision {
     Deny { reason: String, rule: Option<Rule> },
 }
 
+/// An `[[operation]]` allow rule that can never fire because a `[[deny]]` rule
+/// always beats it (`policy check`, #93). See [`Policy::shadowed_allow_rules`]
+/// for the detection method and its soundness boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShadowedAllow {
+    pub operation: String,
+    pub allowed_args: Vec<Vec<String>>,
+}
+
 // ---------------------------------------------------------------------------
 // Error type
 // ---------------------------------------------------------------------------
@@ -314,6 +323,20 @@ impl Policy {
         &self.fingerprint
     }
 
+    /// Names of every `[[operation]]` allow rule, in file order (duplicates
+    /// preserved — one entry per rule block). Used by `policy check` (#93) to
+    /// lint rule names against the Operation vocabulary without exposing the
+    /// private `OperationRuleRaw` fields.
+    pub fn allow_rule_names(&self) -> Vec<&str> {
+        self.operations.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// Names of every `[[deny]]` rule, in file order (duplicates preserved).
+    /// See [`Policy::allow_rule_names`].
+    pub fn deny_rule_names(&self) -> Vec<&str> {
+        self.denies.iter().map(|r| r.name.as_str()).collect()
+    }
+
     /// Evaluate whether `operation_name` may run with the given `args`.
     ///
     /// Semantics (ADR-0002):
@@ -448,6 +471,107 @@ impl Policy {
             rule: None,
         }
     }
+
+    /// Find `[[operation]]` allow rules that can never fire because a
+    /// `[[deny]]` rule always beats them (`policy check`, #93).
+    ///
+    /// **Sound, not complete.** This detector reuses `self.evaluate` — it
+    /// never reimplements deny-beats-allow — and only reports a rule as
+    /// shadowed when it can *prove* every invocation the allow rule covers is
+    /// denied. Two proof strategies:
+    ///
+    /// 1. **Empty-args deny**: a `[[deny]]` rule for the same operation name
+    ///    with an empty `args` list blocks every invocation outright (mirrors
+    ///    the `deny_rule.args.is_empty()` short-circuit in [`Policy::evaluate`]).
+    /// 2. **Finite enumeration**: if the allow rule's `allowed_args` contains
+    ///    no `"*"` wildcard at any position, the set of concrete invocations it
+    ///    covers is finite. Enumerate the cartesian product of the allowed
+    ///    value-sets (bounded by `ENUMERATION_CAP`) and call `self.evaluate`
+    ///    on each. If every one is denied, the rule is shadowed.
+    ///
+    /// A wildcard allow with no matching empty-args deny is **not** flagged —
+    /// there is no finite proof that a deny rule blocks every value the
+    /// wildcard could match, and this detector must never report a false
+    /// positive (under-reporting a shadowed rule is safe; it is only a
+    /// warning). Likewise, a finite allow whose product exceeds
+    /// `ENUMERATION_CAP` is skipped rather than flagged or hung.
+    pub fn shadowed_allow_rules(&self) -> Vec<ShadowedAllow> {
+        /// Upper bound on the number of concrete invocations enumerated per
+        /// allow rule. An allow rule whose cartesian product exceeds this is
+        /// not provably shadowed (skipped, never flagged) rather than risking
+        /// a combinatorial blow-up.
+        const ENUMERATION_CAP: usize = 10_000;
+
+        let mut shadowed = Vec::new();
+
+        for op_rule in &self.operations {
+            let shadowed_by_empty_deny = self
+                .denies
+                .iter()
+                .any(|deny_rule| deny_rule.name == op_rule.name && deny_rule.args.is_empty());
+            if shadowed_by_empty_deny {
+                shadowed.push(ShadowedAllow {
+                    operation: op_rule.name.clone(),
+                    allowed_args: op_rule.allowed_args.clone(),
+                });
+                continue;
+            }
+
+            // Finite-enumeration proof only applies to a wildcard-free allow
+            // rule; a wildcard position has no finite set of covered values.
+            let has_wildcard = op_rule
+                .allowed_args
+                .iter()
+                .any(|values| values.iter().any(|v| v == "*"));
+            if has_wildcard {
+                continue;
+            }
+
+            let product_size = op_rule
+                .allowed_args
+                .iter()
+                .try_fold(1usize, |acc, values| acc.checked_mul(values.len()));
+            let Some(product_size) = product_size else {
+                continue; // overflow — treat as over-cap, not provably shadowed
+            };
+            if product_size == 0 || product_size > ENUMERATION_CAP {
+                // A zero-size product means some position has no allowed
+                // values (the rule can never itself match); an over-cap
+                // product is not enumerated. Neither is flagged.
+                continue;
+            }
+
+            let all_denied = cartesian_product(&op_rule.allowed_args)
+                .into_iter()
+                .all(|args| matches!(self.evaluate(&op_rule.name, &args), Decision::Deny { .. }));
+            if all_denied {
+                shadowed.push(ShadowedAllow {
+                    operation: op_rule.name.clone(),
+                    allowed_args: op_rule.allowed_args.clone(),
+                });
+            }
+        }
+
+        shadowed
+    }
+}
+
+/// Cartesian product of a list of value-sets, e.g. `[["a","b"], ["x"]]` →
+/// `[["a","x"], ["b","x"]]`. Caller bounds the product size before calling
+/// this — see `ENUMERATION_CAP` in [`Policy::shadowed_allow_rules`].
+fn cartesian_product(sets: &[Vec<String>]) -> Vec<Vec<String>> {
+    sets.iter().fold(vec![Vec::new()], |partials, values| {
+        partials
+            .into_iter()
+            .flat_map(|prefix| {
+                values.iter().map(move |value| {
+                    let mut next = prefix.clone();
+                    next.push(value.clone());
+                    next
+                })
+            })
+            .collect()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -846,6 +970,164 @@ deny = []
             file_policy.fingerprint(),
             str_policy.fingerprint(),
             "load_policy and from_toml_str must produce the same fingerprint for the same bytes"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Lint accessor tests (#93)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn allow_and_deny_rule_names_from_fixture() {
+        let policy = fixture_policy();
+        // Fixture is documented at the top of this module's test list; assert
+        // against its known contents rather than re-deriving them.
+        assert!(policy.allow_rule_names().contains(&"service.restart"));
+        assert!(policy.allow_rule_names().contains(&"file.read"));
+        assert!(policy.deny_rule_names().contains(&"file.read"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Shadowed-allow detector tests (#93)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shadowed_allow_empty_args_deny() {
+        // An empty-args deny for "service.restart" blocks every invocation,
+        // regardless of what the allow rule permits.
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[deny]]
+name = "service.restart"
+args = []
+"#,
+        )
+        .expect("policy must parse");
+
+        let shadowed = policy.shadowed_allow_rules();
+        assert_eq!(shadowed.len(), 1);
+        assert_eq!(shadowed[0].operation, "service.restart");
+    }
+
+    #[test]
+    fn shadowed_allow_finite_enumeration() {
+        // Wildcard-free allow listing exactly two values; a deny rule that
+        // explicitly lists both values at the same position denies every
+        // concrete invocation the allow rule covers. Deny-rule positions do
+        // NOT support the "*" wildcard (only allow positions do; see
+        // Policy::evaluate's deny pass), so this must enumerate both values.
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+[[deny]]
+name = "service.restart"
+args = [["nginx", "php-fpm"]]
+"#,
+        )
+        .expect("policy must parse");
+
+        let shadowed = policy.shadowed_allow_rules();
+        assert_eq!(
+            shadowed.len(),
+            1,
+            "every enumerated value is denied; must be flagged as shadowed"
+        );
+        assert_eq!(shadowed[0].operation, "service.restart");
+    }
+
+    #[test]
+    fn wildcard_allow_with_specific_deny_not_flagged() {
+        // A wildcard allow has no finite set of covered values; a deny that
+        // only blocks one specific value does not provably shadow the whole
+        // rule. Must NOT be flagged (no false positives).
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+"#,
+        )
+        .expect("policy must parse");
+
+        let shadowed = policy.shadowed_allow_rules();
+        assert!(
+            shadowed.is_empty(),
+            "wildcard allow with a narrower deny must not be flagged; got {shadowed:?}"
+        );
+    }
+
+    #[test]
+    fn unshadowed_finite_allow_not_flagged() {
+        // Wildcard-free allow where the deny only covers one of the two
+        // allowed values — not every invocation is denied, so this must NOT
+        // be flagged.
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+[[deny]]
+name = "service.restart"
+args = [["php-fpm"]]
+"#,
+        )
+        .expect("policy must parse");
+
+        let shadowed = policy.shadowed_allow_rules();
+        assert!(
+            shadowed.is_empty(),
+            "partially-denied allow must not be flagged as fully shadowed; got {shadowed:?}"
+        );
+    }
+
+    #[test]
+    fn allow_with_no_deny_not_flagged() {
+        let policy = fixture_policy();
+        // service.restart nginx has no covering deny in the fixture.
+        let shadowed = policy.shadowed_allow_rules();
+        assert!(
+            shadowed.iter().all(|s| s.operation != "service.restart"),
+            "service.restart allow with no covering deny must not be flagged; got {shadowed:?}"
+        );
+    }
+
+    #[test]
+    fn over_cap_allow_not_flagged() {
+        // A wildcard-free allow rule whose cartesian product exceeds the
+        // documented enumeration cap must be skipped, not flagged, even
+        // though an empty-args-equivalent deny covers it entirely — the
+        // detector must never hang or silently truncate the enumeration.
+        let many_values: Vec<String> = (0..200).map(|i| format!("v{i}")).collect();
+        let quoted = many_values
+            .iter()
+            .map(|v| format!("{v:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let policy_toml = format!(
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [[{quoted}], [{quoted}]]
+"#
+        );
+        let policy = from_toml_str(&policy_toml).expect("policy must parse");
+        // 200 * 200 = 40,000 > ENUMERATION_CAP (10,000).
+        let shadowed = policy.shadowed_allow_rules();
+        assert!(
+            shadowed.is_empty(),
+            "over-cap allow rule must not be flagged; got {shadowed:?}"
         );
     }
 }

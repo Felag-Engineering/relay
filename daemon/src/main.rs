@@ -15,6 +15,7 @@ mod executor;
 mod identity;
 mod operations;
 mod policy;
+mod policy_check;
 mod raw_exec;
 mod renew;
 mod tunnel;
@@ -292,6 +293,14 @@ async fn run_tunnel(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Offline `policy check` subcommand (#93): dispatched before any daemon
+    // startup (tracing, rustls, mTLS dial) so it runs synchronously with
+    // clean stdout/stderr and never touches the network.
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(code) = policy_check::try_run(&argv) {
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
