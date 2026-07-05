@@ -256,6 +256,21 @@ async fn run_tunnel(
                         // Emits nothing: the spawned Task itself sends the one TaskResult.
                         registry.cancel(&tc.task_id);
                     }
+                    Some(relay_message::Body::PolicyQuery(query)) => {
+                        // Read-only Policy evaluation (ADR-0011): no dedup, no executor.
+                        // `policy` is an Arc<Policy> here; &policy deref-coerces to &Policy.
+                        let verdict = dispatch::evaluate_policy_query(&query, &policy);
+                        if tx
+                            .send(DaemonMessage {
+                                body: Some(daemon_message::Body::PolicyVerdict(verdict)),
+                            })
+                            .await
+                            .is_err()
+                        {
+                            error!("outbound channel closed while sending PolicyVerdict");
+                            break;
+                        }
+                    }
                     Some(_) | None => {
                         // Forward-compatibility: ignore unknown message types.
                     }
