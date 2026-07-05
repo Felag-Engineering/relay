@@ -12,6 +12,8 @@
 
 use std::time::Duration;
 
+use tokio::sync::oneshot;
+
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
 
@@ -56,15 +58,17 @@ pub fn restart_argv(unit: &str) -> Result<Vec<String>, super::OperationError> {
 ///
 /// `run` is an injected closure so the async path is testable without touching
 /// real services: tests pass a fake closure that records the argv and returns a
-/// canned [`TaskResult`]; production callers (#82) pass `executor::execute`.
+/// canned [`TaskResult`]; production callers pass `executor::execute`.
 ///
-/// Short-circuits to `OUTCOME_FAILURE` (exit_code -1, error in stderr) if the
-/// unit name is invalid — `run` is **never called** in that case.
+/// `cancel` is threaded into the [`ExecRequest`] so the executor can kill the
+/// process group on an in-flight cancel signal (ADR-0013). If the unit name is
+/// invalid, `cancel` is dropped (no process spawned) and `run` is **never called**.
 pub async fn service_restart<F, Fut>(
     task_id: String,
     unit: &str,
     timeout: Duration,
     max_output_bytes: usize,
+    cancel: Option<oneshot::Receiver<()>>,
     run: F,
 ) -> TaskResult
 where
@@ -74,6 +78,7 @@ where
     let argv = match restart_argv(unit) {
         Ok(v) => v,
         Err(e) => {
+            // cancel drops naturally here — invalid unit name, no process spawned.
             return TaskResult {
                 task_id,
                 outcome: Outcome::Failure as i32,
@@ -90,6 +95,7 @@ where
         argv,
         timeout,
         max_output_bytes,
+        cancel,
     };
     run(req).await
 }
@@ -177,6 +183,7 @@ mod tests {
             "nginx",
             Duration::from_secs(5),
             1024,
+            None, // cancel: uncancellable in tests
             move |req| {
                 *rec.lock().unwrap() = req.argv.clone();
                 let task_id = req.task_id.clone();
@@ -221,6 +228,7 @@ mod tests {
             "bad;name",
             Duration::from_secs(5),
             1024,
+            None, // cancel: uncancellable in tests
             move |req| {
                 called.store(true, Ordering::SeqCst);
                 let task_id = req.task_id.clone();

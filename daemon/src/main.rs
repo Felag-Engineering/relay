@@ -1,10 +1,12 @@
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
+mod cancel;
 mod config;
 mod dedup;
 mod dispatch;
@@ -17,6 +19,7 @@ mod raw_exec;
 mod renew;
 mod tunnel;
 
+use cancel::CancelRegistry;
 use config::Config;
 
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -26,7 +29,7 @@ mod gen {
 
 use gen::{
     daemon_message, relay_message, tunnel_client::TunnelClient, DaemonMessage, Facts, Heartbeat,
-    Hello, TaskResult,
+    Hello,
 };
 
 fn now_millis() -> i64 {
@@ -105,16 +108,32 @@ async fn acquire_identity(
 /// Sends the initial Hello, drives the heartbeat loop, and processes inbound
 /// messages from the Relay until the stream closes or errors.
 ///
-/// Inbound `RelayMessage.task` messages are dispatched through the pipeline:
-/// dedup → Policy → execute → `DaemonMessage.task_result` (ADR-0001/0002/0004).
+/// Inbound `RelayMessage` handling:
+/// - `Task`: registered in the cancel registry BEFORE spawning, then dispatched
+///   through the dedup → Policy → execute pipeline in a detached task so the loop
+///   keeps reading and can receive `TaskCancel` messages (ADR-0001/0002/0004/0013).
+///   Exactly one `TaskResult` is emitted — either the real outcome or Cancelled.
+///   Each spawned task acquires the `execution_gate` permit before calling dispatch,
+///   serializing execution to one Task at a time (temporary backstop preserving the
+///   pre-cancel inline-await behavior; issue #91 replaces this with the per-risk-class
+///   scheduler: mutate serial, read bounded-parallel).
+/// - `TaskCancel`: delivers the cancel signal to the in-flight Task's executor via
+///   the cancel registry (ADR-0013). If the task_id is unknown or already finished,
+///   this is a safe no-op. The inbound loop NEVER waits on `execution_gate`, so
+///   TaskCancel delivery is never blocked by a running Task.
+/// - Other message types: silently ignored for forward-compatibility.
+///
+/// Policy and DedupStore are passed as `Arc` so spawned per-Task tasks are `'static`.
+#[allow(clippy::too_many_arguments)]
 async fn run_tunnel(
     channel: Channel,
     identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
     interval: Duration,
-    policy: &policy::Policy,
-    dedup: &dedup::DedupStore,
+    policy: Arc<policy::Policy>,
+    dedup: Arc<dedup::DedupStore>,
+    execution_gate: Arc<Semaphore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
@@ -176,27 +195,73 @@ async fn run_tunnel(
         None => error!("stream ended before receiving Ping"),
     }
 
-    // Drive the inbound stream. Task messages are dispatched through the
-    // dedup → Policy → execute pipeline (ADR-0001/0002/0004).
-    // Single-flight: per-Node concurrency is v0.0.4 (blast-radius cap, ADR-0004).
+    // Cancel registry: maps in-flight task_ids to their cancel senders.
+    // Registration happens BEFORE spawn so no TaskCancel can arrive in a window
+    // where the task is in flight but not yet registered.
+    let registry = CancelRegistry::new();
+
+    // Drive the inbound stream. Spawning a detached task per Task keeps the loop
+    // readable so TaskCancel messages can arrive while a Task is in flight.
+    // Single-flight contract (#82) bounds concurrency at one Task per Node until
+    // the scheduler issue (#91) arrives — the loop has no queue.
     loop {
         match inbound.message().await {
             Ok(Some(msg)) => {
-                if let Some(relay_message::Body::Task(task_req)) = msg.body {
-                    let result: TaskResult = dispatch::dispatch(&task_req, policy, dedup).await;
-                    if tx
-                        .send(DaemonMessage {
-                            body: Some(daemon_message::Body::TaskResult(result)),
-                        })
-                        .await
-                        .is_err()
-                    {
-                        error!("outbound channel closed while sending TaskResult");
-                        break;
+                match msg.body {
+                    Some(relay_message::Body::Task(task_req)) => {
+                        let task_id = task_req.task_id.clone();
+                        // Register BEFORE spawn: eliminates the window where
+                        // a TaskCancel could arrive before the registry entry exists.
+                        let cancel_rx = registry.register(&task_id);
+                        let policy = Arc::clone(&policy);
+                        let dedup = Arc::clone(&dedup);
+                        let registry = registry.clone();
+                        let tx = tx.clone();
+                        let gate = Arc::clone(&execution_gate);
+                        tokio::spawn(async move {
+                            // Acquire the execution gate before dispatching.
+                            // This re-serializes Task execution to one-at-a-time,
+                            // preserving the pre-cycle-1 inline-await behavior while
+                            // keeping the inbound loop free to read TaskCancel messages
+                            // (the loop never touches the semaphore, so cancel delivery
+                            // is never blocked by a running Task).
+                            //
+                            // Temporary backstop: issue #91 will replace this with a
+                            // per-risk-class scheduler (mutate serial, read
+                            // bounded-parallel). The semaphore is never closed, so
+                            // expect() is safe here.
+                            let _permit = gate
+                                .acquire()
+                                .await
+                                .expect("execution_gate semaphore must not be closed");
+                            let result =
+                                dispatch::dispatch(&task_req, &policy, &dedup, Some(cancel_rx))
+                                    .await;
+                            // Deregister before sending the result so a subsequent
+                            // TaskCancel for this id is a clean no-op.
+                            registry.deregister(&task_id);
+                            if tx
+                                .send(DaemonMessage {
+                                    body: Some(daemon_message::Body::TaskResult(result)),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                error!("outbound channel closed while sending TaskResult");
+                            }
+                            // _permit drops here, releasing the gate for the next Task.
+                        });
+                    }
+                    Some(relay_message::Body::TaskCancel(tc)) => {
+                        // Deliver cancel signal to the in-flight Task (if any).
+                        // Unknown/finished task_id → no-op (ADR-0013).
+                        // Emits nothing: the spawned Task itself sends the one TaskResult.
+                        registry.cancel(&tc.task_id);
+                    }
+                    Some(_) | None => {
+                        // Forward-compatibility: ignore unknown message types.
                     }
                 }
-                // Other inbound message types (e.g. future relay extensions) are
-                // silently ignored — forward-compatibility.
             }
             Ok(None) => {
                 info!("Relay closed stream, shutting down");
@@ -260,13 +325,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // Open the dedup store before connecting (fail closed: must be writable).
-    let dedup = dedup::DedupStore::open(&config.state_dir)?;
+    let dedup = Arc::new(dedup::DedupStore::open(&config.state_dir)?);
 
     // Load Policy from the configured path (fail closed on any error).
     // If the file is absent or unreadable, fall back to a deny-all Policy
     // with a warning rather than refusing to start. A daemon with no policy
     // file denies every Task, which is the most restrictive safe default.
-    let policy = match policy::load_policy(&config.policy_path) {
+    let policy = Arc::new(match policy::load_policy(&config.policy_path) {
         Ok(p) => {
             info!(path = %config.policy_path.display(), "policy loaded");
             p
@@ -281,7 +346,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // rules → every evaluate call returns Deny{rule: None}.
             policy::from_toml_str("").expect("empty TOML must produce deny-all Policy")
         }
-    };
+    });
+
+    // Process-wide execution gate: 1 permit serializes Task execution to
+    // one-at-a-time, matching the implicit serialization of the old
+    // inline-await loop. Temporary backstop until issue #91 introduces the
+    // per-risk-class scheduler (mutate serial, read bounded-parallel).
+    let execution_gate = Arc::new(Semaphore::new(1));
 
     let interval = heartbeat_interval();
     run_tunnel(
@@ -290,8 +361,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.facts.clone(),
         config.node_labels.clone(),
         interval,
-        &policy,
-        &dedup,
+        policy,
+        dedup,
+        execution_gate,
     )
     .await?;
 
