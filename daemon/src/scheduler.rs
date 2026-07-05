@@ -1,0 +1,467 @@
+//! Per-Node concurrency scheduler: mutate Tasks strictly serial, read Tasks
+//! bounded-parallel (ADR-0004 concurrency amendment, ADR-0012, ADR-0013).
+//!
+//! Two independent [`tokio::sync::Semaphore`]s gate the two risk lanes:
+//! - `mutate_gate`: permits = 1 — mutate Tasks are strictly serial per Node.
+//! - `read_gate`: permits = [`READ_CONCURRENCY`] — read Tasks run concurrently
+//!   up to the fixed bound.
+//!
+//! Two separate semaphores give read+mutate concurrency: a read Task and a
+//! mutate Task may hold their respective gates simultaneously.
+//!
+//! # Queued-Task lifecycle
+//!
+//! [`Scheduler::acquire`] blocks until the caller's risk-class gate has an
+//! available permit, the Task's deadline expires, or an explicit cancel signal
+//! fires. Dropping the losing [`tokio::sync::Semaphore::acquire`] future is
+//! cancel-safe — tokio removes the caller from the semaphore queue without
+//! consuming a slot.
+//!
+//! # ADR references
+//!
+//! - ADR-0004: at-most-once. `acquire` is called INSIDE `DedupStore::run_once`'s
+//!   closure, so a Task whose deadline expires or is cancelled while queued still
+//!   gets its `task_id` recorded. Its id is deduplicated on re-send.
+//! - ADR-0012: risk class drives the concurrency lane, not Policy. Policy
+//!   applies identically after a slot is acquired.
+//! - ADR-0013: honest cancel/race. [`queued_cancel`] mirrors `recv_cancel` in
+//!   executor.rs — a dropped sender (deregister) maps to `pending()` and can
+//!   NEVER trigger a spurious cancel. Only `CancelRegistry::cancel` (an explicit
+//!   `send(())`) fires the cancel arm.
+
+use std::sync::Arc;
+
+use tokio::sync::oneshot;
+use tokio::sync::{Semaphore, SemaphorePermit};
+
+use crate::gen::{task_request, RiskClass, TaskRequest};
+use crate::operations;
+
+/// Fixed upper bound on concurrent read Tasks per Node.
+///
+/// Not configurable in this milestone (ADR-0004 amendment). A future ADR may
+/// expose this as a Policy field; for now this constant is the sole definition.
+pub const READ_CONCURRENCY: usize = 4;
+
+/// Risk class for a Task, used to route it to the correct semaphore gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    /// Read-only Operation (e.g. `system.facts`, `file.read`).
+    /// Bounded-parallel: up to [`READ_CONCURRENCY`] may run simultaneously.
+    Read,
+    /// Mutating Operation, Raw Exec, or unknown/missing action.
+    /// Strictly serial: at most one runs at a time per Node.
+    Mutate,
+}
+
+/// What happened to a Task that left the queue without acquiring a slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueuedOutcome {
+    /// The Task's deadline expired while waiting in the queue.
+    Timeout,
+    /// An explicit cancel signal arrived while the Task was queued.
+    Cancelled,
+}
+
+/// Per-Node concurrency scheduler.
+///
+/// Wrap in [`Arc`] (via [`Scheduler::new`]) and pass a clone into each spawned
+/// Task so all concurrent Tasks on this Node share the same gates.
+pub struct Scheduler {
+    /// Gate for mutate Tasks. Permits = 1: strictly serial.
+    mutate_gate: Semaphore,
+    /// Gate for read Tasks. Permits = [`READ_CONCURRENCY`]: bounded-parallel.
+    read_gate: Semaphore,
+}
+
+impl Scheduler {
+    /// Creates a new scheduler wrapped in an [`Arc`] for shared ownership.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            mutate_gate: Semaphore::new(1),
+            read_gate: Semaphore::new(READ_CONCURRENCY),
+        })
+    }
+
+    /// Returns the semaphore gate for `class`.
+    fn gate(&self, class: Class) -> &Semaphore {
+        match class {
+            Class::Read => &self.read_gate,
+            Class::Mutate => &self.mutate_gate,
+        }
+    }
+
+    /// Classifies a [`TaskRequest`] into a risk [`Class`].
+    ///
+    /// - `RawExec` → always [`Class::Mutate`] (arbitrary-command path, ADR-0001).
+    /// - `Operation` → looked up via [`operations::risk_class`]; unknown names
+    ///   fall to [`Class::Mutate`] (strict lane; Policy denies them before
+    ///   execution, so the gate is held only momentarily).
+    /// - Missing action → [`Class::Mutate`] (protocol error; dispatch returns
+    ///   FAILURE without executing, releasing the gate immediately).
+    pub fn classify(task: &TaskRequest) -> Class {
+        match &task.action {
+            Some(task_request::Action::RawExec(_)) => Class::Mutate,
+            Some(task_request::Action::Operation(op)) => match operations::risk_class(&op.name) {
+                Some(RiskClass::Read) => Class::Read,
+                // Mutate, Unspecified, or unknown name → strict (mutate) lane.
+                // Policy denies unknown names before execution; the gate is held
+                // only momentarily.
+                Some(RiskClass::Mutate) | Some(RiskClass::Unspecified) | None => Class::Mutate,
+            },
+            None => Class::Mutate,
+        }
+    }
+
+    /// Acquires a concurrency slot for a Task.
+    ///
+    /// Blocks until one of (in priority order):
+    ///
+    /// 1. **Cancel** (biased highest): an explicit `send(())` on the paired
+    ///    cancel sender → returns `Err(QueuedOutcome::Cancelled)`.
+    /// 2. **Deadline** (biased second): `deadline` expires while queued →
+    ///    returns `Err(QueuedOutcome::Timeout)`.
+    /// 3. **Slot available**: the risk-class gate has a free permit →
+    ///    returns `Ok(permit)`. The caller MUST hold the permit across execution
+    ///    (keeping the gate occupied while the Task runs).
+    ///
+    /// Biased ordering (cancel > timeout > permit) ensures that an explicit cancel
+    /// or an expired deadline wins over a just-freed permit; the Task NEVER begins
+    /// execution after either event.
+    ///
+    /// Dropping the losing `gate.acquire()` future is cancel-safe: tokio removes
+    /// the caller from the semaphore queue, freeing the slot for the next Task.
+    ///
+    /// # Cancel borrow semantics (ADR-0013)
+    ///
+    /// `cancel` is borrowed (not moved): if the permit arm wins, `cancel` is
+    /// still `Some(rx)` and can be forwarded to the executor for the in-flight
+    /// cancel path. A dropped sender (deregister) resolves to `Err` inside
+    /// [`queued_cancel`], which maps to `pending()` — only an explicit `send(())`
+    /// can trigger the cancel arm.
+    pub async fn acquire<'a>(
+        &'a self,
+        class: Class,
+        deadline: tokio::time::Instant,
+        cancel: &mut Option<oneshot::Receiver<()>>,
+    ) -> Result<SemaphorePermit<'a>, QueuedOutcome> {
+        tokio::select! {
+            biased;
+            _ = queued_cancel(cancel) => Err(QueuedOutcome::Cancelled),
+            _ = tokio::time::sleep_until(deadline) => Err(QueuedOutcome::Timeout),
+            p = self.gate(class).acquire() => Ok(p.expect("scheduler gates are never closed")),
+        }
+    }
+}
+
+/// Resolves only when an explicit `send(())` fires on the paired cancel sender.
+///
+/// Mirrors `recv_cancel` in executor.rs (ADR-0013 honest-race contract):
+/// - `Some(rx)` + `Ok(())` → resolves immediately (explicit cancel signal).
+/// - `Some(rx)` + `Err(_)` → sender was dropped (deregister); maps to
+///   `pending()` — never resolves. A dropped sender MUST NOT trigger cancellation.
+/// - `None` → maps to `pending()` — uncancellable path.
+///
+/// **Borrow-only** (`&mut Option<Receiver<()>>`): if another `select!` arm wins,
+/// the future is dropped and the borrow is released. The receiver remains
+/// `Some(rx)` and is forwarded to the executor for the in-flight cancel path.
+async fn queued_cancel(cancel: &mut Option<oneshot::Receiver<()>>) {
+    match cancel.as_mut() {
+        Some(rx) => match (&mut *rx).await {
+            Ok(()) => {}
+            Err(_) => std::future::pending::<()>().await,
+        },
+        None => std::future::pending::<()>().await,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::sync::oneshot;
+
+    use super::*;
+    use crate::gen::{task_request, Operation, RawExec, TaskRequest};
+    use crate::operations;
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    fn make_task(action: task_request::Action) -> TaskRequest {
+        TaskRequest {
+            task_id: "t".to_string(),
+            timeout_seconds: 5,
+            action: Some(action),
+        }
+    }
+
+    fn make_operation_task(name: &str) -> TaskRequest {
+        make_task(task_request::Action::Operation(Operation {
+            name: name.to_string(),
+            args: Default::default(),
+        }))
+    }
+
+    fn make_raw_exec_task() -> TaskRequest {
+        make_task(task_request::Action::RawExec(RawExec {
+            argv: vec!["/bin/echo".to_string()],
+        }))
+    }
+
+    fn make_no_action_task() -> TaskRequest {
+        TaskRequest {
+            task_id: "t".to_string(),
+            timeout_seconds: 5,
+            action: None,
+        }
+    }
+
+    fn far_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + Duration::from_secs(60)
+    }
+
+    // -----------------------------------------------------------------------
+    // classify() matrix
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classify_raw_exec_is_mutate() {
+        assert_eq!(Scheduler::classify(&make_raw_exec_task()), Class::Mutate);
+    }
+
+    #[test]
+    fn classify_file_read_is_read() {
+        assert_eq!(
+            Scheduler::classify(&make_operation_task(operations::FILE_READ)),
+            Class::Read
+        );
+    }
+
+    #[test]
+    fn classify_system_facts_is_read() {
+        assert_eq!(
+            Scheduler::classify(&make_operation_task(operations::SYSTEM_FACTS)),
+            Class::Read
+        );
+    }
+
+    #[test]
+    fn classify_service_restart_is_mutate() {
+        assert_eq!(
+            Scheduler::classify(&make_operation_task(operations::SERVICE_RESTART)),
+            Class::Mutate
+        );
+    }
+
+    #[test]
+    fn classify_unknown_operation_is_mutate() {
+        assert_eq!(
+            Scheduler::classify(&make_operation_task("completely.unknown")),
+            Class::Mutate
+        );
+    }
+
+    #[test]
+    fn classify_none_action_is_mutate() {
+        assert_eq!(Scheduler::classify(&make_no_action_task()), Class::Mutate);
+    }
+
+    // -----------------------------------------------------------------------
+    // AC1: mutate gate is strictly serial (observed max concurrent == 1)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ac1_mutate_serial_max_concurrent_one() {
+        let sched = Scheduler::new();
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let deadline = far_deadline();
+
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let sched = Arc::clone(&sched);
+            let current = Arc::clone(&current);
+            let peak = Arc::clone(&peak);
+            handles.push(tokio::spawn(async move {
+                let mut cancel = None;
+                let _permit = sched
+                    .acquire(Class::Mutate, deadline, &mut cancel)
+                    .await
+                    .expect("mutate acquire must succeed");
+                let n = current.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                current.fetch_sub(1, Ordering::SeqCst);
+                // _permit drops here, releasing the gate for the next Task
+            }));
+        }
+        for h in handles {
+            h.await.expect("task must not panic");
+        }
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "mutate gate must be strictly serial: max concurrent holders must be 1"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC2: read gate is bounded-parallel (max concurrent == READ_CONCURRENCY)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ac2_read_bounded_max_four() {
+        let sched = Scheduler::new();
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let deadline = far_deadline();
+
+        // Spawn READ_CONCURRENCY+1 read tasks. The first READ_CONCURRENCY acquire
+        // immediately; the (READ_CONCURRENCY+1)th waits for one to release.
+        let mut handles = Vec::new();
+        for _ in 0..(READ_CONCURRENCY + 1) {
+            let sched = Arc::clone(&sched);
+            let current = Arc::clone(&current);
+            let peak = Arc::clone(&peak);
+            handles.push(tokio::spawn(async move {
+                let mut cancel = None;
+                let _permit = sched
+                    .acquire(Class::Read, deadline, &mut cancel)
+                    .await
+                    .expect("read acquire must succeed");
+                let n = current.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(n, Ordering::SeqCst);
+                // Hold the permit long enough for all READ_CONCURRENCY tasks
+                // to have incremented before any decrement — ensures the peak
+                // is observable.
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                current.fetch_sub(1, Ordering::SeqCst);
+            }));
+        }
+        for h in handles {
+            h.await.expect("task must not panic");
+        }
+
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            READ_CONCURRENCY,
+            "read gate must cap at READ_CONCURRENCY ({READ_CONCURRENCY}) concurrent holders"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // AC3: read and mutate may run concurrently (peak >= 2)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ac3_read_and_mutate_concurrent() {
+        let sched = Scheduler::new();
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let deadline = far_deadline();
+
+        let sched_r = Arc::clone(&sched);
+        let cur_r = Arc::clone(&current);
+        let pk_r = Arc::clone(&peak);
+        let t_read = tokio::spawn(async move {
+            let mut cancel = None;
+            let _permit = sched_r
+                .acquire(Class::Read, deadline, &mut cancel)
+                .await
+                .expect("read acquire must succeed");
+            let n = cur_r.fetch_add(1, Ordering::SeqCst) + 1;
+            pk_r.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cur_r.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        let sched_m = Arc::clone(&sched);
+        let cur_m = Arc::clone(&current);
+        let pk_m = Arc::clone(&peak);
+        let t_mutate = tokio::spawn(async move {
+            let mut cancel = None;
+            let _permit = sched_m
+                .acquire(Class::Mutate, deadline, &mut cancel)
+                .await
+                .expect("mutate acquire must succeed");
+            let n = cur_m.fetch_add(1, Ordering::SeqCst) + 1;
+            pk_m.fetch_max(n, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            cur_m.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        t_read.await.expect("read task must not panic");
+        t_mutate.await.expect("mutate task must not panic");
+
+        assert!(
+            peak.load(Ordering::SeqCst) >= 2,
+            "a read and a mutate Task must be able to run concurrently: peak must be >= 2"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Queued-timeout: acquire with an expired deadline → Err(Timeout)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn queued_timeout_returns_timeout() {
+        let sched = Scheduler::new();
+        // Occupy the mutate gate so the next acquire must queue (not acquire immediately).
+        let mut blocker_cancel = None;
+        let _blocker = sched
+            .acquire(Class::Mutate, far_deadline(), &mut blocker_cancel)
+            .await
+            .expect("blocker must acquire");
+
+        // An already-expired deadline fires on the first select! poll, before the
+        // semaphore acquire is checked (biased: cancel > timeout > permit).
+        let past = tokio::time::Instant::now() - Duration::from_millis(1);
+        let mut cancel = None;
+        let result = sched.acquire(Class::Mutate, past, &mut cancel).await;
+        assert!(
+            matches!(result, Err(QueuedOutcome::Timeout)),
+            "expired deadline must yield Err(Timeout); got {result:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Queued-cancel: fire rx while blocked → Err(Cancelled)
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn queued_cancel_returns_cancelled() {
+        let sched = Scheduler::new();
+        // Occupy the mutate gate so the acquire blocks.
+        let mut blocker_cancel = None;
+        let _blocker = sched
+            .acquire(Class::Mutate, far_deadline(), &mut blocker_cancel)
+            .await
+            .expect("blocker must acquire");
+
+        let (tx, rx) = oneshot::channel::<()>();
+        let mut cancel = Some(rx);
+
+        // Fire cancel after a short delay (after acquire is blocked).
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let _ = tx.send(());
+        });
+
+        let result = sched
+            .acquire(Class::Mutate, far_deadline(), &mut cancel)
+            .await;
+        assert!(
+            matches!(result, Err(QueuedOutcome::Cancelled)),
+            "explicit cancel signal must yield Err(Cancelled); got {result:?}"
+        );
+    }
+}
