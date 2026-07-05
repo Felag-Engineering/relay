@@ -1,25 +1,31 @@
 //! Task executor. Runs a command as a direct argv exec (never `/bin/sh`), in its
-//! own process group, with a per-Task timeout and size-capped stdout/stderr capture,
-//! producing a proto [`TaskResult`]. Dispatch-agnostic: no tunnel/mpsc types here.
+//! own process group, with a per-Task timeout, optional cancel signal, and
+//! size-capped stdout/stderr capture, producing a proto [`TaskResult`].
+//! Dispatch-agnostic: no tunnel/mpsc types here.
 //!
 //! # Architecture references
 //! - ADR-0001: argv-only, never `/bin/sh` for structured Operations.
 //! - ADR-0004: per-Task timeout, size-capped output, structured results.
-//! - ADR-0013: killable process groups shared with future cancellation.
+//! - ADR-0013: killable process groups for timeouts and cancellation.
 
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
+use tokio::sync::oneshot;
 
 use crate::gen::{Outcome, TaskResult};
 
-/// Grace period between SIGTERM and SIGKILL when killing a timed-out Task's group.
+/// Grace period between SIGTERM and SIGKILL when killing a Task's group.
 /// Fixed for v1 (privileged side, deterministic); a Policy-configurable value is future work.
 const TERM_GRACE: Duration = Duration::from_secs(5);
 
 /// A dispatch-agnostic request to execute one Task.
+///
+/// Adding `cancel: Option<oneshot::Receiver<()>>` makes this type non-Clone.
+/// Confirm no call site constructs ExecRequest via `.clone()` or struct-update
+/// (`{ ..base }`); each site must construct fresh.
 pub struct ExecRequest {
     /// The Task's unique identifier, echoed into the returned [`TaskResult`].
     pub task_id: String,
@@ -33,6 +39,12 @@ pub struct ExecRequest {
     /// are drained (to avoid blocking the child on a full pipe) but discarded;
     /// `truncated` is set in the returned [`TaskResult`].
     pub max_output_bytes: usize,
+    /// Optional cancel signal. `Some(rx)` enables cancellation: an explicit
+    /// `send(())` on the paired sender kills the process group and sets
+    /// `OUTCOME_CANCELLED`. A dropped sender (deregister) resolves to `Err`,
+    /// which `recv_cancel` maps to `pending()` — never a spurious cancel.
+    /// `None` makes the Task uncancellable (used in tests and data-only handlers).
+    pub cancel: Option<oneshot::Receiver<()>>,
 }
 
 /// Executes `req` and returns a fully-populated [`TaskResult`].
@@ -57,10 +69,10 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     cmd.stderr(Stdio::piped());
     // process_group(0): child becomes its own process-group leader (pgid == child pid).
     // This lets us kill the whole process tree with kill(-pgid, SIG) — required for
-    // timeouts now and cancellation later (ADR-0013).
+    // timeouts and cancellation (ADR-0013).
     cmd.process_group(0);
     // kill_on_drop is a panic-time safety net for the direct child only.
-    // The authoritative no-orphan path is the explicit kill(-pgid) in the timeout branch.
+    // The authoritative no-orphan path is the explicit kill(-pgid) in kill_group_graceful.
     cmd.kill_on_drop(true);
 
     let mut child = match cmd.spawn() {
@@ -83,34 +95,47 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let out_task = tokio::spawn(drain_capped(out_pipe, cap));
     let err_task = tokio::spawn(drain_capped(err_pipe, cap));
 
+    let cancel = req.cancel;
     let mut timed_out = false;
+    let mut cancelled = false;
     let mut exit_code: i32 = -1;
+    // kill_needed: set inside the select! to avoid holding &mut child borrow
+    // across select arms; kill_group_graceful is called once AFTER the select.
+    let mut kill_needed = false;
 
-    match tokio::time::timeout(req.timeout, child.wait()).await {
-        Ok(Ok(status)) => {
-            exit_code = status.code().unwrap_or(-1);
-        }
-        Ok(Err(_io_err)) => {
-            // wait() failed: leave exit_code = -1, treat as failure below.
-        }
-        Err(_elapsed) => {
-            timed_out = true;
-            // Kill the whole process group: SIGTERM first, then SIGKILL after the
-            // grace period. Both the direct child and all grandchildren receive the
-            // signal because pgid == child pid and kill(-pgid) targets the group.
-            signal_group(pgid, libc::SIGTERM);
-            match tokio::time::timeout(TERM_GRACE, child.wait()).await {
-                Ok(_) => {} // exited within the grace period
-                Err(_) => {
-                    signal_group(pgid, libc::SIGKILL);
-                    // Reap the direct child so we don't leave a zombie. The group
-                    // SIGKILL also takes all grandchildren.
-                    let _ = child.wait().await;
+    // biased; makes the wait arm win over the cancel arm when both are ready
+    // simultaneously — an already-exited child reports its real outcome, never a
+    // retroactive OUTCOME_CANCELLED (ADR-0013 honest-race semantics).
+    tokio::select! {
+        biased;
+        res = tokio::time::timeout(req.timeout, child.wait()) => {
+            match res {
+                Ok(Ok(status)) => {
+                    exit_code = status.code().unwrap_or(-1);
+                }
+                Ok(Err(_io_err)) => {
+                    // wait() failed: leave exit_code = -1, treat as failure below.
+                }
+                Err(_elapsed) => {
+                    timed_out = true;
+                    kill_needed = true;
                 }
             }
-            // After the group SIGKILL all pipe write-ends are closed, so the drain
-            // tasks will reach EOF and return promptly.
         }
+        _ = recv_cancel(cancel) => {
+            // KNOWN LIMITATION: a daemonized grandchild inheriting pipe fds could
+            // block the drain tasks below (executor.rs ~L116-119 applies here too);
+            // this is not solved by the cancel path.
+            cancelled = true;
+            kill_needed = true;
+        }
+    }
+
+    if kill_needed {
+        // Kill the whole process group: SIGTERM first, then SIGKILL after the
+        // grace period. Both the direct child and all grandchildren receive the
+        // signal because pgid == child pid and kill(-pgid) targets the group.
+        kill_group_graceful(pgid, &mut child).await;
     }
 
     // KNOWN LIMITATION: if the child backgrounded a process that inherited the pipe
@@ -120,7 +145,12 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let (stdout, out_trunc) = out_task.await.unwrap_or_default();
     let (stderr, err_trunc) = err_task.await.unwrap_or_default();
 
-    let outcome = if timed_out {
+    // Intentionally discard the process's signal exit code when cancelled; use -1.
+    // The process was externally killed (not a normal exit), so its signal-derived
+    // exit code is meaningless — -1 is the honest "externally killed" mapping.
+    let outcome = if cancelled {
+        Outcome::Cancelled
+    } else if timed_out {
         Outcome::Timeout
     } else if exit_code == 0 {
         Outcome::Success
@@ -131,11 +161,52 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     TaskResult {
         task_id: req.task_id,
         outcome: outcome as i32,
-        exit_code: if timed_out { -1 } else { exit_code },
+        exit_code: if timed_out || cancelled {
+            -1
+        } else {
+            exit_code
+        },
         stdout,
         stderr,
         truncated: out_trunc || err_trunc,
         duration_millis: started.elapsed().as_millis() as i64,
+    }
+}
+
+/// Sends SIGTERM to the process group, waits for the grace period, then sends SIGKILL.
+///
+/// Reaps the direct child so no zombie remains. All grandchildren in the group
+/// also receive the signal because pgid == child pid and `kill(-pgid, SIG)` targets
+/// the whole group (ADR-0013, ADR-0001).
+async fn kill_group_graceful(pgid: i32, child: &mut tokio::process::Child) {
+    signal_group(pgid, libc::SIGTERM);
+    match tokio::time::timeout(TERM_GRACE, child.wait()).await {
+        Ok(_) => {} // exited within the grace period
+        Err(_) => {
+            signal_group(pgid, libc::SIGKILL);
+            // Reap the direct child so we don't leave a zombie. The group
+            // SIGKILL also takes all grandchildren.
+            let _ = child.wait().await;
+        }
+    }
+}
+
+/// Resolves only on an explicit `send(())` from the paired sender.
+///
+/// - `Some(rx)` + `Ok(())` → resolves (cancel arm fires).
+/// - `Some(rx)` + `Err(_)` → the sender was dropped (deregister); maps to
+///   `std::future::pending()` so the select never fires the cancel arm.
+/// - `None` → no cancel handle; maps to `std::future::pending()`.
+///
+/// This design guarantees that dropping a sender (e.g. calling `deregister`)
+/// cannot accidentally cancel a Task — only an explicit `send(())` can.
+async fn recv_cancel(rx: Option<oneshot::Receiver<()>>) {
+    match rx {
+        Some(rx) => match rx.await {
+            Ok(()) => {}                                  // explicit cancel signal — resolve
+            Err(_) => std::future::pending::<()>().await, // sender dropped — never resolve
+        },
+        None => std::future::pending::<()>().await, // no cancel handle — uncancellable
     }
 }
 
@@ -217,6 +288,7 @@ mod tests {
             argv: vec!["/bin/true".to_string()],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.outcome, Outcome::Success as i32);
@@ -232,6 +304,7 @@ mod tests {
             argv: vec!["/bin/false".to_string()],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -246,6 +319,7 @@ mod tests {
             argv: vec!["/bin/echo".to_string(), "hello".to_string()],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.stdout, b"hello\n");
@@ -266,6 +340,7 @@ mod tests {
             ],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.stderr, b"boom\n");
@@ -289,6 +364,7 @@ mod tests {
             ],
             timeout: Duration::from_secs(1),
             max_output_bytes: 4096,
+            cancel: None,
         })
         .await;
         assert_eq!(result.outcome, Outcome::Timeout as i32);
@@ -343,6 +419,7 @@ mod tests {
             ],
             timeout: Duration::from_secs(5),
             max_output_bytes: 1024,
+            cancel: None,
         })
         .await;
         assert_eq!(result.stdout.len(), 1024);
@@ -358,6 +435,7 @@ mod tests {
             argv: vec!["/nonexistent/definitely-not-a-binary".to_string()],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -373,9 +451,104 @@ mod tests {
             argv: vec![],
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
+            cancel: None,
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
         assert_eq!(result.exit_code, -1);
+    }
+
+    // 9. ACCEPTANCE-CRITICAL [AC1]: cancel kills the entire process group (no orphans).
+    //    Mirrors timeout_kills_group_no_orphans with the cancel signal.
+    #[tokio::test]
+    async fn cancel_kills_group_no_orphans() {
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Fire the cancel signal after 300 ms — well after the grandchild PID is
+        // printed to stdout but well before the 30 s timeout.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let _ = cancel_tx.send(());
+        });
+
+        let result = execute(ExecRequest {
+            task_id: "t-cancel-group".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                // Background a grandchild and print its PID, then sleep 30.
+                // The cancel must kill both the shell and the grandchild.
+                "sleep 30 & echo $!; sleep 30".to_string(),
+            ],
+            timeout: Duration::from_secs(30), // long — cancel fires before timeout
+            max_output_bytes: 4096,
+            cancel: Some(cancel_rx),
+        })
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Cancelled as i32);
+        assert_eq!(result.exit_code, -1);
+
+        // Parse the grandchild PID from stdout and verify it's reaped (ESRCH),
+        // proving the whole group (not just the direct child) was killed.
+        let stdout_str = String::from_utf8_lossy(&result.stdout);
+        let grandchild_pid: libc::pid_t = stdout_str
+            .trim()
+            .parse()
+            .expect("stdout must contain the background sleep PID");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let ret = unsafe { libc::kill(grandchild_pid, 0) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                assert_eq!(
+                    err.raw_os_error(),
+                    Some(libc::ESRCH),
+                    "grandchild (pid={grandchild_pid}) must be gone (ESRCH), not another error"
+                );
+                break; // grandchild fully reaped — no orphan
+            }
+            assert!(
+                Instant::now() < deadline,
+                "grandchild (pid={grandchild_pid}) still alive after 2 s — orphan not reaped"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    // 10. ACCEPTANCE-CRITICAL [AC2]: a Task that finishes before cancel lands reports its
+    //     real outcome. cancel fires at 2 s; `exit 7` completes in < 10 ms (20× margin).
+    //     biased; guarantees the already-exited child wins over a simultaneously-ready
+    //     cancel signal.
+    #[tokio::test]
+    async fn finished_before_cancel_reports_real_outcome() {
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
+        // Fire cancel at 2 s — far after the child exits.
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let _ = cancel_tx.send(());
+        });
+
+        let result = execute(ExecRequest {
+            task_id: "t-cancel-real".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 7".to_string(),
+            ],
+            timeout: Duration::from_secs(30),
+            max_output_bytes: 1024,
+            cancel: Some(cancel_rx),
+        })
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Failure as i32,
+            "real outcome (exit 7 = Failure) must be reported, not Cancelled"
+        );
+        assert_eq!(result.exit_code, 7, "real exit code must be preserved");
     }
 }

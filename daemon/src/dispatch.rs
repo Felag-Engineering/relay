@@ -15,6 +15,8 @@
 use std::future::Future;
 use std::time::Duration;
 
+use tokio::sync::oneshot;
+
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
@@ -69,11 +71,21 @@ const OP_ARG_UNIT: &str = "unit";
 
 /// Ordered dispatch pipeline: dedup → Policy → execute.
 ///
+/// `cancel` is a oneshot receiver threaded into the process-spawning paths so
+/// that an in-flight Task's process group can be killed by a `TaskCancel` message
+/// from the Relay (ADR-0013). Pass `Some(rx)` for cancellable Tasks; `None` for
+/// tests or data-only paths.
+///
 /// Delegates to [`dispatch_with_runner`] with the real [`execute`] as the
 /// process-spawning runner. `service.restart` is the only Operation that
 /// spawns; all other handlers are data-only and never call the runner.
-pub async fn dispatch(task: &TaskRequest, policy: &Policy, dedup: &DedupStore) -> TaskResult {
-    dispatch_with_runner(task, policy, dedup, execute).await
+pub async fn dispatch(
+    task: &TaskRequest,
+    policy: &Policy,
+    dedup: &DedupStore,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult {
+    dispatch_with_runner(task, policy, dedup, execute, cancel).await
 }
 
 // ---------------------------------------------------------------------------
@@ -90,19 +102,25 @@ pub async fn dispatch(task: &TaskRequest, policy: &Policy, dedup: &DedupStore) -
 /// task_id marker BEFORE invoking the pipeline (deny-or-execute). A denied
 /// Task also consumes a marker: a retry with the same task_id returns the
 /// benign already-processed result, even if the first run was denied by Policy.
+/// A cancelled Task's id is equally recorded before execution; a re-send is
+/// deduplicated (at-most-once holds across cancel, ADR-0004).
+///
+/// `cancel` is moved into the `run_once` closure (FnOnce); a dedup hit drops
+/// it without sending — no accidental cancel effect.
 async fn dispatch_with_runner<R, Fut>(
     task: &TaskRequest,
     policy: &Policy,
     dedup: &DedupStore,
     run: R,
+    cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
     R: Fn(ExecRequest) -> Fut + Clone,
     Fut: Future<Output = TaskResult>,
 {
     dedup
-        .run_once(&task.task_id, || async {
-            evaluate_and_execute(task, policy, run).await
+        .run_once(&task.task_id, move || async move {
+            evaluate_and_execute(task, policy, run, cancel).await
         })
         .await
 }
@@ -209,7 +227,12 @@ fn operation_positional_args(op: &Operation) -> Vec<String> {
 // Policy gate and handler dispatch
 // ---------------------------------------------------------------------------
 
-async fn evaluate_and_execute<R, Fut>(task: &TaskRequest, policy: &Policy, run: R) -> TaskResult
+async fn evaluate_and_execute<R, Fut>(
+    task: &TaskRequest,
+    policy: &Policy,
+    run: R,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult
 where
     R: Fn(ExecRequest) -> Fut + Clone,
     Fut: Future<Output = TaskResult>,
@@ -220,13 +243,14 @@ where
     match &task.action {
         Some(task_request::Action::RawExec(raw)) => {
             // Raw Exec: fully gated by Policy regex before any spawn (ADR-0001, ADR-0002).
-            run_raw_exec(task_id, raw, timeout, MAX_OUTPUT_BYTES, policy).await
+            run_raw_exec(task_id, raw, timeout, MAX_OUTPUT_BYTES, policy, cancel).await
         }
         Some(task_request::Action::Operation(op)) => {
-            handle_operation(task_id, op, timeout, policy, run).await
+            handle_operation(task_id, op, timeout, policy, run, cancel).await
         }
         None => {
             // Missing action: protocol error → FAILURE (not DENIED_BY_POLICY).
+            // cancel drops naturally here (no process spawned).
             failure_result(task_id, b"missing task action")
         }
     }
@@ -238,6 +262,7 @@ async fn handle_operation<R, Fut>(
     timeout: Duration,
     policy: &Policy,
     run: R,
+    cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
     R: Fn(ExecRequest) -> Fut + Clone,
@@ -253,6 +278,7 @@ where
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
     match policy.evaluate(&op.name, &positional) {
         Decision::Deny { reason, rule } => {
+            // cancel drops naturally here — denied before any process spawned.
             tracing::warn!(
                 task_id = %task_id,
                 operation = %op.name,
@@ -266,6 +292,8 @@ where
         Decision::Allow(_rule) => {
             match op.name.as_str() {
                 operations::SYSTEM_FACTS => {
+                    // Data-only: no process spawned; cancel is irrelevant.
+                    let _ = cancel;
                     // KNOWN LIMITATION: gather_facts calls fs::read_to_string
                     // (blocking) and libc::getifaddrs (blocking syscall) inside
                     // this async context. Safe for v0.0.3 single-flight; move to
@@ -282,6 +310,8 @@ where
                     }
                 }
                 operations::FILE_READ => {
+                    // Data-only: no process spawned; cancel is irrelevant.
+                    let _ = cancel;
                     // KNOWN LIMITATION: file_read calls std::fs::File::open
                     // (blocking) inside this async context. Safe for v0.0.3
                     // single-flight; move to spawn_blocking in v0.0.4
@@ -291,11 +321,21 @@ where
                 }
                 operations::SERVICE_RESTART => {
                     let unit = positional.into_iter().next().unwrap_or_default();
-                    service_restart(task_id, &unit, timeout, MAX_OUTPUT_BYTES, run.clone()).await
+                    service_restart(
+                        task_id,
+                        &unit,
+                        timeout,
+                        MAX_OUTPUT_BYTES,
+                        cancel,
+                        run.clone(),
+                    )
+                    .await
                 }
                 _ => {
                     // Policy allowed a name this daemon does not implement.
                     // FAILURE (not DENIED_BY_POLICY): the Policy engine is not at fault.
+                    // cancel drops naturally here — no process spawned.
+                    let _ = cancel;
                     failure_result(task_id, b"unknown operation")
                 }
             }
@@ -380,6 +420,7 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     use super::*;
+    use crate::executor::execute;
     use crate::gen::{Outcome, TaskResult};
     use crate::operations;
     use crate::policy::from_toml_str;
@@ -523,7 +564,7 @@ allowed_args = [["*"]]
         let tmp = TempFile::new("content", content);
         let task = make_task_file_read("t-file-read", &tmp.path_str());
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req)).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
 
         assert_eq!(result.task_id, "t-file-read");
         assert_eq!(
@@ -557,7 +598,7 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/echo".to_string(), "hello".to_string()],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req)).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
 
         assert_eq!(result.outcome, Outcome::Success as i32);
         assert_eq!(result.stdout, b"hello\n");
@@ -599,7 +640,7 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/sh".to_string(), "-c".to_string(), cmd],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req)).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
 
         assert_eq!(
             result.outcome,
@@ -646,7 +687,7 @@ allow = ["^/bin/echo hello$"]
         };
 
         let task = make_task_service_restart("t-nginx", "nginx");
-        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
 
         assert_eq!(
             result.outcome,
@@ -690,7 +731,7 @@ allow = ["^/bin/echo hello$"]
         };
 
         let task = make_task_service_restart("t-sshd", "sshd");
-        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
 
         assert_eq!(
             result.outcome,
@@ -734,8 +775,8 @@ allow = ["^/bin/echo hello$"]
 
         let task = make_task_service_restart("dedup-id-1", "nginx");
 
-        let r1 = dispatch_with_runner(&task, &policy, &dedup, fake_run.clone()).await;
-        let r2 = dispatch_with_runner(&task, &policy, &dedup, fake_run).await;
+        let r1 = dispatch_with_runner(&task, &policy, &dedup, fake_run.clone(), None).await;
+        let r2 = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
 
         assert_eq!(
             runner_calls.load(Ordering::SeqCst),
@@ -780,7 +821,7 @@ allow = ["^/bin/echo hello$"]
             ],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req)).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
 
         assert_eq!(
             result.outcome,
@@ -814,7 +855,7 @@ allowed_args = []
         .expect("parse policy");
 
         let task = make_task_system_facts("t-facts");
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req)).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
 
         assert_eq!(
             result.outcome,
@@ -1007,7 +1048,8 @@ deny = ["secret"]
 
         for case in &cases {
             let verdict = evaluate_policy_query(&case.query, &policy);
-            let result = dispatch_with_runner(&case.task, &policy, &dedup, fake_run.clone()).await;
+            let result =
+                dispatch_with_runner(&case.task, &policy, &dedup, fake_run.clone(), None).await;
 
             // Core assertion: verdict matches execution outcome.
             let exec_allowed = result.outcome != Outcome::DeniedByPolicy as i32;
@@ -1157,6 +1199,85 @@ allow = ["^/bin/sh"]
             !verdict_unknown.deciding_rule.is_empty(),
             "unknown operation deny must carry a non-empty deciding_rule; got {:?}",
             verdict_unknown.deciding_rule,
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ACCEPTANCE-CRITICAL [AC3] (issue #90): a cancelled task_id stays in the
+    // dedup store. A re-sent TaskRequest with the same id is deduped, not re-run.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn cancelled_task_id_is_deduped_on_resend() {
+        let state_dir = TempDir::new("dedup-cancel");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+
+        // Policy allows the sleep command via raw exec.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/sh "]
+"#,
+        )
+        .expect("parse policy");
+
+        let task = make_task_raw_exec(
+            "cancel-dedup-id-1",
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "sleep 30".to_string(),
+            ],
+        );
+
+        // Send cancel before the dispatch future is awaited. The signal is buffered
+        // in the oneshot channel. When execute's select! runs, the child (sleep 30)
+        // hasn't exited, so the cancel arm fires immediately → Cancelled.
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        cancel_tx
+            .send(())
+            .expect("cancel send must succeed (buffered)");
+
+        // First dispatch: real execute runner; cancel fires immediately.
+        let r1 =
+            dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), Some(cancel_rx)).await;
+
+        assert_eq!(
+            r1.outcome,
+            Outcome::Cancelled as i32,
+            "first dispatch must yield Cancelled"
+        );
+
+        // Second dispatch: same task_id, no cancel — must be deduped (runner not called).
+        let runner_calls = Arc::new(AtomicUsize::new(0));
+        let calls = runner_calls.clone();
+        let fake_run = move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        let r2 = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must NOT be called on re-send of a cancelled task_id (deduped)"
+        );
+        assert!(
+            r2.stderr
+                .windows(b"already processed".len())
+                .any(|w| w == b"already processed"),
+            "second result must be benign already-processed"
         );
     }
 }
