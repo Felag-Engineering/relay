@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
 use tracing::{error, info};
@@ -17,10 +17,12 @@ mod operations;
 mod policy;
 mod raw_exec;
 mod renew;
+mod scheduler;
 mod tunnel;
 
 use cancel::CancelRegistry;
 use config::Config;
+use scheduler::Scheduler;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 mod gen {
@@ -110,20 +112,23 @@ async fn acquire_identity(
 ///
 /// Inbound `RelayMessage` handling:
 /// - `Task`: registered in the cancel registry BEFORE spawning, then dispatched
-///   through the dedup → Policy → execute pipeline in a detached task so the loop
-///   keeps reading and can receive `TaskCancel` messages (ADR-0001/0002/0004/0013).
-///   Exactly one `TaskResult` is emitted — either the real outcome or Cancelled.
-///   Each spawned task acquires the `execution_gate` permit before calling dispatch,
-///   serializing execution to one Task at a time (temporary backstop preserving the
-///   pre-cancel inline-await behavior; issue #91 replaces this with the per-risk-class
-///   scheduler: mutate serial, read bounded-parallel).
+///   through the dedup → scheduler → Policy → execute pipeline in a detached task
+///   so the loop keeps reading and can receive `TaskCancel` messages
+///   (ADR-0001/0002/0004/0013). The scheduler gates concurrency by risk class:
+///   mutate Tasks are strictly serial; read Tasks are bounded-parallel (up to
+///   `READ_CONCURRENCY`). Queue-wait time counts against the Task's timeout clock
+///   (started at receipt). Exactly one `TaskResult` is emitted per Task in every
+///   path: executed, queued-timeout, queued-cancel, in-flight-cancel, dedup-benign.
 /// - `TaskCancel`: delivers the cancel signal to the in-flight Task's executor via
 ///   the cancel registry (ADR-0013). If the task_id is unknown or already finished,
-///   this is a safe no-op. The inbound loop NEVER waits on `execution_gate`, so
+///   this is a safe no-op. The inbound loop NEVER touches the scheduler, so
 ///   TaskCancel delivery is never blocked by a running Task.
+/// - `PolicyQuery`: evaluated inline against the loaded Policy (ADR-0011). No dedup,
+///   no executor — structurally incapable of recording a marker or spawning a process.
 /// - Other message types: silently ignored for forward-compatibility.
 ///
-/// Policy and DedupStore are passed as `Arc` so spawned per-Task tasks are `'static`.
+/// Policy, DedupStore, and Scheduler are passed as `Arc` so spawned per-Task tasks
+/// are `'static`.
 #[allow(clippy::too_many_arguments)]
 async fn run_tunnel(
     channel: Channel,
@@ -133,7 +138,7 @@ async fn run_tunnel(
     interval: Duration,
     policy: Arc<policy::Policy>,
     dedup: Arc<dedup::DedupStore>,
-    execution_gate: Arc<Semaphore>,
+    scheduler: Arc<Scheduler>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
@@ -199,42 +204,41 @@ async fn run_tunnel(
     let registry = CancelRegistry::new();
 
     // Drive the inbound stream. Spawning a detached task per Task keeps the loop
-    // readable so TaskCancel messages can arrive while a Task is in flight.
-    // Single-flight contract (#82) bounds concurrency at one Task per Node until
-    // the scheduler issue (#91) arrives — the loop has no queue.
+    // readable so TaskCancel and PolicyQuery messages can arrive while a Task is
+    // in flight or queued. The inbound loop never touches the scheduler.
     loop {
         match inbound.message().await {
             Ok(Some(msg)) => {
                 match msg.body {
                     Some(relay_message::Body::Task(task_req)) => {
+                        // Capture the true receipt time before spawning. The scheduler
+                        // uses this as the single clock origin for the Task's timeout
+                        // budget, covering both queue-wait time and execution time.
+                        let received_at = tokio::time::Instant::now();
                         let task_id = task_req.task_id.clone();
                         // Register BEFORE spawn: eliminates the window where
                         // a TaskCancel could arrive before the registry entry exists.
                         let cancel_rx = registry.register(&task_id);
                         let policy = Arc::clone(&policy);
                         let dedup = Arc::clone(&dedup);
+                        let scheduler = Arc::clone(&scheduler);
                         let registry = registry.clone();
                         let tx = tx.clone();
-                        let gate = Arc::clone(&execution_gate);
                         tokio::spawn(async move {
-                            // Acquire the execution gate before dispatching.
-                            // This re-serializes Task execution to one-at-a-time,
-                            // preserving the pre-cycle-1 inline-await behavior while
-                            // keeping the inbound loop free to read TaskCancel messages
-                            // (the loop never touches the semaphore, so cancel delivery
-                            // is never blocked by a running Task).
-                            //
-                            // Temporary backstop: issue #91 will replace this with a
-                            // per-risk-class scheduler (mutate serial, read
-                            // bounded-parallel). The semaphore is never closed, so
-                            // expect() is safe here.
-                            let _permit = gate
-                                .acquire()
-                                .await
-                                .expect("execution_gate semaphore must not be closed");
-                            let result =
-                                dispatch::dispatch(&task_req, &policy, &dedup, Some(cancel_rx))
-                                    .await;
+                            // dispatch handles the full pipeline: dedup → schedule
+                            // (acquire per-risk-class slot, block until available or
+                            // timeout/cancel) → Policy → execute. The scheduler gate is
+                            // held across execution; the inbound loop never touches it,
+                            // so TaskCancel delivery is never blocked.
+                            let result = dispatch::dispatch(
+                                &task_req,
+                                &policy,
+                                &dedup,
+                                &scheduler,
+                                received_at,
+                                Some(cancel_rx),
+                            )
+                            .await;
                             // Deregister before sending the result so a subsequent
                             // TaskCancel for this id is a clean no-op.
                             registry.deregister(&task_id);
@@ -247,7 +251,6 @@ async fn run_tunnel(
                             {
                                 error!("outbound channel closed while sending TaskResult");
                             }
-                            // _permit drops here, releasing the gate for the next Task.
                         });
                     }
                     Some(relay_message::Body::TaskCancel(tc)) => {
@@ -361,11 +364,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Process-wide execution gate: 1 permit serializes Task execution to
-    // one-at-a-time, matching the implicit serialization of the old
-    // inline-await loop. Temporary backstop until issue #91 introduces the
-    // per-risk-class scheduler (mutate serial, read bounded-parallel).
-    let execution_gate = Arc::new(Semaphore::new(1));
+    // Per-Node concurrency scheduler (issue #91, ADR-0012):
+    // mutate Tasks are strictly serial (Semaphore(1));
+    // read Tasks are bounded-parallel (Semaphore(READ_CONCURRENCY = 4)).
+    // The inbound loop never touches the scheduler — cancel delivery is
+    // never blocked by a running or queued Task.
+    let scheduler = Scheduler::new();
 
     let interval = heartbeat_interval();
     run_tunnel(
@@ -376,7 +380,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         interval,
         policy,
         dedup,
-        execution_gate,
+        scheduler,
     )
     .await?;
 

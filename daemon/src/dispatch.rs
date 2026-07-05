@@ -16,6 +16,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use tokio::sync::oneshot;
+use tokio::time::Instant;
 
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
@@ -29,6 +30,7 @@ use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::gather_facts;
 use crate::policy::{Decision, Policy, Rule};
 use crate::raw_exec::run_raw_exec;
+use crate::scheduler::{QueuedOutcome, Scheduler};
 
 // ---------------------------------------------------------------------------
 // Daemon-level v0.0.3 constants
@@ -69,27 +71,35 @@ const OP_ARG_UNIT: &str = "unit";
 // Public dispatch entry
 // ---------------------------------------------------------------------------
 
-/// Ordered dispatch pipeline: dedup → Policy → execute.
+/// Ordered dispatch pipeline: dedup → schedule → Policy → execute.
 ///
-/// `cancel` is a oneshot receiver threaded into the process-spawning paths so
-/// that an in-flight Task's process group can be killed by a `TaskCancel` message
-/// from the Relay (ADR-0013). Pass `Some(rx)` for cancellable Tasks; `None` for
-/// tests or data-only paths.
+/// Wraps [`dispatch_scheduled_with_runner`] with the real [`execute`] runner.
+/// The scheduler acquires a concurrency slot keyed off the Task's ADR-0012 risk
+/// class before Policy is evaluated. If the Task's deadline expires while queued
+/// or an explicit cancel signal arrives, the Task reports `OUTCOME_TIMEOUT` or
+/// `OUTCOME_CANCELLED` without ever executing.
 ///
-/// Delegates to [`dispatch_with_runner`] with the real [`execute`] as the
-/// process-spawning runner. `service.restart` is the only Operation that
-/// spawns; all other handlers are data-only and never call the runner.
+/// `received_at` is the `tokio::time::Instant` captured at true receipt in the
+/// tunnel loop — it is the single clock origin for both the queue-wait budget and
+/// the in-executor remaining budget (ADR-0004).
+///
+/// `cancel` is forwarded through scheduling into the executor so the in-flight
+/// cancel path (ADR-0013 honest-race) is intact for Tasks that make it past the
+/// queue.
 pub async fn dispatch(
     task: &TaskRequest,
     policy: &Policy,
     dedup: &DedupStore,
+    scheduler: &Scheduler,
+    received_at: Instant,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult {
-    dispatch_with_runner(task, policy, dedup, execute, cancel).await
+    dispatch_scheduled_with_runner(task, policy, dedup, scheduler, received_at, execute, cancel)
+        .await
 }
 
 // ---------------------------------------------------------------------------
-// Testable core (runner-injected)
+// Testable core (runner-injected, test-only)
 // ---------------------------------------------------------------------------
 
 /// Dedup → Policy → execute with an injected runner for hermeticity.
@@ -107,6 +117,11 @@ pub async fn dispatch(
 ///
 /// `cancel` is moved into the `run_once` closure (FnOnce); a dedup hit drops
 /// it without sending — no accidental cancel effect.
+///
+/// Production Tasks flow through [`dispatch_scheduled_with_runner`] instead;
+/// this function is kept for the existing test suite that exercises the
+/// dedup → Policy → execute pipeline directly without a scheduler.
+#[cfg(test)]
 async fn dispatch_with_runner<R, Fut>(
     task: &TaskRequest,
     policy: &Policy,
@@ -120,7 +135,74 @@ where
 {
     dedup
         .run_once(&task.task_id, move || async move {
-            evaluate_and_execute(task, policy, run, cancel).await
+            let timeout = effective_timeout(task.timeout_seconds);
+            evaluate_and_execute(task, timeout, policy, run, cancel).await
+        })
+        .await
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler-aware testable core (runner-injected)
+// ---------------------------------------------------------------------------
+
+/// Dedup → schedule → Policy → execute with an injected runner and scheduler.
+///
+/// This is the production-path core. All invariants hold in a single nested
+/// structure:
+///
+/// - `dedup.run_once` is the **outermost** wrapper (ADR-0004 dedup-before-enqueue):
+///   the `task_id` marker is recorded before the closure enters the queue. A
+///   Task whose deadline expires or is cancelled while queued still has its id
+///   recorded — a re-send is deduplicated (at-most-once holds for queued exits).
+/// - `scheduler.acquire` blocks inside the closure until a slot is available,
+///   the deadline fires, or cancel fires. The permit is held across execution
+///   (mutate serial invariant).
+/// - A single timeout clock runs from `received_at`: `deadline = received_at +
+///   effective_timeout`. The executor receives only the REMAINING budget so the
+///   clock never restarts at dispatch time.
+/// - The still-owned `cancel` receiver is forwarded to the executor so the
+///   in-flight cancel path and honest-race (ADR-0013) remain intact.
+async fn dispatch_scheduled_with_runner<R, Fut>(
+    task: &TaskRequest,
+    policy: &Policy,
+    dedup: &DedupStore,
+    scheduler: &Scheduler,
+    received_at: Instant,
+    run: R,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult
+where
+    R: Fn(ExecRequest) -> Fut + Clone,
+    Fut: Future<Output = TaskResult>,
+{
+    dedup
+        .run_once(&task.task_id, move || async move {
+            let effective = effective_timeout(task.timeout_seconds);
+            let deadline = received_at + effective;
+            let class = Scheduler::classify(task);
+            let mut cancel = cancel;
+            match scheduler.acquire(class, deadline, &mut cancel).await {
+                Err(QueuedOutcome::Timeout) => timeout_result(task.task_id.clone(), received_at),
+                Err(QueuedOutcome::Cancelled) => {
+                    cancelled_result(task.task_id.clone(), received_at)
+                }
+                Ok(_permit) => {
+                    // Single clock from receipt: give the executor only the
+                    // REMAINING wall-clock budget, not a fresh effective_timeout.
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        // Deadline elapsed between acquire returning and now:
+                        // report timeout without executing (no race with the
+                        // executor — permit is held, so no other mutate Task ran).
+                        timeout_result(task.task_id.clone(), received_at)
+                    } else {
+                        // _permit held across evaluate_and_execute: keeps the gate
+                        // occupied for the duration of execution (mutate serial).
+                        evaluate_and_execute(task, remaining, policy, run, cancel).await
+                    }
+                    // _permit drops here, releasing the gate for the next Task.
+                }
+            }
         })
         .await
 }
@@ -229,6 +311,7 @@ fn operation_positional_args(op: &Operation) -> Vec<String> {
 
 async fn evaluate_and_execute<R, Fut>(
     task: &TaskRequest,
+    timeout: Duration,
     policy: &Policy,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
@@ -237,7 +320,6 @@ where
     R: Fn(ExecRequest) -> Fut + Clone,
     Fut: Future<Output = TaskResult>,
 {
-    let timeout = effective_timeout(task.timeout_seconds);
     let task_id = task.task_id.clone();
 
     match &task.action {
@@ -358,6 +440,38 @@ fn effective_timeout(timeout_seconds: i32) -> Duration {
         DEFAULT_TIMEOUT
     } else {
         Duration::from_secs(timeout_seconds as u64).min(MAX_TIMEOUT)
+    }
+}
+
+/// Synthesizes an `OUTCOME_TIMEOUT` [`TaskResult`] for a Task that expired in the queue.
+///
+/// `duration_millis` is measured from `received_at` (true receipt), covering
+/// both queue-wait time and the zero execution time.
+fn timeout_result(task_id: String, received_at: Instant) -> TaskResult {
+    TaskResult {
+        task_id,
+        outcome: Outcome::Timeout as i32,
+        exit_code: -1,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        truncated: false,
+        duration_millis: received_at.elapsed().as_millis() as i64,
+    }
+}
+
+/// Synthesizes an `OUTCOME_CANCELLED` [`TaskResult`] for a Task cancelled while queued.
+///
+/// `duration_millis` is measured from `received_at`, covering queue-wait time.
+/// The Task never executed — no process was spawned.
+fn cancelled_result(task_id: String, received_at: Instant) -> TaskResult {
+    TaskResult {
+        task_id,
+        outcome: Outcome::Cancelled as i32,
+        exit_code: -1,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+        truncated: false,
+        duration_millis: received_at.elapsed().as_millis() as i64,
     }
 }
 
@@ -1278,6 +1392,262 @@ allow = ["^/bin/sh "]
                 .windows(b"already processed".len())
                 .any(|w| w == b"already processed"),
             "second result must be benign already-processed"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ACCEPTANCE-CRITICAL [AC1] (issue #91): two mutate Tasks dispatched
+    // concurrently via the scheduler must never execute simultaneously.
+    // An injected slow runner asserts the concurrency gauge never exceeds 1.
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn ac1_two_mutate_tasks_never_overlap() {
+        let state_dir = TempDir::new("sched-m-overlap");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let policy = fixture_policy(); // nginx allowed (service.restart = MUTATE)
+        let scheduler = crate::scheduler::Scheduler::new();
+        let received_at = tokio::time::Instant::now();
+
+        let current = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let cur1 = Arc::clone(&current);
+        let pk1 = Arc::clone(&peak);
+        let slow_run = move |req: ExecRequest| {
+            let cur = Arc::clone(&cur1);
+            let pk = Arc::clone(&pk1);
+            let task_id = req.task_id.clone();
+            async move {
+                let n = cur.fetch_add(1, Ordering::SeqCst) + 1;
+                pk.fetch_max(n, Ordering::SeqCst);
+                tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                cur.fetch_sub(1, Ordering::SeqCst);
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 40,
+                }
+            }
+        };
+
+        // Two distinct task IDs for nginx — both are MUTATE (service.restart).
+        let task1 = make_task_service_restart("sched-m1", "nginx");
+        let task2 = make_task_service_restart("sched-m2", "nginx");
+
+        let (r1, r2) = tokio::join!(
+            dispatch_scheduled_with_runner(
+                &task1,
+                &policy,
+                &dedup,
+                &scheduler,
+                received_at,
+                slow_run.clone(),
+                None
+            ),
+            dispatch_scheduled_with_runner(
+                &task2,
+                &policy,
+                &dedup,
+                &scheduler,
+                received_at,
+                slow_run,
+                None
+            ),
+        );
+
+        assert_eq!(r1.outcome, Outcome::Success as i32, "task1 must succeed");
+        assert_eq!(r2.outcome, Outcome::Success as i32, "task2 must succeed");
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            1,
+            "mutate Tasks must NEVER overlap: peak concurrent runners must be 1"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Queued-timeout: a Task whose deadline expires while waiting in the queue
+    // reports OUTCOME_TIMEOUT, the runner is never called, and the task_id is
+    // deduped on re-send (ADR-0004 at-most-once for queued exits).
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn queued_timeout_outcome_no_runner_then_deduped() {
+        let state_dir = TempDir::new("sched-qt");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        // Policy allows the operation (Policy gate must not fire before scheduler).
+        let policy = fixture_policy();
+        let scheduler = crate::scheduler::Scheduler::new();
+
+        let runner_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&runner_calls);
+        let fake_run = move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        // Use a received_at far in the past so the deadline is already expired.
+        // effective_timeout(5) = 5s; deadline = (now - 100s) + 5s = now - 95s (past).
+        let received_at = tokio::time::Instant::now() - std::time::Duration::from_secs(100);
+
+        let task = make_task_service_restart("sched-qt-1", "nginx");
+        let result = dispatch_scheduled_with_runner(
+            &task,
+            &policy,
+            &dedup,
+            &scheduler,
+            received_at,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Timeout as i32,
+            "expired deadline must yield OUTCOME_TIMEOUT"
+        );
+        assert_eq!(result.exit_code, -1, "queued-timeout exit_code must be -1");
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must never be called when Task expires in the queue"
+        );
+
+        // Re-dispatch same task_id → deduped benign (at-most-once: id recorded before queue).
+        let result2 = dispatch_scheduled_with_runner(
+            &task,
+            &policy,
+            &dedup,
+            &scheduler,
+            tokio::time::Instant::now(),
+            fake_run,
+            None,
+        )
+        .await;
+        assert!(
+            result2
+                .stderr
+                .windows(b"already processed".len())
+                .any(|w| w == b"already processed"),
+            "re-dispatched queued-timeout task_id must be deduped (already processed)"
+        );
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must not be called on the deduped re-send"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Queued-cancel: a Task cancelled while waiting in the queue reports
+    // OUTCOME_CANCELLED, the runner is never called, and the task_id is deduped
+    // on re-send (ADR-0004, ADR-0013: queued-cancel never spawns; id stays recorded).
+    // -----------------------------------------------------------------------
+    #[tokio::test]
+    async fn queued_cancel_outcome_no_runner_then_deduped() {
+        let state_dir = TempDir::new("sched-qc");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let policy = fixture_policy();
+        let scheduler = crate::scheduler::Scheduler::new();
+
+        // Occupy the mutate gate so the Task queues (doesn't acquire immediately).
+        let mut blocker_cancel = None;
+        let _blocker_permit = scheduler
+            .acquire(
+                crate::scheduler::Class::Mutate,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+                &mut blocker_cancel,
+            )
+            .await
+            .expect("blocker must acquire mutate gate");
+
+        let runner_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&runner_calls);
+        let fake_run = move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        // Set up cancel: fire after a short delay (after the dispatch is queued).
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let _ = cancel_tx.send(());
+        });
+
+        let task = make_task_service_restart("sched-qc-1", "nginx");
+        let received_at = tokio::time::Instant::now();
+        let result = dispatch_scheduled_with_runner(
+            &task,
+            &policy,
+            &dedup,
+            &scheduler,
+            received_at,
+            fake_run.clone(),
+            Some(cancel_rx),
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Cancelled as i32,
+            "queued cancel must yield OUTCOME_CANCELLED"
+        );
+        assert_eq!(result.exit_code, -1, "queued-cancel exit_code must be -1");
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must never be called when Task is cancelled in the queue"
+        );
+
+        // Re-dispatch same task_id → deduped benign (id stays recorded per ADR-0004).
+        drop(_blocker_permit); // release the gate so the re-send can proceed
+        let result2 = dispatch_scheduled_with_runner(
+            &task,
+            &policy,
+            &dedup,
+            &scheduler,
+            tokio::time::Instant::now(),
+            fake_run,
+            None,
+        )
+        .await;
+        assert!(
+            result2
+                .stderr
+                .windows(b"already processed".len())
+                .any(|w| w == b"already processed"),
+            "re-dispatched queued-cancel task_id must be deduped (already processed)"
+        );
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must not be called on the deduped re-send"
         );
     }
 }
