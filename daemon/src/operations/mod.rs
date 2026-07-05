@@ -65,9 +65,9 @@ pub fn descriptors() -> Vec<OperationDescriptor> {
 /// Returns the [`RiskClass`] for a named Operation, or `None` if the name is
 /// not in the v1 vocabulary.
 ///
-/// Only referenced in tests; the dispatch pipeline routes by name string, not
-/// by risk class (Policy evaluates risk at the dispatch layer).
-#[allow(dead_code)]
+/// Called by [`crate::scheduler::Scheduler::classify`] to route Tasks to the
+/// correct concurrency gate. The dispatch pipeline routes by name string, not
+/// by risk class (Policy evaluates at the dispatch layer, not here).
 pub fn risk_class(name: &str) -> Option<RiskClass> {
     match name {
         SYSTEM_FACTS | FILE_READ => Some(RiskClass::Read),
