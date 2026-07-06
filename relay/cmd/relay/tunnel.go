@@ -21,10 +21,14 @@ import (
 //
 // register is called after the Ping handshake completes; it records the
 // outbound send function for the node and returns a cleanup func. deliver is
-// called when a TaskResult arrives on the inbound stream.
+// called when a TaskResult arrives on the inbound stream. deliverVerdict is
+// called when a PolicyVerdict arrives on the inbound stream (the daemon's
+// answer to a PolicyQuery; ADR-0011 — the Relay only reads it, never evaluates
+// Policy itself).
 type taskSink interface {
 	register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func())
 	deliver(nodeID string, result *gleipnirv1.TaskResult)
+	deliverVerdict(nodeID string, verdict *gleipnirv1.PolicyVerdict)
 }
 
 type tunnelServer struct {
@@ -176,6 +180,13 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 			if s.sink != nil {
 				if tr := m.GetTaskResult(); tr != nil {
 					s.sink.deliver(nodeID, tr)
+				}
+			}
+			// Deliver PolicyVerdict to the test sink (if set). In production
+			// s.sink is always nil; this block is a zero-cost no-op.
+			if s.sink != nil {
+				if pv := m.GetPolicyVerdict(); pv != nil {
+					s.sink.deliverVerdict(nodeID, pv)
 				}
 			}
 		}

@@ -12,6 +12,12 @@
 // can dial it. It uses the live enrollment flow: the daemon self-enrolls on first
 // connect using RELAY_ENROLLMENT_TOKEN + RELAY_CA_BUNDLE_PATH.
 //
+// startDaemonNode below is the shared harness for this file and
+// tunnel_control_e2e_test.go's v0.0.4 acceptance tests: it boots the Relay,
+// attaches the dispatcher sink, seeds an Enrollment Token, writes the CA
+// bundle + policy files, launches the daemon subprocess, and waits for the
+// Hello→Ping registration sync point.
+//
 // Skip condition: RELAY_DAEMON_BIN env var not set.
 // This test is behind //go:build integration so `make test` (hermetic) stays green.
 // Run via: make test-integration (or manually: cd relay && RELAY_DAEMON_BIN=...
@@ -31,7 +37,9 @@ import (
 
 // fixturePolicy is the TOML policy the daemon subprocess will load.
 // It allows file.read (wildcard, except /etc/shadow), service.restart for
-// nginx only (sshd denied by default), and raw_exec for systemctl status/restart.
+// nginx only (sshd denied by default), and raw_exec for systemctl status/restart
+// plus a bounded /bin/sleep (used by the cancel/concurrency e2e tests to get a
+// measurable long-running, Policy-allowed Task).
 const fixturePolicy = `
 [[operation]]
 name = "file.read"
@@ -50,7 +58,7 @@ name = "service.restart"
 allowed_args = [["nginx"]]
 
 [raw_exec]
-allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$"]
+allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$", "^/bin/sleep [0-9]+$"]
 deny  = ["--force", "\\brm\\b"]
 `
 
@@ -84,35 +92,85 @@ func startTCPServer(t *testing.T) (string, *appDeps) {
 	return addr, deps
 }
 
-func TestTunnelDispatch_E2E(t *testing.T) {
+// e2eNode is the handle returned by startDaemonNode: everything a v0.0.4
+// acceptance test needs to dispatch Tasks/TaskCancel/PolicyQuery over the real
+// mTLS Tunnel and read back TaskResult/PolicyVerdict, plus the on-disk state
+// needed to assert on the registry and to restart the daemon in place.
+type e2eNode struct {
+	disp       *dispatcher
+	nodeID     string
+	deps       *appDeps
+	stateDir   string
+	policyPath string
+	caPath     string
+	addr       string
+
+	daemonBin string
+	env       []string
+	cmd       *exec.Cmd
+
+	// restart kills the current daemon subprocess and relaunches it against
+	// the SAME stateDir/policyPath/addr, so it reconnects as the same Node
+	// (its identity is persisted under stateDir). Blocks until the dispatcher
+	// observes re-registration or fails the test on timeout.
+	restart func()
+}
+
+// resultCh returns the node's TaskResult channel (created at registration).
+func (n *e2eNode) resultCh() chan *gleipnirv1.TaskResult {
+	n.disp.mu.Lock()
+	defer n.disp.mu.Unlock()
+	return n.disp.results[n.nodeID]
+}
+
+// verdictCh returns the node's PolicyVerdict channel (created at registration).
+func (n *e2eNode) verdictCh() chan *gleipnirv1.PolicyVerdict {
+	n.disp.mu.Lock()
+	defer n.disp.mu.Unlock()
+	return n.disp.verdicts[n.nodeID]
+}
+
+// writeTempFile writes content to a new 0600 temp file under t.TempDir() and
+// returns its path.
+func writeTempFile(t *testing.T, pattern, content string) string {
+	t.Helper()
+	f, err := os.CreateTemp(t.TempDir(), pattern)
+	if err != nil {
+		t.Fatalf("create temp file: %v", err)
+	}
+	if _, err := f.WriteString(content); err != nil {
+		t.Fatalf("write temp file: %v", err)
+	}
+	f.Close()
+	if err := os.Chmod(f.Name(), 0600); err != nil {
+		t.Fatalf("chmod temp file: %v", err)
+	}
+	return f.Name()
+}
+
+// startDaemonNode boots the Relay on a real TCP listener, attaches the
+// dispatcher sink, seeds an Enrollment Token, writes the CA bundle and the
+// given Policy TOML to disk, launches a real relay-daemon subprocess against
+// them, and blocks until the Hello→Ping handshake completes (the dispatcher
+// registration is the sync point). Skips the test if RELAY_DAEMON_BIN is unset.
+func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
+	t.Helper()
 	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
 	if daemonBin == "" {
 		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
-	// -----------------------------------------------------------------------
-	// Infrastructure: start the Relay on a real TCP listener.
-	// -----------------------------------------------------------------------
 	ctx := context.Background()
 	addr, deps := startTCPServer(t)
 
-	// -----------------------------------------------------------------------
-	// Attach dispatcher (test-only sink) before the daemon connects.
-	// -----------------------------------------------------------------------
 	disp := newDispatcher()
 	deps.tunnel.sink = disp
 
-	// -----------------------------------------------------------------------
-	// Seed Enrollment Token.
-	// -----------------------------------------------------------------------
 	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=test"}, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
 
-	// -----------------------------------------------------------------------
-	// Write policy file (mode 0600, set_permissions-style via os.Chmod).
-	// -----------------------------------------------------------------------
 	caBundle := deps.ca.Bundle()
 	caFile, err := os.CreateTemp(t.TempDir(), "ca-bundle-*.pem")
 	if err != nil {
@@ -126,96 +184,107 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 		t.Fatalf("chmod CA bundle: %v", err)
 	}
 
-	policyFile, err := os.CreateTemp(t.TempDir(), "policy-*.toml")
-	if err != nil {
-		t.Fatalf("create policy temp file: %v", err)
-	}
-	if _, err := policyFile.WriteString(fixturePolicy); err != nil {
-		t.Fatalf("write policy: %v", err)
-	}
-	policyFile.Close()
-	if err := os.Chmod(policyFile.Name(), 0600); err != nil {
-		t.Fatalf("chmod policy: %v", err)
-	}
-
-	// -----------------------------------------------------------------------
-	// Write a temp content file for the file.read test.
-	// -----------------------------------------------------------------------
-	contentFile, err := os.CreateTemp(t.TempDir(), "content-*.txt")
-	if err != nil {
-		t.Fatalf("create content file: %v", err)
-	}
-	wantContent := []byte("hello from e2e dispatch test\n")
-	if _, err := contentFile.Write(wantContent); err != nil {
-		t.Fatalf("write content: %v", err)
-	}
-	contentFile.Close()
-	if err := os.Chmod(contentFile.Name(), 0600); err != nil {
-		t.Fatalf("chmod content file: %v", err)
-	}
-
-	// -----------------------------------------------------------------------
-	// Launch the daemon subprocess with enrollment env vars.
-	// -----------------------------------------------------------------------
+	policyPath := writeTempFile(t, "policy-*.toml", policyTOML)
 	stateDir := t.TempDir()
-	daemonCmd := exec.Command(daemonBin, "--relay", "https://"+addr)
-	daemonCmd.Env = append(os.Environ(),
+
+	env := append(os.Environ(),
 		"RELAY_ADDR=https://"+addr,
 		"RELAY_ENROLLMENT_TOKEN="+plaintext,
 		"RELAY_CA_BUNDLE_PATH="+caFile.Name(),
 		"RELAY_ENROLL_ENDPOINT=https://"+addr,
 		"RELAY_STATE_DIR="+stateDir,
-		"RELAY_POLICY_PATH="+policyFile.Name(),
+		"RELAY_POLICY_PATH="+policyPath,
 		"RELAY_DOMAIN=localhost",
 		"HOSTNAME=e2e-test-node",
 		// Disable rustls provider conflict on some environments.
 		"RUST_LOG=warn",
 	)
-	if err := daemonCmd.Start(); err != nil {
-		t.Fatalf("start daemon: %v", err)
-	}
-	t.Cleanup(func() {
-		daemonCmd.Process.Kill() //nolint:errcheck
-		daemonCmd.Wait()         //nolint:errcheck
-	})
 
-	// -----------------------------------------------------------------------
+	launch := func() *exec.Cmd {
+		cmd := exec.Command(daemonBin, "--relay", "https://"+addr)
+		cmd.Env = env
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start daemon: %v", err)
+		}
+		t.Cleanup(func() {
+			cmd.Process.Kill() //nolint:errcheck
+			cmd.Wait()         //nolint:errcheck
+		})
+		return cmd
+	}
+
+	cmd := launch()
+
 	// Wait for the daemon to complete Hello→Ping handshake (registry sync).
-	// Poll deps.registry.Get until the node appears, with a 30 s deadline.
-	// The dispatcher.waitForNode sync is secondary; registry is authoritative.
-	// -----------------------------------------------------------------------
+	// Poll the dispatcher until the node appears, with a 30 s deadline. We
+	// don't know the Relay-assigned node_id yet, so watch disp.senders directly.
 	var nodeID string
 	regCtx, regCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer regCancel()
-	for {
+	for nodeID == "" {
 		select {
 		case <-regCtx.Done():
 			t.Fatalf("timeout: daemon did not complete Hello→Ping handshake within 30 s")
 		case <-time.After(100 * time.Millisecond):
-			// Search registry for the first node with hostname "e2e-test-node".
-			// We don't know the Relay-assigned node_id yet.
 		}
-		// Walk registered nodes: the registry doesn't expose a list-by-hostname
-		// API, so we use the dispatcher as the sync point instead.
-		d := disp
-		d.mu.Lock()
-		for id := range d.senders {
+		disp.mu.Lock()
+		for id := range disp.senders {
 			nodeID = id
 		}
-		d.mu.Unlock()
-		if nodeID != "" {
-			break
-		}
+		disp.mu.Unlock()
 	}
-
-	// Confirm the dispatcher also has the node.
 	if err := disp.waitForNode(nodeID, 5*time.Second); err != nil {
 		t.Fatalf("waitForNode: %v", err)
 	}
 
-	disp.mu.Lock()
-	resultCh := disp.results[nodeID]
-	disp.mu.Unlock()
+	node := &e2eNode{
+		disp:       disp,
+		nodeID:     nodeID,
+		deps:       deps,
+		stateDir:   stateDir,
+		policyPath: policyPath,
+		caPath:     caFile.Name(),
+		addr:       addr,
+		daemonBin:  daemonBin,
+		env:        env,
+		cmd:        cmd,
+	}
+	node.restart = func() {
+		if err := node.cmd.Process.Kill(); err != nil {
+			t.Fatalf("kill daemon for restart: %v", err)
+		}
+		node.cmd.Wait() //nolint:errcheck
+
+		// Wait for the dispatcher to deregister the old sender before
+		// relaunching, so the re-registration poll below cannot spuriously
+		// observe the stale (pre-restart) registration.
+		deregCtx, deregCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer deregCancel()
+		for {
+			disp.mu.Lock()
+			_, present := disp.senders[nodeID]
+			disp.mu.Unlock()
+			if !present {
+				break
+			}
+			select {
+			case <-deregCtx.Done():
+				t.Fatalf("timeout: dispatcher did not deregister %q after kill", nodeID)
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+
+		node.cmd = launch()
+		if err := disp.waitForNode(nodeID, 30*time.Second); err != nil {
+			t.Fatalf("waitForNode after restart: %v", err)
+		}
+	}
+	return node
+}
+
+func TestTunnelDispatch_E2E(t *testing.T) {
+	node := startDaemonNode(t, fixturePolicy)
+	resultCh := node.resultCh()
 	if resultCh == nil {
 		t.Fatal("no result channel for node")
 	}
@@ -223,6 +292,9 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 	// -----------------------------------------------------------------------
 	// (a) file.read of a temp file → SUCCESS + stdout == file contents.
 	// -----------------------------------------------------------------------
+	wantContent := "hello from e2e dispatch test\n"
+	contentPath := writeTempFile(t, "content-*.txt", wantContent)
+
 	fileReadTask := &gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Task{
 			Task: &gleipnirv1.TaskRequest{
@@ -231,13 +303,13 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 				Action: &gleipnirv1.TaskRequest_Operation{
 					Operation: &gleipnirv1.Operation{
 						Name: "file.read",
-						Args: map[string]string{"path": contentFile.Name()},
+						Args: map[string]string{"path": contentPath},
 					},
 				},
 			},
 		},
 	}
-	if err := disp.Dispatch(nodeID, fileReadTask); err != nil {
+	if err := node.disp.Dispatch(node.nodeID, fileReadTask); err != nil {
 		t.Fatalf("Dispatch file.read: %v", err)
 	}
 	select {
@@ -249,7 +321,7 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 			t.Errorf("file.read outcome: got %v, want SUCCESS; stderr=%q",
 				result.Outcome, result.Stderr)
 		}
-		if string(result.Stdout) != string(wantContent) {
+		if string(result.Stdout) != wantContent {
 			t.Errorf("file.read stdout: got %q, want %q", result.Stdout, wantContent)
 		}
 	case <-time.After(15 * time.Second):
@@ -273,7 +345,7 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 			},
 		},
 	}
-	if err := disp.Dispatch(nodeID, sshdTask); err != nil {
+	if err := node.disp.Dispatch(node.nodeID, sshdTask); err != nil {
 		t.Fatalf("Dispatch service.restart sshd: %v", err)
 	}
 	select {
