@@ -15,6 +15,7 @@ mod executor;
 mod identity;
 mod operations;
 mod policy;
+mod policy_check;
 mod raw_exec;
 mod renew;
 mod scheduler;
@@ -295,6 +296,21 @@ async fn run_tunnel(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // `policy check` is a fully offline/synchronous subcommand (issue #93):
+    // it must never dial the Relay or require an identity, so it is
+    // intercepted before Config/network/identity/tracing setup below. It runs
+    // before tracing_subscriber::fmt().init(), so policy_check::run must print
+    // directly to stdout/stderr — a tracing::* call here would be silently
+    // dropped. `args.get(1)/.get(2)` (not direct indexing) keeps normal
+    // `relay-daemon` startup (argv len == 1) panic-free.
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("policy")
+        && args.get(2).map(String::as_str) == Some("check")
+    {
+        let code = policy_check::run(&args);
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

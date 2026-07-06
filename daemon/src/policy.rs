@@ -26,6 +26,8 @@ use std::path::Path;
 use regex::Regex;
 use serde::Deserialize;
 
+use crate::operations;
+
 // ---------------------------------------------------------------------------
 // On-disk serde model
 // ---------------------------------------------------------------------------
@@ -301,6 +303,216 @@ pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
 
     let contents = fs::read_to_string(path)?;
     from_toml_str(&contents)
+}
+
+// ---------------------------------------------------------------------------
+// Lint API (collect-all diagnostics for `relay-daemon policy check`, #93)
+// ---------------------------------------------------------------------------
+
+/// Severity of a single lint finding.
+///
+/// `Error` findings mean the Policy file cannot be trusted (parse error,
+/// invalid regex, unknown Operation name) and must fail a pipeline. `Warning`
+/// findings are Policy smells that do not invalidate the file (a fully
+/// shadowed allow rule) — non-fatal unless `--strict` is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LintSeverity {
+    Error,
+    Warning,
+}
+
+/// One lint finding, naming the offending rule by section + index + name.
+///
+/// Serde-parsed structs carry no source line numbers, so the rule is
+/// identified positionally, e.g. `[[operation]] #1 (name="pkg.install")`,
+/// `[raw_exec].allow[0]`, `[[deny]] #0 (name="file.read")`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintFinding {
+    pub severity: LintSeverity,
+    pub location: String,
+    pub message: String,
+}
+
+/// The result of linting a Policy file.
+///
+/// A TOML parse error means nothing else is checkable, so `parse_error` is
+/// mutually exclusive with `findings` being non-empty: when `parse_error` is
+/// `Some`, `findings` is always empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LintReport {
+    pub parse_error: Option<String>,
+    pub findings: Vec<LintFinding>,
+}
+
+impl LintReport {
+    /// `true` if the file cannot be trusted: a parse error or any
+    /// `Error`-severity finding.
+    pub fn has_errors(&self) -> bool {
+        self.parse_error.is_some()
+            || self
+                .findings
+                .iter()
+                .any(|f| f.severity == LintSeverity::Error)
+    }
+
+    /// `true` if any `Warning`-severity finding is present.
+    pub fn has_warnings(&self) -> bool {
+        self.findings
+            .iter()
+            .any(|f| f.severity == LintSeverity::Warning)
+    }
+}
+
+/// Lints a Policy file, collecting **all** findings rather than failing
+/// closed on the first bad rule.
+///
+/// Contrast [`from_toml_str`], which is fail-closed for runtime loading (stops
+/// at the first bad regex): a pipeline linter needs to report every problem
+/// in one pass, not one problem per invocation.
+///
+/// Checks, in order:
+/// 1. TOML parse — on failure, `parse_error` is set and nothing else is
+///    checked (an unparsable file has no rules to lint).
+/// 2. Invalid `[raw_exec]` regex patterns (`Error`) — compiled with the same
+///    `regex::Regex` engine `from_toml_str` uses, so the lint verdict matches
+///    load-time behavior.
+/// 3. Unknown Operation names in `[[operation]]` and `[[deny]]` (`Error`),
+///    checked against the proto Operation vocabulary
+///    (`crate::operations::risk_class`). An unknown name in `[[deny]]` is
+///    flagged as an `Error` (not a `Warning`) for typo-safety: a defensive
+///    deny for an operation this daemon doesn't implement is indistinguishable
+///    from a typo, and the more-restrictive choice is to fail the pipeline
+///    visibly rather than silently accept a no-op deny rule.
+/// 4. Allow rules fully shadowed by a `[[deny]]` rule of the same name
+///    (`Warning`) — see [`allow_is_shadowed_by_deny`].
+///
+/// **Known limitations** (documented, not attempted):
+/// - Shadowing by the *union* of multiple deny rules (set-cover) is not
+///   detected; only single-deny-rule shadowing is. This is conservative — it
+///   may miss a shadowed allow, but never flags one that isn't actually dead.
+/// - `[raw_exec]` allow-vs-deny regex shadowing is not attempted: regex
+///   language subset containment is undecidable in general.
+pub fn lint(toml: &str) -> LintReport {
+    let file: PolicyFile = match toml::from_str(toml) {
+        Ok(f) => f,
+        Err(e) => {
+            return LintReport {
+                parse_error: Some(e.to_string()),
+                findings: Vec::new(),
+            }
+        }
+    };
+
+    let mut findings = Vec::new();
+
+    lint_raw_exec_regexes(&file.raw_exec.allow, "allow", &mut findings);
+    lint_raw_exec_regexes(&file.raw_exec.deny, "deny", &mut findings);
+
+    for (i, op) in file.operation.iter().enumerate() {
+        if operations::risk_class(&op.name).is_none() {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                location: format!("[[operation]] #{i} (name={:?})", op.name),
+                message: format!("unknown Operation name {:?}", op.name),
+            });
+        }
+    }
+
+    for (i, deny) in file.deny.iter().enumerate() {
+        if operations::risk_class(&deny.name).is_none() {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                location: format!("[[deny]] #{i} (name={:?})", deny.name),
+                message: format!("unknown Operation name {:?}", deny.name),
+            });
+        }
+    }
+
+    lint_shadowed_allows(&file.operation, &file.deny, &mut findings);
+
+    LintReport {
+        parse_error: None,
+        findings,
+    }
+}
+
+/// Checks every pattern in a `[raw_exec]` allow/deny list for regex validity.
+fn lint_raw_exec_regexes(patterns: &[String], section: &str, findings: &mut Vec<LintFinding>) {
+    for (i, pattern) in patterns.iter().enumerate() {
+        if let Err(e) = Regex::new(pattern) {
+            findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                location: format!("[raw_exec].{section}[{i}]"),
+                message: format!("invalid regex {pattern:?}: {e}"),
+            });
+        }
+    }
+}
+
+/// Flags every `[[operation]]` allow rule that is fully shadowed by some
+/// `[[deny]]` rule of the same name (see [`allow_is_shadowed_by_deny`]).
+fn lint_shadowed_allows(
+    allows: &[OperationRuleRaw],
+    denies: &[DenyRuleRaw],
+    findings: &mut Vec<LintFinding>,
+) {
+    for (ai, allow) in allows.iter().enumerate() {
+        for (di, deny) in denies.iter().enumerate() {
+            if deny.name != allow.name {
+                continue;
+            }
+            if allow_is_shadowed_by_deny(allow, deny) {
+                findings.push(LintFinding {
+                    severity: LintSeverity::Warning,
+                    location: format!("[[operation]] #{ai} (name={:?})", allow.name),
+                    message: format!(
+                        "allow rule is fully shadowed by [[deny]] #{di} (name={:?}); it can never fire",
+                        deny.name
+                    ),
+                });
+            }
+        }
+    }
+}
+
+/// `true` if `deny` (same operation name as `allow`, checked by the caller)
+/// covers every invocation `allow` would otherwise permit — i.e. the allow
+/// rule can never fire.
+///
+/// Mirrors [`Policy::evaluate`]'s own deny/allow semantics exactly, so a
+/// flagged allow provably can never fire:
+/// - An empty `deny.args` blocks the whole operation unconditionally
+///   (`Policy::evaluate`'s empty-`args` deny branch) → always shadowed.
+/// - Otherwise, `deny` covers `allow` iff for **every** position `i` in
+///   `0..allow.allowed_args.len()`:
+///   - if `i < deny.args.len()`: `allow.allowed_args[i]` contains no `"*"`
+///     wildcard **and** every value in it is present in `deny.args[i]`
+///     (finite subset — a deny has no wildcard, so a `"*"` allow position is
+///     never coverable);
+///   - if `i >= deny.args.len()`: covered (the deny's vacuous-satisfaction
+///     rule fires for absent trailing positions, matching `Policy::evaluate`,
+///     and `allow`'s fixed arg count means the invocation has exactly
+///     `allow.allowed_args.len()` args).
+///
+/// Positions beyond `allow.allowed_args.len()` (when `deny` is longer than
+/// `allow`) are not examined: they index beyond the invocation's args and are
+/// vacuously satisfied on the deny side, so they never block coverage.
+fn allow_is_shadowed_by_deny(allow: &OperationRuleRaw, deny: &DenyRuleRaw) -> bool {
+    if deny.args.is_empty() {
+        return true;
+    }
+
+    allow
+        .allowed_args
+        .iter()
+        .enumerate()
+        .all(|(i, allowed_vals)| match deny.args.get(i) {
+            Some(denied_vals) => {
+                !allowed_vals.iter().any(|v| v == "*")
+                    && allowed_vals.iter().all(|v| denied_vals.contains(v))
+            }
+            None => true,
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -847,5 +1059,201 @@ deny = []
             str_policy.fingerprint(),
             "load_policy and from_toml_str must produce the same fingerprint for the same bytes"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Lint tests (#93)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn lint_fixture_is_clean() {
+        // Guards against false positives: the fixture's `file.read "*"` +
+        // deny `/etc/shadow` is a partial shadow (the allow still fires for
+        // every other path) and must NOT be flagged.
+        let report = lint(FIXTURE);
+        assert!(
+            report.parse_error.is_none(),
+            "fixture must parse cleanly; got {:?}",
+            report.parse_error
+        );
+        assert!(
+            report.findings.is_empty(),
+            "fixture must lint with zero findings; got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn lint_reports_all_invalid_regexes() {
+        let bad_policy = r#"
+[raw_exec]
+allow = ["[invalid1", "[invalid2"]
+"#;
+        let report = lint(bad_policy);
+        assert!(report.parse_error.is_none());
+        let errors: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            2,
+            "both invalid regexes must be reported (collect-all, unlike from_toml_str's fail-on-first); got {:?}",
+            report.findings
+        );
+        assert!(errors[0].location.contains("allow[0]"));
+        assert!(errors[1].location.contains("allow[1]"));
+    }
+
+    #[test]
+    fn lint_reports_unknown_operation() {
+        let policy = r#"
+[[operation]]
+name = "pkg.install"
+allowed_args = []
+"#;
+        let report = lint(policy);
+        assert!(report.parse_error.is_none());
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "unknown operation name must produce exactly one finding; got {:?}",
+            report.findings
+        );
+        let finding = &report.findings[0];
+        assert_eq!(finding.severity, LintSeverity::Error);
+        assert!(finding.location.contains("[[operation]] #0"));
+        assert!(finding.message.contains("pkg.install"));
+    }
+
+    #[test]
+    fn lint_reports_unknown_operation_in_deny() {
+        let policy = r#"
+[[deny]]
+name = "pkg.install"
+args = []
+"#;
+        let report = lint(policy);
+        assert_eq!(report.findings.len(), 1);
+        let finding = &report.findings[0];
+        assert_eq!(finding.severity, LintSeverity::Error);
+        assert!(finding.location.contains("[[deny]] #0"));
+        assert!(finding.message.contains("pkg.install"));
+    }
+
+    #[test]
+    fn lint_flags_fully_shadowed_allow() {
+        // Non-empty deny.args that exactly covers the allow's single position.
+        let policy = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[deny]]
+name = "service.restart"
+args = [["nginx"]]
+"#;
+        let report = lint(policy);
+        assert!(report.parse_error.is_none());
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "fully shadowed allow must produce exactly one finding; got {:?}",
+            report.findings
+        );
+        let finding = &report.findings[0];
+        assert_eq!(finding.severity, LintSeverity::Warning);
+        assert!(finding.location.contains("[[operation]] #0"));
+        assert!(finding.message.contains("[[deny]] #0"));
+    }
+
+    #[test]
+    fn lint_flags_shadowed_allow_by_empty_args_deny() {
+        // An empty deny.args blocks the operation entirely regardless of arguments.
+        let policy = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[deny]]
+name = "service.restart"
+args = []
+"#;
+        let report = lint(policy);
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "empty-args deny must shadow the allow unconditionally; got {:?}",
+            report.findings
+        );
+        assert_eq!(report.findings[0].severity, LintSeverity::Warning);
+    }
+
+    #[test]
+    fn lint_does_not_flag_partial_shadow() {
+        // allow file.read "*" + deny file.read "/etc/shadow" — the allow
+        // still fires for every other path, so it must NOT be flagged.
+        let policy = r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+"#;
+        let report = lint(policy);
+        assert!(
+            report.findings.is_empty(),
+            "partial shadow (wildcard allow position) must not be flagged; got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn lint_reports_toml_parse_error() {
+        let malformed = "this is not [ valid toml =";
+        let report = lint(malformed);
+        assert!(
+            report.parse_error.is_some(),
+            "malformed TOML must set parse_error"
+        );
+        assert!(
+            report.findings.is_empty(),
+            "no findings should be collected when the file fails to parse"
+        );
+    }
+
+    #[test]
+    fn lint_report_has_errors_and_has_warnings() {
+        let error_only = LintReport {
+            parse_error: None,
+            findings: vec![LintFinding {
+                severity: LintSeverity::Error,
+                location: "x".to_string(),
+                message: "y".to_string(),
+            }],
+        };
+        assert!(error_only.has_errors());
+        assert!(!error_only.has_warnings());
+
+        let warning_only = LintReport {
+            parse_error: None,
+            findings: vec![LintFinding {
+                severity: LintSeverity::Warning,
+                location: "x".to_string(),
+                message: "y".to_string(),
+            }],
+        };
+        assert!(!warning_only.has_errors());
+        assert!(warning_only.has_warnings());
+
+        let parse_err = LintReport {
+            parse_error: Some("bad".to_string()),
+            findings: vec![],
+        };
+        assert!(parse_err.has_errors());
+        assert!(!parse_err.has_warnings());
     }
 }
