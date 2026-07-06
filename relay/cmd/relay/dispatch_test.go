@@ -22,15 +22,17 @@ import (
 // ---------------------------------------------------------------------------
 
 type dispatcher struct {
-	mu      sync.Mutex
-	senders map[string]func(*gleipnirv1.RelayMessage) error
-	results map[string]chan *gleipnirv1.TaskResult
+	mu       sync.Mutex
+	senders  map[string]func(*gleipnirv1.RelayMessage) error
+	results  map[string]chan *gleipnirv1.TaskResult
+	verdicts map[string]chan *gleipnirv1.PolicyVerdict
 }
 
 func newDispatcher() *dispatcher {
 	return &dispatcher{
-		senders: make(map[string]func(*gleipnirv1.RelayMessage) error),
-		results: make(map[string]chan *gleipnirv1.TaskResult),
+		senders:  make(map[string]func(*gleipnirv1.RelayMessage) error),
+		results:  make(map[string]chan *gleipnirv1.TaskResult),
+		verdicts: make(map[string]chan *gleipnirv1.PolicyVerdict),
 	}
 }
 
@@ -42,6 +44,9 @@ func (d *dispatcher) register(nodeID string, send func(*gleipnirv1.RelayMessage)
 	d.senders[nodeID] = send
 	if _, ok := d.results[nodeID]; !ok {
 		d.results[nodeID] = make(chan *gleipnirv1.TaskResult, 32)
+	}
+	if _, ok := d.verdicts[nodeID]; !ok {
+		d.verdicts[nodeID] = make(chan *gleipnirv1.PolicyVerdict, 32)
 	}
 	return func() {
 		d.mu.Lock()
@@ -59,6 +64,19 @@ func (d *dispatcher) deliver(nodeID string, result *gleipnirv1.TaskResult) {
 	d.mu.Unlock()
 	if ch != nil {
 		ch <- result
+	}
+}
+
+// deliverVerdict implements taskSink. Called by tunnelServer.Open when a
+// PolicyVerdict arrives on the inbound stream (the daemon's answer to a
+// PolicyQuery). Buffered channel (32) avoids blocking the stream goroutine
+// while the test goroutine reads.
+func (d *dispatcher) deliverVerdict(nodeID string, verdict *gleipnirv1.PolicyVerdict) {
+	d.mu.Lock()
+	ch := d.verdicts[nodeID]
+	d.mu.Unlock()
+	if ch != nil {
+		ch <- verdict
 	}
 }
 
@@ -93,6 +111,26 @@ func (d *dispatcher) Dispatch(nodeID string, msg *gleipnirv1.RelayMessage) error
 		return fmt.Errorf("dispatch: node %q not registered", nodeID)
 	}
 	return send(msg)
+}
+
+// SendCancel dispatches a TaskCancel for taskID to the node identified by
+// nodeID. Thin wrapper over Dispatch — the send-side plumbing already forwards
+// any RelayMessage oneof body.
+func (d *dispatcher) SendCancel(nodeID, taskID string) error {
+	return d.Dispatch(nodeID, &gleipnirv1.RelayMessage{
+		Body: &gleipnirv1.RelayMessage_TaskCancel{
+			TaskCancel: &gleipnirv1.TaskCancel{TaskId: taskID},
+		},
+	})
+}
+
+// SendPolicyQuery dispatches a PolicyQuery to the node identified by nodeID.
+// Thin wrapper over Dispatch — the send-side plumbing already forwards any
+// RelayMessage oneof body.
+func (d *dispatcher) SendPolicyQuery(nodeID string, q *gleipnirv1.PolicyQuery) error {
+	return d.Dispatch(nodeID, &gleipnirv1.RelayMessage{
+		Body: &gleipnirv1.RelayMessage_PolicyQuery{PolicyQuery: q},
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +195,34 @@ func TestDispatcher_Deliver(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timeout: no result delivered")
+	}
+}
+
+func TestDispatcher_DeliverVerdict(t *testing.T) {
+	d := newDispatcher()
+	unregister := d.register("node-3", func(*gleipnirv1.RelayMessage) error { return nil })
+	defer unregister()
+
+	want := &gleipnirv1.PolicyVerdict{
+		QueryId: "query-abc",
+		Allowed: true,
+	}
+	d.deliverVerdict("node-3", want)
+
+	d.mu.Lock()
+	ch := d.verdicts["node-3"]
+	d.mu.Unlock()
+
+	select {
+	case got := <-ch:
+		if got.QueryId != want.QueryId {
+			t.Errorf("QueryId: got %q, want %q", got.QueryId, want.QueryId)
+		}
+		if got.Allowed != want.Allowed {
+			t.Errorf("Allowed: got %v, want %v", got.Allowed, want.Allowed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout: no verdict delivered")
 	}
 }
 
