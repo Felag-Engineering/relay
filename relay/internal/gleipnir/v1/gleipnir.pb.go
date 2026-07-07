@@ -90,6 +90,7 @@ const (
 	Outcome_OUTCOME_TIMEOUT          Outcome = 3
 	Outcome_OUTCOME_DENIED_BY_POLICY Outcome = 4
 	Outcome_OUTCOME_CANCELLED        Outcome = 5 // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
+	Outcome_OUTCOME_UNREACHABLE      Outcome = 6 // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
 )
 
 // Enum value maps for Outcome.
@@ -101,6 +102,7 @@ var (
 		3: "OUTCOME_TIMEOUT",
 		4: "OUTCOME_DENIED_BY_POLICY",
 		5: "OUTCOME_CANCELLED",
+		6: "OUTCOME_UNREACHABLE",
 	}
 	Outcome_value = map[string]int32{
 		"OUTCOME_UNSPECIFIED":      0,
@@ -109,6 +111,7 @@ var (
 		"OUTCOME_TIMEOUT":          3,
 		"OUTCOME_DENIED_BY_POLICY": 4,
 		"OUTCOME_CANCELLED":        5,
+		"OUTCOME_UNREACHABLE":      6,
 	}
 )
 
@@ -1753,14 +1756,15 @@ const file_gleipnir_v1_gleipnir_proto_rawDesc = "" +
 	"\tRiskClass\x12\x1a\n" +
 	"\x16RISK_CLASS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fRISK_CLASS_READ\x10\x01\x12\x15\n" +
-	"\x11RISK_CLASS_MUTATE\x10\x02*\x96\x01\n" +
+	"\x11RISK_CLASS_MUTATE\x10\x02*\xaf\x01\n" +
 	"\aOutcome\x12\x17\n" +
 	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOUTCOME_SUCCESS\x10\x01\x12\x13\n" +
 	"\x0fOUTCOME_FAILURE\x10\x02\x12\x13\n" +
 	"\x0fOUTCOME_TIMEOUT\x10\x03\x12\x1c\n" +
 	"\x18OUTCOME_DENIED_BY_POLICY\x10\x04\x12\x15\n" +
-	"\x11OUTCOME_CANCELLED\x10\x052\x8f\x01\n" +
+	"\x11OUTCOME_CANCELLED\x10\x05\x12\x17\n" +
+	"\x13OUTCOME_UNREACHABLE\x10\x062\x8f\x01\n" +
 	"\n" +
 	"Enrollment\x12A\n" +
 	"\x06Enroll\x12\x1a.gleipnir.v1.EnrollRequest\x1a\x1b.gleipnir.v1.EnrollResponse\x12>\n" +
