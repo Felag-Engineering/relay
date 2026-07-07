@@ -147,6 +147,16 @@ jobs:
 
       - run: make test-integration
 
+      # #112: cross-binary CI smoke test (real relay + real relay-daemon over
+      # loopback TCP), driven through the devharness build-tag-gated control
+      # socket. lint-devharness vets the gated files (they're excluded from
+      # the default lint-relay); devharness-absent-check mechanically proves
+      # the surface is absent from the normal binary before test-crossbinary
+      # exercises it via the devharness-tagged one.
+      - run: make lint-devharness
+      - run: make devharness-absent-check
+      - run: make test-crossbinary
+
   # ---- release-build: compile-check the musl static binary (main only) ----
   release-build:
     name: Release build (musl)

@@ -8,7 +8,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 
 .PHONY: build test lint proto proto-tools proto-check build-relay build-daemon \
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
-        fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release
+        fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
+        build-relay-devharness devharness-absent-check test-crossbinary lint-devharness
 
 build: build-relay build-daemon
 
@@ -85,6 +86,34 @@ test-integration: build
 
 lint-daemon:
 	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
+
+## --- #112 dev-harness cross-binary CI machinery ---
+# Kept OUT of build/test/lint: build-relay-devharness produces a non-shippable
+# binary (the devharness dispatch/control backdoor, ADR-relevant — see
+# relay/cmd/relay/devharness.go), and test-crossbinary needs both real
+# binaries and is non-hermetic, matching the existing test-integration
+# exclusion above.
+
+# The devharness-tagged relay binary: never the shippable relay/bin/relay.
+build-relay-devharness:
+	cd relay && go build -tags devharness -o bin/relay-devharness ./cmd/relay
+
+# Vet the gated files that the default (untagged) lint-relay never compiles,
+# let alone lints: devharness.go and the integration-tagged Go tests.
+lint-devharness:
+	cd relay && go vet -tags devharness ./cmd/relay && go vet -tags integration ./cmd/relay/...
+
+# Mechanically proves the devharness surface is absent from the normal
+# (untagged, shippable) relay binary and present in the devharness-tagged one.
+devharness-absent-check:
+	bash scripts/devharness-absent-check.sh
+
+# The #112 acceptance test: real relay + real relay-daemon binaries over real
+# loopback TCP, driven through the devharness control socket.
+test-crossbinary: build-daemon build-relay-devharness
+	cd relay && RELAY_BIN=$(CURDIR)/relay/bin/relay-devharness \
+		RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon \
+		go test -tags integration -run TestCrossBinary ./cmd/relay/...
 
 ## --- vulnerability scanning (nightly; non-blocking in CI) ---
 # Install: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4

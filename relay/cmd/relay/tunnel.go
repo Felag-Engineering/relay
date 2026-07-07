@@ -16,8 +16,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// taskSink is a test-only seam for capturing Task dispatch and results in
-// hermetic unit tests. It is nil in production (newServer never sets it).
+// taskSink is a test/devharness-only seam for capturing Task dispatch and
+// results in hermetic unit tests and the #112 cross-binary CI harness. It is
+// nil in an untagged (production) build — newServer never sets it; only
+// tests and installDevHarness (devharness-tagged build only) do.
 //
 // register is called after the Ping handshake completes; it records the
 // outbound send function for the node and returns a cleanup func. deliver is
@@ -35,8 +37,9 @@ type tunnelServer struct {
 	gleipnirv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
-	// sink is nil in production; only set in tests to inject Tasks and capture
-	// results. Never set by newServer.
+	// sink is nil in an untagged (production) build; only set in tests, or by
+	// installDevHarness in a devharness-tagged build, to inject Tasks and
+	// capture results. Never set by newServer.
 	sink taskSink
 }
 
