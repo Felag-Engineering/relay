@@ -551,4 +551,87 @@ mod tests {
         );
         assert_eq!(result.exit_code, 7, "real exit code must be preserved");
     }
+
+    // 11. ACCEPTANCE-CRITICAL: pins `biased;` at executor.rs:110 with BOTH select arms
+    //     genuinely ready heading into the resolving poll — no process-timing race.
+    //
+    //     Test 10 above (`finished_before_cancel_reports_real_outcome`) fires cancel at
+    //     2 s while the child exits in <10 ms, so the wait arm is Ready long before the
+    //     cancel arm and `biased;` is never exercised as a tiebreak — it would still pass
+    //     with `biased;` deleted.
+    //
+    //     A naive "pre-buffer the cancel + timeout: Duration::ZERO" construction (the
+    //     issue's literal design, and an earlier draft of this test) is structurally
+    //     incapable of proving anything: `tokio::time::timeout(dur, fut)` always computes
+    //     its deadline as `Instant::now() + dur` at the moment `execute()`'s `select!`
+    //     constructs it, so a freshly-registered timer entry can NEVER be already-elapsed
+    //     on its own first poll (confirmed against tokio 1.52's timer wheel — a new entry
+    //     is only fast-pathed as `Elapsed` when its deadline is *strictly before* the
+    //     driver's already-processed tick, which a same-instant `Duration::ZERO` deadline
+    //     never is). With the cancel pre-buffered (trivially Ready from the very first
+    //     poll), `select!` always resolves at that very first poll — where the wait arm is
+    //     unconditionally Pending — so that construction yields `Cancelled` deterministically
+    //     REGARDLESS of `biased;` (verified empirically: it fails 100% of the time with
+    //     `biased;` intact, i.e. it doesn't merely flake, it can never pass).
+    //
+    //     This test instead uses tokio's paused/virtual clock (`start_paused = true`,
+    //     dev-only `test-util` feature) to force a genuine tie deterministically:
+    //     1. Spawn `execute()` (timeout: 5 ms) as its own task and `yield_now` once so it
+    //        runs up to the `select!`'s first poll, registering (but not yet satisfying)
+    //        both the wait-arm timer and the cancel-arm receiver — both Pending.
+    //     2. `tokio::time::advance(10 ms)` — processes the virtual clock forward past the
+    //        wait arm's deadline, marking its timer entry Elapsed in the driver's shared
+    //        state. This does NOT re-poll the suspended task; it only marks it ready.
+    //     3. `tx.send(())` — buffers the cancel signal. The cancel arm is now also Ready.
+    //     4. `.await` the `JoinHandle`, which is what actually re-polls the suspended
+    //        `select!`. At THAT poll, both arms are genuinely, simultaneously Ready — the
+    //        exact condition needed to exercise `biased;` as a tiebreak, with zero
+    //        process-timing race. With `biased;`, the wait arm (listed first) wins ->
+    //        `Outcome::Timeout`. Delete `biased;` and tokio's non-biased select picks a
+    //        pseudo-random starting arm, so the winner flips between Timeout and Cancelled
+    //        across iterations.
+    //
+    //     Looped 32x with a fresh channel per iteration; each iteration is fast because
+    //     the `sleep 30` child is SIGTERM'd by `kill_group_graceful` well under TERM_GRACE
+    //     (real OS signal delivery — unaffected by the paused *time* driver).
+    #[tokio::test(start_paused = true)]
+    async fn timeout_beats_buffered_cancel_biased() {
+        for _ in 0..32 {
+            let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+            let handle = tokio::spawn(execute(ExecRequest {
+                task_id: "t-timeout-vs-cancel".to_string(),
+                argv: vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "sleep 30".to_string(),
+                ],
+                timeout: Duration::from_millis(5),
+                max_output_bytes: 4096,
+                cancel: Some(rx),
+            }));
+
+            // Let the spawned task run up to (and register) its select!'s first poll.
+            tokio::task::yield_now().await;
+
+            // Advance the paused clock past the 5 ms deadline: marks the wait arm's
+            // timer Elapsed in shared driver state without re-polling the task.
+            tokio::time::advance(Duration::from_millis(10)).await;
+
+            // Buffer the cancel. Both arms are now simultaneously Ready heading into
+            // the task's next (resolving) poll.
+            tx.send(()).expect("buffered send to an open receiver");
+
+            let result = handle.await.expect("execute task must not panic");
+
+            assert_eq!(
+                result.outcome,
+                Outcome::Timeout as i32,
+                "with biased;, an already-elapsed timeout must beat a simultaneously-\
+                 buffered cancel deterministically; got outcome {}",
+                result.outcome
+            );
+            assert_eq!(result.exit_code, -1);
+        }
+    }
 }

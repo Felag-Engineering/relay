@@ -474,7 +474,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -944,5 +944,128 @@ mod tests {
                 "'recent-task' marker must remain on disk"
             );
         }
+    }
+
+    /// Two CONCURRENT `run_once` calls for the same task_id, racing on separate OS
+    /// threads, must still execute exactly once — the central at-most-once invariant
+    /// (ADR-0004 #4). All tests above call `run_once` sequentially, which cannot
+    /// exercise the TOCTOU window between the in-memory `contains_key` check and
+    /// `record_marker` (dedup.rs:168-184).
+    ///
+    /// Uses `tokio::spawn` (NOT `tokio::join!` on bare futures) on a multi-thread
+    /// runtime with 2 worker threads, so the two `run_once` calls genuinely race on
+    /// separate OS threads over the shared `std::sync::Mutex` critical section.
+    /// `tokio::join!` on bare async fn calls (with no internal `.await` in the exec
+    /// closure) would poll each to completion sequentially within a single task —
+    /// structurally incapable of catching the exact TOCTOU this test exists to guard,
+    /// a fresh instance of the bug this issue exists to fix.
+    ///
+    /// Looped: a single race is not guaranteed to hit a reintroduced TOCTOU window on
+    /// every run, so iterate to raise detection confidence.
+    ///
+    /// Non-vacuous: the check+record block runs under one synchronous `Mutex` with no
+    /// `.await` inside; a TOCTOU refactor that drops the lock between the check and the
+    /// record would let both spawned tasks observe "not seen" and both call `exec`,
+    /// making `counter == 2` and failing the assertion below.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_same_id_executes_once() {
+        for i in 0..20 {
+            let state_dir = TempDir::new(&format!("concurrent-{i}"));
+            let store = Arc::new(DedupStore::open(state_dir.path()).expect("open"));
+            let counter = Arc::new(AtomicUsize::new(0));
+
+            let (s1, c1) = (Arc::clone(&store), Arc::clone(&counter));
+            let h1 = tokio::spawn(async move {
+                s1.run_once("dup", move || async move {
+                    c1.fetch_add(1, Ordering::SeqCst);
+                    make_task_result("dup")
+                })
+                .await
+            });
+
+            let (s2, c2) = (Arc::clone(&store), Arc::clone(&counter));
+            let h2 = tokio::spawn(async move {
+                s2.run_once("dup", move || async move {
+                    c2.fetch_add(1, Ordering::SeqCst);
+                    make_task_result("dup")
+                })
+                .await
+            });
+
+            let (ra, rb) = tokio::join!(h1, h2); // join! on JoinHandles: awaits both spawned tasks
+            let (ra, rb) = (
+                ra.expect("task 1 must not panic"),
+                rb.expect("task 2 must not panic"),
+            );
+
+            assert_eq!(
+                counter.load(Ordering::SeqCst),
+                1,
+                "iteration {i}: exec must run exactly once across two concurrent run_once \
+                 calls for the same task_id"
+            );
+
+            let is_benign = |r: &TaskResult| {
+                r.stdout.is_empty()
+                    && r.stderr
+                        .windows(b"already processed".len())
+                        .any(|w| w == b"already processed")
+            };
+            let is_exec = |r: &TaskResult| r.stdout == b"exec output";
+            let (a_exec, b_exec) = (is_exec(&ra), is_exec(&rb));
+            let (a_benign, b_benign) = (is_benign(&ra), is_benign(&rb));
+
+            assert!(
+                a_exec != b_exec,
+                "iteration {i}: exactly one of the two results must be the exec result; got a_exec={a_exec} b_exec={b_exec}"
+            );
+            assert!(
+                a_benign != b_benign,
+                "iteration {i}: exactly one of the two results must be the benign already-processed result; got a_benign={a_benign} b_benign={b_benign}"
+            );
+        }
+    }
+
+    /// Fail-closed on record error: when the marker cannot be durably recorded (here,
+    /// the NAME_MAX guard at dedup.rs:330 rejects an over-long task_id), `run_once`
+    /// must return FAILURE and NEVER call `exec` (dedup.rs:188-198). At-most-once means
+    /// preferring no-execution over at-least-once when we cannot guarantee the marker
+    /// will be found on retry.
+    ///
+    /// Non-vacuous: flipping fail-closed to fail-open (running exec / returning the exec
+    /// result on a record error) would make `ran == true` and `outcome == Success`,
+    /// failing every assertion below.
+    #[tokio::test]
+    async fn record_error_fails_closed() {
+        let state_dir = TempDir::new("fail-closed");
+        let store = DedupStore::open(state_dir.path()).expect("open");
+
+        // 200-char task_id -> hex filename is 400 bytes, exceeding NAME_MAX (255) ->
+        // record_marker returns Err before ever reaching exec.
+        let task_id = "a".repeat(200);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_c = Arc::clone(&ran);
+        let result = store
+            .run_once(&task_id, move || async move {
+                ran_c.store(true, Ordering::SeqCst);
+                make_task_result("x")
+            })
+            .await;
+
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "exec must never run on a record error"
+        );
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(result.exit_code, -1);
+        assert!(
+            result
+                .stderr
+                .windows(b"failed to record task id before execute".len())
+                .any(|w| w == b"failed to record task id before execute"),
+            "stderr must contain the fail-closed message; got {:?}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 }

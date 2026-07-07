@@ -59,6 +59,11 @@ rustix = { version = "1", features = ["process"] }
 libc = "0.2"
 
 [dev-dependencies]
+# Enables the paused/virtual clock (tokio::time::pause / advance) used only by
+# executor.rs's timeout_beats_buffered_cancel_biased test to deterministically
+# tie the wait-arm and cancel-arm select branches without a process-timing
+# race. test-util is dev-only: it does not ship in the production binary.
+tokio = { version = "1", features = ["test-util"] }
 # Used only by tunnel.rs wrong-CA refusal test (wrong_ca_relay_is_refused).
 # ABI-matched to the rustls = "0.23" runtime dependency. default-features = false
 # prevents the dev build from re-enabling rustls/aws_lc_rs via tokio-rustls defaults.

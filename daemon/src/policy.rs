@@ -801,6 +801,50 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // vacuous_deny_fires_on_shorter_invocation — pins the `i >= args.len()`
+    // more-restrictive rule at the vacuous-satisfaction branch above: a deny
+    // written for N argument positions also fires on an invocation with
+    // fewer args (the unlisted trailing positions are vacuously satisfied,
+    // not vacuously un-satisfied). No fixture deny has >=2 positions, so this
+    // uses an inline deny-only TOML fixture.
+    //
+    // Non-vacuous: the assertion requires `rule: Some(OperationDeny)`, not
+    // merely "is denied". Flipping `true -> false` at the vacuous-satisfaction
+    // branch would make position 1 (absent here) evaluate false, so the
+    // deny's `all()` is false and the explicit deny does not fire; the
+    // decision would fall through to deny-by-default (`Deny { rule: None }`),
+    // which fails the `Some(...)` match below.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn vacuous_deny_fires_on_shorter_invocation() {
+        let policy = from_toml_str(
+            r#"
+            [[deny]]
+            name = "service.restart"
+            args = [["nginx"], ["extra"]]
+            "#,
+        )
+        .expect("inline deny-only TOML must parse cleanly");
+
+        // Invocation has only 1 arg; the deny lists 2 positions. Position 1
+        // ("extra") is absent — it must be treated as vacuously satisfied.
+        let decision = policy.evaluate("service.restart", &args(&["nginx"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::OperationDeny { operation }),
+                    ..
+                }
+                if operation == "service.restart"
+            ),
+            "a deny written for 2 arg positions must also fire on a shorter \
+             (1-arg) invocation, with the explicit rule attributed; got {decision:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // arg_constraint_wildcard_and_count
     //   - file.read /etc/hostname → Allow (wildcard matches)
     //   - service.restart with 0 args → Deny (count mismatch)
