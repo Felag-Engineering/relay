@@ -170,6 +170,7 @@ enum Outcome {
   OUTCOME_TIMEOUT       = 3;
   OUTCOME_DENIED_BY_POLICY = 4;
   OUTCOME_CANCELLED     = 5;   // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
+  OUTCOME_UNREACHABLE   = 6;   // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
 }
 
 message StreamChunk {
