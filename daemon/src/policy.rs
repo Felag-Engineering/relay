@@ -933,6 +933,58 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // raw_exec_deny_matches_joined_string_only — deny pattern matches only the
+    // space-joined argv, never a single element
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn raw_exec_deny_matches_joined_string_only() {
+        // "restart nginx" is a substring of the joined command
+        // "systemctl restart nginx" but never appears in any single argv
+        // element ("systemctl", "restart", "nginx"). Only the
+        // `is_match(&joined)` disjunct at evaluate_raw_exec can catch it.
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^systemctl .+$"]
+deny = ["restart nginx"]
+"#,
+        )
+        .expect("policy must parse");
+        let decision = policy.evaluate_raw_exec(&args(&["systemctl", "restart", "nginx"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::RawExecDeny { pattern }),
+                    ..
+                }
+                if pattern == "restart nginx"
+            ),
+            "deny pattern matching only the joined command must fire; got {decision:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // raw_exec_empty_argv_denied — empty argv is always denied, never
+    // silently joined into an empty string that falls through to allow
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn raw_exec_empty_argv_denied() {
+        let policy = fixture_policy();
+        let decision = policy.evaluate_raw_exec(&[]);
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny { rule: None, reason }
+                if reason == "empty argv"
+            ),
+            "empty argv must be denied with reason 'empty argv'; got {decision:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // 4c. raw_exec_deny_beats_matching_allow — deny wins when BOTH an allow
     //     regex AND a deny regex match the same argv
     // -----------------------------------------------------------------------
@@ -1253,6 +1305,57 @@ args = [["/etc/shadow"]]
             "partial shadow (wildcard allow position) must not be flagged; got {:?}",
             report.findings
         );
+    }
+
+    #[test]
+    fn lint_does_not_flag_finite_partial_shadow() {
+        // allow service.restart [nginx, php-fpm] + deny service.restart
+        // [nginx] — neither allowed value is "*", so this reaches the `.all()`
+        // finite-subset predicate at allow_is_shadowed_by_deny (unlike
+        // lint_does_not_flag_partial_shadow above, which is rejected one
+        // clause earlier by the wildcard guard). php-fpm is not covered by
+        // the deny, so the allow can still fire and must NOT be flagged.
+        let policy = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+[[deny]]
+name = "service.restart"
+args = [["nginx"]]
+"#;
+        let report = lint(policy);
+        assert!(report.parse_error.is_none());
+        assert!(
+            report.findings.is_empty(),
+            "finite partial shadow (php-fpm still uncovered) must not be flagged; got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn lint_reports_invalid_regex_in_deny_section() {
+        // Mirrors lint_reports_all_invalid_regexes but feeds the deny section,
+        // exercising the otherwise-unexercised
+        // lint_raw_exec_regexes(&file.raw_exec.deny, ...) call.
+        let bad_policy = r#"
+[raw_exec]
+deny = ["[invalid"]
+"#;
+        let report = lint(bad_policy);
+        assert!(report.parse_error.is_none());
+        let errors: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "invalid deny-section regex must be reported; got {:?}",
+            report.findings
+        );
+        assert!(errors[0].location.contains("[raw_exec].deny[0]"));
     }
 
     #[test]

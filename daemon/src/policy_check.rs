@@ -326,6 +326,22 @@ mod tests {
         v
     }
 
+    /// Builds a `TaskRequest::Action::Operation` from a name and key=value arg
+    /// pairs — mirrors the `--would-allow operation <name> key=value ...` CLI
+    /// spec so a case can dispatch the exact equivalent real TaskRequest.
+    fn task_action_operation(
+        name: &str,
+        args: &[(&'static str, &'static str)],
+    ) -> crate::gen::task_request::Action {
+        crate::gen::task_request::Action::Operation(Operation {
+            name: name.to_string(),
+            args: args
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        })
+    }
+
     // -----------------------------------------------------------------------
     // Exit-code table
     // -----------------------------------------------------------------------
@@ -457,6 +473,32 @@ deny = ["secret"]
     }
 
     #[test]
+    fn exit_code_invalid_beats_would_deny() {
+        // The file has both a lint ERROR (invalid regex) and a raw_exec deny
+        // that the --would-allow spec would trip. has_errors() at run():114
+        // must short-circuit before the would-allow evaluation ever runs, so
+        // the exit code must be EXIT_INVALID (1), not EXIT_WOULD_DENY (2).
+        let tmp = TempFile::new(
+            "invalid-beats-would-deny",
+            r#"
+[raw_exec]
+allow = ["[invalid"]
+deny = ["secret"]
+"#,
+        );
+        let code = run(&argv(
+            &tmp.path_str(),
+            &["--would-allow", "raw-exec", "--", "/bin/echo", "secret"],
+        ));
+        assert_eq!(
+            code, EXIT_INVALID,
+            "an invalid Policy file must report EXIT_INVALID (1) even when \
+             the would-allow spec would also have been a would-deny (2); a \
+             reordering of the checks would return 2 here instead"
+        );
+    }
+
+    #[test]
     fn exit_code_missing_file_is_one() {
         let code = run(&argv("/nonexistent/path/does-not-exist.toml", &[]));
         assert_eq!(code, EXIT_INVALID);
@@ -464,14 +506,28 @@ deny = ["secret"]
 
     #[test]
     fn help_flag_prints_exit_codes_and_returns_zero() {
-        // Captured for documentation purposes only — assert on the return
-        // code; the help text itself is a stable string checked by the
-        // `--help` acceptance criterion in the issue.
+        // Assert on the actual documented exit-code table strings, not just
+        // that HELP contains the characters '0'/'1'/'2' (near-vacuous — any
+        // digit anywhere in the text, e.g. a version number, would satisfy
+        // that). A HELP edit that drops the exit-code table now fails.
         let code = run(&argv("ignored.toml", &["-h"]));
         assert_eq!(code, EXIT_VALID);
-        assert!(HELP.contains('0'), "help text must document exit code 0");
-        assert!(HELP.contains('1'), "help text must document exit code 1");
-        assert!(HELP.contains('2'), "help text must document exit code 2");
+        assert!(
+            HELP.contains("0   valid"),
+            "help text must document exit code 0 (valid)"
+        );
+        assert!(
+            HELP.contains("1   invalid"),
+            "help text must document exit code 1 (invalid)"
+        );
+        assert!(
+            HELP.contains("2   would-deny"),
+            "help text must document exit code 2 (would-deny)"
+        );
+        assert!(
+            HELP.contains("Precedence: 1 (invalid) > 2 (would-deny) > 0 (valid)."),
+            "help text must document the exit-code precedence"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -693,34 +749,65 @@ deny = ["secret"]
         let dedup = DedupStore::open(state_dir.path()).expect("open dedup");
         let scheduler = Scheduler::new();
 
+        // L1 (issue #127): a per-case action so an OPERATION case (arg-key
+        // path: `unit=sshd` -> operation_positional_args -> evaluate) can be
+        // parity-tested at the CLI layer alongside the raw-exec cases, not
+        // just the tautological would_allow_query_matches_manually_built_
+        // equivalent above.
+        enum CaseAction {
+            RawExec(Vec<String>),
+            Operation {
+                name: &'static str,
+                args: &'static [(&'static str, &'static str)],
+            },
+        }
+
         struct Case {
             label: &'static str,
-            argv: Vec<String>,
+            action: CaseAction,
             expect_allow: bool,
         }
 
         let cases = [
             Case {
                 label: "raw-exec allow",
-                argv: vec!["/bin/echo".to_string(), "hi".to_string()],
+                action: CaseAction::RawExec(vec!["/bin/echo".to_string(), "hi".to_string()]),
                 expect_allow: true,
             },
             Case {
                 label: "raw-exec deny",
-                argv: vec!["/bin/echo".to_string(), "secret".to_string()],
+                action: CaseAction::RawExec(vec!["/bin/echo".to_string(), "secret".to_string()]),
+                expect_allow: false,
+            },
+            Case {
+                label: "operation deny (service.restart sshd)",
+                action: CaseAction::Operation {
+                    name: "service.restart",
+                    args: &[("unit", "sshd")],
+                },
                 expect_allow: false,
             },
         ];
 
         for (i, case) in cases.iter().enumerate() {
             // --would-allow verdict via the CLI-parsing path.
-            let mut full_args = vec![
-                "file.toml".to_string(),
-                "--would-allow".to_string(),
-                "raw-exec".to_string(),
-                "--".to_string(),
-            ];
-            full_args.extend(case.argv.iter().cloned());
+            let mut full_args = vec!["file.toml".to_string(), "--would-allow".to_string()];
+            let task_action = match &case.action {
+                CaseAction::RawExec(argv) => {
+                    full_args.push("raw-exec".to_string());
+                    full_args.push("--".to_string());
+                    full_args.extend(argv.iter().cloned());
+                    task_request::Action::RawExec(GenRawExec { argv: argv.clone() })
+                }
+                CaseAction::Operation { name, args } => {
+                    full_args.push("operation".to_string());
+                    full_args.push(name.to_string());
+                    for (k, v) in *args {
+                        full_args.push(format!("{k}={v}"));
+                    }
+                    task_action_operation(name, args)
+                }
+            };
             let parsed = parse_args(&full_args).expect("must parse");
             let would_allow = parsed.would_allow.expect("must have a would_allow spec");
             let query = build_query(&would_allow);
@@ -730,9 +817,7 @@ deny = ["secret"]
             let task = TaskRequest {
                 task_id: format!("policy-check-parity-{i}"),
                 timeout_seconds: 5,
-                action: Some(task_request::Action::RawExec(GenRawExec {
-                    argv: case.argv.clone(),
-                })),
+                action: Some(task_action),
             };
             let result = crate::dispatch::dispatch(
                 &task,

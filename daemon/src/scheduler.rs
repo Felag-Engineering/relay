@@ -359,6 +359,17 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // M3: pin READ_CONCURRENCY to the ADR-0012 contract value (4), not just
+    // symbolically (ac2_read_bounded_max_four above asserts peak ==
+    // READ_CONCURRENCY, which stays green even if the constant is changed).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn read_concurrency_bound_is_four() {
+        assert_eq!(READ_CONCURRENCY, 4, "ADR-0012 pins the read bound to 4");
+    }
+
+    // -----------------------------------------------------------------------
     // AC3: read and mutate may run concurrently (peak >= 2)
     // -----------------------------------------------------------------------
 

@@ -1650,4 +1650,217 @@ allow = ["^/bin/sh "]
             "runner must not be called on the deduped re-send"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // M4: queued timeout-clock carryover (issue #127).
+    //
+    // queued_timeout_outcome_no_runner_then_deduped above only proves the
+    // deadline is rooted at received_at using an ALREADY-EXPIRED deadline,
+    // which fires on the very first select! poll — a good but limited proxy.
+    // The two tests below use tokio's paused/virtual clock (already enabled
+    // by the dev-only `test-util` feature and used in executor.rs:597) to
+    // prove the stronger, previously-untested properties: (a) a deadline that
+    // is genuinely in the FUTURE at dispatch still fires while the Task
+    // remains queued behind a live blocker, and (b) time spent queued is
+    // deducted from the executor's budget from a SINGLE clock (not reset to
+    // a fresh effective_timeout once the gate frees up).
+    //
+    // NOT tested here: the `remaining.is_zero()` post-acquire branch at
+    // dispatch.rs:193 (a deadline that elapses in the narrow window between
+    // `scheduler.acquire` returning `Ok` and the subsequent `Instant::now()`
+    // read). This is intentionally not covered — see the comment above
+    // `queued_task_deadline_fires_while_genuinely_queued` below for why it is
+    // not deterministically reachable at this seam without a product-side
+    // clock injection point (out of scope for a test-only change).
+    // -----------------------------------------------------------------------
+
+    // M4(a): a Task whose deadline is genuinely in the future at dispatch
+    // still times out while queued behind a live (never-released) blocker —
+    // as opposed to the already-past-deadline case covered by
+    // queued_timeout_outcome_no_runner_then_deduped above.
+    #[tokio::test(start_paused = true)]
+    async fn queued_task_deadline_fires_while_genuinely_queued() {
+        let state_dir = TempDir::new("sched-qt-live");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let policy = fixture_policy();
+        let scheduler = crate::scheduler::Scheduler::new();
+
+        // Occupy the mutate gate with a permit that is never released within
+        // this test, so the Task under test genuinely queues rather than
+        // acquiring immediately.
+        let mut blocker_cancel = None;
+        let _blocker_permit = scheduler
+            .acquire(
+                crate::scheduler::Class::Mutate,
+                tokio::time::Instant::now() + std::time::Duration::from_secs(3600),
+                &mut blocker_cancel,
+            )
+            .await
+            .expect("blocker must acquire mutate gate");
+
+        let runner_calls = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::clone(&runner_calls);
+        let fake_run = move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        // received_at = t0 (paused clock). make_task_service_restart sets
+        // timeout_seconds = 5, so effective_timeout(5) = 5s -> deadline =
+        // t0 + 5s, IN THE FUTURE at dispatch (the distinguishing property vs.
+        // queued_timeout_outcome_no_runner_then_deduped's 100s-past
+        // received_at, which fires on the very first poll). The blocker
+        // never releases the gate, so the only pending timer for the whole
+        // test is acquire's `sleep_until(deadline)`; with nothing else
+        // runnable, the paused runtime auto-advances virtual time to it.
+        let received_at = tokio::time::Instant::now();
+        let task = make_task_service_restart("sched-qt-live-1", "nginx");
+        let result = dispatch_scheduled_with_runner(
+            &task,
+            &policy,
+            &dedup,
+            &scheduler,
+            received_at,
+            fake_run,
+            None,
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Timeout as i32,
+            "deadline firing while genuinely queued must yield OUTCOME_TIMEOUT"
+        );
+        assert_eq!(result.exit_code, -1, "queued-timeout exit_code must be -1");
+        assert_eq!(
+            runner_calls.load(Ordering::SeqCst),
+            0,
+            "runner must never be called when the Task times out while queued"
+        );
+        // Paused-clock elapsed time is exactly 5000ms (not merely "close to"
+        // or "at least"): received_at.elapsed() in virtual time proves the
+        // clock genuinely ran across ~5s of queue-wait, not a first-poll
+        // expiry. A clock rooted at dispatch-time (not received_at) would
+        // never reach the deadline while queued and this would never fire.
+        assert_eq!(
+            result.duration_millis, 5000,
+            "queued-timeout duration_millis must be exactly the 5s effective \
+             timeout measured from received_at"
+        );
+    }
+
+    // M4(b): the single received_at clock deducts real queue-wait time from
+    // the executor's budget — a Task that waits ~3s behind a live blocker
+    // must receive ~2s remaining, not a fresh 5s effective_timeout.
+    #[tokio::test(start_paused = true)]
+    async fn queued_wait_deducts_from_exec_budget_single_clock() {
+        let state_dir = TempDir::new("sched-carryover");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let policy = fixture_policy();
+        let scheduler = crate::scheduler::Scheduler::new();
+        let received_at = tokio::time::Instant::now();
+
+        // task1 (blocker): acquires the single mutate permit immediately and
+        // holds it for 3 virtual seconds before completing.
+        let blocker_run = |req: ExecRequest| {
+            let task_id = req.task_id.clone();
+            async move {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 3000,
+                }
+            }
+        };
+
+        // task2 (under test): records the REMAINING budget the executor
+        // actually receives and returns immediately.
+        let recorded_timeout: Arc<Mutex<Option<Duration>>> = Arc::new(Mutex::new(None));
+        let rec = Arc::clone(&recorded_timeout);
+        let probe_run = move |req: ExecRequest| {
+            *rec.lock().unwrap() = Some(req.timeout);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        let task1 = make_task_service_restart("sched-co-blocker", "nginx");
+        let task2 = make_task_service_restart("sched-co-probe", "nginx");
+
+        // join! polls task1 first: it takes the (single) mutate permit and
+        // suspends on its 3s sleep, still holding the permit. task2 then
+        // queues on the semaphore. The only pending timers are task1's 3s
+        // sleep and task2's 5s deadline; the paused clock auto-advances to
+        // the earlier one (3s), releasing the permit to task2, which then
+        // computes remaining = deadline(t0+5s) - now(t0+3s) = exactly 2s.
+        let (r1, r2) = tokio::join!(
+            dispatch_scheduled_with_runner(
+                &task1,
+                &policy,
+                &dedup,
+                &scheduler,
+                received_at,
+                blocker_run,
+                None,
+            ),
+            dispatch_scheduled_with_runner(
+                &task2,
+                &policy,
+                &dedup,
+                &scheduler,
+                received_at,
+                probe_run,
+                None,
+            ),
+        );
+
+        assert_eq!(
+            r1.outcome,
+            Outcome::Success as i32,
+            "blocker task must succeed"
+        );
+        assert_eq!(
+            r2.outcome,
+            Outcome::Success as i32,
+            "probe task must succeed"
+        );
+
+        let got = recorded_timeout
+            .lock()
+            .unwrap()
+            .expect("probe runner must have been called");
+        assert_eq!(
+            got,
+            Duration::from_secs(2),
+            "the executor must receive the REMAINING budget (5s effective - \
+             3s queue-wait = 2s), not a fresh 5s effective_timeout; a \
+             regression handing the executor a fresh budget would record 5s \
+             here instead"
+        );
+    }
 }
