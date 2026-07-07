@@ -464,4 +464,66 @@ mod tests {
             "explicit cancel signal must yield Err(Cancelled); got {result:?}"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // biased; tiebreak — BOTH select arms ready on the first poll
+    //
+    // Every test above arranges for only one arm to be ready (the gate is
+    // either occupied so only the timeout/cancel arm can fire, or free with
+    // no competing cancel/deadline), so `biased;` at scheduler.rs:149 can be
+    // deleted and the suite stays green. These pin it: the gate is left FREE
+    // (permit arm ready) while a cancel is pre-buffered / the deadline is
+    // already expired (cancel/timeout arm also ready) — both arms are Ready
+    // on the very first poll, so only `biased;` decides the winner.
+    //
+    // Looped 64x with a fresh channel each iteration: with `biased;` every
+    // iteration deterministically picks the higher-priority arm; without it,
+    // tokio's non-biased select rotates the starting branch pseudo-randomly
+    // (not a 50/50 coin flip — for this 3-arm select the cancel arm only
+    // starts first on ~1/3 of polls), so the winner varies across iterations
+    // and the loop's assertion fails near-certainly.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn free_gate_cancel_beats_permit_biased() {
+        let sched = Scheduler::new();
+        for _ in 0..64 {
+            // Pre-buffer the cancel BEFORE acquire so the cancel arm is
+            // Ready (not just eventually-ready) on the first poll.
+            let (tx, rx) = oneshot::channel::<()>();
+            tx.send(()).expect("buffered send to an open receiver");
+            let mut cancel = Some(rx);
+
+            // mutate_gate has its 1 permit free (never occupied here), so the
+            // permit arm is also Ready on the first poll.
+            let result = sched
+                .acquire(Class::Mutate, far_deadline(), &mut cancel)
+                .await;
+            assert!(
+                matches!(result, Err(QueuedOutcome::Cancelled)),
+                "with biased;, a pre-buffered cancel must beat a simultaneously-free \
+                 permit deterministically; got {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn free_gate_timeout_beats_permit_biased() {
+        let sched = Scheduler::new();
+        for _ in 0..64 {
+            // Already-expired deadline: the sleep_until arm is Ready on the
+            // first poll. No cancel handle — queued_cancel is pending() forever.
+            let past = tokio::time::Instant::now() - Duration::from_millis(1);
+            let mut cancel = None;
+
+            // mutate_gate has its 1 permit free, so the permit arm is also
+            // Ready on the first poll.
+            let result = sched.acquire(Class::Mutate, past, &mut cancel).await;
+            assert!(
+                matches!(result, Err(QueuedOutcome::Timeout)),
+                "with biased;, an already-expired deadline must beat a simultaneously-free \
+                 permit deterministically; got {result:?}"
+            );
+        }
+    }
 }

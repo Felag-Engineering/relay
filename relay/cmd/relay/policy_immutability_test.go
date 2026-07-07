@@ -4,9 +4,10 @@ package main
 // enforces the Policy-immutability invariant (ADR-0002, invariant #2):
 // the Relay may NEVER modify a Node's Policy over the wire.
 //
-// Proto-level proof: RelayMessage.Body is a oneof with only Ping and Task
-// variants. There is no policy-setter variant. Any code that attempted to
-// build a RelayMessage carrying policy data would not compile.
+// Proto-level proof: RelayMessage.Body is a oneof whose variants are exactly
+// the current read/dispatch/cancel/query allow-set (ping, task, task_cancel,
+// policy_query). There is no policy-setter variant. Any code that attempted
+// to build a RelayMessage carrying policy data would not compile.
 //
 // DaemonMessage.Body has a policy field (PolicySnapshot, outbound display-only —
 // used by the daemon to share its current Policy with the Relay for display,
@@ -14,37 +15,68 @@ package main
 // authority.
 
 import (
+	"reflect"
+	"strings"
 	"testing"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 )
 
-// TestRelayMessage_OnlyPingAndTask constructs every valid RelayMessage and
-// asserts via a switch that only Ping and Task variants exist. If the proto
-// gains a new oneof variant (e.g. a policy-setter), the new generated type
-// would cause the default case to fire and fail the test, forcing human review
-// of the change (ADR-0002).
-func TestRelayMessage_OnlyPingAndTask(t *testing.T) {
-	msgs := []*gleipnirv1.RelayMessage{
-		{Body: &gleipnirv1.RelayMessage_Ping{Ping: &gleipnirv1.Ping{UnixMillis: 1}}},
-		{Body: &gleipnirv1.RelayMessage_Task{Task: &gleipnirv1.TaskRequest{TaskId: "t1"}}},
-	}
-	for _, msg := range msgs {
-		switch msg.Body.(type) {
-		case *gleipnirv1.RelayMessage_Ping:
-			// Handshake confirmation — not a policy setter. ✓
-		case *gleipnirv1.RelayMessage_Task:
-			// Dispatch request — not a policy setter. ✓
-		default:
-			t.Errorf("unexpected RelayMessage.Body type %T — "+
-				"proto must not add a policy-setter variant (ADR-0002)", msg.Body)
-		}
+// TestRelayMessage_BodyOneofIsExactlyAllowSet reflectively enumerates the
+// `body` oneof on RelayMessage's descriptor and asserts its field-name set is
+// EXACTLY the current allow-set: {ping, task, task_cancel, policy_query}.
+//
+// This replaces a prior version of this test (TestRelayMessage_OnlyPingAndTask)
+// that switched over a hand-built `{Ping, Task}` slice — that construction is
+// structurally blind to the real oneof: it can only ever see the variants the
+// test itself constructs, so a new generated `RelayMessage.Body` variant (e.g.
+// a hypothetical policy-setter) would sail straight through it without
+// touching the `default` case, even though the oneof already had 4 variants
+// (ping, task, task_cancel, policy_query) at the time that test was green.
+//
+// Reading the descriptor directly means ANY new oneof variant — added to the
+// generated code by a future proto change — makes `got` diverge from `want`
+// and fails this test until a human deliberately updates the allow-set,
+// which is the actual ADR-0002 wire-immutability gate.
+func TestRelayMessage_BodyOneofIsExactlyAllowSet(t *testing.T) {
+	md := (&gleipnirv1.RelayMessage{}).ProtoReflect().Descriptor()
+	oneof := md.Oneofs().ByName("body")
+	if oneof == nil {
+		t.Fatal("RelayMessage has no oneof named \"body\" — proto contract changed shape")
 	}
 
-	// Compile-time policy-immutability proof:
-	//   The following would NOT compile because there is no such type:
-	//     _ = &gleipnirv1.RelayMessage_Policy{...}
-	//   If this file compiles, RelayMessage carries no policy setter.
+	fields := oneof.Fields()
+	got := make(map[string]bool, fields.Len())
+	for i := 0; i < fields.Len(); i++ {
+		got[string(fields.Get(i).Name())] = true
+	}
+
+	want := map[string]bool{
+		"ping":         true, // handshake confirmation — not a policy setter
+		"task":         true, // dispatch request — not a policy setter
+		"task_cancel":  true, // Task cancellation — not a policy setter
+		"policy_query": true, // read-only ADR-0011 hypothetical-evaluation probe — not a mutation
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("RelayMessage.body oneof field set changed:\n  got:  %v\n  want: %v\n"+
+			"any new variant must be reviewed for ADR-0002 wire-immutability before this "+
+			"allow-set is updated", got, want)
+	}
+
+	// Belt-and-suspenders: no field name in the oneof may denote a policy
+	// mutation. "policy_query" is a read-only hypothetical-evaluation probe
+	// (ADR-0011: the Relay may query the daemon's live Policy engine, never
+	// set it), not a mutation, so it is intentionally excluded from this check.
+	for name := range got {
+		if name == "policy_query" {
+			continue
+		}
+		if strings.Contains(name, "set") || strings.Contains(name, "update") || strings.Contains(name, "write") {
+			t.Errorf("RelayMessage.body field %q looks like a policy-mutation field name — "+
+				"the Relay must never be able to send a policy setter over the wire (ADR-0002)", name)
+		}
+	}
 }
 
 // TestDaemonMessage_PolicyIsOutboundOnly documents the intended direction of the
