@@ -213,6 +213,10 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	if err := node.disp.Dispatch(node.nodeID, holdTask); err != nil {
 		t.Fatalf("Dispatch mut-hold: %v", err)
 	}
+	// readsStart is a real wall-clock capture: duration_millis (asserted below)
+	// excludes queue-wait, so it cannot by itself prove the reads weren't
+	// serialized behind the 2s mutate hold. This wall-clock signal can.
+	readsStart := time.Now()
 	readIDs := []string{"rd-0", "rd-1", "rd-2", "rd-3"}
 	for _, id := range readIDs {
 		task := &gleipnirv1.RelayMessage{
@@ -244,6 +248,19 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 			t.Fatalf("timeout: only got %d/%d read results: %v", len(readResults), len(readIDs), readResults)
 		}
 	}
+	// Real wall-clock signal: duration_millis is measured by the executor
+	// from Task start (after leaving the queue), so it EXCLUDES queue-wait —
+	// a read wrongly stalled 2s behind the mutate lane would still report
+	// near-zero duration_millis and pass a duration_millis-only check. This
+	// wall-clock capture (from before the reads were even dispatched) is the
+	// real signal: all 4 reads must return well under the 2s mutate hold,
+	// proving they were not serialized behind it. The mut-hold-arrives-first
+	// guard above (which fails if mut-hold's result appears before all 4
+	// reads) remains the load-bearing ordering proof.
+	if elapsed := time.Since(readsStart); elapsed >= 1500*time.Millisecond {
+		t.Errorf("reads took %v (wall clock) to return, want < 1500ms (must not be blocked behind the 2s mut-hold)",
+			elapsed)
+	}
 	for _, id := range readIDs {
 		r, ok := readResults[id]
 		if !ok {
@@ -252,11 +269,6 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 		}
 		if r.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
 			t.Errorf("%s outcome: got %v, want SUCCESS; stderr=%q", id, r.Outcome, r.Stderr)
-		}
-		// Huge margin (2s mutate hold vs near-instant read): well under 2000ms.
-		if r.DurationMillis >= 2000 {
-			t.Errorf("%s duration_millis = %d, want < 2000 (must not be blocked behind mut-hold)",
-				id, r.DurationMillis)
 		}
 	}
 }
@@ -512,9 +524,21 @@ allow = ["[invalid"]
 			}
 			cliErr = ee
 		}
-		// Exit 0 = allow, exit 2 = would-deny (exit 1 = invalid, not expected
-		// here since fixturePolicy is already known-valid).
-		cliAllowed := cliErr == nil
+		// Exit 0 = allow, exit 2 = would-deny. Exit 1 (invalid) is never
+		// expected here since fixturePolicy is already known-valid — assert
+		// that explicitly so a regression making a valid check exit 1 can't
+		// be silently collapsed into "deny" and hidden behind a coincidental
+		// wire DENIED_BY_POLICY (cliAllowed := cliErr == nil would score exit
+		// 1 identically to exit 2).
+		code := 0
+		if cliErr != nil {
+			code = cliErr.(*exec.ExitError).ExitCode()
+		}
+		if code != 0 && code != 2 {
+			t.Fatalf("[%s] policy check --would-allow: exit code %d, want 0 (allow) or 2 (would-deny), never 1 (invalid) (stderr=%q)",
+				c.label, code, cliStderr.String())
+		}
+		cliAllowed := code == 0
 
 		taskID := fmt.Sprintf("pc-task-%d", i)
 		task := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_Task{Task: c.buildTask(taskID)}}
