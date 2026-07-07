@@ -42,8 +42,9 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
-	// tunnel is the registered tunnelServer. Exposed so integration tests can
-	// inject a taskSink (tests only — never set in production).
+	// tunnel is the registered tunnelServer. Exposed so integration tests and
+	// installDevHarness can inject a taskSink (test/devharness-only; never set
+	// in an untagged (production) build).
 	tunnel *tunnelServer
 }
 
@@ -185,8 +186,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enroll.WithRateLimiter(limiter))
 
 	ts := &tunnelServer{conns: conns, reg: reg}
-	// ts.sink is intentionally left nil — the production Relay never sets it.
-	// Only integration tests inject a taskSink after calling newServer.
+	// ts.sink is intentionally left nil here — newServer never sets it under
+	// any build tag. Only integration tests, or installDevHarness in a
+	// devharness-tagged build with RELAY_DEVHARNESS_SOCKET set, inject a
+	// taskSink after calling newServer.
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -211,11 +214,20 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 func main() {
 	cfg := parseConfig()
-	srv, _, err := newServer(cfg)
+	srv, deps, err := newServer(cfg)
 	if err != nil {
 		slog.Error("build server failed", "err", err)
 		os.Exit(1)
 	}
+	// installDevHarness is a no-op in every build except `devharness`
+	// (relay/cmd/relay/devharness_stub.go vs devharness.go); it must run
+	// before Serve so deps.tunnel.sink is set before any tunnel handler starts.
+	stop, err := installDevHarness(deps)
+	if err != nil {
+		slog.Error("install dev harness failed", "err", err)
+		os.Exit(1)
+	}
+	defer stop()
 	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		slog.Error("listen failed", "addr", cfg.Addr, "err", err)
