@@ -92,21 +92,21 @@ var _ dispatcher = (*jobEngine)(nil)
 // run implements dispatcher. See the at-most-once design note above for why
 // IDs are minted before persistence and every Task is persisted (Pending)
 // before any Task is dispatched.
-func (e *jobEngine) run(ctx context.Context, d dispatch) ([]NodeResult, error) {
+func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error) {
 	jobID, err := e.prefixedID("job-")
 	if err != nil {
-		return nil, fmt.Errorf("capability: generate job id: %w", err)
+		return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
 	}
 	if err := e.jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: e.now()}); err != nil {
-		return nil, fmt.Errorf("capability: create job %q: %w", jobID, err)
+		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
 
 	stageID, err := e.prefixedID("stage-")
 	if err != nil {
-		return nil, fmt.Errorf("capability: generate stage id: %w", err)
+		return dispatchResult{}, fmt.Errorf("capability: generate stage id: %w", err)
 	}
 	if err := e.jobsRepo.AddStage(ctx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
-		return nil, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
+		return dispatchResult{}, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
 	}
 
 	// Persist ALL Pending Tasks before dispatching any of them: this is
@@ -117,7 +117,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) ([]NodeResult, error) {
 	for _, n := range d.nodes {
 		taskID, err := e.prefixedID("task-")
 		if err != nil {
-			return nil, fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
+			return dispatchResult{}, fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
 		}
 		task := jobs.Task{
 			ID:      taskID,
@@ -132,7 +132,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) ([]NodeResult, error) {
 			CreatedAt: e.now(),
 		}
 		if err := e.tasksRepo.CreateTask(ctx, task); err != nil {
-			return nil, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
+			return dispatchResult{}, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
 		}
 		pending = append(pending, task)
 	}
@@ -147,7 +147,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) ([]NodeResult, error) {
 		results = append(results, NodeResult{NodeID: task.NodeID, Outcome: outcome})
 	}
 
-	return results, errors.Join(errs...)
+	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
 }
 
 // dispatchOne carries one persisted (Pending) Task through the rest of its

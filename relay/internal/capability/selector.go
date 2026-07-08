@@ -105,6 +105,27 @@ func (sel Selector) Matches(n registry.Node) bool {
 	return true
 }
 
+// String renders sel back into the canonical "node:key=value, relay:key=value"
+// form ParseSelector accepts — the true inverse of ParseSelector, used by the
+// audit adapter to record "the Selector as written" (audit.Record.Selector).
+// An empty Selector renders as "".
+func (sel Selector) String() string {
+	terms := make([]string, 0, len(sel.Predicates))
+	for _, p := range sel.Predicates {
+		var prefix string
+		switch p.Namespace {
+		case NamespaceNode:
+			prefix = "node:"
+		case NamespaceRelay:
+			prefix = "relay:"
+		default:
+			prefix = ""
+		}
+		terms = append(terms, fmt.Sprintf("%s%s=%s", prefix, p.Key, p.Value))
+	}
+	return strings.Join(terms, ", ")
+}
+
 // Resolve returns every Node in reg that matches sel. A Selector with no
 // Predicates matches every Node (inventory semantics — ADR-0003's
 // list_nodes(selector?) is deliberately callable with no selector at all).

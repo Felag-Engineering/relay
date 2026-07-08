@@ -28,10 +28,10 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 	}
 
 	_, err = a.db.ExecContext(ctx, `
-		INSERT INTO audit (audit_id, ts, principal, selector, job_id, action_kind, operation_name, args, raw_exec_argv, outcome)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Principal, r.Selector, r.JobID, r.ActionKind,
-		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome),
+		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
+		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason),
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit record: %w", err)
@@ -49,9 +49,14 @@ func (a *sqliteAudit) ByJob(ctx context.Context, jobID string) ([]audit.Record, 
 	return a.query(ctx, `WHERE job_id = ? ORDER BY ts`, jobID)
 }
 
+// ByNode returns all Records for nodeID, ordered by Timestamp.
+func (a *sqliteAudit) ByNode(ctx context.Context, nodeID string) ([]audit.Record, error) {
+	return a.query(ctx, `WHERE node_id = ? ORDER BY ts`, nodeID)
+}
+
 func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any) ([]audit.Record, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT audit_id, ts, principal, selector, job_id, action_kind, operation_name, args, raw_exec_argv, outcome
+		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason
 		FROM audit `+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query audit records: %w", err)
@@ -61,13 +66,15 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 	var out []audit.Record
 	for rows.Next() {
 		var (
-			id, ts, principal, selector, jobID, actionKind string
-			operationName                                  sql.NullString
-			argsJSON, argvJSON                             sql.NullString
-			outcome                                        int
+			id, ts, kind, principal, selector, jobID, actionKind string
+			nodeID                                               sql.NullString
+			operationName                                        sql.NullString
+			argsJSON, argvJSON                                   sql.NullString
+			outcome                                              int
+			reason                                               sql.NullString
 		)
-		if err := rows.Scan(&id, &ts, &principal, &selector, &jobID, &actionKind,
-			&operationName, &argsJSON, &argvJSON, &outcome); err != nil {
+		if err := rows.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
+			&operationName, &argsJSON, &argvJSON, &outcome, &reason); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
 		tsTime, err := parseTime(sql.NullString{String: ts, Valid: true})
@@ -85,14 +92,17 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 		out = append(out, audit.Record{
 			ID:            id,
 			Timestamp:     tsTime,
+			Kind:          kind,
 			Principal:     principal,
 			Selector:      selector,
 			JobID:         jobID,
+			NodeID:        nodeID.String,
 			ActionKind:    actionKind,
 			OperationName: operationName.String,
 			Args:          args,
 			RawExecArgv:   argv,
 			Outcome:       jobs.Outcome(outcome),
+			Reason:        reason.String,
 		})
 	}
 	return out, rows.Err()

@@ -120,7 +120,8 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
-	results, err := e.run(context.Background(), d)
+	dr, err := e.run(context.Background(), d)
+	results := dr.results
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -184,7 +185,8 @@ func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
-	results, err := e.run(context.Background(), d)
+	dr, err := e.run(context.Background(), d)
+	results := dr.results
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -252,7 +254,8 @@ func TestEngineMixedOutcomesTruthful(t *testing.T) {
 	act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/true"}, RiskClass: jobs.RiskClassMutate}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
-	results, err := e.run(context.Background(), d)
+	dr, err := e.run(context.Background(), d)
+	results := dr.results
 	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
@@ -300,7 +303,8 @@ func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
 	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
 
-	results, err := e.run(context.Background(), d)
+	dr, err := e.run(context.Background(), d)
+	results := dr.results
 	if err == nil {
 		t.Fatal("run() with an erroring Conduit should return an error")
 	}
