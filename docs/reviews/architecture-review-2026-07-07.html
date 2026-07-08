@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Architecture review — Relay</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose" });
+</script>
+<style>
+  .seam { stroke-dasharray: 4 4; }
+  .deepbox { background: linear-gradient(135deg, #0f172a, #1e293b); }
+</style>
+</head>
+<body class="bg-stone-50 text-slate-900 font-sans">
+<main class="max-w-5xl mx-auto px-6 py-12 space-y-12">
+
+<header class="space-y-3">
+  <h1 class="font-serif text-3xl">Architecture review — Relay</h1>
+  <p class="text-sm text-slate-500">2026-07-07 · mid-v0.0.5 (SQLite persistence landed; capability layer, Job engine, blast caps, Freeze next)</p>
+  <div class="flex flex-wrap gap-4 text-xs text-slate-600 pt-1">
+    <span class="flex items-center gap-1.5"><span class="inline-block w-4 h-3 border border-slate-400 bg-white"></span> module</span>
+    <span class="flex items-center gap-1.5"><svg width="20" height="6"><line x1="0" y1="3" x2="20" y2="3" stroke="#64748b" stroke-width="1.5" class="seam"/></svg> seam</span>
+    <span class="flex items-center gap-1.5"><svg width="20" height="6"><line x1="0" y1="3" x2="20" y2="3" stroke="#dc2626" stroke-width="2"/></svg> leakage</span>
+    <span class="flex items-center gap-1.5"><span class="inline-block w-4 h-3 deepbox rounded-sm"></span> deep module</span>
+  </div>
+</header>
+
+<section id="candidates" class="space-y-10">
+
+<!-- ─────────────────── Candidate 1 ─────────────────── -->
+<article id="c1" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">1 · Give dispatch one home: a capability-owned live-stream registry</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">Strong</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">relay/cmd/relay/tunnel.go:30-34,133 · relay/cmd/relay/dispatch_test.go · relay/cmd/relay/devharness.go · relay/internal/revocation/connections.go · relay/cmd/relay/main.go:150-232</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-2">Before</p>
+      <pre class="mermaid">
+flowchart TB
+  OPEN["tunnelServer.Open()<br/>send-func trapped in local scope"]
+  SINK["taskSink<br/>(nil in production)"]
+  DISP["dispatcher<br/>(test-only)"]
+  HARN["harnessSink<br/>(devharness tag, duplicate)"]
+  CONN["revocation.Connections<br/>(teardown contexts)"]
+  SEEN["registry LastSeen<br/>(liveness-ish)"]
+  OPEN -- registers --> SINK
+  SINK -.-> DISP
+  SINK -.-> HARN
+  OPEN --> CONN
+  OPEN --> SEEN
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class SINK,DISP,HARN leak
+      </pre>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-2">After</p>
+      <pre class="mermaid">
+flowchart TB
+  CAP["capability layer<br/>Selector → authz → blast-cap → dispatch → audit<br/><b>sole dispatch constructor</b>"]
+  LIVE["live-stream registry<br/>send-funcs · connected-set · teardown"]
+  OPEN2["tunnelServer.Open()<br/>registers stream, nothing else"]
+  MCP["MCP"] & API["Control API"] & CLI["future CLI"] --> CAP
+  CAP --> LIVE
+  OPEN2 --> LIVE
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class CAP,LIVE deep
+      </pre>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> The only way to send a Task is a send-func trapped in <code class="font-mono text-sm">Open</code>'s local scope, reachable through a sink that is <em>nil in production</em>; "which Nodes are connected" is split across three trackers, and the blast-cap has no seam at all.</p>
+  <p><span class="font-semibold">Solution.</span> One module owns live streams (send-func + connected-set + teardown); the capability layer is the only package that can construct a dispatch — the structural guarantee ROADMAP v0.0.5 mandates.</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li><b>Leverage:</b> one interface, four surfaces (MCP, API, Console, CLI)</li>
+    <li><b>Locality:</b> offline-fail-fast answerable in one place</li>
+    <li>Blast-cap gets its seam before Jobs land</li>
+    <li>Delete duplicated <code class="font-mono">dispatcher</code>/<code class="font-mono">harnessSink</code> pair</li>
+    <li>Composition root wires one constructor, not 12 flat fields</li>
+  </ul>
+  <div class="rounded-md bg-amber-50 border border-amber-200 px-4 py-2 text-sm text-amber-900">ADR-0009/0010: building the capability layer <em>on top of the test sink</em> would compromise "only the capability layer constructs a dispatch" from birth. Build this seam first.</div>
+</article>
+
+<!-- ─────────────────── Candidate 2 ─────────────────── -->
+<article id="c2" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">2 · One authority per concept: persist revocation &amp; Enrollment Tokens</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">Strong</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">local-substitutable</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">relay/internal/revocation/service.go:45-49 · relay/cmd/relay/main.go:176,197 · relay/internal/store/registry.go (SetRevoked / RevokedNodeIDs, unwired) · relay/internal/enroll/memory.go · relay/internal/store/migrations/0001_init.sql</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 p-4 space-y-3">
+      <p class="text-xs uppercase tracking-wider text-slate-400">Before — dual state, half wired</p>
+      <div class="flex gap-3">
+        <div class="flex-1 border-2 border-red-500 rounded p-2 text-center">
+          <p class="text-xs uppercase tracking-wider">in-memory Denylist</p>
+          <p class="text-xs text-slate-500">authoritative · empty on restart</p>
+        </div>
+        <div class="flex-1 border border-slate-300 border-dashed rounded p-2 text-center opacity-50">
+          <p class="text-xs uppercase tracking-wider">nodes.revoked_at</p>
+          <p class="text-xs">dead code — never written, never rehydrated</p>
+        </div>
+      </div>
+      <div class="flex gap-3">
+        <div class="flex-1 border-2 border-red-500 rounded p-2 text-center">
+          <p class="text-xs uppercase tracking-wider">enroll.MemoryRepository</p>
+          <p class="text-xs text-slate-500">tokens volatile · no table exists</p>
+        </div>
+        <div class="flex-1 border border-slate-300 border-dashed rounded p-2 text-center opacity-50">
+          <p class="text-xs uppercase tracking-wider">tokens table</p>
+          <p class="text-xs">missing from migration</p>
+        </div>
+      </div>
+      <p class="text-xs text-red-600 font-semibold">Restart ⇒ revoked Node reconnects; revoked token enrolls again.</p>
+    </div>
+    <div class="rounded-lg border border-slate-200 p-4 space-y-3">
+      <p class="text-xs uppercase tracking-wider text-slate-400">After — store authoritative, cache derived</p>
+      <div class="deepbox text-slate-100 rounded p-3 text-center">
+        <p class="text-xs uppercase tracking-wider">store: revocations + tokens</p>
+        <p class="text-xs text-slate-300">single authority · survives restart</p>
+      </div>
+      <div class="flex justify-center"><svg width="20" height="24"><line x1="10" y1="0" x2="10" y2="20" stroke="#64748b" stroke-width="1.5" class="seam"/><polygon points="6,18 14,18 10,24" fill="#64748b"/></svg></div>
+      <div class="border border-slate-300 rounded p-2 text-center">
+        <p class="text-xs uppercase tracking-wider">Denylist</p>
+        <p class="text-xs text-slate-500">in-memory adapter, rehydrated at boot</p>
+      </div>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> Revocation and Enrollment Tokens are volatile while everything around them persists — <code class="font-mono text-sm">RevokeNode</code> never calls <code class="font-mono text-sm">SetRevoked</code>, boot never calls <code class="font-mono text-sm">RevokedNodeIDs</code>, and no tokens table exists.</p>
+  <p><span class="font-semibold">Solution.</span> Make the store the single authority for both concepts; the in-memory Denylist becomes a derived adapter rehydrated at boot.</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li><b>Correctness:</b> revocation survives restart</li>
+    <li><b>Locality:</b> revoke lifecycle readable in one module</li>
+    <li>Registry doc's rehydration promise becomes true</li>
+    <li>Token-revocation barrier stops evaporating</li>
+  </ul>
+  <div class="rounded-md bg-red-50 border border-red-200 px-4 py-2 text-sm text-red-900"><b>Security finding, not just architecture:</b> today a revoked Node can reconnect after a Relay restart (ADR-0006 strain). Worth fixing ahead of any refactor.</div>
+</article>
+
+<!-- ─────────────────── Candidate 3 ─────────────────── -->
+<article id="c3" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">3 · Operation vocabulary as one lookup (daemon)</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800">Strong</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">daemon/src/operations/mod.rs · daemon/src/dispatch.rs:293-306,375-423 · proto/gleipnir/v1/gleipnir.proto:141-146</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">Before — one new Operation = 5 edit sites</p>
+      <div class="space-y-2">
+        <div class="border border-slate-300 rounded px-3 py-1.5 text-xs font-mono">proto vocabulary table (comment-form)</div>
+        <div class="border border-slate-300 rounded px-3 py-1.5 text-xs font-mono">operations/mod.rs — constant + descriptor + risk_class</div>
+        <div class="border border-slate-300 rounded px-3 py-1.5 text-xs font-mono">operations/new_op.rs — handler</div>
+        <div class="border-2 border-red-500 rounded px-3 py-1.5 text-xs font-mono">dispatch.rs match #1 — arg-shape <span class="text-red-600">(catch-all: _ ⇒ vec![])</span></div>
+        <div class="border-2 border-red-500 rounded px-3 py-1.5 text-xs font-mono">dispatch.rs match #2 — handler <span class="text-red-600">(catch-all: _ ⇒ "unknown operation")</span></div>
+      </div>
+      <p class="text-xs text-red-600 mt-3">The two red arms must stay shape-consistent by hand — Policy can evaluate a different arg vector than the handler acts on.</p>
+    </div>
+    <div class="rounded-lg border border-slate-200 p-4 flex flex-col">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">After — one registration</p>
+      <div class="deepbox text-slate-100 rounded p-4 flex-1 flex flex-col justify-center gap-2">
+        <p class="text-xs uppercase tracking-wider text-center">operations::vocabulary</p>
+        <p class="text-xs font-mono text-slate-300 text-center">name → (handler, arg-shape, risk_class)</p>
+        <div class="text-xs text-slate-400 text-center space-y-0.5 opacity-70">
+          <p>dispatch match arms — absorbed</p>
+          <p>risk_class() — absorbed</p>
+          <p>descriptors() — absorbed</p>
+        </div>
+      </div>
+      <p class="text-xs text-slate-500 mt-3">dispatch.rs asks the vocabulary; forgetting a registration is impossible, not a runtime "unknown operation".</p>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> The name→handler and name→arg-shape bindings are two hand-rolled matches in <code class="font-mono text-sm">dispatch.rs</code> with uncheckable catch-alls, on the security path where Policy and executor must see the same arg vector.</p>
+  <p><span class="font-semibold">Solution.</span> One lookup owned by <code class="font-mono text-sm">operations/mod.rs</code> binds name → (handler, arg-shape, risk class); dispatch stops carrying parallel per-Operation arms.</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li><b>Locality:</b> Policy-arg-vector and handler agree by construction</li>
+    <li><b>Leverage:</b> new Operation = one registration, not 5 edits</li>
+    <li>Template Operations tier (v1.1.0) registers instead of adding match arms</li>
+    <li>dispatch↔lint "unknown name" contract becomes explicit</li>
+  </ul>
+</article>
+
+<!-- ─────────────────── Candidate 4 ─────────────────── -->
+<article id="c4" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">4 · Deepen the Job domain: own the state machine, carry provenance</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">Worth exploring</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">ports &amp; adapters</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">relay/internal/jobs/jobs.go:31-36,98-101 · relay/internal/store/tasks.go (transition) · relay/internal/audit/audit.go:22-33</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">Before — mass diagram</p>
+      <div class="flex gap-6 items-end justify-center h-56">
+        <div class="text-center">
+          <div class="w-28 border-2 border-slate-500 bg-slate-100 rounded-t" style="height:150px"><p class="text-xs pt-2 uppercase tracking-wider">interface</p><p class="text-[10px] text-slate-500 px-1">2 repos · sentinels · invariant prose</p></div>
+          <div class="w-28 border-2 border-t-0 border-slate-500 bg-white rounded-b" style="height:40px"><p class="text-[10px] pt-2 text-slate-500">impl: types only</p></div>
+          <p class="text-xs mt-1 font-mono">jobs (shallow)</p>
+        </div>
+        <div class="text-center">
+          <div class="w-28 border-2 border-red-500 bg-white rounded" style="height:190px"><p class="text-xs pt-2 uppercase tracking-wider text-red-600">store/tasks.go</p><p class="text-[10px] text-slate-500 px-1">state machine actually enforced here — testable only with SQLite</p></div>
+          <p class="text-xs mt-1 font-mono">store</p>
+        </div>
+      </div>
+    </div>
+    <div class="rounded-lg border border-slate-200 p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">After</p>
+      <div class="flex gap-6 items-end justify-center h-56">
+        <div class="text-center">
+          <div class="w-28 deepbox text-slate-100 rounded-t" style="height:40px"><p class="text-xs pt-2 uppercase tracking-wider">interface</p></div>
+          <div class="w-28 border-2 border-t-0 border-slate-800 bg-white rounded-b" style="height:150px"><p class="text-[10px] pt-2 text-slate-500 px-1">transition rules · provenance (principal, Selector) · at-most-once invariant</p></div>
+          <p class="text-xs mt-1 font-mono">jobs (deep)</p>
+        </div>
+        <div class="text-center">
+          <div class="w-28 border border-slate-300 border-dashed rounded" style="height:100px"><p class="text-[10px] pt-2 text-slate-500 px-1">store = persistence adapter; in-memory adapter for tests</p></div>
+          <p class="text-xs mt-1 font-mono">2 adapters = real seam</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> The at-most-once state machine is declared in <code class="font-mono text-sm">jobs</code> but enforced in <code class="font-mono text-sm">store</code>; Job provenance (principal, Selector) lives only in audit; testing the crash-mid-Job invariant requires SQLite.</p>
+  <p><span class="font-semibold">Solution.</span> Move transition rules and provenance into the Job module; store becomes a persistence adapter, joined by an in-memory adapter (two adapters = real seam).</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li><b>Locality:</b> ADR-0004 invariant lives where it's declared</li>
+    <li>Crash-mid-Job acceptance test runs without SQLite</li>
+    <li>Audit stops being the only record of who/what/where</li>
+  </ul>
+</article>
+
+<!-- ─────────────────── Candidate 5 ─────────────────── -->
+<article id="c5" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">5 · Seam the daemon's inbound-message router</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">Worth exploring</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">daemon/src/main.rs:133-295 (run_tunnel) · daemon/src/tunnel.rs (already deep — keep)</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-2">Before</p>
+      <pre class="mermaid">
+flowchart TB
+  GRPC["live gRPC bidi stream<br/>(only way in)"]
+  RT["run_tunnel — 160-line match<br/>Hello · Ping · heartbeat spawn ·<br/>Task / TaskCancel / PolicyQuery routing ·<br/>register→spawn→deregister ordering"]
+  D["dispatch"]
+  C["CancelRegistry"]
+  P["evaluate_policy_query"]
+  GRPC --> RT --> D & C & P
+  classDef leak stroke:#dc2626,stroke-width:2px;
+  class RT leak
+      </pre>
+    </div>
+    <div class="rounded-lg border border-slate-200 bg-white p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-2">After</p>
+      <pre class="mermaid">
+flowchart TB
+  GRPC2["gRPC stream"]
+  RT2["run_tunnel — thin loop"]
+  H["message handler<br/>(over the three Arcs)<br/>ordering assertable in-process"]
+  D2["dispatch"]
+  C2["CancelRegistry"]
+  P2["evaluate_policy_query"]
+  GRPC2 --> RT2 --> H --> D2 & C2 & P2
+  TEST["unit tests"] -.-> H
+  classDef deep fill:#0f172a,color:#f8fafc,stroke:#0f172a;
+  class H deep
+      </pre>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> The register-before-spawn / deregister-before-send ordering — execution-adjacent behaviour — is testable only against a live bidi stream.</p>
+  <p><span class="font-semibold">Solution.</span> Extract per-message routing into a handler module taking the three registries; <code class="font-mono text-sm">run_tunnel</code> keeps only the socket loop.</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li>Ordering invariants assertable without a socket</li>
+    <li><b>Locality:</b> message→registry mapping in one module</li>
+    <li>v0.0.7 reconnect-resilience work gets a test subject</li>
+  </ul>
+</article>
+
+<!-- ─────────────────── Candidate 6 ─────────────────── -->
+<article id="c6" class="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="font-serif text-xl">6 · One primitive for the honest-cancel race</h2>
+    <div class="flex gap-2 shrink-0">
+      <span class="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-100 text-amber-800">Worth exploring</span>
+      <span class="text-xs px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">in-process</span>
+    </div>
+  </div>
+  <p class="font-mono text-sm text-slate-600">daemon/src/executor.rs:203-211 (recv_cancel) · daemon/src/scheduler.rs:159-176 (queued_cancel, self-described mirror) · daemon/src/cancel.rs:38-84 (the contract both depend on)</p>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <div class="rounded-lg border border-slate-200 p-4">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">Before — one rule, three homes</p>
+      <div class="space-y-2">
+        <div class="border-2 border-red-500 rounded px-3 py-2 text-xs"><span class="font-mono">executor::recv_cancel</span> — "send(()) cancels; dropped sender ⇒ pending(), never cancels"</div>
+        <div class="border-2 border-red-500 rounded px-3 py-2 text-xs"><span class="font-mono">scheduler::queued_cancel</span> — same rule, mirrored select! (doc comment admits it)</div>
+        <div class="border-2 border-red-500 rounded px-3 py-2 text-xs"><span class="font-mono">CancelRegistry</span> — contract only holds if both mirrors agree</div>
+      </div>
+      <p class="text-xs text-red-600 mt-3">A change to the race rule must be made twice; the compiler never forces agreement.</p>
+    </div>
+    <div class="rounded-lg border border-slate-200 p-4 flex flex-col justify-center">
+      <p class="text-xs uppercase tracking-wider text-slate-400 mb-3">After</p>
+      <div class="deepbox text-slate-100 rounded p-4 text-center">
+        <p class="text-xs uppercase tracking-wider">cancel-race primitive</p>
+        <p class="text-xs text-slate-300 mt-1">explicit-signal-vs-event select, dropped-sender = pending — once</p>
+      </div>
+      <div class="flex justify-around mt-3 text-xs text-slate-500">
+        <span>↑ scheduler queue-wait</span>
+        <span>↑ executor run-wait</span>
+      </div>
+    </div>
+  </div>
+
+  <p><span class="font-semibold">Problem.</span> The safety-critical "honest race" semantic (a Task that won the race reports <code class="font-mono text-sm">success</code>, never retroactive cancel — ADR-0013) is implemented in two mirrored <code class="font-mono text-sm">select!</code> helpers plus the registry contract they lean on.</p>
+  <p><span class="font-semibold">Solution.</span> One primitive both the queue-wait and the run-wait consume; the rule gets a single home and a single test suite.</p>
+  <ul class="text-sm space-y-1 list-disc list-inside text-slate-700">
+    <li><b>Locality:</b> ADR-0013 semantic changes in one place</li>
+    <li>Mirror-drift class of bug eliminated</li>
+  </ul>
+</article>
+
+</section>
+
+<!-- ─────────────────── Smaller findings ─────────────────── -->
+<section class="bg-white rounded-xl border border-slate-200 p-6 space-y-3">
+  <h2 class="font-serif text-xl">Smaller findings (no card needed)</h2>
+  <ul class="text-sm space-y-2 list-disc list-inside text-slate-700">
+    <li><b>Blocking I/O on the async runtime</b> — <code class="font-mono">dispatch.rs:379-403</code> facts/file-read bodies, and <code class="font-mono">executor.rs:116-144</code> pipe-drain with no timeout (a daemonizing child can stall the mutate lane). Belongs to v0.0.7 hardening.</li>
+    <li><b>Raw Exec allow-regex sees <code class="font-mono">argv.join(" ")</code></b> while the executor runs the argv (<code class="font-mono">policy.rs:633-650</code> vs <code class="font-mono">executor.rs:65-66</code>) — an argv element containing a space changes what the allow-regex sees vs what runs. Deliberate, deny-side element-checked, but deserves an explicit red-team test in v0.0.8.</li>
+    <li><b>Registry Upsert "who-writes-what"</b> — the field-authority rules live as prose in <code class="font-mono">registry/registry.go</code> but are enforced in <code class="font-mono">store/registry.go</code>; two write-sites (enroll, tunnel) re-derive them. A single documented merge table co-located with the implementation.</li>
+    <li><b><code class="font-mono">registry.InMemory</code> (243 lines)</b> — full parallel adapter used only by tests; retire to a test helper or keep deliberately as the second adapter that proves the seam.</li>
+    <li><b><code class="font-mono">WithMaxNodes</code> naming trap</b> — it caps registry inserts, not dispatch blast radius; rename before the real blast cap (ADR-0012) lands beside it.</li>
+    <li><b><code class="font-mono">parseConfig</code> env-block duplication</b> — six near-identical int-override blocks; will grow one per new cap/limit.</li>
+    <li><b><code class="font-mono">policy_check</code> bypasses the owner/group-write gate</b> (documented, offline-lint reason) — the permission gate has exactly one bypass; keep it visible in v0.0.7.</li>
+  </ul>
+</section>
+
+<!-- ─────────────────── Top recommendation ─────────────────── -->
+<section id="top-recommendation" class="deepbox text-slate-100 rounded-xl p-8 space-y-3">
+  <p class="text-xs uppercase tracking-wider text-slate-400">Top recommendation</p>
+  <h2 class="font-serif text-2xl"><a href="#c1" class="underline decoration-slate-500 underline-offset-4">1 · The capability-owned live-stream registry</a> — before any more v0.0.5 code</h2>
+  <p class="text-slate-300 text-sm max-w-3xl">The rest of v0.0.5 (Job engine, blast caps, Freeze, audit wiring) must be built <em>on</em> this seam; today the only send-path is a test-only sink, so building the capability layer around it would compromise the "only the capability layer can construct a dispatch" structural guarantee from birth — the load-bearing decision of ADR-0009/0010. Fix <a href="#c2" class="underline decoration-slate-500 underline-offset-4">candidate 2's revocation-persistence gap</a> in parallel: it is a security bug today, independent of any refactor.</p>
+</section>
+
+<footer class="text-xs text-slate-400 pt-4">Generated 2026-07-07 · surveys: relay (Go) + daemon (Rust) explorers · vocabulary per CONTEXT.md and the deep-module glossary</footer>
+
+</main>
+</body>
+</html>
