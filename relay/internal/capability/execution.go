@@ -56,6 +56,12 @@ type Conduit interface {
 	// Dispatch sends task down nodeID's Tunnel and blocks for its Result.
 	// Callers must only call Dispatch after Connected(nodeID) reports true.
 	Dispatch(ctx context.Context, nodeID string, task jobs.Task) (jobs.Result, error)
+
+	// Cancel sends TaskCancel for taskID down nodeID's Tunnel, best-effort
+	// (ADR-0013). It does not wait for or rewrite the Task's outcome — the
+	// daemon reports the true outcome (OUTCOME_CANCELLED, or the real result
+	// if the Task won the race) through the normal result path.
+	Cancel(ctx context.Context, nodeID string, taskID string) error
 }
 
 // idGen mints a new unique ID. It is a seam so in-package tests can inject
@@ -180,6 +186,54 @@ func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task) (jobs.Outco
 		return jobs.OutcomeFailure, fmt.Errorf("capability: resolve task %q: %w", task.ID, err)
 	}
 	return result.Outcome, nil
+}
+
+// cancel implements dispatcher (#101, ADR-0013): it stops jobID's Tasks by
+// their current dispatch state — Pending Tasks are MarkCancelled without
+// ever being sent, Dispatched Tasks are asked to cancel over their Tunnels
+// (Conduit.Cancel), and Resolved Tasks are left untouched, keeping their
+// truthful outcome (a Task that already completed, or that won the race
+// against cancellation, reports its real outcome — ADR-0013/0004 never
+// rewrite a resolved outcome retroactively). Per-Task errors are joined, not
+// short-circuited, so one failing Task does not stop the rest from being
+// cancelled.
+//
+// Best-effort race gap (deliberate, per ADR-0013's cancel contract — do not
+// try to close it): a Task that transitions Pending -> Dispatched in the
+// window between the ByJob read below and the MarkCancelled attempt is
+// neither cancelled here (the MarkCancelled call fails with
+// ErrInvalidTaskState, joined into the returned error) nor sent
+// Conduit.Cancel (the loop only cancels what it read as Dispatched) — it
+// runs to completion uncancelled. This is unreachable today (no real
+// concurrent dispatcher is wired in this milestone), but whoever wires one
+// in a later issue must know: cancel only ever *asks*, it never fabricates a
+// cancelled outcome for a Task that won the race.
+func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
+	if _, err := e.jobsRepo.GetJob(ctx, jobID); err != nil {
+		return err
+	}
+
+	tasks, err := e.tasksRepo.ByJob(ctx, jobID)
+	if err != nil {
+		return fmt.Errorf("capability: list tasks for job %q: %w", jobID, err)
+	}
+
+	var errs []error
+	for _, task := range tasks {
+		switch task.State {
+		case jobs.DispatchStatePending:
+			if err := e.tasksRepo.MarkCancelled(ctx, task.ID, e.now()); err != nil {
+				errs = append(errs, fmt.Errorf("capability: mark task %q cancelled: %w", task.ID, err))
+			}
+		case jobs.DispatchStateDispatched:
+			if err := e.conduit.Cancel(ctx, task.NodeID, task.ID); err != nil {
+				errs = append(errs, fmt.Errorf("capability: cancel task %q on node %q: %w", task.ID, task.NodeID, err))
+			}
+		case jobs.DispatchStateResolved:
+			// Already terminal with a truthful outcome — never touched.
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // prefixedID mints a new ID via e.newID and adds prefix ("job-", "stage-",

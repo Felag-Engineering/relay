@@ -1,12 +1,14 @@
 // Package store is the Relay's SQLite-backed persistence layer: it gives the
-// Relay durable memory for the Node registry, Jobs/Stages/Tasks, and the
-// audit trail, so all three survive a restart (ADR-0004).
+// Relay durable memory for the Node registry, Jobs/Stages/Tasks, the audit
+// trail, and the Relay-wide Freeze, so all of them survive a restart
+// (ADR-0004, ADR-0013).
 //
 // This package is the ONLY place database/sql (and modernc.org/sqlite) may
 // appear in the Relay. Its accessors return the domain interfaces defined in
-// internal/registry, internal/jobs, and internal/audit — never a concrete
-// SQL-backed type — so a later Postgres swap is a change to this package
-// alone, with no caller changes (per the ROADMAP's deferred-Postgres note).
+// internal/registry, internal/jobs, internal/audit, and internal/freeze —
+// never a concrete SQL-backed type — so a later Postgres swap is a change to
+// this package alone, with no caller changes (per the ROADMAP's
+// deferred-Postgres note).
 package store
 
 import (
@@ -19,6 +21,7 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -116,4 +119,10 @@ func (s *Store) Tasks() jobs.TaskRepository {
 // Audit returns the SQLite-backed audit.Repository.
 func (s *Store) Audit() audit.Repository {
 	return &sqliteAudit{db: s.db}
+}
+
+// Freeze returns the SQLite-backed freeze.Repository — the persisted
+// Relay-wide emergency stop (ADR-0013).
+func (s *Store) Freeze() freeze.Repository {
+	return &sqliteFreeze{db: s.db}
 }

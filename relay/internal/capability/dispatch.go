@@ -65,6 +65,14 @@ type dispatchResult struct {
 // service.go.
 type dispatcher interface {
 	run(ctx context.Context, d dispatch) (dispatchResult, error)
+
+	// cancel stops a Job's Tasks (#101, ADR-0013): undispatched Tasks are
+	// marked cancelled without ever being sent, in-flight Tasks are asked to
+	// cancel over their Tunnels, and already-resolved Tasks are left
+	// untouched. It takes no dispatch value — cancel targets a previously
+	// dispatched Job by ID, not a fresh unit of work — so it does not weaken
+	// the dispatch/newDispatch seal.
+	cancel(ctx context.Context, jobID string) error
 }
 
 // noopDispatcher is the v0.0.5 default. It performs no execution and says
@@ -78,4 +86,8 @@ func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error)
 		results = append(results, NodeResult{NodeID: n.NodeID, Outcome: jobs.OutcomeUnspecified})
 	}
 	return dispatchResult{results: results}, nil
+}
+
+func (noopDispatcher) cancel(context.Context, string) error {
+	return nil
 }

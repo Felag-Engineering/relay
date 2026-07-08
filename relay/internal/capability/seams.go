@@ -96,3 +96,54 @@ func (noopAuditSink) Record(context.Context, AuditEntry) error {
 func (noopAuditSink) RecordFreeze(context.Context, FreezeEvent) error {
 	return nil
 }
+
+// FreezeStore is the persisted, Relay-wide emergency stop (ADR-0013): "I
+// don't trust what's driving this, stop dispatching everything." Service.Run
+// consults Frozen before every dispatch (both risk classes); EngageFreeze/
+// ReleaseFreeze call Engage/Release. This seam takes only a context, so it is
+// allowlist-safe for capability's import-boundary guard
+// (TestCapabilityImportsOnlyRegistryAndJobs); the SQLite-backed
+// implementation (internal/store, behind internal/freeze.Repository, whose
+// method set mirrors this one) is wired in via WithFreeze, kept out of
+// package capability for the same import-boundary reason as Conduit/
+// AuditSink.
+type FreezeStore interface {
+	// Frozen reports whether the Freeze is currently engaged.
+	Frozen(ctx context.Context) (bool, error)
+
+	// Engage sets the Freeze, recording principal as who engaged it.
+	Engage(ctx context.Context, principal string) error
+
+	// Release clears the Freeze, recording principal as who released it and
+	// reason as why.
+	Release(ctx context.Context, principal, reason string) error
+}
+
+// noopFreezeStore is the v0.0.5 default: "never frozen". This is a missing
+// stop-button, not a fail-open of authz/cap/audit — but see New's fail-open
+// guard (service.go), which requires a real FreezeStore alongside a real
+// dispatcher for exactly that reason: an un-stoppable real executor is the
+// same class of composition-root wiring bug.
+type noopFreezeStore struct{}
+
+func (noopFreezeStore) Frozen(context.Context) (bool, error) {
+	return false, nil
+}
+
+func (noopFreezeStore) Engage(context.Context, string) error {
+	return nil
+}
+
+func (noopFreezeStore) Release(context.Context, string, string) error {
+	return nil
+}
+
+// FrozenError is returned by Service.Run when the Relay-wide Freeze is
+// engaged: dispatch is refused before any Task is sent. It is exported and
+// typed so a surface can recognize a Freeze refusal via errors.As without
+// string-matching (mirrors CapExceededError, caps.go).
+type FrozenError struct{}
+
+func (*FrozenError) Error() string {
+	return "capability: dispatch refused: the Relay-wide Freeze is engaged (ADR-0013)"
+}

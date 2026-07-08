@@ -91,6 +91,20 @@ func (t *sqliteTasks) MarkUnreachable(ctx context.Context, taskID string, at tim
 	})
 }
 
+// MarkCancelled transitions a Task from Pending directly to Resolved with
+// jobs.OutcomeCancelled, leaving dispatched_at NULL — the Task was cancelled
+// before it was ever sent (ADR-0013). Returns jobs.ErrTaskNotFound if the
+// Task does not exist, or jobs.ErrInvalidTaskState if it is not currently
+// Pending.
+func (t *sqliteTasks) MarkCancelled(ctx context.Context, taskID string, at time.Time) error {
+	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeCancelled), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // transition runs fn inside a tx after verifying taskID currently has
 // requiredState, translating "not found" / "wrong state" into the sentinel
 // errors jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.

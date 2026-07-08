@@ -20,12 +20,13 @@ import (
 
 // fakeConduit is a configurable Conduit: connected reports which Nodes have
 // a live Tunnel, and results/errs supply a canned Dispatch outcome per Node.
-// It also records every Dispatch call (in order) to a shared log so tests
-// can assert dispatch ordering relative to persistence.
+// It also records every Dispatch/Cancel call (in order) to a shared log so
+// tests can assert dispatch ordering relative to persistence.
 type fakeConduit struct {
 	connected map[string]bool
 	results   map[string]jobs.Result
 	errs      map[string]error
+	cancelErr map[string]error
 	log       *[]string
 }
 
@@ -34,6 +35,7 @@ func newFakeConduit(log *[]string) *fakeConduit {
 		connected: map[string]bool{},
 		results:   map[string]jobs.Result{},
 		errs:      map[string]error{},
+		cancelErr: map[string]error{},
 		log:       log,
 	}
 }
@@ -48,6 +50,15 @@ func (f *fakeConduit) Dispatch(_ context.Context, nodeID string, _ jobs.Task) (j
 		return jobs.Result{}, err
 	}
 	return f.results[nodeID], nil
+}
+
+// Cancel records "cancel:<nodeID>:<taskID>" to the shared log and returns
+// the canned error for nodeID, if any.
+func (f *fakeConduit) Cancel(_ context.Context, nodeID, taskID string) error {
+	if f.log != nil {
+		*f.log = append(*f.log, "cancel:"+nodeID+":"+taskID)
+	}
+	return f.cancelErr[nodeID]
 }
 
 // recordingTasks wraps a jobs.TaskRepository, appending "create:<nodeID>" to
@@ -369,11 +380,13 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	authz := &spyAuthorizer{}
 	capChecker := &spyCapChecker{}
 	audit := &spyAuditSink{}
+	freezeStore := &fakeFreezeStore{}
 
 	svc := New(reg,
 		WithAuthorizer(authz),
 		WithCapChecker(capChecker),
 		WithAuditSink(audit),
+		WithFreeze(freezeStore),
 		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
 	)
 
@@ -389,6 +402,30 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	if !authz.called || !capChecker.called || !audit.called {
 		t.Errorf("expected the real seams to be called: authz=%v cap=%v audit=%v", authz.called, capChecker.called, audit.called)
 	}
+}
+
+// TestWithExecutionRefusesWithoutFreeze is New's fail-open guard extended
+// for FreezeStore (amendment D): wiring a real dispatcher via WithExecution
+// with real Authorizer/CapChecker/AuditSink but WITHOUT a real FreezeStore
+// must still panic — a real executor riding the noopFreezeStore default is
+// un-stoppable, exactly the composition-root wiring bug the guard exists to
+// catch.
+func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	reg := registry.NewInMemory()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New(reg, WithExecution(...)) with real Authorizer/CapChecker/AuditSink but no WithFreeze should panic")
+		}
+	}()
+	New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}),
+		WithExecution(jobsRepo, tasksRepo, conduit),
+	)
 }
 
 // TestCapabilityImportsOnlyRegistryAndJobs is an import-boundary AST guard

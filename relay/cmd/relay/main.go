@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
@@ -244,13 +246,21 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// devharness-tagged build with RELAY_DEVHARNESS_SOCKET set, inject a
 	// taskSink after calling newServer.
 
-	// capSvc is constructed with its default seams (allow-all authz, no-op
-	// dispatch, no-op audit) and no surface wired to it — see the
-	// appDeps.capability doc comment. The CapChecker is the real BlastCap
+	// capSvc is constructed with its default allow-all authz and no-op
+	// dispatch — no execution surface is wired to it yet (see the
+	// appDeps.capability doc comment); WithExecution is still not called, so
+	// New's real-dispatcher fail-open guard is not tripped by the real
+	// AuditSink/FreezeStore below. The CapChecker is the real BlastCap
 	// (ADR-0004/0012); see the ReadBlastCap/MutateBlastCap doc comment on
-	// Config for the file-vs-flag deviation flagged for human review.
+	// Config for the file-vs-flag deviation flagged for human review. The
+	// AuditSink is the real adapter to the SQLite-backed audit trail (#102);
+	// the FreezeStore is the real persisted Relay-wide emergency stop
+	// (#101, ADR-0013) — see watchFreezeSignals (freeze_signal.go) for the
+	// local engage/release lever.
 	capSvc := capability.New(reg,
-		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)))
+		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
+		capability.WithAuditSink(auditsink.New(st.Audit())),
+		capability.WithFreeze(st.Freeze()))
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -295,6 +305,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer stop()
+	// watchFreezeSignals is the local engage/release lever for the Relay-wide
+	// Freeze (#101, ADR-0013) — see freeze_signal.go for the asymmetric-
+	// activation rationale. It must start before Serve so a signal sent
+	// immediately after startup is never missed.
+	go watchFreezeSignals(context.Background(), deps.capability)
 	lis, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
 		slog.Error("listen failed", "addr", cfg.Addr, "err", err)
