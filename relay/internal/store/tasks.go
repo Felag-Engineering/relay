@@ -72,6 +72,19 @@ func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result)
 	})
 }
 
+// MarkUnreachable transitions a Task from Pending directly to Resolved with
+// jobs.OutcomeUnreachable, leaving dispatched_at NULL — the Task was never
+// sent. Returns jobs.ErrTaskNotFound if the Task does not exist, or
+// jobs.ErrInvalidTaskState if it is not currently Pending.
+func (t *sqliteTasks) MarkUnreachable(ctx context.Context, taskID string, at time.Time) error {
+	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeUnreachable), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // transition runs fn inside a tx after verifying taskID currently has
 // requiredState, translating "not found" / "wrong state" into the sentinel
 // errors jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.

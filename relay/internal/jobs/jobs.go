@@ -170,6 +170,15 @@ type TaskRepository interface {
 	// exist, or ErrInvalidTaskState if the Task is not currently Dispatched.
 	Resolve(ctx context.Context, taskID string, r Result) error
 
+	// MarkUnreachable transitions a Task from Pending directly to Resolved
+	// with OutcomeUnreachable, recording the resolve time but no
+	// DispatchedAt — the Task was never sent (ADR-0004's offline fail-fast:
+	// a matched-but-disconnected Node's Task must reach a terminal, truthful
+	// outcome without ever claiming to have been dispatched). Returns
+	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if
+	// the Task is not currently Pending.
+	MarkUnreachable(ctx context.Context, taskID string, at time.Time) error
+
 	// Get returns the Task with the given ID, or ErrTaskNotFound.
 	Get(ctx context.Context, taskID string) (Task, error)
 
