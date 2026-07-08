@@ -62,9 +62,16 @@ A single dispatch of an Operation or Raw Exec across the Nodes matched by a Sele
 Comprises one Task per matched Node and is the unit of audit and blast-radius control.
 _Avoid_: batch, run, execution
 
+**Stage**:
+The persistence-model layer between a Job and its Tasks: a Job comprises one or more
+ordered stages, each a batch of Tasks. **In v1 a Job always has exactly one stage**
+(enforced in code and schema); the concept exists so post-1.0 staged rollout lands
+without a data migration. Not yet operator-facing — a scheduling/persistence detail.
+_Avoid_: phase, wave
+
 **Task**:
-The execution of one Operation or Raw Exec on a single Node, as part of a Job. Carries a
-unique ID for at-most-once execution and reports an independent outcome.
+The execution of one Operation or Raw Exec on a single Node, as part of a Job (within a
+Stage). Carries a unique ID for at-most-once execution and reports an independent outcome.
 _Avoid_: command, unit, step
 
 **Selector**:

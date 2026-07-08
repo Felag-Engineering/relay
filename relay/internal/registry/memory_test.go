@@ -374,3 +374,59 @@ func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T)
 		t.Errorf("after update: RelayLabels[quarantine] = %q, want true (relay labels must survive reconnect)", n.RelayLabels["quarantine"])
 	}
 }
+
+func TestSetRevoked_NotFound(t *testing.T) {
+	reg := NewInMemory()
+	err := reg.SetRevoked("does-not-exist", time.Now())
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestSetRevoked_RoundTripAndRevokedNodeIDs(t *testing.T) {
+	reg := NewInMemory()
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		if _, err := reg.Upsert(Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	// No node is revoked yet.
+	ids, err := reg.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("RevokedNodeIDs before any revoke: got %v, want empty", ids)
+	}
+
+	n, _ := reg.Get("node-a")
+	if !n.RevokedAt.IsZero() {
+		t.Errorf("RevokedAt before revoke: got %v, want zero value", n.RevokedAt)
+	}
+
+	revokedAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := reg.SetRevoked("node-b", revokedAt); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+
+	n, _ = reg.Get("node-b")
+	if !n.RevokedAt.Equal(revokedAt) {
+		t.Errorf("RevokedAt after revoke: got %v, want %v", n.RevokedAt, revokedAt)
+	}
+
+	// Other nodes must be unaffected.
+	n, _ = reg.Get("node-a")
+	if !n.RevokedAt.IsZero() {
+		t.Errorf("node-a RevokedAt: got %v, want zero value (unrevoked)", n.RevokedAt)
+	}
+
+	ids, err = reg.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "node-b" {
+		t.Errorf("RevokedNodeIDs after revoking node-b: got %v, want [node-b]", ids)
+	}
+}

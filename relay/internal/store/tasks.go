@@ -1,0 +1,343 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
+
+// sqliteTasks implements jobs.TaskRepository against the tasks table.
+type sqliteTasks struct {
+	db *sql.DB
+}
+
+var _ jobs.TaskRepository = (*sqliteTasks)(nil)
+
+// CreateTask persists a new Task with State = jobs.DispatchStatePending.
+func (t *sqliteTasks) CreateTask(ctx context.Context, task jobs.Task) error {
+	kindStr, err := actionKindToString(task.Action.Kind)
+	if err != nil {
+		return err
+	}
+	argsJSON, err := encodeStringMap(task.Action.OperationArgs)
+	if err != nil {
+		return err
+	}
+	argvJSON, err := encodeStringSlice(task.Action.RawExecArgv)
+	if err != nil {
+		return err
+	}
+
+	_, err = t.db.ExecContext(ctx, `
+		INSERT INTO tasks (task_id, job_id, stage_id, node_id, action_kind, operation_name,
+			operation_args, raw_exec_argv, risk_class, timeout_seconds, state,
+			outcome, exit_code, stdout, stderr, created_at, dispatched_at, resolved_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, ?, NULL, NULL)`,
+		task.ID, task.JobID, task.StageID, task.NodeID, kindStr, nullIfEmpty(task.Action.OperationName),
+		argsJSON, argvJSON, riskClassToString(task.Action.RiskClass), task.TimeoutSeconds,
+		formatTime(roundTripTime(task.CreatedAt)),
+	)
+	if err != nil {
+		return fmt.Errorf("insert task: %w", err)
+	}
+	return nil
+}
+
+// MarkDispatched transitions a Task from Pending to Dispatched. Returns
+// jobs.ErrTaskNotFound if the Task does not exist, or jobs.ErrInvalidTaskState
+// if it is not currently Pending.
+func (t *sqliteTasks) MarkDispatched(ctx context.Context, taskID string, at time.Time) error {
+	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE tasks SET state = 'dispatched', dispatched_at = ? WHERE task_id = ?`,
+			formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
+// Resolve transitions a Task from Dispatched to Resolved, recording r.
+// Returns jobs.ErrTaskNotFound if the Task does not exist, or
+// jobs.ErrInvalidTaskState if it is not currently Dispatched.
+func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
+	return t.transition(ctx, taskID, "dispatched", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, exit_code = ?, stdout = ?, stderr = ?, resolved_at = ?
+			WHERE task_id = ?`,
+			int(r.Outcome), r.ExitCode, r.Stdout, r.Stderr, formatTime(roundTripTime(time.Now().UTC())), taskID)
+		return err
+	})
+}
+
+// transition runs fn inside a tx after verifying taskID currently has
+// requiredState, translating "not found" / "wrong state" into the sentinel
+// errors jobs.ErrTaskNotFound / jobs.ErrInvalidTaskState.
+func (t *sqliteTasks) transition(ctx context.Context, taskID, requiredState string, fn func(tx *sql.Tx) error) error {
+	tx, err := t.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	var state string
+	err = tx.QueryRowContext(ctx, `SELECT state FROM tasks WHERE task_id = ?`, taskID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobs.ErrTaskNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("query task %q state: %w", taskID, err)
+	}
+	if state != requiredState {
+		return jobs.ErrInvalidTaskState
+	}
+
+	if err := fn(tx); err != nil {
+		return fmt.Errorf("update task %q: %w", taskID, err)
+	}
+	return tx.Commit()
+}
+
+// Get returns the Task with the given ID, or jobs.ErrTaskNotFound.
+func (t *sqliteTasks) Get(ctx context.Context, taskID string) (jobs.Task, error) {
+	task, ok, err := getTask(ctx, t.db, taskID)
+	if err != nil {
+		return jobs.Task{}, err
+	}
+	if !ok {
+		return jobs.Task{}, jobs.ErrTaskNotFound
+	}
+	return task, nil
+}
+
+// InFlight returns every Task in DispatchStateDispatched with no result yet.
+func (t *sqliteTasks) InFlight(ctx context.Context) ([]jobs.Task, error) {
+	return queryTasks(ctx, t.db, `WHERE state = 'dispatched' ORDER BY task_id`)
+}
+
+// ByJob returns all Tasks belonging to jobID.
+func (t *sqliteTasks) ByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	return queryTasks(ctx, t.db, `WHERE job_id = ? ORDER BY task_id`, jobID)
+}
+
+func queryTasks(ctx context.Context, db *sql.DB, whereClause string, args ...any) ([]jobs.Task, error) {
+	rows, err := db.QueryContext(ctx, taskSelectColumns+" FROM tasks "+whereClause, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer rows.Close()
+
+	var out []jobs.Task
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, task)
+	}
+	return out, rows.Err()
+}
+
+func getTask(ctx context.Context, db *sql.DB, taskID string) (jobs.Task, bool, error) {
+	row := db.QueryRowContext(ctx, taskSelectColumns+` FROM tasks WHERE task_id = ?`, taskID)
+	task, err := scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return jobs.Task{}, false, nil
+	}
+	if err != nil {
+		return jobs.Task{}, false, err
+	}
+	return task, true, nil
+}
+
+const taskSelectColumns = `SELECT task_id, job_id, stage_id, node_id, action_kind, operation_name,
+	operation_args, raw_exec_argv, risk_class, timeout_seconds, state,
+	outcome, exit_code, stdout, stderr, created_at, dispatched_at, resolved_at`
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanTask(row rowScanner) (jobs.Task, error) {
+	var (
+		id, jobID, stageID, nodeID, actionKind string
+		operationName                          sql.NullString
+		operationArgs, rawExecArgv             sql.NullString
+		riskClass, state                       string
+		timeoutSeconds                         int32
+		outcome                                sql.NullInt64
+		exitCode                               sql.NullInt64
+		stdout, stderr                         []byte
+		createdAt                              string
+		dispatchedAt, resolvedAt               sql.NullString
+	)
+	if err := row.Scan(&id, &jobID, &stageID, &nodeID, &actionKind, &operationName,
+		&operationArgs, &rawExecArgv, &riskClass, &timeoutSeconds, &state,
+		&outcome, &exitCode, &stdout, &stderr, &createdAt, &dispatchedAt, &resolvedAt); err != nil {
+		return jobs.Task{}, fmt.Errorf("scan task row: %w", err)
+	}
+
+	kind, err := actionKindFromString(actionKind)
+	if err != nil {
+		return jobs.Task{}, err
+	}
+	args, err := decodeStringMap(operationArgs)
+	if err != nil {
+		return jobs.Task{}, err
+	}
+	argv, err := decodeStringSlice(rawExecArgv)
+	if err != nil {
+		return jobs.Task{}, err
+	}
+	createdAtTime, err := parseTime(sql.NullString{String: createdAt, Valid: true})
+	if err != nil {
+		return jobs.Task{}, fmt.Errorf("parse created_at for task %q: %w", id, err)
+	}
+	dispatchedAtTime, err := parseTime(dispatchedAt)
+	if err != nil {
+		return jobs.Task{}, fmt.Errorf("parse dispatched_at for task %q: %w", id, err)
+	}
+	resolvedAtTime, err := parseTime(resolvedAt)
+	if err != nil {
+		return jobs.Task{}, fmt.Errorf("parse resolved_at for task %q: %w", id, err)
+	}
+
+	return jobs.Task{
+		ID:      id,
+		JobID:   jobID,
+		StageID: stageID,
+		NodeID:  nodeID,
+		Action: jobs.Action{
+			Kind:          kind,
+			OperationName: operationName.String,
+			OperationArgs: args,
+			RawExecArgv:   argv,
+			RiskClass:     riskClassFromString(riskClass),
+		},
+		State:          dispatchStateFromString(state),
+		Outcome:        outcomeFromNullInt64(outcome),
+		ExitCode:       int32(exitCode.Int64),
+		Stdout:         stdout,
+		Stderr:         stderr,
+		TimeoutSeconds: timeoutSeconds,
+		CreatedAt:      createdAtTime,
+		DispatchedAt:   dispatchedAtTime,
+		ResolvedAt:     resolvedAtTime,
+	}, nil
+}
+
+func actionKindToString(k jobs.ActionKind) (string, error) {
+	switch k {
+	case jobs.ActionOperation:
+		return "operation", nil
+	case jobs.ActionRawExec:
+		return "raw_exec", nil
+	default:
+		return "", fmt.Errorf("store: unsupported action kind %d", k)
+	}
+}
+
+func actionKindFromString(s string) (jobs.ActionKind, error) {
+	switch s {
+	case "operation":
+		return jobs.ActionOperation, nil
+	case "raw_exec":
+		return jobs.ActionRawExec, nil
+	default:
+		return jobs.ActionUnspecified, fmt.Errorf("store: unrecognized action_kind %q", s)
+	}
+}
+
+func riskClassToString(rc jobs.RiskClass) string {
+	switch rc {
+	case jobs.RiskClassRead:
+		return "read"
+	case jobs.RiskClassMutate:
+		return "mutate"
+	default:
+		return "unspecified"
+	}
+}
+
+func riskClassFromString(s string) jobs.RiskClass {
+	switch s {
+	case "read":
+		return jobs.RiskClassRead
+	case "mutate":
+		return jobs.RiskClassMutate
+	default:
+		return jobs.RiskClassUnspecified
+	}
+}
+
+func dispatchStateFromString(s string) jobs.DispatchState {
+	switch s {
+	case "dispatched":
+		return jobs.DispatchStateDispatched
+	case "resolved":
+		return jobs.DispatchStateResolved
+	default:
+		return jobs.DispatchStatePending
+	}
+}
+
+func outcomeFromNullInt64(n sql.NullInt64) jobs.Outcome {
+	if !n.Valid {
+		return jobs.OutcomeUnspecified
+	}
+	return jobs.Outcome(n.Int64)
+}
+
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func encodeStringMap(m map[string]string) (any, error) {
+	if m == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("encode string map: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeStringMap(s sql.NullString) (map[string]string, error) {
+	if !s.Valid {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(s.String), &m); err != nil {
+		return nil, fmt.Errorf("decode string map: %w", err)
+	}
+	return m, nil
+}
+
+func encodeStringSlice(s []string) (any, error) {
+	if s == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, fmt.Errorf("encode string slice: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeStringSlice(s sql.NullString) ([]string, error) {
+	if !s.Valid {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s.String), &out); err != nil {
+		return nil, fmt.Errorf("decode string slice: %w", err)
+	}
+	return out, nil
+}

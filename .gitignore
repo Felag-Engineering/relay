@@ -35,3 +35,7 @@
 .idea/
 .vscode/
 *.swp
+
+# Relay SQLite store (default ./relay-data/relay.db) — local Node/audit state, never commit
+/relay/relay-data/
+**/relay-data/

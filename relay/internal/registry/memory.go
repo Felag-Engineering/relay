@@ -145,6 +145,35 @@ func (r *InMemory) SetRelayLabels(nodeID string, labels map[string]string) error
 	return nil
 }
 
+// SetRevoked records that nodeID is revoked as of at. Returns ErrNotFound if
+// the Node is not in the registry.
+func (r *InMemory) SetRevoked(nodeID string, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n, ok := r.nodes[nodeID]
+	if !ok {
+		return ErrNotFound
+	}
+	n.RevokedAt = at
+	return nil
+}
+
+// RevokedNodeIDs returns the IDs of every Node with a non-zero RevokedAt.
+func (r *InMemory) RevokedNodeIDs() ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var ids []string
+	for _, n := range r.nodes {
+		if !n.RevokedAt.IsZero() {
+			ids = append(ids, n.NodeID)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 // Get returns a deep copy of the stored Node record. Returns (Node{}, false)
 // if the Node is not in the registry.
 func (r *InMemory) Get(nodeID string) (Node, bool) {
@@ -193,6 +222,7 @@ func copyNode(n *Node) Node {
 		LastSeen:          n.LastSeen,
 		EnrollingTokenID:  n.EnrollingTokenID,
 		PolicyFingerprint: n.PolicyFingerprint,
+		RevokedAt:         n.RevokedAt,
 	}
 }
 
