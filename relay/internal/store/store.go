@@ -13,6 +13,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
@@ -47,6 +49,15 @@ func WithMaxNodes(n int) Option {
 // single connection so SQLite's single-writer constraint is never raced),
 // and applies every embedded migration that has not yet been applied.
 func Open(path string, opts ...Option) (*Store, error) {
+	// SQLite does not create missing parent directories itself (nor does the
+	// WAL journal_mode pragma), so create it first. 0o700 also keeps the
+	// store directory (Node cert fingerprints, relay: labels) owner-only.
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("create store dir %q: %w", dir, err)
+		}
+	}
+
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database %q: %w", path, err)
