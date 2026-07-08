@@ -9,12 +9,15 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 )
@@ -23,6 +26,7 @@ import (
 type Config struct {
 	Addr                string
 	CADir               string
+	StorePath           string
 	Hostname            string
 	EnrollIPRate        int
 	EnrollIPBurst       int
@@ -36,7 +40,11 @@ type Config struct {
 // to reach without starting a listener.
 type appDeps struct {
 	ca         *ca.CA
+	store      *store.Store
 	registry   registry.Repository
+	jobs       jobs.JobRepository
+	tasks      jobs.TaskRepository
+	audit      audit.Repository
 	tokens     *enroll.Service
 	denylist   *revocation.Denylist
 	conns      *revocation.Connections
@@ -64,6 +72,7 @@ func envOr(key, fallback string) string {
 func parseConfig() Config {
 	addr := flag.String("addr", ":7654", "gRPC listen address")
 	caDir := flag.String("ca-dir", "./ca-data", "directory for CA key and certificate")
+	storePath := flag.String("store-path", "./relay-data/relay.db", "path to the Relay's SQLite store file")
 	hostname := flag.String("hostname", "localhost", "hostname for the server certificate SAN")
 
 	// Rate-limit and registry-cap flags. Env overrides follow the RELAY_ prefix
@@ -80,6 +89,7 @@ func parseConfig() Config {
 	var cfg Config
 	cfg.Addr = envOr("RELAY_ADDR", *addr)
 	cfg.CADir = envOr("RELAY_CA_DIR", *caDir)
+	cfg.StorePath = envOr("RELAY_STORE_PATH", *storePath)
 	cfg.Hostname = envOr("RELAY_HOSTNAME", *hostname)
 
 	cfg.EnrollIPRate = *enrollIPRate
@@ -153,6 +163,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
 	}
 
+	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes))
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store: %w", err)
+	}
+
 	// denylist and conns implement immediate Node revocation (ADR-0006).
 	// denylist.Add is now reachable at runtime via the post-enroll revocation
 	// recheck: if a token is revoked mid-enrollment the handler calls
@@ -178,7 +193,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		GlobalBurst:      float64(cfg.EnrollGlobalBurst),
 		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
 	})
-	reg := registry.NewInMemory(registry.WithMaxNodes(cfg.MaxNodes))
+	reg := st.Registry()
 	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
@@ -201,7 +216,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 	deps := &appDeps{
 		ca:         relayCA,
+		store:      st,
 		registry:   reg,
+		jobs:       st.Jobs(),
+		tasks:      st.Tasks(),
+		audit:      st.Audit(),
 		tokens:     tokenSvc,
 		denylist:   denylist,
 		conns:      conns,
@@ -219,6 +238,7 @@ func main() {
 		slog.Error("build server failed", "err", err)
 		os.Exit(1)
 	}
+	defer deps.store.Close() //nolint:errcheck
 	// installDevHarness is a no-op in every build except `devharness`
 	// (relay/cmd/relay/devharness_stub.go vs devharness.go); it must run
 	// before Serve so deps.tunnel.sink is set before any tunnel handler starts.
@@ -237,6 +257,7 @@ func main() {
 		"addr", cfg.Addr,
 		"mtls", true,
 		"ca_dir", cfg.CADir,
+		"store_path", cfg.StorePath,
 		"enroll_ip_rate_per_min", cfg.EnrollIPRate,
 		"enroll_ip_burst", cfg.EnrollIPBurst,
 		"enroll_global_rate_per_min", cfg.EnrollGlobalRate,

@@ -56,6 +56,13 @@ type Node struct {
 	LastSeen          time.Time
 	EnrollingTokenID  string // provenance: the Enrollment Token ID used at first enrollment
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, reported on Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
+
+	// RevokedAt is the persisted revocation state. Zero value means active
+	// (never revoked). Relay-set, Node-immutable — the structural sibling of
+	// RelayLabels: a daemon can never revoke or un-revoke itself, exactly as
+	// it can never set relay: labels. Deliberately NOT settable via Report
+	// (see below); only SetRevoked writes it.
+	RevokedAt time.Time
 }
 
 // Report is the input to Upsert. It deliberately carries no relay-label field —
@@ -105,4 +112,14 @@ type Repository interface {
 	// unspecified; the InMemory implementation sorts by NodeID for determinism,
 	// but callers must not rely on it.
 	List() []Node
+
+	// SetRevoked records that a Node is revoked as of at. It is the
+	// structural sibling of SetRelayLabels: Relay-set, Node-immutable, and
+	// the only write path for RevokedAt. Returns ErrNotFound if the Node is
+	// not in the registry.
+	SetRevoked(nodeID string, at time.Time) error
+
+	// RevokedNodeIDs returns the IDs of every Node with a non-zero
+	// RevokedAt, for rehydrating a connect-time denylist after a restart.
+	RevokedNodeIDs() ([]string, error)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,6 +13,7 @@ func TestNewServer_Smoke(t *testing.T) {
 	cfg := Config{
 		Addr:                ":0",
 		CADir:               t.TempDir(),
+		StorePath:           filepath.Join(t.TempDir(), "relay.db"),
 		Hostname:            "localhost",
 		EnrollIPRate:        5,
 		EnrollIPBurst:       3,
@@ -40,6 +42,19 @@ func TestNewServer_Smoke(t *testing.T) {
 	if deps.ca == nil {
 		t.Fatal("deps.ca is nil")
 	}
+	if deps.store == nil {
+		t.Fatal("deps.store is nil")
+	}
+	if deps.jobs == nil {
+		t.Fatal("deps.jobs is nil")
+	}
+	if deps.tasks == nil {
+		t.Fatal("deps.tasks is nil")
+	}
+	if deps.audit == nil {
+		t.Fatal("deps.audit is nil")
+	}
+	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
 
 	// Not started, so Stop is a safe no-op cleanup.
 	t.Cleanup(srv.Stop)
