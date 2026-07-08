@@ -36,6 +36,15 @@ type NodeResult struct {
 	Outcome jobs.Outcome
 }
 
+// dispatchResult is what dispatcher.run returns: the Job's identity plus its
+// per-Node results. jobID is entry-level (one Job per Run) rather than a
+// per-NodeResult field so it survives a zero-match dispatch, which the audit
+// stage must still record.
+type dispatchResult struct {
+	jobID   string
+	results []NodeResult
+}
+
 // dispatcher executes an already-built dispatch. Both the interface and its
 // run method are unexported, and run's parameter type (dispatch) is itself
 // unexported — a foreign package can neither implement dispatcher nor call
@@ -55,7 +64,7 @@ type NodeResult struct {
 // dispatcher ride these defaults — see the contract note on New in
 // service.go.
 type dispatcher interface {
-	run(ctx context.Context, d dispatch) ([]NodeResult, error)
+	run(ctx context.Context, d dispatch) (dispatchResult, error)
 }
 
 // noopDispatcher is the v0.0.5 default. It performs no execution and says
@@ -63,10 +72,10 @@ type dispatcher interface {
 // fabricated success. #99 replaces this with the real Job engine.
 type noopDispatcher struct{}
 
-func (noopDispatcher) run(_ context.Context, d dispatch) ([]NodeResult, error) {
+func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error) {
 	results := make([]NodeResult, 0, len(d.nodes))
 	for _, n := range d.nodes {
 		results = append(results, NodeResult{NodeID: n.NodeID, Outcome: jobs.OutcomeUnspecified})
 	}
-	return results, nil
+	return dispatchResult{results: results}, nil
 }

@@ -116,35 +116,42 @@ func New(reg registry.Repository, opts ...Option) *Service {
 // Run is the pipeline every surface must call to act on Nodes: resolve the
 // Selector, authorize the Principal, check the blast-radius cap, dispatch,
 // then audit — in that order. Authorize and the cap check short-circuit the
-// remaining stages on error (no dispatch, no audit record — nothing
-// happened yet). Once dispatch is attempted, though, the audit record is
-// always written, even if the dispatcher itself returns an error: a
-// dispatcher may execute some Nodes before failing on others, and a
-// partially-executed dispatch must never go unaudited. In that case Run
-// returns the dispatch error (joined with any audit-write error via
-// errors.Join) alongside the partial results. Principal is threaded through
-// to the AuditSink so every recorded entry attributes who asked, even
-// before real authn exists.
+// remaining stages on error (no dispatch — nothing was executed), but each
+// refusal is itself audited (recordRefusal) — refusals are the most
+// interesting audit events (ROADMAP acceptance for #102). Once dispatch is
+// attempted, the audit record is always written, even if the dispatcher
+// itself returns an error: a dispatcher may execute some Nodes before
+// failing on others, and a partially-executed dispatch must never go
+// unaudited. In that case Run returns the dispatch error (joined with any
+// audit-write error via errors.Join) alongside the partial results.
+// Principal is threaded through to the AuditSink so every recorded entry
+// attributes who asked, even before real authn exists.
 func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.Action) ([]NodeResult, error) {
 	nodes := sel.Resolve(s.reg)
 
 	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
-		return nil, err
+		return nil, s.recordRefusal(ctx, p, sel, act, err)
 	}
 
 	if err := s.cap.Check(act.RiskClass, len(nodes)); err != nil {
-		return nil, err
+		return nil, s.recordRefusal(ctx, p, sel, act, err)
 	}
 
 	d := newDispatch(p, sel, nodes, act)
-	results, dispatchErr := s.disp.run(ctx, d)
+	res, dispatchErr := s.disp.run(ctx, d)
 
 	// The AuditSink is recorded unconditionally, even when the dispatcher
 	// errors: dispatch.run may execute some Nodes before failing on others
 	// (the #99 contract), and a partially-executed dispatch must never be
 	// unaudited. results-so-far are recorded whether or not dispatchErr is
 	// nil.
-	entry := AuditEntry{Principal: p, Selector: sel, Action: act, Results: results}
+	//
+	// Residual risk (inherited from #97/#98, out of #102's scope): Args/
+	// RawExecArgv below are copied verbatim from act, so a secret passed in
+	// an Operation's arguments would land in the audit trail as-is. #102
+	// does not close this — it is flagged here so it is not mistaken for a
+	// gap in #102's redaction guarantee.
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results}
 	auditErr := s.audit.Record(ctx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must
@@ -154,7 +161,21 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 
 	if err := errors.Join(dispatchErr, auditErr); err != nil {
-		return results, err
+		return res.results, err
 	}
-	return results, nil
+	return res.results, nil
+}
+
+// recordRefusal audits an authz-deny or cap-reject short-circuit — the
+// dispatcher was never reached, so there is no JobID or Results, only the
+// refusal's Reason. It returns refusalErr, joined with a wrapped audit-write
+// error if the audit write itself failed, so a failed audit write is never
+// silently swallowed.
+func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, refusalErr error) error {
+	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error()}
+	var auditErr error
+	if err := s.audit.Record(ctx, entry); err != nil {
+		auditErr = fmt.Errorf("capability: record audit entry: %w", err)
+	}
+	return errors.Join(refusalErr, auditErr)
 }

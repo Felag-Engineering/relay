@@ -39,27 +39,60 @@ func (noopCapChecker) Check(jobs.RiskClass, int) error {
 	return nil
 }
 
-// AuditSink records a completed dispatch. Real audit writes — an adapter to
-// audit.Repository (deliberately not imported here; capability stays free
-// of the audit package until that adapter exists) — land in v0.0.5 [7/8]/#102.
+// AuditSink records a completed dispatch, a refusal, or a Freeze
+// engage/release. The real adapter to audit.Repository (deliberately not
+// imported here; capability stays free of the audit package) is
+// internal/auditsink, added in v0.0.5 [7/8]/#102.
 type AuditSink interface {
 	Record(ctx context.Context, e AuditEntry) error
+
+	// RecordFreeze records a Freeze engage/release event (ADR-0013). #102
+	// only adds this sink method; #101 implements Freeze itself and calls it.
+	RecordFreeze(ctx context.Context, e FreezeEvent) error
 }
+
+// AuditKind distinguishes what kind of Run outcome an AuditEntry describes.
+type AuditKind int
+
+const (
+	AuditKindDispatch AuditKind = iota
+	AuditKindRefusal
+)
 
 // AuditEntry is everything the pipeline knows about one Run call, passed to
 // AuditSink.Record. Principal is threaded through here so every future real
 // AuditSink can attribute the entry without the pipeline itself needing to
 // know audit's storage shape.
+//
+// For AuditKindDispatch, JobID and Results are set and Reason is empty. For
+// AuditKindRefusal (authz-deny or cap-reject), Reason is set and JobID/
+// Results are empty — the dispatcher was never reached.
 type AuditEntry struct {
+	Kind      AuditKind
 	Principal Principal
 	Selector  Selector
 	Action    jobs.Action
+	JobID     string
 	Results   []NodeResult
+	Reason    string
+}
+
+// FreezeEvent is a Freeze engage/release, passed to AuditSink.RecordFreeze
+// (ADR-0013). Freeze is Relay-wide, so unlike AuditEntry there is no
+// Selector/NodeID to record. Reason is expected to be set on release.
+type FreezeEvent struct {
+	Principal Principal
+	Engage    bool
+	Reason    string
 }
 
 // noopAuditSink is the v0.0.5 default: nothing is recorded.
 type noopAuditSink struct{}
 
 func (noopAuditSink) Record(context.Context, AuditEntry) error {
+	return nil
+}
+
+func (noopAuditSink) RecordFreeze(context.Context, FreezeEvent) error {
 	return nil
 }

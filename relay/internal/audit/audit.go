@@ -15,21 +15,40 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// Record is one append-only audit entry: a single Task's dispatch, as issued
-// by a principal against a Selector. Fields are self-contained primitives (no
-// pointers into Job/Task state) so a Record remains meaningful even after the
-// Job or Task it describes is gone.
+// Kind distinguishes what kind of event a Record describes: a dispatch
+// attempt, a refusal (authz-deny or cap-reject, never dispatched), or a
+// Freeze engage/release (ADR-0013).
+const (
+	KindDispatch      = "dispatch"
+	KindRefusal       = "refusal"
+	KindFreezeEngage  = "freeze_engage"
+	KindFreezeRelease = "freeze_release"
+)
+
+// Record is one append-only audit entry: a single Task's dispatch, a
+// refusal, or a Freeze engage/release, as issued by a principal. Fields are
+// self-contained primitives (no pointers into Job/Task state) so a Record
+// remains meaningful even after the Job or Task it describes is gone.
 type Record struct {
 	ID            string
 	Timestamp     time.Time
+	Kind          string
 	Principal     string
 	Selector      string
 	JobID         string
+	NodeID        string
 	ActionKind    string
 	OperationName string
 	Args          map[string]string
 	RawExecArgv   []string
-	Outcome       jobs.Outcome
+	// Outcome is only meaningful when Kind == KindDispatch (one Task's
+	// result). For KindRefusal, KindFreezeEngage, and KindFreezeRelease rows
+	// Outcome is always jobs.OutcomeUnspecified (the zero value) and must not
+	// be confused with a real per-Node "didn't execute" outcome — a naive
+	// `WHERE outcome = 0` query would otherwise silently mix refusals in with
+	// unresolved dispatch outcomes.
+	Outcome jobs.Outcome
+	Reason  string
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no
@@ -43,4 +62,9 @@ type Repository interface {
 
 	// ByJob returns all Records for jobID, ordered by Timestamp.
 	ByJob(ctx context.Context, jobID string) ([]Record, error)
+
+	// ByNode returns all Records for nodeID, ordered by Timestamp — the
+	// "which Node" accountability query (CLAUDE.md). Time-range querying is
+	// deferred to the first query surface; no acceptance need yet.
+	ByNode(ctx context.Context, nodeID string) ([]Record, error)
 }

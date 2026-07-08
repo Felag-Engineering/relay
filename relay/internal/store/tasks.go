@@ -62,6 +62,12 @@ func (t *sqliteTasks) MarkDispatched(ctx context.Context, taskID string, at time
 // Resolve transitions a Task from Dispatched to Resolved, recording r.
 // Returns jobs.ErrTaskNotFound if the Task does not exist, or
 // jobs.ErrInvalidTaskState if it is not currently Dispatched.
+//
+// Stdout/Stderr are persisted exactly as delivered, size-capped upstream by
+// the daemon per /proto — this is the ONLY place Task output is stored (the
+// audit trail records Outcome, never output). The full output-retention
+// posture (long-term storage limits, redaction of captured output) is
+// deliberately deferred to v0.0.7 (ROADMAP); this is not that.
 func (t *sqliteTasks) Resolve(ctx context.Context, taskID string, r jobs.Result) error {
 	return t.transition(ctx, taskID, "dispatched", func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `

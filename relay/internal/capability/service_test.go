@@ -42,25 +42,32 @@ func (s *spyCapChecker) Check(class jobs.RiskClass, matched int) error {
 // prove the pipeline's short-circuiting.
 type spyDispatcher struct {
 	called  bool
+	jobID   string
 	results []NodeResult
 	err     error
 }
 
-func (s *spyDispatcher) run(context.Context, dispatch) ([]NodeResult, error) {
+func (s *spyDispatcher) run(context.Context, dispatch) (dispatchResult, error) {
 	s.called = true
-	return s.results, s.err
+	return dispatchResult{jobID: s.jobID, results: s.results}, s.err
 }
 
-// spyAuditSink records the last AuditEntry it received.
+// spyAuditSink records the last AuditEntry/FreezeEvent it received.
 type spyAuditSink struct {
-	called bool
-	entry  AuditEntry
-	err    error
+	called      bool
+	entry       AuditEntry
+	err         error
+	freezeCalls []FreezeEvent
 }
 
 func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
 	s.called = true
 	s.entry = e
+	return s.err
+}
+
+func (s *spyAuditSink) RecordFreeze(_ context.Context, e FreezeEvent) error {
+	s.freezeCalls = append(s.freezeCalls, e)
 	return s.err
 }
 
@@ -98,8 +105,14 @@ func TestRunAuthorizeDeniedShortCircuits(t *testing.T) {
 	if disp.called {
 		t.Error("dispatcher must not be called when Authorize fails")
 	}
-	if audit.called {
-		t.Error("AuditSink must not be called when Authorize fails")
+	if !audit.called {
+		t.Error("AuditSink must be called when Authorize fails — refusals are audited")
+	}
+	if audit.entry.Kind != AuditKindRefusal {
+		t.Errorf("AuditEntry.Kind = %v, want AuditKindRefusal", audit.entry.Kind)
+	}
+	if audit.entry.Reason == "" {
+		t.Error("AuditEntry.Reason is empty, want the Authorize error's message")
 	}
 }
 
@@ -129,8 +142,14 @@ func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 	if disp.called {
 		t.Error("dispatcher must not be called when the cap check fails")
 	}
-	if audit.called {
-		t.Error("AuditSink must not be called when the cap check fails")
+	if !audit.called {
+		t.Error("AuditSink must be called when the cap check fails — refusals are audited")
+	}
+	if audit.entry.Kind != AuditKindRefusal {
+		t.Errorf("AuditEntry.Kind = %v, want AuditKindRefusal", audit.entry.Kind)
+	}
+	if audit.entry.Reason == "" {
+		t.Error("AuditEntry.Reason is empty, want the CapChecker error's message")
 	}
 }
 
@@ -139,7 +158,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	authz := &spyAuthorizer{}
 	capChecker := &spyCapChecker{}
 	wantResults := []NodeResult{{NodeID: "node-1", Outcome: jobs.OutcomeSuccess}}
-	disp := &spyDispatcher{results: wantResults}
+	disp := &spyDispatcher{jobID: "job-1", results: wantResults}
 	audit := &spyAuditSink{}
 	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
 
@@ -157,6 +176,12 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 
 	if !audit.called {
 		t.Fatal("AuditSink was not called")
+	}
+	if audit.entry.Kind != AuditKindDispatch {
+		t.Errorf("AuditEntry.Kind = %v, want AuditKindDispatch", audit.entry.Kind)
+	}
+	if audit.entry.JobID != "job-1" {
+		t.Errorf("AuditEntry.JobID = %q, want %q (threaded from the dispatcher)", audit.entry.JobID, "job-1")
 	}
 	if audit.entry.Principal != principal {
 		t.Errorf("AuditEntry.Principal = %+v, want %+v", audit.entry.Principal, principal)

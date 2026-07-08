@@ -155,13 +155,16 @@ func TestRestartRoundTrip(t *testing.T) {
 	record := audit.Record{
 		ID:            "audit-1",
 		Timestamp:     time.Date(2026, 7, 1, 0, 0, 5, 0, time.UTC),
+		Kind:          audit.KindDispatch,
 		Principal:     "operator:alice",
 		Selector:      "node:role=web",
 		JobID:         "job-1",
+		NodeID:        "node-a",
 		ActionKind:    "operation",
 		OperationName: "system.facts",
 		Args:          map[string]string{"k": "v"},
 		Outcome:       jobs.OutcomeUnspecified,
+		Reason:        "",
 	}
 	if err := auditRepo.Append(ctx, record); err != nil {
 		t.Fatalf("Append audit record: %v", err)
@@ -261,5 +264,13 @@ func TestRestartRoundTrip(t *testing.T) {
 	}
 	if len(records) != 1 || !reflect.DeepEqual(records[0], record) {
 		t.Errorf("reload audit records: got %#v, want [%#v]", records, record)
+	}
+
+	nodeRecords, err := auditRepo2.ByNode(ctx, "node-a")
+	if err != nil {
+		t.Fatalf("reload ByNode audit: %v", err)
+	}
+	if len(nodeRecords) != 1 || !reflect.DeepEqual(nodeRecords[0], record) {
+		t.Errorf("reload ByNode(node-a) audit records: got %#v, want [%#v]", nodeRecords, record)
 	}
 }
