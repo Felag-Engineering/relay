@@ -13,6 +13,14 @@ it realizes.
 > old v0.4.0 → v0.5.0 + v0.6.0. New: v0.0.7 (hardening), v0.0.8 (security pass), v1.0.0
 > (production release). ADRs cite milestones by name where possible.
 
+> **Re-sequenced 2026-07-08** (vision review; decision issues #135–#140). New pre-1.0
+> milestones: **v0.7.0** (read lane, #138) and **v0.8.0** (operator-signed distribution +
+> Template Operations, #135/#136 — absorbs old v1.1.0). The official **CLI** joins v0.4.0
+> (#137). An **HA/routing design spike** (#139) must complete before the v1.0.0 freeze
+> (build stays deferred). Scope rule recorded for all planning: **Relay is response and
+> fleet management, never configuration management** — if Ansible could check it in
+> check-mode, it is out of realm.
+
 ---
 
 ## `v0.0.1` — Walking Skeleton ✅
@@ -248,7 +256,9 @@ pre-launch security pass" (node-origin label trust, the daemon privilege model).
 **Deliverables**
 - **Written threat model**: trust boundaries, assumed adversaries (compromised Node,
   stolen API credential, jailbroken AI-agent, malicious Relay, network attacker),
-  and the defense each boundary provides. Committed as a doc, kept current.
+  and the defense each boundary provides. Committed as a doc, kept current. Opens
+  with the product bet and its kill criterion (issue #140): Relay exists for
+  autonomous AI operation of large fleets under structural distrust.
 - **Raw Exec gate red-team**: adversarial attempt to defeat the regex allow/deny gating
   (quoting tricks, argv smuggling, encoding, symlink/path games) — the highest-risk
   path (ADR-0001). Findings become tests.
@@ -371,6 +381,12 @@ porcelain: the Console renders what this API manages.
   milestone's MCP tools, per ADR-0010's parity rule).
 - Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
   vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
+- **Official CLI** (issue #137): a thin adapter over `/api/v1` for the human operator's
+  workstation — never a parallel control path. Transport generated from the OpenAPI spec
+  (the CLI doubles as the spec's conformance test); UX hand-written. **Plan-by-default
+  for `mutate`**: `run` prints the Plan (fan-out, per-Node verdicts, cap check) and stops
+  unless `--apply`; `read`-class runs directly. Execution, Job status/cancel, and Freeze
+  verbs land here; the Policy/template **signing subcommands** land with v0.8.0.
 
 **Acceptance**
 - An Ansible playbook stands up the Relay and enrolls Nodes end-to-end with no manual
@@ -378,6 +394,8 @@ porcelain: the Console renders what this API manages.
 - `run_operation` via `/api/v1` returns per-Node results consistent with MCP's;
   `raw_exec` requires `admin` and is refused for an `operator` Account.
 - A client generated from the OpenAPI spec can drive the fleet.
+- The CLI runs a `mutate` Operation only after showing its Plan and receiving `--apply`;
+  its actions appear in audit attributed to the operator's Account like any API caller.
 
 **ADRs:** 0010 (Control API); builds on 0003 (capability surface), 0004 (Jobs).
 
@@ -431,6 +449,90 @@ surface** (ADR-0009): Operations and Raw Exec run only via MCP or the Control AP
 
 ---
 
+## `v0.7.0` — Read Lane: Vocabulary, Streaming & Aggregation (post-beta)
+
+Make observation the adoption wedge (issue #138). The AI earns trust by *looking* before
+anyone lets it touch; the split blast cap and read-parallel scheduling already anticipate
+this — the vocabulary catches up here. Positioning rule: **interrogation, not
+monitoring** — on-demand, Policy-gated questions against live state, never a metrics
+pipeline.
+
+**Deliverables**
+- **Read-Operation batch, one daemon release** (each Native Op costs a release, so batch):
+  process list, service status, disk/mount usage, listening ports, package inventory,
+  bounded log tail, file checksum — all `read` class (ADR-0012); the ADR-0014 version
+  gate covers lagging daemons.
+- **Shipped default Policy**: the `read` class pre-allowed out of the box with a
+  confidentiality deny-list (`/etc/shadow`, key material); `mutate` and Raw Exec stay
+  opt-in whitelist. Engine semantics unchanged (deny-by-default) — only the shipped file
+  changes; needs a short ADR because it looks like it touches invariant #3. A freshly
+  enrolled Node is fully interrogable with zero Policy authoring.
+- **Live output streaming, read lane first** (promoted from Deferred; ADR-0004 says the
+  transport already supports it): bounded `log tail --follow`; the watch step of a canary.
+- **Result aggregation primitive**: an AI cannot read 100k per-Node outputs.
+  Histogram-by-output with clustered samples ("97,412 identical / 3 divergent — here are
+  the 3"), built against the read lane first. Proto/Job-schema impact settled **before**
+  the v1.0.0 freeze.
+- Audit **output-retention posture** (v0.0.7) re-checked against read-lane volume —
+  `read` means "cannot change Node state", not "safe to see".
+
+**Acceptance**
+- A Node enrolled with the shipped default Policy answers the full read vocabulary with
+  zero local authoring; a deny-listed path (`/etc/shadow`) is refused.
+- A fleet-wide `file.checksum` returns an aggregated histogram; a divergent Node is
+  identified without reading per-Node output.
+- A streamed `log tail --follow` delivers live output over MCP/API and stops on cancel.
+
+**ADRs:** 0012, 0004 (streaming caveat); new short ADR (default Policy posture).
+
+---
+
+## `v0.8.0` — Operator-Signed Distribution & Template Operations (pre-1.0)
+
+The typed path becomes the real path, and central administration stops requiring CM
+round-trips — without surrendering the moat (issues #135, #136; absorbs old v1.1.0,
+pulled pre-1.0 on 2026-07-08 so the contract freeze reflects it).
+
+**Deliverables**
+- **ADR-0002 rewrite** — "locally-rooted" becomes **operator-rooted**: authority is
+  separated from transport. Policy and templates are authored centrally, **signed by an
+  operator key the Relay never holds**, distributed over the existing mTLS channel, and
+  verified by the daemon against a public key **pinned at enrollment** (the Enrollment
+  Token carries it) before load. The Relay is a **courier, never an author**: a fully
+  compromised Relay can withhold or serve stale bundles, never forge wider Policy.
+- **New signing ADR**: bundle format, key custody (workstation/CI — never the Relay
+  host), anti-rollback via signed monotonic versions, key rotation & compromise runbook.
+  Today's local-file mode is retained as the hardened tier (air-gapped fleets).
+- **Template Operations** (realizes ADR-0001 tier 2, extended): a template body may be a
+  **full script** — trusted because operator-signed — with named, typed-validated
+  parameter slots as the only wire-fillable part; substitution can never alter command
+  structure; **mandatory `risk_class`** (ADR-0012); Policy governs templates exactly like
+  Native Operations (deny beats allow).
+- Daemon-side loading/linting (`policy check` extended to templates); template-set
+  fingerprint reported beside the Policy fingerprint; per-Node vocabulary discovery via
+  `list_operations`/`describe_node`; distinct `unsupported` per-Node outcome; **template
+  packs** convention (shareable per-app packs, installed deliberately).
+- **CLI signing workflow** (see v0.4.0): `relay policy lint | sign | push | status`,
+  with fingerprint-verified rollout. The AI-agent may *draft* templates; nothing loads
+  until a human signs — the AI grows the vocabulary but can never ship it alone.
+- Daemon prerequisite: the Operation vocabulary behind a single
+  name→(handler, arg-shape, risk-class) lookup (architecture review 2026-07-07,
+  candidate 3), so a template tier registers instead of adding dispatch match arms.
+
+**Acceptance**
+- An operator authors and signs a template on a workstation and pushes it via the Relay;
+  daemons verify and load it; a bundle signed by the wrong key — or an older version
+  replayed — is refused.
+- A compromised-Relay simulation (forged/wrong-key bundle over the wire) cannot widen any
+  Node's Policy or template set.
+- The AI-agent drafts a template; it is inert until signed; once signed,
+  `run_operation` uses it, a parameter violating its validation is refused daemon-side,
+  and a Node without the template reports `unsupported`.
+
+**ADRs:** rewrites 0002; new signing ADR; realizes 0001 tier 2; 0012.
+
+---
+
 ## `v1.0.0` — Production Release
 
 The stability promise. Not new surface — the point where everything built so far is
@@ -440,9 +542,14 @@ promise, and the **BSL change-date clock starts** (ADR: licensing). 1.0 is
 
 **Scope (what "1.0" means here)**
 - The full stack in production shape: execution path (v0.0.3–v0.0.8), System Model
-  (v0.2.0), Accounts & Access (v0.3.0), Control API + OpenAPI (v0.4.0), and the Admin
-  Console (v0.5.0–v0.6.0) — each beyond prototype, with the security pass (v0.0.8)
+  (v0.2.0), Accounts & Access (v0.3.0), Control API + OpenAPI + CLI (v0.4.0), the Admin
+  Console (v0.5.0–v0.6.0), the read lane (v0.7.0), and operator-signed distribution +
+  Template Operations (v0.8.0) — each beyond prototype, with the security pass (v0.0.8)
   re-run against the accumulated surface.
+- **HA/routing design spike complete before the freeze** (issue #139): the definitive
+  list of additive proto/schema changes horizontal scaling needs — landed additively
+  pre-freeze so the first 100k-Node fleet never forces a `gleipnir.v2`. The HA *build*
+  stays post-1.0 (see Deferred).
 - **Contract stability commitment**: `gleipnir.v1` proto and `/api/v1` OpenAPI are
   frozen — additive-only from here, breaking changes require a new version served in
   parallel (ADR-0010, ADR-0014). This is the promise fleet operators build against.
@@ -467,49 +574,21 @@ scoping call.
 
 ---
 
-## `v1.1.0` — Template Operations (post-v1.0.0)
+## `v1.1.0` — (retired)
 
-The extensibility tier from ADR-0001, promoted from the deferred list (2026-07-02):
-**locally-authored shell templates with typed, validated parameters** that grow
-app-specific vocabulary (nginx, Postgres, Docker, …) per Node — with zero daemon
-releases. The trust story mirrors Policy: root-owned template files beside the Policy
-file, distributed only via the customer's IaC pipeline; the wire can fill validated
-parameter slots but never alter command structure. The daemon binary stays app-agnostic
-forever; only OS-generic verbs are ever Native. Requires its own ADR before build
-(template format, substitution/quoting safety, discovery).
-
-**Deliverables**
-- Template file format: command template with named parameter slots; per-parameter
-  typed validation (type, regex, path constraints); **mandatory `risk_class`
-  declaration** (ADR-0012) — no default.
-- Substitution safety: validated parameters can never change which command runs —
-  quoting/escaping rules specified in the ADR, enforced by the daemon.
-- Daemon-side loading/linting like Policy (`policy check` extended to templates);
-  template-set fingerprint reported alongside the Policy fingerprint.
-- Per-Node vocabulary discovery: `list_operations`/`describe_node` show which Nodes
-  define which Template Operations; a Selector-targeted Job reports a distinct
-  per-Node outcome (e.g. `unsupported`) on Nodes lacking the template.
-- Policy still governs: Template Operations are subject to allow/deny and
-  argument-level constraints exactly like Native Operations; deny beats allow.
-- **Template packs**: a documented convention for shareable per-app packs
-  (installed deliberately via IaC — an ecosystem surface that costs the security
-  model nothing).
-
-**Acceptance**
-- An operator ships `nginx.test_config` to web Nodes via IaC; the AI-agent discovers
-  it on those Nodes, runs it via `run_operation`, and a Node without the template
-  reports `unsupported` rather than failing opaquely.
-- A parameter violating its validation is refused daemon-side without executing;
-  a Policy deny on the template beats any template-level allow.
-
-**ADRs:** new ADR at pickup (realizes ADR-0001 tier 2); builds on 0002 (node-rooted
-trust), 0012 (risk classes).
+Template Operations moved **pre-1.0** as part of `v0.8.0` on 2026-07-08 (issues #135,
+#136): the typed vocabulary must be rich enough to be the real path *before* the
+contract freeze, and its distribution story changed from IaC-only files to
+operator-signed bundles (ADR-0002 rewrite). See `v0.8.0` for the current spec.
 
 ---
 
 ## Deferred (post-beta, each its own ADR when picked up)
 
 - **HA / horizontal Relay scaling** — Node→instance routing registry (ADR-0005 caveat).
+  *Build* deferred; the **design spike is required before the v1.0.0 freeze**
+  (issue #139, see v1.0.0 acceptance) — the 100k-Node vision makes this a wire-contract
+  risk, not a nice-to-have.
 - **Multi-principal RBAC & Grants** — per-Account authorization rules (Operations ×
   Selectors) managed via the Control API/Console; a Grant only ever narrows what Node
   Policy allows, never widens it (see CONTEXT.md "Grant", ADR-0010). Design rule when
@@ -523,7 +602,12 @@ trust), 0012 (risk classes).
   Node-count threshold — a deterministic guardrail the AI-agent cannot skip. The
   AI-agent's standard arc becomes Plan (ADR-0011) → canary → fleet. Subsumes
   human-in-the-loop approval and overridable blast radius (ADR-0004 caveat).
+  *(2026-07-08: write the rollout ADR pre-1.0 — at 100k Nodes the Plan → canary → gate →
+  fleet arc is the primary safety mechanism, and the Job schema's Stages already
+  anticipate it; execution may still land post-1.0.)*
 - **Live output streaming** — transport already supports it (ADR-0004 caveat).
+  *(2026-07-08: the read-lane slice is promoted to v0.7.0; mutate-lane streaming stays
+  deferred.)*
 - **Postgres store** — swap behind the repository interface when HA lands.
 - **Graphic System Model view** — a visual representation layered over the git-backed YAML
   source of truth (ADR-0008 note).
@@ -531,3 +615,12 @@ trust), 0012 (risk classes).
   (ADR-0008 note).
 - **Per-Account rate limits** — throttle Job creation per Account so a runaway AI-agent
   loop is bounded in time as well as blast radius.
+- **Expectations (runtime health only)** — advisory, scheduled *read-class* checks that
+  fleet runtime state matches what operators believe (service up, cert expiry, disk
+  pressure, quarantine holding) — the Policy-fingerprint pattern generalized. Hard
+  boundary (2026-07-08): Expectations assert **runtime state, never configuration
+  content** — if Ansible could check it in check-mode, it is out of realm. Findings may
+  *propose* a remediation Job; nothing auto-executes (ADR-0008 stands). The scheduler —
+  the system's first standing automaton — must be able to construct **read-class
+  dispatches only, enforced by type**, or it becomes an unattended executor by the back
+  door. Own ADR when picked up; sits naturally after v0.2.0 + v0.7.0.
