@@ -35,6 +35,17 @@ type Config struct {
 	EnrollGlobalBurst   int
 	EnrollMaxTrackedIPs int
 	MaxNodes            int
+	// ReadBlastCap and MutateBlastCap are the blast-radius caps by risk class
+	// (ADR-0004, ADR-0012).
+	//
+	// Interim: ADR-0010/0012 call for a root-owned config FILE; the Relay has
+	// no config-file loader yet, so blast caps use the existing startup
+	// flags+env mechanism (same as MaxNodes/mTLS paths). The security
+	// property — set only at startup, never settable via any API — holds. A
+	// real config-file loader is a separate future change. Flagged for human
+	// review.
+	ReadBlastCap   int
+	MutateBlastCap int
 }
 
 // appDeps holds the constructed collaborators that tests and lifecycle hooks need
@@ -90,6 +101,10 @@ func parseConfig() Config {
 	enrollGlobalBurst := flag.Int("enroll-global-burst", 10, "global Enrollment burst capacity")
 	enrollMaxTrackedIPs := flag.Int("enroll-max-tracked-ips", 100000, "cap on per-IP rate-limit bucket map")
 	maxNodes := flag.Int("max-nodes", 110000, "registry insert cap (0 = unlimited)")
+	readBlastCap := flag.Int("read-blast-cap", capability.DefaultReadCap,
+		"blast-radius cap for read Operations (max Nodes per Job)")
+	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
+		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
 
 	flag.Parse()
 
@@ -145,6 +160,22 @@ func parseConfig() Config {
 			cfg.MaxNodes = v
 		} else {
 			slog.Warn("ignoring invalid RELAY_MAX_NODES", "value", env)
+		}
+	}
+	cfg.ReadBlastCap = *readBlastCap
+	if env := os.Getenv("RELAY_READ_BLAST_CAP"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil {
+			cfg.ReadBlastCap = v
+		} else {
+			slog.Warn("ignoring invalid RELAY_READ_BLAST_CAP", "value", env)
+		}
+	}
+	cfg.MutateBlastCap = *mutateBlastCap
+	if env := os.Getenv("RELAY_MUTATE_BLAST_CAP"); env != "" {
+		if v, err := strconv.Atoi(env); err == nil {
+			cfg.MutateBlastCap = v
+		} else {
+			slog.Warn("ignoring invalid RELAY_MUTATE_BLAST_CAP", "value", env)
 		}
 	}
 
@@ -214,9 +245,12 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// taskSink after calling newServer.
 
 	// capSvc is constructed with its default seams (allow-all authz, no-op
-	// cap check, no-op dispatch, no-op audit) and no surface wired to it —
-	// see the appDeps.capability doc comment.
-	capSvc := capability.New(reg)
+	// dispatch, no-op audit) and no surface wired to it — see the
+	// appDeps.capability doc comment. The CapChecker is the real BlastCap
+	// (ADR-0004/0012); see the ReadBlastCap/MutateBlastCap doc comment on
+	// Config for the file-vs-flag deviation flagged for human review.
+	capSvc := capability.New(reg,
+		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)))
 
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
@@ -277,6 +311,8 @@ func main() {
 		"enroll_global_burst", cfg.EnrollGlobalBurst,
 		"enroll_max_tracked_ips", cfg.EnrollMaxTrackedIPs,
 		"max_nodes", cfg.MaxNodes,
+		"read_blast_cap", cfg.ReadBlastCap,
+		"mutate_blast_cap", cfg.MutateBlastCap,
 	)
 	if err := srv.Serve(lis); err != nil {
 		slog.Error("serve failed", "err", err)

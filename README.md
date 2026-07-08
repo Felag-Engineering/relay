@@ -65,6 +65,14 @@ giving one your fleet.
   system — not isolated Nodes. Advisory only; auditable and human-correctable via git.
   ([ADR-0008](docs/adr/0008-system-model-git-backed-semantic-graph.md))
 
+## Configuration
+
+The Relay's blast-radius caps (above) are startup-only: `-read-blast-cap` /
+`RELAY_READ_BLAST_CAP` (default 10000, generous) and `-mutate-blast-cap` /
+`RELAY_MUTATE_BLAST_CAP` (default 100, small — Raw Exec always takes this one).
+Like the rest of the Relay's config today, they are resolved once from flags/env
+at process start; nothing sets or raises them via an API.
+
 ## Repository layout
 
 ```
