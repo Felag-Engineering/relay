@@ -228,6 +228,34 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	}
 }
 
+// TestWithOptionsPanicOnNilSeam asserts that WithAuthorizer, WithCapChecker,
+// and WithAuditSink all panic on a nil seam at construction, matching
+// WithExecution's own nil guard (execution.go): a nil seam here is a
+// composition-root wiring bug, not a recoverable runtime condition, so every
+// seam surface must fail identically rather than let a nil slip through to
+// panic later (or not at all) inside Run.
+func TestWithOptionsPanicOnNilSeam(t *testing.T) {
+	tests := []struct {
+		name string
+		call func()
+	}{
+		{"WithAuthorizer", func() { WithAuthorizer(nil) }},
+		{"WithCapChecker", func() { WithCapChecker(nil) }},
+		{"WithAuditSink", func() { WithAuditSink(nil) }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%s(nil) should panic", tt.name)
+				}
+			}()
+			tt.call()
+		})
+	}
+}
+
 func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {
 	reg := seedOneNode(t)
 	authz := &spyAuthorizer{}

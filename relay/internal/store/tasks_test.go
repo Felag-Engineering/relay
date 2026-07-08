@@ -210,6 +210,78 @@ func TestResolve_InvalidState(t *testing.T) {
 	}
 }
 
+// TestMarkUnreachable_FromPending is the offline-fail-fast contract
+// (ADR-0004): a Pending Task moves straight to Resolved/OutcomeUnreachable
+// with no DispatchedAt, and is absent from InFlight (it was never sent).
+func TestMarkUnreachable_FromPending(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	resolvedAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := taskRepo.MarkUnreachable(ctx, "task-1", resolvedAt); err != nil {
+		t.Fatalf("MarkUnreachable: %v", err)
+	}
+
+	got, err := taskRepo.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get after MarkUnreachable: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved {
+		t.Errorf("state after MarkUnreachable: got %v, want DispatchStateResolved", got.State)
+	}
+	if got.Outcome != jobs.OutcomeUnreachable {
+		t.Errorf("Outcome after MarkUnreachable: got %v, want OutcomeUnreachable", got.Outcome)
+	}
+	if !got.DispatchedAt.IsZero() {
+		t.Errorf("DispatchedAt after MarkUnreachable: got %v, want zero (never dispatched)", got.DispatchedAt)
+	}
+	if !got.ResolvedAt.Equal(resolvedAt) {
+		t.Errorf("ResolvedAt after MarkUnreachable: got %v, want %v", got.ResolvedAt, resolvedAt)
+	}
+
+	inFlight, err := taskRepo.InFlight(ctx)
+	if err != nil {
+		t.Fatalf("InFlight after MarkUnreachable: %v", err)
+	}
+	if len(inFlight) != 0 {
+		t.Errorf("InFlight after MarkUnreachable: got %v, want empty (an unreachable Task was never dispatched)", inFlight)
+	}
+}
+
+// TestMarkUnreachable_InvalidState mirrors TestResolve_InvalidState: a
+// Dispatched Task cannot be marked unreachable — that transition only
+// applies to a Task that was never sent.
+func TestMarkUnreachable_InvalidState(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := taskRepo.MarkDispatched(ctx, "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+
+	// MarkUnreachable on an already-dispatched Task must fail.
+	if err := taskRepo.MarkUnreachable(ctx, "task-1", time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("MarkUnreachable on dispatched task: want ErrInvalidTaskState, got %v", err)
+	}
+
+	if err := taskRepo.MarkUnreachable(ctx, "does-not-exist", time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("MarkUnreachable unknown task: want ErrTaskNotFound, got %v", err)
+	}
+}
+
 func TestByJob(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()

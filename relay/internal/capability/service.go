@@ -33,6 +33,12 @@ type Service struct {
 	cap   CapChecker
 	disp  dispatcher
 	audit AuditSink
+
+	// realDispatcher is set by WithExecution (execution.go) once a real Job
+	// engine is wired. New's end-of-construction guard uses it to refuse a
+	// real dispatcher riding the allow-all/no-op default seams — see the
+	// contract note below.
+	realDispatcher bool
 }
 
 // Option configures a Service built by New.
@@ -40,16 +46,25 @@ type Option func(*Service)
 
 // WithAuthorizer overrides the default allow-all Authorizer.
 func WithAuthorizer(a Authorizer) Option {
+	if a == nil {
+		panic("capability: WithAuthorizer: authorizer must not be nil")
+	}
 	return func(s *Service) { s.authz = a }
 }
 
 // WithCapChecker overrides the default no-op CapChecker.
 func WithCapChecker(c CapChecker) Option {
+	if c == nil {
+		panic("capability: WithCapChecker: capChecker must not be nil")
+	}
 	return func(s *Service) { s.cap = c }
 }
 
 // WithAuditSink overrides the default no-op AuditSink.
 func WithAuditSink(a AuditSink) Option {
+	if a == nil {
+		panic("capability: WithAuditSink: auditSink must not be nil")
+	}
 	return func(s *Service) { s.audit = a }
 }
 
@@ -57,22 +72,22 @@ func WithAuditSink(a AuditSink) Option {
 // noopCapChecker, noopDispatcher, and noopAuditSink defaults (functional-
 // option pattern, mirroring registry.NewInMemory). There is deliberately no
 // exported WithDispatcher: dispatcher is unexported (see dispatch.go), so
-// only files inside this package can supply a real one. #99 adds an
-// exported WithExecution(...) option that constructs the in-package sealed
-// Job-engine dispatcher from its own collaborators.
+// only files inside this package can supply a real one. #99 adds the
+// exported WithExecution(...) option (execution.go) that constructs the
+// in-package sealed Job-engine dispatcher from its own collaborators.
 //
-// Contract for that future option (and any exported option like it that
-// enables real execution): these allow-all/no-op defaults are safe ONLY
+// Contract enforced here: these allow-all/no-op defaults are safe ONLY
 // because v0.0.5 has no consumer surface and the default dispatcher is a
 // no-op — nothing is actually authorized, capped, or audited. Once
-// WithExecution (or any option wiring a real dispatcher) is added, it MUST
-// require real Authorizer, CapChecker, and AuditSink — either by requiring
-// them as its own parameters or by validating that WithAuthorizer,
-// WithCapChecker, and WithAuditSink were also supplied — rather than
-// silently riding these defaults. A real dispatcher paired with an
-// allow-all Authorizer, a no-op CapChecker, or a no-op AuditSink is a
-// fail-open: every Node would match, every Action would be permitted, and
-// nothing would be recorded. See dispatcher's doc comment in dispatch.go.
+// WithExecution (or any option wiring a real dispatcher) is used, New
+// requires real Authorizer, CapChecker, and AuditSink — WithAuthorizer,
+// WithCapChecker, and WithAuditSink must all have been supplied too — rather
+// than silently letting a real dispatcher ride these defaults, and panics
+// otherwise (a composition-root wiring bug, not a recoverable runtime
+// condition). A real dispatcher paired with an allow-all Authorizer, a
+// no-op CapChecker, or a no-op AuditSink is a fail-open: every Node would
+// match, every Action would be permitted, and nothing would be recorded.
+// See dispatcher's doc comment in dispatch.go.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
 		reg:   reg,
@@ -83,6 +98,17 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.realDispatcher {
+		if _, ok := s.authz.(allowAllAuthorizer); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real Authorizer (WithAuthorizer); allowAllAuthorizer would fail open")
+		}
+		if _, ok := s.cap.(noopCapChecker); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real CapChecker (WithCapChecker); noopCapChecker would fail open")
+		}
+		if _, ok := s.audit.(noopAuditSink); ok {
+			panic("capability: New: a real dispatcher (WithExecution) requires a real AuditSink (WithAuditSink); noopAuditSink would record nothing")
+		}
 	}
 	return s
 }
