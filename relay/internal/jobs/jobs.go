@@ -179,6 +179,13 @@ type TaskRepository interface {
 	// the Task is not currently Pending.
 	MarkUnreachable(ctx context.Context, taskID string, at time.Time) error
 
+	// MarkCancelled transitions a Task from Pending directly to Resolved with
+	// OutcomeCancelled, leaving DispatchedAt unset — the Task was cancelled
+	// before it was ever sent (ADR-0013). Returns ErrTaskNotFound if the Task
+	// does not exist, or ErrInvalidTaskState if the Task is not currently
+	// Pending.
+	MarkCancelled(ctx context.Context, taskID string, at time.Time) error
+
 	// Get returns the Task with the given ID, or ErrTaskNotFound.
 	Get(ctx context.Context, taskID string) (Task, error)
 

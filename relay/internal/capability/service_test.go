@@ -52,6 +52,12 @@ func (s *spyDispatcher) run(context.Context, dispatch) (dispatchResult, error) {
 	return dispatchResult{jobID: s.jobID, results: s.results}, s.err
 }
 
+// cancel satisfies the dispatcher interface's cancel method; no test in this
+// file exercises Job cancellation, so it is a no-op.
+func (s *spyDispatcher) cancel(context.Context, string) error {
+	return nil
+}
+
 // spyAuditSink records the last AuditEntry/FreezeEvent it received.
 type spyAuditSink struct {
 	called      bool
@@ -89,7 +95,7 @@ func TestRunAuthorizeDeniedShortCircuits(t *testing.T) {
 	capChecker := &spyCapChecker{}
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})
@@ -122,7 +128,7 @@ func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 	capChecker := &spyCapChecker{err: errors.New("blast radius exceeded")}
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{RiskClass: jobs.RiskClassMutate}
@@ -160,7 +166,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	wantResults := []NodeResult{{NodeID: "node-1", Outcome: jobs.OutcomeSuccess}}
 	disp := &spyDispatcher{jobID: "job-1", results: wantResults}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
 
 	principal := Principal{Account: "alice", Role: "operator"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -225,7 +231,7 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	dispatchErr := errors.New("node-1: connection reset mid-dispatch")
 	disp := &spyDispatcher{results: partialResults, err: dispatchErr}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
 
 	principal := Principal{Account: "alice"}
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
@@ -289,7 +295,7 @@ func TestRunJoinsDispatchAndAuditErrors(t *testing.T) {
 	auditWriteErr := errors.New("audit write failed")
 	disp := &spyDispatcher{results: nil, err: dispatchErr}
 	audit := &spyAuditSink{err: auditWriteErr}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	act := jobs.Action{RiskClass: jobs.RiskClassMutate}
