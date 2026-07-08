@@ -11,6 +11,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -50,6 +51,12 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
+	// capability is the Relay's single capability layer (ADR-0009/0010).
+	// v0.0.5 [3/8] wires it here with its default (no-op/allow-all) seams
+	// only — no surface is wired to it yet (no consumer until v0.0.6). The
+	// composition root owns it so later issues (#99 engine, #100 caps,
+	// #102 audit) can swap in real seams and tests can reach it.
+	capability *capability.Service
 	// tunnel is the registered tunnelServer. Exposed so integration tests and
 	// installDevHarness can inject a taskSink (test/devharness-only; never set
 	// in an untagged (production) build).
@@ -206,6 +213,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// devharness-tagged build with RELAY_DEVHARNESS_SOCKET set, inject a
 	// taskSink after calling newServer.
 
+	// capSvc is constructed with its default seams (allow-all authz, no-op
+	// cap check, no-op dispatch, no-op audit) and no surface wired to it —
+	// see the appDeps.capability doc comment.
+	capSvc := capability.New(reg)
+
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
@@ -226,6 +238,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		conns:      conns,
 		revocation: revocationSvc,
 		limiter:    limiter,
+		capability: capSvc,
 		tunnel:     ts,
 	}
 	return srv, deps, nil
