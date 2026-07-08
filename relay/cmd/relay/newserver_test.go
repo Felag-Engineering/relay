@@ -21,6 +21,8 @@ func TestNewServer_Smoke(t *testing.T) {
 		EnrollGlobalBurst:   10,
 		EnrollMaxTrackedIPs: 100000,
 		MaxNodes:            110000,
+		ReadBlastCap:        10000,
+		MutateBlastCap:      100,
 	}
 
 	srv, deps, err := newServer(cfg)
