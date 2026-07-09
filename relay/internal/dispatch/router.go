@@ -153,6 +153,20 @@ func (r *Router) Connected(nodeID string) bool {
 	return ok
 }
 
+// ConnectedNodes returns a snapshot of every Node currently registered with a
+// live Tunnel. It is transport-only (mirrors Connected's locking) and exists
+// for callers that need to enumerate the live fleet (e.g. the #103 devharness
+// list_connected op) rather than test one Node at a time.
+func (r *Router) ConnectedNodes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	nodeIDs := make([]string, 0, len(r.conns))
+	for nodeID := range r.conns {
+		nodeIDs = append(nodeIDs, nodeID)
+	}
+	return nodeIDs
+}
+
 // Dispatch sends task down nodeID's Tunnel and blocks for its Result.
 //
 // The map read (send func) and the waiter registration happen under mu; the

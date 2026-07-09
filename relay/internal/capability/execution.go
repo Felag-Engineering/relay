@@ -150,7 +150,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		results = append(results, NodeResult{NodeID: task.NodeID, Outcome: outcome})
+		results = append(results, NodeResult{NodeID: task.NodeID, Outcome: outcome, JobID: jobID})
 	}
 
 	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)

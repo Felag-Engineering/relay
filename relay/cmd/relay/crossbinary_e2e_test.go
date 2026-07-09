@@ -73,34 +73,57 @@ func freeLoopbackAddr() (string, error) {
 	return lis.Addr().String(), nil
 }
 
-// startRelaySubprocess launches relayBin against a freshly-allocated loopback
-// port with RELAY_DEVHARNESS_SOCKET set to sockPath, and blocks until it logs
-// "relay listening" (the same readiness signal scripts/smoke-test.sh uses).
-// On a bind failure (rare port collision, SUGG-4) or a startup timeout, it
-// kills the attempt and retries on a new port, up to 3 attempts total.
-func startRelaySubprocess(t *testing.T, relayBin, caDir, sockPath string) (cmd *exec.Cmd, log *syncBuffer, addr string) {
+// startRelaySubprocess launches relayBin with RELAY_DEVHARNESS_SOCKET set to
+// sockPath, and blocks until it logs "relay listening" (the same readiness
+// signal scripts/smoke-test.sh uses). storePath is passed as --store-path (so
+// a caller can restart the Relay against the SAME on-disk store, proving
+// persistence survives restart — fleet_e2e_test.go). extraEnv is appended to
+// the subprocess environment (e.g. RELAY_READ_BLAST_CAP/RELAY_MUTATE_BLAST_CAP
+// for the over-cap tests); nil is fine.
+//
+// addr controls port reuse across a restart: "" allocates a fresh free port
+// on every attempt (the #112 behavior — absorbs a rare port collision on a
+// brand-new port). A non-empty addr is instead reused UNCHANGED across every
+// attempt: the caller (e.g. a crash-mid-Job restart) needs the daemon to
+// re-dial the exact same address, so this function must never silently
+// reallocate a different port out from under it — only the bind/listen/
+// startup attempt itself is retried, to absorb TIME_WAIT after a kill -9.
+//
+// The returned exited channel is fed by the single goroutine below that owns
+// c.Wait() for the lifetime of the returned *exec.Cmd: os/exec.Cmd.Wait may
+// only ever be called once (a second concurrent call races the first for the
+// same goroutineErr send and blocks forever, since only one send ever
+// happens). Every caller that later kills this subprocess MUST reap it via
+// `<-exited`, never via a second cmd.Wait().
+func startRelaySubprocess(t *testing.T, relayBin, caDir, storePath, sockPath, addr string, extraEnv []string) (cmd *exec.Cmd, log *syncBuffer, gotAddr string, exited chan error) {
 	t.Helper()
 	const maxAttempts = 3
 	const startupTimeout = 10 * time.Second
 
+	fixedAddr := addr != ""
+
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		a, err := freeLoopbackAddr()
-		if err != nil {
-			t.Fatalf("allocate free loopback port: %v", err)
+		a := addr
+		if !fixedAddr {
+			var err error
+			a, err = freeLoopbackAddr()
+			if err != nil {
+				t.Fatalf("allocate free loopback port: %v", err)
+			}
 		}
 
 		logBuf := &syncBuffer{}
-		c := exec.Command(relayBin, "--addr", a, "--ca-dir", caDir, "--hostname", "localhost")
-		c.Env = append(os.Environ(), "RELAY_DEVHARNESS_SOCKET="+sockPath)
+		c := exec.Command(relayBin, "--addr", a, "--ca-dir", caDir, "--hostname", "localhost", "--store-path", storePath)
+		c.Env = append(append(os.Environ(), "RELAY_DEVHARNESS_SOCKET="+sockPath), extraEnv...)
 		c.Stdout = logBuf
 		c.Stderr = logBuf
 		if err := c.Start(); err != nil {
 			t.Fatalf("start relay (attempt %d): %v", attempt, err)
 		}
 
-		exited := make(chan error, 1)
-		go func() { exited <- c.Wait() }()
+		exitedAttempt := make(chan error, 1)
+		go func() { exitedAttempt <- c.Wait() }()
 
 		ready := false
 		deadline := time.After(startupTimeout)
@@ -111,13 +134,13 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, sockPath string) (cmd *
 				break pollLoop
 			}
 			select {
-			case werr := <-exited:
+			case werr := <-exitedAttempt:
 				lastErr = fmt.Errorf("relay exited before listening (attempt %d): %v\n%s", attempt, werr, logBuf.String())
 				break pollLoop
 			case <-deadline:
 				c.Process.Kill() //nolint:errcheck
-				<-exited
-				lastErr = fmt.Errorf("relay did not report listening within %v (attempt %d, likely port collision)\n%s",
+				<-exitedAttempt
+				lastErr = fmt.Errorf("relay did not report listening within %v (attempt %d, likely port collision or lingering TIME_WAIT)\n%s",
 					startupTimeout, attempt, logBuf.String())
 				break pollLoop
 			case <-time.After(50 * time.Millisecond):
@@ -125,11 +148,11 @@ func startRelaySubprocess(t *testing.T, relayBin, caDir, sockPath string) (cmd *
 		}
 
 		if ready {
-			return c, logBuf, a
+			return c, logBuf, a, exitedAttempt
 		}
 	}
 	t.Fatalf("failed to start relay after %d attempts: %v", maxAttempts, lastErr)
-	return nil, nil, ""
+	return nil, nil, "", nil
 }
 
 // waitForSocket polls until path exists or deadline expires.
@@ -172,30 +195,64 @@ func dialHarness(t *testing.T, sockPath string) *harnessClient {
 	}
 }
 
-// call sends req as one JSON line and returns the decoded JSON response line.
-// It fails the test if the response carries a non-empty "error" field.
-func (c *harnessClient) call(t *testing.T, req map[string]any) map[string]any {
-	t.Helper()
+// send writes req as one JSON line and returns the decoded JSON response
+// line, or an error. Unlike call/callRaw it takes no *testing.T and never
+// fails a test itself — it is the shared primitive both build on, and the
+// only one safe to use from a goroutine other than the one running the test
+// (a fleet e2e scenario that issues a blocking run_job on a second connection
+// concurrently with the main goroutine — fleet_e2e_test.go — must never call
+// t.Fatalf off-goroutine: testing.T's FailNow contract requires it be called
+// only from the test's own goroutine).
+func (c *harnessClient) send(req map[string]any) (map[string]any, error) {
 	line, err := json.Marshal(req)
 	if err != nil {
-		t.Fatalf("marshal devharness request %v: %v", req, err)
+		return nil, fmt.Errorf("marshal devharness request %v: %w", req, err)
 	}
 	line = append(line, '\n')
 	if _, err := c.conn.Write(line); err != nil {
-		t.Fatalf("write devharness request %v: %v", req, err)
+		return nil, fmt.Errorf("write devharness request %v: %w", req, err)
 	}
 	respLine, err := c.r.ReadBytes('\n')
 	if err != nil {
-		t.Fatalf("read devharness response to %v: %v", req, err)
+		return nil, fmt.Errorf("read devharness response to %v: %w", req, err)
 	}
 	var resp map[string]any
 	if err := json.Unmarshal(respLine, &resp); err != nil {
-		t.Fatalf("unmarshal devharness response %q: %v", respLine, err)
+		return nil, fmt.Errorf("unmarshal devharness response %q: %w", respLine, err)
+	}
+	return resp, nil
+}
+
+// call sends req and returns the decoded JSON response line. It fails the
+// test if the request cannot be sent/decoded, or if the response carries a
+// non-empty "error" field.
+func (c *harnessClient) call(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	resp, err := c.send(req)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if errMsg, ok := resp["error"]; ok {
 		if s, ok := errMsg.(string); ok && s != "" {
 			t.Fatalf("devharness op %q failed: %s", req["op"], s)
 		}
+	}
+	return resp
+}
+
+// callRaw is identical to call except it does NOT inspect or fail on the
+// response's "error" field — it returns the raw decoded response for the
+// caller to assert on. Use this for refusal-expecting run_job calls (over-cap,
+// Freeze engaged): unlike every other devharness op, run_job's refusal
+// channel IS the response's "error" field, not a transport-level failure, so
+// call's auto-failing semantics would wrongly fail these tests. Every other
+// call — including every #112 usage and non-refusal fleet calls — keeps
+// using call.
+func (c *harnessClient) callRaw(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	resp, err := c.send(req)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return resp
 }
@@ -213,13 +270,14 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 
 	caDir := t.TempDir()
 	sockPath := filepath.Join(t.TempDir(), "devharness.sock")
+	storePath := filepath.Join(t.TempDir(), "relay.db")
 
-	relayCmd, relayLog, addr := startRelaySubprocess(t, relayBin, caDir, sockPath)
+	relayCmd, relayLog, addr, relayExited := startRelaySubprocess(t, relayBin, caDir, storePath, sockPath, "", nil)
 	t.Cleanup(func() {
 		if relayCmd.Process != nil {
 			relayCmd.Process.Kill() //nolint:errcheck
 		}
-		relayCmd.Wait() //nolint:errcheck
+		<-relayExited
 		os.Remove(sockPath)
 	})
 
