@@ -299,7 +299,7 @@ func main() {
 	// installDevHarness is a no-op in every build except `devharness`
 	// (relay/cmd/relay/devharness_stub.go vs devharness.go); it must run
 	// before Serve so deps.tunnel.sink is set before any tunnel handler starts.
-	stop, err := installDevHarness(deps)
+	stop, err := installDevHarness(cfg, deps)
 	if err != nil {
 		slog.Error("install dev harness failed", "err", err)
 		os.Exit(1)

@@ -406,6 +406,40 @@ func TestRouter_StaleUnregisterDoesNotClobberFreshRegistration(t *testing.T) {
 	unreg2()
 }
 
+// TestRouter_ConnectedNodes asserts ConnectedNodes returns every currently
+// registered Node and drops one once it unregisters.
+func TestRouter_ConnectedNodes(t *testing.T) {
+	r := NewRouter(nil)
+	if got := r.ConnectedNodes(); len(got) != 0 {
+		t.Errorf("ConnectedNodes() = %v, want empty before any Register", got)
+	}
+
+	unregA := r.Register("node-a", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregB := r.Register("node-b", func(*gleipnirv1.RelayMessage) error { return nil })
+
+	got := r.ConnectedNodes()
+	want := map[string]bool{"node-a": true, "node-b": true}
+	if len(got) != len(want) {
+		t.Fatalf("ConnectedNodes() = %v, want %v", got, want)
+	}
+	for _, nodeID := range got {
+		if !want[nodeID] {
+			t.Errorf("ConnectedNodes() contains unexpected node %q", nodeID)
+		}
+	}
+
+	unregA()
+	got = r.ConnectedNodes()
+	if len(got) != 1 || got[0] != "node-b" {
+		t.Errorf("ConnectedNodes() after unregistering node-a = %v, want [node-b]", got)
+	}
+
+	unregB()
+	if got := r.ConnectedNodes(); len(got) != 0 {
+		t.Errorf("ConnectedNodes() after unregistering all = %v, want empty", got)
+	}
+}
+
 func waitUntil(t *testing.T, deadline time.Duration, cond func() bool) {
 	t.Helper()
 	end := time.Now().Add(deadline)

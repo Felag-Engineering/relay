@@ -1,9 +1,12 @@
 //go:build devharness
 
 // Package main: devharness.go is the ENTIRE dev-harness dispatch/control
-// surface for #112's cross-binary CI test. It is a deliberate dev backdoor on
-// an RCE control plane (it lets a local unix-socket client mint an Enrollment
-// Token, wait for a Node to register, dispatch Tasks, and read registry
+// surface for #112's cross-binary CI test, extended by #103 to drive the
+// full capability pipeline (Selector -> authz -> blast-cap -> Job engine ->
+// dispatch -> audit, ADR-0009/0010) for the v0.0.5 fleet-semantics e2e suite.
+// It is a deliberate dev backdoor on an RCE control plane (it lets a local
+// unix-socket client mint an Enrollment Token, wait for a Node to register,
+// dispatch Tasks and Jobs, engage/inspect Freeze, and read registry/Job/audit
 // state) and MUST NOT exist in production builds.
 //
 // Exclusion is structural, not a runtime flag:
@@ -17,134 +20,99 @@
 //
 // The control protocol is newline-delimited JSON over a unix domain socket
 // (not proto-on-the-wire): this file is the sole place that translates
-// to/from gleipnirv1, keeping the harness client trivial and this file
-// self-auditing. It never evaluates or mutates Policy (ADR-0002/0011) — it
-// only mints a Token, reads the registry, and forwards raw Tasks; the daemon's
-// live engine remains the sole source of Policy verdicts.
+// to/from gleipnirv1/jobs/capability, keeping the harness client trivial and
+// this file self-auditing.
+//
+// Capability-layer wiring (#103): unlike the composition root (main.go),
+// which defers WithExecution to v0.0.6's real Authorizer, this file supplies
+// its own allow-all devHarnessAuthorizer — a type distinct from capability's
+// own allowAllAuthorizer, so New's fail-open guard is satisfied — precisely
+// what dispatch_wiring.go's doc comment reserves for "the #103 integration
+// harness." Every op below is driven through capSvc (invariant 10): this is
+// what makes the audit trail, blast-cap, and Freeze acceptance criteria real
+// rather than faked at the harness. The daemon's live Policy engine remains
+// the sole source of Policy verdicts (ADR-0002/0011) — nothing here
+// evaluates or mutates Policy.
 package main
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// harnessSink implements taskSink (tunnel.go:28-32) for the dev-harness
-// socket. It is an independent, compact copy of dispatch_test.go's
-// `dispatcher` — the gated binary must not depend on _test.go code (a
-// different compilation unit) — and only tracks what the control protocol
-// needs: outbound send funcs and inbound TaskResults. PolicyVerdicts have no
-// consumer here (the protocol has no PolicyQuery op), so deliverVerdict is a
-// no-op.
-type harnessSink struct {
-	mu      sync.Mutex
-	senders map[string]func(*gleipnirv1.RelayMessage) error
-	results map[string]chan *gleipnirv1.TaskResult
+// harnessState is threaded through every socket handler: deps for
+// registry/tokens/Freeze/store access, router as the transport-level Conduit
+// (raw "dispatch" op + list_connected/get_node's connected field), and capSvc
+// as the sole entry point for anything that must go through the capability
+// pipeline (run_job/cancel_job/get_freeze).
+type harnessState struct {
+	deps   *appDeps
+	router *dispatch.Router
+	capSvc *capability.Service
 }
 
-func newHarnessSink() *harnessSink {
-	return &harnessSink{
-		senders: make(map[string]func(*gleipnirv1.RelayMessage) error),
-		results: make(map[string]chan *gleipnirv1.TaskResult),
-	}
-}
+// devHarnessAuthorizer is the #103 integration harness's allow-all
+// Authorizer. It is a DISTINCT type from capability's own unexported
+// allowAllAuthorizer so capability.New's fail-open guard — "a real dispatcher
+// must never ride the package's own allow-all default" — is satisfied by
+// construction, not by convention. Real Grant-based authorization is
+// v0.0.6+ scope; this harness only proves the pipeline wiring, never a real
+// authz decision.
+type devHarnessAuthorizer struct{}
 
-// register implements taskSink. Called by tunnelServer.Open after Ping is sent.
-func (h *harnessSink) register(nodeID string, send func(*gleipnirv1.RelayMessage) error) func() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.senders[nodeID] = send
-	if _, ok := h.results[nodeID]; !ok {
-		h.results[nodeID] = make(chan *gleipnirv1.TaskResult, 32)
-	}
-	return func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		delete(h.senders, nodeID)
-	}
-}
-
-// deliver implements taskSink. Buffered (32) so the stream goroutine never
-// blocks waiting on the socket client to read.
-func (h *harnessSink) deliver(nodeID string, result *gleipnirv1.TaskResult) {
-	h.mu.Lock()
-	ch := h.results[nodeID]
-	h.mu.Unlock()
-	if ch != nil {
-		ch <- result
-	}
-}
-
-// deliverVerdict implements taskSink. No-op: the dev-harness control
-// protocol has no PolicyQuery op, so there is nothing to deliver a
-// PolicyVerdict to.
-func (h *harnessSink) deliverVerdict(string, *gleipnirv1.PolicyVerdict) {}
-
-// waitForNode polls until any Node registers a sender or deadline expires.
-// Mirrors dispatch_test.go's waitForNode: the harness cannot know the
-// cert-derived node_id in advance, so it watches for the first registration.
-func (h *harnessSink) waitForNode(deadline time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
-	defer cancel()
-	for {
-		h.mu.Lock()
-		for id := range h.senders {
-			h.mu.Unlock()
-			return id, nil
-		}
-		h.mu.Unlock()
-		select {
-		case <-ctx.Done():
-			return "", fmt.Errorf("wait_node: timeout after %v", deadline)
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-}
-
-// dispatch sends msg to nodeID's registered sender.
-func (h *harnessSink) dispatch(nodeID string, msg *gleipnirv1.RelayMessage) error {
-	h.mu.Lock()
-	send, ok := h.senders[nodeID]
-	h.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("dispatch: node %q not registered", nodeID)
-	}
-	return send(msg)
-}
-
-// resultChan returns nodeID's TaskResult channel, or nil if never registered.
-func (h *harnessSink) resultChan(nodeID string) chan *gleipnirv1.TaskResult {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.results[nodeID]
+func (devHarnessAuthorizer) Authorize(context.Context, capability.Principal, jobs.Action, capability.Selector) error {
+	return nil
 }
 
 // installDevHarness wires the dev-harness control socket into deps, iff
 // RELAY_DEVHARNESS_SOCKET is set. If it is empty, this is a no-op — even a
 // devharness-tagged binary is inert by default (defense in depth).
 //
-// Sets deps.tunnel.sink BEFORE the socket starts serving, and strictly before
-// main's srv.Serve is called (installDevHarness runs between newServer and
-// Serve), so there is no concurrency with the tunnel handler at the moment
-// the sink is assigned.
-func installDevHarness(deps *appDeps) (stop func(), err error) {
+// It builds the real dispatch transport (newDispatchStack, dispatch_wiring.go)
+// and sets deps.tunnel.sink to it BEFORE the socket starts serving, and
+// strictly before main's srv.Serve is called (installDevHarness runs between
+// newServer and Serve), so there is no concurrency with the tunnel handler at
+// the moment the sink is assigned. It then constructs an execution-wired
+// capability.Service (WithExecution) over the SAME Router, so run_job's
+// dispatch and the "dispatch" op's raw send share one Conduit and one set of
+// live connections.
+func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 	sockPath := os.Getenv("RELAY_DEVHARNESS_SOCKET")
 	if sockPath == "" {
 		return func() {}, nil
 	}
 
-	sink := newHarnessSink()
+	router, reconciler, sink := newDispatchStack(deps.tasks)
+	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
+	// and fires on every Node registration, including reconnects — this is
+	// what makes the crash-mid-Job test's restart reconciliation happen; it
+	// is not called directly from here.
+	_ = reconciler
 	deps.tunnel.sink = sink
+
+	capSvc := capability.New(deps.registry,
+		capability.WithExecution(deps.jobs, deps.tasks, router),
+		capability.WithAuthorizer(devHarnessAuthorizer{}),
+		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
+		capability.WithAuditSink(auditsink.New(deps.audit)),
+		capability.WithFreeze(deps.store.Freeze()))
+
+	st := &harnessState{deps: deps, router: router, capSvc: capSvc}
 
 	if dir := filepath.Dir(sockPath); dir != "." {
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -166,7 +134,7 @@ func installDevHarness(deps *appDeps) (stop func(), err error) {
 	slog.Warn("devharness control socket active — CI/dev-only backdoor, never run in production",
 		"socket", sockPath)
 
-	go serveDevHarnessSocket(lis, deps, sink)
+	go serveDevHarnessSocket(lis, st)
 
 	stop = func() {
 		lis.Close()
@@ -185,14 +153,14 @@ func installDevHarness(deps *appDeps) (stop func(), err error) {
 // could inline this small function away, making the check vacuous.
 //
 //go:noinline
-func serveDevHarnessSocket(lis net.Listener, deps *appDeps, sink *harnessSink) {
+func serveDevHarnessSocket(lis net.Listener, st *harnessState) {
 	for {
 		conn, err := lis.Accept()
 		if err != nil {
 			// Expected on stop(): lis.Close() causes Accept to return an error.
 			return
 		}
-		go handleDevHarnessConn(conn, deps, sink)
+		go handleDevHarnessConn(conn, st)
 	}
 }
 
@@ -206,6 +174,44 @@ type harnessRequest struct {
 	TaskID         string            `json:"task_id,omitempty"`
 	Operation      string            `json:"operation,omitempty"`
 	Args           map[string]string `json:"args,omitempty"`
+	// Selector/RawExec/RiskClass drive run_job: Selector is parsed via
+	// capability.ParseSelector; RawExec (if non-empty) builds an ActionRawExec
+	// Action and always takes RiskClassMutate (ADR-0012), regardless of
+	// RiskClass; otherwise Operation+Args build an ActionOperation Action
+	// with RiskClass from RiskClass ("read" -> RiskClassRead, else Mutate).
+	Selector  string   `json:"selector,omitempty"`
+	RawExec   []string `json:"raw_exec,omitempty"`
+	RiskClass string   `json:"risk_class,omitempty"`
+	// JobID drives cancel_job and query_job (and, optionally, query_audit).
+	JobID string `json:"job_id,omitempty"`
+}
+
+// harnessNodeResult is one Node's outcome from a run_job dispatch.
+type harnessNodeResult struct {
+	NodeID  string `json:"node_id"`
+	Outcome string `json:"outcome"`
+}
+
+// harnessTaskInfo is one Task's queryable state (query_job, list_inflight).
+// JobID is only populated by list_inflight — query_job's caller already
+// knows job_id (it is the query key), so it is left empty there.
+type harnessTaskInfo struct {
+	TaskID  string `json:"task_id"`
+	JobID   string `json:"job_id,omitempty"`
+	NodeID  string `json:"node_id"`
+	State   string `json:"state"`
+	Outcome string `json:"outcome"`
+	Stderr  string `json:"stderr"`
+}
+
+// harnessAuditInfo is one audit.Record's queryable fields (query_audit).
+type harnessAuditInfo struct {
+	Kind      string `json:"kind"`
+	Principal string `json:"principal"`
+	Selector  string `json:"selector"`
+	NodeID    string `json:"node_id"`
+	Outcome   string `json:"outcome"`
+	Reason    string `json:"reason"`
 }
 
 // harnessResponse is one line of the newline-delimited JSON control protocol
@@ -223,13 +229,30 @@ type harnessResponse struct {
 	// `{}`, not be silently dropped from the response.
 	NodeLabels  map[string]string `json:"node_labels"`
 	RelayLabels map[string]string `json:"relay_labels"`
-	Error       string            `json:"error,omitempty"`
+	// Connected is get_node's live-Tunnel bit (Router.Connected), so tests can
+	// poll for a Node going offline deterministically.
+	Connected bool `json:"connected,omitempty"`
+	// JobID/Results are run_job's success-path fields. Error, below, is
+	// INTENTIONALLY the refusal channel for run_job too (a CapExceededError
+	// or FrozenError populates Error with Results left empty) — refusal-
+	// expecting callers must use the harness client's non-failing helper.
+	JobID   string              `json:"job_id,omitempty"`
+	Results []harnessNodeResult `json:"results,omitempty"`
+	// Frozen is get_freeze's result.
+	Frozen bool `json:"frozen,omitempty"`
+	// NodeIDs is list_connected's result.
+	NodeIDs []string `json:"node_ids,omitempty"`
+	// Tasks is query_job's result.
+	Tasks []harnessTaskInfo `json:"tasks,omitempty"`
+	// Audit is query_audit's result.
+	Audit []harnessAuditInfo `json:"audit,omitempty"`
+	Error string             `json:"error,omitempty"`
 }
 
 // handleDevHarnessConn reads newline-delimited JSON requests off conn and
 // writes newline-delimited JSON responses, one per request, until the client
 // disconnects or a write fails.
-func handleDevHarnessConn(conn net.Conn, deps *appDeps, sink *harnessSink) {
+func handleDevHarnessConn(conn net.Conn, st *harnessState) {
 	defer conn.Close()
 	scanner := bufio.NewScanner(conn)
 	enc := json.NewEncoder(conn)
@@ -243,7 +266,7 @@ func handleDevHarnessConn(conn net.Conn, deps *appDeps, sink *harnessSink) {
 			enc.Encode(harnessResponse{Error: fmt.Sprintf("invalid request: %v", err)}) //nolint:errcheck
 			continue
 		}
-		resp := dispatchHarnessRequest(context.Background(), deps, sink, req)
+		resp := dispatchHarnessRequest(context.Background(), st, req)
 		if err := enc.Encode(resp); err != nil {
 			slog.Warn("devharness: write response failed", "err", err)
 			return
@@ -252,17 +275,33 @@ func handleDevHarnessConn(conn net.Conn, deps *appDeps, sink *harnessSink) {
 }
 
 // dispatchHarnessRequest routes req to its op handler. Every op is read-only
-// with respect to Policy: it never evaluates or mutates it (ADR-0002/0011).
-func dispatchHarnessRequest(ctx context.Context, deps *appDeps, sink *harnessSink, req harnessRequest) harnessResponse {
+// with respect to Policy: it never evaluates or mutates it (ADR-0002/0011) —
+// Policy verdicts always come from the daemon's live engine over the real
+// wire.
+func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	switch req.Op {
 	case "create_token":
-		return harnessCreateToken(ctx, deps, req)
+		return harnessCreateToken(ctx, st.deps, req)
 	case "wait_node":
-		return harnessWaitNode(sink, req)
+		return harnessWaitNode(st, req)
 	case "dispatch":
-		return harnessDispatch(sink, req)
+		return harnessDispatch(ctx, st, req)
 	case "get_node":
-		return harnessGetNode(deps, req)
+		return harnessGetNode(st, req)
+	case "run_job":
+		return harnessRunJob(ctx, st, req)
+	case "cancel_job":
+		return harnessCancelJob(ctx, st, req)
+	case "get_freeze":
+		return harnessGetFreeze(ctx, st)
+	case "list_connected":
+		return harnessListConnected(st)
+	case "query_job":
+		return harnessQueryJob(ctx, st, req)
+	case "query_audit":
+		return harnessQueryAudit(ctx, st, req)
+	case "list_inflight":
+		return harnessListInFlight(ctx, st)
 	default:
 		return harnessResponse{Error: fmt.Sprintf("unknown op %q", req.Op)}
 	}
@@ -289,24 +328,26 @@ func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) 
 // harnessWaitNode blocks (up to timeout_seconds, default 30s) until a Node
 // completes Hello->Ping registration, mirroring the poll at
 // tunnel_dispatch_e2e_test.go:224-235.
-func harnessWaitNode(sink *harnessSink, req harnessRequest) harnessResponse {
+func harnessWaitNode(st *harnessState, req harnessRequest) harnessResponse {
 	timeout := time.Duration(req.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	nodeID, err := sink.waitForNode(timeout)
+	nodeID, err := st.router.WaitForAny(timeout)
 	if err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
 	return harnessResponse{NodeID: nodeID}
 }
 
-// harnessDispatch builds and sends a single-Operation TaskRequest to node_id
-// and blocks (up to timeout_seconds, default 15s) for its TaskResult. It
-// never evaluates Policy itself — the outcome (including
-// OUTCOME_DENIED_BY_POLICY) comes from the daemon's live engine over the
-// real wire (ADR-0011).
-func harnessDispatch(sink *harnessSink, req harnessRequest) harnessResponse {
+// harnessDispatch builds and sends a single-Operation Task to node_id and
+// blocks (up to timeout_seconds, default 15s) for its Result, via
+// st.router.Dispatch directly — the #112 raw-dispatch contract (explicit
+// task_id, single Node, raw result), unchanged by #103's capability-layer
+// rewiring. It never evaluates Policy itself — the outcome (including
+// OUTCOME_DENIED_BY_POLICY) comes from the daemon's live engine over the real
+// wire (ADR-0011).
+func harnessDispatch(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	if req.NodeID == "" || req.TaskID == "" || req.Operation == "" {
 		return harnessResponse{Error: "dispatch: node_id, task_id, and operation are required"}
 	}
@@ -314,52 +355,46 @@ func harnessDispatch(sink *harnessSink, req harnessRequest) harnessResponse {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = 15
 	}
-	resultCh := sink.resultChan(req.NodeID)
-	if resultCh == nil {
-		return harnessResponse{Error: fmt.Sprintf("dispatch: node %q not registered", req.NodeID)}
-	}
 
-	task := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
-				TaskId:         req.TaskID,
-				TimeoutSeconds: int32(timeoutSeconds),
-				Action: &gleipnirv1.TaskRequest_Operation{
-					Operation: &gleipnirv1.Operation{
-						Name: req.Operation,
-						Args: req.Args,
-					},
-				},
-			},
+	dctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	task := jobs.Task{
+		ID:             req.TaskID,
+		NodeID:         req.NodeID,
+		TimeoutSeconds: int32(timeoutSeconds),
+		Action: jobs.Action{
+			Kind:          jobs.ActionOperation,
+			OperationName: req.Operation,
+			OperationArgs: req.Args,
 		},
 	}
-	if err := sink.dispatch(req.NodeID, task); err != nil {
+	result, err := st.router.Dispatch(dctx, req.NodeID, task)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return harnessResponse{Error: fmt.Sprintf("dispatch: timeout waiting for TaskResult %q", req.TaskID)}
+		}
 		return harnessResponse{Error: err.Error()}
 	}
 
-	select {
-	case result := <-resultCh:
-		return harnessResponse{
-			TaskID:  result.TaskId,
-			Outcome: result.Outcome.String(),
-			Stdout:  string(result.Stdout),
-			Stderr:  string(result.Stderr),
-		}
-	case <-time.After(time.Duration(timeoutSeconds) * time.Second):
-		return harnessResponse{Error: fmt.Sprintf("dispatch: timeout waiting for TaskResult %q", req.TaskID)}
+	return harnessResponse{
+		TaskID:  req.TaskID,
+		Outcome: outcomeString(result.Outcome),
+		Stdout:  string(result.Stdout),
+		Stderr:  string(result.Stderr),
 	}
 }
 
 // harnessGetNode reads the registry (registry.go:102) for node_id and
-// returns its Policy fingerprint and labels. No get_ca op exists (plan-review
-// BLOCKING-1): the harness client reads the CA bundle directly from
-// <ca-dir>/ca-cert.pem, which ca.Open writes to disk during newServer,
-// strictly before installDevHarness opens this socket.
-func harnessGetNode(deps *appDeps, req harnessRequest) harnessResponse {
+// returns its Policy fingerprint, labels, and live-Tunnel connectivity. No
+// get_ca op exists (plan-review BLOCKING-1): the harness client reads the CA
+// bundle directly from <ca-dir>/ca-cert.pem, which ca.Open writes to disk
+// during newServer, strictly before installDevHarness opens this socket.
+func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 	if req.NodeID == "" {
 		return harnessResponse{Error: "get_node: node_id is required"}
 	}
-	node, ok := deps.registry.Get(req.NodeID)
+	node, ok := st.deps.registry.Get(req.NodeID)
 	if !ok {
 		return harnessResponse{Error: fmt.Sprintf("get_node: node %q not found", req.NodeID)}
 	}
@@ -368,5 +403,209 @@ func harnessGetNode(deps *appDeps, req harnessRequest) harnessResponse {
 		PolicyFingerprint: node.PolicyFingerprint,
 		NodeLabels:        node.NodeLabels,
 		RelayLabels:       node.RelayLabels,
+		Connected:         st.router.Connected(req.NodeID),
+	}
+}
+
+// harnessRunJob drives a Selector-targeted dispatch through the full
+// capability pipeline (Selector -> authz -> blast-cap -> Job engine ->
+// dispatch -> audit, ADR-0009/0010): the single entry point every real
+// surface (MCP, Control API) must also use (invariant 10). A refusal
+// (CapExceededError from the blast-radius cap, or FrozenError from the
+// Relay-wide Freeze) is reported on the response's Error field, not a
+// transport error — callers that expect a refusal must use the harness
+// client's non-failing helper.
+func harnessRunJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
+	sel, err := capability.ParseSelector(req.Selector)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("run_job: parse selector %q: %v", req.Selector, err)}
+	}
+
+	act, err := harnessRunJobAction(req)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("run_job: %v", err)}
+	}
+
+	results, err := st.capSvc.Run(ctx, capability.Principal{Account: "devharness"}, sel, act)
+	if err != nil {
+		return harnessResponse{Error: err.Error()}
+	}
+
+	resp := harnessResponse{Results: make([]harnessNodeResult, 0, len(results))}
+	for _, r := range results {
+		if resp.JobID == "" {
+			resp.JobID = r.JobID
+		}
+		resp.Results = append(resp.Results, harnessNodeResult{NodeID: r.NodeID, Outcome: outcomeString(r.Outcome)})
+	}
+	return resp
+}
+
+// harnessRunJobAction builds run_job's Action: Raw Exec (if raw_exec is
+// non-empty) ALWAYS takes RiskClassMutate (ADR-0012, invariant 13) regardless
+// of risk_class, enforced here rather than assumed; a structured Operation
+// takes its RiskClass from risk_class ("read" -> RiskClassRead, else Mutate —
+// there is no Relay-side operation->risk-class registry until the v0.0.6 MCP
+// vocabulary).
+func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
+	if len(req.RawExec) > 0 {
+		return jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: req.RawExec, RiskClass: jobs.RiskClassMutate}, nil
+	}
+	if req.Operation == "" {
+		return jobs.Action{}, fmt.Errorf("operation or raw_exec is required")
+	}
+	class := jobs.RiskClassMutate
+	if req.RiskClass == "read" {
+		class = jobs.RiskClassRead
+	}
+	return jobs.Action{Kind: jobs.ActionOperation, OperationName: req.Operation, OperationArgs: req.Args, RiskClass: class}, nil
+}
+
+// harnessCancelJob stops job_id's Tasks (#101, ADR-0013) via the capability
+// pipeline's CancelJob: undispatched Tasks are marked cancelled without ever
+// being sent, in-flight Tasks are asked to cancel over their Tunnels.
+func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
+	if req.JobID == "" {
+		return harnessResponse{Error: "cancel_job: job_id is required"}
+	}
+	if err := st.capSvc.CancelJob(ctx, req.JobID); err != nil {
+		return harnessResponse{Error: err.Error()}
+	}
+	return harnessResponse{}
+}
+
+// harnessGetFreeze reads whether the Relay-wide Freeze (ADR-0013) is
+// currently engaged, directly off the same persisted FreezeStore the local
+// SIGUSR1/SIGUSR2 lever (freeze_signal.go) and st.capSvc share.
+func harnessGetFreeze(ctx context.Context, st *harnessState) harnessResponse {
+	frozen, err := st.deps.store.Freeze().Frozen(ctx)
+	if err != nil {
+		return harnessResponse{Error: err.Error()}
+	}
+	return harnessResponse{Frozen: frozen}
+}
+
+// harnessListConnected enumerates the live fleet — every Node with a
+// currently-registered Tunnel — via Router.ConnectedNodes.
+func harnessListConnected(st *harnessState) harnessResponse {
+	return harnessResponse{NodeIDs: st.router.ConnectedNodes()}
+}
+
+// harnessQueryJob returns job_id's Tasks with their dispatch state, outcome,
+// and stderr — used to assert restart survival and crash-mid-Job
+// reconciliation (the daemon's dedup stderr signal lands here).
+func harnessQueryJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
+	if req.JobID == "" {
+		return harnessResponse{Error: "query_job: job_id is required"}
+	}
+	if _, err := st.deps.jobs.GetJob(ctx, req.JobID); err != nil {
+		return harnessResponse{Error: fmt.Sprintf("query_job: get job %q: %v", req.JobID, err)}
+	}
+	tasks, err := st.deps.tasks.ByJob(ctx, req.JobID)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("query_job: list tasks for job %q: %v", req.JobID, err)}
+	}
+	resp := harnessResponse{Tasks: make([]harnessTaskInfo, 0, len(tasks))}
+	for _, task := range tasks {
+		resp.Tasks = append(resp.Tasks, harnessTaskInfo{
+			TaskID:  task.ID,
+			NodeID:  task.NodeID,
+			State:   dispatchStateString(task.State),
+			Outcome: outcomeString(task.Outcome),
+			Stderr:  string(task.Stderr),
+		})
+	}
+	return resp
+}
+
+// harnessListInFlight returns every Task currently Dispatched with no Result
+// yet (TaskRepository.InFlight — the same set a Relay restart reconciles,
+// ADR-0004), each carrying its JobID. Not in the original plan enumeration:
+// added because Service.Run blocks until EVERY matched Node's Task reaches a
+// terminal state, so a caller can never learn a Job's ID from run_job's own
+// response while a long-running Task (e.g. a raw_exec sleep) is still
+// in-flight on another connection. list_inflight is the test's only way to
+// discover that Job's ID early enough to cancel it (or, after a Relay
+// restart, to keep polling the SAME Job across the crash-mid-Job test).
+func harnessListInFlight(ctx context.Context, st *harnessState) harnessResponse {
+	tasks, err := st.deps.tasks.InFlight(ctx)
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("list_inflight: %v", err)}
+	}
+	resp := harnessResponse{Tasks: make([]harnessTaskInfo, 0, len(tasks))}
+	for _, task := range tasks {
+		resp.Tasks = append(resp.Tasks, harnessTaskInfo{
+			TaskID:  task.ID,
+			JobID:   task.JobID,
+			NodeID:  task.NodeID,
+			State:   dispatchStateString(task.State),
+			Outcome: outcomeString(task.Outcome),
+			Stderr:  string(task.Stderr),
+		})
+	}
+	return resp
+}
+
+// harnessQueryAudit returns every audit.Record for job_id, or every Record if
+// job_id is empty — used to assert every dispatch/refusal is queryable
+// (ROADMAP acceptance for #102).
+func harnessQueryAudit(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
+	var records []audit.Record
+	var err error
+	if req.JobID != "" {
+		records, err = st.deps.audit.ByJob(ctx, req.JobID)
+	} else {
+		records, err = st.deps.audit.List(ctx)
+	}
+	if err != nil {
+		return harnessResponse{Error: fmt.Sprintf("query_audit: %v", err)}
+	}
+	resp := harnessResponse{Audit: make([]harnessAuditInfo, 0, len(records))}
+	for _, rec := range records {
+		resp.Audit = append(resp.Audit, harnessAuditInfo{
+			Kind:      rec.Kind,
+			Principal: rec.Principal,
+			Selector:  rec.Selector,
+			NodeID:    rec.NodeID,
+			Outcome:   outcomeString(rec.Outcome),
+			Reason:    rec.Reason,
+		})
+	}
+	return resp
+}
+
+// outcomeString renders a domain jobs.Outcome as the proto-style
+// "OUTCOME_..." string the harness client (and the #112 test) asserts on.
+func outcomeString(o jobs.Outcome) string {
+	switch o {
+	case jobs.OutcomeSuccess:
+		return "OUTCOME_SUCCESS"
+	case jobs.OutcomeFailure:
+		return "OUTCOME_FAILURE"
+	case jobs.OutcomeTimeout:
+		return "OUTCOME_TIMEOUT"
+	case jobs.OutcomeDeniedByPolicy:
+		return "OUTCOME_DENIED_BY_POLICY"
+	case jobs.OutcomeCancelled:
+		return "OUTCOME_CANCELLED"
+	case jobs.OutcomeUnreachable:
+		return "OUTCOME_UNREACHABLE"
+	default:
+		return "OUTCOME_UNSPECIFIED"
+	}
+}
+
+// dispatchStateString renders a Task's DispatchState, mirroring
+// internal/store/tasks.go's own state-string convention (lowercase).
+func dispatchStateString(s jobs.DispatchState) string {
+	switch s {
+	case jobs.DispatchStatePending:
+		return "pending"
+	case jobs.DispatchStateDispatched:
+		return "dispatched"
+	case jobs.DispatchStateResolved:
+		return "resolved"
+	default:
+		return "unspecified"
 	}
 }

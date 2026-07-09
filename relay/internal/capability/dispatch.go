@@ -30,10 +30,17 @@ func newDispatch(p Principal, sel Selector, nodes []registry.Node, act jobs.Acti
 	return dispatch{principal: p, selector: sel, nodes: nodes, action: act}
 }
 
-// NodeResult is one Node's outcome from executing a dispatch.
+// NodeResult is one Node's outcome from executing a dispatch. JobID is
+// denormalized onto every NodeResult (rather than added as a new return value
+// on Service.Run) so a caller that only sees Run's results — the #103
+// devharness's run_job op, and any future real surface — can learn which Job
+// it belongs to (to later query_job/CancelJob it) without widening Run's
+// signature. It is set by the real Job engine (execution.go); noopDispatcher
+// leaves it empty (there is no real Job).
 type NodeResult struct {
 	NodeID  string
 	Outcome jobs.Outcome
+	JobID   string
 }
 
 // dispatchResult is what dispatcher.run returns: the Job's identity plus its

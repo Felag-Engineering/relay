@@ -108,12 +108,15 @@ lint-devharness:
 devharness-absent-check:
 	bash scripts/devharness-absent-check.sh
 
-# The #112 acceptance test: real relay + real relay-daemon binaries over real
-# loopback TCP, driven through the devharness control socket.
+# The #112 acceptance test, plus the #103 fleet-semantics e2e suite (both
+# real relay + real relay-daemon binaries over real loopback TCP, driven
+# through the devharness control socket — the fleet suite additionally drives
+# the real capability pipeline/Job engine, including a real Relay crash
+# mid-Job, ADR-0004).
 test-crossbinary: build-daemon build-relay-devharness
 	cd relay && RELAY_BIN=$(CURDIR)/relay/bin/relay-devharness \
 		RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon \
-		go test -tags integration -run TestCrossBinary ./cmd/relay/...
+		go test -tags integration -run 'TestCrossBinary|TestFleetE2E' ./cmd/relay/...
 
 ## --- vulnerability scanning (nightly; non-blocking in CI) ---
 # Install: go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
