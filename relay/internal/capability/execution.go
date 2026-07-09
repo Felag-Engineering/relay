@@ -162,6 +162,14 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 // leaves the Task Dispatched (never Resolved) so it surfaces via
 // TaskRepository.InFlight() for restart reconciliation, and is reported
 // honestly as OutcomeFailure rather than fabricated as success.
+//
+// run persists every Task Pending before dispatching any of them, so a
+// concurrent CancelJob (ADR-0013) can legitimately MarkCancelled a Task
+// that is still Pending in this loop by the time dispatchOne reaches it;
+// MarkDispatched then returns ErrInvalidTaskState. That is not a failure —
+// the Task already reached a terminal, truthful outcome (Resolved,
+// OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
+// already-cancelled Task or fabricating OutcomeFailure over a real cancel.
 func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task) (jobs.Outcome, error) {
 	if !e.conduit.Connected(task.NodeID) {
 		if err := e.tasksRepo.MarkUnreachable(ctx, task.ID, e.now()); err != nil {
@@ -171,6 +179,16 @@ func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task) (jobs.Outco
 	}
 
 	if err := e.tasksRepo.MarkDispatched(ctx, task.ID, e.now()); err != nil {
+		if errors.Is(err, jobs.ErrInvalidTaskState) {
+			// A concurrent CancelJob may have MarkCancelled this Task while it
+			// was still Pending, between run's persist loop and this call. If
+			// so, the Task already carries a terminal, truthful outcome —
+			// honor it rather than fabricating OutcomeFailure or dispatching a
+			// Task the caller already asked to stop.
+			if cur, getErr := e.tasksRepo.Get(ctx, task.ID); getErr == nil && cur.State == jobs.DispatchStateResolved {
+				return cur.Outcome, nil
+			}
+		}
 		return jobs.OutcomeFailure, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
 	}
 

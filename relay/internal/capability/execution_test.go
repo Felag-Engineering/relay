@@ -347,6 +347,69 @@ func TestEngineConduitErrorLeavesTaskInFlight(t *testing.T) {
 	}
 }
 
+// TestEngineDispatchOneTreatsConcurrentCancelAsTerminal covers the
+// dispatchOne gap-closure (ADR-0004/0013): a Task MarkCancelled while still
+// Pending (a concurrent CancelJob reaching it before dispatchOne's own
+// MarkDispatched call) must resolve to its real, already-persisted
+// OutcomeCancelled — never a fabricated OutcomeFailure, and never actually
+// dispatched to the Conduit.
+func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-1"] = true
+
+	now := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	e := &jobEngine{
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		now:       func() time.Time { return now },
+	}
+
+	ctx := context.Background()
+	if err := jobsRepo.CreateJob(ctx, jobs.Job{ID: "job-1", CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := jobsRepo.AddStage(ctx, jobs.Stage{ID: "stage-1", JobID: "job-1", Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+	task := jobs.Task{
+		ID:        "task-1",
+		JobID:     "job-1",
+		StageID:   "stage-1",
+		NodeID:    "node-1",
+		Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead},
+		CreatedAt: now,
+	}
+	if err := tasksRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	// Simulate the concurrent CancelJob race: the Task is cancelled while
+	// still Pending, before dispatchOne's own MarkDispatched runs.
+	if err := tasksRepo.MarkCancelled(ctx, task.ID, now); err != nil {
+		t.Fatalf("MarkCancelled: %v", err)
+	}
+
+	outcome, err := e.dispatchOne(ctx, task)
+	if err != nil {
+		t.Fatalf("dispatchOne: %v", err)
+	}
+	if outcome != jobs.OutcomeCancelled {
+		t.Errorf("dispatchOne outcome = %v, want jobs.OutcomeCancelled", outcome)
+	}
+	if len(log) != 0 {
+		t.Errorf("Conduit.Dispatch was called for an already-cancelled task: log = %v", log)
+	}
+
+	got, err := tasksRepo.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
+		t.Errorf("Task = %+v, want Resolved/OutcomeCancelled unchanged by dispatchOne", got)
+	}
+}
+
 // TestWithExecutionRefusesDefaultSeams is the New fail-open guard: wiring a
 // real dispatcher via WithExecution without also supplying a real
 // Authorizer/CapChecker/AuditSink must panic.
