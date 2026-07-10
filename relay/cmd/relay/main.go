@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -45,9 +48,22 @@ type Config struct {
 	// flags+env mechanism (same as MaxNodes/mTLS paths). The security
 	// property — set only at startup, never settable via any API — holds. A
 	// real config-file loader is a separate future change. Flagged for human
-	// review.
+	// review. The control-plane credential hash (below) uses the same
+	// interim mechanism: a root-owned FILE (path via flag/env), not a value
+	// on this Config struct — the same deviation, now also covering secret
+	// material.
 	ReadBlastCap   int
 	MutateBlastCap int
+
+	// ControlEnabled, ControlAddr, and ControlCredentialHashFile configure the
+	// control-plane HTTP listener (MCP + /api/v1, ADR-0009/0010) — separate
+	// from the node-plane gRPC listener (Addr above). Default disabled
+	// (ControlEnabled=false) for backward compatibility; when enabled, a
+	// missing or malformed ControlCredentialHashFile refuses startup rather
+	// than serving an unauthenticated or misconfigured control plane.
+	ControlEnabled            bool
+	ControlAddr               string
+	ControlCredentialHashFile string
 }
 
 // appDeps holds the constructed collaborators that tests and lifecycle hooks need
@@ -74,6 +90,11 @@ type appDeps struct {
 	// installDevHarness can inject a taskSink (test/devharness-only; never set
 	// in an untagged (production) build).
 	tunnel *tunnelServer
+	// control is the control-plane HTTP server (MCP + /api/v1, ADR-0009/0010),
+	// nil when Config.ControlEnabled is false (default; backward-compatible).
+	// It has its own listener and lifecycle, independent of the node-plane
+	// gRPC server above.
+	control *controlplane.Server
 }
 
 // envOr returns the value of environment variable key if it is non-empty, or
@@ -107,6 +128,13 @@ func parseConfig() Config {
 		"blast-radius cap for read Operations (max Nodes per Job)")
 	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
 		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
+
+	controlEnabled := flag.Bool("control-enabled", false,
+		"enable the control-plane listener (MCP + /api/v1); disabled by default")
+	controlAddr := flag.String("control-addr", ":9443",
+		"control-plane HTTPS listen address (distinct from -addr, the node-plane gRPC listener)")
+	controlCredentialHashFile := flag.String("control-credential-hash-file", "",
+		"path to a root-owned file containing the control-plane credential hash (sha256:<hex>); required if -control-enabled")
 
 	flag.Parse()
 
@@ -180,6 +208,17 @@ func parseConfig() Config {
 			slog.Warn("ignoring invalid RELAY_MUTATE_BLAST_CAP", "value", env)
 		}
 	}
+
+	cfg.ControlEnabled = *controlEnabled
+	if env := os.Getenv("RELAY_CONTROL_ENABLED"); env != "" {
+		if v, err := strconv.ParseBool(env); err == nil {
+			cfg.ControlEnabled = v
+		} else {
+			slog.Warn("ignoring invalid RELAY_CONTROL_ENABLED", "value", env)
+		}
+	}
+	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
+	cfg.ControlCredentialHashFile = envOr("RELAY_CONTROL_CREDENTIAL_HASH_FILE", *controlCredentialHashFile)
 
 	return cfg
 }
@@ -262,6 +301,30 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		capability.WithAuditSink(auditsink.New(st.Audit())),
 		capability.WithFreeze(st.Freeze()))
 
+	// controlSrv is the control-plane HTTP server (MCP + /api/v1,
+	// ADR-0009/0010) — nil unless ControlEnabled. It has its own listener,
+	// bound by main, independent of the node-plane gRPC server below.
+	var controlSrv *controlplane.Server
+	if cfg.ControlEnabled {
+		digest, err := controlplane.LoadCredentialHashFile(cfg.ControlCredentialHashFile)
+		if err != nil {
+			return nil, nil, fmt.Errorf("load control credential hash: %w", err)
+		}
+
+		// A dedicated server cert for the control-plane listener, independent
+		// of the node-plane gRPC serverCert above: separate listeners get
+		// separate certificates, even though both chain to the same Relay CA.
+		controlCert, err := relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
+		if err != nil {
+			return nil, nil, fmt.Errorf("issue control-plane server certificate: %w", err)
+		}
+
+		controlSrv = controlplane.New(
+			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
+			controlplane.NewAuthenticator(digest),
+		)
+	}
+
 	srv := grpc.NewServer(
 		grpc.Creds(creds),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
@@ -284,11 +347,21 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		limiter:    limiter,
 		capability: capSvc,
 		tunnel:     ts,
+		control:    controlSrv,
 	}
 	return srv, deps, nil
 }
 
 func main() {
+	// `relay hash-credential` is a standalone utility subcommand (see
+	// hash_credential.go), checked before flag.Parse/parseConfig so it never
+	// touches Relay startup config. It reads the plaintext credential from
+	// STDIN only and exits; it never starts a server.
+	if len(os.Args) > 1 && os.Args[1] == "hash-credential" {
+		runHashCredentialCommand()
+		return
+	}
+
 	cfg := parseConfig()
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -329,6 +402,29 @@ func main() {
 		"read_blast_cap", cfg.ReadBlastCap,
 		"mutate_blast_cap", cfg.MutateBlastCap,
 	)
+
+	// The control-plane listener (MCP + /api/v1, ADR-0009/0010) is separate
+	// from the node-plane gRPC listener above: its own address, its own
+	// goroutine, its own lifecycle. deps.control is nil unless
+	// cfg.ControlEnabled, so this is a no-op on the default (disabled) path.
+	if deps.control != nil {
+		controlLis, err := net.Listen("tcp", cfg.ControlAddr)
+		if err != nil {
+			slog.Error("control-plane listen failed", "addr", cfg.ControlAddr, "err", err)
+			os.Exit(1)
+		}
+		slog.Info("control-plane listening",
+			"addr", cfg.ControlAddr,
+			"credential_configured", true,
+		)
+		go func() {
+			if err := deps.control.Serve(controlLis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("control-plane serve failed", "err", err)
+				os.Exit(1)
+			}
+		}()
+	}
+
 	if err := srv.Serve(lis); err != nil {
 		slog.Error("serve failed", "err", err)
 		os.Exit(1)
