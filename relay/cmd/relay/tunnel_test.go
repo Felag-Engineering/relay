@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
@@ -398,5 +399,126 @@ func TestNodeLabelsFromHello(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSnapshotFromProto is a pure unit test for the conversion the tunnel
+// handler uses to record a daemon-reported PolicySnapshot into the
+// display-only policyview.Cache (#117).
+func TestSnapshotFromProto(t *testing.T) {
+	ps := &gleipnirv1.PolicySnapshot{
+		RawExecEnabled:    true,
+		RawAllowPatterns:  []string{`^/usr/bin/systemctl restart .+$`},
+		RawDenyPatterns:   []string{`.*rm -rf.*`},
+		AllowedOperations: []string{"system.facts", "file.read"},
+		PolicyFingerprint: "sha256:abc123",
+	}
+
+	got := snapshotFromProto(ps)
+
+	want := policyview.Snapshot{
+		RawExecEnabled:    true,
+		RawAllowPatterns:  []string{`^/usr/bin/systemctl restart .+$`},
+		RawDenyPatterns:   []string{`.*rm -rf.*`},
+		AllowedOperations: []string{"system.facts", "file.read"},
+		PolicyFingerprint: "sha256:abc123",
+	}
+	if got.RawExecEnabled != want.RawExecEnabled {
+		t.Errorf("RawExecEnabled = %v, want %v", got.RawExecEnabled, want.RawExecEnabled)
+	}
+	if got.PolicyFingerprint != want.PolicyFingerprint {
+		t.Errorf("PolicyFingerprint = %q, want %q", got.PolicyFingerprint, want.PolicyFingerprint)
+	}
+	if len(got.RawAllowPatterns) != 1 || got.RawAllowPatterns[0] != want.RawAllowPatterns[0] {
+		t.Errorf("RawAllowPatterns = %v, want %v", got.RawAllowPatterns, want.RawAllowPatterns)
+	}
+	if len(got.RawDenyPatterns) != 1 || got.RawDenyPatterns[0] != want.RawDenyPatterns[0] {
+		t.Errorf("RawDenyPatterns = %v, want %v", got.RawDenyPatterns, want.RawDenyPatterns)
+	}
+	if len(got.AllowedOperations) != 2 {
+		t.Errorf("AllowedOperations = %v, want 2 entries", got.AllowedOperations)
+	}
+}
+
+// TestTunnelOpen_PolicySnapshotCapturesIntoCache verifies that sending a
+// DaemonMessage.policy causes the handler to record it into the
+// tunnelServer's policyview.Cache, keyed by the cert-derived nodeID (the
+// injected interceptor identity, never a wire value — PolicySnapshot itself
+// carries no node_id field, so this also proves the handler never confuses
+// "which stream sent this" with anything on the wire). This is the capture
+// wiring for #117's describe_node.
+func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
+	const certNodeID = "cert-node-policy"
+
+	cache := policyview.New()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{policy: cache})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Hello{
+			Hello: &gleipnirv1.Hello{NodeId: certNodeID},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	// Recv the Ping — confirms the handler is past Hello and into the recvMsg
+	// select loop that handles PolicySnapshot.
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+
+	if err := stream.Send(&gleipnirv1.DaemonMessage{
+		Body: &gleipnirv1.DaemonMessage_Policy{
+			Policy: &gleipnirv1.PolicySnapshot{
+				RawExecEnabled:    true,
+				AllowedOperations: []string{"system.facts"},
+				PolicyFingerprint: "sha256:live",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send policy snapshot: %v", err)
+	}
+
+	// The handler processes the PolicySnapshot asynchronously; poll for the
+	// cache entry to appear rather than assuming synchronous delivery.
+	found := make(chan struct{}, 1)
+	go func() {
+		for {
+			if _, ok := cache.Get(certNodeID); ok {
+				found <- struct{}{}
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+
+	select {
+	case <-found:
+		got, ok := cache.Get(certNodeID)
+		if !ok {
+			t.Fatal("cache.Get after found signal: ok = false")
+		}
+		if got.PolicyFingerprint != "sha256:live" {
+			t.Errorf("PolicyFingerprint = %q, want %q", got.PolicyFingerprint, "sha256:live")
+		}
+		if !got.RawExecEnabled {
+			t.Error("RawExecEnabled = false, want true")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout: PolicySnapshot was not captured into the policyview.Cache")
 	}
 }
