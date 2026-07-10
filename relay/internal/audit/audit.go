@@ -16,13 +16,17 @@ import (
 )
 
 // Kind distinguishes what kind of event a Record describes: a dispatch
-// attempt, a refusal (authz-deny or cap-reject, never dispatched), or a
-// Freeze engage/release (ADR-0013).
+// attempt, a refusal (authz-deny or cap-reject, never dispatched), a Freeze
+// engage/release (ADR-0013), or a Control API lifecycle action (Enrollment
+// Token mint/revoke, Node revoke — #116, ADR-0010).
 const (
 	KindDispatch      = "dispatch"
 	KindRefusal       = "refusal"
 	KindFreezeEngage  = "freeze_engage"
 	KindFreezeRelease = "freeze_release"
+	KindTokenMint     = "token_mint"
+	KindTokenRevoke   = "token_revoke"
+	KindNodeRevoke    = "node_revoke"
 )
 
 // Record is one append-only audit entry: a single Task's dispatch, a

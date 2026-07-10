@@ -1,0 +1,106 @@
+package api
+
+import (
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// TestAPIImportsAreAllowlisted is an import-boundary AST guard (mirrors
+// capability.TestCapabilityImportsOnlyRegistryAndJobs): package api's
+// non-test files may only import a small stdlib allowlist plus the handful
+// of internal packages this thin adapter is allowed to reuse — never
+// internal/ca, internal/store, internal/transport, internal/ratelimit, or
+// database/sql. This is the structural half of invariant 11 (the Control
+// API manages runtime objects, never Relay configuration, and never reaches
+// the CA key, a blast cap, or a listener directly).
+func TestAPIImportsAreAllowlisted(t *testing.T) {
+	allowed := map[string]bool{
+		"context":       true,
+		"crypto/rand":   true,
+		"encoding/hex":  true,
+		"encoding/json": true,
+		"errors":        true,
+		"fmt":           true,
+		"io":            true,
+		"log/slog":      true,
+		"net/http":      true,
+		"strings":       true,
+		"time":          true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit":        true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability":   true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane": true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll":       true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation":   true,
+	}
+	forbidden := map[string]bool{
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca":        true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store":     true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport": true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit": true,
+		"database/sql": true,
+	}
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	dir := filepath.Dir(thisFile)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("os.ReadDir(%s): %v", dir, err)
+	}
+
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		file, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatalf("parser.ParseFile(%s): %v", path, err)
+		}
+		for _, imp := range file.Imports {
+			importPath, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				t.Fatalf("unquote import %s in %s: %v", imp.Path.Value, name, err)
+			}
+			if forbidden[importPath] {
+				t.Errorf("%s imports %q — package api must never reach Relay configuration, the CA key, raw SQL, or a listener directly (invariant 11)", name, importPath)
+			}
+			if !allowed[importPath] {
+				t.Errorf("%s imports %q, which is not in package api's import allowlist", name, importPath)
+			}
+		}
+	}
+}
+
+// TestDeps_HasNoConfigField is a structural guard for invariant 11: Deps
+// must never grow a Relay Config, CA, blast-cap, or listener field. A route
+// that could read cfg.ReadBlastCap/MutateBlastCap or the CA key would let
+// the Control API raise its own limits or mutate configuration, which
+// ADR-0010 forbids. This walks Deps's fields via reflection so the check
+// fails the moment such a field is added, without needing to import
+// cmd/relay.Config (which would itself violate the import allowlist above).
+func TestDeps_HasNoConfigField(t *testing.T) {
+	typ := reflect.TypeOf(Deps{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if strings.Contains(strings.ToLower(f.Name), "config") {
+			t.Errorf("Deps field %q looks like a Relay Config field — invariant 11 forbids the Control API from touching Relay configuration", f.Name)
+		}
+		fieldTypeName := f.Type.String()
+		if strings.Contains(strings.ToLower(fieldTypeName), "config") {
+			t.Errorf("Deps field %q has type %q, which looks like a Relay Config type — invariant 11 forbids the Control API from touching Relay configuration", f.Name, fieldTypeName)
+		}
+	}
+}

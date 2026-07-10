@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
@@ -349,6 +351,20 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// display-only policyCache, and the static Operation vocabulary.
 		mcpHandler := mcp.New(reg, policyCache, opvocabLister{})
 		controlSrv.Mux().Handle("/mcp", mcpHandler)
+
+		// api.Register mounts the /api/v1 Control API slice (#116) onto the
+		// control-plane's existing Mux — no new listener, no new auth (invariant
+		// 10). It reuses the already-constructed tokenSvc/revocationSvc/capSvc/
+		// st.Audit() collaborators; it never touches cfg or a blast cap
+		// (invariant 11).
+		api.Register(controlSrv.Mux(), api.Deps{
+			Tokens:       tokenSvc,
+			TokenRevoker: revocationSvc,
+			Nodes:        revocationSvc,
+			Freeze:       capSvc,
+			Audit:        st.Audit(),
+			Now:          func() time.Time { return time.Now().UTC() },
+		})
 	}
 
 	srv := grpc.NewServer(
