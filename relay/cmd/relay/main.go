@@ -17,9 +17,12 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
@@ -96,6 +99,13 @@ type appDeps struct {
 	// gRPC server above.
 	control *controlplane.Server
 }
+
+// opvocabLister adapts opvocab.Operations (a package-level func) to the
+// mcp.OperationLister interface mcp.New expects, without opvocab needing to
+// export a type of its own for this one call.
+type opvocabLister struct{}
+
+func (opvocabLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
 // envOr returns the value of environment variable key if it is non-empty, or
 // fallback otherwise.
@@ -279,7 +289,15 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
 		enroll.WithRateLimiter(limiter))
 
-	ts := &tunnelServer{conns: conns, reg: reg}
+	// policyCache is the display-only effective-Policy cache (#117, invariant
+	// 12 / ADR-0002): the tunnel handler records what a daemon reports in
+	// DaemonMessage.policy, and describe_node (mounted below when
+	// ControlEnabled) reads it. It always exists — independent of
+	// ControlEnabled — so a daemon's PolicySnapshot is captured whether or not
+	// the control-plane listener is on.
+	policyCache := policyview.New()
+
+	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache}
 	// ts.sink is intentionally left nil here — newServer never sets it under
 	// any build tag. Only integration tests, or installDevHarness in a
 	// devharness-tagged build with RELAY_DEVHARNESS_SOCKET set, inject a
@@ -323,6 +341,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
 			controlplane.NewAuthenticator(digest),
 		)
+
+		// The real MCP server (#117) mounts on Mux() at "/mcp", replacing the
+		// #115 placeholder — reached only through the Authenticator.Middleware
+		// controlplane.New already wraps the mux in (invariant 10: one control
+		// path). Read-only: mcp.New never sees capSvc, only the registry, the
+		// display-only policyCache, and the static Operation vocabulary.
+		mcpHandler := mcp.New(reg, policyCache, opvocabLister{})
+		controlSrv.Mux().Handle("/mcp", mcpHandler)
 	}
 
 	srv := grpc.NewServer(

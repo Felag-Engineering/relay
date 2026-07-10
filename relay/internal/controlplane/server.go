@@ -29,15 +29,18 @@ type Server struct {
 	http *http.Server
 }
 
-// New constructs a Server. It mounts two authenticated placeholder routes so
-// that the auth wiring is provable ahead of #116/#117 landing the real
-// routes:
+// New constructs a Server. It mounts one authenticated placeholder route so
+// that the auth wiring is provable ahead of #116 landing the real Control
+// API routes:
 //   - GET /api/v1/ping  => 200 {"status":"ok"}  (Control API stand-in, #116)
-//   - POST /mcp         => 501 Not Implemented  (MCP stand-in, #117)
+//
+// The real MCP server (#117) is mounted on Mux() by the composition root
+// (relay/cmd/relay/main.go) at "/mcp", so this package keeps no MCP
+// dependency; it is reached only through the Authenticator.Middleware
+// wrapping installed below, exactly like every other route on Mux().
 func New(cfg Config, authn *Authenticator) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/ping", handlePing)
-	mux.HandleFunc("POST /mcp", handleMCPPlaceholder)
 
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cfg.TLSCert},
@@ -91,11 +94,4 @@ func handlePing(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// handleMCPPlaceholder is the MCP placeholder (#117): proves the MCP endpoint
-// is reachable only through Authenticator.Middleware, ahead of the real MCP
-// server mounting here.
-func handleMCPPlaceholder(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
 }

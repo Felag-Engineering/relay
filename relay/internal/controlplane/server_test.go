@@ -139,22 +139,6 @@ func TestServer_Ping_RequiresCredential(t *testing.T) {
 	}
 }
 
-func TestServer_MCPPlaceholder_RequiresCredential(t *testing.T) {
-	_, base, client := newTestServer(t)
-
-	resp := doRequest(t, client, http.MethodPost, base+"/mcp", "")
-	defer resp.Body.Close() //nolint:errcheck
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("without credential: status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
-	}
-
-	respOK := doRequest(t, client, http.MethodPost, base+"/mcp", testToken)
-	defer respOK.Body.Close() //nolint:errcheck
-	if respOK.StatusCode != http.StatusNotImplemented {
-		t.Fatalf("with credential: status = %d, want %d", respOK.StatusCode, http.StatusNotImplemented)
-	}
-}
-
 // TestServer_IndependentShutdown proves two Servers are independently lived:
 // shutting one down leaves the other serving. This mirrors the real Relay's
 // separate node-plane/control-plane listeners.

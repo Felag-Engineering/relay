@@ -7,6 +7,7 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
@@ -37,6 +38,12 @@ type tunnelServer struct {
 	gleipnirv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
+	// policy is the display-only effective-Policy cache (#117, invariant 12 /
+	// ADR-0002): the Relay records what a daemon reports in
+	// DaemonMessage.policy and never evaluates or sets Policy itself. Nil-guarded
+	// like reg/conns so existing tests that construct &tunnelServer{} directly
+	// keep compiling; nil in any test that doesn't need the capture.
+	policy *policyview.Cache
 	// sink is nil in an untagged (production) build; only set in tests, or by
 	// installDevHarness in a devharness-tagged build, to inject Tasks and
 	// capture results. Never set by newServer.
@@ -192,6 +199,18 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 					s.sink.deliverVerdict(nodeID, pv)
 				}
 			}
+			// Capture a reported PolicySnapshot into the display-only
+			// policyview.Cache (#117). This RECORDS a report-only daemon
+			// value for describe_node to display — it never sets or
+			// modifies Node Policy (ADR-0002), exactly like the
+			// PolicyFingerprint the registry already records on Hello.
+			// Keyed by the cert-derived nodeID (never a wire value), like
+			// every other write in this handler. Unconditional (not gated
+			// by s.sink): this is the production capture path, not a
+			// test-only seam.
+			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
+				s.policy.Set(nodeID, snapshotFromProto(ps))
+			}
 		}
 	}
 }
@@ -216,4 +235,20 @@ func nodeLabelsFromHello(labels []*gleipnirv1.Label) map[string]string {
 		result[bare] = l.GetValue()
 	}
 	return result
+}
+
+// snapshotFromProto converts a daemon-reported gleipnirv1.PolicySnapshot into
+// the proto-free policyview.Snapshot the display-only cache stores, keeping
+// the policyview package itself free of a proto dependency (mirrors
+// protoconv.FactsFromProto's role for registry.Facts). Display-only: this
+// conversion never evaluates or validates the Policy it carries (ADR-0002,
+// invariant 12) — it only reshapes the reported values for storage.
+func snapshotFromProto(ps *gleipnirv1.PolicySnapshot) policyview.Snapshot {
+	return policyview.Snapshot{
+		RawExecEnabled:    ps.GetRawExecEnabled(),
+		RawAllowPatterns:  ps.GetRawAllowPatterns(),
+		RawDenyPatterns:   ps.GetRawDenyPatterns(),
+		AllowedOperations: ps.GetAllowedOperations(),
+		PolicyFingerprint: ps.GetPolicyFingerprint(),
+	}
 }
