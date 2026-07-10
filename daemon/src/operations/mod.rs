@@ -9,12 +9,14 @@
 //! | `system.facts`     | read      | READ       |
 //! | `file.read`        | read      | READ       |
 //! | `service.restart`  | mutate    | MUTATE     |
+//! | `pkg.install`      | mutate    | MUTATE     |
 //!
 //! Risk class is **blast-radius classification only**, not a Policy substitute —
 //! Policy (ADR-0002, deny-by-default, argument-level) applies identically to
 //! both READ and MUTATE Operations.
 
 pub mod file_read;
+pub mod pkg_install;
 pub mod service_restart;
 pub mod system_facts;
 
@@ -32,6 +34,9 @@ pub const FILE_READ: &str = "file.read";
 
 /// Wire name for the `service.restart` Operation.
 pub const SERVICE_RESTART: &str = "service.restart";
+
+/// Wire name for the `pkg.install` Operation.
+pub const PKG_INSTALL: &str = "pkg.install";
 
 // ---------------------------------------------------------------------------
 // Risk-class registry — one place a reviewer verifies all name→class mappings
@@ -59,6 +64,10 @@ pub fn descriptors() -> Vec<OperationDescriptor> {
             name: SERVICE_RESTART.to_string(),
             risk_class: RiskClass::Mutate as i32,
         },
+        OperationDescriptor {
+            name: PKG_INSTALL.to_string(),
+            risk_class: RiskClass::Mutate as i32,
+        },
     ]
 }
 
@@ -71,7 +80,7 @@ pub fn descriptors() -> Vec<OperationDescriptor> {
 pub fn risk_class(name: &str) -> Option<RiskClass> {
     match name {
         SYSTEM_FACTS | FILE_READ => Some(RiskClass::Read),
-        SERVICE_RESTART => Some(RiskClass::Mutate),
+        SERVICE_RESTART | PKG_INSTALL => Some(RiskClass::Mutate),
         _ => None,
     }
 }
@@ -88,6 +97,15 @@ pub fn risk_class(name: &str) -> Option<RiskClass> {
 pub enum OperationError {
     #[error("invalid unit name '{0}': only [A-Za-z0-9@._-] are allowed")]
     InvalidUnitName(String),
+
+    #[error("invalid package name '{0}': only [A-Za-z0-9+._-] are allowed, no leading '-'")]
+    InvalidPackageName(String),
+
+    #[error("invalid package version '{0}': only [A-Za-z0-9+.:~_-] are allowed, no leading '-'")]
+    InvalidPackageVersion(String),
+
+    #[error("unsupported package manager: no supported apt/dnf/yum binary found on this Node")]
+    UnsupportedPackageManager,
 }
 
 // ---------------------------------------------------------------------------
@@ -99,13 +117,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn descriptors_returns_three_in_order() {
+    fn descriptors_returns_four_in_order() {
         let descs = descriptors();
-        assert_eq!(descs.len(), 3);
+        assert_eq!(descs.len(), 4);
 
         assert_eq!(descs[0].name, SYSTEM_FACTS);
         assert_eq!(descs[1].name, FILE_READ);
         assert_eq!(descs[2].name, SERVICE_RESTART);
+        assert_eq!(descs[3].name, PKG_INSTALL);
 
         // Pin raw i32 values against the proto contract.
         assert_eq!(descs[0].risk_class, RiskClass::Read as i32);
@@ -114,6 +133,8 @@ mod tests {
         assert_eq!(descs[1].risk_class, 1); // RISK_CLASS_READ
         assert_eq!(descs[2].risk_class, RiskClass::Mutate as i32);
         assert_eq!(descs[2].risk_class, 2); // RISK_CLASS_MUTATE
+        assert_eq!(descs[3].risk_class, RiskClass::Mutate as i32);
+        assert_eq!(descs[3].risk_class, 2); // RISK_CLASS_MUTATE
     }
 
     #[test]
@@ -121,6 +142,7 @@ mod tests {
         assert_eq!(risk_class(SYSTEM_FACTS), Some(RiskClass::Read));
         assert_eq!(risk_class(FILE_READ), Some(RiskClass::Read));
         assert_eq!(risk_class(SERVICE_RESTART), Some(RiskClass::Mutate));
+        assert_eq!(risk_class(PKG_INSTALL), Some(RiskClass::Mutate));
         assert_eq!(risk_class("nope"), None);
         assert_eq!(risk_class(""), None);
     }

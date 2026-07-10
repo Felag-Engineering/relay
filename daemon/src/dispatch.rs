@@ -26,6 +26,7 @@ use crate::gen::{
 };
 use crate::operations;
 use crate::operations::file_read::file_read;
+use crate::operations::pkg_install::pkg_install;
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::gather_facts;
 use crate::policy::{Decision, Policy, Rule};
@@ -67,6 +68,21 @@ const OP_ARG_PATH: &str = "path";
 /// This constant is the single definition site for all sides of the contract.
 const OP_ARG_UNIT: &str = "unit";
 
+/// v1 arg-key contract: `pkg.install` callers must supply the package name under this key.
+///
+/// The Relay must send the package name as `args["name"]`. Any other key is
+/// treated as absent (empty-string fallback, which will fail name validation).
+/// This constant is the single definition site for all sides of the contract.
+const OP_ARG_NAME: &str = "name";
+
+/// v1 arg-key contract: `pkg.install` callers may supply an optional package version
+/// under this key.
+///
+/// The Relay may send a version as `args["version"]`; absent or empty installs
+/// the latest version. This constant is the single definition site for all
+/// sides of the contract.
+const OP_ARG_VERSION: &str = "version";
+
 // ---------------------------------------------------------------------------
 // Public dispatch entry
 // ---------------------------------------------------------------------------
@@ -105,8 +121,8 @@ pub async fn dispatch(
 /// Dedup → Policy → execute with an injected runner for hermeticity.
 ///
 /// The `run` closure is the sole process-spawning seam: [`execute`] in
-/// production; a fake that records argv in tests. Only `service.restart`
-/// invokes the runner; `system.facts` and `file.read` are data-only.
+/// production; a fake that records argv in tests. Only `service.restart` and
+/// `pkg.install` invoke the runner; `system.facts` and `file.read` are data-only.
 ///
 /// **Dedup ordering** (ADR-0004, invariant #4): `dedup.run_once` records the
 /// task_id marker BEFORE invoking the pipeline (deny-or-execute). A denied
@@ -301,6 +317,15 @@ fn operation_positional_args(op: &Operation) -> Vec<String> {
             let unit = op.args.get(OP_ARG_UNIT).cloned().unwrap_or_default();
             vec![unit]
         }
+        operations::PKG_INSTALL => {
+            // Stable 2-position schema: [name, version]. version defaults to ""
+            // when absent — matched by a Policy "*" wildcard rule (ADR-0011: the
+            // same mapping feeds both the query and execution paths, so a
+            // PolicyQuery verdict can never diverge from what dispatch decides).
+            let name = op.args.get(OP_ARG_NAME).cloned().unwrap_or_default();
+            let version = op.args.get(OP_ARG_VERSION).cloned().unwrap_or_default();
+            vec![name, version]
+        }
         _ => vec![], // deny-by-default will catch this
     }
 }
@@ -406,6 +431,21 @@ where
                     service_restart(
                         task_id,
                         &unit,
+                        timeout,
+                        MAX_OUTPUT_BYTES,
+                        cancel,
+                        run.clone(),
+                    )
+                    .await
+                }
+                operations::PKG_INSTALL => {
+                    let mut it = positional.into_iter();
+                    let name = it.next().unwrap_or_default();
+                    let version = it.next().filter(|v| !v.is_empty());
+                    pkg_install(
+                        task_id,
+                        &name,
+                        version.as_deref(),
                         timeout,
                         MAX_OUTPUT_BYTES,
                         cancel,
@@ -638,6 +678,22 @@ mod tests {
         }
     }
 
+    fn make_task_pkg_install(task_id: &str, name: &str, version: &str) -> TaskRequest {
+        let mut args = std::collections::HashMap::new();
+        args.insert(OP_ARG_NAME.to_string(), name.to_string());
+        if !version.is_empty() {
+            args.insert(OP_ARG_VERSION.to_string(), version.to_string());
+        }
+        TaskRequest {
+            task_id: task_id.to_string(),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::Operation(crate::gen::Operation {
+                name: operations::PKG_INSTALL.to_string(),
+                args,
+            })),
+        }
+    }
+
     fn make_task_system_facts(task_id: &str) -> TaskRequest {
         TaskRequest {
             task_id: task_id.to_string(),
@@ -860,6 +916,55 @@ allow = ["^/bin/echo hello$"]
     }
 
     // -----------------------------------------------------------------------
+    // pkg.install netcat (not in the fixture's {nginx, curl} allow list) →
+    // DENIED_BY_POLICY, runner never called. Host-independent: Policy denies
+    // before dispatch ever reaches pkg_install's detect_package_manager, so
+    // this test is hermetic regardless of what package manager (if any) is
+    // installed on the machine running the test suite. The allow+argv path
+    // is covered at the unit level in operations/pkg_install.rs (an injected
+    // PackageManager and fake runner — no real package manager needed).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn pkg_install_netcat_denied_runner_not_called() {
+        let state_dir = TempDir::new("pkg-netcat");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let policy = fixture_policy(); // netcat not in allowed list → deny-by-default
+
+        let runner_called = Arc::new(AtomicUsize::new(0));
+        let calls = runner_called.clone();
+        let fake_run = move |req: ExecRequest| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        let task = make_task_pkg_install("t-pkg-netcat", "netcat", "");
+        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "netcat install must be denied"
+        );
+        assert_eq!(
+            runner_called.load(Ordering::SeqCst),
+            0,
+            "runner must never be called for a denied operation"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // (d) dedup: same task_id twice → runner ran once, 2nd result is benign
     // -----------------------------------------------------------------------
 
@@ -1032,6 +1137,10 @@ allowed_args = [["nginx"]]
 name = "file.read"
 allowed_args = [["*"]]
 
+[[operation]]
+name = "pkg.install"
+allowed_args = [["nginx", "curl"], ["*"]]
+
 [[deny]]
 name = "file.read"
 args = [["/etc/shadow"]]
@@ -1073,10 +1182,12 @@ deny = ["secret"]
     /// Policy query verdict must match the outcome of actually dispatching the same
     /// action (ADR-0011: the same engine methods are called; no divergence possible).
     ///
-    /// The matrix covers five distinct cases: allowed operation, denied operation
+    /// The matrix covers seven distinct cases: allowed operation, denied operation
     /// (deny-by-default), denied operation (deny-beats-allow), allowed raw exec,
-    /// denied raw exec (deny-beats-allow). Each case is checked against BOTH the
-    /// query verdict and the dispatch result so a single test enforces consistency.
+    /// denied raw exec (deny-beats-allow), and an allowed/denied `pkg.install` pair
+    /// (deny-by-default, argument-level — ADR-0002). Each case is checked against
+    /// BOTH the query verdict and the dispatch result so a single test enforces
+    /// consistency.
     #[tokio::test]
     async fn policy_query_verdict_matches_execution() {
         let policy = make_query_test_policy();
@@ -1156,6 +1267,36 @@ deny = ["secret"]
                 label: "/bin/echo secret (denied)",
                 query: make_policy_query_raw_exec("q5", vec!["/bin/echo".into(), "secret".into()]),
                 task: make_task_raw_exec("pq-t5", vec!["/bin/echo".into(), "secret".into()]),
+                expected_allowed: false,
+            },
+            // (6) pkg.install nginx -> allowed. NOTE: the dispatch side calls the
+            // production pkg_install entry, which runs detect_package_manager()
+            // against the real host — outside this test's control. The core
+            // assertion below only checks "not DENIED_BY_POLICY" (exec_allowed),
+            // never Outcome::Success, so this case is host-independent: whether
+            // the host has apt/dnf/yum installed, a Policy-allowed install is
+            // never DENIED_BY_POLICY.
+            Case {
+                label: "pkg.install nginx",
+                query: make_policy_query_operation(
+                    "q6",
+                    operations::PKG_INSTALL,
+                    OP_ARG_NAME,
+                    "nginx",
+                ),
+                task: make_task_pkg_install("pq-t6", "nginx", ""),
+                expected_allowed: true,
+            },
+            // (7) pkg.install netcat -> deny-by-default (not in {nginx, curl})
+            Case {
+                label: "pkg.install netcat",
+                query: make_policy_query_operation(
+                    "q7",
+                    operations::PKG_INSTALL,
+                    OP_ARG_NAME,
+                    "netcat",
+                ),
+                task: make_task_pkg_install("pq-t7", "netcat", ""),
                 expected_allowed: false,
             },
         ];

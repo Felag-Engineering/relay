@@ -324,7 +324,7 @@ pub enum LintSeverity {
 /// One lint finding, naming the offending rule by section + index + name.
 ///
 /// Serde-parsed structs carry no source line numbers, so the rule is
-/// identified positionally, e.g. `[[operation]] #1 (name="pkg.install")`,
+/// identified positionally, e.g. `[[operation]] #1 (name="pkg.remove")`,
 /// `[raw_exec].allow[0]`, `[[deny]] #0 (name="file.read")`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LintFinding {
@@ -1206,7 +1206,7 @@ allow = ["[invalid1", "[invalid2"]
     fn lint_reports_unknown_operation() {
         let policy = r#"
 [[operation]]
-name = "pkg.install"
+name = "pkg.remove"
 allowed_args = []
 "#;
         let report = lint(policy);
@@ -1220,14 +1220,14 @@ allowed_args = []
         let finding = &report.findings[0];
         assert_eq!(finding.severity, LintSeverity::Error);
         assert!(finding.location.contains("[[operation]] #0"));
-        assert!(finding.message.contains("pkg.install"));
+        assert!(finding.message.contains("pkg.remove"));
     }
 
     #[test]
     fn lint_reports_unknown_operation_in_deny() {
         let policy = r#"
 [[deny]]
-name = "pkg.install"
+name = "pkg.remove"
 args = []
 "#;
         let report = lint(policy);
@@ -1235,7 +1235,7 @@ args = []
         let finding = &report.findings[0];
         assert_eq!(finding.severity, LintSeverity::Error);
         assert!(finding.location.contains("[[deny]] #0"));
-        assert!(finding.message.contains("pkg.install"));
+        assert!(finding.message.contains("pkg.remove"));
     }
 
     #[test]

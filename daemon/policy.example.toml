@@ -58,6 +58,15 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
+# Allow `pkg.install` only for nginx and curl, any version ("*" wildcard at
+# position 1 — the daemon sends "" when no version is requested, which "*"
+# also matches). Attempts to install any other package (e.g. netcat) are
+# denied. Package installs are slow: the daemon hard-caps at 300s
+# (MAX_TIMEOUT); Policy-configurable per-Operation timeouts are a v0.0.4 item.
+[[operation]]
+name = "pkg.install"
+allowed_args = [["nginx", "curl"], ["*"]]
+
 # ---------------------------------------------------------------------------
 # [[deny]] — explicit deny rules (deny-beats-allow)
 #

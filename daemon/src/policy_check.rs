@@ -379,7 +379,7 @@ allow = ["[invalid regex"]
             "unknown-op",
             r#"
 [[operation]]
-name = "pkg.install"
+name = "pkg.remove"
 allowed_args = []
 "#,
         );
