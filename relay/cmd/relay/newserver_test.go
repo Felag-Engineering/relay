@@ -1,10 +1,49 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+// baseTestConfig returns a Config with the same non-control-plane fields as
+// TestNewServer_Smoke, suitable as a starting point for tests that vary the
+// control-plane fields.
+func baseTestConfig(t *testing.T) Config {
+	t.Helper()
+	return Config{
+		Addr:                ":0",
+		CADir:               t.TempDir(),
+		StorePath:           filepath.Join(t.TempDir(), "relay.db"),
+		Hostname:            "localhost",
+		EnrollIPRate:        5,
+		EnrollIPBurst:       3,
+		EnrollGlobalRate:    50,
+		EnrollGlobalBurst:   10,
+		EnrollMaxTrackedIPs: 100000,
+		MaxNodes:            110000,
+		ReadBlastCap:        10000,
+		MutateBlastCap:      100,
+	}
+}
+
+// writeCredentialHashFile writes a well-formed "sha256:<hex>" credential hash
+// file under t.TempDir() and returns its path.
+func writeCredentialHashFile(t *testing.T) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte("test-control-plane-credential"))
+	path := filepath.Join(t.TempDir(), "control-credential-hash")
+	if err := os.WriteFile(path, []byte("sha256:"+hex.EncodeToString(sum[:])), 0o400); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	return path
+}
 
 // TestNewServer_Smoke verifies that the composition root is constructible from
 // a test. It proves that newServer wires all dependencies — including the
@@ -56,6 +95,9 @@ func TestNewServer_Smoke(t *testing.T) {
 	if deps.audit == nil {
 		t.Fatal("deps.audit is nil")
 	}
+	if deps.control != nil {
+		t.Fatal("deps.control should be nil when Config.ControlEnabled is false (default)")
+	}
 	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
 
 	// Not started, so Stop is a safe no-op cleanup.
@@ -87,4 +129,110 @@ func TestEnvOr(t *testing.T) {
 			t.Errorf("got %q, want %q", got, "from-env")
 		}
 	})
+}
+
+// TestNewServer_ControlEnabled_RequiresHash verifies that enabling the
+// control plane without a valid credential hash refuses startup (newServer
+// returns an error, no listener is ever bound), and that a valid hash
+// succeeds and produces a non-nil deps.control.
+func TestNewServer_ControlEnabled_RequiresHash(t *testing.T) {
+	t.Run("missing hash file", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.ControlEnabled = true
+		cfg.ControlAddr = ":0"
+		cfg.ControlCredentialHashFile = filepath.Join(t.TempDir(), "does-not-exist")
+
+		srv, deps, err := newServer(cfg)
+		if err == nil {
+			t.Fatal("expected newServer to error on a missing control credential hash file")
+		}
+		if srv != nil || deps != nil {
+			t.Fatal("newServer should return nil srv/deps on error")
+		}
+	})
+
+	t.Run("malformed hash file", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.ControlEnabled = true
+		cfg.ControlAddr = ":0"
+		path := filepath.Join(t.TempDir(), "control-credential-hash")
+		if err := os.WriteFile(path, []byte("not-a-valid-hash"), 0o400); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		cfg.ControlCredentialHashFile = path
+
+		srv, deps, err := newServer(cfg)
+		if err == nil {
+			t.Fatal("expected newServer to error on a malformed control credential hash file")
+		}
+		if srv != nil || deps != nil {
+			t.Fatal("newServer should return nil srv/deps on error")
+		}
+	})
+
+	t.Run("valid hash file", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.ControlEnabled = true
+		cfg.ControlAddr = ":0"
+		cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+
+		srv, deps, err := newServer(cfg)
+		if err != nil {
+			t.Fatalf("newServer: %v", err)
+		}
+		if deps.control == nil {
+			t.Fatal("deps.control should be non-nil when ControlEnabled with a valid hash")
+		}
+		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(srv.Stop)
+	})
+}
+
+// TestListeners_Independent verifies that the node-plane gRPC listener keeps
+// serving after the control-plane listener is shut down: the two listeners
+// have independent lifecycles, as required by the acceptance criteria (a
+// crash or shutdown on one plane never affects the other).
+func TestListeners_Independent(t *testing.T) {
+	cfg := baseTestConfig(t)
+	cfg.ControlEnabled = true
+	cfg.ControlAddr = ":0"
+	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+
+	srv, deps, err := newServer(cfg)
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(srv.Stop)
+
+	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen (node-plane): %v", err)
+	}
+	go func() { _ = srv.Serve(nodeLis) }()
+
+	controlLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen (control-plane): %v", err)
+	}
+	go func() { _ = deps.control.Serve(controlLis) }()
+
+	// Shut down the control plane only.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := deps.control.Shutdown(ctx); err != nil {
+		t.Fatalf("control.Shutdown: %v", err)
+	}
+
+	// The control-plane listener is now closed: new connections fail.
+	if _, err := http.Get("https://" + controlLis.Addr().String() + "/api/v1/ping"); err == nil { //nolint:noctx
+		t.Fatal("expected control-plane request to fail after Shutdown")
+	}
+
+	// The node-plane gRPC listener must still accept TCP connections.
+	conn, err := net.DialTimeout("tcp", nodeLis.Addr().String(), 2*time.Second)
+	if err != nil {
+		t.Fatalf("node-plane listener did not survive control-plane Shutdown: %v", err)
+	}
+	conn.Close() //nolint:errcheck
 }
