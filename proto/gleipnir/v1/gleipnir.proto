@@ -120,7 +120,7 @@ message TaskCancel {
 }
 
 message Operation {
-  string name             = 1;   // e.g. "system.facts", "service.restart"
+  string name             = 1;   // e.g. "system.facts", "service.restart", "pkg.install"
   map<string, string> args = 2;   // typed per Operation; validated against schema
 }
 
@@ -142,8 +142,13 @@ enum RiskClass {
 //   system.facts     -> RISK_CLASS_READ    (self-reported Node facts; no state change)
 //   file.read        -> RISK_CLASS_READ    (reads file contents; no state change)
 //   service.restart  -> RISK_CLASS_MUTATE  (changes Node state)
+//   pkg.install      -> RISK_CLASS_MUTATE  (installs a package; changes Node state)
 // Raw Exec is not an Operation and has no descriptor; it is ALWAYS mutate by
 // definition (arbitrary commands are unclassifiable, so they take the strict lane).
+//
+// pkg.install args (Operation.args map): "name" (required, package name,
+// validated against a strict charset before argv is built) and "version"
+// (optional, validated; empty/absent installs the latest version).
 message OperationDescriptor {
   string    name       = 1;   // Operation name, e.g. "system.facts"
   RiskClass risk_class = 2;

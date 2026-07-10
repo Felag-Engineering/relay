@@ -964,7 +964,7 @@ func (x *TaskCancel) GetTaskId() string {
 
 type Operation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                                                           // e.g. "system.facts", "service.restart"
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                                                           // e.g. "system.facts", "service.restart", "pkg.install"
 	Args          map[string]string      `protobuf:"bytes,2,rep,name=args,proto3" json:"args,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // typed per Operation; validated against schema
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1024,9 +1024,14 @@ func (x *Operation) GetArgs() map[string]string {
 //	system.facts     -> RISK_CLASS_READ    (self-reported Node facts; no state change)
 //	file.read        -> RISK_CLASS_READ    (reads file contents; no state change)
 //	service.restart  -> RISK_CLASS_MUTATE  (changes Node state)
+//	pkg.install      -> RISK_CLASS_MUTATE  (installs a package; changes Node state)
 //
 // Raw Exec is not an Operation and has no descriptor; it is ALWAYS mutate by
 // definition (arbitrary commands are unclassifiable, so they take the strict lane).
+//
+// pkg.install args (Operation.args map): "name" (required, package name,
+// validated against a strict charset before argv is built) and "version"
+// (optional, validated; empty/absent installs the latest version).
 type OperationDescriptor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // Operation name, e.g. "system.facts"
