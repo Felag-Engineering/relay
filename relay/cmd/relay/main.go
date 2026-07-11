@@ -15,11 +15,13 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -85,21 +87,32 @@ type appDeps struct {
 	conns      *revocation.Connections
 	revocation *revocation.Service
 	limiter    *ratelimit.Limiter
-	// capability is the Relay's single capability layer (ADR-0009/0010).
-	// v0.0.5 [3/8] wires it here with its default (no-op/allow-all) seams
-	// only — no surface is wired to it yet (no consumer until v0.0.6). The
-	// composition root owns it so later issues (#99 engine, #100 caps,
-	// #102 audit) can swap in real seams and tests can reach it.
+	// capability is the Relay's single capability layer (ADR-0009/0010). When
+	// Config.ControlEnabled, newServer wires it with the real Job engine
+	// (capability.WithExecution) over the real mTLS tunnel and the real
+	// staged Authorizer (authz.NewStaged) — this is the "#154 flip": MCP/
+	// Control API dispatch actually runs on the fleet. When disabled, capSvc
+	// keeps the v0.0.5 default no-op dispatcher/allow-all-by-construction-
+	// unreachable seams (no consumer surface is mounted either), exactly as
+	// before this issue.
 	capability *capability.Service
-	// tunnel is the registered tunnelServer. Exposed so integration tests and
-	// installDevHarness can inject a taskSink (test/devharness-only; never set
-	// in an untagged (production) build).
+	// tunnel is the registered tunnelServer. Its sink is set by newServer
+	// ONLY when Config.ControlEnabled (production execution, #154), by
+	// installDevHarness in a devharness-tagged build, or injected directly by
+	// tests; nil when the control plane is disabled.
 	tunnel *tunnelServer
 	// control is the control-plane HTTP server (MCP + /api/v1, ADR-0009/0010),
 	// nil when Config.ControlEnabled is false (default; backward-compatible).
 	// It has its own listener and lifecycle, independent of the node-plane
 	// gRPC server above.
 	control *controlplane.Server
+	// dispatch is the real dispatch.Router newServer builds when
+	// Config.ControlEnabled — the same Conduit capSvc's Job engine dispatches
+	// through — exposed so integration tests (and a later real-fleet e2e
+	// surface, #121) can block on a live Tunnel via Router.WaitForAny/
+	// Connected before dispatching, rather than racing the offline
+	// fail-fast (ADR-0004). Nil when the control plane is disabled.
+	dispatch *dispatch.Router
 }
 
 // opvocabLister adapts opvocab.Operations (a package-level func) to the
@@ -317,31 +330,30 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	policyCache := policyview.New()
 
 	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache}
-	// ts.sink is intentionally left nil here — newServer never sets it under
-	// any build tag. Only integration tests, or installDevHarness in a
-	// devharness-tagged build with RELAY_DEVHARNESS_SOCKET set, inject a
-	// taskSink after calling newServer.
+	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch — this
+	// is the "#154 flip": execution is on if and only if the control plane
+	// (its only consumer surface, MCP + /api/v1) is on. Disabled: ts.sink
+	// stays nil, exactly as before this issue. Integration tests, or
+	// installDevHarness in a devharness-tagged build, may also inject a
+	// taskSink directly.
 
-	// capSvc is constructed with its default allow-all authz and no-op
-	// dispatch — no execution surface is wired to it yet (see the
-	// appDeps.capability doc comment); WithExecution is still not called, so
-	// New's real-dispatcher fail-open guard is not tripped by the real
-	// AuditSink/FreezeStore below. The CapChecker is the real BlastCap
-	// (ADR-0004/0012); see the ReadBlastCap/MutateBlastCap doc comment on
-	// Config for the file-vs-flag deviation flagged for human review. The
-	// AuditSink is the real adapter to the SQLite-backed audit trail (#102);
-	// the FreezeStore is the real persisted Relay-wide emergency stop
-	// (#101, ADR-0013) — see watchFreezeSignals (freeze_signal.go) for the
-	// local engage/release lever.
-	capSvc := capability.New(reg,
+	// base is the capability.Option set common to both branches below: the
+	// real BlastCap (ADR-0004/0012; see the ReadBlastCap/MutateBlastCap doc
+	// comment on Config for the file-vs-flag deviation flagged for human
+	// review), the real adapter to the SQLite-backed audit trail (#102), and
+	// the real persisted Relay-wide emergency stop (#101, ADR-0013 — see
+	// watchFreezeSignals in freeze_signal.go for the local engage/release
+	// lever). A fresh slice is built per branch below (not appended to) so
+	// neither branch aliases or mutates the other's backing array.
+	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(auditsink.New(st.Audit())),
-		capability.WithFreeze(st.Freeze()))
+		capability.WithFreeze(st.Freeze()),
+	}
 
-	// controlSrv is the control-plane HTTP server (MCP + /api/v1,
-	// ADR-0009/0010) — nil unless ControlEnabled. It has its own listener,
-	// bound by main, independent of the node-plane gRPC server below.
+	var capSvc *capability.Service
 	var controlSrv *controlplane.Server
+	var dispatchRouter *dispatch.Router
 	if cfg.ControlEnabled {
 		digest, err := controlplane.LoadCredentialHashFile(cfg.ControlCredentialHashFile)
 		if err != nil {
@@ -356,6 +368,41 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			return nil, nil, fmt.Errorf("issue control-plane server certificate: %w", err)
 		}
 
+		// This is THE production execution flip (#154): the Relay becomes
+		// remote-code-execution-as-a-service over the control surfaces
+		// mounted below. newDispatchStack (dispatch_wiring.go) is the SAME
+		// tested assembly installDevHarness uses — no parallel production
+		// wiring path — over the real mTLS Tunnel (tunnelServer.Open,
+		// tunnel.go). The guardrails are unchanged and all already enforced
+		// through this one capability pipeline (invariant 10): mTLS
+		// authenticates every Node (ADR-0005/0006); the daemon's live Policy
+		// engine remains the sole, last-word verdict on every Task
+		// (ADR-0002/0011) — nothing added here evaluates or mutates Policy;
+		// the blast-radius cap (ADR-0004/0012) and the real, deny-by-default
+		// authz.NewStaged Authorizer (ADR-0010) both run before any
+		// dispatch; Freeze (ADR-0013) can stop all of it instantly; every
+		// dispatch and refusal is audited (#102). This flip adds no new
+		// bypass — it only turns on the same pipeline every other surface
+		// already dispatches through.
+		router, reconciler, sink := newDispatchStack(st.Tasks())
+		// reconciler is captured by router's onConnect closure
+		// (dispatch_wiring.go) and fires on every Node (re)connect — this is
+		// what makes crash-mid-Job restart reconciliation happen; it is not
+		// called directly from here.
+		_ = reconciler
+		ts.sink = sink
+		dispatchRouter = router
+
+		// A FRESH slice, not append(base, ...): base's backing array must
+		// never be aliased/mutated by this branch (there is only one
+		// newServer call per Config today, but the two branches must stay
+		// independently safe regardless).
+		enabledOpts := append([]capability.Option{}, base...)
+		enabledOpts = append(enabledOpts,
+			capability.WithExecution(st.Jobs(), st.Tasks(), router),
+			capability.WithAuthorizer(authz.NewStaged()))
+		capSvc = capability.New(reg, enabledOpts...)
+
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
 			controlplane.NewAuthenticator(digest),
@@ -364,19 +411,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// The real MCP server (#117's read tools, #118's execution tools)
 		// mounts on Mux() at "/mcp", replacing the #115 placeholder — reached
 		// only through the Authenticator.Middleware controlplane.New already
-		// wraps the mux in (invariant 10: one control path).
-		//
-		// #118, owner DECISION 1: the execution tools (run_operation,
-		// raw_exec, cancel_job, get_job) are wired here against the SAME
-		// capSvc every other surface uses, but production dispatch stays
-		// OFF — capSvc above has no WithExecution call, so its dispatcher is
-		// still the v0.0.5 default noopDispatcher: every matched Node
-		// reports OutcomeUnspecified, nothing is actually sent. Flipping
-		// capSvc to the real Job engine (WithExecution) in this composition
-		// root is deliberately isolated to #154, which also lands the
-		// production Authorizer that flip requires. All #118 acceptance is
-		// proven in-package against a test-wired execution capability
-		// (mcp_test.go/mcp_exec_test.go).
+		// wraps the mux in (invariant 10: one control path). The execution
+		// tools (run_operation, raw_exec, cancel_job, get_job) now dispatch
+		// for real: capSvc above carries the execution-wired Service just
+		// constructed.
 		mcpHandler := mcp.New(reg, policyCache, opvocabLister{}, capSvc,
 			jobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()})
 		controlSrv.Mux().Handle("/mcp", mcpHandler)
@@ -394,6 +432,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			Audit:        st.Audit(),
 			Now:          func() time.Time { return time.Now().UTC() },
 		})
+	} else {
+		// No consumer surface is mounted (MCP/API require ControlEnabled),
+		// so capSvc keeps the v0.0.5 default no-op dispatcher/allow-all authz
+		// — identical to every build before this issue.
+		capSvc = capability.New(reg, base...)
 	}
 
 	srv := grpc.NewServer(
@@ -419,6 +462,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		capability: capSvc,
 		tunnel:     ts,
 		control:    controlSrv,
+		dispatch:   dispatchRouter,
 	}
 	return srv, deps, nil
 }

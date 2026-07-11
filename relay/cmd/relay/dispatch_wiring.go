@@ -9,18 +9,16 @@ import (
 )
 
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root
-// wiring: it is production-ready code, built by every build (no build tag),
-// but newServer does not call newDispatchStack and never sets tunnel.sink —
-// see TestTunnelSink_NilInProduction. Wiring the real Job engine
-// (capability.WithExecution) into newServer is deferred to v0.0.6, when a
-// real Authorizer exists: capability.New's fail-open guard panics if a real
-// dispatcher rides the default allow-all Authorizer (service.go), and no
-// real Authorizer is in scope this milestone. Until then this stack is
-// exercised by tests and the #103 integration harness, which supply their
-// own test Authorizer.
-//
-// This mirrors how execution.go's WithExecution exists, fully wired and
-// unit-tested, without main ever calling it.
+// wiring: it is production-ready code, built by every build (no build tag).
+// newServer (main.go) calls newDispatchStack and sets tunnel.sink whenever
+// Config.ControlEnabled — the production execution flip (#154) — over the
+// real mTLS Tunnel, paired with the real staged Authorizer
+// (internal/authz.NewStaged, ADR-0010) capability.New's fail-open guard
+// requires alongside a real dispatcher (service.go). The dev harness
+// (devharness.go, installDevHarness) uses this SAME assembly — the only
+// difference is its own allow-all devHarnessAuthorizer, never
+// authz.NewStaged — see TestTunnelSink_GatedByControlEnabled for the
+// disabled-vs-enabled assertion this file's callers must keep true.
 
 // routerSink adapts *dispatch.Router to the unexported taskSink interface
 // (tunnel.go): tunnelServer can only be handed a taskSink, and a type
