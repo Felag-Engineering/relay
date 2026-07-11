@@ -60,10 +60,19 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return at },
 	}
-	svc := &Service{disp: e}
+	audit := &spyAuditSink{}
+	svc := &Service{disp: e, audit: audit}
 
-	if err := svc.CancelJob(ctx, jobID); err != nil {
+	principal := Principal{Account: "alice", Role: "operator"}
+	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
+	}
+
+	if len(audit.cancelCalls) != 1 {
+		t.Fatalf("AuditSink.RecordCancel calls = %d, want 1", len(audit.cancelCalls))
+	}
+	if got := audit.cancelCalls[0]; got.Principal != principal || got.JobID != jobID {
+		t.Errorf("RecordCancel call = %+v, want {%+v %q}", got, principal, jobID)
 	}
 
 	gotPending, err := tasksRepo.Get(ctx, pendingTask.ID)
@@ -123,10 +132,14 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 		newID:     sequentialIDs("id-"),
 		now:       func() time.Time { return time.Now().UTC() },
 	}
-	svc := &Service{disp: e}
+	audit := &spyAuditSink{}
+	svc := &Service{disp: e, audit: audit}
 
-	err := svc.CancelJob(context.Background(), "job-does-not-exist")
+	err := svc.CancelJob(context.Background(), Principal{Account: "alice"}, "job-does-not-exist")
 	if !errors.Is(err, jobs.ErrJobNotFound) {
 		t.Errorf("CancelJob(unknown) error = %v, want jobs.ErrJobNotFound", err)
+	}
+	if len(audit.cancelCalls) != 0 {
+		t.Errorf("RecordCancel calls = %d, want 0 (nothing true happened, so nothing is recorded)", len(audit.cancelCalls))
 	}
 }

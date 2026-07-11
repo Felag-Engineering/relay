@@ -14,17 +14,22 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
 const testToken = "mcp-integration-test-token"
@@ -90,22 +95,56 @@ func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 	return rt.base.RoundTrip(req)
 }
 
-// testServer is the fixture for every test in this file: a control-plane
-// Server with the real MCP handler mounted at /mcp behind
-// Authenticator.Middleware, seeded with two Nodes and one Policy snapshot.
-type testServer struct {
-	base   string
-	plain  *http.Client // TLS-trusting, no credential
-	authed *http.Client // TLS-trusting, valid bearer credential
-	nodeA  string       // node:role=web, relay:quarantine=on; has a captured Policy snapshot
-	nodeB  string       // node:env=prod; no Policy snapshot captured
+// testJobResultReader adapts a *store.Store's Jobs()/Tasks() to
+// mcp.JobResultReader, mirroring cmd/relay/main.go's own (unexported)
+// jobResultReader — duplicated here rather than exported solely for tests.
+type testJobResultReader struct {
+	jobsRepo  jobs.JobRepository
+	tasksRepo jobs.TaskRepository
 }
 
-// newTestServer builds the fixture described on testServer. Node A carries
-// both a node: and a relay: label so the "labels are never merged"
-// assertions have something to distinguish; Node B has no policyview.Cache
-// entry so describe_node's reported=false path is exercised.
+func (r testJobResultReader) GetJob(ctx context.Context, id string) (jobs.Job, error) {
+	return r.jobsRepo.GetJob(ctx, id)
+}
+
+func (r testJobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	return r.tasksRepo.ByJob(ctx, jobID)
+}
+
+// testServer is the fixture for every test in this file: a control-plane
+// Server with the real MCP handler mounted at /mcp behind
+// Authenticator.Middleware, seeded with two Nodes and one Policy snapshot,
+// and (#118) a REAL execution-wired capability.Service — store, conduit,
+// authz, blast-cap, audit sink, and Freeze store are all real, so
+// run_operation/raw_exec/cancel_job/get_job exercise the exact same
+// pipeline (Freeze -> Selector -> authz -> blast-cap -> dispatch -> audit)
+// every production surface does. store/conduit are exposed so
+// mcp_exec_test.go's cases can configure per-Node connectivity/results and
+// inspect audit rows.
+type testServer struct {
+	base    string
+	plain   *http.Client // TLS-trusting, no credential
+	authed  *http.Client // TLS-trusting, valid bearer credential
+	nodeA   string       // node:role=web, relay:quarantine=on; has a captured Policy snapshot
+	nodeB   string       // node:env=prod; no Policy snapshot captured
+	store   *store.Store
+	conduit *fakeConduit
+}
+
+// newTestServer builds the fixture described on testServer with generous
+// (package-default) blast-radius caps — see newTestServerWithBlastCap for
+// the over-cap test's smaller mutateCap.
 func newTestServer(t *testing.T) testServer {
+	return newTestServerWithBlastCap(t, 0, 0)
+}
+
+// newTestServerWithBlastCap is newTestServer, parameterized on the
+// read/mutate blast-radius caps (capability.NewBlastCap: a non-positive
+// value clamps to the package default). Node A carries both a node: and a
+// relay: label so the "labels are never merged" assertions have something
+// to distinguish; Node B has no policyview.Cache entry so describe_node's
+// reported=false path is exercised.
+func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer {
 	t.Helper()
 
 	const nodeA = "node-a"
@@ -149,7 +188,23 @@ func newTestServer(t *testing.T) testServer {
 	// nodeB intentionally has no captured snapshot: describe_node(nodeB) must
 	// show reported=false, proving absence isn't confused with "unrestricted".
 
-	handler := mcp.New(reg, policyCache, opsLister{})
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+
+	conduit := newFakeConduit()
+	capSvc := capability.New(reg,
+		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(deterministicIDs())),
+		capability.WithAuthorizer(testAuthorizer{}),
+		capability.WithCapChecker(capability.NewBlastCap(readCap, mutateCap)),
+		capability.WithAuditSink(auditsink.New(st.Audit())),
+		capability.WithFreeze(st.Freeze()),
+	)
+	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
+
+	handler := mcp.New(reg, policyCache, opsLister{}, capSvc, results)
 
 	cert := selfSignedCert(t)
 	sum := sha256.Sum256([]byte(testToken))
@@ -184,11 +239,13 @@ func newTestServer(t *testing.T) testServer {
 	authed := &http.Client{Transport: bearerRoundTripper{base: transport, token: testToken}}
 
 	return testServer{
-		base:   "https://" + lis.Addr().String(),
-		plain:  plain,
-		authed: authed,
-		nodeA:  nodeA,
-		nodeB:  nodeB,
+		base:    "https://" + lis.Addr().String(),
+		plain:   plain,
+		authed:  authed,
+		nodeA:   nodeA,
+		nodeB:   nodeB,
+		store:   st,
+		conduit: conduit,
 	}
 }
 

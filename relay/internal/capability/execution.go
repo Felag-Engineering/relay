@@ -126,16 +126,13 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			return dispatchResult{}, fmt.Errorf("capability: generate task id for node %q: %w", n.NodeID, err)
 		}
 		task := jobs.Task{
-			ID:      taskID,
-			JobID:   jobID,
-			StageID: stageID,
-			NodeID:  n.NodeID,
-			Action:  d.action,
-			// TimeoutSeconds is left at its zero value: jobs.Action carries
-			// no timeout field, and threading a real per-Task timeout
-			// through Service.Run/Action/dispatch is later-issue work
-			// outside #99's acceptance.
-			CreatedAt: e.now(),
+			ID:             taskID,
+			JobID:          jobID,
+			StageID:        stageID,
+			NodeID:         n.NodeID,
+			Action:         d.action,
+			TimeoutSeconds: d.action.TimeoutSeconds,
+			CreatedAt:      e.now(),
 		}
 		if err := e.tasksRepo.CreateTask(ctx, task); err != nil {
 			return dispatchResult{}, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
