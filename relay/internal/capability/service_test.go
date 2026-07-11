@@ -64,6 +64,13 @@ type spyAuditSink struct {
 	entry       AuditEntry
 	err         error
 	freezeCalls []FreezeEvent
+	cancelCalls []cancelCall
+}
+
+// cancelCall records one RecordCancel invocation's arguments.
+type cancelCall struct {
+	Principal Principal
+	JobID     string
 }
 
 func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
@@ -74,6 +81,11 @@ func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
 
 func (s *spyAuditSink) RecordFreeze(_ context.Context, e FreezeEvent) error {
 	s.freezeCalls = append(s.freezeCalls, e)
+	return s.err
+}
+
+func (s *spyAuditSink) RecordCancel(_ context.Context, p Principal, jobID string) error {
+	s.cancelCalls = append(s.cancelCalls, cancelCall{Principal: p, JobID: jobID})
 	return s.err
 }
 

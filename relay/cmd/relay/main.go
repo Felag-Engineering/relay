@@ -109,6 +109,23 @@ type opvocabLister struct{}
 
 func (opvocabLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
 
+// jobResultReader adapts st.Jobs()/st.Tasks() to mcp.JobResultReader — the
+// tiny per-Job read surface the execution tools (#118) use to render
+// per-Node results (exit code, output, duration) and get_job's polling
+// re-read.
+type jobResultReader struct {
+	jobsRepo  jobs.JobRepository
+	tasksRepo jobs.TaskRepository
+}
+
+func (r jobResultReader) GetJob(ctx context.Context, id string) (jobs.Job, error) {
+	return r.jobsRepo.GetJob(ctx, id)
+}
+
+func (r jobResultReader) TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	return r.tasksRepo.ByJob(ctx, jobID)
+}
+
 // envOr returns the value of environment variable key if it is non-empty, or
 // fallback otherwise.
 func envOr(key, fallback string) string {
@@ -344,12 +361,24 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			controlplane.NewAuthenticator(digest),
 		)
 
-		// The real MCP server (#117) mounts on Mux() at "/mcp", replacing the
-		// #115 placeholder — reached only through the Authenticator.Middleware
-		// controlplane.New already wraps the mux in (invariant 10: one control
-		// path). Read-only: mcp.New never sees capSvc, only the registry, the
-		// display-only policyCache, and the static Operation vocabulary.
-		mcpHandler := mcp.New(reg, policyCache, opvocabLister{})
+		// The real MCP server (#117's read tools, #118's execution tools)
+		// mounts on Mux() at "/mcp", replacing the #115 placeholder — reached
+		// only through the Authenticator.Middleware controlplane.New already
+		// wraps the mux in (invariant 10: one control path).
+		//
+		// #118, owner DECISION 1: the execution tools (run_operation,
+		// raw_exec, cancel_job, get_job) are wired here against the SAME
+		// capSvc every other surface uses, but production dispatch stays
+		// OFF — capSvc above has no WithExecution call, so its dispatcher is
+		// still the v0.0.5 default noopDispatcher: every matched Node
+		// reports OutcomeUnspecified, nothing is actually sent. Flipping
+		// capSvc to the real Job engine (WithExecution) in this composition
+		// root is deliberately isolated to #154, which also lands the
+		// production Authorizer that flip requires. All #118 acceptance is
+		// proven in-package against a test-wired execution capability
+		// (mcp_test.go/mcp_exec_test.go).
+		mcpHandler := mcp.New(reg, policyCache, opvocabLister{}, capSvc,
+			jobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()})
 		controlSrv.Mux().Handle("/mcp", mcpHandler)
 
 		// api.Register mounts the /api/v1 Control API slice (#116) onto the

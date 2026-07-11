@@ -248,10 +248,19 @@ func (s *Service) ReleaseFreeze(ctx context.Context, p Principal, reason string)
 // cancel over their Tunnels, and already-resolved Tasks keep their truthful
 // outcome. It delegates to the sealed dispatcher (see dispatch.go) so
 // tasksRepo/Conduit stay inside the engine, mirroring how Run delegates to
-// s.disp.run. Principal/audit attribution for the cancel action itself is
-// intentionally deferred to the surface milestone that calls this (v0.0.6):
-// audit.Kind has no cancel value yet, and the cancellation is durably
-// recorded in the tasks table (OutcomeCancelled) either way.
-func (s *Service) CancelJob(ctx context.Context, jobID string) error {
-	return s.disp.cancel(ctx, jobID)
+// s.disp.run.
+//
+// p is recorded via AuditSink.RecordCancel (v0.0.6 [5/8], owner DECISION 2):
+// cancellation is durably recorded on each affected Task via
+// OutcomeCancelled regardless of who asked (ADR-0013), but the audit trail
+// must still answer "who asked for the stop", so this call ADDS a
+// principal-attributed audit row on top of that per-Task record. Mirroring
+// EngageFreeze/ReleaseFreeze: the cancel itself is attempted first, and the
+// audit write is skipped if it errors — there is nothing true to record
+// (e.g. jobs.ErrJobNotFound: no Task was ever touched).
+func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) error {
+	if err := s.disp.cancel(ctx, jobID); err != nil {
+		return err
+	}
+	return s.audit.RecordCancel(ctx, p, jobID)
 }

@@ -463,12 +463,14 @@ func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
 
 // harnessCancelJob stops job_id's Tasks (#101, ADR-0013) via the capability
 // pipeline's CancelJob: undispatched Tasks are marked cancelled without ever
-// being sent, in-flight Tasks are asked to cancel over their Tunnels.
+// being sent, in-flight Tasks are asked to cancel over their Tunnels. Uses
+// the same devharness Principal as its sibling harnessRunJob (v0.0.6 [5/8],
+// owner DECISION 2: CancelJob now records who asked).
 func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	if req.JobID == "" {
 		return harnessResponse{Error: "cancel_job: job_id is required"}
 	}
-	if err := st.capSvc.CancelJob(ctx, req.JobID); err != nil {
+	if err := st.capSvc.CancelJob(ctx, capability.Principal{Account: "devharness"}, req.JobID); err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
 	return harnessResponse{}

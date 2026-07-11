@@ -39,16 +39,25 @@ func (noopCapChecker) Check(jobs.RiskClass, int) error {
 	return nil
 }
 
-// AuditSink records a completed dispatch, a refusal, or a Freeze
-// engage/release. The real adapter to audit.Repository (deliberately not
-// imported here; capability stays free of the audit package) is
-// internal/auditsink, added in v0.0.5 [7/8]/#102.
+// AuditSink records a completed dispatch, a refusal, a Freeze
+// engage/release, or a Job cancel. The real adapter to audit.Repository
+// (deliberately not imported here; capability stays free of the audit
+// package) is internal/auditsink, added in v0.0.5 [7/8]/#102.
 type AuditSink interface {
 	Record(ctx context.Context, e AuditEntry) error
 
 	// RecordFreeze records a Freeze engage/release event (ADR-0013). #102
 	// only adds this sink method; #101 implements Freeze itself and calls it.
 	RecordFreeze(ctx context.Context, e FreezeEvent) error
+
+	// RecordCancel records a Job cancel action, attributed to p (v0.0.6
+	// [5/8], owner DECISION 2). Cancellation is durably recorded on each
+	// affected Task via OutcomeCancelled regardless (ADR-0013) — this adds
+	// the principal-attributed audit row so *who* asked for the stop is
+	// queryable, mirroring RecordFreeze. Service.CancelJob calls this only
+	// after the cancel itself was attempted successfully; see CancelJob's
+	// doc comment.
+	RecordCancel(ctx context.Context, p Principal, jobID string) error
 }
 
 // AuditKind distinguishes what kind of Run outcome an AuditEntry describes.
@@ -94,6 +103,10 @@ func (noopAuditSink) Record(context.Context, AuditEntry) error {
 }
 
 func (noopAuditSink) RecordFreeze(context.Context, FreezeEvent) error {
+	return nil
+}
+
+func (noopAuditSink) RecordCancel(context.Context, Principal, string) error {
 	return nil
 }
 

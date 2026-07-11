@@ -137,6 +137,21 @@ func (s *Sink) RecordFreeze(ctx context.Context, e capability.FreezeEvent) error
 	return s.append(ctx, rec)
 }
 
+// RecordCancel implements capability.AuditSink (v0.0.6 [5/8], owner DECISION
+// 2). It records exactly one audit.Record per cancel action: Kind is
+// KindJobCancel, Principal is p's attribution, JobID is jobID — no Selector/
+// NodeID/Action, since a cancel targets an existing Job by ID, not a fresh
+// dispatch (mirrors RecordFreeze's Relay-wide shape, minus the Reason field).
+func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID string) error {
+	rec := audit.Record{
+		Timestamp: s.now(),
+		Kind:      audit.KindJobCancel,
+		Principal: p.Attribution(),
+		JobID:     jobID,
+	}
+	return s.append(ctx, rec)
+}
+
 // baseRecord builds the audit.Record fields common to every Kind: attributed
 // Principal, the Selector as written, and the Action's shape. Kind, JobID,
 // NodeID, Outcome, and Reason are filled in by the caller per Kind.

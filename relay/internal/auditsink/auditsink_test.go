@@ -238,6 +238,41 @@ func TestRecordFreezeEngageAndRelease(t *testing.T) {
 	}
 }
 
+// TestRecordCancelAttributesPrincipal is v0.0.6 [5/8]'s owner DECISION 2:
+// RecordCancel writes exactly one KindJobCancel row, attributed to the
+// cancelling Principal, carrying the target JobID and no Selector/NodeID/
+// Action (a cancel targets an existing Job by ID, not a fresh dispatch).
+func TestRecordCancelAttributesPrincipal(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	if err := sink.RecordCancel(context.Background(), principal, "job-1"); err != nil {
+		t.Fatalf("RecordCancel: %v", err)
+	}
+
+	records, err := repo.ByJob(context.Background(), "job-1")
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ByJob(job-1) returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindJobCancel {
+		t.Errorf("Kind = %q, want %q", rec.Kind, audit.KindJobCancel)
+	}
+	if rec.Principal != principal.Attribution() {
+		t.Errorf("Principal = %q, want %q", rec.Principal, principal.Attribution())
+	}
+	if rec.JobID != "job-1" {
+		t.Errorf("JobID = %q, want job-1", rec.JobID)
+	}
+	if rec.NodeID != "" {
+		t.Errorf("NodeID = %q, want empty (a cancel targets a Job, not a Node)", rec.NodeID)
+	}
+}
+
 // TestRecordRestartDurability is acceptance #2: audit rows survive a Relay
 // restart (a Close followed by a fresh Open of the same path).
 func TestRecordRestartDurability(t *testing.T) {
