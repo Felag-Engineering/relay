@@ -62,6 +62,15 @@ type Conduit interface {
 	// daemon reports the true outcome (OUTCOME_CANCELLED, or the real result
 	// if the Task won the race) through the normal result path.
 	Cancel(ctx context.Context, nodeID string, taskID string) error
+
+	// Query sends a PolicyQuery for act down nodeID's Tunnel and blocks for
+	// the daemon's PolicyVerdict (ADR-0011) — plan mode's probe, never
+	// Dispatch's TaskRequest: it carries no Task ID, sends no Task, and
+	// cannot be deduped into execution or leave any Job/Task/dedup trace.
+	// Callers must only call Query after Connected(nodeID); a
+	// matched-but-disconnected Node is never queried — it is a Relay-side
+	// unknown(offline) conclusion instead (invariant 12).
+	Query(ctx context.Context, nodeID string, act jobs.Action) (jobs.Verdict, error)
 }
 
 // idGen mints a new unique ID. It is a seam so in-package tests can inject

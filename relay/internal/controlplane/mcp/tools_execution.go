@@ -42,6 +42,11 @@ import (
 type Executor interface {
 	Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
 	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
+
+	// Plan is Service.Plan's exact shape (#119, ADR-0011): resolves sel,
+	// authorizes p against act, and reports per-Node PolicyVerdicts instead
+	// of dispatching — no Job/Task/dedup entry is ever created.
+	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
 }
 
 // execAdapter narrows an arbitrary Executor down to a value whose dynamic
@@ -65,6 +70,10 @@ func (a execAdapter) Run(ctx context.Context, p capability.Principal, sel capabi
 
 func (a execAdapter) CancelJob(ctx context.Context, p capability.Principal, jobID string) error {
 	return a.r.CancelJob(ctx, p, jobID)
+}
+
+func (a execAdapter) Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error) {
+	return a.r.Plan(ctx, p, sel, act)
 }
 
 // requirePrincipal returns the Principal controlplane.Authenticator.Middleware
@@ -134,6 +143,116 @@ type perNodeResult struct {
 type executionOutput struct {
 	JobID   string          `json:"job_id"`
 	Results []perNodeResult `json:"results"`
+}
+
+// perNodeVerdict is one matched Node's Plan-mode result (#119, ADR-0011):
+// "allow"/"deny"/"unknown", with DecidingRule set only on deny and Reason
+// (e.g. "offline") set only on unknown — mirrors perNodeResult's per-Node
+// shape but for a verdict, never an executed outcome.
+type perNodeVerdict struct {
+	NodeID       string `json:"node_id"`
+	Verdict      string `json:"verdict"`
+	DecidingRule string `json:"deciding_rule,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// wouldBeRejected reports why real dispatch (plan=false against the same
+// Selector/Action) would currently be refused, without erroring the Plan
+// itself (ADR-0011/0013: a Plan reports guardrails, never hard-fails on
+// them). "exceeds_cap" carries Matched/Cap/Class; "frozen" carries neither —
+// the Relay-wide Freeze is not Selector/Action-specific.
+type wouldBeRejected struct {
+	Reason  string `json:"reason"`
+	Matched int    `json:"matched,omitempty"`
+	Cap     int    `json:"cap,omitempty"`
+	Class   string `json:"class,omitempty"`
+}
+
+// planOutput is plan=true's result shape: the resolved fan-out size, the
+// per-Node verdicts (empty when WouldBeRejected is set — the query fan-out
+// is skipped over-cap), an optional would-be-rejected report, and a fixed
+// point-in-time advisory string (ADR-0011: Policy may change between plan
+// and apply).
+type planOutput struct {
+	Matched         int              `json:"matched"`
+	Verdicts        []perNodeVerdict `json:"verdicts"`
+	WouldBeRejected *wouldBeRejected `json:"would_be_rejected,omitempty"`
+	Advisory        string           `json:"advisory"`
+}
+
+// planAdvisory is the fixed point-in-time disclaimer every planOutput
+// carries (ADR-0011): a Plan's verdicts are a snapshot, not a guarantee —
+// Policy may change between the Plan and a later real run.
+const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
+
+// runOrPlanOutput is run_operation/raw_exec's shared result shape (#119):
+// additive over #118's executionOutput. JobID/Results keep EXACTLY
+// executionOutput's tags — no omitempty — so a zero-match plan=false run
+// still renders {"job_id":"","results":[]}, byte-identical to #118; Plan is
+// the only new, omitempty field, populated only when plan=true.
+type runOrPlanOutput struct {
+	JobID   string          `json:"job_id"`
+	Results []perNodeResult `json:"results"`
+	Plan    *planOutput     `json:"plan,omitempty"`
+}
+
+// verdictString renders a capability.VerdictStatus as the lowercase string
+// the execution tools emit, mirroring outcomeString's style.
+func verdictString(v capability.VerdictStatus) string {
+	switch v {
+	case capability.VerdictAllow:
+		return "allow"
+	case capability.VerdictDeny:
+		return "deny"
+	default:
+		return "unknown"
+	}
+}
+
+// renderPlan renders a capability.PlanResult as the tool's planOutput:
+// verdicts sorted by NodeID for a stable response (mirrors renderJob), and
+// would_be_rejected derived from pr.CapExceeded (reason "exceeds_cap") or,
+// absent that, pr.Frozen (reason "frozen"). A Plan can be both over-cap and
+// Frozen at once (Service.Plan computes Frozen before the cap check); the
+// over-cap report takes priority here since it is the reason the query
+// fan-out never even ran (Verdicts is empty in that case too).
+func renderPlan(pr capability.PlanResult) planOutput {
+	verdicts := make([]perNodeVerdict, 0, len(pr.Verdicts))
+	for _, v := range pr.Verdicts {
+		verdicts = append(verdicts, perNodeVerdict{
+			NodeID:       v.NodeID,
+			Verdict:      verdictString(v.Status),
+			DecidingRule: v.DecidingRule,
+			Reason:       v.Reason,
+		})
+	}
+	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
+
+	out := planOutput{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
+	switch {
+	case pr.CapExceeded != nil:
+		out.WouldBeRejected = &wouldBeRejected{
+			Reason:  "exceeds_cap",
+			Matched: pr.CapExceeded.Matched,
+			Cap:     pr.CapExceeded.Cap,
+			Class:   riskClassString(pr.CapExceeded.Class),
+		}
+	case pr.Frozen:
+		out.WouldBeRejected = &wouldBeRejected{Reason: "frozen"}
+	}
+	return out
+}
+
+// planAndRender runs act against sel through exec.Plan and renders the
+// result — plan=true's counterpart to dispatchAndRender. err from exec.Plan
+// is ONLY an authz-refusal or infra failure (renderRunError's existing
+// cases): cap/Freeze are reported INSIDE pr, never as an error (ADR-0011).
+func planAndRender(ctx context.Context, exec Executor, p capability.Principal, sel capability.Selector, act jobs.Action) (planOutput, error) {
+	pr, err := exec.Plan(ctx, p, sel, act)
+	if err != nil {
+		return planOutput{}, renderRunError(err)
+	}
+	return renderPlan(pr), nil
 }
 
 // outcomeString renders a jobs.Outcome as the lowercase string the
@@ -256,10 +375,10 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 	return jobs.Action{}, fmt.Errorf("unknown operation %q (see list_operations)", name)
 }
 
-// runOperationInput is run_operation's argument. Deliberately does not carry
-// a "plan" field yet: plan mode (plan=true) is #119's scope, not this one —
-// this shape is written so #119 can add an optional plan bool later without
-// breaking any existing caller.
+// runOperationInput is run_operation's argument. Plan is additive (#119):
+// omitted or false keeps today's real-dispatch behavior byte-identical to
+// #118; plan=true resolves/authorizes/checks exactly as a real run would but
+// executes nothing, returning per-Node Policy verdicts instead.
 type runOperationInput struct {
 	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
 	Operation string            `json:"operation" jsonschema:"Operation name, e.g. 'system.facts' (see list_operations for the full vocabulary and each Operation's risk class)."`
@@ -267,6 +386,8 @@ type runOperationInput struct {
 	// TimeoutSeconds omitted or 0 keeps today's default (the daemon/engine
 	// default); [0, maxTimeoutSeconds] is enforced (RB6).
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
+	// Plan: see the type doc comment above.
+	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
 }
 
 // rawExecInput is raw_exec's argument: argv only — no shell, no
@@ -276,6 +397,10 @@ type rawExecInput struct {
 	Argv     []string `json:"argv" jsonschema:"Argv to execute verbatim on each matched Node — no shell, no client-side splitting (ADR-0001). The daemon's Policy regex decides per Node whether it is allowed."`
 	// TimeoutSeconds: see runOperationInput's field doc.
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
+	// Plan: see runOperationInput's field doc. raw_exec's Plan still probes
+	// argv verbatim and always risk class mutate (ADR-0012, invariant 13) —
+	// no client field can change either.
+	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
 }
 
 // dispatchAndRender runs act against sel through exec, then renders the
@@ -296,40 +421,51 @@ func dispatchAndRender(ctx context.Context, exec Executor, results JobResultRead
 
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build
-// the Action -> requirePrincipal -> exec.Run -> render. Neither evaluates
-// Policy or the blast-radius cap itself (invariant 10/12); both dispatch
-// through the SAME injected Executor, so every acceptance the capability
-// layer already proves (Freeze/authz/cap/audit, at-most-once) carries
-// through unchanged.
+// the Action -> requirePrincipal -> branch on plan -> render. Neither
+// evaluates Policy or the blast-radius cap itself (invariant 10/12); both
+// dispatch (or, when plan=true, query) through the SAME injected Executor,
+// so every acceptance the capability layer already proves (Freeze/authz/cap/
+// audit, at-most-once, plan mode) carries through unchanged.
 func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "run_operation",
 		Description: "Run a structured Operation (ADR-0001's typed, native-argv path — never a shell) " +
 			"against a Selector's matched Nodes through the capability layer (Selector -> authz -> " +
 			"blast-cap -> dispatch -> audit). Blocks until every matched Node's Task reaches a terminal " +
-			"outcome and returns per-Node results plus the Job id; get_job re-reads the same Job later.",
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, executionOutput, error) {
+			"outcome and returns per-Node results plus the Job id; get_job re-reads the same Job later. " +
+			"plan=true probes the same pipeline (Selector -> authz -> blast-cap) without dispatching: it " +
+			"returns per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) and would_be_rejected " +
+			"instead, creating no Job/Task (ADR-0011).",
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
 		}
 
 		sel, err := capability.ParseSelector(in.Selector)
 		if err != nil {
-			return nil, executionOutput{}, fmt.Errorf("invalid selector: %w", err)
+			return nil, runOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
 		act, err := buildOperationAction(ops, in.Operation, in.Args, in.TimeoutSeconds)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
+		}
+
+		if in.Plan {
+			plan, err := planAndRender(ctx, exec, p, sel, act)
+			if err != nil {
+				return nil, runOrPlanOutput{}, err
+			}
+			return nil, runOrPlanOutput{Plan: &plan}, nil
 		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
 		}
-		return nil, out, nil
+		return nil, runOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
 	})
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -338,36 +474,46 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"matched Nodes, always risk class mutate (ADR-0012) regardless of what argv does. argv runs " +
 			"verbatim — no shell, no client-side splitting — and the daemon's Policy regex decides per " +
 			"Node whether it is allowed (a per-Node refusal renders outcome=denied_by_policy). Prefer " +
-			"run_operation's typed path when a structured Operation covers the same intent.",
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, executionOutput, error) {
+			"run_operation's typed path when a structured Operation covers the same intent. plan=true " +
+			"probes the same argv/blast-cap without dispatching, returning per-Node Policy verdicts and " +
+			"would_be_rejected instead (ADR-0011).",
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
 		}
 
 		if len(in.Argv) == 0 {
-			return nil, executionOutput{}, fmt.Errorf("argv must not be empty")
+			return nil, runOrPlanOutput{}, fmt.Errorf("argv must not be empty")
 		}
 
 		sel, err := capability.ParseSelector(in.Selector)
 		if err != nil {
-			return nil, executionOutput{}, fmt.Errorf("invalid selector: %w", err)
+			return nil, runOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
 		timeoutSeconds, err := resolveTimeoutSeconds(in.TimeoutSeconds)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
 		}
 		// Raw Exec always takes RiskClassMutate by construction, regardless
 		// of what argv does (ADR-0012, invariant 13) — no client field can
-		// change this.
+		// change this, plan mode included.
 		act := jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: in.Argv, RiskClass: jobs.RiskClassMutate, TimeoutSeconds: timeoutSeconds}
+
+		if in.Plan {
+			plan, err := planAndRender(ctx, exec, p, sel, act)
+			if err != nil {
+				return nil, runOrPlanOutput{}, err
+			}
+			return nil, runOrPlanOutput{Plan: &plan}, nil
+		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, runOrPlanOutput{}, err
 		}
-		return nil, out, nil
+		return nil, runOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
 	})
 }

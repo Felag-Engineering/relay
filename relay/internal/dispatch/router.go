@@ -2,6 +2,8 @@ package dispatch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -58,6 +60,20 @@ type waiter struct {
 	ch     chan *gleipnirv1.TaskResult
 }
 
+// verdictWaiter is waiter's sibling for a Plan's PolicyQuery (#119,
+// ADR-0011): correlates one in-flight Query call with the PolicyVerdict that
+// will eventually arrive on the Node's Tunnel, keyed by query_id rather than
+// task_id — a wholly separate ID space, so a query_id can never collide
+// with, or be mistaken for, a real Task's dedup key. ch is buffered(1) for
+// the same reason as waiter's: DeliverVerdict's send never blocks the
+// Tunnel's receive goroutine, and is never racing a blocked close from
+// unregister.
+type verdictWaiter struct {
+	nodeID string
+	owner  *conn
+	ch     chan *gleipnirv1.PolicyVerdict
+}
+
 // Router is the production capability.Conduit: it sends Tasks down a
 // connected Node's authenticated Tunnel (the existing mTLS stream and its
 // cert-derived node_id — ADR-0005/0006; Router creates no new transport or
@@ -67,19 +83,22 @@ type waiter struct {
 // one place (ADR-0004).
 //
 // Router satisfies capability.Conduit structurally (Connected/Dispatch/
-// Cancel on jobs.Task/jobs.Result) without importing package capability, so
-// there is no import cycle and capability's proto-free import lock
-// (TestCapabilityImportsOnlyRegistryAndJobs) stays intact.
+// Cancel/Query on jobs.Task/jobs.Result/jobs.Verdict) without importing
+// package capability, so there is no import cycle and capability's
+// proto-free import lock (TestCapabilityImportsOnlyRegistryAndJobs) stays
+// intact.
 //
-// Lock discipline: mu guards ONLY the conns and waiters maps. It is taken
-// only around map reads/writes, never around a network send or the blocking
-// wait for a Result — a slow or stalled write to one Node's stream must never
+// Lock discipline: mu guards ONLY the conns, waiters, and verdictWaiters
+// maps. It is taken only around map reads/writes, never around a network
+// send or the blocking wait for a Result — a slow or stalled write to one
+// Node's stream must never
 // stall Connected()/Register()/Deliver() for every other Node (an
 // availability hazard at fleet scale).
 type Router struct {
-	mu      sync.Mutex
-	conns   map[string]*conn
-	waiters map[string]*waiter
+	mu             sync.Mutex
+	conns          map[string]*conn
+	waiters        map[string]*waiter
+	verdictWaiters map[string]*verdictWaiter
 
 	// onConnect, if non-nil, is invoked (in its own goroutine, so it never
 	// blocks the Tunnel handler) every time a Node registers a live send
@@ -92,9 +111,10 @@ type Router struct {
 // used by hermetic tests that only exercise Dispatch/Deliver/Cancel).
 func NewRouter(onConnect func(nodeID string)) *Router {
 	return &Router{
-		conns:     make(map[string]*conn),
-		waiters:   make(map[string]*waiter),
-		onConnect: onConnect,
+		conns:          make(map[string]*conn),
+		waiters:        make(map[string]*waiter),
+		verdictWaiters: make(map[string]*verdictWaiter),
+		onConnect:      onConnect,
 	}
 }
 
@@ -113,12 +133,13 @@ func NewRouter(onConnect func(nodeID string)) *Router {
 // unregister is also the disconnect-mid-dispatch correctness point: under mu,
 // it deletes the conn (if still current) AND fails every waiter it owns
 // (waiter.owner == this *conn) by deleting it from waiters and closing its
-// channel. Scoping by owner rather than nodeID means a stale unregister can
+// channel — and, identically, every verdictWaiter it owns (a blocked Query,
+// #119). Scoping by owner rather than nodeID means a stale unregister can
 // never close a FRESH waiter that a newer registration created after reusing
-// the same nodeID (and potentially the same task_id). This guarantees any
-// Dispatch call blocked in its select on a waiter it truly owns unblocks (via
-// the closed-channel case) rather than hanging until ctx expiry or forever on
-// a deadline-less ctx.
+// the same nodeID (and potentially the same task_id/query_id). This
+// guarantees any Dispatch or Query call blocked in its select on a waiter it
+// truly owns unblocks (via the closed-channel case) rather than hanging
+// until ctx expiry or forever on a deadline-less ctx.
 func (r *Router) Register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func()) {
 	c := &conn{send: send}
 
@@ -138,6 +159,12 @@ func (r *Router) Register(nodeID string, send func(*gleipnirv1.RelayMessage) err
 		for taskID, w := range r.waiters {
 			if w.owner == c {
 				delete(r.waiters, taskID)
+				close(w.ch)
+			}
+		}
+		for queryID, w := range r.verdictWaiters {
+			if w.owner == c {
+				delete(r.verdictWaiters, queryID)
 				close(w.ch)
 			}
 		}
@@ -235,11 +262,91 @@ func (r *Router) Deliver(nodeID string, tr *gleipnirv1.TaskResult) {
 	}
 }
 
-// DeliverVerdict is a no-op: the PolicyQuery/PolicyVerdict surface
-// (hypothetical "would Policy allow" probes, ADR-0011) is v0.0.6 scope. It
-// exists on Router so the composition root's taskSink adapter has something
-// to forward to.
-func (r *Router) DeliverVerdict(string, *gleipnirv1.PolicyVerdict) {}
+// newQueryID mints a unique query_id for one Query call: "query-" plus 16
+// random bytes, hex-encoded, mirroring capability.defaultID's shape. It is
+// deliberately unrelated to any task_id — a Plan's PolicyQuery can never
+// collide with, or be mistaken for, a Task's at-most-once dedup key.
+func newQueryID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("dispatch: generate query id: %w", err)
+	}
+	return "query-" + hex.EncodeToString(b), nil
+}
+
+// Query sends a PolicyQuery for act down nodeID's Tunnel and blocks for the
+// daemon's PolicyVerdict (#119, ADR-0011) — capability.Conduit.Query's real
+// implementation, mirroring Dispatch's shape exactly except for the
+// query_id/task_id ID space and the waiter map it correlates through.
+func (r *Router) Query(ctx context.Context, nodeID string, act jobs.Action) (jobs.Verdict, error) {
+	queryID, err := newQueryID()
+	if err != nil {
+		return jobs.Verdict{}, err
+	}
+
+	r.mu.Lock()
+	c, ok := r.conns[nodeID]
+	if !ok {
+		r.mu.Unlock()
+		return jobs.Verdict{}, ErrNotConnected
+	}
+	w := &verdictWaiter{nodeID: nodeID, owner: c, ch: make(chan *gleipnirv1.PolicyVerdict, 1)}
+	r.verdictWaiters[queryID] = w
+	r.mu.Unlock()
+
+	msg := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_PolicyQuery{PolicyQuery: policyQuery(queryID, act)}}
+	if err := c.send(msg); err != nil {
+		r.removeVerdictWaiter(queryID)
+		return jobs.Verdict{}, fmt.Errorf("dispatch: send policy query %q to node %q: %w", queryID, nodeID, err)
+	}
+
+	select {
+	case pv, ok := <-w.ch:
+		if !ok {
+			// Channel closed by unregister: the Node's Tunnel went away while
+			// we were waiting.
+			return jobs.Verdict{}, ErrNodeDisconnected
+		}
+		return verdict(pv), nil
+	case <-ctx.Done():
+		r.removeVerdictWaiter(queryID)
+		return jobs.Verdict{}, ctx.Err()
+	}
+}
+
+// removeVerdictWaiter deletes queryID's waiter, if still present, under mu.
+// It does NOT close the channel — the caller (Query) is the only reader and
+// is abandoning it, not signalling disconnect to some other reader (mirrors
+// removeWaiter).
+func (r *Router) removeVerdictWaiter(queryID string) {
+	r.mu.Lock()
+	delete(r.verdictWaiters, queryID)
+	r.mu.Unlock()
+}
+
+// DeliverVerdict routes an inbound PolicyVerdict to the Query call waiting
+// on it — Deliver's sibling for the plan-mode ID space. If pv.QueryId has no
+// registered waiter, or the waiter belongs to a different nodeID
+// (defense-in-depth; see waiter's doc comment), the PolicyVerdict is
+// silently dropped — an uncorrelated verdict is not a Router error.
+//
+// The waiter is deleted under mu before the (non-blocking, buffered(1))
+// send, which makes this delete-then-send mutually exclusive with
+// unregister's delete-then-close: exactly one of the two ever touches a
+// given waiter's channel, so DeliverVerdict can never send on an
+// already-closed channel (mirrors Deliver).
+func (r *Router) DeliverVerdict(nodeID string, pv *gleipnirv1.PolicyVerdict) {
+	r.mu.Lock()
+	w, ok := r.verdictWaiters[pv.GetQueryId()]
+	if ok && w.nodeID == nodeID {
+		delete(r.verdictWaiters, pv.GetQueryId())
+	}
+	r.mu.Unlock()
+
+	if ok && w.nodeID == nodeID {
+		w.ch <- pv
+	}
+}
 
 // Cancel sends TaskCancel for taskID down nodeID's Tunnel, best-effort
 // (ADR-0013). It does not wait for or rewrite the Task's outcome — the

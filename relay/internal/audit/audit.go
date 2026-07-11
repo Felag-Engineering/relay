@@ -18,10 +18,11 @@ import (
 // Kind distinguishes what kind of event a Record describes: a dispatch
 // attempt, a refusal (authz-deny or cap-reject, never dispatched), a Freeze
 // engage/release (ADR-0013), a Job cancel (v0.0.6 [5/8], owner DECISION 2),
-// or a Control API lifecycle action (Enrollment Token mint/revoke, Node
-// revoke — #116, ADR-0010). Kind is a plain unconstrained TEXT column in the
-// schema (migrations/0002) — no CHECK constraint — so adding KindJobCancel
-// here needs no migration.
+// a Control API lifecycle action (Enrollment Token mint/revoke, Node
+// revoke — #116, ADR-0010), or a Plan (#119, ADR-0011: a no-execution
+// PolicyQuery probe, distinct from a real dispatch). Kind is a plain
+// unconstrained TEXT column in the schema (migrations/0002) — no CHECK
+// constraint — so adding KindPlan here needs no migration.
 const (
 	KindDispatch      = "dispatch"
 	KindRefusal       = "refusal"
@@ -31,6 +32,7 @@ const (
 	KindTokenMint     = "token_mint"
 	KindTokenRevoke   = "token_revoke"
 	KindNodeRevoke    = "node_revoke"
+	KindPlan          = "plan"
 )
 
 // Record is one append-only audit entry: a single Task's dispatch, a

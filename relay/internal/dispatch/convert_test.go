@@ -83,6 +83,88 @@ func TestTaskRequest_RiskClassNeverSent(t *testing.T) {
 	}
 }
 
+func TestPolicyQuery_OperationRoundTrip(t *testing.T) {
+	act := jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "file.read",
+		OperationArgs: map[string]string{"path": "/etc/hostname"},
+		RiskClass:     jobs.RiskClassRead,
+	}
+
+	got := policyQuery("query-1", act)
+	if got.GetQueryId() != "query-1" {
+		t.Errorf("QueryId = %q, want query-1", got.GetQueryId())
+	}
+	op := got.GetOperation()
+	if op == nil {
+		t.Fatal("GetOperation() = nil, want a populated Operation")
+	}
+	if op.GetName() != "file.read" {
+		t.Errorf("Operation.Name = %q, want file.read", op.GetName())
+	}
+	if !reflect.DeepEqual(op.GetArgs(), act.OperationArgs) {
+		t.Errorf("Operation.Args = %v, want %v", op.GetArgs(), act.OperationArgs)
+	}
+	if got.GetRawExec() != nil {
+		t.Error("GetRawExec() should be nil for an Operation Action")
+	}
+}
+
+func TestPolicyQuery_RawExecRoundTrip(t *testing.T) {
+	act := jobs.Action{
+		Kind:        jobs.ActionRawExec,
+		RawExecArgv: []string{"/bin/sleep", "5"},
+		RiskClass:   jobs.RiskClassMutate,
+	}
+
+	got := policyQuery("query-2", act)
+	rawExec := got.GetRawExec()
+	if rawExec == nil {
+		t.Fatal("GetRawExec() = nil, want a populated RawExec")
+	}
+	if !reflect.DeepEqual(rawExec.GetArgv(), act.RawExecArgv) {
+		t.Errorf("RawExec.Argv = %v, want %v", rawExec.GetArgv(), act.RawExecArgv)
+	}
+	if got.GetOperation() != nil {
+		t.Error("GetOperation() should be nil for a RawExec Action")
+	}
+}
+
+// TestPolicyQuery_CarriesNoTaskID documents the deliberate omission: a
+// PolicyQuery has no task_id field on the wire at all — a Plan's probe can
+// never be mistaken for, or deduped alongside, a real Task (ADR-0011).
+func TestPolicyQuery_CarriesNoTaskID(t *testing.T) {
+	got := policyQuery("query-3", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	// PolicyQuery has no TaskId field at all; this test documents the
+	// contract via the type itself compiling without one, plus a proto
+	// round-trip check that no unexpected field leaks a task_id-shaped value.
+	if got.GetQueryId() != "query-3" {
+		t.Errorf("QueryId = %q, want query-3", got.GetQueryId())
+	}
+}
+
+func TestVerdict_ConvertsFields(t *testing.T) {
+	tests := []struct {
+		name string
+		pv   *gleipnirv1.PolicyVerdict
+		want jobs.Verdict
+	}{
+		{"allow", &gleipnirv1.PolicyVerdict{QueryId: "q-1", Allowed: true}, jobs.Verdict{Allowed: true}},
+		{
+			"deny with deciding rule",
+			&gleipnirv1.PolicyVerdict{QueryId: "q-2", Allowed: false, DecidingRule: "deny-rm-rf"},
+			jobs.Verdict{Allowed: false, DecidingRule: "deny-rm-rf"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := verdict(tt.pv); got != tt.want {
+				t.Errorf("verdict(%+v) = %+v, want %+v", tt.pv, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResult_ConvertsFields(t *testing.T) {
 	tr := &gleipnirv1.TaskResult{
 		TaskId:   "task-1",

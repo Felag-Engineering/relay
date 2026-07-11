@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -29,5 +30,41 @@ func TestResolveTimeoutSeconds_RejectsOutOfRange(t *testing.T) {
 	}
 	if got, err := resolveTimeoutSeconds(maxTimeoutSeconds); err != nil || got != maxTimeoutSeconds {
 		t.Errorf("resolveTimeoutSeconds(max) = (%d, %v), want (%d, nil)", got, err, maxTimeoutSeconds)
+	}
+}
+
+// TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape is the PLAN-REVIEWER
+// ADDENDUM A2 regression guard: job_id/results carry NO omitempty on
+// runOrPlanOutput (mirroring executionOutput's own tags exactly), so a
+// zero-match plan=false run still renders {"job_id":"","results":[]} —
+// byte-identical to #118 — never a bare {}. plan, the only new field, is
+// omitempty and absent entirely when nil.
+func TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape(t *testing.T) {
+	out := runOrPlanOutput{Results: []perNodeResult{}}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	want := `{"job_id":"","results":[]}`
+	if string(b) != want {
+		t.Errorf("json.Marshal(zero-match runOrPlanOutput) = %s, want %s", b, want)
+	}
+}
+
+// TestRunOrPlanOutput_PlanFieldOmittedWhenNil asserts the plan field itself
+// carries omitempty — a real (non-plan) response never renders a "plan" key
+// at all.
+func TestRunOrPlanOutput_PlanFieldOmittedWhenNil(t *testing.T) {
+	out := runOrPlanOutput{JobID: "job-1", Results: []perNodeResult{{NodeID: "node-1", Outcome: "success"}}}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if _, ok := raw["plan"]; ok {
+		t.Errorf("marshaled output %s contains a \"plan\" key, want it omitted when Plan is nil", b)
 	}
 }

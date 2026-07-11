@@ -440,6 +440,248 @@ func TestRouter_ConnectedNodes(t *testing.T) {
 	}
 }
 
+// TestRouter_QueryCorrelatesVerdict is #119's core correlation test: Query
+// sends a PolicyQuery, and the query_id it minted is what DeliverVerdict
+// must be called with for Query to return the mapped jobs.Verdict.
+func TestRouter_QueryCorrelatesVerdict(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan struct {
+		v   jobs.Verdict
+		err error
+	}, 1)
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	go func() {
+		v, err := r.Query(context.Background(), "node-1", act)
+		done <- struct {
+			v   jobs.Verdict
+			err error
+		}{v, err}
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	msg := send.last()
+	pq := msg.GetPolicyQuery()
+	if pq == nil {
+		t.Fatal("Query did not send a PolicyQuery")
+	}
+	if pq.GetQueryId() == "" {
+		t.Fatal("PolicyQuery.QueryId is empty, want a minted query_id")
+	}
+	if op := pq.GetOperation(); op == nil || op.GetName() != "system.facts" {
+		t.Errorf("PolicyQuery.Operation = %+v, want system.facts", op)
+	}
+
+	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: pq.GetQueryId(), Allowed: true})
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("Query: %v", got.err)
+		}
+		if !got.v.Allowed {
+			t.Errorf("Query() verdict = %+v, want Allowed=true", got.v)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Query never returned after DeliverVerdict")
+	}
+}
+
+// TestRouter_QueryDenyCarriesDecidingRule asserts a deny verdict's
+// DecidingRule round-trips through Query.
+func TestRouter_QueryDenyCarriesDecidingRule(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan jobs.Verdict, 1)
+	go func() {
+		v, err := r.Query(context.Background(), "node-1", jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/rm", "-rf", "/"}})
+		if err != nil {
+			t.Errorf("Query: %v", err)
+		}
+		done <- v
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	queryID := send.last().GetPolicyQuery().GetQueryId()
+	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: false, DecidingRule: "deny-rm-rf"})
+
+	select {
+	case v := <-done:
+		if v.Allowed {
+			t.Error("verdict.Allowed = true, want false")
+		}
+		if v.DecidingRule != "deny-rm-rf" {
+			t.Errorf("verdict.DecidingRule = %q, want deny-rm-rf", v.DecidingRule)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Query never returned")
+	}
+}
+
+// TestRouter_QueryDisconnectMidQuery mirrors
+// TestRouter_DisconnectFailsPendingWaiter for the verdict-waiter ID space: a
+// blocked Query call must return ErrNodeDisconnected (not hang) when the
+// Node's Tunnel unregisters while the call is still waiting.
+func TestRouter_QueryDisconnectMidQuery(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Query(context.Background(), "node-1", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+		done <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	unregister()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNodeDisconnected) {
+			t.Errorf("Query error = %v, want ErrNodeDisconnected", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Query did not return after unregister — goroutine leak / hang")
+	}
+}
+
+// TestRouter_QueryHonorsContextCancel asserts ctx cancellation unblocks
+// Query and removes its verdict waiter (no leak).
+func TestRouter_QueryHonorsContextCancel(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Query(ctx, "node-1", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+		done <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Query error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Query did not return after ctx cancel")
+	}
+
+	queryID := send.last().GetPolicyQuery().GetQueryId()
+	r.mu.Lock()
+	_, stillWaiting := r.verdictWaiters[queryID]
+	r.mu.Unlock()
+	if stillWaiting {
+		t.Error("verdict waiter leaked after ctx cancel")
+	}
+}
+
+// TestRouter_DeliverVerdictUncorrelatedQueryIDDropped asserts a PolicyVerdict
+// for an unknown (or already-delivered) query_id is silently dropped, never
+// panics — mirrors TestRouter_DeliverUncorrelatedTaskIDDropped.
+func TestRouter_DeliverVerdictUncorrelatedQueryIDDropped(t *testing.T) {
+	r := NewRouter(nil)
+	unregister := r.Register("node-1", func(*gleipnirv1.RelayMessage) error { return nil })
+	defer unregister()
+
+	// No Query call is waiting on "query-unknown" — this must not panic or
+	// block.
+	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: "query-unknown", Allowed: true})
+}
+
+// TestRouter_DeliverVerdictWrongNodeDropped mirrors
+// TestRouter_DeliverWrongNodeDropped for the verdict-waiter ID space.
+func TestRouter_DeliverVerdictWrongNodeDropped(t *testing.T) {
+	r := NewRouter(nil)
+	sendA := &recordingSend{}
+	sendB := &recordingSend{}
+	unregA := r.Register("node-a", sendA.send)
+	unregB := r.Register("node-b", sendB.send)
+	defer unregA()
+	defer unregB()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Query(context.Background(), "node-a", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+		done <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return sendA.len() == 1 })
+	queryID := sendA.last().GetPolicyQuery().GetQueryId()
+
+	// A verdict for queryID arrives (incorrectly) on node-b's stream: dropped.
+	r.DeliverVerdict("node-b", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: true})
+
+	select {
+	case <-done:
+		t.Fatal("Query returned after a DeliverVerdict on the wrong node — should have been dropped")
+	case <-time.After(100 * time.Millisecond):
+		// expected: still blocked
+	}
+
+	// The correct delivery still completes it.
+	r.DeliverVerdict("node-a", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: true})
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Query: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Query never returned after the correct DeliverVerdict")
+	}
+}
+
+// TestRouter_QueryNotConnected asserts Query fails fast for an unregistered
+// Node rather than blocking, mirroring TestRouter_DispatchNotConnected.
+func TestRouter_QueryNotConnected(t *testing.T) {
+	r := NewRouter(nil)
+	_, err := r.Query(context.Background(), "node-absent", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+	if !errors.Is(err, ErrNotConnected) {
+		t.Errorf("Query error = %v, want ErrNotConnected", err)
+	}
+}
+
+// TestRouter_UnregisterClosesVerdictWaiter asserts unregister closes a
+// verdict waiter it owns even outside a live Query call's select loop —
+// i.e. the map entry itself is removed and its channel closed, mirroring
+// the waiters-map half of the same guarantee.
+func TestRouter_UnregisterClosesVerdictWaiter(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.Query(context.Background(), "node-1", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
+		done <- err
+	}()
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	queryID := send.last().GetPolicyQuery().GetQueryId()
+	unregister()
+
+	<-done // Query must have returned ErrNodeDisconnected by now.
+
+	r.mu.Lock()
+	_, stillWaiting := r.verdictWaiters[queryID]
+	r.mu.Unlock()
+	if stillWaiting {
+		t.Error("verdict waiter for queryID leaked after unregister")
+	}
+}
+
 func waitUntil(t *testing.T, deadline time.Duration, cond func() bool) {
 	t.Helper()
 	end := time.Now().Add(deadline)

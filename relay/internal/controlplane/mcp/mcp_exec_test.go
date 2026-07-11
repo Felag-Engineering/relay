@@ -67,6 +67,17 @@ type fakeConduit struct {
 	timeoutSeconds map[string]int32
 	cancelCalls    []cancelCall
 
+	// verdicts/queryErrs are #119's plan-mode fixtures: per-Node canned
+	// jobs.Verdict/error for Query, configurable independently of
+	// results/errs so a plan-vs-real-run parity test (#121) can set
+	// allow<->Success/deny<->DeniedByPolicy/offline<->Unreachable
+	// consistently on the same fleet. queryCalls records every Query
+	// invocation so tests can assert it is never called for an offline or
+	// over-cap Node.
+	verdicts   map[string]jobs.Verdict
+	queryErrs  map[string]error
+	queryCalls []string
+
 	blockNode string
 	ready     chan struct{}
 	unblock   chan struct{}
@@ -78,6 +89,8 @@ func newFakeConduit() *fakeConduit {
 		results:        map[string]jobs.Result{},
 		errs:           map[string]error{},
 		timeoutSeconds: map[string]int32{},
+		verdicts:       map[string]jobs.Verdict{},
+		queryErrs:      map[string]error{},
 	}
 }
 
@@ -122,6 +135,29 @@ func (f *fakeConduit) Cancel(_ context.Context, nodeID, taskID string) error {
 	defer f.mu.Unlock()
 	f.cancelCalls = append(f.cancelCalls, cancelCall{NodeID: nodeID, TaskID: taskID})
 	return nil
+}
+
+// Query returns the canned jobs.Verdict/error configured for nodeID (#119),
+// recording every call so tests can assert it is never invoked for an
+// offline or over-cap Node.
+func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jobs.Verdict, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queryCalls = append(f.queryCalls, nodeID)
+	if err, ok := f.queryErrs[nodeID]; ok && err != nil {
+		return jobs.Verdict{}, err
+	}
+	return f.verdicts[nodeID], nil
+}
+
+// queriedNodes returns a snapshot of every Node Query was called for, in
+// call order.
+func (f *fakeConduit) queriedNodes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.queryCalls))
+	copy(out, f.queryCalls)
+	return out
 }
 
 func (f *fakeConduit) timeoutFor(nodeID string) int32 {
