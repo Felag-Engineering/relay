@@ -342,7 +342,9 @@ type describeNodeResultJSON struct {
 type operationItemJSON struct {
 	Name           string            `json:"name"`
 	RiskClass      string            `json:"risk_class"`
+	Purpose        string            `json:"purpose"`
 	ArgConstraints map[string]string `json:"arg_constraints"`
+	Example        string            `json:"example"`
 }
 
 type listOperationsResultJSON struct {
@@ -493,6 +495,15 @@ func TestMCP_ListOperations(t *testing.T) {
 		"service.restart": "mutate",
 		"pkg.install":     "mutate",
 	}
+	// wantArgKeys pins the exact documented arg-key set per Operation over
+	// the wire (mirrors opvocab_test.go's TestOperations_DocumentedArgKeys,
+	// but proves it survives JSON rendering through list_operations too).
+	wantArgKeys := map[string][]string{
+		"system.facts":    {},
+		"file.read":       {"path"},
+		"service.restart": {"unit"},
+		"pkg.install":     {"name", "version"},
+	}
 	if len(out.Operations) != len(want) {
 		t.Fatalf("list_operations(): got %d entries, want %d: %+v", len(out.Operations), len(want), out.Operations)
 	}
@@ -507,6 +518,33 @@ func TestMCP_ListOperations(t *testing.T) {
 		}
 		if op.Name == "raw_exec" {
 			t.Error("list_operations(): Raw Exec must never appear (it is not an Operation)")
+		}
+
+		// #120: every Operation must be legible — a non-empty purpose and
+		// example, so a model reader never has to trial-and-error its way
+		// to a working call.
+		if strings.TrimSpace(op.Purpose) == "" {
+			t.Errorf("list_operations()[%q].Purpose is empty, want a non-empty description", op.Name)
+		}
+		if op.Example == "" {
+			t.Errorf("list_operations()[%q].Example is empty, want a concrete usage example", op.Name)
+		}
+		if op.ArgConstraints == nil {
+			t.Errorf("list_operations()[%q].ArgConstraints is nil, want non-nil", op.Name)
+		}
+
+		wantKeys, ok := wantArgKeys[op.Name]
+		if !ok {
+			continue
+		}
+		if len(op.ArgConstraints) != len(wantKeys) {
+			t.Errorf("list_operations()[%q].ArgConstraints = %v, want keys %v", op.Name, op.ArgConstraints, wantKeys)
+			continue
+		}
+		for _, k := range wantKeys {
+			if strings.TrimSpace(op.ArgConstraints[k]) == "" {
+				t.Errorf("list_operations()[%q].ArgConstraints[%q] is empty, want documented constraint prose", op.Name, k)
+			}
 		}
 	}
 }

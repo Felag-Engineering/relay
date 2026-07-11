@@ -27,8 +27,9 @@ type CapExceededError struct {
 
 func (e *CapExceededError) Error() string {
 	return fmt.Sprintf(
-		"capability: blast-radius cap exceeded: selector matched %d nodes, exceeds the %s of %d (risk class %s)",
-		e.Matched, capName(e.Class), e.Cap, className(e.Class),
+		"capability: blast-radius cap exceeded: selector matched %d nodes, exceeds the %s of %d (risk class %s); "+
+			"narrow the Selector to at most %d Nodes (or split the Job into batches)",
+		e.Matched, capName(e.Class), e.Cap, className(e.Class), e.Cap,
 	)
 }
 

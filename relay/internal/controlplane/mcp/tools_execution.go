@@ -382,7 +382,7 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 type runOperationInput struct {
 	Selector  string            `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
 	Operation string            `json:"operation" jsonschema:"Operation name, e.g. 'system.facts' (see list_operations for the full vocabulary and each Operation's risk class)."`
-	Args      map[string]string `json:"args,omitempty" jsonschema:"Operation arguments, validated against the Operation's own constraints (never a shell)."`
+	Args      map[string]string `json:"args,omitempty" jsonschema:"Operation arguments, validated against the Operation's own constraints (never a shell) — see list_operations for each Operation's argument names, types, and constraints."`
 	// TimeoutSeconds omitted or 0 keeps today's default (the daemon/engine
 	// default); [0, maxTimeoutSeconds] is enforced (RB6).
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
@@ -419,6 +419,17 @@ func dispatchAndRender(ctx context.Context, exec Executor, results JobResultRead
 	return renderJob(ctx, results, nodeResults[0].JobID)
 }
 
+// planModeClause is the SINGLE, IDENTICAL sentence cross-referencing plan
+// mode from both run_operation's and raw_exec's Description (#120's plan:
+// "IDENTICAL single delimited <PLAN CLAUSE>"). It is deliberately
+// concept-level — it names plan mode and ADR-0011 but no param name — so it
+// stays accurate regardless of whether #119 (which adds an actual `plan`
+// input field to these same two tools) has landed yet, keeping that merge
+// trivial.
+const planModeClause = "Plan mode — the no-execution preview of whether each Node's live Policy would allow " +
+	"the action (ADR-0011) — is the sanctioned probe before mutating; prefer it over learning Policy " +
+	"boundaries by triggering real executions."
+
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build
 // the Action -> requirePrincipal -> branch on plan -> render. Neither
@@ -426,16 +437,25 @@ func dispatchAndRender(ctx context.Context, exec Executor, results JobResultRead
 // dispatch (or, when plan=true, query) through the SAME injected Executor,
 // so every acceptance the capability layer already proves (Freeze/authz/cap/
 // audit, at-most-once, plan mode) carries through unchanged.
+//
+// Their Descriptions are the ADR-0001 typed-path-by-default safety
+// assumption engineered into words (#120): run_operation presents itself as
+// the DEFAULT and raw_exec as the ESCAPE HATCH, both cross-reference plan
+// mode via the identical planModeClause, and run_operation's steers a
+// denied_by_policy result toward describe_node rather than blind retries.
 func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "run_operation",
-		Description: "Run a structured Operation (ADR-0001's typed, native-argv path — never a shell) " +
-			"against a Selector's matched Nodes through the capability layer (Selector -> authz -> " +
-			"blast-cap -> dispatch -> audit). Blocks until every matched Node's Task reaches a terminal " +
-			"outcome and returns per-Node results plus the Job id; get_job re-reads the same Job later. " +
-			"plan=true probes the same pipeline (Selector -> authz -> blast-cap) without dispatching: it " +
-			"returns per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) and would_be_rejected " +
-			"instead, creating no Job/Task (ADR-0011).",
+		Description: "The default way to act on Nodes. Run a structured Operation (ADR-0001's typed, " +
+			"native-argv path — never a shell) against a Selector's matched Nodes through the capability " +
+			"layer (Selector -> authz -> blast-cap -> dispatch -> audit). Prefer run_operation over raw_exec " +
+			"whenever a structured Operation expresses what you want to do; call list_operations first for " +
+			"the vocabulary — each Operation's purpose, risk class, argument names/types/constraints, and a " +
+			"usage example — so you pick the right one and build its args correctly, without trial-and-error. " +
+			planModeClause + " If a result comes back outcome=denied_by_policy, call describe_node to see the " +
+			"Node's effective Policy and narrow your request rather than guessing again. Blocks until every " +
+			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
+			"get_job re-reads the same Job later.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
 		p, err := requirePrincipal(ctx)
@@ -470,13 +490,14 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "raw_exec",
-		Description: "Run an arbitrary argv (ADR-0001's regex-gated escape hatch) against a Selector's " +
-			"matched Nodes, always risk class mutate (ADR-0012) regardless of what argv does. argv runs " +
-			"verbatim — no shell, no client-side splitting — and the daemon's Policy regex decides per " +
-			"Node whether it is allowed (a per-Node refusal renders outcome=denied_by_policy). Prefer " +
-			"run_operation's typed path when a structured Operation covers the same intent. plan=true " +
-			"probes the same argv/blast-cap without dispatching, returning per-Node Policy verdicts and " +
-			"would_be_rejected instead (ADR-0011).",
+		Description: "The escape hatch — use only when no structured Operation expresses the task. Run an " +
+			"arbitrary argv (ADR-0001's regex-gated escape hatch) against a Selector's matched Nodes. Prefer " +
+			"run_operation's typed path first: call list_operations to check whether a structured Operation " +
+			"already covers your intent before reaching for raw_exec. Always risk class mutate (ADR-0012) " +
+			"regardless of what argv does — raw_exec always takes the strict mutate-cap, even for a " +
+			"read-only-looking command. argv runs verbatim — no shell, no client-side splitting — and the " +
+			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
+			"outcome=denied_by_policy). " + planModeClause,
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
 		p, err := requirePrincipal(ctx)
