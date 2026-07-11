@@ -195,6 +195,54 @@ func TestRecordRefusalOneRowNoNodeID(t *testing.T) {
 	}
 }
 
+// TestRecordPlanOneRowNoJobOrNode is #119's audit acceptance line: an
+// AuditKindPlan entry writes exactly one KindPlan row, with Principal/
+// Selector/Action set and JobID/NodeID/Outcome empty — a Plan creates no
+// Job/Task, so there is nothing to reference by ID.
+func TestRecordPlanOneRowNoJobOrNode(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	entry := capability.AuditEntry{Kind: capability.AuditKindPlan, Principal: principal, Selector: sel, Action: act}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("List returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindPlan {
+		t.Errorf("Kind = %q, want %q", rec.Kind, audit.KindPlan)
+	}
+	if rec.Principal != principal.Attribution() {
+		t.Errorf("Principal = %q, want %q", rec.Principal, principal.Attribution())
+	}
+	if rec.Selector != sel.String() {
+		t.Errorf("Selector = %q, want %q", rec.Selector, sel.String())
+	}
+	if rec.ActionKind != "operation" || rec.OperationName != "service.restart" {
+		t.Errorf("Action fields = {%q %q}, want {operation service.restart}", rec.ActionKind, rec.OperationName)
+	}
+	if rec.JobID != "" {
+		t.Errorf("JobID = %q, want empty (a Plan creates no Job)", rec.JobID)
+	}
+	if rec.NodeID != "" {
+		t.Errorf("NodeID = %q, want empty (a Plan creates no Task)", rec.NodeID)
+	}
+	if rec.Outcome != jobs.OutcomeUnspecified {
+		t.Errorf("Outcome = %v, want OutcomeUnspecified", rec.Outcome)
+	}
+}
+
 func TestRecordFreezeEngageAndRelease(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))

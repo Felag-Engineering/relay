@@ -20,13 +20,16 @@ import (
 
 // fakeConduit is a configurable Conduit: connected reports which Nodes have
 // a live Tunnel, and results/errs supply a canned Dispatch outcome per Node.
-// It also records every Dispatch/Cancel call (in order) to a shared log so
-// tests can assert dispatch ordering relative to persistence.
+// It also records every Dispatch/Cancel/Query call (in order) to a shared
+// log so tests can assert dispatch ordering relative to persistence.
+// verdicts/queryErrs supply a canned Query outcome per Node (#119).
 type fakeConduit struct {
 	connected map[string]bool
 	results   map[string]jobs.Result
 	errs      map[string]error
 	cancelErr map[string]error
+	verdicts  map[string]jobs.Verdict
+	queryErrs map[string]error
 	log       *[]string
 }
 
@@ -36,6 +39,8 @@ func newFakeConduit(log *[]string) *fakeConduit {
 		results:   map[string]jobs.Result{},
 		errs:      map[string]error{},
 		cancelErr: map[string]error{},
+		verdicts:  map[string]jobs.Verdict{},
+		queryErrs: map[string]error{},
 		log:       log,
 	}
 }
@@ -59,6 +64,18 @@ func (f *fakeConduit) Cancel(_ context.Context, nodeID, taskID string) error {
 		*f.log = append(*f.log, "cancel:"+nodeID+":"+taskID)
 	}
 	return f.cancelErr[nodeID]
+}
+
+// Query records "query:<nodeID>" to the shared log and returns the canned
+// jobs.Verdict/error for nodeID (#119), mirroring Dispatch's shape.
+func (f *fakeConduit) Query(_ context.Context, nodeID string, _ jobs.Action) (jobs.Verdict, error) {
+	if f.log != nil {
+		*f.log = append(*f.log, "query:"+nodeID)
+	}
+	if err, ok := f.queryErrs[nodeID]; ok && err != nil {
+		return jobs.Verdict{}, err
+	}
+	return f.verdicts[nodeID], nil
 }
 
 // recordingTasks wraps a jobs.TaskRepository, appending "create:<nodeID>" to

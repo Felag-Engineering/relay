@@ -58,6 +58,12 @@ func (s *spyDispatcher) cancel(context.Context, string) error {
 	return nil
 }
 
+// query satisfies the dispatcher interface's query method (#119); no test in
+// this file exercises Plan, so it is a no-op returning no verdicts.
+func (s *spyDispatcher) query(context.Context, dispatch) (planResult, error) {
+	return planResult{}, nil
+}
+
 // spyAuditSink records the last AuditEntry/FreezeEvent it received.
 type spyAuditSink struct {
 	called      bool

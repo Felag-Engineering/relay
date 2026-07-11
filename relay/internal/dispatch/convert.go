@@ -46,6 +46,44 @@ func taskRequest(t jobs.Task) *gleipnirv1.TaskRequest {
 	return tr
 }
 
+// policyQuery converts act into the wire PolicyQuery sent down the Node's
+// Tunnel for a Plan (#119, ADR-0011): the same argv-verbatim/no-shell oneof
+// as taskRequest, but deliberately carrying no task_id — a PolicyQuery can
+// never be mistaken for (or deduped alongside) a real Task. queryID is
+// correlation-only (Router.Query mints it via crypto/rand, unrelated to any
+// task_id).
+func policyQuery(queryID string, act jobs.Action) *gleipnirv1.PolicyQuery {
+	pq := &gleipnirv1.PolicyQuery{QueryId: queryID}
+	switch act.Kind {
+	case jobs.ActionOperation:
+		pq.Action = &gleipnirv1.PolicyQuery_Operation{
+			Operation: &gleipnirv1.Operation{
+				Name: act.OperationName,
+				Args: act.OperationArgs,
+			},
+		}
+	case jobs.ActionRawExec:
+		pq.Action = &gleipnirv1.PolicyQuery_RawExec{
+			RawExec: &gleipnirv1.RawExec{Argv: act.RawExecArgv},
+		}
+	case jobs.ActionUnspecified:
+		// No Action set: leave pq.Action nil, mirroring taskRequest's own
+		// pure-converter discipline (never panics on an unset Action).
+	}
+	return pq
+}
+
+// verdict converts a wire PolicyVerdict into the domain jobs.Verdict that
+// capability.Conduit.Query returns. There is no "unrecognized" case to
+// default here — Allowed is a plain bool and DecidingRule a plain string, so
+// every wire value maps unambiguously.
+func verdict(pv *gleipnirv1.PolicyVerdict) jobs.Verdict {
+	return jobs.Verdict{
+		Allowed:      pv.GetAllowed(),
+		DecidingRule: pv.GetDecidingRule(),
+	}
+}
+
 // result converts a wire TaskResult into the domain jobs.Result that
 // TaskRepository.Resolve persists.
 func result(tr *gleipnirv1.TaskResult) jobs.Result {

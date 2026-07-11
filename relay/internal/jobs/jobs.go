@@ -143,6 +143,22 @@ type Result struct {
 	Stderr   []byte
 }
 
+// Verdict is a connected Node's PolicyVerdict, converted to its proto-free
+// domain mirror (ADR-0011): the daemon's live enforcement engine answered
+// "would Policy allow this", never a Relay-side evaluation (invariant 12).
+// It is returned by Conduit.Query — the proto-free counterpart to Dispatch
+// returning Result — so internal/dispatch.Router can satisfy the extended
+// Conduit without capability importing the wire proto.
+//
+// unknown(offline) is deliberately NOT a Verdict value: a matched-but-
+// disconnected Node never reaches Query at all, so "unknown" is a Relay-side
+// conclusion about connectivity (capability's NodeVerdict), not something
+// the daemon ever answers.
+type Verdict struct {
+	Allowed      bool
+	DecidingRule string
+}
+
 // JobRepository persists Jobs and their Stages.
 type JobRepository interface {
 	// CreateJob persists a new Job.

@@ -1,0 +1,157 @@
+// Plan mode (#119, ADR-0011): plan=true's Relay-side half. A Plan resolves
+// the same Selector, runs the same authz/cap checks as Run, but never
+// dispatches a Task — it asks each matched, connected daemon a read-only
+// PolicyQuery and reports the per-Node PolicyVerdict instead of executing.
+//
+// The load-bearing distinctions from Run:
+//   - Freeze is ADVISORY only, never a gate (ADR-0013): observation is
+//     wanted during an incident, so PolicyQuery is exempt from the Freeze
+//     check that refuses real dispatch.
+//   - The blast cap is CHECKED but never ENFORCED as an error (ADR-0011): an
+//     over-cap Plan reports would-be-rejected data (Matched/Cap/Class) with
+//     err == nil, and — because real dispatch would touch nothing over-cap —
+//     the query fan-out is skipped entirely rather than querying an
+//     unbounded fleet.
+//   - A matched-but-disconnected Node is unknown(offline), never a guess
+//     from a cached PolicySnapshot (invariant 12): the Relay never computes
+//     verdicts, only the daemon's live engine does.
+//   - Authz still GATES (mirrors Run): a caller not authorized to ASK must
+//     not learn per-Node deciding rules.
+//   - A Plan creates no Job, no Stage, no Task, no dedup entry, and is
+//     audited as a distinct AuditKindPlan (seams.go), never AuditKindDispatch.
+package capability
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
+
+// VerdictStatus is one Node's Plan-mode verdict. The zero value,
+// VerdictUnknown, is deliberately "not yet known" (a matched-but-
+// disconnected Node, or a query that itself failed) rather than a fabricated
+// allow — mirrors jobs.OutcomeUnspecified's zero-value discipline.
+type VerdictStatus int
+
+const (
+	VerdictUnknown VerdictStatus = iota
+	VerdictAllow
+	VerdictDeny
+)
+
+// NodeVerdict is one matched Node's Plan-mode result. DecidingRule is set
+// only on VerdictDeny (the daemon's PolicyVerdict.DecidingRule); Reason is
+// set only on VerdictUnknown (e.g. "offline", "query_failed") — never both,
+// mirroring jobs.Result's per-Node discipline.
+type NodeVerdict struct {
+	NodeID       string
+	Status       VerdictStatus
+	DecidingRule string
+	Reason       string
+}
+
+// planResult is what dispatcher.query returns: just the per-Node verdicts.
+// Unlike dispatchResult there is no jobID — a Plan creates no Job.
+type planResult struct {
+	verdicts []NodeVerdict
+}
+
+// PlanResult is Service.Plan's exported surface. CapExceeded, when non-nil,
+// carries the blast-cap rejection AS DATA (ADR-0011: a Plan never hard-fails
+// on a guardrail) — Verdicts is empty in that case, since the query fan-out
+// is skipped rather than probing an unbounded fleet. Frozen is advisory: it
+// reports that real dispatch would currently be refused (ADR-0013), but the
+// Plan still ran its queries — Frozen and a populated Verdicts are not
+// mutually exclusive.
+type PlanResult struct {
+	Matched     int
+	Frozen      bool
+	CapExceeded *CapExceededError
+	Verdicts    []NodeVerdict
+}
+
+// query implements dispatcher: for each of d's matched Nodes, ask the
+// daemon a read-only PolicyQuery if it is connected, else conclude
+// unknown(offline) without ever touching the Conduit — the Relay never
+// guesses a verdict from a cached PolicySnapshot (invariant 12). It persists
+// nothing: no Job, no Stage, no Task, no MarkDispatched, so jobEngine
+// satisfying dispatcher.query adds no new store dependency.
+func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
+	verdicts := make([]NodeVerdict, 0, len(d.nodes))
+	for _, n := range d.nodes {
+		if !e.conduit.Connected(n.NodeID) {
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "offline"})
+			continue
+		}
+		v, err := e.conduit.Query(ctx, n.NodeID, d.action)
+		if err != nil {
+			// Best-effort, never fabricated: a query that itself failed (e.g.
+			// the Tunnel dropped mid-query) is unknown, not a guessed allow or
+			// deny.
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "query_failed"})
+			continue
+		}
+		if v.Allowed {
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictAllow})
+		} else {
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictDeny, DecidingRule: v.DecidingRule})
+		}
+	}
+	return planResult{verdicts: verdicts}, nil
+}
+
+// Plan resolves sel, authorizes p against act, and — unlike Run — checks the
+// Freeze and blast cap only as ADVISORY data, never as a gate: a Plan always
+// runs (once authorized) and always reports, rather than erroring, when real
+// dispatch would currently be refused (ADR-0011/0013).
+//
+// Order mirrors Run except for the Freeze/cap treatment:
+//  1. resolve the Selector — identical resolution to Run (parity for #121).
+//  2. authorize p against act/sel — GATES (returns an error, audited as a
+//     refusal): a caller not permitted to ASK must not learn per-Node
+//     deciding rules (invariant 3).
+//  3. read Frozen — advisory only; a read error is swallowed (never fails
+//     the Plan) since Frozen here is informational, not a guardrail.
+//  4. check the blast cap — reported as CapExceeded data, not an error; the
+//     query fan-out is skipped in that case (real dispatch would touch
+//     nothing over-cap, so there is nothing useful to probe).
+//  5. query every matched Node through the sealed dispatcher seam.
+//  6. audit as AuditKindPlan — Principal/Selector/Action only, no
+//     JobID/Results (no Job/Task rows were ever created).
+func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
+	nodes := sel.Resolve(s.reg)
+
+	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
+		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, err)
+	}
+
+	frozen, _ := s.freeze.Frozen(ctx)
+
+	if capErr := s.cap.Check(act.RiskClass, len(nodes)); capErr != nil {
+		var ce *CapExceededError
+		errors.As(capErr, &ce)
+		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act}); err != nil {
+			return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce},
+				fmt.Errorf("capability: record audit entry: %w", err)
+		}
+		return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce}, nil
+	}
+
+	pr, err := s.disp.query(ctx, newDispatch(p, sel, nodes, act))
+
+	// The audit write is unconditional, even when query itself errored —
+	// mirroring Run's own "a partially-executed dispatch must never go
+	// unaudited" discipline (service.go) — and a failed write is joined
+	// into the returned error rather than silently swallowed.
+	auditErr := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act})
+	if auditErr != nil {
+		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
+	}
+
+	if joined := errors.Join(err, auditErr); joined != nil {
+		return PlanResult{Matched: len(nodes), Frozen: frozen, Verdicts: pr.verdicts}, joined
+	}
+	return PlanResult{Matched: len(nodes), Frozen: frozen, Verdicts: pr.verdicts}, nil
+}

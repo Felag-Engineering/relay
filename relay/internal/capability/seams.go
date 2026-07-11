@@ -66,6 +66,14 @@ type AuditKind int
 const (
 	AuditKindDispatch AuditKind = iota
 	AuditKindRefusal
+
+	// AuditKindPlan is a no-execution Plan (#119, ADR-0011): Principal,
+	// Selector, and Action are set exactly as for AuditKindDispatch, but
+	// JobID/Results/Reason are always empty — a Plan creates no Job/Task, so
+	// there is nothing to reference by ID and no per-Node NodeResult set,
+	// only the transient (unaudited) per-Node Verdicts returned to the
+	// caller directly.
+	AuditKindPlan
 )
 
 // AuditEntry is everything the pipeline knows about one Run call, passed to
@@ -75,7 +83,10 @@ const (
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
 // AuditKindRefusal (authz-deny or cap-reject), Reason is set and JobID/
-// Results are empty — the dispatcher was never reached.
+// Results are empty — the dispatcher was never reached. For AuditKindPlan
+// (#119), only Principal/Selector/Action are set — JobID, Results, and
+// Reason are all empty, since a Plan never dispatches (no Job/Task exists to
+// reference) even when it reports a would-be-rejected cap/Freeze condition.
 type AuditEntry struct {
 	Kind      AuditKind
 	Principal Principal

@@ -80,6 +80,15 @@ type dispatcher interface {
 	// dispatched Job by ID, not a fresh unit of work — so it does not weaken
 	// the dispatch/newDispatch seal.
 	cancel(ctx context.Context, jobID string) error
+
+	// query answers a Plan (#119, ADR-0011): for each of d's matched Nodes it
+	// asks the daemon a read-only PolicyQuery and collects a per-Node
+	// verdict — allow/deny(rule) from the daemon's live engine, or
+	// unknown(offline) for a matched-but-disconnected Node (invariant 12).
+	// query flows through the SAME sealed seam as run/cancel (invariant 10),
+	// but persists NOTHING: no Job, no Stage, no Task, no MarkDispatched —
+	// a Plan creates no dedup entry by construction.
+	query(ctx context.Context, d dispatch) (planResult, error)
 }
 
 // noopDispatcher is the v0.0.5 default. It performs no execution and says
@@ -97,4 +106,16 @@ func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error)
 
 func (noopDispatcher) cancel(context.Context, string) error {
 	return nil
+}
+
+// query implements dispatcher honestly: it performs no PolicyQuery and says
+// so — every matched Node gets VerdictUnknown, never a fabricated allow.
+// #119's jobEngine.query (plan.go) replaces this with the real per-Node
+// PolicyQuery/PolicyVerdict fan-out.
+func (noopDispatcher) query(_ context.Context, d dispatch) (planResult, error) {
+	verdicts := make([]NodeVerdict, 0, len(d.nodes))
+	for _, n := range d.nodes {
+		verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "not evaluated (noopDispatcher)"})
+	}
+	return planResult{verdicts: verdicts}, nil
 }

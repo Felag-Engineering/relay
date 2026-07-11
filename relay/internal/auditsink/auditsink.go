@@ -89,14 +89,22 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // NodeID, so the attempt remains queryable by JobID. A Refusal entry (authz-
 // deny or cap-reject: the dispatcher was never reached) gets exactly one
 // Record with the refusal's Reason, jobs.OutcomeUnspecified, and no JobID/
-// NodeID. Per-Record Append failures are joined, not short-circuited, so
-// one failing write does not silently drop the rest.
+// NodeID. A Plan entry (#119, ADR-0011: a no-execution PolicyQuery probe)
+// gets exactly one Record, Principal+Selector+Action only — no JobID/NodeID/
+// Outcome, since a Plan never creates a Job or Task. Per-Record Append
+// failures are joined, not short-circuited, so one failing write does not
+// silently drop the rest.
 func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	base := s.baseRecord(e.Principal, e.Selector, e.Action)
 
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
 		base.Reason = e.Reason
+		return s.append(ctx, base)
+	}
+
+	if e.Kind == capability.AuditKindPlan {
+		base.Kind = audit.KindPlan
 		return s.append(ctx, base)
 	}
 
