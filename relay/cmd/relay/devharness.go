@@ -97,6 +97,20 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 		return func() {}, nil
 	}
 
+	// Mutual exclusion (RB2, plan review): the production execution flip
+	// (#154) makes newServer itself set deps.tunnel.sink when
+	// Config.ControlEnabled, wiring its own capability.Service around the
+	// SAME dispatch.Router assembly this function builds below. Installing
+	// the dev harness on top of that would silently orphan newServer's
+	// production sink/capSvc (split-brain: two Routers, two Services, one
+	// Tunnel) — never enable the control plane and the dev harness together.
+	// This is a composition-root wiring bug, not a recoverable runtime
+	// condition, so it panics rather than silently overwriting the sink.
+	if deps.tunnel.sink != nil {
+		panic("devharness: installDevHarness: deps.tunnel.sink is already set — " +
+			"the control plane (Config.ControlEnabled) and the dev harness must never be enabled together")
+	}
+
 	router, reconciler, sink := newDispatchStack(deps.tasks)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is

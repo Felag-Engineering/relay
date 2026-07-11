@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"google.golang.org/grpc/codes"
@@ -288,7 +289,16 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 
 	sel := capability.Selector{}
 	act := jobs.Action{RiskClass: jobs.RiskClassRead}
-	_, runErr := deps.capability.Run(ctx, capability.Principal{Account: "probe"}, sel, act)
+	// controlplane.FoundingAdmin() — not an unattributed/non-admin probe
+	// Principal — so these three calls keep verifying the Freeze gate itself
+	// (frozen -> FrozenError; released -> a genuine success), not an authz
+	// denial that would satisfy "err != nil" for the wrong reason (RB1, plan
+	// review): since #154, ControlEnabled wires the real deny-by-default
+	// authz.NewStaged Authorizer, and a non-admin Principal here would be
+	// denied with authz.ErrUnauthorized before ever reaching the Freeze
+	// check's dispatch outcome.
+	admin := controlplane.FoundingAdmin()
+	_, runErr := deps.capability.Run(ctx, admin, sel, act)
 	var frozenErr *capability.FrozenError
 	if !errors.As(runErr, &frozenErr) {
 		t.Fatalf("capability.Run after engage: err = %v, want a *capability.FrozenError", runErr)
@@ -302,7 +312,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	if noReasonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
 	}
-	if _, runErr := deps.capability.Run(ctx, capability.Principal{Account: "probe"}, sel, act); !errors.As(runErr, &frozenErr) {
+	if _, runErr := deps.capability.Run(ctx, admin, sel, act); !errors.As(runErr, &frozenErr) {
 		t.Fatalf("capability.Run after refused release: err = %v, want still a *capability.FrozenError", runErr)
 	}
 
@@ -313,8 +323,11 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 		t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
 	}
 
-	if _, runErr := deps.capability.Run(ctx, capability.Principal{Account: "probe"}, sel, act); errors.As(runErr, &frozenErr) {
-		t.Fatalf("capability.Run after release: still a *capability.FrozenError: %v", runErr)
+	// After a genuine release, dispatch must genuinely succeed for an
+	// authorized (admin) Principal — not merely "not a FrozenError", which an
+	// authz denial would also satisfy (RB1, plan review).
+	if _, runErr := deps.capability.Run(ctx, admin, sel, act); runErr != nil {
+		t.Fatalf("capability.Run after release: err = %v, want nil (dispatch unblocked for an admin Principal)", runErr)
 	}
 
 	records, err := deps.audit.List(ctx)

@@ -17,8 +17,10 @@ import (
 // function for each connected node (so tests can push Tasks), and collects
 // inbound TaskResults (so tests can assert on outcomes).
 //
-// This is the ONLY concrete taskSink. Production code never sets tunnel.sink,
-// so the interface and dispatcher are unreachable in the production binary.
+// This is a test-only taskSink. newServer's production taskSink (since
+// #154) is routerSink (dispatch_wiring.go), wrapping the real
+// dispatch.Router — set only when Config.ControlEnabled (see
+// TestTunnelSink_GatedByControlEnabled).
 // ---------------------------------------------------------------------------
 
 type dispatcher struct {
@@ -243,26 +245,48 @@ func TestDispatcher_DispatchUnknownNode(t *testing.T) {
 	}
 }
 
-// TestTunnelSink_NilInProduction asserts that newServer does not set a taskSink
-// on the tunnelServer — the production server must not wire a dispatcher.
-// This protects ADR-0002: the dispatch seam is test-only.
-func TestTunnelSink_NilInProduction(t *testing.T) {
-	cfg := Config{
-		Addr:                ":0",
-		CADir:               t.TempDir(),
-		Hostname:            "localhost",
-		EnrollIPRate:        5,
-		EnrollIPBurst:       3,
-		EnrollGlobalRate:    50,
-		EnrollGlobalBurst:   10,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
-	}
-	_, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	if deps.tunnel.sink != nil {
-		t.Error("newServer must leave tunnel.sink nil in production")
-	}
+// TestTunnelSink_GatedByControlEnabled asserts that newServer wires
+// execution (tunnel.sink + deps.dispatch) if and only if Config.ControlEnabled
+// (the #154 production execution flip): execution is off unless the control
+// plane is enabled, in which case it's on for real. This replaces the old
+// TestTunnelSink_NilInProduction, which encoded "always off" — no longer
+// true after #154.
+func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
+	t.Run("disabled: execution stays off", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		srv, deps, err := newServer(cfg)
+		if err != nil {
+			t.Fatalf("newServer: %v", err)
+		}
+		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(srv.Stop)
+
+		if deps.tunnel.sink != nil {
+			t.Error("newServer must leave tunnel.sink nil when ControlEnabled is false")
+		}
+		if deps.dispatch != nil {
+			t.Error("newServer must leave deps.dispatch nil when ControlEnabled is false")
+		}
+	})
+
+	t.Run("enabled: execution is wired for real", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.ControlEnabled = true
+		cfg.ControlAddr = "127.0.0.1:0"
+		cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+
+		srv, deps, err := newServer(cfg)
+		if err != nil {
+			t.Fatalf("newServer: %v", err)
+		}
+		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(srv.Stop)
+
+		if deps.tunnel.sink == nil {
+			t.Error("newServer must set tunnel.sink when ControlEnabled is true")
+		}
+		if deps.dispatch == nil {
+			t.Error("newServer must set deps.dispatch when ControlEnabled is true")
+		}
+	})
 }

@@ -17,10 +17,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// taskSink is a test/devharness-only seam for capturing Task dispatch and
-// results in hermetic unit tests and the #112 cross-binary CI harness. It is
-// nil in an untagged (production) build — newServer never sets it; only
-// tests and installDevHarness (devharness-tagged build only) do.
+// taskSink is the seam for capturing Task dispatch and results: hermetic
+// unit tests, the #112 cross-binary CI harness (installDevHarness,
+// devharness-tagged build only), and — since #154 — newServer itself, which
+// sets it to the real dispatch.Router (via routerSink, dispatch_wiring.go)
+// whenever Config.ControlEnabled, so Tasks dispatched through the capability
+// pipeline actually reach connected daemons over this mTLS Tunnel. Nil when
+// the control plane is disabled (execution off, exactly as before #154).
 //
 // register is called after the Ping handshake completes; it records the
 // outbound send function for the node and returns a cleanup func. deliver is
@@ -44,9 +47,9 @@ type tunnelServer struct {
 	// like reg/conns so existing tests that construct &tunnelServer{} directly
 	// keep compiling; nil in any test that doesn't need the capture.
 	policy *policyview.Cache
-	// sink is nil in an untagged (production) build; only set in tests, or by
-	// installDevHarness in a devharness-tagged build, to inject Tasks and
-	// capture results. Never set by newServer.
+	// sink is set by newServer when Config.ControlEnabled (production
+	// execution, #154), by installDevHarness in a devharness-tagged build, or
+	// injected directly by tests; nil when the control plane is disabled.
 	sink taskSink
 }
 
@@ -134,8 +137,9 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 		return status.Errorf(codes.Internal, "send ping: %v", err)
 	}
 
-	// Register the outbound send function with the test sink (if set).
-	// In production s.sink is always nil; this block is a zero-cost no-op.
+	// Register the outbound send function with the sink (if set). Nil, and
+	// this block a zero-cost no-op, when the control plane is disabled
+	// (execution off); the real production sink when it's enabled (#154).
 	if s.sink != nil {
 		unregister := s.sink.register(nodeID, stream.Send)
 		defer unregister()
@@ -185,15 +189,17 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 					}
 				}
 			}
-			// Deliver TaskResult to the test sink (if set). In production
-			// s.sink is always nil; this block is a zero-cost no-op.
+			// Deliver TaskResult to the sink (if set) — the real production
+			// sink (#154) is how a dispatched Task's result reaches the
+			// waiting Router.Dispatch call. Nil, and this block a zero-cost
+			// no-op, when the control plane is disabled.
 			if s.sink != nil {
 				if tr := m.GetTaskResult(); tr != nil {
 					s.sink.deliver(nodeID, tr)
 				}
 			}
-			// Deliver PolicyVerdict to the test sink (if set). In production
-			// s.sink is always nil; this block is a zero-cost no-op.
+			// Deliver PolicyVerdict to the sink (if set); nil-guarded like
+			// deliver above.
 			if s.sink != nil {
 				if pv := m.GetPolicyVerdict(); pv != nil {
 					s.sink.deliverVerdict(nodeID, pv)
