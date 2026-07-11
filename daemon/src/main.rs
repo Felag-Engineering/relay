@@ -32,7 +32,7 @@ mod gen {
 
 use gen::{
     daemon_message, relay_message, tunnel_client::TunnelClient, DaemonMessage, Facts, Heartbeat,
-    Hello,
+    Hello, PolicySnapshot,
 };
 
 fn now_millis() -> i64 {
@@ -108,8 +108,27 @@ async fn acquire_identity(
     Ok(identity)
 }
 
-/// Sends the initial Hello, drives the heartbeat loop, and processes inbound
-/// messages from the Relay until the stream closes or errors.
+/// Assembles a `PolicySnapshot` from the live, loaded Policy for the Relay to
+/// display.
+///
+/// Report-only / display-only (ADR-0002, ADR-0011): every field is read
+/// straight from `policy`'s own accessors — no re-evaluation, nothing
+/// Relay-derived. `policy_fingerprint` calls the SAME [`policy::Policy::fingerprint`]
+/// Hello uses, so a snapshot and the Hello sent from the same `Policy` always
+/// agree.
+fn policy_snapshot(policy: &policy::Policy) -> PolicySnapshot {
+    PolicySnapshot {
+        raw_exec_enabled: policy.raw_exec_enabled(),
+        raw_allow_patterns: policy.raw_allow_patterns(),
+        raw_deny_patterns: policy.raw_deny_patterns(),
+        allowed_operations: policy.allowed_operations(),
+        policy_fingerprint: policy.fingerprint().to_string(),
+    }
+}
+
+/// Sends the initial Hello, followed by a `PolicySnapshot` of the live Policy
+/// (report-only, ADR-0002/0011), drives the heartbeat loop, and processes
+/// inbound messages from the Relay until the stream closes or errors.
 ///
 /// Inbound `RelayMessage` handling:
 /// - `Task`: registered in the cancel registry BEFORE spawning, then dispatched
@@ -156,6 +175,14 @@ async fn run_tunnel(
             labels: enroll::node_labels_to_proto(&node_labels),
             policy_fingerprint: policy.fingerprint().to_string(),
         })),
+    })
+    .await?;
+
+    // Send the effective PolicySnapshot immediately after Hello: report-only,
+    // for the Relay's display cache (ADR-0002/0011). Hello's `policy_fingerprint`
+    // is a summary; this is the full snapshot, from the same live `policy`.
+    tx.send(DaemonMessage {
+        body: Some(daemon_message::Body::Policy(policy_snapshot(&policy))),
     })
     .await?;
 
@@ -405,7 +432,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{gen::Facts, heartbeat_delay, now_millis, parse_interval_secs};
+    use super::{gen::Facts, heartbeat_delay, now_millis, parse_interval_secs, policy_snapshot};
+    use crate::policy;
     use std::time::Duration;
 
     #[test]
@@ -496,5 +524,32 @@ mod tests {
             upper >= min_delay && upper <= max_delay,
             "upper out of bounds: {upper:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // policy_snapshot (#151)
+    // -----------------------------------------------------------------------
+
+    const FIXTURE: &str = include_str!("../policy.example.toml");
+
+    #[test]
+    fn policy_snapshot_from_fixture_populates_all_fields() {
+        let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
+        let snapshot = policy_snapshot(&p);
+
+        assert_eq!(snapshot.raw_exec_enabled, p.raw_exec_enabled());
+        assert_eq!(snapshot.raw_allow_patterns, p.raw_allow_patterns());
+        assert_eq!(snapshot.raw_deny_patterns, p.raw_deny_patterns());
+        assert_eq!(snapshot.allowed_operations, p.allowed_operations());
+        assert_eq!(snapshot.policy_fingerprint, p.fingerprint());
+    }
+
+    #[test]
+    fn policy_snapshot_fingerprint_matches_hello() {
+        // The key consistency guarantee: the snapshot's fingerprint must be
+        // identical to the fingerprint Hello sends, since both are computed
+        // from the same policy.fingerprint() call on the same Arc<Policy>.
+        let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
+        assert_eq!(policy_snapshot(&p).policy_fingerprint, p.fingerprint());
     }
 }

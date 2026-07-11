@@ -526,6 +526,51 @@ impl Policy {
         &self.fingerprint
     }
 
+    /// Whether Raw Exec is enabled at all on this Node: `true` iff the
+    /// `[raw_exec]` block has at least one allow pattern.
+    ///
+    /// Report-only / display-only (ADR-0002): this reads the live engine's own
+    /// loaded state for the `PolicySnapshot` the Relay displays; it never
+    /// evaluates or grants anything itself. An empty (or absent) `allow` list
+    /// means Raw Exec is denied-by-default, matching `evaluate_raw_exec`.
+    pub fn raw_exec_enabled(&self) -> bool {
+        !self.raw_allow.is_empty()
+    }
+
+    /// The `[raw_exec] allow` regex patterns, in file order.
+    ///
+    /// Report-only / display-only (ADR-0002) — for the `PolicySnapshot` the
+    /// Relay displays; not used for evaluation (the compiled `Regex` on
+    /// `CompiledRe` is what `evaluate_raw_exec` uses).
+    pub fn raw_allow_patterns(&self) -> Vec<String> {
+        self.raw_allow.iter().map(|c| c.pattern.clone()).collect()
+    }
+
+    /// The `[raw_exec] deny` regex patterns, in file order.
+    ///
+    /// Report-only / display-only (ADR-0002) — see [`Policy::raw_allow_patterns`].
+    pub fn raw_deny_patterns(&self) -> Vec<String> {
+        self.raw_deny.iter().map(|c| c.pattern.clone()).collect()
+    }
+
+    /// The distinct `[[operation]]` allow-rule names, in first-appearance file
+    /// order.
+    ///
+    /// Report-only / display-only (ADR-0002): a raw report of allow-rule
+    /// names for the `PolicySnapshot` the Relay displays. `[[deny]]` rule
+    /// names are NOT included — this is not a re-evaluation of what is
+    /// actually permitted (that would reimplement `Policy::evaluate`,
+    /// forbidden by ADR-0011); it mirrors the proto field's own contract.
+    pub fn allowed_operations(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for op in &self.operations {
+            if !names.contains(&op.name) {
+                names.push(op.name.clone());
+            }
+        }
+        names
+    }
+
     /// Evaluate whether `operation_name` may run with the given `args`.
     ///
     /// Semantics (ADR-0002):
@@ -1154,6 +1199,64 @@ deny = []
             file_policy.fingerprint(),
             str_policy.fingerprint(),
             "load_policy and from_toml_str must produce the same fingerprint for the same bytes"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // PolicySnapshot accessors (#151)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn snapshot_accessors_from_fixture() {
+        let policy = fixture_policy();
+        assert!(
+            policy.raw_exec_enabled(),
+            "fixture has a raw_exec allow pattern"
+        );
+        assert_eq!(
+            policy.raw_allow_patterns(),
+            vec!["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$".to_string()]
+        );
+        assert_eq!(
+            policy.raw_deny_patterns(),
+            vec!["--force".to_string(), "\\brm\\b".to_string()]
+        );
+        assert_eq!(
+            policy.allowed_operations(),
+            vec![
+                "service.restart".to_string(),
+                "system.facts".to_string(),
+                "file.read".to_string(),
+                "pkg.install".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn snapshot_accessors_empty_policy() {
+        let policy = from_toml_str("").expect("empty TOML must parse as deny-all");
+        assert!(!policy.raw_exec_enabled());
+        assert!(policy.raw_allow_patterns().is_empty());
+        assert!(policy.raw_deny_patterns().is_empty());
+        assert!(policy.allowed_operations().is_empty());
+    }
+
+    #[test]
+    fn allowed_operations_dedups() {
+        let toml = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[operation]]
+name = "service.restart"
+allowed_args = [["php-fpm"]]
+"#;
+        let policy = from_toml_str(toml).expect("inline policy must parse");
+        assert_eq!(
+            policy.allowed_operations(),
+            vec!["service.restart".to_string()],
+            "duplicate operation names must appear once, first-appearance order"
         );
     }
 
