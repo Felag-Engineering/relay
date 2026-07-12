@@ -6,44 +6,14 @@ import (
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// --- wire-shape mirrors for #119's plan=true output (external test package;
-// see mcp_test.go's own note on why the JSON shape is re-declared rather
-// than reaching into mcp's unexported types). ---
-
-type perNodeVerdictJSON struct {
-	NodeID       string `json:"node_id"`
-	Verdict      string `json:"verdict"`
-	DecidingRule string `json:"deciding_rule,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-}
-
-type wouldBeRejectedJSON struct {
-	Reason  string `json:"reason"`
-	Matched int    `json:"matched,omitempty"`
-	Cap     int    `json:"cap,omitempty"`
-	Class   string `json:"class,omitempty"`
-}
-
-type planOutputJSON struct {
-	Matched         int                  `json:"matched"`
-	Verdicts        []perNodeVerdictJSON `json:"verdicts"`
-	WouldBeRejected *wouldBeRejectedJSON `json:"would_be_rejected,omitempty"`
-	Advisory        string               `json:"advisory"`
-}
-
-type runOrPlanOutputJSON struct {
-	JobID   string              `json:"job_id"`
-	Results []perNodeResultJSON `json:"results"`
-	Plan    *planOutputJSON     `json:"plan,omitempty"`
-}
-
-// verdictsByNode indexes a planOutputJSON's Verdicts by NodeID for
+// verdictsByNode indexes a mcp.PlanOutput's Verdicts by NodeID for
 // order-independent assertions.
-func verdictsByNode(p planOutputJSON) map[string]perNodeVerdictJSON {
-	m := make(map[string]perNodeVerdictJSON, len(p.Verdicts))
+func verdictsByNode(p mcp.PlanOutput) map[string]mcp.PerNodeVerdict {
+	m := make(map[string]mcp.PerNodeVerdict, len(p.Verdicts))
 	for _, v := range p.Verdicts {
 		m[v.NodeID] = v
 	}
@@ -62,7 +32,7 @@ func TestMCP_RunOperation_Plan_VerdictsNoExecution(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
-	var out runOrPlanOutputJSON
+	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
 	if out.JobID != "" {
@@ -72,7 +42,7 @@ func TestMCP_RunOperation_Plan_VerdictsNoExecution(t *testing.T) {
 		t.Errorf("results = %+v, want empty (a Plan never dispatches)", out.Results)
 	}
 	if out.Plan == nil {
-		t.Fatal("plan field is nil, want a populated planOutput")
+		t.Fatal("plan field is nil, want a populated PlanOutput")
 	}
 	if out.Plan.Matched != 2 {
 		t.Errorf("plan.matched = %d, want 2", out.Plan.Matched)
@@ -108,7 +78,7 @@ func TestMCP_RunOperation_Plan_OfflineIsUnknown(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
-	var out runOrPlanOutputJSON
+	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
 	byNode := verdictsByNode(*out.Plan)
@@ -138,7 +108,7 @@ func TestMCP_RunOperation_Plan_OverCap_ReportsNotErrors(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("raw_exec(plan=true) over the mutate-cap: IsError = true, want false (reported, not errored): content = %+v", res.Content)
 	}
-	var out runOrPlanOutputJSON
+	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
 	if out.Plan == nil || out.Plan.WouldBeRejected == nil {
@@ -183,7 +153,7 @@ func TestMCP_RunOperation_Plan_FrozenReportsWhileRealRunErrors(t *testing.T) {
 	if planRes.IsError {
 		t.Fatalf("run_operation(plan=true) while frozen: IsError = true, want false (advisory, not a refusal): content = %+v", planRes.Content)
 	}
-	var planOut runOrPlanOutputJSON
+	var planOut mcp.RunOrPlanOutput
 	decodeResult(t, planRes, &planOut)
 	if planOut.Plan == nil || planOut.Plan.WouldBeRejected == nil || planOut.Plan.WouldBeRejected.Reason != "frozen" {
 		t.Fatalf("plan.would_be_rejected = %+v, want {reason: frozen}", planOut.Plan)
@@ -212,7 +182,7 @@ func TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts", "plan": true})
-	var out runOrPlanOutputJSON
+	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 
 	records, err := ts.store.Audit().List(context.Background())
@@ -257,7 +227,7 @@ func TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask(t *testing.T) {
 	// A subsequent real run still mints "job-id-1" — proof the Plan call
 	// above never advanced the deterministic ID sequence either.
 	runRes := callTool(t, session, "run_operation", map[string]any{"selector": "node:role=web", "operation": "system.facts"})
-	var runOut runOrPlanOutputJSON
+	var runOut mcp.RunOrPlanOutput
 	decodeResult(t, runRes, &runOut)
 	if runOut.JobID != "job-id-1" {
 		t.Errorf("first real run's job_id = %q, want job-id-1 (the Plan call must not have minted any ID)", runOut.JobID)
@@ -281,7 +251,7 @@ func TestMCP_RawExec_Plan_ArgvVerbatimMutateClass(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("raw_exec(plan=true): IsError = true, content = %+v", res.Content)
 	}
-	var out runOrPlanOutputJSON
+	var out mcp.RunOrPlanOutput
 	decodeResult(t, res, &out)
 	if out.Plan == nil || out.Plan.WouldBeRejected == nil || out.Plan.WouldBeRejected.Class != "mutate" {
 		t.Fatalf("raw_exec(plan=true).would_be_rejected = %+v, want class=mutate (always mutate, ADR-0012)", out.Plan)
@@ -303,15 +273,15 @@ func TestMCP_Plan_PlanVsRealRunParity(t *testing.T) {
 	session := ts.connect(t)
 
 	planRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
-	var planOut runOrPlanOutputJSON
+	var planOut mcp.RunOrPlanOutput
 	decodeResult(t, planRes, &planOut)
 
 	runRes := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
-	var runOut runOrPlanOutputJSON
+	var runOut mcp.RunOrPlanOutput
 	decodeResult(t, runRes, &runOut)
 
 	planByNode := verdictsByNode(*planOut.Plan)
-	runByNode := map[string]perNodeResultJSON{}
+	runByNode := map[string]mcp.PerNodeResult{}
 	for _, r := range runOut.Results {
 		runByNode[r.NodeID] = r
 	}
