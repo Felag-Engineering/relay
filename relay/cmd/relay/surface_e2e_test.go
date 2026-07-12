@@ -1,0 +1,952 @@
+//go:build integration
+
+// Package main: surface_e2e_test.go is #121's milestone-proving integration
+// test — it proves the FULL v0.0.6 acceptance matrix (ROADMAP "Control
+// Surfaces: MCP & First API Slice") end to end, driven ONLY through the
+// public surfaces a real client would use: a real MCP SDK client over HTTPS
+// (run_operation/raw_exec/describe_node/list_nodes) and real /api/v1 HTTPS
+// calls (token mint/revoke, Node revoke, Freeze engage/release) — against
+// real relay-daemon subprocesses, with newServer wired for production
+// (Config.ControlEnabled=true, the #154 path this repo's other e2e suites
+// already prove piecewise). This file adds no assertion path that reaches
+// into deps.capability directly (unlike control_api_e2e_test.go's Freeze
+// probe) — deps.audit reads and the direct node-plane Enroll RPC (for the
+// deterministic revoked-token negative) are the only non-MCP/non-HTTP
+// observation points, both read-only/negative-only, never part of the
+// dispatch/authz assertion path itself.
+//
+// #113 (compose dev-fleet) note: #113 is still OPEN as of this issue. A
+// future compose-based dev-fleet harness can reuse, wholesale: the
+// token-scope -> distinct relay: label pattern used here to stand up
+// alpha/beta/fresh Nodes; the launchDaemon env recipe (RELAY_ADDR/
+// RELAY_ENROLLMENT_TOKEN/RELAY_CA_BUNDLE_PATH/RELAY_STATE_DIR/
+// RELAY_POLICY_PATH, one HOSTNAME + one RELAY_STATE_DIR per Node); the
+// waitForConnectedNodes(deps.dispatch.ConnectedNodes()) readiness poll; the
+// pollDescribeReported poll for the daemon's post-connect PolicySnapshot
+// (#151); and the public-surface (MCP + HTTPS) assertion shapes throughout.
+// No compose file is added here — #113's own scope.
+//
+// Skip condition: RELAY_DAEMON_BIN env var not set (mirrors every other file
+// in this package). Run via: make test-integration.
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+)
+
+// --- JSON wire-shape mirrors -----------------------------------------------
+//
+// package main cannot reach internal/controlplane/mcp's own external test
+// package (mcp_test) where these are declared, so they are copied field for
+// field here (same rationale as perNodeResultJSON/executionOutputJSON in
+// mcp_execution_e2e_test.go): this test exercises the MCP tools as an
+// outside caller would, over the wire, never by importing mcp's unexported
+// types.
+
+// factsJSON mirrors internal/controlplane/mcp/tools_nodes.go's factsOutput.
+type factsJSON struct {
+	Hostname    string   `json:"hostname"`
+	OS          string   `json:"os"`
+	Kernel      string   `json:"kernel"`
+	Arch        string   `json:"arch"`
+	IPAddresses []string `json:"ip_addresses"`
+}
+
+// nodeItemJSON mirrors internal/controlplane/mcp/tools_nodes.go's nodeItem.
+type nodeItemJSON struct {
+	NodeID            string            `json:"node_id"`
+	NodeLabels        map[string]string `json:"node_labels"`
+	RelayLabels       map[string]string `json:"relay_labels"`
+	Facts             factsJSON         `json:"facts"`
+	LastSeen          string            `json:"last_seen"`
+	PolicyFingerprint string            `json:"policy_fingerprint"`
+	Revoked           bool              `json:"revoked"`
+	RevokedAt         string            `json:"revoked_at,omitempty"`
+}
+
+// listNodesResultJSON mirrors tools_nodes.go's listNodesOutput.
+type listNodesResultJSON struct {
+	Nodes []nodeItemJSON `json:"nodes"`
+}
+
+// effectivePolicyJSON mirrors tools_nodes.go's effectivePolicyOutput.
+type effectivePolicyJSON struct {
+	RawExecEnabled    bool     `json:"raw_exec_enabled"`
+	RawAllowPatterns  []string `json:"raw_allow_patterns"`
+	RawDenyPatterns   []string `json:"raw_deny_patterns"`
+	AllowedOperations []string `json:"allowed_operations"`
+	PolicyFingerprint string   `json:"policy_fingerprint"`
+	Reported          bool     `json:"reported"`
+}
+
+// describeNodeResultJSON mirrors tools_nodes.go's describeNodeOutput
+// (nodeItem embedded + EffectivePolicy).
+type describeNodeResultJSON struct {
+	nodeItemJSON
+	EffectivePolicy effectivePolicyJSON `json:"effective_policy"`
+}
+
+// perNodeVerdictJSON mirrors internal/controlplane/mcp/tools_execution.go's
+// perNodeVerdict (#119, ADR-0011).
+type perNodeVerdictJSON struct {
+	NodeID       string `json:"node_id"`
+	Verdict      string `json:"verdict"`
+	DecidingRule string `json:"deciding_rule,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// wouldBeRejectedJSON mirrors tools_execution.go's wouldBeRejected.
+type wouldBeRejectedJSON struct {
+	Reason  string `json:"reason"`
+	Matched int    `json:"matched,omitempty"`
+	Cap     int    `json:"cap,omitempty"`
+	Class   string `json:"class,omitempty"`
+}
+
+// planOutputJSON mirrors tools_execution.go's planOutput.
+type planOutputJSON struct {
+	Matched         int                  `json:"matched"`
+	Verdicts        []perNodeVerdictJSON `json:"verdicts"`
+	WouldBeRejected *wouldBeRejectedJSON `json:"would_be_rejected,omitempty"`
+	Advisory        string               `json:"advisory"`
+}
+
+// runOrPlanOutputJSON mirrors tools_execution.go's runOrPlanOutput — the
+// shared run_operation/raw_exec result shape (plan=false renders Plan as
+// nil/omitted; plan=true renders JobID=""/Results=[]).
+type runOrPlanOutputJSON struct {
+	JobID   string              `json:"job_id"`
+	Results []perNodeResultJSON `json:"results"`
+	Plan    *planOutputJSON     `json:"plan,omitempty"`
+}
+
+// verdictsByNode indexes a planOutputJSON's Verdicts by NodeID for
+// order-independent assertions (ADR-0006: never assume slice order).
+func verdictsByNode(p planOutputJSON) map[string]perNodeVerdictJSON {
+	m := make(map[string]perNodeVerdictJSON, len(p.Verdicts))
+	for _, v := range p.Verdicts {
+		m[v.NodeID] = v
+	}
+	return m
+}
+
+// resultsByNode indexes a []perNodeResultJSON by NodeID, the run_operation/
+// raw_exec sibling of verdictsByNode.
+func resultsByNode(results []perNodeResultJSON) map[string]perNodeResultJSON {
+	m := make(map[string]perNodeResultJSON, len(results))
+	for _, r := range results {
+		m[r.NodeID] = r
+	}
+	return m
+}
+
+// stringSlicesEqual reports whether a and b hold the same strings in the
+// same order — used for RawAllowPatterns/RawDenyPatterns, which the daemon
+// reports (and this test asserts) verbatim in fixturePolicy's own order.
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// --- new helpers -------------------------------------------------------
+
+// decodeCallToolJSON unmarshals a successful CallToolResult's text content
+// into out, failing the test on a tool error or malformed content (mirrors
+// internal/controlplane/mcp/mcp_test.go's decodeResult, unreachable here —
+// see the JSON-mirror comment above).
+func decodeCallToolJSON(t *testing.T, res *sdkmcp.CallToolResult, out any) {
+	t.Helper()
+	if res.IsError {
+		t.Fatalf("tool call returned IsError=true unexpectedly; content = %+v", res.Content)
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("CallToolResult.Content is empty")
+	}
+	tc, ok := res.Content[0].(*sdkmcp.TextContent)
+	if !ok {
+		t.Fatalf("CallToolResult.Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
+	}
+	if err := json.Unmarshal([]byte(tc.Text), out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", tc.Text, err)
+	}
+}
+
+// toolErrorText extracts a tool error's message text, failing the test if
+// res is not actually an error result (mirrors
+// internal/controlplane/mcp/mcp_exec_test.go's toolErrorText — unreachable
+// here, same rationale as the JSON mirrors above).
+func toolErrorText(t *testing.T, res *sdkmcp.CallToolResult) string {
+	t.Helper()
+	if !res.IsError {
+		t.Fatal("toolErrorText: result is not an error")
+	}
+	if len(res.Content) == 0 {
+		t.Fatal("toolErrorText: Content is empty")
+	}
+	tc, ok := res.Content[0].(*sdkmcp.TextContent)
+	if !ok {
+		t.Fatalf("toolErrorText: Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
+	}
+	return tc.Text
+}
+
+// startSurfaceHarness boots the real Relay composition root (newServer) with
+// the control plane enabled for production execution (Config.ControlEnabled
+// = true, the #154 flip): a real TCP node-plane gRPC listener (daemon
+// subprocesses need a real socket, mirroring mcp_execution_e2e_test.go — not
+// startControlAPIServer's bufconn, which only wraps gRPC's dialer) and a real
+// TCP control-plane HTTPS listener. Returns deps, the node-plane address, the
+// control-plane base URL, an authenticated *http.Client (bearer
+// controlAPITestCredential baked in via bearerRoundTripper — usable for both
+// MCP and /api/v1 calls), and a plain TLS-trusting *http.Client carrying no
+// credential (for the auth-negative subtest). Skips the test if
+// RELAY_DAEMON_BIN is unset.
+func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase string, authed, plain *http.Client) {
+	t.Helper()
+	if os.Getenv("RELAY_DAEMON_BIN") == "" {
+		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+	}
+
+	cfg := baseTestConfig(t)
+	cfg.Addr = "127.0.0.1:0"
+	// baseTestConfig's enrollment rate limits (IPBurst: 3) are tight enough
+	// for control_api_e2e_test.go's 1-2-Enroll-call tests, but this harness
+	// enrolls 3 real daemon subprocesses plus a deliberately-failing 4th
+	// attempt (api_token_lifecycle's revoked-token negative), all from the
+	// same loopback IP — generous limits here (mirrors
+	// tunnel_dispatch_e2e_test.go's startTCPServer) so that negative assert
+	// sees the real PermissionDenied decision, never a rate-limit false
+	// positive from this test's own enrollment volume.
+	cfg.EnrollIPRate = 100
+	cfg.EnrollIPBurst = 50
+	cfg.EnrollGlobalRate = 1000
+	cfg.EnrollGlobalBurst = 500
+	cfg.ControlEnabled = true
+	cfg.ControlAddr = "127.0.0.1:0"
+	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+
+	srv, d, err := newServer(cfg)
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { d.store.Close() }) //nolint:errcheck
+	// deliberately NOT injecting a test taskSink: newServer itself wires
+	// deps.tunnel.sink + deps.dispatch because cfg.ControlEnabled is true —
+	// the same production path mcp_execution_e2e_test.go proves, exercised
+	// here through the full v0.0.6 acceptance matrix.
+
+	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen (node-plane): %v", err)
+	}
+	nodeAddr = nodeLis.Addr().String()
+	go srv.Serve(nodeLis) //nolint:errcheck
+	t.Cleanup(srv.GracefulStop)
+
+	controlLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen (control-plane): %v", err)
+	}
+	go func() { _ = d.control.Serve(controlLis) }()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = d.control.Shutdown(shutdownCtx)
+	})
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(d.ca.Bundle()) {
+		t.Fatal("AppendCertsFromPEM(deps.ca.Bundle()) returned false")
+	}
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
+	authed = &http.Client{Transport: bearerRoundTripper{base: transport, token: controlAPITestCredential}}
+	plain = &http.Client{Transport: transport}
+
+	return d, nodeAddr, "https://" + controlLis.Addr().String(), authed, plain
+}
+
+// launchDaemon starts a real relay-daemon subprocess against nodeAddr,
+// enrolling with token, with its own fresh RELAY_STATE_DIR and HOSTNAME (so
+// distinct calls model distinct fleet Nodes, never reusing on-disk identity).
+// The subprocess is killed and reaped via t.Cleanup.
+func launchDaemon(t *testing.T, nodeAddr, caFile, policyPath, token, hostname string) *exec.Cmd {
+	t.Helper()
+	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
+	if daemonBin == "" {
+		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+	}
+
+	stateDir := t.TempDir()
+	env := append(os.Environ(),
+		"RELAY_ADDR=https://"+nodeAddr,
+		"RELAY_ENROLLMENT_TOKEN="+token,
+		"RELAY_CA_BUNDLE_PATH="+caFile,
+		"RELAY_ENROLL_ENDPOINT=https://"+nodeAddr,
+		"RELAY_STATE_DIR="+stateDir,
+		"RELAY_POLICY_PATH="+policyPath,
+		"RELAY_DOMAIN=localhost",
+		"HOSTNAME="+hostname,
+		// Disable rustls provider conflict on some environments.
+		"RUST_LOG=warn",
+	)
+	cmd := exec.Command(daemonBin, "--relay", "https://"+nodeAddr)
+	cmd.Env = env
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start daemon (%s): %v", hostname, err)
+	}
+	t.Cleanup(func() {
+		cmd.Process.Kill() //nolint:errcheck
+		cmd.Wait()         //nolint:errcheck
+	})
+	return cmd
+}
+
+// waitForConnectedNodes polls deps.dispatch.ConnectedNodes() (the live
+// Tunnel registry, dispatch.Router's whole reason for existing per the plan)
+// until at least n Nodes are connected, or fails the test at deadline.
+// Renamed from the plan's "waitForConnected" to avoid colliding with
+// fleet_e2e_test.go's existing helper of that name (same package, same
+// integration build; different signature — devharness-socket-driven, not
+// deps.dispatch-driven).
+func waitForConnectedNodes(t *testing.T, deps *appDeps, n int, deadline time.Duration) []string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	for {
+		connected := deps.dispatch.ConnectedNodes()
+		if len(connected) >= n {
+			return connected
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timeout: only %d/%d Nodes connected within %s: %v", len(connected), n, deadline, connected)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// pollDescribeReported calls describe_node for nodeID until
+// effective_policy.reported==true (the daemon's post-connect PolicySnapshot,
+// #151, captured by tunnel.go's snapshotFromProto just after Hello->Ping),
+// or fails the test at deadline. A real product bug here (reported never
+// becoming true against a real daemon) is a security-relevant finding on the
+// Policy-display surface, per this issue's instructions — it must never be
+// papered over by loosening this poll into a single non-retried call.
+func pollDescribeReported(t *testing.T, session *sdkmcp.ClientSession, nodeID string, deadline time.Duration) describeNodeResultJSON {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	defer cancel()
+	for {
+		res := mcpCallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
+		var out describeNodeResultJSON
+		decodeCallToolJSON(t, res, &out)
+		if out.EffectivePolicy.Reported {
+			return out
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timeout: describe_node(%s) never reached effective_policy.reported==true within %s", nodeID, deadline)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+// dialNodeTCP opens a *grpc.ClientConn against a real TCP node-plane
+// address with the given client TLS config (ServerName forced to
+// "localhost" to match the server certificate SAN) — the real-TCP twin of
+// lifecycle_e2e_test.go's dialTLS, which only dials a bufconn.Listener.
+// conn.Close is registered as a t.Cleanup.
+func dialNodeTCP(t *testing.T, addr string, tlsCfg *tls.Config) *grpc.ClientConn {
+	t.Helper()
+	tlsCfg.ServerName = "localhost"
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return conn
+}
+
+// nodeIDForLabel finds the single connected Node whose relay: label key
+// equals value, failing the test if there is none or more than one — used
+// to recover the beta Node's Relay-assigned node_id (needed for the final
+// audit_attribution subtest's node revoke) from its relay:node=beta scope
+// label, since the Relay never lets a caller choose a Node's own id.
+func nodeIDForLabel(t *testing.T, deps *appDeps, key, value string) string {
+	t.Helper()
+	var found string
+	for _, n := range deps.registry.List() {
+		if n.RelayLabels[key] != value {
+			continue
+		}
+		if found != "" {
+			t.Fatalf("nodeIDForLabel(%s=%s): multiple Nodes match: %s and %s", key, value, found, n.NodeID)
+		}
+		found = n.NodeID
+	}
+	if found == "" {
+		t.Fatalf("nodeIDForLabel(%s=%s): no Node found", key, value)
+	}
+	return found
+}
+
+// TestSurfaceE2E_v006Acceptance proves the full v0.0.6 milestone acceptance
+// matrix end to end, through the public surfaces only, against a shared
+// harness + 3 real relay-daemon subprocesses total (2 baseline: relay:
+// env=test with relay:node=alpha/beta; 1 fresh, minted mid-test over
+// /api/v1). Subtests are ORDERED (t.Run runs them in declaration order) and
+// share state (session, connected Node set, the facts_fanout Job id) — see
+// each subtest's own comment for why its position in the sequence matters.
+func TestSurfaceE2E_v006Acceptance(t *testing.T) {
+	deps, nodeAddr, controlBase, authed, plain := startSurfaceHarness(t)
+	ctx := context.Background()
+
+	caFile := writeTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
+	policyPath := writeTempFile(t, "policy-*.toml", fixturePolicy)
+
+	_, tokenAlpha, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=alpha"}, time.Hour)
+	if err != nil {
+		t.Fatalf("seed alpha Enrollment Token: %v", err)
+	}
+	_, tokenBeta, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=beta"}, time.Hour)
+	if err != nil {
+		t.Fatalf("seed beta Enrollment Token: %v", err)
+	}
+
+	launchDaemon(t, nodeAddr, caFile, policyPath, tokenAlpha, "surface-e2e-alpha")
+	launchDaemon(t, nodeAddr, caFile, policyPath, tokenBeta, "surface-e2e-beta")
+
+	connected := waitForConnectedNodes(t, deps, 2, 45*time.Second)
+	if len(connected) != 2 {
+		t.Fatalf("waitForConnectedNodes: got %d Nodes, want exactly 2 (bounded baseline fleet): %v", len(connected), connected)
+	}
+	connectedSet := map[string]bool{connected[0]: true, connected[1]: true}
+
+	// Recovered up front (before any revoke) so audit_attribution (LAST) can
+	// use it without re-scanning the registry after beta's own revoke.
+	nodeBetaID := nodeIDForLabel(t, deps, "node", "beta")
+
+	session := mcpConnect(t, controlBase, authed)
+
+	var factsJobID string
+
+	// (1) facts_fanout: run_operation(system.facts, relay:env=test) fans out
+	// to both baseline Nodes; per-Node success plus a real hostname fact.
+	t.Run("facts_fanout", func(t *testing.T) {
+		res := mcpCallTool(t, session, "run_operation", map[string]any{
+			"operation": "system.facts",
+			"selector":  "relay:env=test",
+		})
+		if res.IsError {
+			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", res.Content)
+		}
+		var out executionOutputJSON
+		decodeCallToolJSON(t, res, &out)
+
+		if len(out.Results) != 2 {
+			t.Fatalf("facts_fanout: got %d results, want 2: %+v", len(out.Results), out.Results)
+		}
+		byNode := map[string]perNodeResultJSON{}
+		for _, r := range out.Results {
+			byNode[r.NodeID] = r
+		}
+		for nodeID := range connectedSet {
+			r, ok := byNode[nodeID]
+			if !ok {
+				t.Errorf("facts_fanout: no result for connected Node %s: %+v", nodeID, out.Results)
+				continue
+			}
+			if r.Outcome != "success" {
+				t.Errorf("facts_fanout: node %s outcome = %q, want success; stderr=%q", nodeID, r.Outcome, r.Stderr)
+			}
+			if factHostname(r.Stdout) == "" {
+				t.Errorf("facts_fanout: node %s stdout carries no non-empty hostname= fact: %q", nodeID, r.Stdout)
+			}
+		}
+		if out.JobID == "" {
+			t.Fatal("facts_fanout: JobID is empty")
+		}
+		factsJobID = out.JobID
+	})
+
+	// (2) describe_node_policy (#151-unblocked): per connected Node, poll
+	// describe_node until the daemon's post-connect PolicySnapshot has
+	// arrived, then assert the EXACT fixturePolicy shape (C1/C2: set
+	// equality on AllowedOperations — NOT opvocab's full vocabulary — and
+	// the exact raw_exec allow/deny patterns, in fixturePolicy's own order).
+	t.Run("describe_node_policy", func(t *testing.T) {
+		wantAllowed := map[string]bool{"file.read": true, "system.facts": true, "service.restart": true}
+		wantRawAllow := []string{
+			`^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$`,
+			`^/bin/sleep [0-9]+$`,
+		}
+		wantRawDeny := []string{"--force", `\brm\b`}
+
+		for nodeID := range connectedSet {
+			t.Run(nodeID, func(t *testing.T) {
+				out := pollDescribeReported(t, session, nodeID, 30*time.Second)
+				ep := out.EffectivePolicy
+
+				if !ep.RawExecEnabled {
+					t.Error("RawExecEnabled = false, want true")
+				}
+
+				gotAllowed := map[string]bool{}
+				for _, op := range ep.AllowedOperations {
+					gotAllowed[op] = true
+				}
+				if len(gotAllowed) != len(wantAllowed) {
+					t.Errorf("AllowedOperations = %v, want EXACTLY %v (C1: the loaded policy TOML has three [[operation]] entries, not opvocab's full vocabulary)", ep.AllowedOperations, wantAllowed)
+				}
+				for op := range wantAllowed {
+					if !gotAllowed[op] {
+						t.Errorf("AllowedOperations missing %q: got %v", op, ep.AllowedOperations)
+					}
+				}
+				if gotAllowed["pkg.install"] {
+					t.Error("AllowedOperations contains pkg.install, want it absent — fixturePolicy declares no such [[operation]] (C1)")
+				}
+
+				if !stringSlicesEqual(ep.RawAllowPatterns, wantRawAllow) {
+					t.Errorf("RawAllowPatterns = %v, want %v", ep.RawAllowPatterns, wantRawAllow)
+				}
+				if !stringSlicesEqual(ep.RawDenyPatterns, wantRawDeny) {
+					t.Errorf("RawDenyPatterns = %v, want %v", ep.RawDenyPatterns, wantRawDeny)
+				}
+
+				if ep.PolicyFingerprint == "" {
+					t.Error("EffectivePolicy.PolicyFingerprint is empty, want set")
+				}
+				if ep.PolicyFingerprint != out.PolicyFingerprint {
+					t.Errorf("EffectivePolicy.PolicyFingerprint (%q) != top-level PolicyFingerprint (%q)", ep.PolicyFingerprint, out.PolicyFingerprint)
+				}
+			})
+		}
+	})
+
+	// (3) raw_exec_allowed_denied_and_typed: /bin/sleep 1 matches the
+	// raw_exec allow pattern (success); /bin/echo hello matches NO allow
+	// pattern, so it is refused by ADR-0002's DEFAULT-DENY, not by a
+	// [[deny]] rule (C2) — denied_by_policy either way on the wire. A
+	// structured Operation (system.facts) still succeeds afterward.
+	t.Run("raw_exec_allowed_denied_and_typed", func(t *testing.T) {
+		sleepRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+			"argv": []string{"/bin/sleep", "1"}, "selector": "relay:env=test",
+		})
+		if sleepRes.IsError {
+			t.Fatalf("raw_exec(/bin/sleep 1): IsError=true; content = %+v", sleepRes.Content)
+		}
+		var sleepOut runOrPlanOutputJSON
+		decodeCallToolJSON(t, sleepRes, &sleepOut)
+		sleepByNode := resultsByNode(sleepOut.Results)
+		for nodeID := range connectedSet {
+			if r, ok := sleepByNode[nodeID]; !ok || r.Outcome != "success" {
+				t.Errorf("raw_exec(/bin/sleep 1) on %s: result = %+v (present=%v), want success", nodeID, r, ok)
+			}
+		}
+
+		echoRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+			"argv": []string{"/bin/echo", "hello"}, "selector": "relay:env=test",
+		})
+		if echoRes.IsError {
+			t.Fatalf("raw_exec(/bin/echo hello): IsError=true; content = %+v", echoRes.Content)
+		}
+		var echoOut runOrPlanOutputJSON
+		decodeCallToolJSON(t, echoRes, &echoOut)
+		echoByNode := resultsByNode(echoOut.Results)
+		for nodeID := range connectedSet {
+			if r, ok := echoByNode[nodeID]; !ok || r.Outcome != "denied_by_policy" {
+				t.Errorf("raw_exec(/bin/echo hello) on %s: result = %+v (present=%v), want denied_by_policy", nodeID, r, ok)
+			}
+		}
+
+		factsRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			"operation": "system.facts", "selector": "relay:env=test",
+		})
+		if factsRes.IsError {
+			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", factsRes.Content)
+		}
+		var factsOut executionOutputJSON
+		decodeCallToolJSON(t, factsRes, &factsOut)
+		for _, r := range factsOut.Results {
+			if r.Outcome != "success" {
+				t.Errorf("run_operation(system.facts) on %s: outcome = %q, want success", r.NodeID, r.Outcome)
+			}
+		}
+	})
+
+	// (4) plan_vs_apply (ROADMAP acceptance): on the unchanged fleet, a
+	// plan=true verdict must match a subsequent real run's outcome, per
+	// NodeID, for both an allowed action (system.facts) and a denied one
+	// (raw_exec /bin/echo — DEFAULT-DENY, per (3) above).
+	t.Run("plan_vs_apply", func(t *testing.T) {
+		t.Run("allow", func(t *testing.T) {
+			planRes := mcpCallTool(t, session, "run_operation", map[string]any{
+				"operation": "system.facts", "selector": "relay:env=test", "plan": true,
+			})
+			if planRes.IsError {
+				t.Fatalf("run_operation(plan=true): IsError=true; content = %+v", planRes.Content)
+			}
+			var planOut runOrPlanOutputJSON
+			decodeCallToolJSON(t, planRes, &planOut)
+			if planOut.JobID != "" || len(planOut.Results) != 0 {
+				t.Errorf("run_operation(plan=true) left job_id/results non-empty: %+v", planOut)
+			}
+			if planOut.Plan == nil {
+				t.Fatal("run_operation(plan=true): plan field is nil")
+			}
+
+			applyRes := mcpCallTool(t, session, "run_operation", map[string]any{
+				"operation": "system.facts", "selector": "relay:env=test",
+			})
+			if applyRes.IsError {
+				t.Fatalf("run_operation(plan=false): IsError=true; content = %+v", applyRes.Content)
+			}
+			var applyOut runOrPlanOutputJSON
+			decodeCallToolJSON(t, applyRes, &applyOut)
+
+			verdicts := verdictsByNode(*planOut.Plan)
+			outcomes := resultsByNode(applyOut.Results)
+			for nodeID := range connectedSet {
+				if v := verdicts[nodeID]; v.Verdict != "allow" {
+					t.Errorf("node %s: plan verdict = %+v, want allow", nodeID, v)
+				}
+				if o := outcomes[nodeID]; o.Outcome != "success" {
+					t.Errorf("node %s: real outcome = %+v, want success", nodeID, o)
+				}
+			}
+		})
+
+		t.Run("deny", func(t *testing.T) {
+			planRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test", "plan": true,
+			})
+			if planRes.IsError {
+				t.Fatalf("raw_exec(plan=true): IsError=true; content = %+v", planRes.Content)
+			}
+			var planOut runOrPlanOutputJSON
+			decodeCallToolJSON(t, planRes, &planOut)
+			if planOut.JobID != "" || len(planOut.Results) != 0 {
+				t.Errorf("raw_exec(plan=true) left job_id/results non-empty: %+v", planOut)
+			}
+			if planOut.Plan == nil {
+				t.Fatal("raw_exec(plan=true): plan field is nil")
+			}
+
+			applyRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test",
+			})
+			if applyRes.IsError {
+				t.Fatalf("raw_exec(plan=false): IsError=true; content = %+v", applyRes.Content)
+			}
+			var applyOut runOrPlanOutputJSON
+			decodeCallToolJSON(t, applyRes, &applyOut)
+
+			verdicts := verdictsByNode(*planOut.Plan)
+			outcomes := resultsByNode(applyOut.Results)
+			for nodeID := range connectedSet {
+				if v := verdicts[nodeID]; v.Verdict != "deny" {
+					t.Errorf("node %s: plan verdict = %+v, want deny", nodeID, v)
+				}
+				if o := outcomes[nodeID]; o.Outcome != "denied_by_policy" {
+					t.Errorf("node %s: real outcome = %+v, want denied_by_policy", nodeID, o)
+				}
+			}
+		})
+	})
+
+	// (5) freeze_over_api (ROADMAP acceptance): engage over the API stops a
+	// real MCP dispatch (the distinct "frozen" tool error) while plan=true
+	// keeps working (advisory, per ADR-0013); release with a reason restores
+	// dispatch. Must run before api_token_lifecycle so a later dispatch on
+	// the fresh Node is never mistaken for a residual freeze effect.
+	t.Run("freeze_over_api", func(t *testing.T) {
+		engageResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/engage", controlAPITestCredential, nil)
+		defer engageResp.Body.Close() //nolint:errcheck
+		if engageResp.StatusCode != http.StatusOK {
+			t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
+		}
+
+		frozenRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			"operation": "system.facts", "selector": "relay:env=test",
+		})
+		if !frozenRes.IsError {
+			t.Fatal("run_operation while frozen: IsError = false, want true")
+		}
+		if text := toolErrorText(t, frozenRes); !strings.Contains(text, "the Relay is frozen") {
+			t.Errorf("run_operation while frozen error = %q, want it to contain %q", text, "the Relay is frozen")
+		}
+
+		planRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			"operation": "system.facts", "selector": "relay:env=test", "plan": true,
+		})
+		if planRes.IsError {
+			t.Fatalf("run_operation(plan=true) while frozen: IsError=true, want false (advisory); content = %+v", planRes.Content)
+		}
+		var planOut runOrPlanOutputJSON
+		decodeCallToolJSON(t, planRes, &planOut)
+		if planOut.Plan == nil || planOut.Plan.WouldBeRejected == nil || planOut.Plan.WouldBeRejected.Reason != "frozen" {
+			t.Fatalf("run_operation(plan=true) while frozen: plan = %+v, want would_be_rejected.reason=frozen", planOut.Plan)
+		}
+		if len(planOut.Plan.Verdicts) == 0 {
+			t.Error("run_operation(plan=true) while frozen: verdicts is empty, want non-empty (Plan still queries while frozen)")
+		}
+
+		noReasonResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
+			controlAPITestCredential, map[string]string{"reason": ""})
+		defer noReasonResp.Body.Close() //nolint:errcheck
+		if noReasonResp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
+		}
+
+		releaseResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
+			controlAPITestCredential, map[string]string{"reason": "e2e resolved"})
+		defer releaseResp.Body.Close() //nolint:errcheck
+		if releaseResp.StatusCode != http.StatusOK {
+			t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
+		}
+
+		restoredRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			"operation": "system.facts", "selector": "relay:env=test",
+		})
+		if restoredRes.IsError {
+			t.Fatalf("run_operation after release: IsError=true; content = %+v", restoredRes.Content)
+		}
+		var restoredOut executionOutputJSON
+		decodeCallToolJSON(t, restoredRes, &restoredOut)
+		if len(restoredOut.Results) != 2 {
+			t.Fatalf("run_operation after release: got %d results, want 2: %+v", len(restoredOut.Results), restoredOut.Results)
+		}
+		for _, r := range restoredOut.Results {
+			if r.Outcome != "success" {
+				t.Errorf("run_operation after release: node %s outcome = %q, want success", r.NodeID, r.Outcome)
+			}
+		}
+	})
+
+	// (6) api_token_lifecycle (3rd/fresh daemon): mint a scoped Enrollment
+	// Token over /api/v1, enroll a fresh daemon with it, see it appear with
+	// the token's own relay: labels, revoke the token, then prove the
+	// revoked plaintext can no longer enroll (direct node-plane Enroll RPC —
+	// the one deterministic negative that needs a real gRPC status code, not
+	// an MCP/HTTP surface).
+	t.Run("api_token_lifecycle", func(t *testing.T) {
+		mintResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/enrollment-tokens",
+			controlAPITestCredential, map[string]any{
+				"scope":       []string{"relay:env=test", "relay:node=fresh"},
+				"ttl_seconds": 3600,
+			})
+		defer mintResp.Body.Close() //nolint:errcheck
+		if mintResp.StatusCode != http.StatusCreated {
+			t.Fatalf("mint status = %d, want %d", mintResp.StatusCode, http.StatusCreated)
+		}
+		var minted mintTokenAPIResponse
+		if err := json.NewDecoder(mintResp.Body).Decode(&minted); err != nil {
+			t.Fatalf("decode mint response: %v", err)
+		}
+		if minted.ID == "" || minted.Token == "" {
+			t.Fatalf("mint response missing id/token: %+v", minted)
+		}
+
+		launchDaemon(t, nodeAddr, caFile, policyPath, minted.Token, "surface-e2e-fresh")
+		freshConnected := waitForConnectedNodes(t, deps, 3, 45*time.Second)
+		if len(freshConnected) != 3 {
+			t.Fatalf("waitForConnectedNodes: got %d Nodes, want exactly 3 (bounded fleet): %v", len(freshConnected), freshConnected)
+		}
+
+		listRes := mcpCallTool(t, session, "list_nodes", map[string]any{"selector": "relay:node=fresh"})
+		if listRes.IsError {
+			t.Fatalf("list_nodes(relay:node=fresh): IsError=true; content = %+v", listRes.Content)
+		}
+		var listOut listNodesResultJSON
+		decodeCallToolJSON(t, listRes, &listOut)
+		if len(listOut.Nodes) != 1 {
+			t.Fatalf("list_nodes(relay:node=fresh): got %d Nodes, want exactly 1: %+v", len(listOut.Nodes), listOut.Nodes)
+		}
+		fresh := listOut.Nodes[0]
+		if fresh.RelayLabels["env"] != "test" || fresh.RelayLabels["node"] != "fresh" {
+			t.Errorf("fresh Node RelayLabels = %v, want env=test node=fresh", fresh.RelayLabels)
+		}
+
+		revokeResp := controlAPIRequest(t, authed, http.MethodDelete,
+			controlBase+"/api/v1/enrollment-tokens/"+minted.ID, controlAPITestCredential, nil)
+		defer revokeResp.Body.Close() //nolint:errcheck
+		if revokeResp.StatusCode != http.StatusNoContent {
+			t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
+		}
+
+		conn := dialNodeTCP(t, nodeAddr, &tls.Config{RootCAs: certPool(t, deps.ca.Bundle())})
+		csrPEM, _ := newCSR(t, "ignored-cn-revoked-token")
+		enrollCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := gleipnirv1.NewEnrollmentClient(conn).Enroll(enrollCtx, &gleipnirv1.EnrollRequest{
+			EnrollmentToken: minted.Token,
+			Csr:             csrPEM,
+			Facts:           &gleipnirv1.Facts{Hostname: "surface-e2e-revoked-attempt", Os: "linux"},
+		})
+		if err == nil {
+			t.Fatal("expected Enroll with a revoked token to fail, got nil error")
+		}
+		if code := status.Code(err); code != codes.PermissionDenied {
+			t.Errorf("Enroll with revoked token: code = %v, want %v", code, codes.PermissionDenied)
+		}
+	})
+
+	// (7) auth_negative (ROADMAP acceptance): every MCP call and every
+	// /api/v1 route this issue exercises is refused without the credential.
+	t.Run("auth_negative", func(t *testing.T) {
+		t.Run("mcp", func(t *testing.T) {
+			const initializeBody = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+			post := func(token string) *http.Response {
+				t.Helper()
+				req, err := http.NewRequest(http.MethodPost, controlBase+"/mcp", strings.NewReader(initializeBody))
+				if err != nil {
+					t.Fatalf("NewRequest: %v", err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Accept", "application/json, text/event-stream")
+				if token != "" {
+					req.Header.Set("Authorization", "Bearer "+token)
+				}
+				resp, err := plain.Do(req)
+				if err != nil {
+					t.Fatalf("Do: %v", err)
+				}
+				return resp
+			}
+
+			noCredResp := post("")
+			defer noCredResp.Body.Close() //nolint:errcheck
+			if noCredResp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("no credential: status = %d, want %d", noCredResp.StatusCode, http.StatusUnauthorized)
+			}
+
+			wrongCredResp := post("wrong-" + controlAPITestCredential)
+			defer wrongCredResp.Body.Close() //nolint:errcheck
+			if wrongCredResp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("wrong credential: status = %d, want %d", wrongCredResp.StatusCode, http.StatusUnauthorized)
+			}
+		})
+
+		t.Run("api", func(t *testing.T) {
+			cases := []struct {
+				method string
+				path   string
+				body   any
+			}{
+				{http.MethodPost, "/api/v1/enrollment-tokens", map[string]any{"scope": []string{"relay:env=test"}, "ttl_seconds": 3600}},
+				{http.MethodDelete, "/api/v1/enrollment-tokens/does-not-matter", nil},
+				{http.MethodPost, "/api/v1/nodes/does-not-matter/revoke", nil},
+				{http.MethodPost, "/api/v1/freeze/engage", nil},
+				{http.MethodPost, "/api/v1/freeze/release", map[string]string{"reason": "x"}},
+			}
+			for _, tc := range cases {
+				t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+					resp := controlAPIRequest(t, plain, tc.method, controlBase+tc.path, "", tc.body)
+					defer resp.Body.Close() //nolint:errcheck
+					if resp.StatusCode != http.StatusUnauthorized {
+						t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+					}
+				})
+			}
+		})
+	})
+
+	// (8) audit_attribution (LAST — tears down beta's Tunnel, so it must not
+	// disrupt any earlier subtest): revoke beta, the one lifecycle action not
+	// yet exercised, then assert every Kind this run produced is present at
+	// least once, attributed to the single seeded principal
+	// ("founding-admin:admin" — the MCP Authenticator.Middleware and the API
+	// principal() helper inject the same FoundingAdmin, ADR-0009 invariant
+	// 10: one capability layer, one Principal source), and that the
+	// successful freeze_release carries the reason this run supplied.
+	t.Run("audit_attribution", func(t *testing.T) {
+		revokeResp := controlAPIRequest(t, authed, http.MethodPost,
+			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", controlAPITestCredential, nil)
+		defer revokeResp.Body.Close() //nolint:errcheck
+		if revokeResp.StatusCode != http.StatusNoContent {
+			t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
+		}
+
+		records, err := deps.audit.List(ctx)
+		if err != nil {
+			t.Fatalf("deps.audit.List: %v", err)
+		}
+		if len(records) == 0 {
+			t.Fatal("deps.audit.List: got 0 records")
+		}
+
+		const wantPrincipal = "founding-admin:admin"
+		wantKinds := []string{
+			audit.KindDispatch, audit.KindPlan, audit.KindTokenMint, audit.KindTokenRevoke,
+			audit.KindNodeRevoke, audit.KindFreezeEngage, audit.KindFreezeRelease,
+		}
+		seenKind := make(map[string]bool, len(wantKinds))
+		var sawFreezeRelease bool
+		for _, r := range records {
+			seenKind[r.Kind] = true
+			if r.Principal != wantPrincipal {
+				t.Errorf("record kind=%s id=%s has Principal=%q, want %q", r.Kind, r.ID, r.Principal, wantPrincipal)
+			}
+			if r.Kind == audit.KindFreezeRelease {
+				sawFreezeRelease = true
+				if r.Reason != "e2e resolved" {
+					t.Errorf("freeze_release Reason = %q, want %q", r.Reason, "e2e resolved")
+				}
+			}
+		}
+		for _, k := range wantKinds {
+			if !seenKind[k] {
+				t.Errorf("no audit record of Kind=%q found among %d records", k, len(records))
+			}
+		}
+		if !sawFreezeRelease {
+			t.Error("no KindFreezeRelease record found to check Reason on")
+		}
+
+		if factsJobID == "" {
+			t.Fatal("factsJobID is empty (facts_fanout subtest did not run or record it)")
+		}
+		jobRecords, err := deps.audit.ByJob(ctx, factsJobID)
+		if err != nil {
+			t.Fatalf("deps.audit.ByJob(%q): %v", factsJobID, err)
+		}
+		if len(jobRecords) == 0 {
+			t.Errorf("deps.audit.ByJob(%q): got 0 records, want at least 1 (every dispatch is audited, #102)", factsJobID)
+		}
+		for _, r := range jobRecords {
+			if r.Kind != audit.KindDispatch {
+				t.Errorf("audit record for JobID=%q has Kind=%q, want %q", factsJobID, r.Kind, audit.KindDispatch)
+			}
+			if r.Principal != wantPrincipal {
+				t.Errorf("audit record for JobID=%q has Principal=%q, want %q", factsJobID, r.Principal, wantPrincipal)
+			}
+		}
+	})
+}
