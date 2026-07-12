@@ -27,6 +27,7 @@ use crate::gen::{
 use crate::operations;
 use crate::operations::file_read::file_read;
 use crate::operations::pkg_install::pkg_install;
+use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::gather_facts;
 use crate::policy::{Decision, Policy, Rule};
@@ -54,34 +55,11 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 /// output caps are a v0.0.4 item.
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
 
-/// v1 arg-key contract: `file.read` callers must supply the path under this key.
-///
-/// Any `TaskRequest.Operation.args` map sent by the Relay must use `"path"`
-/// to address the file. Any other key is treated as absent (empty-string fallback).
-/// This constant is the single definition site for all sides of the contract.
-const OP_ARG_PATH: &str = "path";
-
-/// v1 arg-key contract: `service.restart` callers must supply the unit name under this key.
-///
-/// The Relay must send the systemd unit name as `args["unit"]`. Any other key
-/// is treated as absent (empty-string fallback, which will fail unit-name validation).
-/// This constant is the single definition site for all sides of the contract.
-const OP_ARG_UNIT: &str = "unit";
-
-/// v1 arg-key contract: `pkg.install` callers must supply the package name under this key.
-///
-/// The Relay must send the package name as `args["name"]`. Any other key is
-/// treated as absent (empty-string fallback, which will fail name validation).
-/// This constant is the single definition site for all sides of the contract.
-const OP_ARG_NAME: &str = "name";
-
-/// v1 arg-key contract: `pkg.install` callers may supply an optional package version
-/// under this key.
-///
-/// The Relay may send a version as `args["version"]`; absent or empty installs
-/// the latest version. This constant is the single definition site for all
-/// sides of the contract.
-const OP_ARG_VERSION: &str = "version";
+// v1 arg-key contract (`OP_ARG_PATH`/`OP_ARG_UNIT`/`OP_ARG_NAME`/`OP_ARG_VERSION`):
+// relocated to `operations::schema` (ADR-0015) — the single definition site
+// for every side of the arg-key contract (this dispatch pipeline reads them
+// out of `Operation.args`; the schema module also advertises them in the
+// golden Operation schema). Re-exported here via the `use` above.
 
 // ---------------------------------------------------------------------------
 // Public dispatch entry

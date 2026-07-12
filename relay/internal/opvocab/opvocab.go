@@ -1,11 +1,15 @@
 // Package opvocab is a Relay-side, READ-ONLY mirror of /proto's Operation
 // vocabulary (OperationDescriptor, gleipnir.proto:142-145): the fixed set of
 // structured Operations, each with its risk class. /proto remains the single
-// source of truth for the wire vocabulary (invariant 8) — this list MUST be
-// kept in sync with it by hand; opvocab carries no proto or dispatch
-// dependency, following the registry.Facts / jobs domain-mirror precedent so
-// the MCP surface ([internal/controlplane/mcp]) can list Operations without
-// importing the dispatch path.
+// source of truth for the wire vocabulary (invariant 8) — this list is
+// hand-authored, but opvocab_test.go's TestOperations_MatchesGoldenSchema
+// hermetically cross-checks it against the daemon's own golden Operation
+// schema (testdata/operations.schema.json, ADR-0015), so a hand-authoring
+// mistake fails a test instead of silently drifting. opvocab carries no
+// proto or dispatch dependency, following the registry.Facts / jobs
+// domain-mirror precedent so the MCP surface
+// ([internal/controlplane/mcp]) can list Operations without importing the
+// dispatch path.
 //
 // Raw Exec is deliberately NOT listed here: it is not an Operation
 // (ADR-0003, CONTEXT.md) and has no OperationDescriptor on the wire. It is
@@ -23,10 +27,11 @@ import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 // args without trial-and-error (ADR-0001's typed-path-by-default safety
 // assumption). They are NOT the enforcement: the daemon's own validate_*
 // functions (daemon/src/operations/*.rs) are the real gate (ADR-0002,
-// invariant 2), and this prose is kept in sync with them BY HAND — a mismatch
-// here is a legibility bug, not a security hole, but it is exactly the
-// failure this issue exists to prevent, so treat any daemon validator change
-// as requiring a matching edit here.
+// invariant 2). This prose is still hand-authored, but
+// TestOperations_MatchesGoldenSchema (opvocab_test.go) hermetically proves it
+// agrees with the daemon's golden Operation schema — a mismatch here is a
+// legibility bug, not a security hole, but it is exactly the failure ADR-0015
+// exists to catch mechanically rather than by hand-review.
 type Descriptor struct {
 	Name    string
 	Risk    jobs.RiskClass
@@ -35,7 +40,7 @@ type Descriptor struct {
 	// "type, required/optional. constraint prose." A zero-arg Operation
 	// (system.facts) legitimately has an empty-but-non-nil map — that is
 	// INTENTIONAL, not a placeholder still to be filled (see
-	// TestOperations_Legible / TestOperations_DocumentedArgKeys in
+	// TestOperations_Legible / TestOperations_MatchesGoldenSchema in
 	// opvocab_test.go).
 	ArgConstraints map[string]string
 	// Example is a concrete, runnable-shaped usage sample for
@@ -58,8 +63,10 @@ type Descriptor struct {
 // validators — daemon/src/operations/service_restart.rs (validate_unit_name)
 // and daemon/src/operations/pkg_install.rs (validate_pkg_name/
 // validate_pkg_version) — and every documented arg key is copied from
-// daemon/src/dispatch.rs's OP_ARG_* constants. Keep both in sync by hand if
-// either side changes.
+// daemon/src/operations/schema.rs's OP_ARG_* constants (relocated there from
+// dispatch.rs, ADR-0015). Keep both in sync by hand if either side changes;
+// TestOperations_MatchesGoldenSchema (opvocab_test.go) is the mechanical
+// check that catches it if you forget.
 func Operations() []Descriptor {
 	return []Descriptor{
 		{
@@ -98,7 +105,7 @@ func Operations() []Descriptor {
 			ArgConstraints: map[string]string{
 				"name": "string, required. Package name; charset [A-Za-z0-9+._-], must start and end alphanumeric. " +
 					"Validated before argv is built; never a shell string.",
-				"version": "string, optional. Charset [A-Za-z0-9+._:~-], must start and end alphanumeric. " +
+				"version": "string, optional. Charset [A-Za-z0-9+.:~_-], must start and end alphanumeric. " +
 					"Empty/absent installs the latest.",
 			},
 			Example: `run_operation operation=pkg.install args={"name":"nginx","version":"1.24.0"}`,

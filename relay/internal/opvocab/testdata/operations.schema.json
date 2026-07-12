@@ -1,0 +1,55 @@
+{
+  "operations": [
+    {
+      "name": "system.facts",
+      "risk": "read",
+      "args": []
+    },
+    {
+      "name": "file.read",
+      "risk": "read",
+      "args": [
+        {
+          "key": "path",
+          "charset": null,
+          "first_last_alnum": false,
+          "no_leading_dash": false,
+          "kind": "required"
+        }
+      ]
+    },
+    {
+      "name": "service.restart",
+      "risk": "mutate",
+      "args": [
+        {
+          "key": "unit",
+          "charset": "[A-Za-z0-9@._-]",
+          "first_last_alnum": false,
+          "no_leading_dash": true,
+          "kind": "required"
+        }
+      ]
+    },
+    {
+      "name": "pkg.install",
+      "risk": "mutate",
+      "args": [
+        {
+          "key": "name",
+          "charset": "[A-Za-z0-9+._-]",
+          "first_last_alnum": true,
+          "no_leading_dash": false,
+          "kind": "required"
+        },
+        {
+          "key": "version",
+          "charset": "[A-Za-z0-9+.:~_-]",
+          "first_last_alnum": true,
+          "no_leading_dash": false,
+          "kind": "optional"
+        }
+      ]
+    }
+  ]
+}

@@ -338,6 +338,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(code);
     }
 
+    // `dump-operation-schema` (ADR-0015) is the same kind of fully offline,
+    // synchronous subcommand as `policy check` above: it prints the canonical
+    // Operation schema JSON (operations::schema) and exits, so it too is
+    // intercepted before Config/network/identity/tracing setup.
+    if args.get(1).map(String::as_str) == Some("dump-operation-schema") {
+        let code = operations::schema::run();
+        std::process::exit(code);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
