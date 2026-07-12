@@ -33,34 +33,8 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
-
-// fixturePolicy is the TOML policy the daemon subprocess will load.
-// It allows file.read (wildcard, except /etc/shadow), service.restart for
-// nginx only (sshd denied by default), and raw_exec for systemctl status/restart
-// plus a bounded /bin/sleep (used by the cancel/concurrency e2e tests to get a
-// measurable long-running, Policy-allowed Task).
-const fixturePolicy = `
-[[operation]]
-name = "file.read"
-allowed_args = [["*"]]
-
-[[deny]]
-name = "file.read"
-args = [["/etc/shadow"]]
-
-[[operation]]
-name = "system.facts"
-allowed_args = []
-
-[[operation]]
-name = "service.restart"
-allowed_args = [["nginx"]]
-
-[raw_exec]
-allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$", "^/bin/sleep [0-9]+$"]
-deny  = ["--force", "\\brm\\b"]
-`
 
 // startTCPServer starts a real TCP listener on 127.0.0.1:0, runs the Relay
 // gRPC server on it, and returns the listener address plus appDeps.
@@ -130,24 +104,6 @@ func (n *e2eNode) verdictCh() chan *gleipnirv1.PolicyVerdict {
 	return n.disp.verdicts[n.nodeID]
 }
 
-// writeTempFile writes content to a new 0600 temp file under t.TempDir() and
-// returns its path.
-func writeTempFile(t *testing.T, pattern, content string) string {
-	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), pattern)
-	if err != nil {
-		t.Fatalf("create temp file: %v", err)
-	}
-	if _, err := f.WriteString(content); err != nil {
-		t.Fatalf("write temp file: %v", err)
-	}
-	f.Close()
-	if err := os.Chmod(f.Name(), 0600); err != nil {
-		t.Fatalf("chmod temp file: %v", err)
-	}
-	return f.Name()
-}
-
 // startDaemonNode boots the Relay on a real TCP listener, attaches the
 // dispatcher sink, seeds an Enrollment Token, writes the CA bundle and the
 // given Policy TOML to disk, launches a real relay-daemon subprocess against
@@ -184,7 +140,7 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 		t.Fatalf("chmod CA bundle: %v", err)
 	}
 
-	policyPath := writeTempFile(t, "policy-*.toml", policyTOML)
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", policyTOML)
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
@@ -283,7 +239,7 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 }
 
 func TestTunnelDispatch_E2E(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 	resultCh := node.resultCh()
 	if resultCh == nil {
 		t.Fatal("no result channel for node")
@@ -293,7 +249,7 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 	// (a) file.read of a temp file → SUCCESS + stdout == file contents.
 	// -----------------------------------------------------------------------
 	wantContent := "hello from e2e dispatch test\n"
-	contentPath := writeTempFile(t, "content-*.txt", wantContent)
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 
 	fileReadTask := &gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Task{

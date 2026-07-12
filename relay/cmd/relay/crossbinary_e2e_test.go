@@ -15,7 +15,7 @@
 // read the CA bundle directly from disk (no get_ca op; plan-review
 // BLOCKING-1) -> start relay-daemon binary against the real endpoint ->
 // wait_node -> get_node (fingerprint + labels) -> dispatch file.read
-// (allowed) -> dispatch service.restart sshd (denied by fixturePolicy). The
+// (allowed) -> dispatch service.restart sshd (denied by relaytest.FixturePolicy). The
 // Relay never evaluates Policy itself (ADR-0011): the DENIED_BY_POLICY
 // verdict below comes from the daemon's live engine over the real wire.
 //
@@ -36,6 +36,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // syncBuffer is a mutex-guarded bytes.Buffer: both subprocess log captures
@@ -322,7 +324,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		t.Fatal("CA bundle is empty")
 	}
 
-	policyPath := writeTempFile(t, "policy-*.toml", fixturePolicy)
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
@@ -385,7 +387,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	// stdout (mirrors tunnel_dispatch_e2e_test.go:285-329).
 	// -------------------------------------------------------------------
 	wantContent := "hello from cross-binary e2e dispatch\n"
-	contentPath := writeTempFile(t, "content-*.txt", wantContent)
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 	readResp := harness.call(t, map[string]any{
 		"op":              "dispatch",
 		"node_id":         nodeID,

@@ -15,12 +15,8 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"net"
 	"strings"
@@ -28,57 +24,13 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
-
-// newCSR generates a fresh ECDSA P-256 key and returns a PEM-encoded
-// CERTIFICATE REQUEST and the private key. The CN is deliberately a throwaway —
-// the Relay's SignCSR ignores the CSR subject and sets CN authoritatively to the
-// Relay-assigned node_id (ADR-0006).
-func newCSR(t *testing.T, cn string) (csrPEM []byte, key *ecdsa.PrivateKey) {
-	t.Helper()
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-	tmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}}
-	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, k)
-	if err != nil {
-		t.Fatalf("create CSR: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), k
-}
-
-// assembleClientCert combines a PEM-encoded leaf certificate and its ECDSA
-// private key into a tls.Certificate suitable for use as a relay-daemon client
-// credential on an mTLS connection.
-func assembleClientCert(t *testing.T, certPEM []byte, key *ecdsa.PrivateKey) tls.Certificate {
-	t.Helper()
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal private key: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("X509KeyPair: %v", err)
-	}
-	return tlsCert
-}
-
-// certPool builds an *x509.CertPool from the given PEM bundle.
-func certPool(t *testing.T, bundlePEM []byte) *x509.CertPool {
-	t.Helper()
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(bundlePEM) {
-		t.Fatal("certPool: AppendCertsFromPEM returned false — empty or invalid PEM")
-	}
-	return pool
-}
 
 // dialTLS opens a *grpc.ClientConn through lis with the given TLS config.
 // ServerName is forced to "localhost" to match the server certificate SAN.
@@ -165,9 +117,9 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	//     the CSR subject ("ignored-cn") is never trusted (ADR-0006).
 	// -------------------------------------------------------------------------
 	enrollConn := dialTLS(t, lis, &tls.Config{
-		RootCAs: certPool(t, deps.ca.Bundle()),
+		RootCAs: relaytest.CertPool(t, deps.ca.Bundle()),
 	})
-	csrPEM, leafKey := newCSR(t, "ignored-cn")
+	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
 	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
@@ -224,8 +176,8 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	}
 
 	// Assemble the Node identity cert for subsequent mTLS connections.
-	clientCert := assembleClientCert(t, enrollResp.GetCertificate(), leafKey)
-	pool := certPool(t, deps.ca.Bundle())
+	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
+	pool := relaytest.CertPool(t, deps.ca.Bundle())
 
 	// -------------------------------------------------------------------------
 	// (c) mTLS Tunnel: reconnect with the issued Node cert, open Tunnel, send Hello.
@@ -324,7 +276,7 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	//     Identity comes from the verified client cert (not a token) — Renew is
 	//     mTLS-required and not in the certless allowlist.
 	// -------------------------------------------------------------------------
-	csr2PEM, _ := newCSR(t, "ignored-again") // key unused: this step only asserts cert properties
+	csr2PEM, _ := relaytest.NewCSR(t, "ignored-again") // key unused: this step only asserts cert properties
 	renewResp, err := gleipnirv1.NewEnrollmentClient(mtlsConn).Renew(ctx, &gleipnirv1.RenewRequest{
 		Csr: csr2PEM,
 	})

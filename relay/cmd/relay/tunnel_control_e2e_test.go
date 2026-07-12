@@ -33,6 +33,7 @@ import (
 	"time"
 
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -40,7 +41,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 	resultCh := node.resultCh()
 
 	// (a) In-flight cancel: dispatch a long-running raw_exec, wait long enough
@@ -84,7 +85,7 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 	// THEN cancel the now-finished/deregistered id. A Task that completed
 	// must never become a retroactive cancelled, and cancelling a
 	// deregistered id must be a harmless no-op (ADR-0013).
-	contentPath := writeTempFile(t, "content-*.txt", "race-fast content\n")
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "race-fast content\n")
 	fastTask := &gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Task{
 			Task: &gleipnirv1.TaskRequest{
@@ -127,7 +128,7 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_MutateSerialReadParallel(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 	resultCh := node.resultCh()
 
 	// (a) Mutate serial: two raw_exec /bin/sleep 1 Tasks dispatched
@@ -198,7 +199,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	// semantics are proven deterministically by scheduler.rs unit tests
 	// ac2_read_bounded_max_four / ac3_read_and_mutate_concurrent — there is no
 	// slow-read Operation to gauge peak overlap over the wire.)
-	contentPath := writeTempFile(t, "content-*.txt", "read parallel content\n")
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "read parallel content\n")
 	holdTask := &gleipnirv1.RelayMessage{
 		Body: &gleipnirv1.RelayMessage_Task{
 			Task: &gleipnirv1.TaskRequest{
@@ -275,7 +276,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Shared Policy matrix (AC3, AC4): allow / deny-by-default / deny-beats-allow /
-// Raw Exec allow / Raw Exec deny, evaluated against fixturePolicy.
+// Raw Exec allow / Raw Exec deny, evaluated against relaytest.FixturePolicy.
 // ---------------------------------------------------------------------------
 
 // policyMatrixCase pairs a PolicyQuery/TaskRequest builder with the CLI
@@ -289,7 +290,7 @@ type policyMatrixCase struct {
 }
 
 // policyMatrixCases returns the v0.0.4 acceptance matrix: allow, deny-by-default,
-// deny-beats-allow, Raw Exec allow, Raw Exec deny — all against fixturePolicy.
+// deny-beats-allow, Raw Exec allow, Raw Exec deny — all against relaytest.FixturePolicy.
 // contentPath must be a file.read-able temp file (allow case gives a clean
 // SUCCESS unlike the systemctl allow case, which may FAIL on a box without
 // systemd — assertions key on DENIED_BY_POLICY vs not, never on SUCCESS).
@@ -419,11 +420,11 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 // ---------------------------------------------------------------------------
 
 func TestE2E_PolicyQueryMatchesExecution(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 	resultCh := node.resultCh()
 	verdictCh := node.verdictCh()
 
-	contentPath := writeTempFile(t, "content-*.txt", "policy query matches execution\n")
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "policy query matches execution\n")
 	cases := policyMatrixCases(contentPath)
 
 	for i, c := range cases {
@@ -481,12 +482,12 @@ func TestE2E_PolicyQueryMatchesExecution(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2E_PolicyCheckAgreesWithLiveEngine(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 	resultCh := node.resultCh()
 
 	// (a) Malformed variant: an invalid raw_exec regex must be rejected with
 	// exit code 1 and a useful stderr message. No Tunnel needed for the CLI.
-	malformedPath := writeTempFile(t, "malformed-*.toml", `
+	malformedPath := relaytest.WriteTempFile(t, "malformed-*.toml", `
 [raw_exec]
 allow = ["[invalid"]
 `)
@@ -508,7 +509,7 @@ allow = ["[invalid"]
 	// (b) --would-allow vs live dispatch parity, on the SAME on-disk Policy
 	// file the daemon subprocess loaded (node.policyPath) — binding the
 	// offline CLI to the live engine on an unchanged Policy (ADR-0011).
-	contentPath := writeTempFile(t, "content-*.txt", "policy check parity\n")
+	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "policy check parity\n")
 	cases := policyMatrixCases(contentPath)
 
 	for i, c := range cases {
@@ -525,7 +526,7 @@ allow = ["[invalid"]
 			cliErr = ee
 		}
 		// Exit 0 = allow, exit 2 = would-deny. Exit 1 (invalid) is never
-		// expected here since fixturePolicy is already known-valid — assert
+		// expected here since relaytest.FixturePolicy is already known-valid — assert
 		// that explicitly so a regression making a valid check exit 1 can't
 		// be silently collapsed into "deny" and hidden behind a coincidental
 		// wire DENIED_BY_POLICY (cliAllowed := cliErr == nil would score exit
@@ -565,7 +566,7 @@ allow = ["[invalid"]
 // ---------------------------------------------------------------------------
 
 func TestE2E_RegistryFingerprintAfterReconnect(t *testing.T) {
-	node := startDaemonNode(t, fixturePolicy)
+	node := startDaemonNode(t, relaytest.FixturePolicy)
 
 	before, ok := node.deps.registry.Get(node.nodeID)
 	if !ok {

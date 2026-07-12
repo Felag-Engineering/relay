@@ -29,6 +29,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -79,20 +80,6 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 		t.Fatalf("X509KeyPair: %v", err)
 	}
 	return cert
-}
-
-// bearerRoundTripper injects "Authorization: Bearer <token>" on every
-// request, so the SDK's MCP client authenticates against the same
-// Authenticator.Middleware every other control-plane caller does.
-type bearerRoundTripper struct {
-	base  http.RoundTripper
-	token string
-}
-
-func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	req.Header.Set("Authorization", "Bearer "+rt.token)
-	return rt.base.RoundTrip(req)
 }
 
 // testJobResultReader adapts a *store.Store's Jobs()/Tasks() to
@@ -236,7 +223,7 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
 
 	plain := &http.Client{Transport: transport}
-	authed := &http.Client{Transport: bearerRoundTripper{base: transport, token: testToken}}
+	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: testToken}}
 
 	return testServer{
 		base:    "https://" + lis.Addr().String(),
