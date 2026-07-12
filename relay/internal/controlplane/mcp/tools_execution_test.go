@@ -35,19 +35,19 @@ func TestResolveTimeoutSeconds_RejectsOutOfRange(t *testing.T) {
 
 // TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape is the PLAN-REVIEWER
 // ADDENDUM A2 regression guard: job_id/results carry NO omitempty on
-// runOrPlanOutput (mirroring executionOutput's own tags exactly), so a
+// RunOrPlanOutput (mirroring ExecutionOutput's own tags exactly), so a
 // zero-match plan=false run still renders {"job_id":"","results":[]} —
 // byte-identical to #118 — never a bare {}. plan, the only new field, is
 // omitempty and absent entirely when nil.
 func TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape(t *testing.T) {
-	out := runOrPlanOutput{Results: []perNodeResult{}}
+	out := RunOrPlanOutput{Results: []PerNodeResult{}}
 	b, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	want := `{"job_id":"","results":[]}`
 	if string(b) != want {
-		t.Errorf("json.Marshal(zero-match runOrPlanOutput) = %s, want %s", b, want)
+		t.Errorf("json.Marshal(zero-match RunOrPlanOutput) = %s, want %s", b, want)
 	}
 }
 
@@ -55,7 +55,7 @@ func TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape(t *testing.T) {
 // carries omitempty — a real (non-plan) response never renders a "plan" key
 // at all.
 func TestRunOrPlanOutput_PlanFieldOmittedWhenNil(t *testing.T) {
-	out := runOrPlanOutput{JobID: "job-1", Results: []perNodeResult{{NodeID: "node-1", Outcome: "success"}}}
+	out := RunOrPlanOutput{JobID: "job-1", Results: []PerNodeResult{{NodeID: "node-1", Outcome: "success"}}}
 	b, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)

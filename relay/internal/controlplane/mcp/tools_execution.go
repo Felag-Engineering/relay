@@ -119,82 +119,10 @@ func resolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
 	return timeoutSeconds, nil
 }
 
-// perNodeResult is one Node's rendered Task outcome — exit code, size-capped
-// output, and duration — the shape run_operation/raw_exec/get_job all
-// render (renderJob below). Outcome/denied_by_policy come straight off the
-// Task the daemon resolved: this package never evaluates Policy itself
-// (invariant 12).
-type perNodeResult struct {
-	NodeID          string `json:"node_id"`
-	Outcome         string `json:"outcome"`
-	ExitCode        int32  `json:"exit_code"`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
-	DurationMS      int64  `json:"duration_ms"`
-}
-
-// executionOutput is run_operation/raw_exec/get_job's shared result shape:
-// the Job id (so a caller can later cancel_job/get_job it) plus every
-// matched Node's rendered result. A zero-match dispatch (no Node matched the
-// Selector) renders as {job_id: "", results: []} — Run never reached the
-// dispatcher, so there is no Job to read back.
-type executionOutput struct {
-	JobID   string          `json:"job_id"`
-	Results []perNodeResult `json:"results"`
-}
-
-// perNodeVerdict is one matched Node's Plan-mode result (#119, ADR-0011):
-// "allow"/"deny"/"unknown", with DecidingRule set only on deny and Reason
-// (e.g. "offline") set only on unknown — mirrors perNodeResult's per-Node
-// shape but for a verdict, never an executed outcome.
-type perNodeVerdict struct {
-	NodeID       string `json:"node_id"`
-	Verdict      string `json:"verdict"`
-	DecidingRule string `json:"deciding_rule,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-}
-
-// wouldBeRejected reports why real dispatch (plan=false against the same
-// Selector/Action) would currently be refused, without erroring the Plan
-// itself (ADR-0011/0013: a Plan reports guardrails, never hard-fails on
-// them). "exceeds_cap" carries Matched/Cap/Class; "frozen" carries neither —
-// the Relay-wide Freeze is not Selector/Action-specific.
-type wouldBeRejected struct {
-	Reason  string `json:"reason"`
-	Matched int    `json:"matched,omitempty"`
-	Cap     int    `json:"cap,omitempty"`
-	Class   string `json:"class,omitempty"`
-}
-
-// planOutput is plan=true's result shape: the resolved fan-out size, the
-// per-Node verdicts (empty when WouldBeRejected is set — the query fan-out
-// is skipped over-cap), an optional would-be-rejected report, and a fixed
-// point-in-time advisory string (ADR-0011: Policy may change between plan
-// and apply).
-type planOutput struct {
-	Matched         int              `json:"matched"`
-	Verdicts        []perNodeVerdict `json:"verdicts"`
-	WouldBeRejected *wouldBeRejected `json:"would_be_rejected,omitempty"`
-	Advisory        string           `json:"advisory"`
-}
-
-// planAdvisory is the fixed point-in-time disclaimer every planOutput
+// planAdvisory is the fixed point-in-time disclaimer every PlanOutput
 // carries (ADR-0011): a Plan's verdicts are a snapshot, not a guarantee —
 // Policy may change between the Plan and a later real run.
 const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
-
-// runOrPlanOutput is run_operation/raw_exec's shared result shape (#119):
-// additive over #118's executionOutput. JobID/Results keep EXACTLY
-// executionOutput's tags — no omitempty — so a zero-match plan=false run
-// still renders {"job_id":"","results":[]}, byte-identical to #118; Plan is
-// the only new, omitempty field, populated only when plan=true.
-type runOrPlanOutput struct {
-	JobID   string          `json:"job_id"`
-	Results []perNodeResult `json:"results"`
-	Plan    *planOutput     `json:"plan,omitempty"`
-}
 
 // verdictString renders a capability.VerdictStatus as the lowercase string
 // the execution tools emit, mirroring outcomeString's style.
@@ -209,17 +137,17 @@ func verdictString(v capability.VerdictStatus) string {
 	}
 }
 
-// renderPlan renders a capability.PlanResult as the tool's planOutput:
+// renderPlan renders a capability.PlanResult as the tool's PlanOutput:
 // verdicts sorted by NodeID for a stable response (mirrors renderJob), and
 // would_be_rejected derived from pr.CapExceeded (reason "exceeds_cap") or,
 // absent that, pr.Frozen (reason "frozen"). A Plan can be both over-cap and
 // Frozen at once (Service.Plan computes Frozen before the cap check); the
 // over-cap report takes priority here since it is the reason the query
 // fan-out never even ran (Verdicts is empty in that case too).
-func renderPlan(pr capability.PlanResult) planOutput {
-	verdicts := make([]perNodeVerdict, 0, len(pr.Verdicts))
+func renderPlan(pr capability.PlanResult) PlanOutput {
+	verdicts := make([]PerNodeVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
-		verdicts = append(verdicts, perNodeVerdict{
+		verdicts = append(verdicts, PerNodeVerdict{
 			NodeID:       v.NodeID,
 			Verdict:      verdictString(v.Status),
 			DecidingRule: v.DecidingRule,
@@ -228,17 +156,17 @@ func renderPlan(pr capability.PlanResult) planOutput {
 	}
 	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
 
-	out := planOutput{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
+	out := PlanOutput{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
 	switch {
 	case pr.CapExceeded != nil:
-		out.WouldBeRejected = &wouldBeRejected{
+		out.WouldBeRejected = &WouldBeRejected{
 			Reason:  "exceeds_cap",
 			Matched: pr.CapExceeded.Matched,
 			Cap:     pr.CapExceeded.Cap,
 			Class:   riskClassString(pr.CapExceeded.Class),
 		}
 	case pr.Frozen:
-		out.WouldBeRejected = &wouldBeRejected{Reason: "frozen"}
+		out.WouldBeRejected = &WouldBeRejected{Reason: "frozen"}
 	}
 	return out
 }
@@ -247,10 +175,10 @@ func renderPlan(pr capability.PlanResult) planOutput {
 // result — plan=true's counterpart to dispatchAndRender. err from exec.Plan
 // is ONLY an authz-refusal or infra failure (renderRunError's existing
 // cases): cap/Freeze are reported INSIDE pr, never as an error (ADR-0011).
-func planAndRender(ctx context.Context, exec Executor, p capability.Principal, sel capability.Selector, act jobs.Action) (planOutput, error) {
+func planAndRender(ctx context.Context, exec Executor, p capability.Principal, sel capability.Selector, act jobs.Action) (PlanOutput, error) {
 	pr, err := exec.Plan(ctx, p, sel, act)
 	if err != nil {
-		return planOutput{}, renderRunError(err)
+		return PlanOutput{}, renderRunError(err)
 	}
 	return renderPlan(pr), nil
 }
@@ -285,11 +213,11 @@ func truncateOutput(b []byte) (string, bool) {
 	return string(b[:maxRenderedOutputBytes]), true
 }
 
-// perNodeResultFromTask renders one jobs.Task as a perNodeResult.
+// perNodeResultFromTask renders one jobs.Task as a PerNodeResult.
 // DurationMS is 0 when the Task was never dispatched (DispatchedAt zero —
 // e.g. OutcomeUnreachable/an offline Node, or a Pending Task cancelled
 // before it was ever sent), never a fabricated negative/huge value.
-func perNodeResultFromTask(task jobs.Task) perNodeResult {
+func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 	stdout, stdoutTruncated := truncateOutput(task.Stdout)
 	stderr, stderrTruncated := truncateOutput(task.Stderr)
 
@@ -298,7 +226,7 @@ func perNodeResultFromTask(task jobs.Task) perNodeResult {
 		durationMS = task.ResolvedAt.Sub(task.DispatchedAt).Milliseconds()
 	}
 
-	return perNodeResult{
+	return PerNodeResult{
 		NodeID:          task.NodeID,
 		Outcome:         outcomeString(task.Outcome),
 		ExitCode:        task.ExitCode,
@@ -311,26 +239,26 @@ func perNodeResultFromTask(task jobs.Task) perNodeResult {
 }
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
-// renders every one of its Tasks as a perNodeResult, sorted by NodeID for a
+// renders every one of its Tasks as a PerNodeResult, sorted by NodeID for a
 // stable response. It is the shared rendering path for run_operation/
 // raw_exec's own result (once exec.Run returns a non-empty NodeResult set)
 // and get_job's polling re-read of the same Job later.
-func renderJob(ctx context.Context, results JobResultReader, jobID string) (executionOutput, error) {
+func renderJob(ctx context.Context, results JobResultReader, jobID string) (ExecutionOutput, error) {
 	if _, err := results.GetJob(ctx, jobID); err != nil {
-		return executionOutput{}, fmt.Errorf("get job %q: %w", jobID, err)
+		return ExecutionOutput{}, fmt.Errorf("get job %q: %w", jobID, err)
 	}
 	tasks, err := results.TasksByJob(ctx, jobID)
 	if err != nil {
-		return executionOutput{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
+		return ExecutionOutput{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
 	}
 
-	items := make([]perNodeResult, 0, len(tasks))
+	items := make([]PerNodeResult, 0, len(tasks))
 	for _, task := range tasks {
 		items = append(items, perNodeResultFromTask(task))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
 
-	return executionOutput{JobID: jobID, Results: items}, nil
+	return ExecutionOutput{JobID: jobID, Results: items}, nil
 }
 
 // renderRunError translates an error returned by Executor.Run into the tool
@@ -408,13 +336,13 @@ type rawExecInput struct {
 // once each has built its own jobs.Action. A zero-match Run (no Node matched
 // the Selector) renders as {results: []} without ever reading a Job back;
 // Run never reached the dispatcher, so there is no Job.
-func dispatchAndRender(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (executionOutput, error) {
+func dispatchAndRender(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (ExecutionOutput, error) {
 	nodeResults, err := exec.Run(ctx, p, sel, act)
 	if err != nil {
-		return executionOutput{}, renderRunError(err)
+		return ExecutionOutput{}, renderRunError(err)
 	}
 	if len(nodeResults) == 0 {
-		return executionOutput{Results: []perNodeResult{}}, nil
+		return ExecutionOutput{Results: []PerNodeResult{}}, nil
 	}
 	return renderJob(ctx, results, nodeResults[0].JobID)
 }
@@ -456,36 +384,36 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"Node's effective Policy and narrow your request rather than guessing again. Blocks until every " +
 			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
 			"get_job re-reads the same Job later.",
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
 
 		sel, err := capability.ParseSelector(in.Selector)
 		if err != nil {
-			return nil, runOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
+			return nil, RunOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
 		act, err := buildOperationAction(ops, in.Operation, in.Args, in.TimeoutSeconds)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
 
 		if in.Plan {
 			plan, err := planAndRender(ctx, exec, p, sel, act)
 			if err != nil {
-				return nil, runOrPlanOutput{}, err
+				return nil, RunOrPlanOutput{}, err
 			}
-			return nil, runOrPlanOutput{Plan: &plan}, nil
+			return nil, RunOrPlanOutput{Plan: &plan}, nil
 		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
-		return nil, runOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
+		return nil, RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
 	})
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -498,25 +426,25 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"read-only-looking command. argv runs verbatim — no shell, no client-side splitting — and the " +
 			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
 			"outcome=denied_by_policy). " + planModeClause,
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, runOrPlanOutput, error) {
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
 
 		if len(in.Argv) == 0 {
-			return nil, runOrPlanOutput{}, fmt.Errorf("argv must not be empty")
+			return nil, RunOrPlanOutput{}, fmt.Errorf("argv must not be empty")
 		}
 
 		sel, err := capability.ParseSelector(in.Selector)
 		if err != nil {
-			return nil, runOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
+			return nil, RunOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
 		timeoutSeconds, err := resolveTimeoutSeconds(in.TimeoutSeconds)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
 		// Raw Exec always takes RiskClassMutate by construction, regardless
 		// of what argv does (ADR-0012, invariant 13) — no client field can
@@ -526,15 +454,15 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		if in.Plan {
 			plan, err := planAndRender(ctx, exec, p, sel, act)
 			if err != nil {
-				return nil, runOrPlanOutput{}, err
+				return nil, RunOrPlanOutput{}, err
 			}
-			return nil, runOrPlanOutput{Plan: &plan}, nil
+			return nil, RunOrPlanOutput{Plan: &plan}, nil
 		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
 		if err != nil {
-			return nil, runOrPlanOutput{}, err
+			return nil, RunOrPlanOutput{}, err
 		}
-		return nil, runOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
+		return nil, RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
 	})
 }

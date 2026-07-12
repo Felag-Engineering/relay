@@ -50,109 +50,24 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 )
 
-// --- JSON wire-shape mirrors -----------------------------------------------
-//
-// package main cannot reach internal/controlplane/mcp's own external test
-// package (mcp_test) where these are declared, so they are copied field for
-// field here (same rationale as perNodeResultJSON/executionOutputJSON in
-// mcp_execution_e2e_test.go): this test exercises the MCP tools as an
-// outside caller would, over the wire, never by importing mcp's unexported
-// types.
-
-// factsJSON mirrors internal/controlplane/mcp/tools_nodes.go's factsOutput.
-type factsJSON struct {
-	Hostname    string   `json:"hostname"`
-	OS          string   `json:"os"`
-	Kernel      string   `json:"kernel"`
-	Arch        string   `json:"arch"`
-	IPAddresses []string `json:"ip_addresses"`
-}
-
-// nodeItemJSON mirrors internal/controlplane/mcp/tools_nodes.go's nodeItem.
-type nodeItemJSON struct {
-	NodeID            string            `json:"node_id"`
-	NodeLabels        map[string]string `json:"node_labels"`
-	RelayLabels       map[string]string `json:"relay_labels"`
-	Facts             factsJSON         `json:"facts"`
-	LastSeen          string            `json:"last_seen"`
-	PolicyFingerprint string            `json:"policy_fingerprint"`
-	Revoked           bool              `json:"revoked"`
-	RevokedAt         string            `json:"revoked_at,omitempty"`
-}
-
-// listNodesResultJSON mirrors tools_nodes.go's listNodesOutput.
-type listNodesResultJSON struct {
-	Nodes []nodeItemJSON `json:"nodes"`
-}
-
-// effectivePolicyJSON mirrors tools_nodes.go's effectivePolicyOutput.
-type effectivePolicyJSON struct {
-	RawExecEnabled    bool     `json:"raw_exec_enabled"`
-	RawAllowPatterns  []string `json:"raw_allow_patterns"`
-	RawDenyPatterns   []string `json:"raw_deny_patterns"`
-	AllowedOperations []string `json:"allowed_operations"`
-	PolicyFingerprint string   `json:"policy_fingerprint"`
-	Reported          bool     `json:"reported"`
-}
-
-// describeNodeResultJSON mirrors tools_nodes.go's describeNodeOutput
-// (nodeItem embedded + EffectivePolicy).
-type describeNodeResultJSON struct {
-	nodeItemJSON
-	EffectivePolicy effectivePolicyJSON `json:"effective_policy"`
-}
-
-// perNodeVerdictJSON mirrors internal/controlplane/mcp/tools_execution.go's
-// perNodeVerdict (#119, ADR-0011).
-type perNodeVerdictJSON struct {
-	NodeID       string `json:"node_id"`
-	Verdict      string `json:"verdict"`
-	DecidingRule string `json:"deciding_rule,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-}
-
-// wouldBeRejectedJSON mirrors tools_execution.go's wouldBeRejected.
-type wouldBeRejectedJSON struct {
-	Reason  string `json:"reason"`
-	Matched int    `json:"matched,omitempty"`
-	Cap     int    `json:"cap,omitempty"`
-	Class   string `json:"class,omitempty"`
-}
-
-// planOutputJSON mirrors tools_execution.go's planOutput.
-type planOutputJSON struct {
-	Matched         int                  `json:"matched"`
-	Verdicts        []perNodeVerdictJSON `json:"verdicts"`
-	WouldBeRejected *wouldBeRejectedJSON `json:"would_be_rejected,omitempty"`
-	Advisory        string               `json:"advisory"`
-}
-
-// runOrPlanOutputJSON mirrors tools_execution.go's runOrPlanOutput — the
-// shared run_operation/raw_exec result shape (plan=false renders Plan as
-// nil/omitted; plan=true renders JobID=""/Results=[]).
-type runOrPlanOutputJSON struct {
-	JobID   string              `json:"job_id"`
-	Results []perNodeResultJSON `json:"results"`
-	Plan    *planOutputJSON     `json:"plan,omitempty"`
-}
-
-// verdictsByNode indexes a planOutputJSON's Verdicts by NodeID for
+// verdictsByNode indexes a mcp.PlanOutput's Verdicts by NodeID for
 // order-independent assertions (ADR-0006: never assume slice order).
-func verdictsByNode(p planOutputJSON) map[string]perNodeVerdictJSON {
-	m := make(map[string]perNodeVerdictJSON, len(p.Verdicts))
+func verdictsByNode(p mcp.PlanOutput) map[string]mcp.PerNodeVerdict {
+	m := make(map[string]mcp.PerNodeVerdict, len(p.Verdicts))
 	for _, v := range p.Verdicts {
 		m[v.NodeID] = v
 	}
 	return m
 }
 
-// resultsByNode indexes a []perNodeResultJSON by NodeID, the run_operation/
+// resultsByNode indexes a []mcp.PerNodeResult by NodeID, the run_operation/
 // raw_exec sibling of verdictsByNode.
-func resultsByNode(results []perNodeResultJSON) map[string]perNodeResultJSON {
-	m := make(map[string]perNodeResultJSON, len(results))
+func resultsByNode(results []mcp.PerNodeResult) map[string]mcp.PerNodeResult {
+	m := make(map[string]mcp.PerNodeResult, len(results))
 	for _, r := range results {
 		m[r.NodeID] = r
 	}
@@ -358,13 +273,13 @@ func waitForConnectedNodes(t *testing.T, deps *appDeps, n int, deadline time.Dur
 // becoming true against a real daemon) is a security-relevant finding on the
 // Policy-display surface, per this issue's instructions — it must never be
 // papered over by loosening this poll into a single non-retried call.
-func pollDescribeReported(t *testing.T, session *sdkmcp.ClientSession, nodeID string, deadline time.Duration) describeNodeResultJSON {
+func pollDescribeReported(t *testing.T, session *sdkmcp.ClientSession, nodeID string, deadline time.Duration) mcp.DescribeNodeOutput {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	for {
 		res := mcpCallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
-		var out describeNodeResultJSON
+		var out mcp.DescribeNodeOutput
 		decodeCallToolJSON(t, res, &out)
 		if out.EffectivePolicy.Reported {
 			return out
@@ -466,13 +381,13 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", res.Content)
 		}
-		var out executionOutputJSON
+		var out mcp.ExecutionOutput
 		decodeCallToolJSON(t, res, &out)
 
 		if len(out.Results) != 2 {
 			t.Fatalf("facts_fanout: got %d results, want 2: %+v", len(out.Results), out.Results)
 		}
-		byNode := map[string]perNodeResultJSON{}
+		byNode := map[string]mcp.PerNodeResult{}
 		for _, r := range out.Results {
 			byNode[r.NodeID] = r
 		}
@@ -562,7 +477,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if sleepRes.IsError {
 			t.Fatalf("raw_exec(/bin/sleep 1): IsError=true; content = %+v", sleepRes.Content)
 		}
-		var sleepOut runOrPlanOutputJSON
+		var sleepOut mcp.RunOrPlanOutput
 		decodeCallToolJSON(t, sleepRes, &sleepOut)
 		sleepByNode := resultsByNode(sleepOut.Results)
 		for nodeID := range connectedSet {
@@ -577,7 +492,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if echoRes.IsError {
 			t.Fatalf("raw_exec(/bin/echo hello): IsError=true; content = %+v", echoRes.Content)
 		}
-		var echoOut runOrPlanOutputJSON
+		var echoOut mcp.RunOrPlanOutput
 		decodeCallToolJSON(t, echoRes, &echoOut)
 		echoByNode := resultsByNode(echoOut.Results)
 		for nodeID := range connectedSet {
@@ -592,7 +507,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if factsRes.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", factsRes.Content)
 		}
-		var factsOut executionOutputJSON
+		var factsOut mcp.ExecutionOutput
 		decodeCallToolJSON(t, factsRes, &factsOut)
 		for _, r := range factsOut.Results {
 			if r.Outcome != "success" {
@@ -613,7 +528,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			if planRes.IsError {
 				t.Fatalf("run_operation(plan=true): IsError=true; content = %+v", planRes.Content)
 			}
-			var planOut runOrPlanOutputJSON
+			var planOut mcp.RunOrPlanOutput
 			decodeCallToolJSON(t, planRes, &planOut)
 			if planOut.JobID != "" || len(planOut.Results) != 0 {
 				t.Errorf("run_operation(plan=true) left job_id/results non-empty: %+v", planOut)
@@ -628,7 +543,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			if applyRes.IsError {
 				t.Fatalf("run_operation(plan=false): IsError=true; content = %+v", applyRes.Content)
 			}
-			var applyOut runOrPlanOutputJSON
+			var applyOut mcp.RunOrPlanOutput
 			decodeCallToolJSON(t, applyRes, &applyOut)
 
 			verdicts := verdictsByNode(*planOut.Plan)
@@ -650,7 +565,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			if planRes.IsError {
 				t.Fatalf("raw_exec(plan=true): IsError=true; content = %+v", planRes.Content)
 			}
-			var planOut runOrPlanOutputJSON
+			var planOut mcp.RunOrPlanOutput
 			decodeCallToolJSON(t, planRes, &planOut)
 			if planOut.JobID != "" || len(planOut.Results) != 0 {
 				t.Errorf("raw_exec(plan=true) left job_id/results non-empty: %+v", planOut)
@@ -665,7 +580,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			if applyRes.IsError {
 				t.Fatalf("raw_exec(plan=false): IsError=true; content = %+v", applyRes.Content)
 			}
-			var applyOut runOrPlanOutputJSON
+			var applyOut mcp.RunOrPlanOutput
 			decodeCallToolJSON(t, applyRes, &applyOut)
 
 			verdicts := verdictsByNode(*planOut.Plan)
@@ -709,7 +624,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if planRes.IsError {
 			t.Fatalf("run_operation(plan=true) while frozen: IsError=true, want false (advisory); content = %+v", planRes.Content)
 		}
-		var planOut runOrPlanOutputJSON
+		var planOut mcp.RunOrPlanOutput
 		decodeCallToolJSON(t, planRes, &planOut)
 		if planOut.Plan == nil || planOut.Plan.WouldBeRejected == nil || planOut.Plan.WouldBeRejected.Reason != "frozen" {
 			t.Fatalf("run_operation(plan=true) while frozen: plan = %+v, want would_be_rejected.reason=frozen", planOut.Plan)
@@ -738,7 +653,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if restoredRes.IsError {
 			t.Fatalf("run_operation after release: IsError=true; content = %+v", restoredRes.Content)
 		}
-		var restoredOut executionOutputJSON
+		var restoredOut mcp.ExecutionOutput
 		decodeCallToolJSON(t, restoredRes, &restoredOut)
 		if len(restoredOut.Results) != 2 {
 			t.Fatalf("run_operation after release: got %d results, want 2: %+v", len(restoredOut.Results), restoredOut.Results)
@@ -784,7 +699,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		if listRes.IsError {
 			t.Fatalf("list_nodes(relay:node=fresh): IsError=true; content = %+v", listRes.Content)
 		}
-		var listOut listNodesResultJSON
+		var listOut mcp.ListNodesOutput
 		decodeCallToolJSON(t, listRes, &listOut)
 		if len(listOut.Nodes) != 1 {
 			t.Fatalf("list_nodes(relay:node=fresh): got %d Nodes, want exactly 1: %+v", len(listOut.Nodes), listOut.Nodes)

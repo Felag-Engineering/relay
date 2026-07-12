@@ -59,6 +59,10 @@ var readFiles = map[string]bool{
 	"tools_nodes.go":      true,
 	"tools_operations.go": true,
 	"attribution.go":      true,
+	// wire.go (#161) is pure data — the 13 exported MCP tool output structs,
+	// no methods, no capability.*/newDispatch references — so it classifies
+	// as a strict readFile like mcp.go/tools_nodes.go/tools_operations.go.
+	"wire.go": true,
 }
 
 var execFiles = map[string]bool{

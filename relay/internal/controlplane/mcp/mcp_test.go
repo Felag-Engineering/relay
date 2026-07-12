@@ -298,72 +298,19 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 	}
 }
 
-// --- wire-shape mirrors for assertions (this is an external test package;
-// it deliberately re-declares the JSON shape rather than reaching into the
-// mcp package's unexported types, to also pin the wire contract). ---
-
-type factsJSON struct {
-	Hostname    string   `json:"hostname"`
-	OS          string   `json:"os"`
-	Kernel      string   `json:"kernel"`
-	Arch        string   `json:"arch"`
-	IPAddresses []string `json:"ip_addresses"`
-}
-
-type nodeItemJSON struct {
-	NodeID            string            `json:"node_id"`
-	NodeLabels        map[string]string `json:"node_labels"`
-	RelayLabels       map[string]string `json:"relay_labels"`
-	Facts             factsJSON         `json:"facts"`
-	LastSeen          string            `json:"last_seen"`
-	PolicyFingerprint string            `json:"policy_fingerprint"`
-	Revoked           bool              `json:"revoked"`
-	RevokedAt         string            `json:"revoked_at,omitempty"`
-}
-
-type listNodesResultJSON struct {
-	Nodes []nodeItemJSON `json:"nodes"`
-}
-
-type effectivePolicyJSON struct {
-	RawExecEnabled    bool     `json:"raw_exec_enabled"`
-	RawAllowPatterns  []string `json:"raw_allow_patterns"`
-	RawDenyPatterns   []string `json:"raw_deny_patterns"`
-	AllowedOperations []string `json:"allowed_operations"`
-	PolicyFingerprint string   `json:"policy_fingerprint"`
-	Reported          bool     `json:"reported"`
-}
-
-type describeNodeResultJSON struct {
-	nodeItemJSON
-	EffectivePolicy effectivePolicyJSON `json:"effective_policy"`
-}
-
-type operationItemJSON struct {
-	Name           string            `json:"name"`
-	RiskClass      string            `json:"risk_class"`
-	Purpose        string            `json:"purpose"`
-	ArgConstraints map[string]string `json:"arg_constraints"`
-	Example        string            `json:"example"`
-}
-
-type listOperationsResultJSON struct {
-	Operations []operationItemJSON `json:"operations"`
-}
-
 func TestMCP_ListNodes_All(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)
 
 	res := callTool(t, session, "list_nodes", nil)
-	var out listNodesResultJSON
+	var out mcp.ListNodesOutput
 	decodeResult(t, res, &out)
 
 	if len(out.Nodes) != 2 {
 		t.Fatalf("list_nodes(): got %d Nodes, want 2: %+v", len(out.Nodes), out.Nodes)
 	}
 
-	var a, b *nodeItemJSON
+	var a, b *mcp.NodeItem
 	for i := range out.Nodes {
 		switch out.Nodes[i].NodeID {
 		case ts.nodeA:
@@ -405,7 +352,7 @@ func TestMCP_ListNodes_SelectorFilter(t *testing.T) {
 
 	t.Run("node: filter matches only node A", func(t *testing.T) {
 		res := callTool(t, session, "list_nodes", map[string]any{"selector": "node:role=web"})
-		var out listNodesResultJSON
+		var out mcp.ListNodesOutput
 		decodeResult(t, res, &out)
 		if len(out.Nodes) != 1 || out.Nodes[0].NodeID != ts.nodeA {
 			t.Fatalf("list_nodes(node:role=web) = %+v, want only %q", out.Nodes, ts.nodeA)
@@ -414,7 +361,7 @@ func TestMCP_ListNodes_SelectorFilter(t *testing.T) {
 
 	t.Run("relay: filter matches only node A", func(t *testing.T) {
 		res := callTool(t, session, "list_nodes", map[string]any{"selector": "relay:quarantine=on"})
-		var out listNodesResultJSON
+		var out mcp.ListNodesOutput
 		decodeResult(t, res, &out)
 		if len(out.Nodes) != 1 || out.Nodes[0].NodeID != ts.nodeA {
 			t.Fatalf("list_nodes(relay:quarantine=on) = %+v, want only %q", out.Nodes, ts.nodeA)
@@ -435,7 +382,7 @@ func TestMCP_DescribeNode(t *testing.T) {
 
 	t.Run("node with a captured Policy snapshot", func(t *testing.T) {
 		res := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
-		var out describeNodeResultJSON
+		var out mcp.DescribeNodeOutput
 		decodeResult(t, res, &out)
 
 		if out.NodeID != ts.nodeA {
@@ -457,7 +404,7 @@ func TestMCP_DescribeNode(t *testing.T) {
 
 	t.Run("node with no captured Policy snapshot", func(t *testing.T) {
 		res := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeB})
-		var out describeNodeResultJSON
+		var out mcp.DescribeNodeOutput
 		decodeResult(t, res, &out)
 
 		if out.NodeID != ts.nodeB {
@@ -486,7 +433,7 @@ func TestMCP_ListOperations(t *testing.T) {
 	session := ts.connect(t)
 
 	res := callTool(t, session, "list_operations", nil)
-	var out listOperationsResultJSON
+	var out mcp.ListOperationsOutput
 	decodeResult(t, res, &out)
 
 	want := map[string]string{

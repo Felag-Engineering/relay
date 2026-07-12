@@ -12,6 +12,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -174,26 +175,6 @@ func (f *fakeConduit) cancelledCalls() []cancelCall {
 	return out
 }
 
-// --- wire-shape mirrors for assertions (see mcp_test.go's own note: this is
-// an external test package, so it deliberately re-declares the JSON shape
-// rather than reaching into the mcp package's unexported types). ---
-
-type perNodeResultJSON struct {
-	NodeID          string `json:"node_id"`
-	Outcome         string `json:"outcome"`
-	ExitCode        int32  `json:"exit_code"`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
-	DurationMS      int64  `json:"duration_ms"`
-}
-
-type executionOutputJSON struct {
-	JobID   string              `json:"job_id"`
-	Results []perNodeResultJSON `json:"results"`
-}
-
 // toolErrorText extracts a tool error's message text, failing the test if
 // res is not actually an error result.
 func toolErrorText(t *testing.T, res *sdkmcp.CallToolResult) string {
@@ -222,7 +203,7 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 
 	session := ts.connect(t)
 	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
-	var out executionOutputJSON
+	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
 	if out.JobID == "" {
@@ -258,7 +239,7 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 	res := callTool(t, session, "raw_exec", map[string]any{
 		"argv": []string{"/usr/bin/systemctl", "restart", "nginx"},
 	})
-	var out executionOutputJSON
+	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
 	got := map[string]string{}
@@ -278,7 +259,7 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 	// pipeline, not a separate one.
 	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
 	res2 := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
-	var out2 executionOutputJSON
+	var out2 mcp.ExecutionOutput
 	decodeResult(t, res2, &out2)
 	for _, r := range out2.Results {
 		if r.Outcome != "success" {
@@ -376,7 +357,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	close(ts.conduit.unblock)
 
 	runRes := <-runDone
-	var runResult executionOutputJSON
+	var runResult mcp.ExecutionOutput
 	decodeResult(t, runRes, &runResult)
 
 	outcomes := map[string]string{}
@@ -395,7 +376,7 @@ func TestMCP_CancelJob_InFlightAndPendingSibling(t *testing.T) {
 	}
 
 	getRes := callTool(t, cancelSession, "get_job", map[string]any{"job_id": predictedJobID})
-	var getOut executionOutputJSON
+	var getOut mcp.ExecutionOutput
 	decodeResult(t, getRes, &getOut)
 	if len(getOut.Results) != 2 {
 		t.Fatalf("get_job: got %d results, want 2", len(getOut.Results))
@@ -483,7 +464,7 @@ func TestMCP_RunOperation_AuditedWithPrincipal(t *testing.T) {
 		"selector":  "node:role=web",
 		"operation": "system.facts",
 	})
-	var out executionOutputJSON
+	var out mcp.ExecutionOutput
 	decodeResult(t, res, &out)
 
 	records, err := ts.store.Audit().ByJob(context.Background(), out.JobID)

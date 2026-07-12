@@ -33,6 +33,8 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 )
 
 // bearerRoundTripper injects "Authorization: Bearer <token>" on every
@@ -82,23 +84,6 @@ func mcpCallTool(t *testing.T, session *sdkmcp.ClientSession, name string, args 
 		t.Fatalf("CallTool(%s): protocol error: %v", name, err)
 	}
 	return res
-}
-
-// perNodeResultJSON and executionOutputJSON mirror
-// internal/controlplane/mcp/tools_execution.go's perNodeResult/
-// executionOutput wire shape (deliberately re-declared rather than importing
-// the unexported types: this test exercises run_operation as an outside MCP
-// caller would, over the wire).
-type perNodeResultJSON struct {
-	NodeID  string `json:"node_id"`
-	Outcome string `json:"outcome"`
-	Stdout  string `json:"stdout"`
-	Stderr  string `json:"stderr"`
-}
-
-type executionOutputJSON struct {
-	JobID   string              `json:"job_id"`
-	Results []perNodeResultJSON `json:"results"`
 }
 
 // factHostname extracts the "hostname=" value from a system.facts stdout
@@ -229,7 +214,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	if !ok {
 		t.Fatalf("run_operation: Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
 	}
-	var out executionOutputJSON
+	var out mcp.ExecutionOutput
 	if err := json.Unmarshal([]byte(tc.Text), &out); err != nil {
 		t.Fatalf("json.Unmarshal(%q): %v", tc.Text, err)
 	}

@@ -62,12 +62,12 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 			"Job started via run_operation/raw_exec (which already block and return full results; " +
 			"get_job re-reads the same Job later, e.g. after cancel_job, or to check on a still-in-flight " +
 			"Job from a second call).",
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, executionOutput, error) {
+	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, ExecutionOutput, error) {
 		logPrincipal(ctx, "get_job")
 
 		out, err := renderJob(ctx, results, in.JobID)
 		if err != nil {
-			return nil, executionOutput{}, err
+			return nil, ExecutionOutput{}, err
 		}
 		return nil, out, nil
 	})
