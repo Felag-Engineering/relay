@@ -9,7 +9,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 .PHONY: build test lint proto proto-tools proto-check build-relay build-daemon \
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
-        build-relay-devharness devharness-absent-check test-crossbinary lint-devharness
+        build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
+        gen-opschema
 
 build: build-relay build-daemon
 
@@ -86,6 +87,16 @@ test-integration: build
 
 lint-daemon:
 	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
+
+## --- opschema golden (ADR-0015: daemon is the single source of truth for what
+## it enforces) ---
+# Regenerates the golden Operation schema by running the daemon's offline
+# `dump-operation-schema` subcommand (same pre-runtime seam as `policy check`)
+# and writing its canonical JSON straight to the committed golden. The golden
+# MUST live inside relay/internal/opvocab/ (not repo root): opvocab_test.go
+# //go:embed's it, and go:embed cannot reach above its own package tree.
+gen-opschema: build-daemon
+	$(CURDIR)/daemon/target/debug/relay-daemon dump-operation-schema > $(CURDIR)/relay/internal/opvocab/testdata/operations.schema.json
 
 ## --- #112 dev-harness cross-binary CI machinery ---
 # Kept OUT of build/test/lint: build-relay-devharness produces a non-shippable

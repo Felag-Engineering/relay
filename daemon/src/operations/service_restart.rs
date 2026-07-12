@@ -29,7 +29,11 @@ use crate::gen::{Outcome, TaskResult};
 ///    excludes whitespace, `/`, NUL/control chars, and every shell
 ///    metacharacter. It also matches the Policy fixture charset so any name
 ///    that validates here is one Policy can also express.
-fn validate_unit_name(unit: &str) -> Result<(), super::OperationError> {
+///
+/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
+/// byte-space proof test, which binds the schema's independently-declared
+/// charset to this real validator (ADR-0015) without rewriting it.
+pub(crate) fn validate_unit_name(unit: &str) -> Result<(), super::OperationError> {
     if unit.is_empty() {
         return Err(super::OperationError::InvalidUnitName(unit.to_string()));
     }

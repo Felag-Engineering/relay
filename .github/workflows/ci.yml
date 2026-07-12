@@ -111,6 +111,34 @@ jobs:
       - run: make proto-tools
       - run: make proto-check
 
+  # ---- opschema-drift: the daemon is the single source of truth for what it
+  # enforces (ADR-0015); the committed Operation-schema golden must never
+  # drift from `dump-operation-schema`'s live output. This is a Rust build
+  # (dump-operation-schema is a daemon subcommand), so it is modeled on the
+  # `daemon` job above, not the Go-only proto-drift job.
+  opschema-drift:
+    name: Operation schema drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - run: make gen-opschema
+      - run: git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
+
   # ---- integration: smoke test against both built binaries ----
   integration:
     name: Integration

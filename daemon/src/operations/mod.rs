@@ -17,6 +17,7 @@
 
 pub mod file_read;
 pub mod pkg_install;
+pub mod schema;
 pub mod service_restart;
 pub mod system_facts;
 
@@ -95,13 +96,15 @@ pub fn risk_class(name: &str) -> Option<RiskClass> {
 /// from `OUTCOME_DENIED_BY_POLICY`, which is a Policy-engine concern.
 #[derive(Debug, thiserror::Error)]
 pub enum OperationError {
-    #[error("invalid unit name '{0}': only [A-Za-z0-9@._-] are allowed")]
+    #[error("invalid unit name '{0}': only [A-Za-z0-9@._-] are allowed, no leading '-'")]
     InvalidUnitName(String),
 
-    #[error("invalid package name '{0}': only [A-Za-z0-9+._-] are allowed, no leading '-'")]
+    #[error("invalid package name '{0}': only [A-Za-z0-9+._-] are allowed; must start and end alphanumeric")]
     InvalidPackageName(String),
 
-    #[error("invalid package version '{0}': only [A-Za-z0-9+.:~_-] are allowed, no leading '-'")]
+    #[error(
+        "invalid package version '{0}': only [A-Za-z0-9+.:~_-] are allowed; must start and end alphanumeric"
+    )]
     InvalidPackageVersion(String),
 
     #[error("unsupported package manager: no supported apt/dnf/yum binary found on this Node")]

@@ -60,7 +60,11 @@ impl PackageManager {
 /// 3. Rejects any interior character outside `[A-Za-z0-9+._-]`. Notably
 ///    excludes `=` so a name can never smuggle an apt `name=version`
 ///    pkgspec separator.
-fn validate_pkg_name(name: &str) -> Result<(), super::OperationError> {
+///
+/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
+/// byte-space proof test, which binds the schema's independently-declared
+/// charset to this real validator (ADR-0015) without rewriting it.
+pub(crate) fn validate_pkg_name(name: &str) -> Result<(), super::OperationError> {
     let invalid = || Err(super::OperationError::InvalidPackageName(name.to_string()));
 
     let Some(first) = name.chars().next() else {
@@ -93,7 +97,11 @@ fn validate_pkg_name(name: &str) -> Result<(), super::OperationError> {
 /// REMOVE of `nginx`, and a leading `-` risks option injection. This is the
 /// same install→remove flip [`validate_pkg_name`] closes on the name side,
 /// now closed on the version side.
-fn validate_pkg_version(version: &str) -> Result<(), super::OperationError> {
+///
+/// `pub(crate)`: also called directly by `operations::schema`'s exhaustive
+/// byte-space proof test, which binds the schema's independently-declared
+/// charset to this real validator (ADR-0015) without rewriting it.
+pub(crate) fn validate_pkg_version(version: &str) -> Result<(), super::OperationError> {
     let invalid = || {
         Err(super::OperationError::InvalidPackageVersion(
             version.to_string(),

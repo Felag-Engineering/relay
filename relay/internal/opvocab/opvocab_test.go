@@ -1,6 +1,9 @@
 package opvocab
 
 import (
+	_ "embed"
+	"encoding/json"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -79,10 +82,10 @@ func TestOperations_RawExecAbsent(t *testing.T) {
 //
 // system.facts' ArgConstraints is an empty-but-non-nil map: that is
 // INTENTIONAL (a zero-arg Operation has nothing to document), not "not yet
-// filled" — TestOperations_DocumentedArgKeys separately pins the exact
-// documented key set per Operation, so a future Operation with real
-// arguments cannot read this test's tolerance of an empty map as license to
-// skip documenting them.
+// filled" — TestOperations_MatchesGoldenSchema separately pins the exact
+// documented key set per Operation against the daemon's golden schema, so a
+// future Operation with real arguments cannot read this test's tolerance of
+// an empty map as license to skip documenting them.
 func TestOperations_Legible(t *testing.T) {
 	for _, d := range Operations() {
 		if strings.TrimSpace(d.Purpose) == "" {
@@ -106,42 +109,158 @@ func TestOperations_Legible(t *testing.T) {
 	}
 }
 
-// TestOperations_DocumentedArgKeys pins the exact documented arg-key set per
-// Operation against daemon/src/dispatch.rs's OP_ARG_* constants (the keys the
-// daemon actually reads out of Operation.args), so opvocab's ArgConstraints
-// can never silently drift from what the daemon accepts — neither
-// documenting a key the daemon ignores nor omitting one it reads.
-func TestOperations_DocumentedArgKeys(t *testing.T) {
-	// This exact key set is also asserted in
-	// relay/internal/controlplane/mcp/mcp_test.go and mirrors the daemon's
-	// OP_ARG_* constants — update all three together.
-	want := map[string][]string{
-		"system.facts":    {},
-		"file.read":       {"path"},
-		"service.restart": {"unit"},
-		"pkg.install":     {"name", "version"},
+// ---------------------------------------------------------------------------
+// Golden Operation schema cross-check (ADR-0015)
+//
+// The daemon (daemon/src/operations/schema.rs) is the single source of truth
+// for what it actually enforces. Its offline `dump-operation-schema`
+// subcommand emits a canonical JSON schema, committed at
+// testdata/operations.schema.json ("make gen-opschema"; regenerated and
+// diffed by the opschema-drift CI job). goldenSchema below //go:embeds that
+// exact file — go:embed cannot reach above its own package tree, which is
+// WHY the golden lives inside relay/internal/opvocab/testdata/, not at the
+// repo root.
+//
+// TestOperations_MatchesGoldenSchema is trip-wire (c) of the three
+// independent trip-wires ADR-0015 describes: it reads the golden and asserts
+// opvocab.Operations() agrees on names, risk classes, arg keys, and — for
+// every documented arg — that the prose contains the golden's charset token
+// plus its anchor phrases. It retires the hand-copied `want`/`wantArgKeys`
+// maps that used to live in this file (and in mcp_test.go, #163 S3): those
+// were "kept in sync by hand with no guard", precisely the failure mode
+// ADR-0015 exists to close.
+// ---------------------------------------------------------------------------
+
+//go:embed testdata/operations.schema.json
+var goldenSchemaJSON []byte
+
+type goldenArg struct {
+	Key            string  `json:"key"`
+	Charset        *string `json:"charset"`
+	FirstLastAlnum bool    `json:"first_last_alnum"`
+	NoLeadingDash  bool    `json:"no_leading_dash"`
+	Kind           string  `json:"kind"`
+}
+
+type goldenOp struct {
+	Name string      `json:"name"`
+	Risk string      `json:"risk"`
+	Args []goldenArg `json:"args"`
+}
+
+type goldenDoc struct {
+	Operations []goldenOp `json:"operations"`
+}
+
+func loadGoldenSchema(t *testing.T) goldenDoc {
+	t.Helper()
+	var doc goldenDoc
+	if err := json.Unmarshal(goldenSchemaJSON, &doc); err != nil {
+		t.Fatalf("failed to parse testdata/operations.schema.json: %v", err)
+	}
+	return doc
+}
+
+func riskString(r jobs.RiskClass) string {
+	switch r {
+	case jobs.RiskClassRead:
+		return "read"
+	case jobs.RiskClassMutate:
+		return "mutate"
+	default:
+		return "unspecified"
+	}
+}
+
+// charsetTokenRe extracts the exact bracket-notation charset token following
+// the word "charset" in ArgConstraints prose (case-insensitive: pkg.install's
+// "version" arg capitalizes it — "Charset [...]" — while the others don't).
+var charsetTokenRe = regexp.MustCompile(`(?i)charset\s+(\[[^\]]*\])`)
+
+// extractCharsetToken pulls the literal `[...]` charset token out of prose,
+// e.g. "charset [A-Za-z0-9@._-], no leading '-'" -> "[A-Za-z0-9@._-]".
+func extractCharsetToken(prose string) (string, bool) {
+	m := charsetTokenRe.FindStringSubmatch(prose)
+	if m == nil {
+		return "", false
+	}
+	return m[1], true
+}
+
+func TestOperations_MatchesGoldenSchema(t *testing.T) {
+	golden := loadGoldenSchema(t)
+	byName := make(map[string]goldenOp, len(golden.Operations))
+	for _, op := range golden.Operations {
+		byName[op.Name] = op
 	}
 
-	for _, d := range Operations() {
-		wantKeys, ok := want[d.Name]
+	got := Operations()
+	if len(got) != len(golden.Operations) {
+		t.Fatalf("Operations(): got %d entries, want %d (golden): %+v", len(got), len(golden.Operations), got)
+	}
+
+	for _, d := range got {
+		op, ok := byName[d.Name]
 		if !ok {
-			t.Errorf("Operations(): unexpected entry %q", d.Name)
+			t.Errorf("Operations(): entry %q has no matching golden schema entry", d.Name)
 			continue
+		}
+
+		if gotRisk := riskString(d.Risk); gotRisk != op.Risk {
+			t.Errorf("Operations()[%q].Risk = %q, want %q (golden)", d.Name, gotRisk, op.Risk)
+		}
+
+		wantKeys := make([]string, 0, len(op.Args))
+		for _, arg := range op.Args {
+			wantKeys = append(wantKeys, arg.Key)
 		}
 		gotKeys := make([]string, 0, len(d.ArgConstraints))
 		for k := range d.ArgConstraints {
 			gotKeys = append(gotKeys, k)
 		}
-		sort.Strings(gotKeys)
 		sort.Strings(wantKeys)
+		sort.Strings(gotKeys)
 		if len(gotKeys) != len(wantKeys) {
-			t.Errorf("Operations()[%q].ArgConstraints keys = %v, want %v", d.Name, gotKeys, wantKeys)
+			t.Errorf("Operations()[%q].ArgConstraints keys = %v, want %v (golden)", d.Name, gotKeys, wantKeys)
 			continue
 		}
 		for i := range wantKeys {
 			if gotKeys[i] != wantKeys[i] {
-				t.Errorf("Operations()[%q].ArgConstraints keys = %v, want %v", d.Name, gotKeys, wantKeys)
+				t.Errorf("Operations()[%q].ArgConstraints keys = %v, want %v (golden)", d.Name, gotKeys, wantKeys)
 				break
+			}
+		}
+
+		for _, arg := range op.Args {
+			prose := d.ArgConstraints[arg.Key]
+			if arg.Charset != nil {
+				// Extract the EXACT "charset [...]" token from prose and
+				// require it to equal the golden's token verbatim, rather
+				// than merely checking substring containment: a plain
+				// strings.Contains(prose, *arg.Charset) check only proves
+				// the golden's characters appear SOMEWHERE in prose, which
+				// would still pass if prose additionally (wrongly) claimed
+				// extra characters outside that exact bracket. Equality on
+				// the extracted token proves prose advertises the EXACT
+				// charset the golden — itself now proven byte-for-byte equal
+				// to the real validator (schema.rs's
+				// display_matches_declared_predicate_byte_space) — declares.
+				got, ok := extractCharsetToken(prose)
+				if !ok {
+					t.Errorf("Operations()[%q].ArgConstraints[%q] = %q, want a \"charset [...]\" token",
+						d.Name, arg.Key, prose)
+				} else if got != *arg.Charset {
+					t.Errorf("Operations()[%q].ArgConstraints[%q] charset token = %q, want exactly %q (golden)",
+						d.Name, arg.Key, got, *arg.Charset)
+				}
+			}
+			if arg.FirstLastAlnum && !strings.Contains(prose, "start and end alphanumeric") {
+				t.Errorf("Operations()[%q].ArgConstraints[%q] = %q, want it to contain %q (golden first_last_alnum=true)",
+					d.Name, arg.Key, prose, "start and end alphanumeric")
+			}
+			if arg.NoLeadingDash && !strings.Contains(prose, "no leading '-'") {
+				t.Errorf("Operations()[%q].ArgConstraints[%q] = %q, want it to contain %q (golden no_leading_dash=true)",
+					d.Name, arg.Key, prose, "no leading '-'")
 			}
 		}
 	}

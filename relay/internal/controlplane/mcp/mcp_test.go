@@ -436,20 +436,28 @@ func TestMCP_ListOperations(t *testing.T) {
 	var out mcp.ListOperationsOutput
 	decodeResult(t, res, &out)
 
-	want := map[string]string{
-		"system.facts":    "read",
-		"file.read":       "read",
-		"service.restart": "mutate",
-		"pkg.install":     "mutate",
-	}
-	// wantArgKeys pins the exact documented arg-key set per Operation over
-	// the wire (mirrors opvocab_test.go's TestOperations_DocumentedArgKeys,
-	// but proves it survives JSON rendering through list_operations too).
-	wantArgKeys := map[string][]string{
-		"system.facts":    {},
-		"file.read":       {"path"},
-		"service.restart": {"unit"},
-		"pkg.install":     {"name", "version"},
+	// want/wantArgKeys are derived directly from opvocab.Operations() (the
+	// exact registry list_operations itself renders) rather than a
+	// hand-copied literal (#163 S3) — this test can never drift from
+	// opvocab's own golden-backed vocabulary (opvocab_test.go's
+	// TestOperations_MatchesGoldenSchema, ADR-0015); it instead proves the
+	// vocabulary survives JSON rendering through list_operations.
+	want := make(map[string]string, len(opvocab.Operations()))
+	wantArgKeys := make(map[string][]string, len(opvocab.Operations()))
+	for _, d := range opvocab.Operations() {
+		switch d.Risk {
+		case jobs.RiskClassRead:
+			want[d.Name] = "read"
+		case jobs.RiskClassMutate:
+			want[d.Name] = "mutate"
+		default:
+			t.Fatalf("opvocab.Operations()[%q].Risk = %v, want RiskClassRead or RiskClassMutate", d.Name, d.Risk)
+		}
+		keys := make([]string, 0, len(d.ArgConstraints))
+		for k := range d.ArgConstraints {
+			keys = append(keys, k)
+		}
+		wantArgKeys[d.Name] = keys
 	}
 	if len(out.Operations) != len(want) {
 		t.Fatalf("list_operations(): got %d entries, want %d: %+v", len(out.Operations), len(want), out.Operations)
