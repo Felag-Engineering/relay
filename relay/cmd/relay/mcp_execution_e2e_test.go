@@ -9,11 +9,11 @@
 // harness (ControlEnabled=false, a test taskSink injected directly).
 //
 // RB3 (plan review): fixturePolicy, writeCredentialHashFile, and
-// controlAPITestCredential are reused directly (same package, both already
-// compiled alongside this integration-tagged file); only the
-// startTCPServer/startDaemonNode-shaped SETUP SEQUENCE is duplicated inline
-// here, because those hardcode ControlEnabled=false and inject a test sink —
-// exactly what this test must not do.
+// controlAPITestCredential are reused directly (now via relaytest, same
+// package import already compiled alongside this integration-tagged file);
+// only the startTCPServer/startDaemonNode-shaped SETUP SEQUENCE is
+// duplicated inline here, because those hardcode ControlEnabled=false and
+// inject a test sink — exactly what this test must not do.
 //
 // Skip condition: RELAY_DAEMON_BIN env var not set (mirrors
 // tunnel_dispatch_e2e_test.go). Run via: make test-integration.
@@ -28,75 +28,14 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
-
-// bearerRoundTripper injects "Authorization: Bearer <token>" on every
-// request, mirroring internal/controlplane/mcp/mcp_test.go's own helper of
-// the same name — duplicated here because that one lives in an external test
-// package (mcp_test) this file cannot import.
-type bearerRoundTripper struct {
-	base  http.RoundTripper
-	token string
-}
-
-func (rt bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	req = req.Clone(req.Context())
-	req.Header.Set("Authorization", "Bearer "+rt.token)
-	return rt.base.RoundTrip(req)
-}
-
-// mcpConnect opens an authenticated MCP client session against base, mirroring
-// internal/controlplane/mcp/mcp_test.go's connect().
-func mcpConnect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSession {
-	t.Helper()
-
-	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "mcp-execution-e2e-client", Version: "0.0.1"}, nil)
-	transport := &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: client}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	session, err := c.Connect(ctx, transport, nil)
-	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = session.Close() })
-	return session
-}
-
-// mcpCallTool calls name with args, failing the test on a protocol-level
-// error (not a tool error — callers assert IsError explicitly), mirroring
-// internal/controlplane/mcp/mcp_test.go's callTool(). The Task dispatched by
-// run_operation blocks for a real daemon's live execution, so this uses a
-// longer timeout than the read-only tools' 10s.
-func mcpCallTool(t *testing.T, session *sdkmcp.ClientSession, name string, args map[string]any) *sdkmcp.CallToolResult {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
-	if err != nil {
-		t.Fatalf("CallTool(%s): protocol error: %v", name, err)
-	}
-	return res
-}
-
-// factHostname extracts the "hostname=" value from a system.facts stdout
-// blob — the daemon's key=value stdout encoding (relay-daemon/src/dispatch.rs
-// format_facts_as_kv), NOT JSON — one line per fact, "hostname=..." first.
-func factHostname(stdout string) string {
-	for _, line := range strings.Split(stdout, "\n") {
-		if v, ok := strings.CutPrefix(line, "hostname="); ok {
-			return v
-		}
-	}
-	return ""
-}
 
 // TestMCPExecution_RealDaemon_E2E drives #154's acceptance criterion: a real
 // daemon connects and an MCP run_operation(system.facts) call returns a real
@@ -116,7 +55,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	cfg.Addr = "127.0.0.1:0"
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -154,8 +93,8 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
 
-	caFile := writeTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
-	policyPath := writeTempFile(t, "policy-*.toml", fixturePolicy)
+	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
@@ -196,11 +135,11 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"},
 	}
-	authed := &http.Client{Transport: bearerRoundTripper{base: transport, token: controlAPITestCredential}}
+	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
 
-	session := mcpConnect(t, "https://"+controlLis.Addr().String(), authed)
+	session := relaytest.Connect(t, "https://"+controlLis.Addr().String(), authed)
 
-	res := mcpCallTool(t, session, "run_operation", map[string]any{
+	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation": "system.facts",
 		"selector":  "relay:env=test",
 	})
@@ -232,7 +171,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	if result.Outcome != "success" {
 		t.Fatalf("result.Outcome = %q, want %q; stderr=%q", result.Outcome, "success", result.Stderr)
 	}
-	if hostname := factHostname(result.Stdout); hostname == "" {
+	if hostname := relaytest.FactHostname(result.Stdout); hostname == "" {
 		t.Errorf("run_operation(system.facts): stdout carries no non-empty hostname= fact: %q", result.Stdout)
 	}
 

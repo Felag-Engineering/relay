@@ -6,8 +6,9 @@
 // succeeding/failing, a Tunnel tearing down, dispatch refusing) is observed,
 // not just the HTTP response code.
 //
-// controlAPITestCredential must match the plaintext writeCredentialHashFile
-// (newserver_test.go) hashes into the credential file used here.
+// relaytest.ControlCredential must match the plaintext
+// relaytest.WriteCredentialHashFile hashes into the credential file used
+// here.
 package main
 
 import (
@@ -27,14 +28,11 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
-
-// controlAPITestCredential is the plaintext credential writeCredentialHashFile
-// hashes into the control-plane credential file (see newserver_test.go).
-const controlAPITestCredential = "test-control-plane-credential" //nolint:gosec // test fixture
 
 // startControlAPIServer boots the real Relay composition root with the
 // control plane enabled: the node-plane gRPC server on an in-memory bufconn
@@ -48,7 +46,7 @@ func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *
 	cfg := baseTestConfig(t)
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -137,7 +135,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	nodeLis, deps, base, client := startControlAPIServer(t)
 
 	mintResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/enrollment-tokens",
-		controlAPITestCredential, map[string]any{
+		relaytest.ControlCredential, map[string]any{
 			"scope":       []string{"relay:env=prod"},
 			"ttl_seconds": 3600,
 		})
@@ -155,8 +153,8 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 
 	// A daemon enrolls with the minted plaintext over the node-plane gRPC
 	// listener: enrollment must succeed while the token is live.
-	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: certPool(t, deps.ca.Bundle())})
-	csrPEM, _ := newCSR(t, "ignored-cn")
+	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
+	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
 	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
 		EnrollmentToken: minted.Token,
 		Csr:             csrPEM,
@@ -170,15 +168,15 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	}
 
 	revokeResp := controlAPIRequest(t, client, http.MethodDelete,
-		base+"/api/v1/enrollment-tokens/"+minted.ID, controlAPITestCredential, nil)
+		base+"/api/v1/enrollment-tokens/"+minted.ID, relaytest.ControlCredential, nil)
 	defer revokeResp.Body.Close() //nolint:errcheck
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 	}
 
 	// The same plaintext must no longer enroll a second Node.
-	enrollConn2 := dialTLS(t, nodeLis, &tls.Config{RootCAs: certPool(t, deps.ca.Bundle())})
-	csr2PEM, _ := newCSR(t, "ignored-cn-2")
+	enrollConn2 := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
+	csr2PEM, _ := relaytest.NewCSR(t, "ignored-cn-2")
 	_, err = gleipnirv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &gleipnirv1.EnrollRequest{
 		EnrollmentToken: minted.Token,
 		Csr:             csr2PEM,
@@ -207,8 +205,8 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
 
-	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: certPool(t, deps.ca.Bundle())})
-	csrPEM, leafKey := newCSR(t, "ignored-cn")
+	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
+	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
 	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
@@ -219,8 +217,8 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	}
 	nodeID := enrollResp.GetNodeId()
 
-	clientCert := assembleClientCert(t, enrollResp.GetCertificate(), leafKey)
-	pool := certPool(t, deps.ca.Bundle())
+	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
+	pool := relaytest.CertPool(t, deps.ca.Bundle())
 	mtlsConn := dialTLS(t, nodeLis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
 	stream, err := gleipnirv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {
@@ -236,7 +234,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	}
 
 	revokeResp := controlAPIRequest(t, client, http.MethodPost,
-		base+"/api/v1/nodes/"+nodeID+"/revoke", controlAPITestCredential, nil)
+		base+"/api/v1/nodes/"+nodeID+"/revoke", relaytest.ControlCredential, nil)
 	defer revokeResp.Body.Close() //nolint:errcheck
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -281,7 +279,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 
 	_, deps, base, client := startControlAPIServer(t)
 
-	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", controlAPITestCredential, nil)
+	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", relaytest.ControlCredential, nil)
 	defer engageResp.Body.Close() //nolint:errcheck
 	if engageResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
@@ -307,7 +305,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// Release without a reason must be refused (ADR-0013 asymmetric
 	// activation) and the Freeze must remain engaged.
 	noReasonResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
-		controlAPITestCredential, map[string]string{"reason": ""})
+		relaytest.ControlCredential, map[string]string{"reason": ""})
 	defer noReasonResp.Body.Close() //nolint:errcheck
 	if noReasonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
@@ -317,7 +315,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	}
 
 	releaseResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
-		controlAPITestCredential, map[string]string{"reason": "incident resolved"})
+		relaytest.ControlCredential, map[string]string{"reason": "incident resolved"})
 	defer releaseResp.Body.Close() //nolint:errcheck
 	if releaseResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)

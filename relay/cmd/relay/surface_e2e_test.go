@@ -52,6 +52,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // verdictsByNode indexes a mcp.PlanOutput's Verdicts by NodeID for
@@ -76,7 +77,7 @@ func resultsByNode(results []mcp.PerNodeResult) map[string]mcp.PerNodeResult {
 
 // stringSlicesEqual reports whether a and b hold the same strings in the
 // same order — used for RawAllowPatterns/RawDenyPatterns, which the daemon
-// reports (and this test asserts) verbatim in fixturePolicy's own order.
+// reports (and this test asserts) verbatim in relaytest.FixturePolicy's own order.
 func stringSlicesEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -89,48 +90,6 @@ func stringSlicesEqual(a, b []string) bool {
 	return true
 }
 
-// --- new helpers -------------------------------------------------------
-
-// decodeCallToolJSON unmarshals a successful CallToolResult's text content
-// into out, failing the test on a tool error or malformed content (mirrors
-// internal/controlplane/mcp/mcp_test.go's decodeResult, unreachable here —
-// see the JSON-mirror comment above).
-func decodeCallToolJSON(t *testing.T, res *sdkmcp.CallToolResult, out any) {
-	t.Helper()
-	if res.IsError {
-		t.Fatalf("tool call returned IsError=true unexpectedly; content = %+v", res.Content)
-	}
-	if len(res.Content) == 0 {
-		t.Fatal("CallToolResult.Content is empty")
-	}
-	tc, ok := res.Content[0].(*sdkmcp.TextContent)
-	if !ok {
-		t.Fatalf("CallToolResult.Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
-	}
-	if err := json.Unmarshal([]byte(tc.Text), out); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", tc.Text, err)
-	}
-}
-
-// toolErrorText extracts a tool error's message text, failing the test if
-// res is not actually an error result (mirrors
-// internal/controlplane/mcp/mcp_exec_test.go's toolErrorText — unreachable
-// here, same rationale as the JSON mirrors above).
-func toolErrorText(t *testing.T, res *sdkmcp.CallToolResult) string {
-	t.Helper()
-	if !res.IsError {
-		t.Fatal("toolErrorText: result is not an error")
-	}
-	if len(res.Content) == 0 {
-		t.Fatal("toolErrorText: Content is empty")
-	}
-	tc, ok := res.Content[0].(*sdkmcp.TextContent)
-	if !ok {
-		t.Fatalf("toolErrorText: Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
-	}
-	return tc.Text
-}
-
 // startSurfaceHarness boots the real Relay composition root (newServer) with
 // the control plane enabled for production execution (Config.ControlEnabled
 // = true, the #154 flip): a real TCP node-plane gRPC listener (daemon
@@ -138,7 +97,7 @@ func toolErrorText(t *testing.T, res *sdkmcp.CallToolResult) string {
 // startControlAPIServer's bufconn, which only wraps gRPC's dialer) and a real
 // TCP control-plane HTTPS listener. Returns deps, the node-plane address, the
 // control-plane base URL, an authenticated *http.Client (bearer
-// controlAPITestCredential baked in via bearerRoundTripper — usable for both
+// relaytest.ControlCredential baked in via relaytest.BearerRoundTripper — usable for both
 // MCP and /api/v1 calls), and a plain TLS-trusting *http.Client carrying no
 // credential (for the auth-negative subtest). Skips the test if
 // RELAY_DAEMON_BIN is unset.
@@ -164,7 +123,7 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 	cfg.EnrollGlobalBurst = 500
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, d, err := newServer(cfg)
 	if err != nil {
@@ -200,7 +159,7 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 		t.Fatal("AppendCertsFromPEM(deps.ca.Bundle()) returned false")
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
-	authed = &http.Client{Transport: bearerRoundTripper{base: transport, token: controlAPITestCredential}}
+	authed = &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
 	plain = &http.Client{Transport: transport}
 
 	return d, nodeAddr, "https://" + controlLis.Addr().String(), authed, plain
@@ -278,9 +237,9 @@ func pollDescribeReported(t *testing.T, session *sdkmcp.ClientSession, nodeID st
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	for {
-		res := mcpCallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
+		res := relaytest.CallTool(t, session, "describe_node", map[string]any{"node_id": nodeID})
 		var out mcp.DescribeNodeOutput
-		decodeCallToolJSON(t, res, &out)
+		relaytest.DecodeToolJSON(t, res, &out)
 		if out.EffectivePolicy.Reported {
 			return out
 		}
@@ -342,8 +301,8 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	deps, nodeAddr, controlBase, authed, plain := startSurfaceHarness(t)
 	ctx := context.Background()
 
-	caFile := writeTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
-	policyPath := writeTempFile(t, "policy-*.toml", fixturePolicy)
+	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
 
 	_, tokenAlpha, err := deps.tokens.Create(ctx, []string{"relay:env=test", "relay:node=alpha"}, time.Hour)
 	if err != nil {
@@ -367,14 +326,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// use it without re-scanning the registry after beta's own revoke.
 	nodeBetaID := nodeIDForLabel(t, deps, "node", "beta")
 
-	session := mcpConnect(t, controlBase, authed)
+	session := relaytest.Connect(t, controlBase, authed)
 
 	var factsJobID string
 
 	// (1) facts_fanout: run_operation(system.facts, relay:env=test) fans out
 	// to both baseline Nodes; per-Node success plus a real hostname fact.
 	t.Run("facts_fanout", func(t *testing.T) {
-		res := mcpCallTool(t, session, "run_operation", map[string]any{
+		res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "system.facts",
 			"selector":  "relay:env=test",
 		})
@@ -382,7 +341,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", res.Content)
 		}
 		var out mcp.ExecutionOutput
-		decodeCallToolJSON(t, res, &out)
+		relaytest.DecodeToolJSON(t, res, &out)
 
 		if len(out.Results) != 2 {
 			t.Fatalf("facts_fanout: got %d results, want 2: %+v", len(out.Results), out.Results)
@@ -400,7 +359,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			if r.Outcome != "success" {
 				t.Errorf("facts_fanout: node %s outcome = %q, want success; stderr=%q", nodeID, r.Outcome, r.Stderr)
 			}
-			if factHostname(r.Stdout) == "" {
+			if relaytest.FactHostname(r.Stdout) == "" {
 				t.Errorf("facts_fanout: node %s stdout carries no non-empty hostname= fact: %q", nodeID, r.Stdout)
 			}
 		}
@@ -412,9 +371,9 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 
 	// (2) describe_node_policy (#151-unblocked): per connected Node, poll
 	// describe_node until the daemon's post-connect PolicySnapshot has
-	// arrived, then assert the EXACT fixturePolicy shape (C1/C2: set
+	// arrived, then assert the EXACT relaytest.FixturePolicy shape (C1/C2: set
 	// equality on AllowedOperations — NOT opvocab's full vocabulary — and
-	// the exact raw_exec allow/deny patterns, in fixturePolicy's own order).
+	// the exact raw_exec allow/deny patterns, in relaytest.FixturePolicy's own order).
 	t.Run("describe_node_policy", func(t *testing.T) {
 		wantAllowed := map[string]bool{"file.read": true, "system.facts": true, "service.restart": true}
 		wantRawAllow := []string{
@@ -445,7 +404,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 					}
 				}
 				if gotAllowed["pkg.install"] {
-					t.Error("AllowedOperations contains pkg.install, want it absent — fixturePolicy declares no such [[operation]] (C1)")
+					t.Error("AllowedOperations contains pkg.install, want it absent — relaytest.FixturePolicy declares no such [[operation]] (C1)")
 				}
 
 				if !stringSlicesEqual(ep.RawAllowPatterns, wantRawAllow) {
@@ -471,14 +430,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// [[deny]] rule (C2) — denied_by_policy either way on the wire. A
 	// structured Operation (system.facts) still succeeds afterward.
 	t.Run("raw_exec_allowed_denied_and_typed", func(t *testing.T) {
-		sleepRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+		sleepRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
 			"argv": []string{"/bin/sleep", "1"}, "selector": "relay:env=test",
 		})
 		if sleepRes.IsError {
 			t.Fatalf("raw_exec(/bin/sleep 1): IsError=true; content = %+v", sleepRes.Content)
 		}
 		var sleepOut mcp.RunOrPlanOutput
-		decodeCallToolJSON(t, sleepRes, &sleepOut)
+		relaytest.DecodeToolJSON(t, sleepRes, &sleepOut)
 		sleepByNode := resultsByNode(sleepOut.Results)
 		for nodeID := range connectedSet {
 			if r, ok := sleepByNode[nodeID]; !ok || r.Outcome != "success" {
@@ -486,14 +445,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 		}
 
-		echoRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+		echoRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
 			"argv": []string{"/bin/echo", "hello"}, "selector": "relay:env=test",
 		})
 		if echoRes.IsError {
 			t.Fatalf("raw_exec(/bin/echo hello): IsError=true; content = %+v", echoRes.Content)
 		}
 		var echoOut mcp.RunOrPlanOutput
-		decodeCallToolJSON(t, echoRes, &echoOut)
+		relaytest.DecodeToolJSON(t, echoRes, &echoOut)
 		echoByNode := resultsByNode(echoOut.Results)
 		for nodeID := range connectedSet {
 			if r, ok := echoByNode[nodeID]; !ok || r.Outcome != "denied_by_policy" {
@@ -501,14 +460,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 		}
 
-		factsRes := mcpCallTool(t, session, "run_operation", map[string]any{
+		factsRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "system.facts", "selector": "relay:env=test",
 		})
 		if factsRes.IsError {
 			t.Fatalf("run_operation(system.facts): IsError=true; content = %+v", factsRes.Content)
 		}
 		var factsOut mcp.ExecutionOutput
-		decodeCallToolJSON(t, factsRes, &factsOut)
+		relaytest.DecodeToolJSON(t, factsRes, &factsOut)
 		for _, r := range factsOut.Results {
 			if r.Outcome != "success" {
 				t.Errorf("run_operation(system.facts) on %s: outcome = %q, want success", r.NodeID, r.Outcome)
@@ -522,14 +481,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// (raw_exec /bin/echo — DEFAULT-DENY, per (3) above).
 	t.Run("plan_vs_apply", func(t *testing.T) {
 		t.Run("allow", func(t *testing.T) {
-			planRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			planRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 				"operation": "system.facts", "selector": "relay:env=test", "plan": true,
 			})
 			if planRes.IsError {
 				t.Fatalf("run_operation(plan=true): IsError=true; content = %+v", planRes.Content)
 			}
 			var planOut mcp.RunOrPlanOutput
-			decodeCallToolJSON(t, planRes, &planOut)
+			relaytest.DecodeToolJSON(t, planRes, &planOut)
 			if planOut.JobID != "" || len(planOut.Results) != 0 {
 				t.Errorf("run_operation(plan=true) left job_id/results non-empty: %+v", planOut)
 			}
@@ -537,14 +496,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 				t.Fatal("run_operation(plan=true): plan field is nil")
 			}
 
-			applyRes := mcpCallTool(t, session, "run_operation", map[string]any{
+			applyRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 				"operation": "system.facts", "selector": "relay:env=test",
 			})
 			if applyRes.IsError {
 				t.Fatalf("run_operation(plan=false): IsError=true; content = %+v", applyRes.Content)
 			}
 			var applyOut mcp.RunOrPlanOutput
-			decodeCallToolJSON(t, applyRes, &applyOut)
+			relaytest.DecodeToolJSON(t, applyRes, &applyOut)
 
 			verdicts := verdictsByNode(*planOut.Plan)
 			outcomes := resultsByNode(applyOut.Results)
@@ -559,14 +518,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		})
 
 		t.Run("deny", func(t *testing.T) {
-			planRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+			planRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
 				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test", "plan": true,
 			})
 			if planRes.IsError {
 				t.Fatalf("raw_exec(plan=true): IsError=true; content = %+v", planRes.Content)
 			}
 			var planOut mcp.RunOrPlanOutput
-			decodeCallToolJSON(t, planRes, &planOut)
+			relaytest.DecodeToolJSON(t, planRes, &planOut)
 			if planOut.JobID != "" || len(planOut.Results) != 0 {
 				t.Errorf("raw_exec(plan=true) left job_id/results non-empty: %+v", planOut)
 			}
@@ -574,14 +533,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 				t.Fatal("raw_exec(plan=true): plan field is nil")
 			}
 
-			applyRes := mcpCallTool(t, session, "raw_exec", map[string]any{
+			applyRes := relaytest.CallTool(t, session, "raw_exec", map[string]any{
 				"argv": []string{"/bin/echo", "x"}, "selector": "relay:env=test",
 			})
 			if applyRes.IsError {
 				t.Fatalf("raw_exec(plan=false): IsError=true; content = %+v", applyRes.Content)
 			}
 			var applyOut mcp.RunOrPlanOutput
-			decodeCallToolJSON(t, applyRes, &applyOut)
+			relaytest.DecodeToolJSON(t, applyRes, &applyOut)
 
 			verdicts := verdictsByNode(*planOut.Plan)
 			outcomes := resultsByNode(applyOut.Results)
@@ -602,30 +561,30 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// dispatch. Must run before api_token_lifecycle so a later dispatch on
 	// the fresh Node is never mistaken for a residual freeze effect.
 	t.Run("freeze_over_api", func(t *testing.T) {
-		engageResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/engage", controlAPITestCredential, nil)
+		engageResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/engage", relaytest.ControlCredential, nil)
 		defer engageResp.Body.Close() //nolint:errcheck
 		if engageResp.StatusCode != http.StatusOK {
 			t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
 		}
 
-		frozenRes := mcpCallTool(t, session, "run_operation", map[string]any{
+		frozenRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "system.facts", "selector": "relay:env=test",
 		})
 		if !frozenRes.IsError {
 			t.Fatal("run_operation while frozen: IsError = false, want true")
 		}
-		if text := toolErrorText(t, frozenRes); !strings.Contains(text, "the Relay is frozen") {
+		if text := relaytest.ToolErrorText(t, frozenRes); !strings.Contains(text, "the Relay is frozen") {
 			t.Errorf("run_operation while frozen error = %q, want it to contain %q", text, "the Relay is frozen")
 		}
 
-		planRes := mcpCallTool(t, session, "run_operation", map[string]any{
+		planRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "system.facts", "selector": "relay:env=test", "plan": true,
 		})
 		if planRes.IsError {
 			t.Fatalf("run_operation(plan=true) while frozen: IsError=true, want false (advisory); content = %+v", planRes.Content)
 		}
 		var planOut mcp.RunOrPlanOutput
-		decodeCallToolJSON(t, planRes, &planOut)
+		relaytest.DecodeToolJSON(t, planRes, &planOut)
 		if planOut.Plan == nil || planOut.Plan.WouldBeRejected == nil || planOut.Plan.WouldBeRejected.Reason != "frozen" {
 			t.Fatalf("run_operation(plan=true) while frozen: plan = %+v, want would_be_rejected.reason=frozen", planOut.Plan)
 		}
@@ -634,27 +593,27 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		noReasonResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
-			controlAPITestCredential, map[string]string{"reason": ""})
+			relaytest.ControlCredential, map[string]string{"reason": ""})
 		defer noReasonResp.Body.Close() //nolint:errcheck
 		if noReasonResp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
 		}
 
 		releaseResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
-			controlAPITestCredential, map[string]string{"reason": "e2e resolved"})
+			relaytest.ControlCredential, map[string]string{"reason": "e2e resolved"})
 		defer releaseResp.Body.Close() //nolint:errcheck
 		if releaseResp.StatusCode != http.StatusOK {
 			t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
 		}
 
-		restoredRes := mcpCallTool(t, session, "run_operation", map[string]any{
+		restoredRes := relaytest.CallTool(t, session, "run_operation", map[string]any{
 			"operation": "system.facts", "selector": "relay:env=test",
 		})
 		if restoredRes.IsError {
 			t.Fatalf("run_operation after release: IsError=true; content = %+v", restoredRes.Content)
 		}
 		var restoredOut mcp.ExecutionOutput
-		decodeCallToolJSON(t, restoredRes, &restoredOut)
+		relaytest.DecodeToolJSON(t, restoredRes, &restoredOut)
 		if len(restoredOut.Results) != 2 {
 			t.Fatalf("run_operation after release: got %d results, want 2: %+v", len(restoredOut.Results), restoredOut.Results)
 		}
@@ -673,7 +632,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// an MCP/HTTP surface).
 	t.Run("api_token_lifecycle", func(t *testing.T) {
 		mintResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/enrollment-tokens",
-			controlAPITestCredential, map[string]any{
+			relaytest.ControlCredential, map[string]any{
 				"scope":       []string{"relay:env=test", "relay:node=fresh"},
 				"ttl_seconds": 3600,
 			})
@@ -695,12 +654,12 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			t.Fatalf("waitForConnectedNodes: got %d Nodes, want exactly 3 (bounded fleet): %v", len(freshConnected), freshConnected)
 		}
 
-		listRes := mcpCallTool(t, session, "list_nodes", map[string]any{"selector": "relay:node=fresh"})
+		listRes := relaytest.CallTool(t, session, "list_nodes", map[string]any{"selector": "relay:node=fresh"})
 		if listRes.IsError {
 			t.Fatalf("list_nodes(relay:node=fresh): IsError=true; content = %+v", listRes.Content)
 		}
 		var listOut mcp.ListNodesOutput
-		decodeCallToolJSON(t, listRes, &listOut)
+		relaytest.DecodeToolJSON(t, listRes, &listOut)
 		if len(listOut.Nodes) != 1 {
 			t.Fatalf("list_nodes(relay:node=fresh): got %d Nodes, want exactly 1: %+v", len(listOut.Nodes), listOut.Nodes)
 		}
@@ -710,14 +669,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		revokeResp := controlAPIRequest(t, authed, http.MethodDelete,
-			controlBase+"/api/v1/enrollment-tokens/"+minted.ID, controlAPITestCredential, nil)
+			controlBase+"/api/v1/enrollment-tokens/"+minted.ID, relaytest.ControlCredential, nil)
 		defer revokeResp.Body.Close() //nolint:errcheck
 		if revokeResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
 		}
 
-		conn := dialNodeTCP(t, nodeAddr, &tls.Config{RootCAs: certPool(t, deps.ca.Bundle())})
-		csrPEM, _ := newCSR(t, "ignored-cn-revoked-token")
+		conn := dialNodeTCP(t, nodeAddr, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
+		csrPEM, _ := relaytest.NewCSR(t, "ignored-cn-revoked-token")
 		enrollCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_, err := gleipnirv1.NewEnrollmentClient(conn).Enroll(enrollCtx, &gleipnirv1.EnrollRequest{
@@ -762,7 +721,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 				t.Errorf("no credential: status = %d, want %d", noCredResp.StatusCode, http.StatusUnauthorized)
 			}
 
-			wrongCredResp := post("wrong-" + controlAPITestCredential)
+			wrongCredResp := post("wrong-" + relaytest.ControlCredential)
 			defer wrongCredResp.Body.Close() //nolint:errcheck
 			if wrongCredResp.StatusCode != http.StatusUnauthorized {
 				t.Errorf("wrong credential: status = %d, want %d", wrongCredResp.StatusCode, http.StatusUnauthorized)
@@ -803,7 +762,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// successful freeze_release carries the reason this run supplied.
 	t.Run("audit_attribution", func(t *testing.T) {
 		revokeResp := controlAPIRequest(t, authed, http.MethodPost,
-			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", controlAPITestCredential, nil)
+			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", relaytest.ControlCredential, nil)
 		defer revokeResp.Body.Close() //nolint:errcheck
 		if revokeResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)

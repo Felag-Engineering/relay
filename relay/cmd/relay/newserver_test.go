@@ -2,14 +2,14 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // baseTestConfig returns a Config with the same non-control-plane fields as
@@ -31,18 +31,6 @@ func baseTestConfig(t *testing.T) Config {
 		ReadBlastCap:        10000,
 		MutateBlastCap:      100,
 	}
-}
-
-// writeCredentialHashFile writes a well-formed "sha256:<hex>" credential hash
-// file under t.TempDir() and returns its path.
-func writeCredentialHashFile(t *testing.T) string {
-	t.Helper()
-	sum := sha256.Sum256([]byte("test-control-plane-credential"))
-	path := filepath.Join(t.TempDir(), "control-credential-hash")
-	if err := os.WriteFile(path, []byte("sha256:"+hex.EncodeToString(sum[:])), 0o400); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return path
 }
 
 // TestNewServer_Smoke verifies that the composition root is constructible from
@@ -174,7 +162,7 @@ func TestNewServer_ControlEnabled_RequiresHash(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.ControlEnabled = true
 		cfg.ControlAddr = ":0"
-		cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+		cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 		srv, deps, err := newServer(cfg)
 		if err != nil {
@@ -196,7 +184,7 @@ func TestListeners_Independent(t *testing.T) {
 	cfg := baseTestConfig(t)
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = ":0"
-	cfg.ControlCredentialHashFile = writeCredentialHashFile(t)
+	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {
