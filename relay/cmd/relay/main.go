@@ -19,8 +19,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
@@ -408,30 +406,27 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			controlplane.NewAuthenticator(digest),
 		)
 
-		// The real MCP server (#117's read tools, #118's execution tools)
-		// mounts on Mux() at "/mcp", replacing the #115 placeholder — reached
-		// only through the Authenticator.Middleware controlplane.New already
-		// wraps the mux in (invariant 10: one control path). The execution
-		// tools (run_operation, raw_exec, cancel_job, get_job) now dispatch
-		// for real: capSvc above carries the execution-wired Service just
-		// constructed.
-		mcpHandler := mcp.New(reg, policyCache, opvocabLister{}, capSvc,
-			jobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()})
-		controlSrv.Mux().Handle("/mcp", mcpHandler)
-
-		// api.Register mounts the /api/v1 Control API slice (#116) onto the
-		// control-plane's existing Mux — no new listener, no new auth (invariant
-		// 10). It reuses the already-constructed tokenSvc/revocationSvc/capSvc/
-		// st.Audit() collaborators; it never touches cfg or a blast cap
-		// (invariant 11).
-		api.Register(controlSrv.Mux(), api.Deps{
-			Tokens:       tokenSvc,
-			TokenRevoker: revocationSvc,
-			Nodes:        revocationSvc,
-			Freeze:       capSvc,
-			Audit:        st.Audit(),
-			Now:          func() time.Time { return time.Now().UTC() },
-		})
+		// sd bundles every collaborator a control surface's Mount may need,
+		// assembled exactly once (invariant 10: capSvc above is a single
+		// instance, delivered to every surface below — no surface constructs
+		// its own capability.Service or dispatcher). See control_surfaces.go
+		// for the ControlSurface seam (#162) this replaces the two inline
+		// mount stanzas with.
+		sd := surfaceDeps{
+			registry:   reg,
+			policy:     policyCache,
+			ops:        opvocabLister{},
+			capability: capSvc,
+			jobs:       st.Jobs(),
+			tasks:      st.Tasks(),
+			tokens:     tokenSvc,
+			revocation: revocationSvc,
+			audit:      st.Audit(),
+			now:        func() time.Time { return time.Now().UTC() },
+		}
+		for _, s := range defaultControlSurfaces() {
+			s.Mount(controlSrv.Mux(), sd)
+		}
 	} else {
 		// No consumer surface is mounted (MCP/API require ControlEnabled),
 		// so capSvc keeps the v0.0.5 default no-op dispatcher/allow-all authz
