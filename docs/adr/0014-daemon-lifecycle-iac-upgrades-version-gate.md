@@ -20,9 +20,9 @@ served as a parallel package for a deprecation window.
   would make stale daemons invisible mid-upgrade; the registry is the upgrade
   dashboard. The minimum version is Relay config: file-only, like the blast caps —
   the API cannot lower it.
-- **Proto discipline: additive-only within `gleipnir.v1`.** New fields and messages
+- **Proto discipline: additive-only within `relay.v1`.** New fields and messages
   only; no renumbering, no semantic changes to existing fields. A breaking change
-  means a `gleipnir.v2` package served alongside `v1` for a deprecation window.
+  means a `relay.v2` package served alongside `v1` for a deprecation window.
   Ordering rule: **the Relay upgrades first**; daemons lag behind within the
   min-version window.
 

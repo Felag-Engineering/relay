@@ -1,4 +1,4 @@
-// Package protoconv is the single proto-aware seam that translates gleipnirv1
+// Package protoconv is the single proto-aware seam that translates relayv1
 // wire types into registry domain types. It lives outside registry because
 // registry intentionally carries no proto dependency (registry.go:25-26).
 package protoconv
@@ -6,14 +6,14 @@ package protoconv
 import (
 	"strings"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // FactsFromProto converts a proto Facts message to registry.Facts.
 // Nil-safe: returns a zero-value registry.Facts when pf is nil.
 // IPAddresses is copied into a fresh slice (never aliases the proto slice).
-func FactsFromProto(pf *gleipnirv1.Facts) registry.Facts {
+func FactsFromProto(pf *relayv1.Facts) registry.Facts {
 	if pf == nil {
 		return registry.Facts{}
 	}

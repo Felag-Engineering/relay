@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 func TestTaskRequest_OperationRoundTrip(t *testing.T) {
@@ -146,13 +146,13 @@ func TestPolicyQuery_CarriesNoTaskID(t *testing.T) {
 func TestVerdict_ConvertsFields(t *testing.T) {
 	tests := []struct {
 		name string
-		pv   *gleipnirv1.PolicyVerdict
+		pv   *relayv1.PolicyVerdict
 		want jobs.Verdict
 	}{
-		{"allow", &gleipnirv1.PolicyVerdict{QueryId: "q-1", Allowed: true}, jobs.Verdict{Allowed: true}},
+		{"allow", &relayv1.PolicyVerdict{QueryId: "q-1", Allowed: true}, jobs.Verdict{Allowed: true}},
 		{
 			"deny with deciding rule",
-			&gleipnirv1.PolicyVerdict{QueryId: "q-2", Allowed: false, DecidingRule: "deny-rm-rf"},
+			&relayv1.PolicyVerdict{QueryId: "q-2", Allowed: false, DecidingRule: "deny-rm-rf"},
 			jobs.Verdict{Allowed: false, DecidingRule: "deny-rm-rf"},
 		},
 	}
@@ -166,9 +166,9 @@ func TestVerdict_ConvertsFields(t *testing.T) {
 }
 
 func TestResult_ConvertsFields(t *testing.T) {
-	tr := &gleipnirv1.TaskResult{
+	tr := &relayv1.TaskResult{
 		TaskId:   "task-1",
-		Outcome:  gleipnirv1.Outcome_OUTCOME_SUCCESS,
+		Outcome:  relayv1.Outcome_OUTCOME_SUCCESS,
 		ExitCode: 0,
 		Stdout:   []byte("hi"),
 		Stderr:   []byte(""),
@@ -185,16 +185,16 @@ func TestResult_ConvertsFields(t *testing.T) {
 
 func TestOutcome_FullEnumMap(t *testing.T) {
 	cases := []struct {
-		wire gleipnirv1.Outcome
+		wire relayv1.Outcome
 		want jobs.Outcome
 	}{
-		{gleipnirv1.Outcome_OUTCOME_UNSPECIFIED, jobs.OutcomeUnspecified},
-		{gleipnirv1.Outcome_OUTCOME_SUCCESS, jobs.OutcomeSuccess},
-		{gleipnirv1.Outcome_OUTCOME_FAILURE, jobs.OutcomeFailure},
-		{gleipnirv1.Outcome_OUTCOME_TIMEOUT, jobs.OutcomeTimeout},
-		{gleipnirv1.Outcome_OUTCOME_DENIED_BY_POLICY, jobs.OutcomeDeniedByPolicy},
-		{gleipnirv1.Outcome_OUTCOME_CANCELLED, jobs.OutcomeCancelled},
-		{gleipnirv1.Outcome_OUTCOME_UNREACHABLE, jobs.OutcomeUnreachable},
+		{relayv1.Outcome_OUTCOME_UNSPECIFIED, jobs.OutcomeUnspecified},
+		{relayv1.Outcome_OUTCOME_SUCCESS, jobs.OutcomeSuccess},
+		{relayv1.Outcome_OUTCOME_FAILURE, jobs.OutcomeFailure},
+		{relayv1.Outcome_OUTCOME_TIMEOUT, jobs.OutcomeTimeout},
+		{relayv1.Outcome_OUTCOME_DENIED_BY_POLICY, jobs.OutcomeDeniedByPolicy},
+		{relayv1.Outcome_OUTCOME_CANCELLED, jobs.OutcomeCancelled},
+		{relayv1.Outcome_OUTCOME_UNREACHABLE, jobs.OutcomeUnreachable},
 	}
 	for _, c := range cases {
 		if got := outcome(c.wire); got != c.want {
@@ -204,7 +204,7 @@ func TestOutcome_FullEnumMap(t *testing.T) {
 }
 
 func TestOutcome_UnrecognizedDefaultsToUnspecified(t *testing.T) {
-	if got := outcome(gleipnirv1.Outcome(999)); got != jobs.OutcomeUnspecified {
+	if got := outcome(relayv1.Outcome(999)); got != jobs.OutcomeUnspecified {
 		t.Errorf("outcome(999) = %v, want jobs.OutcomeUnspecified", got)
 	}
 }

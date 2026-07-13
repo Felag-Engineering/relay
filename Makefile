@@ -1,4 +1,4 @@
-# Gleipnir Relay — top-level build wrapper over both toolchains.
+# Relay — top-level build wrapper over both toolchains.
 # Go builds the Relay (/relay); Cargo builds the relay-daemon (/daemon);
 # proto codegen feeds both from /proto (the contract spine, ADR-0007).
 
@@ -19,7 +19,7 @@ test: test-relay test-daemon
 lint: lint-relay lint-daemon
 
 ## --- proto codegen ---
-# Go types are generated (via buf) into relay/internal/gleipnir/v1/ and committed.
+# Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
 # CI runs make proto-tools then make proto for the proto-drift check; Rust types are
 # generated at cargo-build time by daemon/build.rs (tonic-build), so there is no
 # Rust step here.  Run `make proto-tools` once before regenerating locally.
@@ -35,9 +35,9 @@ proto-tools:
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
-# Runs proto (which regenerates) then fails if relay/internal/gleipnir/v1 differs.
+# Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
 proto-check: proto
-	git diff --exit-code -- relay/internal/gleipnir/v1
+	git diff --exit-code -- relay/internal/relay/v1
 
 ## --- Relay (Go) ---
 # Emit the actual `relay` binary (into the gitignored relay/bin/), not just a

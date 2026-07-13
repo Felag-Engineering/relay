@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -89,7 +89,7 @@ func startServer(t *testing.T, recvNodeID *string, opts ...grpc.ServerOption) *b
 	t.Helper()
 	lis := bufconn.Listen(1 << 20)
 	srv := grpc.NewServer(opts...)
-	gleipnirv1.RegisterTunnelServer(srv, &recordingTunnelServer{nodeID: recvNodeID})
+	relayv1.RegisterTunnelServer(srv, &recordingTunnelServer{nodeID: recvNodeID})
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(srv.Stop)
 	return lis
@@ -105,19 +105,19 @@ func bufDialer(lis *bufconn.Listener) func(context.Context, string) (net.Conn, e
 // recordingTunnelServer records the node_id extracted from context and sends a
 // Ping so the client can confirm the handshake succeeded end-to-end.
 type recordingTunnelServer struct {
-	gleipnirv1.UnimplementedTunnelServer
+	relayv1.UnimplementedTunnelServer
 	nodeID *string
 }
 
-func (s *recordingTunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMessage, gleipnirv1.RelayMessage]) error {
+func (s *recordingTunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessage, relayv1.RelayMessage]) error {
 	id, _ := transport.NodeIDFromContext(stream.Context())
 	*s.nodeID = id
 
 	// Drain the Hello (if present) then send a Ping so the client knows we reached the handler.
 	stream.Recv() //nolint:errcheck
-	return stream.Send(&gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Ping{
-			Ping: &gleipnirv1.Ping{UnixMillis: time.Now().UnixMilli()},
+	return stream.Send(&relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Ping{
+			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},
 		},
 	})
 }
@@ -140,11 +140,11 @@ func dial(t *testing.T, lis *bufconn.Listener, clientTLS *tls.Config) *grpc.Clie
 }
 
 // sendHello sends a Hello on the stream with NodeId set to helloID.
-func sendHello(t *testing.T, stream gleipnirv1.Tunnel_OpenClient, helloID string) {
+func sendHello(t *testing.T, stream relayv1.Tunnel_OpenClient, helloID string) {
 	t.Helper()
-	err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{NodeId: helloID},
+	err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{NodeId: helloID},
 		},
 	})
 	if err != nil {
@@ -189,7 +189,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		// If Open didn't fail immediately, try sending to force the RPC through.
 		sendHello(t, stream, "anon")
@@ -275,7 +275,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		sendHello(t, stream, "rogue")
 		_, err = stream.Recv()
@@ -311,7 +311,7 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	var gotNodeID string
 
 	// Add the Tunnel/Open method to the certless set — mimics how Enroll will work.
-	const tunnelOpenMethod = "/gleipnir.v1.Tunnel/Open"
+	const tunnelOpenMethod = "/relay.v1.Tunnel/Open"
 	certless := map[string]struct{}{tunnelOpenMethod: {}}
 
 	lis := startServer(t, &gotNodeID,
@@ -328,7 +328,7 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open certless stream: %v", err)
 	}
@@ -377,7 +377,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		sendHello(t, stream, "node-revoked")
 		_, err = stream.Recv()
@@ -423,7 +423,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		sendHello(t, stream, "node-intercepted")
 		_, err = stream.Recv()

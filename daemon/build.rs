@@ -7,6 +7,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tonic's generated client `connect()` constructor — see the proto / ADR-0005.
     tonic_build::configure()
         .build_server(false)
-        .compile_protos(&["../proto/gleipnir/v1/gleipnir.proto"], &["../proto"])?;
+        .compile_protos(&["../proto/relay/v1/relay.proto"], &["../proto"])?;
     Ok(())
 }

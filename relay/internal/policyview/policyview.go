@@ -5,14 +5,14 @@
 // (ADR-0002) and evaluated only by the daemon's live engine (ADR-0011,
 // invariant 12). The Relay never evaluates Policy itself and never sets a
 // Node's Policy — it only records what a daemon reports (DaemonMessage.policy
-// / gleipnirv1.PolicySnapshot) so describe_node (#117) can show it to an
+// / relayv1.PolicySnapshot) so describe_node (#117) can show it to an
 // authorized caller. Nothing in this package parses argv, checks a regex, or
 // makes an allow/deny decision; it is a passive cache, the read-side sibling
 // of registry.Node.PolicyFingerprint.
 //
 // Proto-free domain mirror, following the registry.Facts / jobs precedent:
 // this package carries no proto dependency. The caller (relay/cmd/relay's
-// tunnel handler) converts gleipnirv1.PolicySnapshot to Snapshot before
+// tunnel handler) converts relayv1.PolicySnapshot to Snapshot before
 // calling Set.
 //
 // In-memory, not registry/store: keeping this thin-surface issue out of the
@@ -25,7 +25,7 @@ package policyview
 
 import "sync"
 
-// Snapshot is a proto-free mirror of gleipnirv1.PolicySnapshot: the
+// Snapshot is a proto-free mirror of relayv1.PolicySnapshot: the
 // daemon-reported effective Policy for one Node, at the time it was last
 // reported. Display-only (see package doc).
 type Snapshot struct {

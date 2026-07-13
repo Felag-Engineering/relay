@@ -1,8 +1,8 @@
 [package]
-name = "gleipnir-relay-daemon"
+name = "relay-daemon"
 version = "0.0.1"
 edition = "2021"
-description = "The Gleipnir Relay relay-daemon: the non-AI daemon that runs on each managed Node."
+description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
 license = "Proprietary"
 
 [[bin]]

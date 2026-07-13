@@ -50,7 +50,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -646,10 +646,10 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		csrPEM, _ := relaytest.NewCSR(t, "ignored-cn-revoked-token")
 		enrollCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err := gleipnirv1.NewEnrollmentClient(conn).Enroll(enrollCtx, &gleipnirv1.EnrollRequest{
+		_, err := relayv1.NewEnrollmentClient(conn).Enroll(enrollCtx, &relayv1.EnrollRequest{
 			EnrollmentToken: minted.Token,
 			Csr:             csrPEM,
-			Facts:           &gleipnirv1.Facts{Hostname: "surface-e2e-revoked-attempt", Os: "linux"},
+			Facts:           &relayv1.Facts{Hostname: "surface-e2e-revoked-attempt", Os: "linux"},
 		})
 		if err == nil {
 			t.Fatal("expected Enroll with a revoked token to fail, got nil error")

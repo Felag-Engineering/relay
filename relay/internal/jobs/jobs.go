@@ -4,7 +4,7 @@
 // v1 permits exactly one Stage per Job so a post-1.0 staged rollout lands
 // without a data migration (ROADMAP).
 //
-// These are domain mirrors of the gleipnirv1 wire vocabulary (Outcome,
+// These are domain mirrors of the relayv1 wire vocabulary (Outcome,
 // RiskClass, Operation/RawExec), following the registry.Facts precedent: this
 // package carries no proto dependency and, critically, no database/sql
 // dependency either — that boundary is what makes a later Postgres swap a
@@ -35,7 +35,7 @@ var ErrTaskNotFound = errors.New("jobs: task not found")
 // never resolve a Task it never dispatched.
 var ErrInvalidTaskState = errors.New("jobs: invalid task state transition")
 
-// Outcome mirrors gleipnirv1.Outcome. The zero value, OutcomeUnspecified,
+// Outcome mirrors relayv1.Outcome. The zero value, OutcomeUnspecified,
 // means "not yet resolved" (a Pending or Dispatched Task has no Outcome).
 type Outcome int
 
@@ -49,7 +49,7 @@ const (
 	OutcomeUnreachable
 )
 
-// RiskClass mirrors gleipnirv1.RiskClass. The zero value, RiskClassUnspecified,
+// RiskClass mirrors relayv1.RiskClass. The zero value, RiskClassUnspecified,
 // keeps the enum's zero value defined, matching how Outcome mirrors Unspecified.
 type RiskClass int
 

@@ -32,7 +32,7 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -48,12 +48,12 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 	// that the process is definitely spawned and running (30x margin over the
 	// 300ms cancel timing exercised by executor.rs::cancel_kills_group_no_orphans),
 	// then cancel it. Expect OUTCOME_CANCELLED, exit_code -1 (ADR-0013).
-	sleepTask := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
+	sleepTask := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Task{
+			Task: &relayv1.TaskRequest{
 				TaskId:         "cancel-sleep",
 				TimeoutSeconds: 60,
-				Action: &gleipnirv1.TaskRequest_RawExec{RawExec: &gleipnirv1.RawExec{
+				Action: &relayv1.TaskRequest_RawExec{RawExec: &relayv1.RawExec{
 					Argv: []string{"/bin/sleep", "30"},
 				}},
 			},
@@ -71,7 +71,7 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 		if result.TaskId != "cancel-sleep" {
 			t.Errorf("TaskId: got %q, want %q", result.TaskId, "cancel-sleep")
 		}
-		if result.Outcome != gleipnirv1.Outcome_OUTCOME_CANCELLED {
+		if result.Outcome != relayv1.Outcome_OUTCOME_CANCELLED {
 			t.Errorf("outcome: got %v, want OUTCOME_CANCELLED", result.Outcome)
 		}
 		if result.ExitCode != -1 {
@@ -86,12 +86,12 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 	// must never become a retroactive cancelled, and cancelling a
 	// deregistered id must be a harmless no-op (ADR-0013).
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "race-fast content\n")
-	fastTask := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
+	fastTask := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Task{
+			Task: &relayv1.TaskRequest{
 				TaskId:         "race-fast",
 				TimeoutSeconds: 10,
-				Action: &gleipnirv1.TaskRequest_Operation{Operation: &gleipnirv1.Operation{
+				Action: &relayv1.TaskRequest_Operation{Operation: &relayv1.Operation{
 					Name: "file.read",
 					Args: map[string]string{"path": contentPath},
 				}},
@@ -106,7 +106,7 @@ func TestE2E_CancelInFlightAndRaceWindow(t *testing.T) {
 		if result.TaskId != "race-fast" {
 			t.Errorf("TaskId: got %q, want %q", result.TaskId, "race-fast")
 		}
-		if result.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
+		if result.Outcome != relayv1.Outcome_OUTCOME_SUCCESS {
 			t.Fatalf("outcome: got %v, want OUTCOME_SUCCESS", result.Outcome)
 		}
 	case <-time.After(10 * time.Second):
@@ -135,12 +135,12 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	// back-to-back must never overlap (ADR-0012 mutate lane is Semaphore(1)).
 	t0 := time.Now()
 	for _, id := range []string{"mut-a", "mut-b"} {
-		task := &gleipnirv1.RelayMessage{
-			Body: &gleipnirv1.RelayMessage_Task{
-				Task: &gleipnirv1.TaskRequest{
+		task := &relayv1.RelayMessage{
+			Body: &relayv1.RelayMessage_Task{
+				Task: &relayv1.TaskRequest{
 					TaskId:         id,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_RawExec{RawExec: &gleipnirv1.RawExec{
+					Action: &relayv1.TaskRequest_RawExec{RawExec: &relayv1.RawExec{
 						Argv: []string{"/bin/sleep", "1"},
 					}},
 				},
@@ -150,7 +150,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 			t.Fatalf("Dispatch %s: %v", id, err)
 		}
 	}
-	mutateResults := make(map[string]*gleipnirv1.TaskResult, 2)
+	mutateResults := make(map[string]*relayv1.TaskResult, 2)
 	mutateDeadline := time.After(15 * time.Second)
 	for len(mutateResults) < 2 {
 		select {
@@ -170,10 +170,10 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	if !okA || !okB {
 		t.Fatalf("missing mutate results: got %v", mutateResults)
 	}
-	if mutA.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
+	if mutA.Outcome != relayv1.Outcome_OUTCOME_SUCCESS {
 		t.Errorf("mut-a outcome: got %v, want SUCCESS; stderr=%q", mutA.Outcome, mutA.Stderr)
 	}
-	if mutB.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
+	if mutB.Outcome != relayv1.Outcome_OUTCOME_SUCCESS {
 		t.Errorf("mut-b outcome: got %v, want SUCCESS; stderr=%q", mutB.Outcome, mutB.Stderr)
 	}
 	// duration_millis is measured by the executor from the moment a Task
@@ -185,7 +185,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	// >= 1.8s across two back-to-back dispatches) is what proves the two
 	// Tasks did not overlap. Sanity-check here only that each Task actually
 	// ran its full ~1s sleep (not e.g. an instant no-op).
-	for _, r := range []*gleipnirv1.TaskResult{mutA, mutB} {
+	for _, r := range []*relayv1.TaskResult{mutA, mutB} {
 		if r.DurationMillis < 700 {
 			t.Errorf("%s duration_millis = %d, want >= 700 (must have run the full /bin/sleep 1)",
 				r.TaskId, r.DurationMillis)
@@ -200,12 +200,12 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	// ac2_read_bounded_max_four / ac3_read_and_mutate_concurrent — there is no
 	// slow-read Operation to gauge peak overlap over the wire.)
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", "read parallel content\n")
-	holdTask := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
+	holdTask := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Task{
+			Task: &relayv1.TaskRequest{
 				TaskId:         "mut-hold",
 				TimeoutSeconds: 10,
-				Action: &gleipnirv1.TaskRequest_RawExec{RawExec: &gleipnirv1.RawExec{
+				Action: &relayv1.TaskRequest_RawExec{RawExec: &relayv1.RawExec{
 					Argv: []string{"/bin/sleep", "2"},
 				}},
 			},
@@ -220,12 +220,12 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 	readsStart := time.Now()
 	readIDs := []string{"rd-0", "rd-1", "rd-2", "rd-3"}
 	for _, id := range readIDs {
-		task := &gleipnirv1.RelayMessage{
-			Body: &gleipnirv1.RelayMessage_Task{
-				Task: &gleipnirv1.TaskRequest{
+		task := &relayv1.RelayMessage{
+			Body: &relayv1.RelayMessage_Task{
+				Task: &relayv1.TaskRequest{
 					TaskId:         id,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.TaskRequest_Operation{Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": contentPath},
 					}},
@@ -236,7 +236,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 			t.Fatalf("Dispatch %s: %v", id, err)
 		}
 	}
-	readResults := make(map[string]*gleipnirv1.TaskResult, len(readIDs))
+	readResults := make(map[string]*relayv1.TaskResult, len(readIDs))
 	readDeadline := time.After(5 * time.Second)
 	for len(readResults) < len(readIDs) {
 		select {
@@ -268,7 +268,7 @@ func TestE2E_MutateSerialReadParallel(t *testing.T) {
 			t.Errorf("missing read result for %s", id)
 			continue
 		}
-		if r.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
+		if r.Outcome != relayv1.Outcome_OUTCOME_SUCCESS {
 			t.Errorf("%s outcome: got %v, want SUCCESS; stderr=%q", id, r.Outcome, r.Stderr)
 		}
 	}
@@ -285,8 +285,8 @@ type policyMatrixCase struct {
 	label      string
 	wantAllow  bool
 	cliSpec    []string // args following "--would-allow", exact operation_positional_args key spelling
-	buildQuery func(queryID string) *gleipnirv1.PolicyQuery
-	buildTask  func(taskID string) *gleipnirv1.TaskRequest
+	buildQuery func(queryID string) *relayv1.PolicyQuery
+	buildTask  func(taskID string) *relayv1.TaskRequest
 }
 
 // policyMatrixCases returns the v0.0.4 acceptance matrix: allow, deny-by-default,
@@ -300,20 +300,20 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 			label:     "file.read allow",
 			wantAllow: true,
 			cliSpec:   []string{"operation", "file.read", "path=" + contentPath},
-			buildQuery: func(queryID string) *gleipnirv1.PolicyQuery {
-				return &gleipnirv1.PolicyQuery{
+			buildQuery: func(queryID string) *relayv1.PolicyQuery {
+				return &relayv1.PolicyQuery{
 					QueryId: queryID,
-					Action: &gleipnirv1.PolicyQuery_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.PolicyQuery_Operation{Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": contentPath},
 					}},
 				}
 			},
-			buildTask: func(taskID string) *gleipnirv1.TaskRequest {
-				return &gleipnirv1.TaskRequest{
+			buildTask: func(taskID string) *relayv1.TaskRequest {
+				return &relayv1.TaskRequest{
 					TaskId:         taskID,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.TaskRequest_Operation{Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": contentPath},
 					}},
@@ -324,20 +324,20 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 			label:     "service.restart deny-by-default",
 			wantAllow: false,
 			cliSpec:   []string{"operation", "service.restart", "unit=sshd"},
-			buildQuery: func(queryID string) *gleipnirv1.PolicyQuery {
-				return &gleipnirv1.PolicyQuery{
+			buildQuery: func(queryID string) *relayv1.PolicyQuery {
+				return &relayv1.PolicyQuery{
 					QueryId: queryID,
-					Action: &gleipnirv1.PolicyQuery_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.PolicyQuery_Operation{Operation: &relayv1.Operation{
 						Name: "service.restart",
 						Args: map[string]string{"unit": "sshd"},
 					}},
 				}
 			},
-			buildTask: func(taskID string) *gleipnirv1.TaskRequest {
-				return &gleipnirv1.TaskRequest{
+			buildTask: func(taskID string) *relayv1.TaskRequest {
+				return &relayv1.TaskRequest{
 					TaskId:         taskID,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.TaskRequest_Operation{Operation: &relayv1.Operation{
 						Name: "service.restart",
 						Args: map[string]string{"unit": "sshd"},
 					}},
@@ -348,20 +348,20 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 			label:     "file.read deny-beats-allow",
 			wantAllow: false,
 			cliSpec:   []string{"operation", "file.read", "path=/etc/shadow"},
-			buildQuery: func(queryID string) *gleipnirv1.PolicyQuery {
-				return &gleipnirv1.PolicyQuery{
+			buildQuery: func(queryID string) *relayv1.PolicyQuery {
+				return &relayv1.PolicyQuery{
 					QueryId: queryID,
-					Action: &gleipnirv1.PolicyQuery_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.PolicyQuery_Operation{Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": "/etc/shadow"},
 					}},
 				}
 			},
-			buildTask: func(taskID string) *gleipnirv1.TaskRequest {
-				return &gleipnirv1.TaskRequest{
+			buildTask: func(taskID string) *relayv1.TaskRequest {
+				return &relayv1.TaskRequest{
 					TaskId:         taskID,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_Operation{Operation: &gleipnirv1.Operation{
+					Action: &relayv1.TaskRequest_Operation{Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": "/etc/shadow"},
 					}},
@@ -372,19 +372,19 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 			label:     "raw_exec systemctl allow",
 			wantAllow: true,
 			cliSpec:   []string{"raw-exec", "--", "/usr/bin/systemctl", "status", "nginx"},
-			buildQuery: func(queryID string) *gleipnirv1.PolicyQuery {
-				return &gleipnirv1.PolicyQuery{
+			buildQuery: func(queryID string) *relayv1.PolicyQuery {
+				return &relayv1.PolicyQuery{
 					QueryId: queryID,
-					Action: &gleipnirv1.PolicyQuery_RawExec{RawExec: &gleipnirv1.RawExec{
+					Action: &relayv1.PolicyQuery_RawExec{RawExec: &relayv1.RawExec{
 						Argv: []string{"/usr/bin/systemctl", "status", "nginx"},
 					}},
 				}
 			},
-			buildTask: func(taskID string) *gleipnirv1.TaskRequest {
-				return &gleipnirv1.TaskRequest{
+			buildTask: func(taskID string) *relayv1.TaskRequest {
+				return &relayv1.TaskRequest{
 					TaskId:         taskID,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_RawExec{RawExec: &gleipnirv1.RawExec{
+					Action: &relayv1.TaskRequest_RawExec{RawExec: &relayv1.RawExec{
 						Argv: []string{"/usr/bin/systemctl", "status", "nginx"},
 					}},
 				}
@@ -394,19 +394,19 @@ func policyMatrixCases(contentPath string) []policyMatrixCase {
 			label:     "raw_exec rm deny",
 			wantAllow: false,
 			cliSpec:   []string{"raw-exec", "--", "/bin/rm", "-rf", "/tmp/relay-e2e-should-not-run"},
-			buildQuery: func(queryID string) *gleipnirv1.PolicyQuery {
-				return &gleipnirv1.PolicyQuery{
+			buildQuery: func(queryID string) *relayv1.PolicyQuery {
+				return &relayv1.PolicyQuery{
 					QueryId: queryID,
-					Action: &gleipnirv1.PolicyQuery_RawExec{RawExec: &gleipnirv1.RawExec{
+					Action: &relayv1.PolicyQuery_RawExec{RawExec: &relayv1.RawExec{
 						Argv: []string{"/bin/rm", "-rf", "/tmp/relay-e2e-should-not-run"},
 					}},
 				}
 			},
-			buildTask: func(taskID string) *gleipnirv1.TaskRequest {
-				return &gleipnirv1.TaskRequest{
+			buildTask: func(taskID string) *relayv1.TaskRequest {
+				return &relayv1.TaskRequest{
 					TaskId:         taskID,
 					TimeoutSeconds: 10,
-					Action: &gleipnirv1.TaskRequest_RawExec{RawExec: &gleipnirv1.RawExec{
+					Action: &relayv1.TaskRequest_RawExec{RawExec: &relayv1.RawExec{
 						Argv: []string{"/bin/rm", "-rf", "/tmp/relay-e2e-should-not-run"},
 					}},
 				}
@@ -434,7 +434,7 @@ func TestE2E_PolicyQueryMatchesExecution(t *testing.T) {
 		if err := node.disp.SendPolicyQuery(node.nodeID, c.buildQuery(queryID)); err != nil {
 			t.Fatalf("[%s] SendPolicyQuery: %v", c.label, err)
 		}
-		var verdict *gleipnirv1.PolicyVerdict
+		var verdict *relayv1.PolicyVerdict
 		select {
 		case v := <-verdictCh:
 			verdict = v
@@ -451,11 +451,11 @@ func TestE2E_PolicyQueryMatchesExecution(t *testing.T) {
 			t.Errorf("[%s] deny verdict must carry a non-empty deciding_rule", c.label)
 		}
 
-		task := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_Task{Task: c.buildTask(taskID)}}
+		task := &relayv1.RelayMessage{Body: &relayv1.RelayMessage_Task{Task: c.buildTask(taskID)}}
 		if err := node.disp.Dispatch(node.nodeID, task); err != nil {
 			t.Fatalf("[%s] Dispatch: %v", c.label, err)
 		}
-		var result *gleipnirv1.TaskResult
+		var result *relayv1.TaskResult
 		select {
 		case r := <-resultCh:
 			result = r
@@ -465,7 +465,7 @@ func TestE2E_PolicyQueryMatchesExecution(t *testing.T) {
 		// Allow cases may execute to FAILURE on a box without systemd/rm; key
 		// the assertion on DENIED_BY_POLICY vs not, exactly as the daemon's own
 		// unit test does — never on SUCCESS for systemctl.
-		execAllowed := result.Outcome != gleipnirv1.Outcome_OUTCOME_DENIED_BY_POLICY
+		execAllowed := result.Outcome != relayv1.Outcome_OUTCOME_DENIED_BY_POLICY
 		if execAllowed != c.wantAllow {
 			t.Errorf("[%s] execution outcome %v (denied=%v) does not match expected allow=%v",
 				c.label, result.Outcome, !execAllowed, c.wantAllow)
@@ -542,18 +542,18 @@ allow = ["[invalid"]
 		cliAllowed := code == 0
 
 		taskID := fmt.Sprintf("pc-task-%d", i)
-		task := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_Task{Task: c.buildTask(taskID)}}
+		task := &relayv1.RelayMessage{Body: &relayv1.RelayMessage_Task{Task: c.buildTask(taskID)}}
 		if err := node.disp.Dispatch(node.nodeID, task); err != nil {
 			t.Fatalf("[%s] Dispatch: %v", c.label, err)
 		}
-		var result *gleipnirv1.TaskResult
+		var result *relayv1.TaskResult
 		select {
 		case r := <-resultCh:
 			result = r
 		case <-time.After(15 * time.Second):
 			t.Fatalf("[%s] timeout waiting for TaskResult", c.label)
 		}
-		wireAllowed := result.Outcome != gleipnirv1.Outcome_OUTCOME_DENIED_BY_POLICY
+		wireAllowed := result.Outcome != relayv1.Outcome_OUTCOME_DENIED_BY_POLICY
 		if cliAllowed != wireAllowed {
 			t.Errorf("[%s] policy check --would-allow allowed=%v, wire dispatch allowed=%v (outcome=%v)",
 				c.label, cliAllowed, wireAllowed, result.Outcome)

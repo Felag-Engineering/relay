@@ -548,9 +548,9 @@ promise, and the **BSL change-date clock starts** (ADR: licensing). 1.0 is
   re-run against the accumulated surface.
 - **HA/routing design spike complete before the freeze** (issue #139): the definitive
   list of additive proto/schema changes horizontal scaling needs — landed additively
-  pre-freeze so the first 100k-Node fleet never forces a `gleipnir.v2`. The HA *build*
+  pre-freeze so the first 100k-Node fleet never forces a `relay.v2`. The HA *build*
   stays post-1.0 (see Deferred).
-- **Contract stability commitment**: `gleipnir.v1` proto and `/api/v1` OpenAPI are
+- **Contract stability commitment**: `relay.v1` proto and `/api/v1` OpenAPI are
   frozen — additive-only from here, breaking changes require a new version served in
   parallel (ADR-0010, ADR-0014). This is the promise fleet operators build against.
 - **Operational maturity**: documented upgrade path across a 1.x series, backup/restore

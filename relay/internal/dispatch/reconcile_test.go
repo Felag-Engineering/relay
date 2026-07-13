@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // fakeTaskRepository is a minimal in-memory jobs.TaskRepository fake for
@@ -161,9 +161,9 @@ func TestReconciler_ResendResolvesInFlightTask(t *testing.T) {
 
 	// Simulate the daemon's benign already-processed result (dedup.rs): the
 	// Relay never re-executes, it only asks "what happened."
-	router.Deliver("node-1", &gleipnirv1.TaskResult{
+	router.Deliver("node-1", &relayv1.TaskResult{
 		TaskId:  "task-1",
-		Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS,
+		Outcome: relayv1.Outcome_OUTCOME_SUCCESS,
 		Stderr:  []byte("task already processed; deduplicated (at-most-once, not re-run)"),
 	})
 
@@ -217,7 +217,7 @@ func TestReconciler_IdempotentUnderAlreadyResolved(t *testing.T) {
 	if err := tasks.Resolve(context.Background(), "task-1", jobs.Result{Outcome: jobs.OutcomeSuccess}); err != nil {
 		t.Fatalf("Resolve (setup): %v", err)
 	}
-	router.Deliver("node-1", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 
 	select {
 	case err := <-done:
@@ -247,7 +247,7 @@ func TestReconciler_SkipsOtherNodesTasks(t *testing.T) {
 	go func() { done <- reconciler.ReconcileNode(context.Background(), "node-1") }()
 
 	waitUntil(t, time.Second, func() bool { return sendA.len() == 1 })
-	router.Deliver("node-1", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 
 	select {
 	case err := <-done:
@@ -294,7 +294,7 @@ func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
 	// Give the second (guarded) call a moment to observe inProgress and
 	// return early, in case it started concurrently with the first.
 	time.Sleep(20 * time.Millisecond)
-	router.Deliver("node-1", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	router.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 
 	wg.Wait()
 	close(errs)

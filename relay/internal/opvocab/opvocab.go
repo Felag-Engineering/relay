@@ -1,5 +1,5 @@
 // Package opvocab is a Relay-side, READ-ONLY mirror of /proto's Operation
-// vocabulary (OperationDescriptor, gleipnir.proto:142-145): the fixed set of
+// vocabulary (OperationDescriptor, relay.proto:142-145): the fixed set of
 // structured Operations, each with its risk class. /proto remains the single
 // source of truth for the wire vocabulary (invariant 8) — this list is
 // hand-authored, but opvocab_test.go's TestOperations_MatchesGoldenSchema
@@ -19,7 +19,7 @@ package opvocab
 
 import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 
-// Descriptor mirrors gleipnirv1.OperationDescriptor's Name and Risk (the wire
+// Descriptor mirrors relayv1.OperationDescriptor's Name and Risk (the wire
 // contract, invariant 8/ADR-0012), plus model-facing legibility PROSE that
 // has no proto counterpart (#120, central decision: NO /proto change).
 // Purpose, ArgConstraints, and Example are ADVISORY — they exist so a model
@@ -49,7 +49,7 @@ type Descriptor struct {
 }
 
 // Operations returns the fixed v1 Operation vocabulary, per
-// gleipnir.proto:142-145:
+// relay.proto:142-145:
 //
 //	system.facts     -> read    (self-reported Node facts; no state change)
 //	file.read        -> read    (reads file contents; no state change)

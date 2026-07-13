@@ -512,9 +512,9 @@ func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
 // (mirrors jobs.TestNoDatabaseSQLImport and dispatch_construction_test.go's
 // parse-and-inspect style): package capability's non-test files may only
 // import a small stdlib allowlist plus internal/registry and internal/jobs
-// — never internal/gleipnir/v1 (the wire proto) or database/sql. #99 is
+// — never internal/relay/v1 (the wire proto) or database/sql. #99 is
 // exactly the issue that tempts a real-Conduit author to reach for
-// gleipnirv1.TaskRequest/TaskResult inside capability; this fails the build
+// relayv1.TaskRequest/TaskResult inside capability; this fails the build
 // if they do (ADR-0009/0010, ROADMAP invariant 10).
 func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 	allowed := map[string]bool{
@@ -529,7 +529,7 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": true,
 	}
 	forbidden := map[string]bool{
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1": true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,
 		"database/sql": true,
 	}
 

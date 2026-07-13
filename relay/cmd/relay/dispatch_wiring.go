@@ -4,8 +4,8 @@ import (
 	"context"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // dispatch_wiring.go is the v0.0.5 dispatch transport's composition-root
@@ -29,15 +29,15 @@ type routerSink struct {
 	r *dispatch.Router
 }
 
-func (s routerSink) register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func()) {
+func (s routerSink) register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func()) {
 	return s.r.Register(nodeID, send)
 }
 
-func (s routerSink) deliver(nodeID string, result *gleipnirv1.TaskResult) {
+func (s routerSink) deliver(nodeID string, result *relayv1.TaskResult) {
 	s.r.Deliver(nodeID, result)
 }
 
-func (s routerSink) deliverVerdict(nodeID string, verdict *gleipnirv1.PolicyVerdict) {
+func (s routerSink) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict) {
 	s.r.DeliverVerdict(nodeID, verdict)
 }
 

@@ -1,4 +1,4 @@
-# Gleipnir Relay — Node Policy file
+# Relay — Node Policy file
 #
 # SECURITY INVARIANTS (ADR-0002):
 #   - Node-rooted and remotely-immutable: this file is edited by a human on the

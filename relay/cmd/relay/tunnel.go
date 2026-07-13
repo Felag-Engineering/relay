@@ -6,10 +6,10 @@ import (
 	"log/slog"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
@@ -32,13 +32,13 @@ import (
 // answer to a PolicyQuery; ADR-0011 — the Relay only reads it, never evaluates
 // Policy itself).
 type taskSink interface {
-	register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func())
-	deliver(nodeID string, result *gleipnirv1.TaskResult)
-	deliverVerdict(nodeID string, verdict *gleipnirv1.PolicyVerdict)
+	register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func())
+	deliver(nodeID string, result *relayv1.TaskResult)
+	deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict)
 }
 
 type tunnelServer struct {
-	gleipnirv1.UnimplementedTunnelServer
+	relayv1.UnimplementedTunnelServer
 	conns *revocation.Connections
 	reg   registry.Repository
 	// policy is the display-only effective-Policy cache (#117, invariant 12 /
@@ -53,7 +53,7 @@ type tunnelServer struct {
 	sink taskSink
 }
 
-func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMessage, gleipnirv1.RelayMessage]) error {
+func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessage, relayv1.RelayMessage]) error {
 	first, err := stream.Recv()
 	if err == io.EOF {
 		return nil
@@ -129,9 +129,9 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 
 	// Send Ping after the registry Upsert so a client that receives the Ping is
 	// guaranteed the registration is complete — tests use Ping as the sync point.
-	if err := stream.Send(&gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Ping{
-			Ping: &gleipnirv1.Ping{UnixMillis: time.Now().UnixMilli()},
+	if err := stream.Send(&relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Ping{
+			Ping: &relayv1.Ping{UnixMillis: time.Now().UnixMilli()},
 		},
 	}); err != nil {
 		return status.Errorf(codes.Internal, "send ping: %v", err)
@@ -155,7 +155,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 	// goroutine must be able to send that error without blocking, otherwise it
 	// would leak until the gRPC framework finalises the stream.
 	recvErr := make(chan error, 1)
-	recvMsg := make(chan *gleipnirv1.DaemonMessage)
+	recvMsg := make(chan *relayv1.DaemonMessage)
 	go func() {
 		for {
 			m, err := stream.Recv()
@@ -231,7 +231,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[gleipnirv1.DaemonMes
 // relay-space labels, regardless of what it sends on the wire. Dropping (rather
 // than rejecting with an error) keeps the tunnel resilient — a stray relay: label
 // never tears down a long-lived connection.
-func nodeLabelsFromHello(labels []*gleipnirv1.Label) map[string]string {
+func nodeLabelsFromHello(labels []*relayv1.Label) map[string]string {
 	result := make(map[string]string)
 	for _, l := range labels {
 		bare, ok := protoconv.ParseNodeLabel(l.GetKey())
@@ -243,13 +243,13 @@ func nodeLabelsFromHello(labels []*gleipnirv1.Label) map[string]string {
 	return result
 }
 
-// snapshotFromProto converts a daemon-reported gleipnirv1.PolicySnapshot into
+// snapshotFromProto converts a daemon-reported relayv1.PolicySnapshot into
 // the proto-free policyview.Snapshot the display-only cache stores, keeping
 // the policyview package itself free of a proto dependency (mirrors
 // protoconv.FactsFromProto's role for registry.Facts). Display-only: this
 // conversion never evaluates or validates the Policy it carries (ADR-0002,
 // invariant 12) — it only reshapes the reported values for storage.
-func snapshotFromProto(ps *gleipnirv1.PolicySnapshot) policyview.Snapshot {
+func snapshotFromProto(ps *relayv1.PolicySnapshot) policyview.Snapshot {
 	return policyview.Snapshot{
 		RawExecEnabled:    ps.GetRawExecEnabled(),
 		RawAllowPatterns:  ps.GetRawAllowPatterns(),

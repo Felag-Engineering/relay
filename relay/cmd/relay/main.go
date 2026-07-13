@@ -21,12 +21,12 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
@@ -304,7 +304,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// remain mTLS-required. Renew is intentionally absent here: it is authenticated
 	// by the caller's existing mTLS client cert, not a token.
 	certless := map[string]struct{}{
-		gleipnirv1.Enrollment_Enroll_FullMethodName: {},
+		relayv1.Enrollment_Enroll_FullMethodName: {},
 	}
 
 	limiter := ratelimit.New(ratelimit.Config{
@@ -454,8 +454,8 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, denylist)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, denylist)),
 	)
-	gleipnirv1.RegisterTunnelServer(srv, ts)
-	gleipnirv1.RegisterEnrollmentServer(srv, enrollSrv)
+	relayv1.RegisterTunnelServer(srv, ts)
+	relayv1.RegisterEnrollmentServer(srv, enrollSrv)
 
 	deps := &appDeps{
 		ca:         relayCA,

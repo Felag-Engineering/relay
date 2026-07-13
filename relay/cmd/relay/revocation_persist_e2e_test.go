@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
@@ -76,10 +76,10 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	}
 	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
 	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-133", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
 	})
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
@@ -91,13 +91,13 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	// Open a Tunnel and send Hello; Ping is the sync point that the registry
 	// Upsert (which creates the row SetRevoked will persist against) is complete.
 	mtlsConn := dialTLS(t, lis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
-	stream, err := gleipnirv1.NewTunnelClient(mtlsConn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {
 		t.Fatalf("Tunnel Open: %v", err)
 	}
-	if err = stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{Hello: &gleipnirv1.Hello{
-			Facts: &gleipnirv1.Facts{Hostname: "host-133", Os: "linux"},
+	if err = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{
+			Facts: &relayv1.Facts{Hostname: "host-133", Os: "linux"},
 		}},
 	}); err != nil {
 		t.Fatalf("send Hello: %v", err)
@@ -122,10 +122,10 @@ func TestRevokedNode_RefusedAfterRestart(t *testing.T) {
 	// Reconnect with the now-revoked cert: the rehydrated denylist must refuse it
 	// at (or immediately after) the TLS handshake.
 	revokedConn := dialTLS(t, lis2, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
-	revokedStream, reconnectErr := gleipnirv1.NewTunnelClient(revokedConn).Open(ctx)
+	revokedStream, reconnectErr := relayv1.NewTunnelClient(revokedConn).Open(ctx)
 	if reconnectErr == nil {
-		_ = revokedStream.Send(&gleipnirv1.DaemonMessage{
-			Body: &gleipnirv1.DaemonMessage_Hello{Hello: &gleipnirv1.Hello{}},
+		_ = revokedStream.Send(&relayv1.DaemonMessage{
+			Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 		})
 		_, reconnectErr = revokedStream.Recv()
 	}
@@ -159,10 +159,10 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	caBundle := deps.ca.Bundle()
 	enrollConn := dialTLS(t, lis, &tls.Config{RootCAs: relaytest.CertPool(t, caBundle)})
 	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	if _, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	if _, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-133", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
 	}); err == nil {
 		t.Fatal("expected Enroll with revoked token to fail before restart, got nil")
 	}
@@ -181,10 +181,10 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	// authority, not volatile memory.
 	enrollConn2 := dialTLS(t, lis2, &tls.Config{RootCAs: relaytest.CertPool(t, deps2.ca.Bundle())})
 	csr2PEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	if _, err := gleipnirv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	if _, err := relayv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csr2PEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-133", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
 	}); err == nil {
 		t.Fatal("expected Enroll with revoked token to fail after restart, got nil")
 	}

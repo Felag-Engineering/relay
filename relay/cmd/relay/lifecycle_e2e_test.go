@@ -23,7 +23,7 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -120,11 +120,11 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 		RootCAs: relaytest.CertPool(t, deps.ca.Bundle()),
 	})
 	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
-		SelfLabels:      []*gleipnirv1.Label{{Key: "node:role", Value: "web"}},
-		Facts:           &gleipnirv1.Facts{Hostname: "host-e2e", Os: "linux"},
+		SelfLabels:      []*relayv1.Label{{Key: "node:role", Value: "web"}},
+		Facts:           &relayv1.Facts{Hostname: "host-e2e", Os: "linux"},
 	})
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
@@ -189,15 +189,15 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 		Certificates: []tls.Certificate{clientCert},
 		RootCAs:      pool,
 	})
-	stream, err := gleipnirv1.NewTunnelClient(mtlsConn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {
 		t.Fatalf("Tunnel Open: %v", err)
 	}
-	if err = stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{
-				Facts: &gleipnirv1.Facts{Hostname: "host-e2e", Os: "linux"},
-				Labels: []*gleipnirv1.Label{
+	if err = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
+				Facts: &relayv1.Facts{Hostname: "host-e2e", Os: "linux"},
+				Labels: []*relayv1.Label{
 					{Key: "node:role", Value: "web"},
 					{Key: "relay:env", Value: "ignored"}, // relay: Labels are dropped (ADR-0006)
 				},
@@ -246,9 +246,9 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	// (d) Heartbeat: assert LastSeen advances in the registry.
 	//     The handler processes Heartbeat asynchronously; poll with a 5 s bound.
 	// -------------------------------------------------------------------------
-	if err = stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Heartbeat{
-			Heartbeat: &gleipnirv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+	if err = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Heartbeat{
+			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
 		},
 	}); err != nil {
 		t.Fatalf("send Heartbeat: %v", err)
@@ -277,7 +277,7 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 	//     mTLS-required and not in the certless allowlist.
 	// -------------------------------------------------------------------------
 	csr2PEM, _ := relaytest.NewCSR(t, "ignored-again") // key unused: this step only asserts cert properties
-	renewResp, err := gleipnirv1.NewEnrollmentClient(mtlsConn).Renew(ctx, &gleipnirv1.RenewRequest{
+	renewResp, err := relayv1.NewEnrollmentClient(mtlsConn).Renew(ctx, &relayv1.RenewRequest{
 		Csr: csr2PEM,
 	})
 	if err != nil {
@@ -338,10 +338,10 @@ func TestLifecycle_SeedEnrollMTLSRenewRevoke(t *testing.T) {
 		Certificates: []tls.Certificate{clientCert},
 		RootCAs:      pool,
 	})
-	revokedStream, reconnectErr := gleipnirv1.NewTunnelClient(revokedConn).Open(ctx)
+	revokedStream, reconnectErr := relayv1.NewTunnelClient(revokedConn).Open(ctx)
 	if reconnectErr == nil {
-		_ = revokedStream.Send(&gleipnirv1.DaemonMessage{
-			Body: &gleipnirv1.DaemonMessage_Hello{Hello: &gleipnirv1.Hello{}},
+		_ = revokedStream.Send(&relayv1.DaemonMessage{
+			Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}},
 		})
 		_, reconnectErr = revokedStream.Recv()
 	}

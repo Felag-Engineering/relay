@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -29,8 +29,8 @@ func testTaskRepository(t *testing.T) jobs.TaskRepository {
 func TestRouterSink_ForwardsToRouter(t *testing.T) {
 	router, _, sink := newDispatchStack(testTaskRepository(t))
 
-	sentCh := make(chan *gleipnirv1.RelayMessage, 4)
-	send := func(msg *gleipnirv1.RelayMessage) error {
+	sentCh := make(chan *relayv1.RelayMessage, 4)
+	send := func(msg *relayv1.RelayMessage) error {
 		sentCh <- msg
 		return nil
 	}
@@ -43,7 +43,7 @@ func TestRouterSink_ForwardsToRouter(t *testing.T) {
 		t.Error("router.Connected(node-1) = false after sink.register")
 	}
 
-	want := &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS}
+	want := &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS}
 
 	resultCh := make(chan jobs.Result, 1)
 	errCh := make(chan error, 1)
@@ -77,7 +77,7 @@ func TestRouterSink_ForwardsToRouter(t *testing.T) {
 	}
 
 	// deliverVerdict is a documented no-op; assert only that it does not panic.
-	sink.deliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: "q-1", Allowed: true})
+	sink.deliverVerdict("node-1", &relayv1.PolicyVerdict{QueryId: "q-1", Allowed: true})
 
 	unregister()
 	if router.Connected("node-1") {
@@ -95,7 +95,7 @@ func TestNewDispatchStack_ReconcilerUsesRouter(t *testing.T) {
 		t.Fatal("newDispatchStack returned a nil Reconciler")
 	}
 
-	unregister := sink.register("node-2", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := sink.register("node-2", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
 	if err := router.WaitForNode("node-2", time.Second); err != nil {

@@ -7,19 +7,19 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // recordingSend is a fake send func that records every RelayMessage it is
 // given, safe for concurrent use.
 type recordingSend struct {
 	mu   sync.Mutex
-	sent []*gleipnirv1.RelayMessage
+	sent []*relayv1.RelayMessage
 	err  error
 }
 
-func (s *recordingSend) send(msg *gleipnirv1.RelayMessage) error {
+func (s *recordingSend) send(msg *relayv1.RelayMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
@@ -35,7 +35,7 @@ func (s *recordingSend) len() int {
 	return len(s.sent)
 }
 
-func (s *recordingSend) last() *gleipnirv1.RelayMessage {
+func (s *recordingSend) last() *relayv1.RelayMessage {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.sent) == 0 {
@@ -91,7 +91,7 @@ func TestRouter_CorrelatesConcurrentTasksAcrossNodes(t *testing.T) {
 	waitUntil(t, time.Second, func() bool { return sendA.len() == 2 && sendB.len() == 2 })
 
 	deliver := func(nodeID, taskID string, exitCode int32) {
-		r.Deliver(nodeID, &gleipnirv1.TaskResult{TaskId: taskID, Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS, ExitCode: exitCode})
+		r.Deliver(nodeID, &relayv1.TaskResult{TaskId: taskID, Outcome: relayv1.Outcome_OUTCOME_SUCCESS, ExitCode: exitCode})
 	}
 	deliver("node-b", "task-b2", 2)
 	deliver("node-a", "task-a1", 3)
@@ -243,12 +243,12 @@ func TestRouter_CancelOfflineNodeIsBestEffort(t *testing.T) {
 // unknown (or already-delivered) task_id is silently dropped, never panics.
 func TestRouter_DeliverUncorrelatedTaskIDDropped(t *testing.T) {
 	r := NewRouter(nil)
-	unregister := r.Register("node-1", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
 	// No Dispatch call is waiting on "task-unknown" — this must not panic or
 	// block.
-	r.Deliver("node-1", &gleipnirv1.TaskResult{TaskId: "task-unknown", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-unknown", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 }
 
 // TestRouter_DeliverWrongNodeDropped asserts the nodeID defense-in-depth
@@ -271,7 +271,7 @@ func TestRouter_DeliverWrongNodeDropped(t *testing.T) {
 	waitUntil(t, time.Second, func() bool { return sendA.len() == 1 })
 
 	// A Result for task-1 arrives (incorrectly) on node-b's stream: dropped.
-	r.Deliver("node-b", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	r.Deliver("node-b", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 
 	select {
 	case <-done:
@@ -281,7 +281,7 @@ func TestRouter_DeliverWrongNodeDropped(t *testing.T) {
 	}
 
 	// The correct delivery still completes it.
-	r.Deliver("node-a", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS})
+	r.Deliver("node-a", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS})
 	select {
 	case err := <-done:
 		if err != nil {
@@ -303,7 +303,7 @@ func TestRouter_ConnectedAndWaitForNode(t *testing.T) {
 		t.Error("WaitForNode on an unregistered node should time out")
 	}
 
-	unregister := r.Register("node-1", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 	if !r.Connected("node-1") {
 		t.Error("Connected(node-1) = false after Register")
@@ -320,7 +320,7 @@ func TestRouter_WaitForAny(t *testing.T) {
 		t.Error("WaitForAny with no registered node should time out")
 	}
 
-	unregister := r.Register("node-x", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := r.Register("node-x", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 	got, err := r.WaitForAny(time.Second)
 	if err != nil {
@@ -338,7 +338,7 @@ func TestRouter_RegisterFiresOnConnect(t *testing.T) {
 	fired := make(chan string, 4)
 	r := NewRouter(func(nodeID string) { fired <- nodeID })
 
-	unregister := r.Register("node-1", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
 	select {
@@ -392,7 +392,7 @@ func TestRouter_StaleUnregisterDoesNotClobberFreshRegistration(t *testing.T) {
 		// expected: still blocked, waiting for a real Deliver via conn2
 	}
 
-	r.Deliver("node-1", &gleipnirv1.TaskResult{TaskId: "task-1", Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS, ExitCode: 7})
+	r.Deliver("node-1", &relayv1.TaskResult{TaskId: "task-1", Outcome: relayv1.Outcome_OUTCOME_SUCCESS, ExitCode: 7})
 
 	select {
 	case err := <-done:
@@ -414,8 +414,8 @@ func TestRouter_ConnectedNodes(t *testing.T) {
 		t.Errorf("ConnectedNodes() = %v, want empty before any Register", got)
 	}
 
-	unregA := r.Register("node-a", func(*gleipnirv1.RelayMessage) error { return nil })
-	unregB := r.Register("node-b", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregA := r.Register("node-a", func(*relayv1.RelayMessage) error { return nil })
+	unregB := r.Register("node-b", func(*relayv1.RelayMessage) error { return nil })
 
 	got := r.ConnectedNodes()
 	want := map[string]bool{"node-a": true, "node-b": true}
@@ -476,7 +476,7 @@ func TestRouter_QueryCorrelatesVerdict(t *testing.T) {
 		t.Errorf("PolicyQuery.Operation = %+v, want system.facts", op)
 	}
 
-	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: pq.GetQueryId(), Allowed: true})
+	r.DeliverVerdict("node-1", &relayv1.PolicyVerdict{QueryId: pq.GetQueryId(), Allowed: true})
 
 	select {
 	case got := <-done:
@@ -510,7 +510,7 @@ func TestRouter_QueryDenyCarriesDecidingRule(t *testing.T) {
 
 	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
 	queryID := send.last().GetPolicyQuery().GetQueryId()
-	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: false, DecidingRule: "deny-rm-rf"})
+	r.DeliverVerdict("node-1", &relayv1.PolicyVerdict{QueryId: queryID, Allowed: false, DecidingRule: "deny-rm-rf"})
 
 	select {
 	case v := <-done:
@@ -594,12 +594,12 @@ func TestRouter_QueryHonorsContextCancel(t *testing.T) {
 // panics — mirrors TestRouter_DeliverUncorrelatedTaskIDDropped.
 func TestRouter_DeliverVerdictUncorrelatedQueryIDDropped(t *testing.T) {
 	r := NewRouter(nil)
-	unregister := r.Register("node-1", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
 	// No Query call is waiting on "query-unknown" — this must not panic or
 	// block.
-	r.DeliverVerdict("node-1", &gleipnirv1.PolicyVerdict{QueryId: "query-unknown", Allowed: true})
+	r.DeliverVerdict("node-1", &relayv1.PolicyVerdict{QueryId: "query-unknown", Allowed: true})
 }
 
 // TestRouter_DeliverVerdictWrongNodeDropped mirrors
@@ -622,7 +622,7 @@ func TestRouter_DeliverVerdictWrongNodeDropped(t *testing.T) {
 	queryID := sendA.last().GetPolicyQuery().GetQueryId()
 
 	// A verdict for queryID arrives (incorrectly) on node-b's stream: dropped.
-	r.DeliverVerdict("node-b", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: true})
+	r.DeliverVerdict("node-b", &relayv1.PolicyVerdict{QueryId: queryID, Allowed: true})
 
 	select {
 	case <-done:
@@ -632,7 +632,7 @@ func TestRouter_DeliverVerdictWrongNodeDropped(t *testing.T) {
 	}
 
 	// The correct delivery still completes it.
-	r.DeliverVerdict("node-a", &gleipnirv1.PolicyVerdict{QueryId: queryID, Allowed: true})
+	r.DeliverVerdict("node-a", &relayv1.PolicyVerdict{QueryId: queryID, Allowed: true})
 	select {
 	case err := <-done:
 		if err != nil {

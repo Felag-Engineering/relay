@@ -3,8 +3,8 @@ package protoconv_test
 import (
 	"testing"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 func TestFactsFromProto(t *testing.T) {
@@ -16,7 +16,7 @@ func TestFactsFromProto(t *testing.T) {
 	})
 
 	t.Run("populated input maps all fields", func(t *testing.T) {
-		pf := &gleipnirv1.Facts{
+		pf := &relayv1.Facts{
 			Hostname:    "host1",
 			Os:          "linux",
 			Kernel:      "6.1.0",
@@ -42,7 +42,7 @@ func TestFactsFromProto(t *testing.T) {
 	})
 
 	t.Run("IPAddresses is an independent copy", func(t *testing.T) {
-		pf := &gleipnirv1.Facts{
+		pf := &relayv1.Facts{
 			IpAddresses: []string{"10.0.0.1"},
 		}
 		got := protoconv.FactsFromProto(pf)
@@ -54,7 +54,7 @@ func TestFactsFromProto(t *testing.T) {
 	})
 
 	t.Run("empty IPAddresses", func(t *testing.T) {
-		pf := &gleipnirv1.Facts{Hostname: "h"}
+		pf := &relayv1.Facts{Hostname: "h"}
 		got := protoconv.FactsFromProto(pf)
 		if len(got.IPAddresses) != 0 {
 			t.Errorf("expected empty IPAddresses, got %v", got.IPAddresses)

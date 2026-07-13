@@ -10,7 +10,7 @@
 // v0.0.5 [3/8] wires this pipeline with seams and safe no-op/allow-all
 // defaults only: no real Job engine (#99), no real blast-radius cap
 // (#100/[5/8]), no real audit writes (#102/[7/8]). capability imports
-// registry and jobs only — no database/sql, no audit, no gleipnirv1 proto —
+// registry and jobs only — no database/sql, no audit, no relayv1 proto —
 // preserving the store-swap and contract boundaries the rest of the Relay
 // relies on.
 package capability

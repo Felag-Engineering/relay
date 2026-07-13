@@ -14,9 +14,9 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
@@ -87,13 +87,13 @@ func TestEnroll_Success(t *testing.T) {
 	scope := []string{"relay:role=web", "relay:env=prod"}
 	tok, plaintext := mintToken(t, svc, scope)
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "bogus-daemon-cn-must-be-ignored"),
-		SelfLabels: []*gleipnirv1.Label{
+		SelfLabels: []*relayv1.Label{
 			{Key: "node:role", Value: "web"},
 		},
-		Facts: &gleipnirv1.Facts{
+		Facts: &relayv1.Facts{
 			Hostname: "host-1",
 			Os:       "linux",
 		},
@@ -170,7 +170,7 @@ func TestEnroll_IdentityNotFromCSR(t *testing.T) {
 	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 
 	const csrCN = "daemon-wants-this-identity"
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, csrCN),
 	}
@@ -192,7 +192,7 @@ func TestEnroll_InvalidToken(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, _ := newEnrollServer(t, svc)
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: "deadbeef.notavalidtoken",
 		Csr:             genCSR(t, "cn"),
 	}
@@ -215,7 +215,7 @@ func TestEnroll_ExpiredToken(t *testing.T) {
 	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 	clk.advance(2 * time.Hour) // past the 1-hour TTL
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "cn"),
 	}
@@ -240,7 +240,7 @@ func TestEnroll_RevokedToken(t *testing.T) {
 		t.Fatalf("Revoke: %v", err)
 	}
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "cn"),
 	}
@@ -266,7 +266,7 @@ func TestEnroll_ExhaustedToken(t *testing.T) {
 	}
 
 	// First enrollment must succeed.
-	if _, err := srv.Enroll(context.Background(), &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: pt,
 		Csr:             genCSR(t, "cn"),
 	}); err != nil {
@@ -277,7 +277,7 @@ func TestEnroll_ExhaustedToken(t *testing.T) {
 	}
 
 	// Second enrollment must be rejected — MaxUses exhausted.
-	_, err = srv.Enroll(context.Background(), &gleipnirv1.EnrollRequest{
+	_, err = srv.Enroll(context.Background(), &relayv1.EnrollRequest{
 		EnrollmentToken: pt,
 		Csr:             genCSR(t, "cn"),
 	})
@@ -298,7 +298,7 @@ func TestEnroll_BadCSR(t *testing.T) {
 
 	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             []byte("this is not a valid CSR"),
 	}
@@ -318,11 +318,11 @@ func TestEnroll_BadCSR(t *testing.T) {
 func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 	cases := []struct {
 		name  string
-		label *gleipnirv1.Label
+		label *relayv1.Label
 	}{
-		{"relay-prefix", &gleipnirv1.Label{Key: "relay:env", Value: "prod"}},
-		{"bare-key", &gleipnirv1.Label{Key: "role", Value: "web"}},
-		{"empty-bare-key", &gleipnirv1.Label{Key: "node:", Value: ""}},
+		{"relay-prefix", &relayv1.Label{Key: "relay:env", Value: "prod"}},
+		{"bare-key", &relayv1.Label{Key: "role", Value: "web"}},
+		{"empty-bare-key", &relayv1.Label{Key: "node:", Value: ""}},
 	}
 
 	for _, tc := range cases {
@@ -332,10 +332,10 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 
 			_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 
-			req := &gleipnirv1.EnrollRequest{
+			req := &relayv1.EnrollRequest{
 				EnrollmentToken: plaintext,
 				Csr:             genCSR(t, "cn"),
-				SelfLabels:      []*gleipnirv1.Label{tc.label},
+				SelfLabels:      []*relayv1.Label{tc.label},
 			}
 
 			_, err := srv.Enroll(context.Background(), req)
@@ -397,7 +397,7 @@ func TestEnroll_PostUpsertRevocationCheck_ClosesRaceWindow(t *testing.T) {
 		return "node-race-1", nil
 	}
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "bogus-cn"),
 	}
@@ -426,7 +426,7 @@ func TestEnroll_PostUpsertRevocationCheck_AllowsCleanEnroll(t *testing.T) {
 
 	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "bogus-cn"),
 	}
@@ -448,7 +448,7 @@ func TestEnroll_NoPostCheck_BackwardCompatible(t *testing.T) {
 
 	_, plaintext := mintToken(t, svc, []string{"relay:env=prod"})
 
-	req := &gleipnirv1.EnrollRequest{
+	req := &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             genCSR(t, "bogus-cn"),
 	}
@@ -503,19 +503,19 @@ func TestEnroll_RateLimited_PerIP(t *testing.T) {
 	ctx2 := ctxFromIP("10.0.0.2")
 
 	// First two calls from IP-1 succeed (burst=2).
-	if _, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(ctx1, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext1, Csr: genCSR(t, "cn"),
 	}); err != nil {
 		t.Errorf("IP-1 call 1: want nil, got %v", err)
 	}
-	if _, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(ctx1, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext2, Csr: genCSR(t, "cn"),
 	}); err != nil {
 		t.Errorf("IP-1 call 2: want nil, got %v", err)
 	}
 
 	// Third call from IP-1 is denied.
-	_, err := srv.Enroll(ctx1, &gleipnirv1.EnrollRequest{
+	_, err := srv.Enroll(ctx1, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext3, Csr: genCSR(t, "cn"),
 	})
 	if status.Code(err) != codes.ResourceExhausted {
@@ -523,7 +523,7 @@ func TestEnroll_RateLimited_PerIP(t *testing.T) {
 	}
 
 	// Fresh IP-2 is still allowed.
-	if _, err := srv.Enroll(ctx2, &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(ctx2, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext4, Csr: genCSR(t, "cn"),
 	}); err != nil {
 		t.Errorf("IP-2 call 1: want nil, got %v", err)
@@ -554,7 +554,7 @@ func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
 	ctx := ctxFromIP("10.0.0.42")
 
 	// Valid token — denied at the rate-limit gate before any token validation.
-	_, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+	_, err := srv.Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: validPlaintext,
 		Csr:             genCSR(t, "cn"),
 	})
@@ -563,7 +563,7 @@ func TestEnroll_RateLimited_NoTokenOracle(t *testing.T) {
 	}
 
 	// Garbage token — must produce identical ResourceExhausted (no validity oracle).
-	_, err = srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+	_, err = srv.Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: "garbage.notvalid",
 		Csr:             genCSR(t, "cn"),
 	})
@@ -594,14 +594,14 @@ func TestEnroll_RateLimited_Global(t *testing.T) {
 	_, pt2 := mintToken(t, svc, []string{"relay:env=prod"})
 
 	// First enroll (IP-a) consumes the sole global token.
-	if _, err := srv.Enroll(ctxFromIP("10.0.0.1"), &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(ctxFromIP("10.0.0.1"), &relayv1.EnrollRequest{
 		EnrollmentToken: pt1, Csr: genCSR(t, "cn"),
 	}); err != nil {
 		t.Errorf("IP-a: want nil, got %v", err)
 	}
 
 	// Second enroll (fresh IP-b) denied — global budget exhausted.
-	_, err := srv.Enroll(ctxFromIP("10.0.0.2"), &gleipnirv1.EnrollRequest{
+	_, err := srv.Enroll(ctxFromIP("10.0.0.2"), &relayv1.EnrollRequest{
 		EnrollmentToken: pt2, Csr: genCSR(t, "cn"),
 	})
 	if status.Code(err) != codes.ResourceExhausted {
@@ -627,7 +627,7 @@ func TestEnroll_RegistryAtCapacity(t *testing.T) {
 	ctx := ctxFromIP("10.0.0.1")
 
 	// First enroll fills the cap.
-	if _, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+	if _, err := srv.Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: pt1, Csr: genCSR(t, "cn"),
 	}); err != nil {
 		t.Fatalf("first enroll: %v", err)
@@ -637,7 +637,7 @@ func TestEnroll_RegistryAtCapacity(t *testing.T) {
 	}
 
 	// Second enroll must be rejected with ResourceExhausted.
-	_, err := srv.Enroll(ctx, &gleipnirv1.EnrollRequest{
+	_, err := srv.Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: pt2, Csr: genCSR(t, "cn"),
 	})
 	if status.Code(err) != codes.ResourceExhausted {
@@ -657,11 +657,11 @@ func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 
 	cases := []struct {
 		name string
-		req  *gleipnirv1.EnrollRequest
+		req  *relayv1.EnrollRequest
 	}{
-		{"empty-token", &gleipnirv1.EnrollRequest{Csr: csrPEM}},
-		{"empty-csr", &gleipnirv1.EnrollRequest{EnrollmentToken: "some.token"}},
-		{"both-empty", &gleipnirv1.EnrollRequest{}},
+		{"empty-token", &relayv1.EnrollRequest{Csr: csrPEM}},
+		{"empty-csr", &relayv1.EnrollRequest{EnrollmentToken: "some.token"}},
+		{"both-empty", &relayv1.EnrollRequest{}},
 	}
 
 	for _, tc := range cases {
