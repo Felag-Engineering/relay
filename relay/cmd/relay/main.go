@@ -288,10 +288,12 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	}
 
 	// denylist and conns implement immediate Node revocation (ADR-0006).
-	// denylist.Add is now reachable at runtime via the post-enroll revocation
-	// recheck: if a token is revoked mid-enrollment the handler calls
-	// revocationSvc.RevokeNode, which calls denylist.Add. An admin-trigger RPC
-	// to revoke nodes on demand still requires a proto change (future milestone).
+	// denylist.Add is reached at runtime by revocationSvc.RevokeNode (the
+	// post-enroll revocation recheck and the Control API revoke path both call
+	// it), which now ALSO persists the revocation to the registry. The registry
+	// is the authority; the denylist is a derived cache, rehydrated from
+	// registry.RevokedNodeIDs() below so a revoked Node stays refused across a
+	// Relay restart (issue #133).
 	denylist := revocation.NewDenylist()
 	conns := revocation.NewConnections()
 
@@ -313,7 +315,20 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
 	})
 	reg := st.Registry()
-	tokenSvc := enroll.NewService(enroll.NewMemoryRepository())
+
+	// Rehydrate the denylist from the persisted authority before the listener
+	// accepts any connection: the Denylist is a derived cache of
+	// registry.RevokedNodeIDs(); the store is the source of truth (issue #133,
+	// ADR-0006 "revocation is instant" must also hold across a restart).
+	revokedIDs, err := reg.RevokedNodeIDs()
+	if err != nil {
+		return nil, nil, fmt.Errorf("load revoked node ids: %w", err)
+	}
+	for _, id := range revokedIDs {
+		denylist.Add(id)
+	}
+
+	tokenSvc := enroll.NewService(st.Tokens())
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),

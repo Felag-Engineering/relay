@@ -11,9 +11,10 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
 
-// fakeLister is a test double for revocation.Lister. It returns a successive
+// fakeLister is a test double for revocation.Registry. It returns a successive
 // slice of Nodes on each call to List(); once all slices are exhausted it
-// repeats the last one.
+// repeats the last one. SetRevoked is a no-op: these tests assert on the
+// denylist, not on persisted registry state.
 type fakeLister struct {
 	calls   int
 	perCall [][]registry.Node
@@ -27,6 +28,8 @@ func (f *fakeLister) List() []registry.Node {
 	f.calls++
 	return f.perCall[i]
 }
+
+func (f *fakeLister) SetRevoked(string, time.Time) error { return nil }
 
 // fakeTokenRevoker is a test double for revocation.TokenRevoker.
 type fakeTokenRevoker struct{ err error }
@@ -67,6 +70,30 @@ func TestService_RevokeNode_DenylistAndDisconnect(t *testing.T) {
 		// expected: live stream was torn down
 	case <-time.After(time.Second):
 		t.Error("live connection should have been canceled by RevokeNode")
+	}
+}
+
+// TestService_RevokeNode_PersistsToRegistry asserts RevokeNode writes the
+// revocation through to the registry (the authority), not just the in-memory
+// denylist — this is what makes revocation survive a Relay restart (issue #133).
+func TestService_RevokeNode_PersistsToRegistry(t *testing.T) {
+	svc, d, _, reg, _ := newServiceFixture(t)
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-1", EnrollingTokenID: "tok-1"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	svc.RevokeNode("node-1")
+
+	if !d.IsRevoked("node-1") {
+		t.Error("node-1 should be in the denylist after RevokeNode")
+	}
+	n, ok := reg.Get("node-1")
+	if !ok {
+		t.Fatal("node-1 missing from registry after RevokeNode")
+	}
+	if n.RevokedAt.IsZero() {
+		t.Error("RevokedAt should be persisted (non-zero) after RevokeNode")
 	}
 }
 
