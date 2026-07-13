@@ -28,7 +28,6 @@ import (
 	"context"
 	"net"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -79,9 +78,12 @@ type e2eNode struct {
 	caPath     string
 	addr       string
 
+	// daemonBin is the relay-daemon binary path — kept (unlike env/cmd) since
+	// tunnel_control_e2e_test.go's `policy check` acceptance criteria invoke
+	// it directly as an offline CLI, a separate use case from handle's
+	// Tunnel-connected subprocess.
 	daemonBin string
-	env       []string
-	cmd       *exec.Cmd
+	handle    *relaytest.DaemonHandle
 
 	// restart kills the current daemon subprocess and relaunches it against
 	// the SAME stateDir/policyPath/addr, so it reconnects as the same Node
@@ -143,33 +145,15 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", policyTOML)
 	stateDir := t.TempDir()
 
-	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+addr,
-		"RELAY_ENROLLMENT_TOKEN="+plaintext,
-		"RELAY_CA_BUNDLE_PATH="+caFile.Name(),
-		"RELAY_ENROLL_ENDPOINT=https://"+addr,
-		"RELAY_STATE_DIR="+stateDir,
-		"RELAY_POLICY_PATH="+policyPath,
-		"RELAY_DOMAIN=localhost",
-		"HOSTNAME=e2e-test-node",
-		// Disable rustls provider conflict on some environments.
-		"RUST_LOG=warn",
-	)
-
-	launch := func() *exec.Cmd {
-		cmd := exec.Command(daemonBin, "--relay", "https://"+addr)
-		cmd.Env = env
-		if err := cmd.Start(); err != nil {
-			t.Fatalf("start daemon: %v", err)
-		}
-		t.Cleanup(func() {
-			cmd.Process.Kill() //nolint:errcheck
-			cmd.Wait()         //nolint:errcheck
-		})
-		return cmd
-	}
-
-	cmd := launch()
+	handle := relaytest.StartDaemon(t, relaytest.DaemonConfig{
+		Bin:        daemonBin,
+		NodeAddr:   addr,
+		CAPath:     caFile.Name(),
+		Token:      plaintext,
+		StateDir:   stateDir,
+		PolicyPath: policyPath,
+		Hostname:   "e2e-test-node",
+	})
 
 	// Wait for the daemon to complete Hello→Ping handshake (registry sync).
 	// Poll the dispatcher until the node appears, with a 30 s deadline. We
@@ -202,14 +186,10 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 		caPath:     caFile.Name(),
 		addr:       addr,
 		daemonBin:  daemonBin,
-		env:        env,
-		cmd:        cmd,
+		handle:     handle,
 	}
 	node.restart = func() {
-		if err := node.cmd.Process.Kill(); err != nil {
-			t.Fatalf("kill daemon for restart: %v", err)
-		}
-		node.cmd.Wait() //nolint:errcheck
+		node.handle.Kill()
 
 		// Wait for the dispatcher to deregister the old sender before
 		// relaunching, so the re-registration poll below cannot spuriously
@@ -230,7 +210,7 @@ func startDaemonNode(t *testing.T, policyTOML string) *e2eNode {
 			}
 		}
 
-		node.cmd = launch()
+		node.handle.Launch()
 		if err := disp.waitForNode(nodeID, 30*time.Second); err != nil {
 			t.Fatalf("waitForNode after restart: %v", err)
 		}

@@ -127,74 +127,26 @@ func createFleetToken(t *testing.T, harness *harnessClient, labels ...string) st
 	return token
 }
 
-// daemonHandle is a relay-daemon subprocess that can be killed and relaunched
-// against the SAME stateDir — its persisted identity and dedup markers
-// (daemon/src/dedup.rs) survive a restart, which is what the crash-mid-Job
-// test depends on. The daemon has no reconnect loop of its own
-// (daemon/src/main.rs): when the Relay's stream drops, the process exits, so
-// relaunch is how a config-management restart is modeled here.
-type daemonHandle struct {
-	t         *testing.T
-	daemonBin string
-	relayAddr string
-	env       []string
-	log       *syncBuffer
-	cmd       *exec.Cmd
-}
-
 // startDaemonSubprocess launches a relay-daemon against relayAddr, enrolling
 // with token, using stateDir/policyPath/hostname — the same environment
-// shape as crossbinary_e2e_test.go's daemon launch.
-func startDaemonSubprocess(t *testing.T, daemonBin, relayAddr, caCertPath, token, stateDir, policyPath, hostname string) *daemonHandle {
+// shape as crossbinary_e2e_test.go's daemon launch. Its persisted identity
+// and dedup markers (daemon/src/dedup.rs) survive a Relaunch against the SAME
+// stateDir, which is what the crash-mid-Job test depends on. The daemon has
+// no reconnect loop of its own (daemon/src/main.rs): when the Relay's stream
+// drops, the process exits, so Relaunch is how a config-management restart is
+// modeled here.
+func startDaemonSubprocess(t *testing.T, daemonBin, relayAddr, caCertPath, token, stateDir, policyPath, hostname string) *relaytest.DaemonHandle {
 	t.Helper()
-	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+relayAddr,
-		"RELAY_ENROLLMENT_TOKEN="+token,
-		"RELAY_CA_BUNDLE_PATH="+caCertPath,
-		"RELAY_ENROLL_ENDPOINT=https://"+relayAddr,
-		"RELAY_STATE_DIR="+stateDir,
-		"RELAY_POLICY_PATH="+policyPath,
-		"RELAY_DOMAIN=localhost",
-		"HOSTNAME="+hostname,
-		// Disable rustls provider conflict on some environments (matches
-		// startDaemonNode in tunnel_dispatch_e2e_test.go).
-		"RUST_LOG=warn",
-	)
-	h := &daemonHandle{t: t, daemonBin: daemonBin, relayAddr: relayAddr, env: env}
-	h.launch()
-	t.Cleanup(h.kill)
-	return h
-}
-
-func (h *daemonHandle) launch() {
-	h.t.Helper()
-	h.log = &syncBuffer{}
-	cmd := exec.Command(h.daemonBin, "--relay", "https://"+h.relayAddr)
-	cmd.Env = h.env
-	cmd.Stdout = h.log
-	cmd.Stderr = h.log
-	if err := cmd.Start(); err != nil {
-		h.t.Fatalf("start relay-daemon: %v", err)
-	}
-	h.cmd = cmd
-}
-
-// kill stops the daemon subprocess, if still running. Safe to call more than
-// once (e.g. once explicitly mid-test, once again via t.Cleanup).
-func (h *daemonHandle) kill() {
-	if h.cmd == nil || h.cmd.Process == nil {
-		return
-	}
-	h.cmd.Process.Kill() //nolint:errcheck
-	h.cmd.Wait()         //nolint:errcheck
-}
-
-// relaunch kills the current daemon subprocess (if any) and starts a fresh
-// one against the SAME env — same stateDir, so the same persisted identity
-// and dedup markers — modeling a config-management restart.
-func (h *daemonHandle) relaunch() {
-	h.kill()
-	h.launch()
+	return relaytest.StartDaemon(t, relaytest.DaemonConfig{
+		Bin:        daemonBin,
+		NodeAddr:   relayAddr,
+		CAPath:     caCertPath,
+		Token:      token,
+		StateDir:   stateDir,
+		PolicyPath: policyPath,
+		Hostname:   hostname,
+		LogWriter:  &syncBuffer{},
+	})
 }
 
 // waitForConnected polls list_connected until at least n Nodes are present,
@@ -423,7 +375,7 @@ func TestFleetE2E_JobSpanningOfflineNode(t *testing.T) {
 	nodeA := nodeByRelayLabel(t, fr.harness, nodeIDs, "nodeid", "a")
 	nodeB := nodeByRelayLabel(t, fr.harness, nodeIDs, "nodeid", "b")
 
-	daemonB.kill()
+	daemonB.Kill()
 	waitForNodeConnected(t, fr.harness, nodeB, false)
 
 	wantContent := "hello from fleet offline-node e2e\n"
@@ -708,7 +660,7 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	if fr.cmd.Process != nil {
 		fr.cmd.Process.Kill() //nolint:errcheck
 	}
-	daemon.kill()
+	daemon.Kill()
 
 	// Restart the Relay on the SAME store/addr/CA dir: its persisted store
 	// still has the Task Dispatched with no Result (TaskRepository.InFlight).
@@ -718,7 +670,7 @@ func TestFleetE2E_CrashMidJobNeverDoubleRuns(t *testing.T) {
 	// persisted dedup marker survive. On reconnect, Router.onConnect ->
 	// Reconciler.ReconcileNode resends the in-flight Task; the daemon's dedup
 	// returns the benign already-processed result WITHOUT re-executing.
-	daemon.relaunch()
+	daemon.Relaunch()
 
 	// Poll query_job until the Task reaches Resolved.
 	var task map[string]any

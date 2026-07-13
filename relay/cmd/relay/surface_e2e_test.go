@@ -33,7 +33,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -143,26 +142,12 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 	go srv.Serve(nodeLis) //nolint:errcheck
 	t.Cleanup(srv.GracefulStop)
 
-	controlLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (control-plane): %v", err)
-	}
-	go func() { _ = d.control.Serve(controlLis) }()
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = d.control.Shutdown(shutdownCtx)
-	})
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(d.ca.Bundle()) {
-		t.Fatal("AppendCertsFromPEM(deps.ca.Bundle()) returned false")
-	}
+	controlBase, pool := serveControlPlane(t, d)
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
 	authed = &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
 	plain = &http.Client{Transport: transport}
 
-	return d, nodeAddr, "https://" + controlLis.Addr().String(), authed, plain
+	return d, nodeAddr, controlBase, authed, plain
 }
 
 // launchDaemon starts a real relay-daemon subprocess against nodeAddr,
@@ -171,34 +156,16 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 // The subprocess is killed and reaped via t.Cleanup.
 func launchDaemon(t *testing.T, nodeAddr, caFile, policyPath, token, hostname string) *exec.Cmd {
 	t.Helper()
-	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
-	if daemonBin == "" {
-		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
-	}
-
-	stateDir := t.TempDir()
-	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+nodeAddr,
-		"RELAY_ENROLLMENT_TOKEN="+token,
-		"RELAY_CA_BUNDLE_PATH="+caFile,
-		"RELAY_ENROLL_ENDPOINT=https://"+nodeAddr,
-		"RELAY_STATE_DIR="+stateDir,
-		"RELAY_POLICY_PATH="+policyPath,
-		"RELAY_DOMAIN=localhost",
-		"HOSTNAME="+hostname,
-		// Disable rustls provider conflict on some environments.
-		"RUST_LOG=warn",
-	)
-	cmd := exec.Command(daemonBin, "--relay", "https://"+nodeAddr)
-	cmd.Env = env
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start daemon (%s): %v", hostname, err)
-	}
-	t.Cleanup(func() {
-		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
+	handle := relaytest.StartDaemon(t, relaytest.DaemonConfig{
+		Bin:        os.Getenv("RELAY_DAEMON_BIN"),
+		NodeAddr:   nodeAddr,
+		CAPath:     caFile,
+		Token:      token,
+		StateDir:   t.TempDir(),
+		PolicyPath: policyPath,
+		Hostname:   hostname,
 	})
-	return cmd
+	return handle.Cmd()
 }
 
 // waitForConnectedNodes polls deps.dispatch.ConnectedNodes() (the live
