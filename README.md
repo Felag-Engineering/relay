@@ -94,4 +94,5 @@ Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical sl
 
 - **[CONTEXT.md](CONTEXT.md)** — the ubiquitous language. Every term here is canonical.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
+- **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
 - **[ROADMAP.md](ROADMAP.md)** — what we're building and in what order.

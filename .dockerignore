@@ -1,0 +1,33 @@
+# Keep the Docker build context small and — more importantly — never bake local
+# secrets or throwaway state into an image layer. Only /proto, /relay, /daemon,
+# and /docker are needed by the dev-fleet builds; everything else is excluded.
+#
+# This file affects `docker build` / `docker compose build` only. It has no
+# effect on the Go/Rust/proto toolchains or on CI (CI never invokes Docker).
+
+# VCS + tooling metadata
+.git/
+.github/
+.claude/
+.dev-loop/
+scripts/dev-loop/
+
+# Docs are not needed to compile the binaries (the dev-fleet doc lives in-repo,
+# not in the image).
+docs/
+
+# Build outputs — rebuilt inside the multi-stage images, never copied from host.
+daemon/target/
+relay/bin/
+
+# Local Relay state / SQLite store (never bake a laptop's store into an image).
+**/relay-data/
+**/ca-data/
+**/*.db
+**/*.sqlite
+
+# Never bake key material or certificates into an image.
+*.pem
+*.key
+*.crt
+*.csr
