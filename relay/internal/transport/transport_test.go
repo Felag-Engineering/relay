@@ -152,6 +152,18 @@ func sendHello(t *testing.T, stream relayv1.Tunnel_OpenClient, helloID string) {
 	}
 }
 
+// trySendHello sends a Hello but tolerates a Send error. On rejection paths
+// the server aborts the stream concurrently with the client's Send, so Send
+// may return io.EOF; per the gRPC ClientStream contract the RPC status must
+// then be retrieved via Recv, which the caller does next.
+func trySendHello(stream relayv1.Tunnel_OpenClient, helloID string) {
+	_ = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{NodeId: helloID},
+		},
+	})
+}
+
 // fakeChecker implements transport.RevocationChecker for tests.
 type fakeChecker struct {
 	revoked map[string]bool
@@ -233,7 +245,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
 		// If Open didn't fail immediately, try sending to force the RPC through.
-		sendHello(t, stream, "anon")
+		trySendHello(stream, "anon")
 		_, err = stream.Recv()
 	}
 	if err == nil {
@@ -277,7 +289,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		sendHello(t, stream, "rogue")
+		trySendHello(stream, "rogue")
 		_, err = stream.Recv()
 	}
 	// The TLS handshake should fail because the server rejects the untrusted cert.
@@ -379,7 +391,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		sendHello(t, stream, "node-revoked")
+		trySendHello(stream, "node-revoked")
 		_, err = stream.Recv()
 	}
 	// The connection must fail (handshake or interceptor rejection).
@@ -425,7 +437,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 
 	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err == nil {
-		sendHello(t, stream, "node-intercepted")
+		trySendHello(stream, "node-intercepted")
 		_, err = stream.Recv()
 	}
 	if err == nil {
