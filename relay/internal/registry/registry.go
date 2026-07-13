@@ -32,7 +32,7 @@ var ErrAtCapacity = errors.New("registry: at capacity")
 
 // Facts are descriptive properties a relay-daemon self-reports about its Node.
 // They inform decisions but are never used for targeting — that is the role of Labels.
-// This is a domain mirror of gleipnirv1.Facts; the registry package carries no
+// This is a domain mirror of relayv1.Facts; the registry package carries no
 // proto dependency.
 type Facts struct {
 	Hostname    string

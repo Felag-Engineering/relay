@@ -369,33 +369,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gleipnir-relay-daemon"
-version = "0.0.1"
-dependencies = [
- "libc",
- "prost",
- "protoc-bin-vendored",
- "rcgen",
- "regex",
- "ring",
- "rustix",
- "rustls",
- "rustls-pemfile",
- "serde",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "toml",
- "tonic",
- "tonic-build",
- "tracing",
- "tracing-subscriber",
- "x509-parser 0.18.1",
-]
-
-[[package]]
 name = "h2"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1048,6 +1021,33 @@ name = "regex-syntax"
 version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
+
+[[package]]
+name = "relay-daemon"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "prost",
+ "protoc-bin-vendored",
+ "rcgen",
+ "regex",
+ "ring",
+ "rustix",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "toml",
+ "tonic",
+ "tonic-build",
+ "tracing",
+ "tracing-subscriber",
+ "x509-parser 0.18.1",
+]
 
 [[package]]
 name = "ring"

@@ -1,15 +1,15 @@
 syntax = "proto3";
 
-// The Gleipnir Relay contract: the single source of truth for the wire protocol
+// The Relay contract: the single source of truth for the wire protocol
 // between the Relay and relay-daemons, and for the Operation vocabulary. Both the
 // Go Relay and the Rust relay-daemon generate their types from this file. See
 // ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
 //
 // This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
 // captures the shapes implied by ADRs 0001-0013, not a frozen API.
-package gleipnir.v1;
+package relay.v1;
 
-option go_package = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1;gleipnirv1";
+option go_package = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1;relayv1";
 
 // ---------------------------------------------------------------------------
 // Enrollment (ADR-0006): a daemon presents a reusable, scoped Enrollment Token

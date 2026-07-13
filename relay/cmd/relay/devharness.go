@@ -20,7 +20,7 @@
 //
 // The control protocol is newline-delimited JSON over a unix domain socket
 // (not proto-on-the-wire): this file is the sole place that translates
-// to/from gleipnirv1/jobs/capability, keeping the harness client trivial and
+// to/from relayv1/jobs/capability, keeping the harness client trivial and
 // this file self-auditing.
 //
 // Capability-layer wiring (#103): unlike the composition root (main.go),

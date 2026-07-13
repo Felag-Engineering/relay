@@ -9,7 +9,7 @@ while per-server policy restricts what may actually run — defense in depth.
 **Gleipnir** is a different project: the first-party AI-agent system that will drive
 Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of
 it. The repo name `gleipnir-relay` is historical; the product here is Relay (see
-issue #39 for the internals rename).
+ADR-0016 for the internal-naming boundary).
 
 ## Language
 

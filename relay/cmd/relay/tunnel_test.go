@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	transport "github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc"
@@ -69,23 +69,23 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 	const helloNodeID = "hello-node-1" // wire-supplied (must not become node_id)
 
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	err = stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{
+	err = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
 				NodeId:        helloNodeID,
 				DaemonVersion: "0.0.1-test",
-				Facts: &gleipnirv1.Facts{
+				Facts: &relayv1.Facts{
 					Hostname: "test-host",
 					Os:       "linux",
 				},
@@ -115,20 +115,20 @@ func TestTunnelOpen_HelloPing(t *testing.T) {
 func TestTunnelOpen_FailClosed(t *testing.T) {
 	// No interceptor: NodeIDFromContext will return ok==false.
 	srv := grpc.NewServer()
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	if err = stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{
+	if err = stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
 				NodeId: "attacker-supplied-id",
 			},
 		},
@@ -154,21 +154,21 @@ func TestTunnelOpen_RevokeTearsDownLiveStream(t *testing.T) {
 
 	conns := revocation.NewConnections()
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(nodeID)))
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{conns: conns})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
 	// Send Hello to advance the handler past the initial recv.
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{NodeId: nodeID},
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{NodeId: nodeID},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -218,24 +218,24 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
 				NodeId:        certNodeID,
 				DaemonVersion: "0.0.1-test",
-				Facts:         &gleipnirv1.Facts{Hostname: "h", Os: "linux"},
-				Labels: []*gleipnirv1.Label{
+				Facts:         &relayv1.Facts{Hostname: "h", Os: "linux"},
+				Labels: []*relayv1.Label{
 					{Key: "node:role", Value: "web"},
 					{Key: "relay:env", Value: "prod"}, // must be dropped: stream cannot set relay: labels
 				},
@@ -287,20 +287,20 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 
 	reg := registry.NewInMemory(registry.WithClock(func() time.Time { return oldTime }))
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{NodeId: certNodeID},
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{NodeId: certNodeID},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -325,9 +325,9 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	}
 
 	// Send a Heartbeat — the handler will call UpdateLastSeen(nodeID, time.Now()).
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Heartbeat{
-			Heartbeat: &gleipnirv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Heartbeat{
+			Heartbeat: &relayv1.Heartbeat{UnixMillis: time.Now().UnixMilli()},
 		},
 	}); err != nil {
 		t.Fatalf("send heartbeat: %v", err)
@@ -360,27 +360,27 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 func TestNodeLabelsFromHello(t *testing.T) {
 	tests := []struct {
 		name  string
-		input []*gleipnirv1.Label
+		input []*relayv1.Label
 		want  map[string]string
 	}{
 		{
 			name:  "node: prefix is accepted; bare key is stored",
-			input: []*gleipnirv1.Label{{Key: "node:role", Value: "web"}},
+			input: []*relayv1.Label{{Key: "node:role", Value: "web"}},
 			want:  map[string]string{"role": "web"},
 		},
 		{
 			name:  "relay: prefix is dropped (stream cannot set relay: labels)",
-			input: []*gleipnirv1.Label{{Key: "relay:env", Value: "prod"}},
+			input: []*relayv1.Label{{Key: "relay:env", Value: "prod"}},
 			want:  map[string]string{},
 		},
 		{
 			name:  "node: with empty bare key is dropped",
-			input: []*gleipnirv1.Label{{Key: "node:", Value: "val"}},
+			input: []*relayv1.Label{{Key: "node:", Value: "val"}},
 			want:  map[string]string{},
 		},
 		{
 			name:  "no namespace prefix is dropped",
-			input: []*gleipnirv1.Label{{Key: "role", Value: "web"}},
+			input: []*relayv1.Label{{Key: "role", Value: "web"}},
 			want:  map[string]string{},
 		},
 	}
@@ -406,7 +406,7 @@ func TestNodeLabelsFromHello(t *testing.T) {
 // handler uses to record a daemon-reported PolicySnapshot into the
 // display-only policyview.Cache (#117).
 func TestSnapshotFromProto(t *testing.T) {
-	ps := &gleipnirv1.PolicySnapshot{
+	ps := &relayv1.PolicySnapshot{
 		RawExecEnabled:    true,
 		RawAllowPatterns:  []string{`^/usr/bin/systemctl restart .+$`},
 		RawDenyPatterns:   []string{`.*rm -rf.*`},
@@ -452,20 +452,20 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 
 	cache := policyview.New()
 	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
-	gleipnirv1.RegisterTunnelServer(srv, &tunnelServer{policy: cache})
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{policy: cache})
 	conn := newBufconnConn(t, srv)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	stream, err := gleipnirv1.NewTunnelClient(conn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
 
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{
-			Hello: &gleipnirv1.Hello{NodeId: certNodeID},
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{NodeId: certNodeID},
 		},
 	}); err != nil {
 		t.Fatalf("send hello: %v", err)
@@ -481,9 +481,9 @@ func TestTunnelOpen_PolicySnapshotCapturesIntoCache(t *testing.T) {
 		t.Fatalf("expected Ping, got %T", msg.Body)
 	}
 
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Policy{
-			Policy: &gleipnirv1.PolicySnapshot{
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Policy{
+			Policy: &relayv1.PolicySnapshot{
 				RawExecEnabled:    true,
 				AllowedOperations: []string{"system.facts"},
 				PolicyFingerprint: "sha256:live",

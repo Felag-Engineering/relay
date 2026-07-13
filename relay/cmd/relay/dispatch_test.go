@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -26,30 +26,30 @@ import (
 
 type dispatcher struct {
 	mu       sync.Mutex
-	senders  map[string]func(*gleipnirv1.RelayMessage) error
-	results  map[string]chan *gleipnirv1.TaskResult
-	verdicts map[string]chan *gleipnirv1.PolicyVerdict
+	senders  map[string]func(*relayv1.RelayMessage) error
+	results  map[string]chan *relayv1.TaskResult
+	verdicts map[string]chan *relayv1.PolicyVerdict
 }
 
 func newDispatcher() *dispatcher {
 	return &dispatcher{
-		senders:  make(map[string]func(*gleipnirv1.RelayMessage) error),
-		results:  make(map[string]chan *gleipnirv1.TaskResult),
-		verdicts: make(map[string]chan *gleipnirv1.PolicyVerdict),
+		senders:  make(map[string]func(*relayv1.RelayMessage) error),
+		results:  make(map[string]chan *relayv1.TaskResult),
+		verdicts: make(map[string]chan *relayv1.PolicyVerdict),
 	}
 }
 
 // register implements taskSink. Called by tunnelServer.Open after Ping is sent.
 // Returns an unregister cleanup func (called on stream teardown).
-func (d *dispatcher) register(nodeID string, send func(*gleipnirv1.RelayMessage) error) func() {
+func (d *dispatcher) register(nodeID string, send func(*relayv1.RelayMessage) error) func() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.senders[nodeID] = send
 	if _, ok := d.results[nodeID]; !ok {
-		d.results[nodeID] = make(chan *gleipnirv1.TaskResult, 32)
+		d.results[nodeID] = make(chan *relayv1.TaskResult, 32)
 	}
 	if _, ok := d.verdicts[nodeID]; !ok {
-		d.verdicts[nodeID] = make(chan *gleipnirv1.PolicyVerdict, 32)
+		d.verdicts[nodeID] = make(chan *relayv1.PolicyVerdict, 32)
 	}
 	return func() {
 		d.mu.Lock()
@@ -61,7 +61,7 @@ func (d *dispatcher) register(nodeID string, send func(*gleipnirv1.RelayMessage)
 // deliver implements taskSink. Called by tunnelServer.Open when a TaskResult
 // arrives on the inbound stream. Buffered channel (32) avoids blocking the
 // stream goroutine while the test goroutine reads.
-func (d *dispatcher) deliver(nodeID string, result *gleipnirv1.TaskResult) {
+func (d *dispatcher) deliver(nodeID string, result *relayv1.TaskResult) {
 	d.mu.Lock()
 	ch := d.results[nodeID]
 	d.mu.Unlock()
@@ -74,7 +74,7 @@ func (d *dispatcher) deliver(nodeID string, result *gleipnirv1.TaskResult) {
 // PolicyVerdict arrives on the inbound stream (the daemon's answer to a
 // PolicyQuery). Buffered channel (32) avoids blocking the stream goroutine
 // while the test goroutine reads.
-func (d *dispatcher) deliverVerdict(nodeID string, verdict *gleipnirv1.PolicyVerdict) {
+func (d *dispatcher) deliverVerdict(nodeID string, verdict *relayv1.PolicyVerdict) {
 	d.mu.Lock()
 	ch := d.verdicts[nodeID]
 	d.mu.Unlock()
@@ -106,7 +106,7 @@ func (d *dispatcher) waitForNode(nodeID string, deadline time.Duration) error {
 
 // Dispatch sends a RelayMessage to the node identified by nodeID. Returns an
 // error if the node is not (yet) registered or if stream.Send fails.
-func (d *dispatcher) Dispatch(nodeID string, msg *gleipnirv1.RelayMessage) error {
+func (d *dispatcher) Dispatch(nodeID string, msg *relayv1.RelayMessage) error {
 	d.mu.Lock()
 	send, ok := d.senders[nodeID]
 	d.mu.Unlock()
@@ -120,9 +120,9 @@ func (d *dispatcher) Dispatch(nodeID string, msg *gleipnirv1.RelayMessage) error
 // nodeID. Thin wrapper over Dispatch — the send-side plumbing already forwards
 // any RelayMessage oneof body.
 func (d *dispatcher) SendCancel(nodeID, taskID string) error {
-	return d.Dispatch(nodeID, &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_TaskCancel{
-			TaskCancel: &gleipnirv1.TaskCancel{TaskId: taskID},
+	return d.Dispatch(nodeID, &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_TaskCancel{
+			TaskCancel: &relayv1.TaskCancel{TaskId: taskID},
 		},
 	})
 }
@@ -130,9 +130,9 @@ func (d *dispatcher) SendCancel(nodeID, taskID string) error {
 // SendPolicyQuery dispatches a PolicyQuery to the node identified by nodeID.
 // Thin wrapper over Dispatch — the send-side plumbing already forwards any
 // RelayMessage oneof body.
-func (d *dispatcher) SendPolicyQuery(nodeID string, q *gleipnirv1.PolicyQuery) error {
-	return d.Dispatch(nodeID, &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_PolicyQuery{PolicyQuery: q},
+func (d *dispatcher) SendPolicyQuery(nodeID string, q *relayv1.PolicyQuery) error {
+	return d.Dispatch(nodeID, &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_PolicyQuery{PolicyQuery: q},
 	})
 }
 
@@ -143,9 +143,9 @@ func (d *dispatcher) SendPolicyQuery(nodeID string, q *gleipnirv1.PolicyQuery) e
 func TestDispatcher_RegisterDeliverUnregister(t *testing.T) {
 	d := newDispatcher()
 
-	sent := make([]*gleipnirv1.RelayMessage, 0)
+	sent := make([]*relayv1.RelayMessage, 0)
 	mu := sync.Mutex{}
-	fakeSend := func(msg *gleipnirv1.RelayMessage) error {
+	fakeSend := func(msg *relayv1.RelayMessage) error {
 		mu.Lock()
 		sent = append(sent, msg)
 		mu.Unlock()
@@ -155,8 +155,8 @@ func TestDispatcher_RegisterDeliverUnregister(t *testing.T) {
 	// register delivers an unregister func; the node should be present.
 	unregister := d.register("node-1", fakeSend)
 
-	if err := d.Dispatch("node-1", &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Ping{Ping: &gleipnirv1.Ping{}},
+	if err := d.Dispatch("node-1", &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Ping{Ping: &relayv1.Ping{}},
 	}); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -168,19 +168,19 @@ func TestDispatcher_RegisterDeliverUnregister(t *testing.T) {
 
 	// unregister removes the node from senders.
 	unregister()
-	if err := d.Dispatch("node-1", &gleipnirv1.RelayMessage{}); err == nil {
+	if err := d.Dispatch("node-1", &relayv1.RelayMessage{}); err == nil {
 		t.Fatal("expected error after unregister, got nil")
 	}
 }
 
 func TestDispatcher_Deliver(t *testing.T) {
 	d := newDispatcher()
-	unregister := d.register("node-2", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := d.register("node-2", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
-	want := &gleipnirv1.TaskResult{
+	want := &relayv1.TaskResult{
 		TaskId:  "task-xyz",
-		Outcome: gleipnirv1.Outcome_OUTCOME_SUCCESS,
+		Outcome: relayv1.Outcome_OUTCOME_SUCCESS,
 	}
 	d.deliver("node-2", want)
 
@@ -203,10 +203,10 @@ func TestDispatcher_Deliver(t *testing.T) {
 
 func TestDispatcher_DeliverVerdict(t *testing.T) {
 	d := newDispatcher()
-	unregister := d.register("node-3", func(*gleipnirv1.RelayMessage) error { return nil })
+	unregister := d.register("node-3", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
-	want := &gleipnirv1.PolicyVerdict{
+	want := &relayv1.PolicyVerdict{
 		QueryId: "query-abc",
 		Allowed: true,
 	}
@@ -240,7 +240,7 @@ func TestDispatcher_WaitForNodeTimeout(t *testing.T) {
 
 func TestDispatcher_DispatchUnknownNode(t *testing.T) {
 	d := newDispatcher()
-	err := d.Dispatch("unknown-node", &gleipnirv1.RelayMessage{})
+	err := d.Dispatch("unknown-node", &relayv1.RelayMessage{})
 	if err == nil {
 		t.Fatal("expected error for unknown node, got nil")
 	}

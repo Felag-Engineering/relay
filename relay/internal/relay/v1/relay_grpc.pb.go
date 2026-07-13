@@ -2,9 +2,9 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             (unknown)
-// source: gleipnir/v1/gleipnir.proto
+// source: relay/v1/relay.proto
 
-// The Gleipnir Relay contract: the single source of truth for the wire protocol
+// The Relay contract: the single source of truth for the wire protocol
 // between the Relay and relay-daemons, and for the Operation vocabulary. Both the
 // Go Relay and the Rust relay-daemon generate their types from this file. See
 // ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
@@ -12,7 +12,7 @@
 // This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
 // captures the shapes implied by ADRs 0001-0013, not a frozen API.
 
-package gleipnirv1
+package relayv1
 
 import (
 	context "context"
@@ -27,8 +27,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Enrollment_Enroll_FullMethodName = "/gleipnir.v1.Enrollment/Enroll"
-	Enrollment_Renew_FullMethodName  = "/gleipnir.v1.Enrollment/Renew"
+	Enrollment_Enroll_FullMethodName = "/relay.v1.Enrollment/Enroll"
+	Enrollment_Renew_FullMethodName  = "/relay.v1.Enrollment/Renew"
 )
 
 // EnrollmentClient is the client API for Enrollment service.
@@ -172,7 +172,7 @@ func _Enrollment_Renew_Handler(srv interface{}, ctx context.Context, dec func(in
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Enrollment_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "gleipnir.v1.Enrollment",
+	ServiceName: "relay.v1.Enrollment",
 	HandlerType: (*EnrollmentServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -185,11 +185,11 @@ var Enrollment_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "gleipnir/v1/gleipnir.proto",
+	Metadata: "relay/v1/relay.proto",
 }
 
 const (
-	Tunnel_Open_FullMethodName = "/gleipnir.v1.Tunnel/Open"
+	Tunnel_Open_FullMethodName = "/relay.v1.Tunnel/Open"
 )
 
 // TunnelClient is the client API for Tunnel service.
@@ -286,7 +286,7 @@ type Tunnel_OpenServer = grpc.BidiStreamingServer[DaemonMessage, RelayMessage]
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var Tunnel_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "gleipnir.v1.Tunnel",
+	ServiceName: "relay.v1.Tunnel",
 	HandlerType: (*TunnelServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
@@ -297,5 +297,5 @@ var Tunnel_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "gleipnir/v1/gleipnir.proto",
+	Metadata: "relay/v1/relay.proto",
 }

@@ -12,7 +12,7 @@
 // verified client cert and have its CN injected as node_id into the context,
 // UNLESS its FullMethod string appears in the `certless` allowlist. The
 // allowlist is the seam for Enrollment: Enroll is the one certless method, and
-// main.go adds gleipnirv1.Enrollment_Enroll_FullMethodName to the set.
+// main.go adds relayv1.Enrollment_Enroll_FullMethodName to the set.
 package transport
 
 import (

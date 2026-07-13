@@ -5,7 +5,7 @@ import (
 	"crypto/x509"
 	"testing"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,7 +20,7 @@ func TestRenew_Success(t *testing.T) {
 	srv, _, realCA := newEnrollServer(t, svc)
 
 	ctx := transport.NewContextWithNodeID(context.Background(), "node-abc")
-	req := &gleipnirv1.RenewRequest{
+	req := &relayv1.RenewRequest{
 		Csr: genCSR(t, "bogus-csr-cn-must-be-ignored"),
 	}
 
@@ -65,7 +65,7 @@ func TestRenew_IgnoresCSRSubject(t *testing.T) {
 
 	const csrCN = "daemon-wants-this-identity"
 	ctx := transport.NewContextWithNodeID(context.Background(), "node-relay-assigned")
-	req := &gleipnirv1.RenewRequest{
+	req := &relayv1.RenewRequest{
 		Csr: genCSR(t, csrCN),
 	}
 
@@ -89,7 +89,7 @@ func TestRenew_MissingNodeID(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, _, _ := newEnrollServer(t, svc)
 
-	req := &gleipnirv1.RenewRequest{
+	req := &relayv1.RenewRequest{
 		Csr: genCSR(t, "cn"),
 	}
 
@@ -106,7 +106,7 @@ func TestRenew_EmptyCSR(t *testing.T) {
 	srv, _, _ := newEnrollServer(t, svc)
 
 	ctx := transport.NewContextWithNodeID(context.Background(), "node-abc")
-	_, err := srv.Renew(ctx, &gleipnirv1.RenewRequest{})
+	_, err := srv.Renew(ctx, &relayv1.RenewRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("empty CSR: want InvalidArgument, got %v", err)
 	}
@@ -118,7 +118,7 @@ func TestRenew_GarbageCSR(t *testing.T) {
 	srv, _, _ := newEnrollServer(t, svc)
 
 	ctx := transport.NewContextWithNodeID(context.Background(), "node-abc")
-	_, err := srv.Renew(ctx, &gleipnirv1.RenewRequest{
+	_, err := srv.Renew(ctx, &relayv1.RenewRequest{
 		Csr: []byte("this is not a valid CSR"),
 	})
 	if status.Code(err) != codes.InvalidArgument {

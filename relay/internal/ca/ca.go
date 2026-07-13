@@ -182,7 +182,7 @@ func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tl
 	now := time.Now()
 	leaf := x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Gleipnir Relay"},
+		Subject:               pkix.Name{CommonName: "Relay"},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(LeafValidity),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
@@ -226,7 +226,7 @@ func create(dir string) error {
 	now := time.Now()
 	template := x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "Gleipnir Relay CA"},
+		Subject:               pkix.Name{CommonName: "Relay CA"},
 		NotBefore:             now.Add(-clockSkew),
 		NotAfter:              now.Add(caValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,

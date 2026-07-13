@@ -13,30 +13,30 @@
 package dispatch
 
 import (
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // taskRequest converts a persisted Task into the wire TaskRequest sent down
 // the Node's Tunnel. RiskClass is deliberately NOT sent: it is not a
 // TaskRequest field on the wire — blast-radius classification is a Relay-side
 // concern (ADR-0012), already spent by the time a Task reaches dispatch.
-func taskRequest(t jobs.Task) *gleipnirv1.TaskRequest {
-	tr := &gleipnirv1.TaskRequest{
+func taskRequest(t jobs.Task) *relayv1.TaskRequest {
+	tr := &relayv1.TaskRequest{
 		TaskId:         t.ID,
 		TimeoutSeconds: t.TimeoutSeconds,
 	}
 	switch t.Action.Kind {
 	case jobs.ActionOperation:
-		tr.Action = &gleipnirv1.TaskRequest_Operation{
-			Operation: &gleipnirv1.Operation{
+		tr.Action = &relayv1.TaskRequest_Operation{
+			Operation: &relayv1.Operation{
 				Name: t.Action.OperationName,
 				Args: t.Action.OperationArgs,
 			},
 		}
 	case jobs.ActionRawExec:
-		tr.Action = &gleipnirv1.TaskRequest_RawExec{
-			RawExec: &gleipnirv1.RawExec{Argv: t.Action.RawExecArgv},
+		tr.Action = &relayv1.TaskRequest_RawExec{
+			RawExec: &relayv1.RawExec{Argv: t.Action.RawExecArgv},
 		}
 	case jobs.ActionUnspecified:
 		// No Action set: leave tr.Action nil. jobEngine never mints a Task with
@@ -52,19 +52,19 @@ func taskRequest(t jobs.Task) *gleipnirv1.TaskRequest {
 // never be mistaken for (or deduped alongside) a real Task. queryID is
 // correlation-only (Router.Query mints it via crypto/rand, unrelated to any
 // task_id).
-func policyQuery(queryID string, act jobs.Action) *gleipnirv1.PolicyQuery {
-	pq := &gleipnirv1.PolicyQuery{QueryId: queryID}
+func policyQuery(queryID string, act jobs.Action) *relayv1.PolicyQuery {
+	pq := &relayv1.PolicyQuery{QueryId: queryID}
 	switch act.Kind {
 	case jobs.ActionOperation:
-		pq.Action = &gleipnirv1.PolicyQuery_Operation{
-			Operation: &gleipnirv1.Operation{
+		pq.Action = &relayv1.PolicyQuery_Operation{
+			Operation: &relayv1.Operation{
 				Name: act.OperationName,
 				Args: act.OperationArgs,
 			},
 		}
 	case jobs.ActionRawExec:
-		pq.Action = &gleipnirv1.PolicyQuery_RawExec{
-			RawExec: &gleipnirv1.RawExec{Argv: act.RawExecArgv},
+		pq.Action = &relayv1.PolicyQuery_RawExec{
+			RawExec: &relayv1.RawExec{Argv: act.RawExecArgv},
 		}
 	case jobs.ActionUnspecified:
 		// No Action set: leave pq.Action nil, mirroring taskRequest's own
@@ -77,7 +77,7 @@ func policyQuery(queryID string, act jobs.Action) *gleipnirv1.PolicyQuery {
 // capability.Conduit.Query returns. There is no "unrecognized" case to
 // default here — Allowed is a plain bool and DecidingRule a plain string, so
 // every wire value maps unambiguously.
-func verdict(pv *gleipnirv1.PolicyVerdict) jobs.Verdict {
+func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
 	return jobs.Verdict{
 		Allowed:      pv.GetAllowed(),
 		DecidingRule: pv.GetDecidingRule(),
@@ -86,7 +86,7 @@ func verdict(pv *gleipnirv1.PolicyVerdict) jobs.Verdict {
 
 // result converts a wire TaskResult into the domain jobs.Result that
 // TaskRepository.Resolve persists.
-func result(tr *gleipnirv1.TaskResult) jobs.Result {
+func result(tr *relayv1.TaskResult) jobs.Result {
 	return jobs.Result{
 		Outcome:  outcome(tr.GetOutcome()),
 		ExitCode: tr.GetExitCode(),
@@ -99,21 +99,21 @@ func result(tr *gleipnirv1.TaskResult) jobs.Result {
 // wire value (including OUTCOME_UNSPECIFIED) maps to jobs.OutcomeUnspecified
 // rather than panicking or guessing — a Task with an unspecified Outcome is
 // truthfully "not yet resolved" from the Relay's point of view.
-func outcome(o gleipnirv1.Outcome) jobs.Outcome {
+func outcome(o relayv1.Outcome) jobs.Outcome {
 	switch o {
-	case gleipnirv1.Outcome_OUTCOME_SUCCESS:
+	case relayv1.Outcome_OUTCOME_SUCCESS:
 		return jobs.OutcomeSuccess
-	case gleipnirv1.Outcome_OUTCOME_FAILURE:
+	case relayv1.Outcome_OUTCOME_FAILURE:
 		return jobs.OutcomeFailure
-	case gleipnirv1.Outcome_OUTCOME_TIMEOUT:
+	case relayv1.Outcome_OUTCOME_TIMEOUT:
 		return jobs.OutcomeTimeout
-	case gleipnirv1.Outcome_OUTCOME_DENIED_BY_POLICY:
+	case relayv1.Outcome_OUTCOME_DENIED_BY_POLICY:
 		return jobs.OutcomeDeniedByPolicy
-	case gleipnirv1.Outcome_OUTCOME_CANCELLED:
+	case relayv1.Outcome_OUTCOME_CANCELLED:
 		return jobs.OutcomeCancelled
-	case gleipnirv1.Outcome_OUTCOME_UNREACHABLE:
+	case relayv1.Outcome_OUTCOME_UNREACHABLE:
 		return jobs.OutcomeUnreachable
-	case gleipnirv1.Outcome_OUTCOME_UNSPECIFIED:
+	case relayv1.Outcome_OUTCOME_UNSPECIFIED:
 		return jobs.OutcomeUnspecified
 	default:
 		return jobs.OutcomeUnspecified

@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // ErrNotConnected is returned by Dispatch/Cancel when nodeID has no live
@@ -32,7 +32,7 @@ var ErrNodeDisconnected = errors.New("dispatch: node disconnected while waiting 
 // refuse to clobber) a NEWER registration that has since taken nodeID's slot
 // in conns. See Register's doc comment.
 type conn struct {
-	send func(*gleipnirv1.RelayMessage) error
+	send func(*relayv1.RelayMessage) error
 }
 
 // waiter correlates one in-flight Dispatch call with the Result that will
@@ -57,7 +57,7 @@ type conn struct {
 type waiter struct {
 	nodeID string
 	owner  *conn
-	ch     chan *gleipnirv1.TaskResult
+	ch     chan *relayv1.TaskResult
 }
 
 // verdictWaiter is waiter's sibling for a Plan's PolicyQuery (#119,
@@ -71,7 +71,7 @@ type waiter struct {
 type verdictWaiter struct {
 	nodeID string
 	owner  *conn
-	ch     chan *gleipnirv1.PolicyVerdict
+	ch     chan *relayv1.PolicyVerdict
 }
 
 // Router is the production capability.Conduit: it sends Tasks down a
@@ -140,7 +140,7 @@ func NewRouter(onConnect func(nodeID string)) *Router {
 // guarantees any Dispatch or Query call blocked in its select on a waiter it
 // truly owns unblocks (via the closed-channel case) rather than hanging
 // until ctx expiry or forever on a deadline-less ctx.
-func (r *Router) Register(nodeID string, send func(*gleipnirv1.RelayMessage) error) (unregister func()) {
+func (r *Router) Register(nodeID string, send func(*relayv1.RelayMessage) error) (unregister func()) {
 	c := &conn{send: send}
 
 	r.mu.Lock()
@@ -206,11 +206,11 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 		r.mu.Unlock()
 		return jobs.Result{}, ErrNotConnected
 	}
-	w := &waiter{nodeID: nodeID, owner: c, ch: make(chan *gleipnirv1.TaskResult, 1)}
+	w := &waiter{nodeID: nodeID, owner: c, ch: make(chan *relayv1.TaskResult, 1)}
 	r.waiters[t.ID] = w
 	r.mu.Unlock()
 
-	msg := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_Task{Task: taskRequest(t)}}
+	msg := &relayv1.RelayMessage{Body: &relayv1.RelayMessage_Task{Task: taskRequest(t)}}
 	if err := c.send(msg); err != nil {
 		r.removeWaiter(t.ID)
 		return jobs.Result{}, fmt.Errorf("dispatch: send task %q to node %q: %w", t.ID, nodeID, err)
@@ -249,7 +249,7 @@ func (r *Router) removeWaiter(taskID string) {
 // which makes this delete-then-send mutually exclusive with unregister's
 // delete-then-close: exactly one of the two ever touches a given waiter's
 // channel, so Deliver can never send on an already-closed channel.
-func (r *Router) Deliver(nodeID string, tr *gleipnirv1.TaskResult) {
+func (r *Router) Deliver(nodeID string, tr *relayv1.TaskResult) {
 	r.mu.Lock()
 	w, ok := r.waiters[tr.GetTaskId()]
 	if ok && w.nodeID == nodeID {
@@ -290,11 +290,11 @@ func (r *Router) Query(ctx context.Context, nodeID string, act jobs.Action) (job
 		r.mu.Unlock()
 		return jobs.Verdict{}, ErrNotConnected
 	}
-	w := &verdictWaiter{nodeID: nodeID, owner: c, ch: make(chan *gleipnirv1.PolicyVerdict, 1)}
+	w := &verdictWaiter{nodeID: nodeID, owner: c, ch: make(chan *relayv1.PolicyVerdict, 1)}
 	r.verdictWaiters[queryID] = w
 	r.mu.Unlock()
 
-	msg := &gleipnirv1.RelayMessage{Body: &gleipnirv1.RelayMessage_PolicyQuery{PolicyQuery: policyQuery(queryID, act)}}
+	msg := &relayv1.RelayMessage{Body: &relayv1.RelayMessage_PolicyQuery{PolicyQuery: policyQuery(queryID, act)}}
 	if err := c.send(msg); err != nil {
 		r.removeVerdictWaiter(queryID)
 		return jobs.Verdict{}, fmt.Errorf("dispatch: send policy query %q to node %q: %w", queryID, nodeID, err)
@@ -335,7 +335,7 @@ func (r *Router) removeVerdictWaiter(queryID string) {
 // unregister's delete-then-close: exactly one of the two ever touches a
 // given waiter's channel, so DeliverVerdict can never send on an
 // already-closed channel (mirrors Deliver).
-func (r *Router) DeliverVerdict(nodeID string, pv *gleipnirv1.PolicyVerdict) {
+func (r *Router) DeliverVerdict(nodeID string, pv *relayv1.PolicyVerdict) {
 	r.mu.Lock()
 	w, ok := r.verdictWaiters[pv.GetQueryId()]
 	if ok && w.nodeID == nodeID {
@@ -364,8 +364,8 @@ func (r *Router) Cancel(_ context.Context, nodeID string, taskID string) error {
 	if !ok {
 		return nil
 	}
-	msg := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_TaskCancel{TaskCancel: &gleipnirv1.TaskCancel{TaskId: taskID}},
+	msg := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_TaskCancel{TaskCancel: &relayv1.TaskCancel{TaskId: taskID}},
 	}
 	if err := c.send(msg); err != nil {
 		return fmt.Errorf("dispatch: send cancel for task %q to node %q: %w", taskID, nodeID, err)

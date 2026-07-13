@@ -31,7 +31,7 @@ import (
 	"testing"
 	"time"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -93,14 +93,14 @@ type e2eNode struct {
 }
 
 // resultCh returns the node's TaskResult channel (created at registration).
-func (n *e2eNode) resultCh() chan *gleipnirv1.TaskResult {
+func (n *e2eNode) resultCh() chan *relayv1.TaskResult {
 	n.disp.mu.Lock()
 	defer n.disp.mu.Unlock()
 	return n.disp.results[n.nodeID]
 }
 
 // verdictCh returns the node's PolicyVerdict channel (created at registration).
-func (n *e2eNode) verdictCh() chan *gleipnirv1.PolicyVerdict {
+func (n *e2eNode) verdictCh() chan *relayv1.PolicyVerdict {
 	n.disp.mu.Lock()
 	defer n.disp.mu.Unlock()
 	return n.disp.verdicts[n.nodeID]
@@ -231,13 +231,13 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 	wantContent := "hello from e2e dispatch test\n"
 	contentPath := relaytest.WriteTempFile(t, "content-*.txt", wantContent)
 
-	fileReadTask := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
+	fileReadTask := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Task{
+			Task: &relayv1.TaskRequest{
 				TaskId:         "e2e-file-read-1",
 				TimeoutSeconds: 10,
-				Action: &gleipnirv1.TaskRequest_Operation{
-					Operation: &gleipnirv1.Operation{
+				Action: &relayv1.TaskRequest_Operation{
+					Operation: &relayv1.Operation{
 						Name: "file.read",
 						Args: map[string]string{"path": contentPath},
 					},
@@ -253,7 +253,7 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 		if result.TaskId != "e2e-file-read-1" {
 			t.Errorf("TaskId: got %q, want %q", result.TaskId, "e2e-file-read-1")
 		}
-		if result.Outcome != gleipnirv1.Outcome_OUTCOME_SUCCESS {
+		if result.Outcome != relayv1.Outcome_OUTCOME_SUCCESS {
 			t.Errorf("file.read outcome: got %v, want SUCCESS; stderr=%q",
 				result.Outcome, result.Stderr)
 		}
@@ -267,13 +267,13 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 	// -----------------------------------------------------------------------
 	// (b) service.restart sshd → DENIED_BY_POLICY (not in allowed_args).
 	// -----------------------------------------------------------------------
-	sshdTask := &gleipnirv1.RelayMessage{
-		Body: &gleipnirv1.RelayMessage_Task{
-			Task: &gleipnirv1.TaskRequest{
+	sshdTask := &relayv1.RelayMessage{
+		Body: &relayv1.RelayMessage_Task{
+			Task: &relayv1.TaskRequest{
 				TaskId:         "e2e-sshd-deny-1",
 				TimeoutSeconds: 10,
-				Action: &gleipnirv1.TaskRequest_Operation{
-					Operation: &gleipnirv1.Operation{
+				Action: &relayv1.TaskRequest_Operation{
+					Operation: &relayv1.Operation{
 						Name: "service.restart",
 						Args: map[string]string{"unit": "sshd"},
 					},
@@ -289,7 +289,7 @@ func TestTunnelDispatch_E2E(t *testing.T) {
 		if result.TaskId != "e2e-sshd-deny-1" {
 			t.Errorf("TaskId: got %q, want %q", result.TaskId, "e2e-sshd-deny-1")
 		}
-		if result.Outcome != gleipnirv1.Outcome_OUTCOME_DENIED_BY_POLICY {
+		if result.Outcome != relayv1.Outcome_OUTCOME_DENIED_BY_POLICY {
 			t.Errorf("service.restart sshd outcome: got %v, want DENIED_BY_POLICY; stderr=%q",
 				result.Outcome, result.Stderr)
 		}

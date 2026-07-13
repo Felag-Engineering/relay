@@ -24,8 +24,8 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -139,10 +139,10 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	// listener: enrollment must succeed while the token is live.
 	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
 	csrPEM, _ := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: minted.Token,
 		Csr:             csrPEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-control-api", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-control-api", Os: "linux"},
 	})
 	if err != nil {
 		t.Fatalf("Enroll with freshly minted token: %v", err)
@@ -161,10 +161,10 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	// The same plaintext must no longer enroll a second Node.
 	enrollConn2 := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
 	csr2PEM, _ := relaytest.NewCSR(t, "ignored-cn-2")
-	_, err = gleipnirv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	_, err = relayv1.NewEnrollmentClient(enrollConn2).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: minted.Token,
 		Csr:             csr2PEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-control-api-2", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-control-api-2", Os: "linux"},
 	})
 	if err == nil {
 		t.Fatal("expected Enroll to fail with a revoked token, got nil error")
@@ -191,10 +191,10 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 
 	enrollConn := dialTLS(t, nodeLis, &tls.Config{RootCAs: relaytest.CertPool(t, deps.ca.Bundle())})
 	csrPEM, leafKey := relaytest.NewCSR(t, "ignored-cn")
-	enrollResp, err := gleipnirv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &gleipnirv1.EnrollRequest{
+	enrollResp, err := relayv1.NewEnrollmentClient(enrollConn).Enroll(ctx, &relayv1.EnrollRequest{
 		EnrollmentToken: plaintext,
 		Csr:             csrPEM,
-		Facts:           &gleipnirv1.Facts{Hostname: "host-node-revoke", Os: "linux"},
+		Facts:           &relayv1.Facts{Hostname: "host-node-revoke", Os: "linux"},
 	})
 	if err != nil {
 		t.Fatalf("Enroll: %v", err)
@@ -204,12 +204,12 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	clientCert := relaytest.AssembleClientCert(t, enrollResp.GetCertificate(), leafKey)
 	pool := relaytest.CertPool(t, deps.ca.Bundle())
 	mtlsConn := dialTLS(t, nodeLis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
-	stream, err := gleipnirv1.NewTunnelClient(mtlsConn).Open(ctx)
+	stream, err := relayv1.NewTunnelClient(mtlsConn).Open(ctx)
 	if err != nil {
 		t.Fatalf("Tunnel Open: %v", err)
 	}
-	if err := stream.Send(&gleipnirv1.DaemonMessage{
-		Body: &gleipnirv1.DaemonMessage_Hello{Hello: &gleipnirv1.Hello{Facts: &gleipnirv1.Facts{Hostname: "host-node-revoke", Os: "linux"}}},
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{Facts: &relayv1.Facts{Hostname: "host-node-revoke", Os: "linux"}}},
 	}); err != nil {
 		t.Fatalf("send Hello: %v", err)
 	}
@@ -243,9 +243,9 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 
 	// Reconnection with the now-revoked Node cert must be rejected.
 	revokedConn := dialTLS(t, nodeLis, &tls.Config{Certificates: []tls.Certificate{clientCert}, RootCAs: pool})
-	revokedStream, reconnectErr := gleipnirv1.NewTunnelClient(revokedConn).Open(ctx)
+	revokedStream, reconnectErr := relayv1.NewTunnelClient(revokedConn).Open(ctx)
 	if reconnectErr == nil {
-		_ = revokedStream.Send(&gleipnirv1.DaemonMessage{Body: &gleipnirv1.DaemonMessage_Hello{Hello: &gleipnirv1.Hello{}}})
+		_ = revokedStream.Send(&relayv1.DaemonMessage{Body: &relayv1.DaemonMessage_Hello{Hello: &relayv1.Hello{}}})
 		_, reconnectErr = revokedStream.Recv()
 	}
 	if reconnectErr == nil {

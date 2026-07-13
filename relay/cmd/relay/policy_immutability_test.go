@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 )
 
 // TestRelayMessage_BodyOneofIsExactlyAllowSet reflectively enumerates the
@@ -39,7 +39,7 @@ import (
 // and fails this test until a human deliberately updates the allow-set,
 // which is the actual ADR-0002 wire-immutability gate.
 func TestRelayMessage_BodyOneofIsExactlyAllowSet(t *testing.T) {
-	md := (&gleipnirv1.RelayMessage{}).ProtoReflect().Descriptor()
+	md := (&relayv1.RelayMessage{}).ProtoReflect().Descriptor()
 	oneof := md.Oneofs().ByName("body")
 	if oneof == nil {
 		t.Fatal("RelayMessage has no oneof named \"body\" — proto contract changed shape")
@@ -93,7 +93,7 @@ func TestDaemonMessage_PolicyIsOutboundOnly(t *testing.T) {
 	// DaemonMessage has a policy field (outbound: daemon → Relay).
 	// GetPolicy() is generated iff the field exists; this call is a compile-time
 	// assertion that the field is on DaemonMessage (not a RelayMessage setter).
-	dm := &gleipnirv1.DaemonMessage{}
+	dm := &relayv1.DaemonMessage{}
 	snapshot := dm.GetPolicy()
 	// At runtime the field is nil on an empty message; nil is expected here.
 	if snapshot != nil {
@@ -104,7 +104,7 @@ func TestDaemonMessage_PolicyIsOutboundOnly(t *testing.T) {
 	// The absence proves the Relay cannot send a policy setter to the daemon.
 	//
 	// Verified: the following would NOT compile:
-	//   rm := &gleipnirv1.RelayMessage{}
+	//   rm := &relayv1.RelayMessage{}
 	//   _ = rm.GetPolicy()   // no such method — ADR-0002 enforced at proto level
 	//
 	// If this file compiles, RelayMessage carries no policy-setter (ADR-0002). ✓

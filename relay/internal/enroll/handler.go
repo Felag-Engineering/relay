@@ -11,9 +11,9 @@ import (
 	"net"
 	"strings"
 
-	gleipnirv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/gleipnir/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -89,10 +89,10 @@ func WithRateLimiter(l RateLimiter) ServerOption {
 	}
 }
 
-// Server implements gleipnirv1.EnrollmentServer. It validates Enrollment Tokens,
+// Server implements relayv1.EnrollmentServer. It validates Enrollment Tokens,
 // signs CSRs, and records Nodes in the registry (ADR-0006).
 type Server struct {
-	gleipnirv1.UnimplementedEnrollmentServer
+	relayv1.UnimplementedEnrollmentServer
 	tokens            *Service
 	signer            Signer
 	registry          Registrar
@@ -152,7 +152,7 @@ func peerIP(ctx context.Context) string {
 //
 // Sign and registry writes happen ONLY after the token validates; any rejection leaves
 // no certificate and no registry entry (fail-closed).
-func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gleipnirv1.EnrollResponse, error) {
+func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relayv1.EnrollResponse, error) {
 	// a. Rate-limit check: runs BEFORE any token validation or CSR signing so that
 	//    a throttled rejection cannot be used to probe whether an Enrollment Token
 	//    is valid (no oracle). Nil limiter is skipped to preserve backward
@@ -280,11 +280,11 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 	}
 
 	// l. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
-	assigned := make([]*gleipnirv1.Label, 0, len(scope))
+	assigned := make([]*relayv1.Label, 0, len(scope))
 	for _, entry := range scope {
 		bare := strings.TrimPrefix(entry, "relay:")
 		kv := strings.SplitN(bare, "=", 2)
-		l := &gleipnirv1.Label{Key: "relay:" + kv[0]}
+		l := &relayv1.Label{Key: "relay:" + kv[0]}
 		if len(kv) == 2 {
 			l.Value = kv[1]
 		}
@@ -302,7 +302,7 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 	)
 
 	// n. Return the response.
-	return &gleipnirv1.EnrollResponse{
+	return &relayv1.EnrollResponse{
 		NodeId:         nodeID,
 		Certificate:    certPEM,
 		CaBundle:       s.signer.Bundle(),
@@ -320,7 +320,7 @@ func (s *Server) Enroll(ctx context.Context, req *gleipnirv1.EnrollRequest) (*gl
 // The registry's CertFingerprint reflects the renewed cert only after the daemon's
 // next Hello Upsert (on reconnect). Operators must not treat the fingerprint as a
 // liveness assertion of the current live client cert.
-func (s *Server) Renew(ctx context.Context, req *gleipnirv1.RenewRequest) (*gleipnirv1.RenewResponse, error) {
+func (s *Server) Renew(ctx context.Context, req *relayv1.RenewRequest) (*relayv1.RenewResponse, error) {
 	// a. Reject an empty CSR immediately.
 	if len(req.GetCsr()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "csr is required")
@@ -344,7 +344,7 @@ func (s *Server) Renew(ctx context.Context, req *gleipnirv1.RenewRequest) (*glei
 	// d. Audit log: node_id only — no key material, no CSR contents.
 	slog.Info("node cert renewed", "node_id", nodeID)
 
-	return &gleipnirv1.RenewResponse{
+	return &relayv1.RenewResponse{
 		NodeId:      nodeID,
 		Certificate: certPEM,
 		CaBundle:    s.signer.Bundle(),

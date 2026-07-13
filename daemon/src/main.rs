@@ -27,7 +27,7 @@ use scheduler::Scheduler;
 
 #[allow(dead_code, unused_imports, clippy::all)]
 mod gen {
-    include!(concat!(env!("OUT_DIR"), "/gleipnir.v1.rs"));
+    include!(concat!(env!("OUT_DIR"), "/relay.v1.rs"));
 }
 
 use gen::{

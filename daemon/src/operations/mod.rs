@@ -41,7 +41,7 @@ pub const PKG_INSTALL: &str = "pkg.install";
 
 // ---------------------------------------------------------------------------
 // Risk-class registry — one place a reviewer verifies all name→class mappings
-// against the proto comment at gleipnir.proto (ADR-0012).
+// against the proto comment at relay.proto (ADR-0012).
 // ---------------------------------------------------------------------------
 
 /// Returns all v1 Operation descriptors in canonical order.
