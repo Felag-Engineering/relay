@@ -21,6 +21,7 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -125,4 +126,12 @@ func (s *Store) Audit() audit.Repository {
 // Relay-wide emergency stop (ADR-0013).
 func (s *Store) Freeze() freeze.Repository {
 	return &sqliteFreeze{db: s.db}
+}
+
+// Tokens returns the SQLite-backed enroll.Repository — the persisted
+// Enrollment Token store (ADR-0006), authoritative across a Relay restart so a
+// revoked token can never mint a new identity after the process restarts
+// (issue #133).
+func (s *Store) Tokens() enroll.Repository {
+	return &sqliteTokens{db: s.db}
 }
