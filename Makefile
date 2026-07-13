@@ -10,7 +10,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        gen-opschema
+        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs
 
 build: build-relay build-daemon
 
@@ -137,6 +137,20 @@ vuln-relay:
 # Install: cargo install cargo-audit --version 0.22.2 --locked # pinned for supply-chain reproducibility
 vuln-daemon:
 	cd daemon && cargo audit
+
+## --- local dev fleet (DEV-ONLY; requires Docker + compose v2) ---
+# Thin convenience wrappers over `docker compose` for the laptop dev fleet
+# (docs/dev-fleet.md). NOT part of build/test/lint and never invoked by CI —
+# the hermetic gate must never depend on Docker. Nothing else depends on these
+# targets; docs/dev-fleet.md documents the raw commands too.
+dev-fleet-up:
+	docker compose up --build -d
+
+dev-fleet-down:
+	docker compose down
+
+dev-fleet-logs:
+	docker compose logs -f
 
 clean:
 	cd relay && go clean ./... || true

@@ -1,0 +1,153 @@
+# Relay dev fleet — DEV-ONLY (docs/dev-fleet.md).
+#
+# One `relay` container plus three `relay-daemon` containers that auto-enroll
+# over CA-pinned mTLS and are drivable through the control plane (MCP + /api/v1).
+# This is a laptop demo / dogfooding environment; it makes NO production posture
+# claims. Docker is never a CI dependency — this file only affects
+# `docker compose`, not `make build/test/lint`.
+#
+# Startup order:
+#   relay (healthy) -> bootstrap (mints a relay: Enrollment Token + exports the
+#   public CA cert) -> daemon-1..3 (enroll, then go healthy on their node_id).
+
+# The three daemon services are byte-identical except for their per-Node
+# environment and their private state volume. This anchor factors out ONLY the
+# non-mapping fields they share. NOTE: the YAML merge key `<<` REPLACES a
+# mapping wholesale (it does not deep-merge), so each daemon's `environment:` and
+# `volumes:` are written inline below — they must never live in this anchor.
+x-daemon-base: &daemon-base
+  build:
+    context: .
+    dockerfile: docker/daemon.Dockerfile
+  restart: unless-stopped
+  depends_on:
+    bootstrap:
+      # Daemons start only after the token + CA cert exist on the shared volume.
+      condition: service_completed_successfully
+  healthcheck:
+    # The daemon writes the `node_id` file only after a successful enrollment
+    # (identity.persist_identity), so this gates health on enrollment success.
+    test: ["CMD", "test", "-f", "/var/lib/relay-daemon/node_id"]
+    interval: 3s
+    timeout: 3s
+    retries: 20
+    start_period: 5s
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+    restart: unless-stopped
+    environment:
+      # Node-plane gRPC listener (relay-daemon dial-home).
+      RELAY_ADDR: ":7654"
+      # Control-plane HTTPS listener (MCP + /api/v1) — the #154 execution flip is
+      # ON because the control plane is enabled. Distinct port from the node
+      # plane: listener separation.
+      RELAY_CONTROL_ENABLED: "true"
+      RELAY_CONTROL_ADDR: ":9443"
+      RELAY_CONTROL_CREDENTIAL_HASH_FILE: "/fixtures/control-credential.hash"
+      # Server cert SAN = the in-fleet DNS name daemons and bootstrap dial, so
+      # mTLS verification succeeds without any insecure flag inside the fleet.
+      RELAY_HOSTNAME: "relay"
+      RELAY_CA_DIR: "/var/lib/relay/ca"
+      RELAY_STORE_PATH: "/var/lib/relay/store/relay.db"
+    ports:
+      # Distinct published host ports: node plane vs control plane. Bound to
+      # 127.0.0.1 (loopback) ONLY: the control plane accepts a committed dev
+      # credential, so publishing on 0.0.0.0 would make it LAN-reachable RCE —
+      # anyone on the network could drive the control plane. Nothing inside the
+      # fleet uses these host ports; daemons and bootstrap dial the compose DNS
+      # name `relay` over the private network.
+      - "127.0.0.1:7654:7654"
+      - "127.0.0.1:9443:9443"
+    volumes:
+      # CA state (ca-cert.pem + ca-key.pem) and the SQLite store persist here, so
+      # `compose down` / `up` keeps the same Node identities and audit trail.
+      - relay-data:/var/lib/relay
+    healthcheck:
+      # busybox nc: a raw TCP connect proves each listener is accepting. This is
+      # a dev convenience, not a correctness check; -w1 bounds the probe.
+      test:
+        - "CMD"
+        - "sh"
+        - "-c"
+        - "nc -w1 127.0.0.1 7654 </dev/null && nc -w1 127.0.0.1 9443 </dev/null"
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 3s
+
+  # One-shot: mints the Enrollment Token and exports the public CA cert, then
+  # exits. Runs as root (0:0) so it can read the root-owned CA volume and write
+  # the shared bootstrap volume. See docker/bootstrap.sh for the security notes
+  # (relay:-scoped token; daemons receive ONLY ca-cert.pem, never ca-key.pem).
+  bootstrap:
+    image: curlimages/curl:8.11.1
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      relay:
+        condition: service_healthy
+    entrypoint: ["sh", "/bootstrap.sh"]
+    environment:
+      # DEV-ONLY control-plane credential (plaintext). Grants full control-plane
+      # access; matches docker/fixtures/control-credential.hash. Never reuse it.
+      RELAY_CONTROL_CREDENTIAL: "dev-fleet-control-credential"
+    volumes:
+      - ./docker/bootstrap.sh:/bootstrap.sh:ro
+      - relay-data:/relay-data:ro
+      - bootstrap-shared:/bootstrap
+
+  daemon-1:
+    <<: *daemon-base
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      HOSTNAME: "dev-node-1"
+      RELAY_NODE_LABELS: "role=web"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      # Private per-Node state volume => stable identity across down/up, no
+      # re-enrollment storm.
+      - daemon1-state:/var/lib/relay-daemon
+
+  daemon-2:
+    <<: *daemon-base
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      HOSTNAME: "dev-node-2"
+      RELAY_NODE_LABELS: "role=web"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon2-state:/var/lib/relay-daemon
+
+  daemon-3:
+    <<: *daemon-base
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      HOSTNAME: "dev-node-3"
+      RELAY_NODE_LABELS: "role=db"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon3-state:/var/lib/relay-daemon
+
+# All named => persist across `compose down`; wiped only with `compose down -v`.
+volumes:
+  relay-data:
+  bootstrap-shared:
+  daemon1-state:
+  daemon2-state:
+  daemon3-state:
