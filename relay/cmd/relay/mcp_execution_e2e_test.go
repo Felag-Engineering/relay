@@ -22,12 +22,10 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -74,16 +72,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	go srv.Serve(nodeLis) //nolint:errcheck
 	t.Cleanup(srv.GracefulStop)
 
-	controlLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (control-plane): %v", err)
-	}
-	go func() { _ = deps.control.Serve(controlLis) }()
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = deps.control.Shutdown(shutdownCtx)
-	})
+	controlBase, pool := serveControlPlane(t, deps)
 
 	// Seed an Enrollment Token scoped relay:env=test — the daemon's
 	// relay: label after enrollment, which the run_operation selector below
@@ -95,28 +84,15 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 
 	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
 	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-	stateDir := t.TempDir()
 
-	env := append(os.Environ(),
-		"RELAY_ADDR=https://"+nodeAddr,
-		"RELAY_ENROLLMENT_TOKEN="+plaintext,
-		"RELAY_CA_BUNDLE_PATH="+caFile,
-		"RELAY_ENROLL_ENDPOINT=https://"+nodeAddr,
-		"RELAY_STATE_DIR="+stateDir,
-		"RELAY_POLICY_PATH="+policyPath,
-		"RELAY_DOMAIN=localhost",
-		"HOSTNAME=mcp-execution-e2e-node",
-		// Disable rustls provider conflict on some environments.
-		"RUST_LOG=warn",
-	)
-	cmd := exec.Command(daemonBin, "--relay", "https://"+nodeAddr)
-	cmd.Env = env
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start daemon: %v", err)
-	}
-	t.Cleanup(func() {
-		cmd.Process.Kill() //nolint:errcheck
-		cmd.Wait()         //nolint:errcheck
+	relaytest.StartDaemon(t, relaytest.DaemonConfig{
+		Bin:        daemonBin,
+		NodeAddr:   nodeAddr,
+		CAPath:     caFile,
+		Token:      plaintext,
+		StateDir:   t.TempDir(),
+		PolicyPath: policyPath,
+		Hostname:   "mcp-execution-e2e-node",
 	})
 
 	// Block on the live Tunnel via deps.dispatch (appDeps.dispatch's whole
@@ -128,16 +104,12 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 		t.Fatalf("WaitForAny: daemon did not complete Hello->Ping handshake within 30s: %v", err)
 	}
 
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(deps.ca.Bundle()) {
-		t.Fatal("AppendCertsFromPEM(deps.ca.Bundle()) returned false")
-	}
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"},
 	}
 	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
 
-	session := relaytest.Connect(t, "https://"+controlLis.Addr().String(), authed)
+	session := relaytest.Connect(t, controlBase, authed)
 
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation": "system.facts",

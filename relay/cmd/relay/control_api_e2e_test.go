@@ -15,11 +15,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -58,21 +56,7 @@ func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *
 	nodeLis := bufconn.Listen(1 << 20)
 	go srv.Serve(nodeLis) //nolint:errcheck
 
-	controlLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (control-plane): %v", err)
-	}
-	go func() { _ = deps.control.Serve(controlLis) }()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = deps.control.Shutdown(ctx)
-	})
-
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(deps.ca.Bundle()) {
-		t.Fatal("AppendCertsFromPEM(deps.ca.Bundle()) returned false")
-	}
+	base, pool := serveControlPlane(t, deps)
 	client := &http.Client{
 		// ServerName forced to "localhost" to match the control-plane server
 		// certificate's SAN (relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
@@ -80,7 +64,7 @@ func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}},
 	}
 
-	return nodeLis, deps, "https://" + controlLis.Addr().String(), client
+	return nodeLis, deps, base, client
 }
 
 // controlAPIRequest issues a request against the control-plane API with the
