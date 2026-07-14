@@ -134,4 +134,10 @@ type Repository interface {
 	// RevokedNodeIDs returns the IDs of every Node with a non-zero
 	// RevokedAt, for rehydrating a connect-time denylist after a restart.
 	RevokedNodeIDs() ([]string, error)
+
+	// Count returns aggregate Node counts for metrics: total enrolled and the
+	// subset currently revoked. Backed by COUNT(*) in the store, never a full
+	// List() deep-copy, so it stays cheap at fleet scale (100k Nodes;
+	// scraping must not O(N) deep-copy).
+	Count() (total int, revoked int, err error)
 }

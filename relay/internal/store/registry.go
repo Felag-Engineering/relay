@@ -180,6 +180,19 @@ func (r *sqliteRegistry) RevokedNodeIDs() ([]string, error) {
 	return ids, rows.Err()
 }
 
+// Count returns the total number of enrolled Nodes and the subset currently
+// revoked, via COUNT(*) rather than a full List() deep-copy (cheap at fleet
+// scale — /metrics scraping must not be O(N)).
+func (r *sqliteRegistry) Count() (int, int, error) {
+	ctx := context.Background()
+	var total, revoked int
+	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(revoked_at) FROM nodes`).Scan(&total, &revoked)
+	if err != nil {
+		return 0, 0, fmt.Errorf("count nodes: %w", err)
+	}
+	return total, revoked, nil
+}
+
 // Get returns the stored Node record, or (Node{}, false) if the Node is not
 // in the registry.
 func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {

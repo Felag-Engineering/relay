@@ -34,6 +34,7 @@ func TestDefaultControlSurfaces_MountWithoutCollision(t *testing.T) {
 		{http.MethodPost, "/api/v1/nodes/some-node/revoke"},
 		{http.MethodPost, "/api/v1/freeze/engage"},
 		{http.MethodPost, "/api/v1/freeze/release"},
+		{http.MethodGet, "/metrics"},
 	}
 	for _, want := range wantRoutes {
 		req := httptest.NewRequest(want.method, want.path, nil)
@@ -44,17 +45,20 @@ func TestDefaultControlSurfaces_MountWithoutCollision(t *testing.T) {
 }
 
 // TestDefaultControlSurfaces_Order pins defaultControlSurfaces() to exactly
-// mcpSurface and apiSurface: a change here should be a deliberate one-line
-// edit to the explicit slice, not an accidental drop.
+// mcpSurface, apiSurface, and metricsSurface: a change here should be a
+// deliberate one-line edit to the explicit slice, not an accidental drop.
 func TestDefaultControlSurfaces_Order(t *testing.T) {
 	surfaces := defaultControlSurfaces()
-	if len(surfaces) != 2 {
-		t.Fatalf("len(defaultControlSurfaces()) = %d, want 2", len(surfaces))
+	if len(surfaces) != 3 {
+		t.Fatalf("len(defaultControlSurfaces()) = %d, want 3", len(surfaces))
 	}
 	if _, ok := surfaces[0].(mcpSurface); !ok {
 		t.Errorf("surfaces[0] = %T, want mcpSurface", surfaces[0])
 	}
 	if _, ok := surfaces[1].(apiSurface); !ok {
 		t.Errorf("surfaces[1] = %T, want apiSurface", surfaces[1])
+	}
+	if _, ok := surfaces[2].(metricsSurface); !ok {
+		t.Errorf("surfaces[2] = %T, want metricsSurface", surfaces[2])
 	}
 }

@@ -51,6 +51,13 @@ type RateLimiter interface {
 	Allow(ip string) bool
 }
 
+// EnrollmentObserver records a successful Enrollment for observability.
+// *metrics.Metrics satisfies this interface. Kept as an interface so enroll
+// carries no compile-time dependency on the metrics package.
+type EnrollmentObserver interface {
+	IncEnrollment()
+}
+
 // ServerOption configures a Server at construction.
 type ServerOption func(*Server)
 
@@ -89,6 +96,16 @@ func WithRateLimiter(l RateLimiter) ServerOption {
 	}
 }
 
+// WithEnrollmentObserver attaches an EnrollmentObserver whose IncEnrollment is
+// called once per successful Enroll — only the success path, since every
+// failure path returns earlier. Pass a nil observer (the default) to skip
+// observation.
+func WithEnrollmentObserver(o EnrollmentObserver) ServerOption {
+	return func(s *Server) {
+		s.observer = o
+	}
+}
+
 // Server implements relayv1.EnrollmentServer. It validates Enrollment Tokens,
 // signs CSRs, and records Nodes in the registry (ADR-0006).
 type Server struct {
@@ -100,6 +117,7 @@ type Server struct {
 	revocationChecker TokenRevocationChecker
 	nodeDenylister    NodeDenylister
 	limiter           RateLimiter
+	observer          EnrollmentObserver
 }
 
 // NewServer creates a Server backed by the given token Service, Signer (CA), and Registrar.
@@ -301,7 +319,13 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		"relay_label_count", len(relayBare),
 	)
 
-	// n. Return the response.
+	// n. Record the successful Enrollment for observability. Only the success
+	//    path reaches here — every failure path above returns earlier.
+	if s.observer != nil {
+		s.observer.IncEnrollment()
+	}
+
+	// o. Return the response.
 	return &relayv1.EnrollResponse{
 		NodeId:         nodeID,
 		Certificate:    certPEM,

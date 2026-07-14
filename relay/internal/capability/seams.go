@@ -162,6 +162,37 @@ func (noopFreezeStore) Release(context.Context, string, string) error {
 	return nil
 }
 
+// RefusalKind classifies why Service.Run or Service.Plan short-circuited
+// before dispatch, for MetricsSink.IncRefusal. It is a fixed, small enum —
+// never the human-readable refusal error text — so /metrics stays free of
+// unbounded cardinality.
+type RefusalKind int
+
+const (
+	RefusalFrozen RefusalKind = iota
+	RefusalUnauthorized
+	RefusalBlastCap
+	RefusalInternal
+)
+
+// MetricsSink records best-effort observability counters for the capability
+// pipeline: a dispatch outcome per Node, or a refusal kind. Mirrors AuditSink's
+// seam doc: this must never affect a dispatch decision — it is purely
+// observational. The real adapter (internal/metrics) is wired in via
+// WithMetrics; this seam only imports jobs, staying within capability's
+// import allowlist (execution_test.go guard).
+type MetricsSink interface {
+	IncDispatch(outcome jobs.Outcome)
+	IncRefusal(kind RefusalKind)
+}
+
+// noopMetricsSink is the default: nothing is recorded.
+type noopMetricsSink struct{}
+
+func (noopMetricsSink) IncDispatch(jobs.Outcome) {}
+
+func (noopMetricsSink) IncRefusal(RefusalKind) {}
+
 // FrozenError is returned by Service.Run when the Relay-wide Freeze is
 // engaged: dispatch is refused before any Task is sent. It is exported and
 // typed so a surface can recognize a Freeze refusal via errors.As without

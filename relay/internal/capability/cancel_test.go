@@ -61,7 +61,7 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 		now:       func() time.Time { return at },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}}
 
 	principal := Principal{Account: "alice", Role: "operator"}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
@@ -133,7 +133,7 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 		now:       func() time.Time { return time.Now().UTC() },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}}
 
 	err := svc.CancelJob(context.Background(), Principal{Account: "alice"}, "job-does-not-exist")
 	if !errors.Is(err, jobs.ErrJobNotFound) {

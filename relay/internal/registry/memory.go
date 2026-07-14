@@ -187,6 +187,22 @@ func (r *InMemory) RevokedNodeIDs() ([]string, error) {
 	return ids, nil
 }
 
+// Count returns the total number of enrolled Nodes and the subset currently
+// revoked (non-zero RevokedAt).
+func (r *InMemory) Count() (int, int, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	total := len(r.nodes)
+	revoked := 0
+	for _, n := range r.nodes {
+		if !n.RevokedAt.IsZero() {
+			revoked++
+		}
+	}
+	return total, revoked, nil
+}
+
 // Get returns a deep copy of the stored Node record. Returns (Node{}, false)
 // if the Node is not in the registry.
 func (r *InMemory) Get(nodeID string) (Node, bool) {

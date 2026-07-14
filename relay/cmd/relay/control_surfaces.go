@@ -27,6 +27,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
@@ -48,6 +49,7 @@ type surfaceDeps struct {
 	revocation *revocation.Service
 	audit      audit.Repository
 	now        func() time.Time
+	metrics    *metrics.Metrics
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -82,10 +84,21 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	})
 }
 
+// metricsSurface mounts the Prometheus text /metrics endpoint (#182) onto the
+// same mux — no new listener, no new auth (invariant 10). It is
+// observability-only, reached solely through the Authenticator.Middleware
+// wrapping mux: it never calls capability.Service.Run and has no execution
+// capability whatsoever (invariant 10, ADR-0009/0010).
+type metricsSurface struct{}
+
+func (metricsSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
+	mux.Handle("GET /metrics", d.metrics.Handler())
+}
+
 // defaultControlSurfaces returns every control surface newServer mounts when
 // Config.ControlEnabled. An explicit slice (not init()-registration): adding
 // a surface is an obvious, greppable one-line edit here, with no global
 // mutable registration state.
 func defaultControlSurfaces() []controlSurface {
-	return []controlSurface{mcpSurface{}, apiSurface{}}
+	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
 }

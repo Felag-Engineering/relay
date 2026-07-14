@@ -75,3 +75,11 @@ func (c *Connections) Disconnect(nodeID string) {
 	}
 	delete(c.conns, nodeID)
 }
+
+// Count returns the number of distinct node_ids with at least one live Tunnel
+// stream tracked. This is the "connected Nodes" gauge source for /metrics.
+func (c *Connections) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.conns)
+}

@@ -298,6 +298,45 @@ func TestSqliteRegistry_SetRevoked(t *testing.T) {
 	}
 }
 
+func TestSqliteRegistry_Count(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	total, revoked, err := reg.Count()
+	if err != nil {
+		t.Fatalf("Count on empty registry: %v", err)
+	}
+	if total != 0 || revoked != 0 {
+		t.Errorf("Count on empty registry = (%d, %d), want (0, 0)", total, revoked)
+	}
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	total, revoked, err = reg.Count()
+	if err != nil {
+		t.Fatalf("Count with 3 enrolled: %v", err)
+	}
+	if total != 3 || revoked != 0 {
+		t.Errorf("Count with 3 enrolled, none revoked = (%d, %d), want (3, 0)", total, revoked)
+	}
+
+	if err := reg.SetRevoked("node-b", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+
+	total, revoked, err = reg.Count()
+	if err != nil {
+		t.Fatalf("Count with one revoked: %v", err)
+	}
+	if total != 3 || revoked != 1 {
+		t.Errorf("Count with 3 enrolled, 1 revoked = (%d, %d), want (3, 1)", total, revoked)
+	}
+}
+
 func TestSqliteRegistry_ListSortedByNodeID(t *testing.T) {
 	st, _ := openTestStore(t)
 	reg := st.Registry()
