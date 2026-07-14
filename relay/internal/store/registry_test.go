@@ -89,6 +89,81 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 	}
 }
 
+// TestSqliteRegistry_FactsReplacedOnReconnect ports
+// registry.TestUpsert_FactsReplacedOnReconnect against the SQLite-backed
+// registry: a reconnect Upsert fully replaces the stored Facts (kernel/IPs
+// go from empty to populated), round-tripping through the persistent store,
+// while RelayLabels/EnrollingTokenID/RevokedAt are untouched.
+func TestSqliteRegistry_FactsReplacedOnReconnect(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	// INSERT: first connect with partial Facts (kernel/IPs not yet populated).
+	_, err := reg.Upsert(registry.Report{
+		NodeID:           "node-facts",
+		EnrollingTokenID: "tok-facts",
+		Facts:            registry.Facts{Hostname: "old-host", OS: "linux"},
+		NodeLabels:       map[string]string{"env": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	if err := reg.SetRelayLabels("node-facts", map[string]string{"quarantine": "true"}); err != nil {
+		t.Fatalf("SetRelayLabels: %v", err)
+	}
+
+	// UPDATE: node reconnects (daemon restart) with full Facts and new NodeLabels.
+	_, err = reg.Upsert(registry.Report{
+		NodeID:           "node-facts",
+		EnrollingTokenID: "tok-ignored", // must not overwrite provenance
+		Facts: registry.Facts{
+			Hostname:    "new-host",
+			OS:          "linux",
+			Kernel:      "6.12.0",
+			Arch:        "x86_64",
+			IPAddresses: []string{"10.0.0.5"},
+		},
+		NodeLabels: map[string]string{"env": "staging"},
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	got, ok := reg.Get("node-facts")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+
+	// Facts must round-trip through the store fully replaced.
+	if got.Facts.Hostname != "new-host" {
+		t.Errorf("Facts.Hostname: got %q, want new-host", got.Facts.Hostname)
+	}
+	if got.Facts.Kernel != "6.12.0" {
+		t.Errorf("Facts.Kernel: got %q, want 6.12.0", got.Facts.Kernel)
+	}
+	if got.Facts.Arch != "x86_64" {
+		t.Errorf("Facts.Arch: got %q, want x86_64", got.Facts.Arch)
+	}
+	if len(got.Facts.IPAddresses) != 1 || got.Facts.IPAddresses[0] != "10.0.0.5" {
+		t.Errorf("Facts.IPAddresses: got %v, want [10.0.0.5]", got.Facts.IPAddresses)
+	}
+	if got.NodeLabels["env"] != "staging" {
+		t.Errorf("NodeLabels[env]: got %q, want staging", got.NodeLabels["env"])
+	}
+
+	// Relay-space state must survive the node-sent Facts refresh.
+	if got.RelayLabels["quarantine"] != "true" {
+		t.Errorf("RelayLabels[quarantine]: got %q, want true (relay labels must survive Facts refresh)", got.RelayLabels["quarantine"])
+	}
+	if got.EnrollingTokenID != "tok-facts" {
+		t.Errorf("EnrollingTokenID: got %q, want tok-facts (provenance must be immutable)", got.EnrollingTokenID)
+	}
+	if !got.RevokedAt.IsZero() {
+		t.Errorf("RevokedAt: got %v, want zero value (untouched by Facts refresh)", got.RevokedAt)
+	}
+}
+
 // TestSqliteRegistry_Outdated ports registry.TestOutdated_* against the
 // SQLite-backed registry: daemon_version is persisted on insert and
 // refreshed on update, and Outdated is derived at read time from the

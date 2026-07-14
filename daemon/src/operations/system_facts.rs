@@ -1,10 +1,17 @@
 //! `system.facts` Operation — gathers OS, kernel, arch, hostname, and non-loopback
 //! IP addresses from the running Node at Task time.
 //!
-//! This gathers a richer [`Facts`] at runtime than `config.rs`, which fills only
-//! `hostname/os/arch` at startup from environment variables. Reconciling the two
-//! sources (config.rs Hello path vs. system.facts Task result) is dispatch wiring
-//! that lands in a later issue (#82) — this module does not touch config.rs.
+//! [`gather_facts`] is the **single Facts collector** for the whole daemon: the
+//! live `system.facts` Operation, the enrollment path (`EnrollConfig::from_config`),
+//! and the Hello/connect path (`Config::from_env`, threaded through every
+//! reconnect) all call it. There is no second, hand-built Facts source — this
+//! is what keeps the Relay's registry in sync with a live `system.facts` run.
+//!
+//! Hostname source, in priority order:
+//! 1. Kernel hostname (`/proc/sys/kernel/hostname`) — authoritative.
+//! 2. `$HOSTNAME` — an explicit fallback used only when `/proc` is unreadable
+//!    (e.g. a container without `/proc` mounted).
+//! 3. `"unknown-node"` — last resort when neither source is available.
 //!
 //! No subprocess is spawned: `os`/`arch` come from `std::env::consts`, and
 //! `kernel`/`hostname` are read directly from `/proc/sys/kernel/` — data the

@@ -102,6 +102,10 @@ services:
 
   daemon-1:
     <<: *daemon-base
+    # Sets the container's kernel hostname, which gather_facts() reads as the
+    # authoritative Facts.hostname source (issue #188). The HOSTNAME env var
+    # below is now only an explicit fallback for an unreadable /proc.
+    hostname: "dev-node-1"
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
@@ -118,6 +122,7 @@ services:
 
   daemon-2:
     <<: *daemon-base
+    hostname: "dev-node-2"
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"
@@ -132,6 +137,7 @@ services:
 
   daemon-3:
     <<: *daemon-base
+    hostname: "dev-node-3"
     environment:
       RELAY_ADDR: "https://relay:7654"
       RELAY_DOMAIN: "relay"

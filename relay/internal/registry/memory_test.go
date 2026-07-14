@@ -375,6 +375,83 @@ func TestPolicyFingerprint_UpdatePathOverwritesPreservesProvenance(t *testing.T)
 	}
 }
 
+// TestUpsert_FactsReplacedOnReconnect verifies that:
+//   - A reconnect Upsert fully REPLACES the stored Facts (single-source refresh:
+//     partial Facts from an earlier connect are overwritten wholesale by a
+//     fuller Facts set on the next Hello, not merged field-by-field).
+//   - RelayLabels and EnrollingTokenID — relay-space state — are never touched
+//     by the node-sent Facts/NodeLabels refresh (ADR-0006 §7 / invariant #7).
+func TestUpsert_FactsReplacedOnReconnect(t *testing.T) {
+	reg := NewInMemory()
+
+	// INSERT: first connect with partial Facts (kernel/IPs not yet populated).
+	_, err := reg.Upsert(Report{
+		NodeID:           "node-facts",
+		EnrollingTokenID: "tok-facts",
+		Facts:            Facts{Hostname: "old-host", OS: "linux"},
+		NodeLabels:       map[string]string{"env": "prod"},
+	})
+	if err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+
+	// Relay quarantines the node — relay-space state that must survive.
+	if err := reg.SetRelayLabels("node-facts", map[string]string{"quarantine": "true"}); err != nil {
+		t.Fatalf("SetRelayLabels: %v", err)
+	}
+
+	// UPDATE: node reconnects (daemon restart) with full Facts and new NodeLabels.
+	_, err = reg.Upsert(Report{
+		NodeID:           "node-facts",
+		EnrollingTokenID: "tok-ignored", // must not overwrite provenance
+		Facts: Facts{
+			Hostname:    "new-host",
+			OS:          "linux",
+			Kernel:      "6.12.0",
+			Arch:        "x86_64",
+			IPAddresses: []string{"10.0.0.5"},
+		},
+		NodeLabels: map[string]string{"env": "staging"},
+	})
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+
+	n, _ := reg.Get("node-facts")
+
+	// Facts must be replaced wholesale with the new (fuller) values.
+	want := Facts{
+		Hostname:    "new-host",
+		OS:          "linux",
+		Kernel:      "6.12.0",
+		Arch:        "x86_64",
+		IPAddresses: []string{"10.0.0.5"},
+	}
+	if n.Facts.Hostname != want.Hostname {
+		t.Errorf("Facts.Hostname: got %q, want %q", n.Facts.Hostname, want.Hostname)
+	}
+	if n.Facts.Kernel != want.Kernel {
+		t.Errorf("Facts.Kernel: got %q, want %q", n.Facts.Kernel, want.Kernel)
+	}
+	if n.Facts.Arch != want.Arch {
+		t.Errorf("Facts.Arch: got %q, want %q", n.Facts.Arch, want.Arch)
+	}
+	if len(n.Facts.IPAddresses) != 1 || n.Facts.IPAddresses[0] != "10.0.0.5" {
+		t.Errorf("Facts.IPAddresses: got %v, want [10.0.0.5]", n.Facts.IPAddresses)
+	}
+	if n.NodeLabels["env"] != "staging" {
+		t.Errorf("NodeLabels[env]: got %q, want staging", n.NodeLabels["env"])
+	}
+
+	// Relay-space state must survive the node-sent Facts refresh.
+	if n.RelayLabels["quarantine"] != "true" {
+		t.Errorf("RelayLabels[quarantine]: got %q, want true (relay labels must survive Facts refresh)", n.RelayLabels["quarantine"])
+	}
+	if n.EnrollingTokenID != "tok-facts" {
+		t.Errorf("EnrollingTokenID: got %q, want tok-facts (provenance must be immutable)", n.EnrollingTokenID)
+	}
+}
+
 func TestSetRevoked_NotFound(t *testing.T) {
 	reg := NewInMemory()
 	err := reg.SetRevoked("does-not-exist", time.Now())

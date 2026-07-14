@@ -1,6 +1,6 @@
 //! The daemon's single environment/config surface, read once at startup and
 //! threaded down. Centralizes the previously double-read RELAY_ADDR /
-//! RELAY_DOMAIN / HOSTNAME and the http→https scheme normalization.
+//! RELAY_DOMAIN and the http→https scheme normalization.
 //!
 //! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
 //! compile-time constants, not env-derived — kept here as the daemon's single
@@ -32,8 +32,12 @@ pub struct Config {
     /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs; `node:` prefix is
     /// added at send time by `enroll::node_labels_to_proto` (ADR-0006 §7).
     pub node_labels: Vec<(String, String)>,
-    /// Facts advertised to the Relay on Hello. Built once here so neither
-    /// `EnrollConfig` nor `main` re-reads `HOSTNAME` / `OS` / `ARCH`.
+    /// Facts advertised to the Relay on Hello. Built once here, from the shared
+    /// [`crate::operations::system_facts::gather_facts`] collector — the same
+    /// single source used by the live `system.facts` Operation — so neither
+    /// `EnrollConfig` nor `main` re-reads `HOSTNAME` / `OS` / `ARCH` and the
+    /// Relay's registry never sees a Hello with a different (poorer) Facts set
+    /// than a live `system.facts` run.
     pub facts: Facts,
 }
 
@@ -51,15 +55,11 @@ impl Config {
         let node_labels = node_labels_from_env();
 
         // Facts.hostname is the human-readable descriptor, not the
-        // Relay-assigned identity UUID (see node_id on Hello, ADR-0006).
-        let hostname = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-node".to_string());
-        let facts = Facts {
-            hostname,
-            os: std::env::consts::OS.to_string(),
-            arch: std::env::consts::ARCH.to_string(),
-            kernel: String::new(),
-            ip_addresses: vec![],
-        };
+        // Relay-assigned identity UUID (see node_id on Hello, ADR-0006). Gathered
+        // via the shared collector so kernel/IPs are populated and the hostname
+        // policy (kernel hostname first, $HOSTNAME an explicit fallback) matches
+        // the live `system.facts` Operation exactly — see system_facts.rs.
+        let facts = crate::operations::system_facts::gather_facts();
 
         let policy_path = std::env::var("RELAY_POLICY_PATH")
             .map(PathBuf::from)
@@ -173,7 +173,6 @@ mod tests {
         assert_eq!(cfg.relay_addr, "http://127.0.0.1:7654");
         assert_eq!(cfg.endpoint, "https://127.0.0.1:7654");
         assert_eq!(cfg.relay_domain, None);
-        assert_eq!(cfg.facts.hostname, "unknown-node");
         assert_eq!(cfg.state_dir, PathBuf::from("/var/lib/relay-daemon"));
         assert_eq!(
             cfg.policy_path,
@@ -200,18 +199,33 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::set_var("RELAY_ADDR", "https://relay:9000");
         std::env::set_var("RELAY_DOMAIN", "relay.internal");
-        std::env::set_var("HOSTNAME", "web-01");
 
         let cfg = Config::from_env();
         assert_eq!(cfg.relay_addr, "https://relay:9000");
         // https:// passes through normalize_scheme unchanged.
         assert_eq!(cfg.endpoint, "https://relay:9000");
         assert_eq!(cfg.relay_domain, Some("relay.internal".to_string()));
-        assert_eq!(cfg.facts.hostname, "web-01");
 
         std::env::remove_var("RELAY_ADDR");
         std::env::remove_var("RELAY_DOMAIN");
-        std::env::remove_var("HOSTNAME");
+    }
+
+    #[test]
+    fn config_from_env_facts_match_gather_facts() {
+        let _lock = ENV_LOCK.lock().unwrap();
+
+        let cfg = Config::from_env();
+        let facts = crate::operations::system_facts::gather_facts();
+
+        // Proves the single-source wiring: Config::from_env no longer builds a
+        // second, partial Facts by hand — it draws from the same collector as
+        // the live `system.facts` Operation. ip_addresses is intentionally not
+        // compared: two independent getifaddrs() calls can race real interface
+        // changes on a live box.
+        assert_eq!(cfg.facts.os, facts.os);
+        assert_eq!(cfg.facts.arch, facts.arch);
+        assert_eq!(cfg.facts.hostname, facts.hostname);
+        assert_eq!(cfg.facts.kernel, facts.kernel);
     }
 
     // --- Config::from_env scheme normalization ------------------------------
