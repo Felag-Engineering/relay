@@ -95,4 +95,5 @@ Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical sl
 - **[CONTEXT.md](CONTEXT.md)** — the ubiquitous language. Every term here is canonical.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
+- **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[ROADMAP.md](ROADMAP.md)** — what we're building and in what order.

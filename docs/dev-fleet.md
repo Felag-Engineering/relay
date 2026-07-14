@@ -12,7 +12,9 @@ real control path end to end.
 > docs. Never reuse the credentials or Policy below anywhere real. The published
 > ports (`7654`, `9443`) are bound to `127.0.0.1` only: the control plane accepts
 > a committed dev credential, so exposing it on the LAN would be remote code
-> execution for anyone on your network.
+> execution for anyone on your network. For the hardened production posture, see
+> `daemon/packaging/relay-daemon.service` and
+> [docs/operations/daemon-privilege-posture.md](operations/daemon-privilege-posture.md).
 
 ## Prerequisites
 
