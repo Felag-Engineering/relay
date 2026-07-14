@@ -1,0 +1,86 @@
+# Hardened systemd unit for the relay-daemon (v0.0.7 groundwork).
+#
+# This bounds everything the daemon does NOT need; it does not — and cannot
+# without breaking Operations — remove root, because service.restart commands
+# PID1 via systemctl and pkg.install writes the system package database.
+# See docs/operations/daemon-privilege-posture.md for the per-Operation
+# privilege map, the rationale behind every directive below, and the
+# documented exception for Nodes running pkg.install / fs-mutating Raw Exec.
+#
+# Install: daemon/packaging/README.md.
+
+[Unit]
+Description=Relay relay-daemon (privileged fleet-administration Node daemon)
+Documentation=file:///usr/share/doc/relay-daemon/daemon-privilege-posture.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/usr/local/bin/relay-daemon
+# Optional: carries RELAY_ADDR/RELAY_DOMAIN/RELAY_CA_BUNDLE_PATH/RELAY_POLICY_PATH/
+# RELAY_NODE_LABELS/RELAY_ENROLLMENT_TOKEN. See relay-daemon.env.example. The
+# leading '-' means a missing file is not a startup failure.
+EnvironmentFile=-/etc/relay-daemon/relay-daemon.env
+Restart=on-failure
+RestartSec=5s
+
+# Writable state: identity (key.pem/cert.pem/ca_bundle.pem/node_id) and the
+# seen-tasks/ marker-file dedup store (ADR-0004). Matches the default
+# RELAY_STATE_DIR of /var/lib/relay-daemon.
+StateDirectory=relay-daemon
+StateDirectoryMode=0700
+
+# --- hardening (issue-required) ---
+NoNewPrivileges=yes
+# /usr,/etc,/boot,/var read-only; StateDirectory stays writable. Read-only
+# /etc reinforces that Policy is remotely-immutable (ADR-0002): even a
+# compromised daemon process cannot rewrite its own Policy file.
+ProtectSystem=strict
+# read-only (not "yes") so file.read can still reach /home,/root for its
+# read-only Operation; "yes" would mask those paths and silently break reads.
+ProtectHome=read-only
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+# file.read opens arbitrary Node paths (Policy constrains which, not this
+# unit); CAP_DAC_READ_SEARCH grants universal read with no write/priv-bypass,
+# the least privilege that keeps file.read working for non-root-owned files.
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+
+# --- additional restrictive directives (more-restrictive, still support the mapped Operations) ---
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# "invisible" (not "yes"): system.facts reads /proc/sys/kernel/hostname and
+# /proc/sys/kernel/osrelease, which stay visible at this level.
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+# AF_NETLINK is load-bearing: system.facts enumerates interfaces via
+# libc::getifaddrs, which opens an AF_NETLINK socket. AF_INET/AF_INET6 are
+# the outbound mTLS connection to the Relay; AF_UNIX is load-bearing for
+# service.restart: it spawns `systemctl restart <unit>`, and systemctl
+# reaches PID 1 over D-Bus on an AF_UNIX socket (/run/dbus/system_bus_socket
+# or /run/systemd/private). The spawned systemctl child inherits this unit's
+# seccomp RestrictAddressFamilies across execve, so dropping AF_UNIX would
+# silently break service.restart. Omitting any of these breaks a read
+# Operation or the daemon's own connection.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+
+# SystemCallFilter and MemoryDenyWriteExecute are intentionally OMITTED here.
+# The exact syscall surface (a SystemCallFilter allowlist) and the precise
+# minimal capability set are deferred to the v0.0.8 capability/syscall audit
+# (issue scope: this unit is restricted-user groundwork, not that audit).
+# Shipping a guessed syscall allowlist now risks silently breaking
+# pkg.install or Policy-permitted Raw Exec commands.
+
+[Install]
+WantedBy=multi-user.target
