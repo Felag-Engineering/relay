@@ -41,6 +41,15 @@ type NodeResult struct {
 	NodeID  string
 	Outcome jobs.Outcome
 	JobID   string
+	// Stdout, Stderr, and Truncated are the full per-Node captured output and
+	// the daemon-side truncated flag, retained whole for the audit trail
+	// (#122 full-output-always). Empty for outcomes with no real execution
+	// (e.g. unreachable) except version-refused, whose Stderr carries the
+	// Relay-synthesized jobs.VersionRefusedMessage (matching the Task row);
+	// always empty for noopDispatcher, which performs no execution.
+	Stdout    []byte
+	Stderr    []byte
+	Truncated bool
 }
 
 // dispatchResult is what dispatcher.run returns: the Job's identity plus its

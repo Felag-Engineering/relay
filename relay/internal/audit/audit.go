@@ -59,6 +59,17 @@ type Record struct {
 	// unresolved dispatch outcomes.
 	Outcome jobs.Outcome
 	Reason  string
+	// Stdout, Stderr, and Truncated are the full captured per-Task output and
+	// the daemon-side truncated flag (#122 full-output-always: the Relay
+	// stores what it received, entire — the only cap is the daemon-side
+	// size limit). Meaningful only for KindDispatch rows that reached
+	// execution, or that carry a Relay-synthesized refusal message (e.g.
+	// version-refused); empty for refusals, plans, freeze, and cancel rows.
+	// Truncated is the daemon-side cap flag: a single flag over the whole
+	// result, not per-stream (mirrors jobs.Result.Truncated).
+	Stdout    []byte
+	Stderr    []byte
+	Truncated bool
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no

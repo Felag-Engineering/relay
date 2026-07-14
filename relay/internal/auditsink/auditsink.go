@@ -11,12 +11,15 @@
 //
 // Redaction: Record/RecordFreeze copy ONLY the domain fields named below —
 // Principal's attribution string, the Selector as written, the Action's
-// kind/name/args/argv, and per-Node Outcome. Nothing else is added: no
-// stdout/stderr (Tasks carry those, not audit — see internal/store/tasks.go),
-// and no enrichment from tokens, keys, or other in-memory secrets the sink
-// never even sees. Record/RecordFreeze never log an AuditEntry's or
-// FreezeEvent's field values; errors propagate up to Service.Run, which
-// wraps but does not dump the entry's contents.
+// kind/name/args/argv, per-Node Outcome, and (since #122's full-output-always
+// posture) each NodeResult's captured Stdout/Stderr and the daemon-side
+// Truncated flag, copied verbatim — the sink never scrubs or redacts them
+// (Policy, ADR-0002, is where secret-emitting commands are prevented, not
+// here). Nothing else is added: no enrichment from tokens, keys, or other
+// in-memory secrets the sink never even sees. Record/RecordFreeze never log
+// an AuditEntry's or FreezeEvent's field values (including output); errors
+// propagate up to Service.Run, which wraps but does not dump the entry's
+// contents.
 package auditsink
 
 import (
@@ -120,6 +123,9 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		rec.Kind = audit.KindDispatch
 		rec.NodeID = r.NodeID
 		rec.Outcome = r.Outcome
+		rec.Stdout = r.Stdout
+		rec.Stderr = r.Stderr
+		rec.Truncated = r.Truncated
 		if err := s.append(ctx, rec); err != nil {
 			errs = append(errs, err)
 		}
