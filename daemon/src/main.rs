@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::transport::Channel;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
 
 mod cancel;
 mod config;
@@ -24,6 +24,7 @@ mod tunnel;
 use cancel::CancelRegistry;
 use config::Config;
 use scheduler::Scheduler;
+use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
 #[allow(dead_code, unused_imports, clippy::all)]
 mod gen {
@@ -126,9 +127,33 @@ fn policy_snapshot(policy: &policy::Policy) -> PolicySnapshot {
     }
 }
 
+/// The outcome of one `run_tunnel` session, reported to `reconnect_loop` so it
+/// can decide whether to reset the reconnect backoff.
+///
+/// "Healthy" = `client.open()` succeeded (TLS handshake AND the gRPC bidi
+/// stream both came up). A revoked or wrong-CA Node never gets this far — it
+/// fails inside `connect_mtls`, before `run_tunnel` is even called — so that
+/// case can never reset the backoff and correctly ramps to the cap.
+enum TunnelExit {
+    /// `open()`/Hello send failed — the stream never authenticated. The
+    /// backoff is NOT reset.
+    NotEstablished(Box<dyn std::error::Error + Send + Sync>),
+    /// The Relay closed the stream cleanly after a healthy `open()`. The
+    /// backoff IS reset.
+    ClosedClean,
+    /// The stream errored mid-session after a healthy `open()`. The backoff
+    /// IS reset.
+    DroppedMidSession(Box<dyn std::error::Error + Send + Sync>),
+}
+
 /// Sends the initial Hello, followed by a `PolicySnapshot` of the live Policy
 /// (report-only, ADR-0002/0011), drives the heartbeat loop, and processes
 /// inbound messages from the Relay until the stream closes or errors.
+///
+/// Returns a [`TunnelExit`] describing why the session ended rather than a
+/// bare `Result`, so the caller (`reconnect_loop`) can tell a healthy session
+/// (stream opened, later closed or dropped — reset the backoff) apart from a
+/// stream that never got established (Hello/`open()` failed — do not reset).
 ///
 /// Inbound `RelayMessage` handling:
 /// - `Task`: registered in the cancel registry BEFORE spawning, then dispatched
@@ -159,7 +184,7 @@ async fn run_tunnel(
     policy: Arc<policy::Policy>,
     dedup: Arc<dedup::DedupStore>,
     scheduler: Arc<Scheduler>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> TunnelExit {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
 
@@ -167,24 +192,34 @@ async fn run_tunnel(
     // node_id is the Relay-assigned identity (from the enrolled cert CN),
     // aligning the app-layer identity with the transport-layer client cert
     // (ADR-0006 amendment 2).
-    tx.send(DaemonMessage {
-        body: Some(daemon_message::Body::Hello(Hello {
-            node_id: identity.node_id.clone(),
-            daemon_version: env!("CARGO_PKG_VERSION").to_string(),
-            facts: Some(facts),
-            labels: enroll::node_labels_to_proto(&node_labels),
-            policy_fingerprint: policy.fingerprint().to_string(),
-        })),
-    })
-    .await?;
+    if tx
+        .send(DaemonMessage {
+            body: Some(daemon_message::Body::Hello(Hello {
+                node_id: identity.node_id.clone(),
+                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                facts: Some(facts),
+                labels: enroll::node_labels_to_proto(&node_labels),
+                policy_fingerprint: policy.fingerprint().to_string(),
+            })),
+        })
+        .await
+        .is_err()
+    {
+        return TunnelExit::NotEstablished("failed to buffer Hello/PolicySnapshot".into());
+    }
 
     // Send the effective PolicySnapshot immediately after Hello: report-only,
     // for the Relay's display cache (ADR-0002/0011). Hello's `policy_fingerprint`
     // is a summary; this is the full snapshot, from the same live `policy`.
-    tx.send(DaemonMessage {
-        body: Some(daemon_message::Body::Policy(policy_snapshot(&policy))),
-    })
-    .await?;
+    if tx
+        .send(DaemonMessage {
+            body: Some(daemon_message::Body::Policy(policy_snapshot(&policy))),
+        })
+        .await
+        .is_err()
+    {
+        return TunnelExit::NotEstablished("failed to buffer Hello/PolicySnapshot".into());
+    }
 
     // Background task: emit a Heartbeat at a configurable, jittered interval.
     // Jitter spreads send times across a bulk-restarted fleet so daemons do not
@@ -211,19 +246,25 @@ async fn run_tunnel(
     // Keep tx alive for the inbound loop (Task results are sent on it).
     // The heartbeat task has its own tx_hb clone; this tx is for Task results.
 
-    let response = client.open(ReceiverStream::new(rx)).await?;
+    let response = match client.open(ReceiverStream::new(rx)).await {
+        Ok(response) => response,
+        Err(status) => return TunnelExit::NotEstablished(Box::new(status)),
+    };
     let mut inbound = response.into_inner();
 
     // First inbound message must be the Relay's Ping (handshake confirmation).
-    match inbound.message().await? {
-        Some(msg) => match msg.body {
+    // The stream is healthy from here on: open() succeeded, so a failure below
+    // is a mid-session drop, not a failed stream establishment.
+    match inbound.message().await {
+        Ok(Some(msg)) => match msg.body {
             Some(relay_message::Body::Ping(ping)) => {
                 info!(unix_millis = ping.unix_millis, "received Ping from Relay");
             }
             Some(_) => error!("expected Ping as first RelayMessage"),
             None => error!("received empty RelayMessage body"),
         },
-        None => error!("stream ended before receiving Ping"),
+        Ok(None) => return TunnelExit::ClosedClean,
+        Err(e) => return TunnelExit::DroppedMidSession(Box::new(e)),
     }
 
     // Cancel registry: maps in-flight task_ids to their cancel senders.
@@ -298,8 +339,7 @@ async fn run_tunnel(
                             .await
                             .is_err()
                         {
-                            error!("outbound channel closed while sending PolicyVerdict");
-                            break;
+                            return TunnelExit::DroppedMidSession("outbound closed".into());
                         }
                     }
                     Some(_) | None => {
@@ -307,18 +347,124 @@ async fn run_tunnel(
                     }
                 }
             }
-            Ok(None) => {
-                info!("Relay closed stream, shutting down");
-                break;
+            Ok(None) => return TunnelExit::ClosedClean,
+            Err(e) => return TunnelExit::DroppedMidSession(Box::new(e)),
+        }
+    }
+}
+
+/// Drives the daemon's connect → run → reconnect lifecycle forever, so the
+/// process survives Relay restarts and revocation instead of exiting
+/// (issue #176).
+///
+/// `startup_identity` is the identity `acquire_identity` produced at process
+/// start (the ONLY enrollment path — never called again here). On every
+/// iteration the identity is reloaded from disk to adopt any cert the renew
+/// task rotated in the meantime (ADR-0006 Amendment 3: "adopted on the next
+/// connect"), falling back to `startup_identity` if the reload finds nothing
+/// or errors; this NEVER re-enrolls.
+///
+/// `policy`, `dedup`, and `scheduler` are constructed once by the caller and
+/// shared by `Arc` across every reconnect within this process's lifetime, so
+/// the at-most-once dedup state survives reconnects (ADR-0004).
+///
+/// The cert-renewal background task is rebound to the fresh channel and
+/// freshly-reloaded identity on every successful connect: tonic's `Channel`
+/// bakes the TLS client identity in at `connect()` and its internal
+/// `Reconnect` redial reuses that stale cert forever, so a once-spawned renew
+/// task would keep redialing with the original/aging cert after any Relay
+/// restart and silently, permanently break cert rotation. Aborting the
+/// previous renew task mid-renewal is safe: `perform_renewal_with`'s
+/// `persist_identity` write has no intervening `.await`, so there is no torn
+/// write — the new task simply reschedules from the current cert.
+///
+/// `connect_mtls`/`build_channel` are never weakened here (invariant #6): a
+/// wrong-CA or revoked Relay/Node is refused at every attempt, just logged
+/// and retried instead of exiting the process. The one exception is
+/// `IdentityError::EndpointScheme`, a non-transient configuration error that
+/// can never succeed on retry — that remains fatal (fail closed).
+async fn reconnect_loop(
+    config: &Config,
+    startup_identity: identity::Identity,
+    policy: Arc<policy::Policy>,
+    dedup: Arc<dedup::DedupStore>,
+    scheduler: Arc<Scheduler>,
+    interval: Duration,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut backoff = Backoff::new(RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP);
+    let mut renew_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    loop {
+        // Reload identity from disk to adopt any cert the renew task rotated;
+        // fall back to the startup identity on None/Err. NEVER re-enroll here.
+        let identity = identity::load_identity(&config.state_dir)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| startup_identity.clone());
+
+        match tunnel::connect_mtls(
+            config.endpoint.clone(),
+            config.relay_domain.clone(),
+            &identity,
+        )
+        .await
+        {
+            Ok(channel) => {
+                // Rebind the renew task to the fresh channel + freshly-reloaded
+                // identity on every reconnect (ADR-0006 Amendment 3 — see doc
+                // comment above for why a once-spawned renew task would break
+                // cert rotation across Relay restarts).
+                if let Some(h) = renew_handle.take() {
+                    h.abort();
+                }
+                renew_handle = Some(tokio::spawn(renew::run(
+                    channel.clone(),
+                    config.state_dir.clone(),
+                    identity.clone(),
+                )));
+
+                match run_tunnel(
+                    channel,
+                    &identity,
+                    config.facts.clone(),
+                    config.node_labels.clone(),
+                    interval,
+                    Arc::clone(&policy),
+                    Arc::clone(&dedup),
+                    Arc::clone(&scheduler),
+                )
+                .await
+                {
+                    TunnelExit::ClosedClean => {
+                        info!(relay = %config.relay_addr, "Relay closed stream; reconnecting");
+                        backoff.reset();
+                    }
+                    TunnelExit::DroppedMidSession(e) => {
+                        warn!(relay = %config.relay_addr, "stream dropped mid-session; reconnecting");
+                        debug!(error = ?e, "mid-session drop detail");
+                        backoff.reset();
+                    }
+                    TunnelExit::NotEstablished(e) => {
+                        warn!(relay = %config.relay_addr, "Relay rejected stream open; will retry");
+                        debug!(error = ?e, "stream-open failure detail");
+                    }
+                }
+                let delay = backoff.next_delay(rand_unit());
+                tokio::time::sleep(delay).await;
+            }
+            Err(identity::IdentityError::EndpointScheme { scheme }) => {
+                // Fatal, non-transient config error: retrying can never
+                // succeed. Fail closed and exit loudly (invariant #6).
+                error!(%scheme, "endpoint scheme invalid (must be https); refusing to connect");
+                return Err(Box::new(identity::IdentityError::EndpointScheme { scheme }));
             }
             Err(e) => {
-                error!(error = %e, "stream error");
-                break;
+                let delay = backoff.next_delay(rand_unit());
+                tunnel::log_connect_failure(&e, &config.relay_addr, delay);
+                tokio::time::sleep(delay).await;
             }
         }
     }
-
-    Ok(())
 }
 
 #[tokio::main]
@@ -370,28 +516,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(relay = %config.relay_addr, node_id = %identity.node_id, "relay-daemon starting");
 
-    // connect_mtls is the authoritative fail-closed check for the https scheme
-    // (validate_endpoint_scheme inside build_channel); config.endpoint already
-    // carries the http→https normalization from Config::from_env.
-    let channel = tunnel::connect_mtls(
-        config.endpoint.clone(),
-        config.relay_domain.clone(),
-        &identity,
-    )
-    .await?;
-
-    // Spawn the cert-renewal background task. It rides the same mTLS channel so
-    // the Relay authenticates it via the current client cert (no token). The renewed
-    // cert is written atomically to state_dir and adopted on the next connect_mtls
-    // (process restart or reconnect). The live session continues with the old cert —
-    // TLS does not re-validate certs mid-session and the renewal margin (3.5–7 days)
-    // ensures no connectivity gap (ADR-0006 Amendment 3).
-    tokio::spawn(renew::run(
-        channel.clone(),
-        config.state_dir.clone(),
-        identity.clone(),
-    ));
-
     // Open the dedup store before connecting (fail closed: must be writable).
     let dedup = Arc::new(dedup::DedupStore::open(&config.state_dir)?);
 
@@ -423,18 +547,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // never blocked by a running or queued Task.
     let scheduler = Scheduler::new();
 
+    // dedup/policy/scheduler are constructed ONCE here and shared by Arc across
+    // every reconnect inside reconnect_loop, so at-most-once dedup state
+    // (ADR-0004) survives reconnects within this process's lifetime. The renew
+    // task is no longer spawned here — reconnect_loop rebinds it to the fresh
+    // channel + identity on every successful connect (ADR-0006 Amendment 3).
     let interval = heartbeat_interval();
-    run_tunnel(
-        channel,
-        &identity,
-        config.facts.clone(),
-        config.node_labels.clone(),
-        interval,
-        policy,
-        dedup,
-        scheduler,
-    )
-    .await?;
+    reconnect_loop(&config, identity, policy, dedup, scheduler, interval).await?;
 
     Ok(())
 }
