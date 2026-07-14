@@ -111,6 +111,43 @@ jobs:
       - run: make proto-tools
       - run: make proto-check
 
+  # ---- proto-breaking: /proto is additive-only past the #39 rename (ADR-0014).
+  # A PR that breaks wire compatibility (field renumber/delete, type change, file
+  # move) must fail CI. Runs the same check as `make proto-breaking`, against the
+  # PR base revision. PR-only: main only advances via reviewed PRs (CLAUDE.md), and
+  # a push event has no natural single base commit to diff against, so the gate has
+  # nothing meaningful to run there. ----
+  proto-breaking:
+    name: Proto breaking
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: relay/go.mod
+
+      - name: Cache Go modules
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('relay/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - run: make proto-tools
+
+      # github.event.pull_request.base.sha is a snapshot from the PR's last sync
+      # event (push/rebase), not necessarily the current tip of the base branch —
+      # a known, accepted limitation of this pattern (matches bufbuild's own
+      # buf-breaking-action guidance).
+      - name: Buf breaking against PR base
+        run: make proto-breaking PROTO_BREAKING_REF=${{ github.event.pull_request.base.sha }}
+
   # ---- opschema-drift: the daemon is the single source of truth for what it
   # enforces (ADR-0015); the committed Operation-schema golden must never
   # drift from `dump-operation-schema`'s live output. This is a Rust build
