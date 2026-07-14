@@ -648,10 +648,24 @@ impl Policy {
         }
 
         // --- 3. Deny-by-default ---------------------------------------------
-        Decision::Deny {
-            reason: format!("deny-by-default: no allow rule for operation '{operation_name}'"),
-            rule: None,
-        }
+        // Neither the deny pass nor the allow pass matched: this is still a
+        // plain deny-by-default (`rule: None` in both branches below). The
+        // reason text only distinguishes *why* no allow rule matched, for
+        // legibility: an allow rule may exist for this operation but not for
+        // these particular args (wrong arg count, or an arg value outside
+        // the allowed set), versus no allow rule existing for the operation
+        // at all. This must never enumerate the allowed values (the
+        // PolicySnapshot owns discovery) and must never change the outcome
+        // — only the string differs.
+        let reason = if self.operations.iter().any(|op| op.name == operation_name) {
+            format!(
+                "no allow rule matched args {args:?} for operation '{operation_name}' \
+                 (allow rules exist for other arguments)"
+            )
+        } else {
+            format!("deny-by-default: no allow rule for operation '{operation_name}'")
+        };
+        Decision::Deny { reason, rule: None }
     }
 
     /// Evaluate whether the Raw Exec command `argv` may run.
@@ -925,6 +939,70 @@ mod tests {
         assert!(
             matches!(&decision, Decision::Deny { rule: None, .. }),
             "service.restart with 2 args must be denied (count mismatch); got {decision:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Golden deny-reason tests (issue #186) — pin the EXACT `reason` string
+    // for all three deny forms. These are the security-legibility contract:
+    // an AI-agent reading the reason must be able to tell "narrow the args"
+    // (args-mismatch) apart from "this operation is not allowed at all"
+    // (no-rule) apart from "an explicit deny fired" (explicit-deny).
+    //
+    // All three still assert `rule: None` for the first two (no rule fired,
+    // per ADR-0002 deny-by-default) — only the `reason` text differs.
+    // Flipping the args-mismatch branch back to always emit the no-rule
+    // text, or to `rule: Some(...)`, is exactly what these tests guard
+    // against.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn golden_reason_no_rule_for_unlisted_operation() {
+        let policy = fixture_policy();
+        let decision = policy.evaluate("package.install", &args(&["curl"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny { rule: None, reason }
+                if reason == "deny-by-default: no allow rule for operation 'package.install'"
+            ),
+            "unlisted operation must report the no-rule reason verbatim; got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn golden_reason_args_mismatch_for_service_restart_sshd() {
+        let policy = fixture_policy();
+        let decision = policy.evaluate("service.restart", &args(&["sshd"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny { rule: None, reason }
+                if reason == "no allow rule matched args [\"sshd\"] for operation \
+                    'service.restart' (allow rules exist for other arguments)"
+            ),
+            "service.restart sshd must report the args-mismatch reason (an allow rule \
+             exists for service.restart, just not for \"sshd\"), not the no-rule text, \
+             and `rule` must stay None; got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn golden_reason_explicit_deny_for_file_read_shadow() {
+        let policy = fixture_policy();
+        let decision = policy.evaluate("file.read", &args(&["/etc/shadow"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::OperationDeny { operation }),
+                    reason,
+                }
+                if operation == "file.read"
+                    && reason == "denied by explicit rule for operation 'file.read'"
+            ),
+            "file.read /etc/shadow must report the explicit-deny reason with the rule \
+             attributed; got {decision:?}"
         );
     }
 
