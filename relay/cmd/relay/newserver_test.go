@@ -176,6 +176,48 @@ func TestNewServer_ControlEnabled_RequiresHash(t *testing.T) {
 	})
 }
 
+// TestNewServer_MinDaemonVersion verifies the ADR-0014 startup validation: a
+// malformed min-daemon-version refuses startup (no listener/store ever
+// opened), empty leaves the gate off, and a valid semver value is accepted.
+func TestNewServer_MinDaemonVersion(t *testing.T) {
+	t.Run("malformed value refuses startup", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.MinDaemonVersion = "not-a-version"
+
+		srv, deps, err := newServer(cfg)
+		if err == nil {
+			t.Fatal("expected newServer to error on a malformed min-daemon-version")
+		}
+		if srv != nil || deps != nil {
+			t.Fatal("newServer should return nil srv/deps on error")
+		}
+	})
+
+	t.Run("empty value leaves the gate off", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.MinDaemonVersion = ""
+
+		srv, deps, err := newServer(cfg)
+		if err != nil {
+			t.Fatalf("newServer: %v", err)
+		}
+		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(srv.Stop)
+	})
+
+	t.Run("valid value is accepted", func(t *testing.T) {
+		cfg := baseTestConfig(t)
+		cfg.MinDaemonVersion = "1.2.0"
+
+		srv, deps, err := newServer(cfg)
+		if err != nil {
+			t.Fatalf("newServer: %v", err)
+		}
+		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+		t.Cleanup(srv.Stop)
+	})
+}
+
 // TestListeners_Independent verifies that the node-plane gRPC listener keeps
 // serving after the control-plane listener is shut down: the two listeners
 // have independent lifecycles, as required by the acceptance criteria (a

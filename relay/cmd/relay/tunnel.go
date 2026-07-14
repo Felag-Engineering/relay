@@ -122,6 +122,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			Facts:             protoconv.FactsFromProto(hello.Facts),
 			NodeLabels:        nodeLabelsFromHello(hello.GetLabels()),
 			PolicyFingerprint: hello.GetPolicyFingerprint(),
+			DaemonVersion:     hello.GetDaemonVersion(),
 		}); err != nil {
 			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
 		}

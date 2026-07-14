@@ -70,7 +70,11 @@ giving one your fleet.
 The Relay's blast-radius caps (above) are startup-only: `-read-blast-cap` /
 `RELAY_READ_BLAST_CAP` (default 10000, generous) and `-mutate-blast-cap` /
 `RELAY_MUTATE_BLAST_CAP` (default 100, small — Raw Exec always takes this one).
-Like the rest of the Relay's config today, they are resolved once from flags/env
+The minimum-daemon-version gate is the same shape: `-min-daemon-version` /
+`RELAY_MIN_DAEMON_VERSION` (semver, empty = off) flags any connected Node whose
+reported daemon version is below it as `outdated` in the registry.
+([ADR-0014](docs/adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md))
+Like the rest of the Relay's config today, these are resolved once from flags/env
 at process start; nothing sets or raises them via an API.
 
 ## Repository layout

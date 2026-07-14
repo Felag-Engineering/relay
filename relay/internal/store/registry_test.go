@@ -23,12 +23,14 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		NodeLabels:        map[string]string{"role": "web"},
 		EnrollingTokenID:  "tok-1",
 		PolicyFingerprint: "abc123",
+		DaemonVersion:     "1.0.0",
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
 	if n1.NodeID != "node-a" || n1.CertFingerprint != "fp-a" || n1.Facts.Hostname != "host-a" ||
-		n1.NodeLabels["role"] != "web" || n1.PolicyFingerprint != "abc123" || n1.EnrollingTokenID != "tok-1" {
+		n1.NodeLabels["role"] != "web" || n1.PolicyFingerprint != "abc123" || n1.EnrollingTokenID != "tok-1" ||
+		n1.DaemonVersion != "1.0.0" {
 		t.Errorf("insert result: got %#v", n1)
 	}
 	if n1.RelayLabels == nil || len(n1.RelayLabels) != 0 {
@@ -50,6 +52,7 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		NodeLabels:        map[string]string{"role": "db"},
 		EnrollingTokenID:  "tok-ignored",
 		PolicyFingerprint: "def456",
+		DaemonVersion:     "1.1.0",
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
@@ -66,6 +69,9 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 	if n2.PolicyFingerprint != "def456" {
 		t.Errorf("update PolicyFingerprint: got %q, want def456", n2.PolicyFingerprint)
 	}
+	if n2.DaemonVersion != "1.1.0" {
+		t.Errorf("update DaemonVersion: got %q, want 1.1.0 (refreshed on reconnect)", n2.DaemonVersion)
+	}
 	if n2.EnrollingTokenID != "tok-1" {
 		t.Errorf("update EnrollingTokenID: got %q, want tok-1 (provenance must be immutable)", n2.EnrollingTokenID)
 	}
@@ -77,8 +83,98 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 	if !ok {
 		t.Fatal("Get: not found")
 	}
-	if got.CertFingerprint != "fp-new" || got.EnrollingTokenID != "tok-1" || got.RelayLabels["quarantine"] != "true" {
+	if got.CertFingerprint != "fp-new" || got.EnrollingTokenID != "tok-1" || got.RelayLabels["quarantine"] != "true" ||
+		got.DaemonVersion != "1.1.0" {
 		t.Errorf("Get after update: got %#v", got)
+	}
+}
+
+// TestSqliteRegistry_Outdated ports registry.TestOutdated_* against the
+// SQLite-backed registry: daemon_version is persisted on insert and
+// refreshed on update, and Outdated is derived at read time from the
+// store's WithMinDaemonVersion, exactly mirroring registry.InMemory.
+func TestSqliteRegistry_Outdated(t *testing.T) {
+	st, _ := openTestStore(t, WithMinDaemonVersion("1.2.0"))
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-old", DaemonVersion: "1.1.0"}); err != nil {
+		t.Fatalf("upsert node-old: %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-new", DaemonVersion: "1.3.0"}); err != nil {
+		t.Fatalf("upsert node-new: %v", err)
+	}
+
+	old, ok := reg.Get("node-old")
+	if !ok {
+		t.Fatal("Get node-old: not found")
+	}
+	if old.DaemonVersion != "1.1.0" {
+		t.Errorf("node-old DaemonVersion: got %q, want 1.1.0", old.DaemonVersion)
+	}
+	if !old.Outdated {
+		t.Error("node-old Outdated: got false, want true (below minimum)")
+	}
+
+	current, ok := reg.Get("node-new")
+	if !ok {
+		t.Fatal("Get node-new: not found")
+	}
+	if current.Outdated {
+		t.Error("node-new Outdated: got true, want false (above minimum)")
+	}
+
+	list := reg.List()
+	if len(list) != 2 {
+		t.Fatalf("List len: got %d, want 2", len(list))
+	}
+	if list[0].Outdated { // node-new sorts before node-old
+		t.Errorf("List[0] (node-new): Outdated got %v, want false", list[0].Outdated)
+	}
+	if !list[1].Outdated {
+		t.Errorf("List[1] (node-old): Outdated got %v, want true", list[1].Outdated)
+	}
+
+	// Reconnect at the minimum: Outdated must flip to false and the stored
+	// daemon_version must refresh.
+	upserted, err := reg.Upsert(registry.Report{NodeID: "node-old", DaemonVersion: "1.2.0"})
+	if err != nil {
+		t.Fatalf("reconnect upsert: %v", err)
+	}
+	if upserted.Outdated {
+		t.Error("reconnect Upsert result: Outdated got true, want false")
+	}
+	old, _ = reg.Get("node-old")
+	if old.DaemonVersion != "1.2.0" || old.Outdated {
+		t.Errorf("after reconnect: got DaemonVersion=%q Outdated=%v, want 1.2.0/false", old.DaemonVersion, old.Outdated)
+	}
+}
+
+// TestSqliteRegistry_Outdated_NoMinimumConfigured mirrors
+// registry.TestOutdated_NoMinimumConfigured: with no WithMinDaemonVersion,
+// every Node is always non-outdated regardless of its reported version.
+func TestSqliteRegistry_Outdated_NoMinimumConfigured(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	n, err := reg.Upsert(registry.Report{NodeID: "node-a", DaemonVersion: "0.0.1"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if n.Outdated {
+		t.Error("Upsert result: Outdated true with no min_daemon_version configured, want false")
+	}
+
+	got, ok := reg.Get("node-a")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+	if got.Outdated {
+		t.Error("Get: Outdated true with no min_daemon_version configured, want false")
+	}
+
+	list := reg.List()
+	if len(list) != 1 || list[0].Outdated {
+		t.Errorf("List: Outdated true with no min_daemon_version configured, want false (list=%+v)", list)
 	}
 }
 

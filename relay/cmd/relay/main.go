@@ -60,6 +60,14 @@ type Config struct {
 	ReadBlastCap   int
 	MutateBlastCap int
 
+	// MinDaemonVersion is the minimum relay-daemon version (ADR-0014); empty
+	// means the gate is off and no Node is ever Outdated. It follows the SAME
+	// interim root-owned-file/flags+env mechanism as ReadBlastCap/
+	// MutateBlastCap above: set only at startup, never settable via any API
+	// (invariant #11, ADR-0010). A malformed value refuses startup — see
+	// newServer.
+	MinDaemonVersion string
+
 	// ControlEnabled, ControlAddr, and ControlCredentialHashFile configure the
 	// control-plane HTTP listener (MCP + /api/v1, ADR-0009/0010) — separate
 	// from the node-plane gRPC listener (Addr above). Default disabled
@@ -168,6 +176,8 @@ func parseConfig() Config {
 		"blast-radius cap for read Operations (max Nodes per Job)")
 	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
 		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
+	minDaemonVersion := flag.String("min-daemon-version", "",
+		"minimum relay-daemon semver version (ADR-0014); empty disables the outdated gate")
 
 	controlEnabled := flag.Bool("control-enabled", false,
 		"enable the control-plane listener (MCP + /api/v1); disabled by default")
@@ -249,6 +259,8 @@ func parseConfig() Config {
 		}
 	}
 
+	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
+
 	cfg.ControlEnabled = *controlEnabled
 	if env := os.Getenv("RELAY_CONTROL_ENABLED"); env != "" {
 		if v, err := strconv.ParseBool(env); err == nil {
@@ -282,7 +294,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
 	}
 
-	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes))
+	// A malformed min_daemon_version refuses startup rather than silently
+	// leaving the outdated gate in an unpredictable state (ADR-0014). Empty
+	// is valid — it means the gate is off.
+	if cfg.MinDaemonVersion != "" && !registry.ValidVersion(cfg.MinDaemonVersion) {
+		return nil, nil, fmt.Errorf("invalid min-daemon-version %q: not a valid semver version", cfg.MinDaemonVersion)
+	}
+
+	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
@@ -526,6 +545,7 @@ func main() {
 		"max_nodes", cfg.MaxNodes,
 		"read_blast_cap", cfg.ReadBlastCap,
 		"mutate_blast_cap", cfg.MutateBlastCap,
+		"min_daemon_version", cfg.MinDaemonVersion,
 	)
 
 	// The control-plane listener (MCP + /api/v1, ADR-0009/0010) is separate

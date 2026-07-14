@@ -56,6 +56,7 @@ type Node struct {
 	LastSeen          time.Time
 	EnrollingTokenID  string // provenance: the Enrollment Token ID used at first enrollment
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, reported on Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
+	DaemonVersion     string // relay-daemon version self-reported on Hello; report-only, refreshed on each (re)connect (ADR-0014)
 
 	// RevokedAt is the persisted revocation state. Zero value means active
 	// (never revoked). Relay-set, Node-immutable — the structural sibling of
@@ -63,6 +64,15 @@ type Node struct {
 	// it can never set relay: labels. Deliberately NOT settable via Report
 	// (see below); only SetRevoked writes it.
 	RevokedAt time.Time
+
+	// Outdated is DERIVED, not stored: true when DaemonVersion is below the
+	// Relay's configured min_daemon_version (ADR-0014). It is computed fresh
+	// on every read from the Relay's current config, never persisted — the
+	// config can change between restarts, so a stored value would go stale.
+	// Fail-closed: a malformed or empty DaemonVersion is Outdated whenever a
+	// minimum is configured. An unconfigured (empty) minimum means the gate
+	// is off and Outdated is always false.
+	Outdated bool
 }
 
 // Report is the input to Upsert. It deliberately carries no relay-label field —
@@ -75,21 +85,23 @@ type Report struct {
 	NodeLabels        map[string]string
 	EnrollingTokenID  string
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, sourced from Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
+	DaemonVersion     string // relay-daemon version self-reported on Hello; report-only drift/upgrade-progress signal (ADR-0014)
 }
 
 // Repository is the interface for the Node registry.
 type Repository interface {
 	// Upsert registers or updates a Node from a relay-daemon's own report. This is
-	// the only write path for node-space labels, Facts, and PolicyFingerprint. It
-	// cannot write relay-space labels — Report has no such field.
+	// the only write path for node-space labels, Facts, PolicyFingerprint, and
+	// DaemonVersion. It cannot write relay-space labels — Report has no such field.
 	//
 	// On INSERT (new Node): returns ErrAtCapacity when a max-nodes cap is set and
 	// reached. On UPDATE (existing Node): the cap is never checked — reconnects
 	// and Hello Upserts must never be throttled.
 	//
-	// PolicyFingerprint is overwritten on both INSERT and UPDATE (like Facts and
-	// NodeLabels), so each (re)connect refreshes the stored value to the currently
-	// loaded Policy. RelayLabels and EnrollingTokenID provenance are never touched.
+	// PolicyFingerprint and DaemonVersion are overwritten on both INSERT and
+	// UPDATE (like Facts and NodeLabels), so each (re)connect refreshes the
+	// stored values to what the Node currently reports. RelayLabels and
+	// EnrollingTokenID provenance are never touched.
 	Upsert(r Report) (Node, error)
 
 	// UpdateLastSeen records the most recent contact time for a Node. Returns

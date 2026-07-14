@@ -29,8 +29,9 @@ import (
 
 // Store is the Relay's single SQLite-backed persistence handle.
 type Store struct {
-	db       *sql.DB
-	maxNodes int // 0 = unlimited; see WithMaxNodes
+	db               *sql.DB
+	maxNodes         int    // 0 = unlimited; see WithMaxNodes
+	minDaemonVersion string // ADR-0014 gate; empty = off; see WithMinDaemonVersion
 }
 
 // Option configures a Store at Open time.
@@ -44,6 +45,17 @@ type Option func(*Store)
 func WithMaxNodes(n int) Option {
 	return func(s *Store) {
 		s.maxNodes = n
+	}
+}
+
+// WithMinDaemonVersion sets the minimum relay-daemon version (ADR-0014) used
+// to derive each Node's Outdated flag on read. Pass "" (the default) to leave
+// the gate off — every Node is then always non-outdated. This mirrors
+// registry.WithMinDaemonVersion; it is a Relay-side startup config value
+// only, never settable through any API (invariant #11, ADR-0010).
+func WithMinDaemonVersion(v string) Option {
+	return func(s *Store) {
+		s.minDaemonVersion = v
 	}
 }
 
@@ -104,7 +116,7 @@ func (s *Store) Close() error {
 
 // Registry returns the SQLite-backed registry.Repository.
 func (s *Store) Registry() registry.Repository {
-	return &sqliteRegistry{db: s.db, maxNodes: s.maxNodes}
+	return &sqliteRegistry{db: s.db, maxNodes: s.maxNodes, minDaemonVersion: s.minDaemonVersion}
 }
 
 // Jobs returns the SQLite-backed jobs.JobRepository.

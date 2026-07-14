@@ -132,12 +132,19 @@ func newTestServer(t *testing.T) testServer {
 // to distinguish; Node B has no policyview.Cache entry so describe_node's
 // reported=false path is exercised.
 func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer {
+	return newTestServerWithConfig(t, readCap, mutateCap, "")
+}
+
+// newTestServerWithConfig is newTestServerWithBlastCap, additionally
+// parameterized on the registry's min_daemon_version gate (ADR-0014); ""
+// leaves the gate off, exactly like newTestServerWithBlastCap.
+func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVersion string) testServer {
 	t.Helper()
 
 	const nodeA = "node-a"
 	const nodeB = "node-b"
 
-	reg := registry.NewInMemory()
+	reg := registry.NewInMemory(registry.WithMinDaemonVersion(minDaemonVersion))
 	if _, err := reg.Upsert(registry.Report{
 		NodeID: nodeA,
 		Facts: registry.Facts{
@@ -149,6 +156,7 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 		},
 		NodeLabels:        map[string]string{"role": "web"},
 		PolicyFingerprint: "sha256:node-a-fingerprint",
+		DaemonVersion:     "1.1.0",
 	}); err != nil {
 		t.Fatalf("seed node A: %v", err)
 	}
@@ -160,6 +168,7 @@ func newTestServerWithBlastCap(t *testing.T, readCap, mutateCap int) testServer 
 		Facts:             registry.Facts{Hostname: "db-1", OS: "linux"},
 		NodeLabels:        map[string]string{"env": "prod"},
 		PolicyFingerprint: "sha256:node-b-fingerprint",
+		DaemonVersion:     "1.3.0",
 	}); err != nil {
 		t.Fatalf("seed node B: %v", err)
 	}
@@ -331,6 +340,69 @@ func TestMCP_ListNodes_All(t *testing.T) {
 	if a.Facts.Hostname != "web-1" {
 		t.Errorf("node A Facts.Hostname = %q, want %q", a.Facts.Hostname, "web-1")
 	}
+}
+
+// TestMCP_Outdated exercises the ADR-0014 outdated gate end-to-end through
+// both list_nodes and describe_node: a below-minimum Node's daemon version
+// must show outdated:true, an at/above-minimum Node's must show false, and
+// with the gate off (newTestServer's default) no Node is ever outdated.
+func TestMCP_Outdated(t *testing.T) {
+	t.Run("gate off: no Node is ever outdated", func(t *testing.T) {
+		ts := newTestServer(t)
+		session := ts.connect(t)
+
+		listRes := callTool(t, session, "list_nodes", nil)
+		var listOut mcp.ListNodesOutput
+		decodeResult(t, listRes, &listOut)
+		for _, n := range listOut.Nodes {
+			if n.Outdated {
+				t.Errorf("list_nodes: node %q Outdated = true, want false (gate off)", n.NodeID)
+			}
+		}
+
+		describeRes := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
+		var describeOut mcp.DescribeNodeOutput
+		decodeResult(t, describeRes, &describeOut)
+		if describeOut.Outdated {
+			t.Error("describe_node: Outdated = true, want false (gate off)")
+		}
+	})
+
+	t.Run("gate on: below-minimum Node is outdated, above-minimum is not", func(t *testing.T) {
+		// Node A reports 1.1.0, Node B reports 1.3.0 (see newTestServerWithConfig).
+		ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
+		session := ts.connect(t)
+
+		listRes := callTool(t, session, "list_nodes", nil)
+		var listOut mcp.ListNodesOutput
+		decodeResult(t, listRes, &listOut)
+
+		var a, b *mcp.NodeItem
+		for i := range listOut.Nodes {
+			switch listOut.Nodes[i].NodeID {
+			case ts.nodeA:
+				a = &listOut.Nodes[i]
+			case ts.nodeB:
+				b = &listOut.Nodes[i]
+			}
+		}
+		if a == nil || b == nil {
+			t.Fatalf("list_nodes(): missing expected NodeIDs; got %+v", listOut.Nodes)
+		}
+		if !a.Outdated {
+			t.Error("list_nodes: node A (1.1.0) Outdated = false, want true (below 1.2.0 minimum)")
+		}
+		if b.Outdated {
+			t.Error("list_nodes: node B (1.3.0) Outdated = true, want false (above 1.2.0 minimum)")
+		}
+
+		describeRes := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
+		var describeOut mcp.DescribeNodeOutput
+		decodeResult(t, describeRes, &describeOut)
+		if !describeOut.Outdated {
+			t.Error("describe_node(node A): Outdated = false, want true (below 1.2.0 minimum)")
+		}
+	})
 }
 
 func TestMCP_ListNodes_SelectorFilter(t *testing.T) {
