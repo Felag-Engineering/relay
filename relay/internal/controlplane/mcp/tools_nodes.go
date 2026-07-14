@@ -26,6 +26,7 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 		},
 		PolicyFingerprint: n.PolicyFingerprint,
 		Revoked:           !n.RevokedAt.IsZero(),
+		Outdated:          n.Outdated,
 	}
 	if !n.LastSeen.IsZero() {
 		item.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
@@ -56,7 +57,8 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
 			"(node:/relay: label predicates). node: and relay: labels are returned as separate " +
-			"maps, never merged.",
+			"maps, never merged. `outdated` flags Nodes below the Relay's configured " +
+			"minimum daemon version (ADR-0014); always false when no minimum is set.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listNodesInput) (*sdkmcp.CallToolResult, ListNodesOutput, error) {
 		logPrincipal(ctx, "list_nodes")
 
@@ -86,7 +88,8 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 		Name: "describe_node",
 		Description: "Describe one Node in full, including its effective Policy as last " +
 			"reported by the daemon. Display-only: the Relay never evaluates Policy itself " +
-			"(ADR-0002/0011).",
+			"(ADR-0002/0011). `outdated` flags a Node below the Relay's configured minimum " +
+			"daemon version (ADR-0014); always false when no minimum is set.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
 		logPrincipal(ctx, "describe_node")
 

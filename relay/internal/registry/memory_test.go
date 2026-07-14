@@ -430,3 +430,101 @@ func TestSetRevoked_RoundTripAndRevokedNodeIDs(t *testing.T) {
 		t.Errorf("RevokedNodeIDs after revoking node-b: got %v, want [node-b]", ids)
 	}
 }
+
+func TestOutdated_NoMinimumConfigured(t *testing.T) {
+	reg := NewInMemory()
+
+	n, err := reg.Upsert(Report{NodeID: "node-a", DaemonVersion: "0.0.1"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if n.Outdated {
+		t.Error("Upsert result: Outdated true with no min_daemon_version configured, want false")
+	}
+
+	got, ok := reg.Get("node-a")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+	if got.Outdated {
+		t.Error("Get: Outdated true with no min_daemon_version configured, want false")
+	}
+
+	list := reg.List()
+	if len(list) != 1 || list[0].Outdated {
+		t.Errorf("List: Outdated true with no min_daemon_version configured, want false (list=%+v)", list)
+	}
+}
+
+func TestOutdated_WithMinimumConfigured(t *testing.T) {
+	reg := NewInMemory(WithMinDaemonVersion("1.2.0"))
+
+	if _, err := reg.Upsert(Report{NodeID: "node-old", DaemonVersion: "1.1.0"}); err != nil {
+		t.Fatalf("upsert node-old: %v", err)
+	}
+	if _, err := reg.Upsert(Report{NodeID: "node-new", DaemonVersion: "1.3.0"}); err != nil {
+		t.Fatalf("upsert node-new: %v", err)
+	}
+
+	old, ok := reg.Get("node-old")
+	if !ok {
+		t.Fatal("Get node-old: not found")
+	}
+	if old.DaemonVersion != "1.1.0" {
+		t.Errorf("node-old DaemonVersion: got %q, want 1.1.0", old.DaemonVersion)
+	}
+	if !old.Outdated {
+		t.Error("node-old Outdated: got false, want true (below minimum)")
+	}
+
+	current, ok := reg.Get("node-new")
+	if !ok {
+		t.Fatal("Get node-new: not found")
+	}
+	if current.Outdated {
+		t.Error("node-new Outdated: got true, want false (above minimum)")
+	}
+
+	list := reg.List()
+	if len(list) != 2 {
+		t.Fatalf("List len: got %d, want 2", len(list))
+	}
+	if list[0].Outdated { // node-new sorts before node-old
+		t.Errorf("List[0] (node-new): Outdated got %v, want false", list[0].Outdated)
+	}
+	if !list[1].Outdated {
+		t.Errorf("List[1] (node-old): Outdated got %v, want true", list[1].Outdated)
+	}
+}
+
+func TestOutdated_UpdatePathRefreshesDaemonVersion(t *testing.T) {
+	reg := NewInMemory(WithMinDaemonVersion("1.2.0"))
+
+	if _, err := reg.Upsert(Report{NodeID: "node-x", DaemonVersion: "1.1.0"}); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	n, _ := reg.Get("node-x")
+	if !n.Outdated {
+		t.Fatal("after first upsert: expected Outdated true")
+	}
+
+	// Reconnect with a version at the minimum: Outdated must flip to false.
+	upserted, err := reg.Upsert(Report{NodeID: "node-x", DaemonVersion: "1.2.0"})
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if upserted.DaemonVersion != "1.2.0" {
+		t.Errorf("Upsert result DaemonVersion: got %q, want 1.2.0", upserted.DaemonVersion)
+	}
+	if upserted.Outdated {
+		t.Error("Upsert result Outdated: got true, want false (reconnected at minimum)")
+	}
+
+	n, _ = reg.Get("node-x")
+	if n.DaemonVersion != "1.2.0" {
+		t.Errorf("Get DaemonVersion after reconnect: got %q, want 1.2.0", n.DaemonVersion)
+	}
+	if n.Outdated {
+		t.Error("Get Outdated after reconnect: got true, want false")
+	}
+}

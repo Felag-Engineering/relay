@@ -4,6 +4,7 @@ go 1.25.12
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
+	golang.org/x/mod v0.36.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 	modernc.org/sqlite v1.53.0

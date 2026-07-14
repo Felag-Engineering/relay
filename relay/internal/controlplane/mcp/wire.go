@@ -42,6 +42,7 @@ type NodeItem struct {
 	PolicyFingerprint string            `json:"policy_fingerprint"`
 	Revoked           bool              `json:"revoked"`
 	RevokedAt         string            `json:"revoked_at,omitempty"`
+	Outdated          bool              `json:"outdated"`
 }
 
 // ListNodesOutput is list_nodes' result shape.

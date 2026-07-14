@@ -12,10 +12,11 @@ var _ Repository = (*InMemory)(nil)
 
 // InMemory is a thread-safe, in-memory implementation of Repository.
 type InMemory struct {
-	mu       sync.RWMutex
-	nodes    map[string]*Node
-	now      func() time.Time
-	maxNodes int // 0 = unlimited
+	mu               sync.RWMutex
+	nodes            map[string]*Node
+	now              func() time.Time
+	maxNodes         int    // 0 = unlimited
+	minDaemonVersion string // ADR-0014 gate; empty = off. Never mutable via any API.
 }
 
 // Option is a functional option for NewInMemory.
@@ -39,6 +40,16 @@ func WithMaxNodes(n int) Option {
 	}
 }
 
+// WithMinDaemonVersion sets the minimum relay-daemon version (ADR-0014) used
+// to derive each Node's Outdated flag. Pass "" (the default) to leave the
+// gate off — every Node is then always non-outdated. This is a Relay-side
+// config value only; it is never settable through Report or any API.
+func WithMinDaemonVersion(v string) Option {
+	return func(r *InMemory) {
+		r.minDaemonVersion = v
+	}
+}
+
 // NewInMemory returns an empty InMemory registry. Pass WithClock to override
 // the clock (defaults to time.Now).
 func NewInMemory(opts ...Option) *InMemory {
@@ -58,7 +69,7 @@ func NewInMemory(opts ...Option) *InMemory {
 // and RelayLabels is initialized to an empty map.
 //
 // On update: overwrites CertFingerprint, Facts, NodeLabels, PolicyFingerprint,
-// and LastSeen.
+// DaemonVersion, and LastSeen.
 // RelayLabels is never touched (the node side cannot reach it). EnrollingTokenID
 // is preserved from the first enrollment — a reconnecting Hello cannot rewrite
 // provenance.
@@ -92,9 +103,10 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 			LastSeen:          r.now(),
 			EnrollingTokenID:  rep.EnrollingTokenID,
 			PolicyFingerprint: rep.PolicyFingerprint,
+			DaemonVersion:     rep.DaemonVersion,
 		}
 		r.nodes[rep.NodeID] = n
-		return copyNode(n), nil
+		return r.copyNode(n), nil
 	}
 
 	// Update path: overwrite node-rooted fields; leave relay-space untouched.
@@ -107,9 +119,10 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	existing.NodeLabels = nl
 	existing.LastSeen = r.now()
 	existing.PolicyFingerprint = rep.PolicyFingerprint
+	existing.DaemonVersion = rep.DaemonVersion
 	// existing.RelayLabels: unchanged — node report cannot overwrite relay space.
 	// existing.EnrollingTokenID: unchanged — provenance is set once at first enrollment.
-	return copyNode(existing), nil
+	return r.copyNode(existing), nil
 }
 
 // UpdateLastSeen records the most recent contact time for nodeID. Returns
@@ -184,7 +197,7 @@ func (r *InMemory) Get(nodeID string) (Node, bool) {
 	if !ok {
 		return Node{}, false
 	}
-	return copyNode(n), true
+	return r.copyNode(n), true
 }
 
 // List returns deep copies of all stored Node records, sorted by NodeID.
@@ -194,7 +207,7 @@ func (r *InMemory) List() []Node {
 
 	out := make([]Node, 0, len(r.nodes))
 	for _, n := range r.nodes {
-		out = append(out, copyNode(n))
+		out = append(out, r.copyNode(n))
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].NodeID < out[j].NodeID
@@ -203,8 +216,9 @@ func (r *InMemory) List() []Node {
 }
 
 // copyNode returns a deep copy of n so callers cannot mutate stored state
-// through a returned value.
-func copyNode(n *Node) Node {
+// through a returned value, with Outdated computed against the registry's
+// configured minDaemonVersion (ADR-0014; derived on read, never stored).
+func (r *InMemory) copyNode(n *Node) Node {
 	nl := maps.Clone(n.NodeLabels)
 	if nl == nil {
 		nl = map[string]string{}
@@ -222,7 +236,9 @@ func copyNode(n *Node) Node {
 		LastSeen:          n.LastSeen,
 		EnrollingTokenID:  n.EnrollingTokenID,
 		PolicyFingerprint: n.PolicyFingerprint,
+		DaemonVersion:     n.DaemonVersion,
 		RevokedAt:         n.RevokedAt,
+		Outdated:          Outdated(n.DaemonVersion, r.minDaemonVersion),
 	}
 }
 

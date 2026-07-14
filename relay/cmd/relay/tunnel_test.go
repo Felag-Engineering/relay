@@ -262,6 +262,9 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 	if n.Facts.Hostname != "h" {
 		t.Errorf("Facts.Hostname: got %q, want %q", n.Facts.Hostname, "h")
 	}
+	if n.DaemonVersion != "0.0.1-test" {
+		t.Errorf("DaemonVersion: got %q, want %q", n.DaemonVersion, "0.0.1-test")
+	}
 	// node:role=web is accepted; bare key stored without prefix.
 	if n.NodeLabels["role"] != "web" {
 		t.Errorf("NodeLabels[role]: got %q, want web", n.NodeLabels["role"])
