@@ -167,19 +167,33 @@ func TestVerdict_ConvertsFields(t *testing.T) {
 
 func TestResult_ConvertsFields(t *testing.T) {
 	tr := &relayv1.TaskResult{
-		TaskId:   "task-1",
-		Outcome:  relayv1.Outcome_OUTCOME_SUCCESS,
-		ExitCode: 0,
-		Stdout:   []byte("hi"),
-		Stderr:   []byte(""),
+		TaskId:    "task-1",
+		Outcome:   relayv1.Outcome_OUTCOME_SUCCESS,
+		ExitCode:  0,
+		Stdout:    []byte("hi"),
+		Stderr:    []byte(""),
+		Truncated: true,
 	}
 	got := result(tr)
-	want := jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte("hi"), Stderr: []byte("")}
+	want := jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte("hi"), Stderr: []byte(""), Truncated: true}
 	if got.Outcome != want.Outcome || got.ExitCode != want.ExitCode {
 		t.Errorf("result() = %+v, want %+v", got, want)
 	}
 	if string(got.Stdout) != string(want.Stdout) || string(got.Stderr) != string(want.Stderr) {
 		t.Errorf("result() stdout/stderr = %q/%q, want %q/%q", got.Stdout, got.Stderr, want.Stdout, want.Stderr)
+	}
+	if got.Truncated != want.Truncated {
+		t.Errorf("result() Truncated = %v, want %v", got.Truncated, want.Truncated)
+	}
+}
+
+// TestResult_TruncatedDefaultsFalse asserts the wire's single truncated bool
+// maps to false when the daemon reports no truncation — the not-truncated
+// case must not be silently dropped either direction.
+func TestResult_TruncatedDefaultsFalse(t *testing.T) {
+	tr := &relayv1.TaskResult{TaskId: "task-2", Outcome: relayv1.Outcome_OUTCOME_SUCCESS}
+	if got := result(tr); got.Truncated {
+		t.Errorf("result().Truncated = true, want false for an untruncated TaskResult")
 	}
 }
 

@@ -193,12 +193,17 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 
 // TestEngineOfflineNodeUnreachable is the ROADMAP acceptance line: a Job
 // spanning an offline Node reports unreachable for it and real results for
-// the rest.
+// the rest. It also covers #185's full-output-always plumbing: a successful
+// Dispatch's Stdout/Stderr/Truncated must reach the returned NodeResult, and
+// an unreachable Node (never dispatched) must carry none.
 func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	jobsRepo, tasksRepo := testEngineStore(t)
 	conduit := newFakeConduit(nil)
 	conduit.connected["node-online"] = true
-	conduit.results["node-online"] = jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0}
+	conduit.results["node-online"] = jobs.Result{
+		Outcome: jobs.OutcomeSuccess, ExitCode: 0,
+		Stdout: []byte("all good\n"), Stderr: []byte(""), Truncated: true,
+	}
 	// node-offline is deliberately absent from conduit.connected (false).
 
 	e := &jobEngine{
@@ -224,8 +229,16 @@ func TestEngineOfflineNodeUnreachable(t *testing.T) {
 	if results[0].NodeID != "node-online" || results[0].Outcome != jobs.OutcomeSuccess {
 		t.Errorf("results[0] = %+v, want node-online/OutcomeSuccess", results[0])
 	}
+	if string(results[0].Stdout) != "all good\n" || string(results[0].Stderr) != "" || !results[0].Truncated {
+		t.Errorf("results[0] Stdout/Stderr/Truncated = %q/%q/%v, want %q/%q/true",
+			results[0].Stdout, results[0].Stderr, results[0].Truncated, "all good\n", "")
+	}
 	if results[1].NodeID != "node-offline" || results[1].Outcome != jobs.OutcomeUnreachable {
 		t.Errorf("results[1] = %+v, want node-offline/OutcomeUnreachable", results[1])
+	}
+	if len(results[1].Stdout) != 0 || len(results[1].Stderr) != 0 || results[1].Truncated {
+		t.Errorf("results[1] Stdout/Stderr/Truncated = %q/%q/%v, want all empty/false (never dispatched)",
+			results[1].Stdout, results[1].Stderr, results[1].Truncated)
 	}
 
 	ctx := context.Background()
@@ -407,12 +420,12 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 		t.Fatalf("MarkCancelled: %v", err)
 	}
 
-	outcome, err := e.dispatchOne(ctx, task, false)
+	res, err := e.dispatchOne(ctx, task, false)
 	if err != nil {
 		t.Fatalf("dispatchOne: %v", err)
 	}
-	if outcome != jobs.OutcomeCancelled {
-		t.Errorf("dispatchOne outcome = %v, want jobs.OutcomeCancelled", outcome)
+	if res.Outcome != jobs.OutcomeCancelled {
+		t.Errorf("dispatchOne Outcome = %v, want jobs.OutcomeCancelled", res.Outcome)
 	}
 	if len(log) != 0 {
 		t.Errorf("Conduit.Dispatch was called for an already-cancelled task: log = %v", log)
@@ -424,6 +437,16 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 	}
 	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
 		t.Errorf("Task = %+v, want Resolved/OutcomeCancelled unchanged by dispatchOne", got)
+	}
+	// dispatchOne's cancel-honored mapping reads Stdout/Stderr from the
+	// already-persisted Task (via tasksRepo.Get) — MarkCancelled stores no
+	// output, so both are empty; this asserts the mapping is truthful, not
+	// aspirational.
+	if len(res.Stdout) != 0 || len(res.Stderr) != 0 {
+		t.Errorf("dispatchOne Stdout/Stderr = %q/%q, want both empty (MarkCancelled persists no output)", res.Stdout, res.Stderr)
+	}
+	if got.Stdout != nil || got.Stderr != nil {
+		t.Errorf("Task Stdout/Stderr = %q/%q, want nil (MarkCancelled persists no output)", got.Stdout, got.Stderr)
 	}
 }
 
@@ -491,6 +514,13 @@ func TestEngineMixedFleetVersionGate(t *testing.T) {
 		}
 		if r.Outcome != wantOutcome {
 			t.Errorf("NodeResult[%s].Outcome = %v, want %v", r.NodeID, r.Outcome, wantOutcome)
+		}
+		// node-old's version-refusal carries the same Relay-synthesized
+		// Stderr onto the NodeResult (and so into the audit trail) as the
+		// Task row does (#122 full-output-always) — the audit trail must
+		// never be less legible than the Task store for the same refusal.
+		if r.NodeID == "node-old" && string(r.Stderr) != jobs.VersionRefusedMessage {
+			t.Errorf("NodeResult[node-old].Stderr = %q, want VersionRefusedMessage", r.Stderr)
 		}
 	}
 

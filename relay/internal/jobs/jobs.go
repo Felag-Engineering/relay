@@ -151,6 +151,9 @@ type Result struct {
 	ExitCode int32
 	Stdout   []byte
 	Stderr   []byte
+	// Truncated is the daemon-side size-cap flag (proto TaskResult.truncated):
+	// a single flag over the whole result, not per-stream.
+	Truncated bool
 }
 
 // Verdict is a connected Node's PolicyVerdict, converted to its proto-free

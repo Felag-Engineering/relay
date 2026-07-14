@@ -194,7 +194,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() returned unexpected error: %v", err)
 	}
-	if len(results) != 1 || results[0] != wantResults[0] {
+	if len(results) != 1 || !reflect.DeepEqual(results[0], wantResults[0]) {
 		t.Errorf("Run() results = %+v, want %+v", results, wantResults)
 	}
 
@@ -216,7 +216,7 @@ func TestRunThreadsPrincipalToAudit(t *testing.T) {
 	if !reflect.DeepEqual(audit.entry.Action, act) {
 		t.Errorf("AuditEntry.Action = %+v, want %+v", audit.entry.Action, act)
 	}
-	if len(audit.entry.Results) != 1 || audit.entry.Results[0] != wantResults[0] {
+	if len(audit.entry.Results) != 1 || !reflect.DeepEqual(audit.entry.Results[0], wantResults[0]) {
 		t.Errorf("AuditEntry.Results = %+v, want %+v", audit.entry.Results, wantResults)
 	}
 }
@@ -262,7 +262,7 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	if !errors.Is(err, dispatchErr) {
 		t.Errorf("Run() error = %v, want it to wrap the dispatch error %v", err, dispatchErr)
 	}
-	if len(results) != 1 || results[0] != partialResults[0] {
+	if len(results) != 1 || !reflect.DeepEqual(results[0], partialResults[0]) {
 		t.Errorf("Run() results = %+v, want the dispatcher's partial results %+v", results, partialResults)
 	}
 
@@ -272,7 +272,7 @@ func TestRunAuditsPartialResultsOnDispatchError(t *testing.T) {
 	if audit.entry.Principal != principal {
 		t.Errorf("AuditEntry.Principal = %+v, want %+v", audit.entry.Principal, principal)
 	}
-	if len(audit.entry.Results) != 1 || audit.entry.Results[0] != partialResults[0] {
+	if len(audit.entry.Results) != 1 || !reflect.DeepEqual(audit.entry.Results[0], partialResults[0]) {
 		t.Errorf("AuditEntry.Results = %+v, want the dispatcher's partial results %+v", audit.entry.Results, partialResults)
 	}
 }

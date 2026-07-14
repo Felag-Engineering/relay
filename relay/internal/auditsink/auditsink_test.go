@@ -59,10 +59,10 @@ func TestRecordDispatchFanOutOnePerNodeResult(t *testing.T) {
 		Action:    act,
 		JobID:     "job-1",
 		Results: []capability.NodeResult{
-			{NodeID: "node-ok", Outcome: jobs.OutcomeSuccess},
+			{NodeID: "node-ok", Outcome: jobs.OutcomeSuccess, Stdout: []byte("node-ok stdout"), Stderr: []byte(""), Truncated: false},
 			{NodeID: "node-denied", Outcome: jobs.OutcomeDeniedByPolicy},
 			{NodeID: "node-offline", Outcome: jobs.OutcomeUnreachable},
-			{NodeID: "node-cancelled", Outcome: jobs.OutcomeCancelled},
+			{NodeID: "node-cancelled", Outcome: jobs.OutcomeCancelled, Stdout: []byte(""), Stderr: []byte("cancelled mid-run"), Truncated: true},
 		},
 	}
 
@@ -83,6 +83,18 @@ func TestRecordDispatchFanOutOnePerNodeResult(t *testing.T) {
 		"node-denied":    jobs.OutcomeDeniedByPolicy,
 		"node-offline":   jobs.OutcomeUnreachable,
 		"node-cancelled": jobs.OutcomeCancelled,
+	}
+	// wantOutput covers #185's full-output-always mapping: each NodeResult's
+	// Stdout/Stderr/Truncated must round-trip through the REAL SQLite-backed
+	// audit.Repository exactly.
+	wantOutput := map[string]struct {
+		stdout, stderr string
+		truncated      bool
+	}{
+		"node-ok":        {"node-ok stdout", "", false},
+		"node-denied":    {"", "", false},
+		"node-offline":   {"", "", false},
+		"node-cancelled": {"", "cancelled mid-run", true},
 	}
 	seen := map[string]bool{}
 	for _, rec := range byJob {
@@ -105,6 +117,11 @@ func TestRecordDispatchFanOutOnePerNodeResult(t *testing.T) {
 		}
 		if rec.Selector != sel.String() {
 			t.Errorf("record for %q Selector = %q, want %q", rec.NodeID, rec.Selector, sel.String())
+		}
+		wantOut := wantOutput[rec.NodeID]
+		if string(rec.Stdout) != wantOut.stdout || string(rec.Stderr) != wantOut.stderr || rec.Truncated != wantOut.truncated {
+			t.Errorf("record for %q Stdout/Stderr/Truncated = %q/%q/%v, want %q/%q/%v",
+				rec.NodeID, rec.Stdout, rec.Stderr, rec.Truncated, wantOut.stdout, wantOut.stderr, wantOut.truncated)
 		}
 		seen[rec.NodeID] = true
 	}

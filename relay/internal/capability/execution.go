@@ -155,11 +155,18 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	results := make([]NodeResult, 0, len(pending))
 	var errs []error
 	for _, pt := range pending {
-		outcome, err := e.dispatchOne(ctx, pt.task, pt.outdated)
+		res, err := e.dispatchOne(ctx, pt.task, pt.outdated)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		results = append(results, NodeResult{NodeID: pt.task.NodeID, Outcome: outcome, JobID: jobID})
+		results = append(results, NodeResult{
+			NodeID:    pt.task.NodeID,
+			Outcome:   res.Outcome,
+			JobID:     jobID,
+			Stdout:    res.Stdout,
+			Stderr:    res.Stderr,
+			Truncated: res.Truncated,
+		})
 	}
 
 	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
@@ -196,19 +203,19 @@ type pendingTask struct {
 // the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
-func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bool) (jobs.Outcome, error) {
+func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bool) (jobs.Result, error) {
 	if outdated {
 		if err := e.tasksRepo.MarkVersionRefused(ctx, task.ID, e.now()); err != nil {
-			return jobs.OutcomeVersionRefused, fmt.Errorf("capability: mark task %q version-refused: %w", task.ID, err)
+			return jobs.Result{Outcome: jobs.OutcomeVersionRefused}, fmt.Errorf("capability: mark task %q version-refused: %w", task.ID, err)
 		}
-		return jobs.OutcomeVersionRefused, nil
+		return jobs.Result{Outcome: jobs.OutcomeVersionRefused, Stderr: []byte(jobs.VersionRefusedMessage)}, nil
 	}
 
 	if !e.conduit.Connected(task.NodeID) {
 		if err := e.tasksRepo.MarkUnreachable(ctx, task.ID, e.now()); err != nil {
-			return jobs.OutcomeUnreachable, fmt.Errorf("capability: mark task %q unreachable: %w", task.ID, err)
+			return jobs.Result{Outcome: jobs.OutcomeUnreachable}, fmt.Errorf("capability: mark task %q unreachable: %w", task.ID, err)
 		}
-		return jobs.OutcomeUnreachable, nil
+		return jobs.Result{Outcome: jobs.OutcomeUnreachable}, nil
 	}
 
 	if err := e.tasksRepo.MarkDispatched(ctx, task.ID, e.now()); err != nil {
@@ -219,10 +226,10 @@ func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bo
 			// honor it rather than fabricating OutcomeFailure or dispatching a
 			// Task the caller already asked to stop.
 			if cur, getErr := e.tasksRepo.Get(ctx, task.ID); getErr == nil && cur.State == jobs.DispatchStateResolved {
-				return cur.Outcome, nil
+				return jobs.Result{Outcome: cur.Outcome, Stdout: cur.Stdout, Stderr: cur.Stderr}, nil
 			}
 		}
-		return jobs.OutcomeFailure, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
+		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: mark task %q dispatched: %w", task.ID, err)
 	}
 
 	result, dispatchErr := e.conduit.Dispatch(ctx, task.NodeID, task)
@@ -230,13 +237,13 @@ func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bo
 		// Connected but the send/exec did not complete: the Task stays
 		// Dispatched (no Resolve), so it is reconciled on restart via
 		// InFlight() rather than silently declared unreachable.
-		return jobs.OutcomeFailure, fmt.Errorf("capability: dispatch task %q to node %q: %w", task.ID, task.NodeID, dispatchErr)
+		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: dispatch task %q to node %q: %w", task.ID, task.NodeID, dispatchErr)
 	}
 
 	if err := e.tasksRepo.Resolve(ctx, task.ID, result); err != nil {
-		return jobs.OutcomeFailure, fmt.Errorf("capability: resolve task %q: %w", task.ID, err)
+		return jobs.Result{Outcome: jobs.OutcomeFailure}, fmt.Errorf("capability: resolve task %q: %w", task.ID, err)
 	}
-	return result.Outcome, nil
+	return result, nil
 }
 
 // cancel implements dispatcher (#101, ADR-0013): it stops jobID's Tasks by

@@ -88,10 +88,11 @@ func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
 // TaskRepository.Resolve persists.
 func result(tr *relayv1.TaskResult) jobs.Result {
 	return jobs.Result{
-		Outcome:  outcome(tr.GetOutcome()),
-		ExitCode: tr.GetExitCode(),
-		Stdout:   tr.GetStdout(),
-		Stderr:   tr.GetStderr(),
+		Outcome:   outcome(tr.GetOutcome()),
+		ExitCode:  tr.GetExitCode(),
+		Stdout:    tr.GetStdout(),
+		Stderr:    tr.GetStderr(),
+		Truncated: tr.GetTruncated(),
 	}
 }
 

@@ -163,8 +163,11 @@ func TestRestartRoundTrip(t *testing.T) {
 		ActionKind:    "operation",
 		OperationName: "system.facts",
 		Args:          map[string]string{"k": "v"},
-		Outcome:       jobs.OutcomeUnspecified,
+		Outcome:       jobs.OutcomeSuccess,
 		Reason:        "",
+		Stdout:        []byte("hostname: host-a\n"),
+		Stderr:        []byte("warning: deprecated flag\n"),
+		Truncated:     true,
 	}
 	if err := auditRepo.Append(ctx, record); err != nil {
 		t.Fatalf("Append audit record: %v", err)
@@ -272,5 +275,48 @@ func TestRestartRoundTrip(t *testing.T) {
 	}
 	if len(nodeRecords) != 1 || !reflect.DeepEqual(nodeRecords[0], record) {
 		t.Errorf("reload ByNode(node-a) audit records: got %#v, want [%#v]", nodeRecords, record)
+	}
+}
+
+// TestAuditOutputMigrationBackwardCompat is #185's migration backward-compat
+// acceptance line: a pre-0006 audit row (written using ONLY the legacy
+// column set — no stdout/stderr/truncated) must survive being read back
+// through the current sqliteAudit.query with clean, truthful defaults
+// (nil output, Truncated = false), never an error or a fabricated value.
+// Migrations run on Open, so the row below is written post-migration (the
+// stdout/stderr/truncated columns already exist with their DEFAULTs) but
+// via a raw INSERT that only names the legacy columns, faithfully simulating
+// what a genuinely pre-0006 row looks like once the store is upgraded.
+func TestAuditOutputMigrationBackwardCompat(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	_, err := st.db.ExecContext(ctx, `
+		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"audit-legacy", formatTime(roundTripTime(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC))),
+		audit.KindDispatch, "operator:alice", "node:role=web", "job-legacy", "node-a", "operation",
+		"system.facts", nil, nil, int(jobs.OutcomeSuccess), nil,
+	)
+	if err != nil {
+		t.Fatalf("insert legacy-shape audit row: %v", err)
+	}
+
+	records, err := st.Audit().ByJob(ctx, "job-legacy")
+	if err != nil {
+		t.Fatalf("ByJob(job-legacy): %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ByJob(job-legacy) returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Stdout != nil {
+		t.Errorf("legacy row Stdout = %q, want nil", rec.Stdout)
+	}
+	if rec.Stderr != nil {
+		t.Errorf("legacy row Stderr = %q, want nil", rec.Stderr)
+	}
+	if rec.Truncated {
+		t.Error("legacy row Truncated = true, want false")
 	}
 }

@@ -27,11 +27,15 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 		return err
 	}
 
+	// Stdout/Stderr are stored raw, exactly as delivered — no redaction or
+	// scrubbing (secrets in command output are retained by design; Policy is
+	// the place to prevent secret-emitting commands, ADR-0002). This mirrors
+	// how tasks.go persists Task output.
 	_, err = a.db.ExecContext(ctx, `
-		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
-		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason),
+		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit record: %w", err)
@@ -56,7 +60,7 @@ func (a *sqliteAudit) ByNode(ctx context.Context, nodeID string) ([]audit.Record
 
 func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any) ([]audit.Record, error) {
 	rows, err := a.db.QueryContext(ctx, `
-		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason
+		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated
 		FROM audit `+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query audit records: %w", err)
@@ -72,9 +76,11 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			argsJSON, argvJSON                                   sql.NullString
 			outcome                                              int
 			reason                                               sql.NullString
+			stdout, stderr                                       []byte
+			truncated                                            int
 		)
 		if err := rows.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
-			&operationName, &argsJSON, &argvJSON, &outcome, &reason); err != nil {
+			&operationName, &argsJSON, &argvJSON, &outcome, &reason, &stdout, &stderr, &truncated); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
 		tsTime, err := parseTime(sql.NullString{String: ts, Valid: true})
@@ -103,6 +109,9 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			RawExecArgv:   argv,
 			Outcome:       jobs.Outcome(outcome),
 			Reason:        reason.String,
+			Stdout:        stdout,
+			Stderr:        stderr,
+			Truncated:     truncated != 0,
 		})
 	}
 	return out, rows.Err()
