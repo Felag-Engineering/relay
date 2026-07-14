@@ -6,7 +6,7 @@
 # Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go/buf may be absent.
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
-.PHONY: build test lint proto proto-tools proto-check build-relay build-daemon \
+.PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
@@ -38,6 +38,15 @@ proto-tools:
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
 proto-check: proto
 	git diff --exit-code -- relay/internal/relay/v1
+
+# Additive-only /proto gate (ADR-0014): fail if the working-tree proto breaks wire
+# compatibility vs a base git ref. Run from repo root so the `.git` input resolves at
+# the repo root; `subdir=proto` points buf at the proto module inside that revision.
+# PROTO_BREAKING_REF defaults to origin/main for local use; CI passes the PR base SHA.
+PROTO_BREAKING_REF ?= origin/main
+proto-breaking:
+	PATH="$$(go env GOPATH)/bin:$$PATH" buf breaking proto \
+		--against ".git#ref=$(PROTO_BREAKING_REF),subdir=proto"
 
 ## --- Relay (Go) ---
 # Emit the actual `relay` binary (into the gitignored relay/bin/), not just a
