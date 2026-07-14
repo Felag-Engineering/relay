@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	schema "github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -334,6 +335,30 @@ type rawExecInput struct {
 	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
 }
 
+// tightenExecInputSchema infers In's schema, then makes it stricter than the
+// reflect defaults on the two fields the reflected schema gets wrong for this
+// RCE surface: argv (required, so drop the spurious "null" variant a
+// []string picks up) and timeout_seconds (advertise the real
+// [0, maxTimeoutSeconds] bound instead of int32 min/max). Pure tightening:
+// the handler still unmarshals into In and resolveTimeoutSeconds stays as
+// defense-in-depth. Invariant 10: this only narrows advertised inputs, it
+// does not add a control path.
+func tightenExecInputSchema[In any]() *schema.Schema {
+	s, err := schema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("mcp: infer input schema: %v", err))
+	}
+	if p := s.Properties["argv"]; p != nil {
+		p.Type = "array" // was Types:["null","array"]
+		p.Types = nil
+	}
+	if p := s.Properties["timeout_seconds"]; p != nil {
+		p.Minimum = schema.Ptr(float64(0))
+		p.Maximum = schema.Ptr(float64(maxTimeoutSeconds)) // 86400
+	}
+	return s
+}
+
 // dispatchAndRender runs act against sel through exec, then renders the
 // full per-Node result set — the shared body of run_operation and raw_exec
 // once each has built its own jobs.Action. A zero-match Run (no Node matched
@@ -387,6 +412,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"Node's effective Policy and narrow your request rather than guessing again. Blocks until every " +
 			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
 			"get_job re-reads the same Job later.",
+		InputSchema: tightenExecInputSchema[runOperationInput](),
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
 		p, err := requirePrincipal(ctx)
@@ -429,6 +455,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"read-only-looking command. argv runs verbatim — no shell, no client-side splitting — and the " +
 			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
 			"outcome=denied_by_policy). " + planModeClause,
+		InputSchema: tightenExecInputSchema[rawExecInput](),
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
 		p, err := requirePrincipal(ctx)

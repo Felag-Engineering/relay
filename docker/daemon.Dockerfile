@@ -45,6 +45,11 @@ COPY --from=build \
 COPY docker/fixtures/policy.toml /etc/relay-daemon/policy.toml
 RUN chmod 0644 /etc/relay-daemon/policy.toml
 
+# busybox ships no /etc/os-release; bake one in so the documented
+# list_operations file.read example (path=/etc/os-release) succeeds on the
+# dev fleet (docs/dev-fleet.md). DEV-ONLY fixture.
+COPY docker/fixtures/os-release /etc/os-release
+
 # The entrypoint lifts the bootstrap-minted Enrollment Token file into the env
 # var the daemon reads, then execs the daemon (see docker/daemon-entrypoint.sh).
 # chmod so the exec-form ENTRYPOINT works regardless of the host file's mode.
