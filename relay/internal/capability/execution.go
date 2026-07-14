@@ -27,6 +27,9 @@
 //     automatic behavior.
 //   - Unreachable Tasks (MarkUnreachable) are already terminal — Resolved,
 //     never Dispatched — and are never part of InFlight() reconciliation.
+//     Version-refused Tasks (MarkVersionRefused, ADR-0014) are the same
+//     shape: an outdated Node's Task never leaves Pending, so it too is
+//     never part of InFlight() reconciliation.
 package capability
 
 import (
@@ -128,7 +131,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	// "one Task per matched Node, unique IDs, persisted before dispatch"
 	// (acceptance criterion 2), and leaves a clean Pending/Dispatched split
 	// on any mid-Job crash.
-	pending := make([]jobs.Task, 0, len(d.nodes))
+	pending := make([]pendingTask, 0, len(d.nodes))
 	for _, n := range d.nodes {
 		taskID, err := e.prefixedID("task-")
 		if err != nil {
@@ -146,28 +149,45 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		if err := e.tasksRepo.CreateTask(ctx, task); err != nil {
 			return dispatchResult{}, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
 		}
-		pending = append(pending, task)
+		pending = append(pending, pendingTask{task: task, outdated: n.Outdated})
 	}
 
 	results := make([]NodeResult, 0, len(pending))
 	var errs []error
-	for _, task := range pending {
-		outcome, err := e.dispatchOne(ctx, task)
+	for _, pt := range pending {
+		outcome, err := e.dispatchOne(ctx, pt.task, pt.outdated)
 		if err != nil {
 			errs = append(errs, err)
 		}
-		results = append(results, NodeResult{NodeID: task.NodeID, Outcome: outcome, JobID: jobID})
+		results = append(results, NodeResult{NodeID: pt.task.NodeID, Outcome: outcome, JobID: jobID})
 	}
 
 	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
 }
 
+// pendingTask pairs a persisted (Pending) Task with its source Node's
+// Outdated flag (registry.Node.Outdated, ADR-0014), read at the moment run
+// resolves the Selector — dispatchOne needs it to decide the version gate
+// without re-querying the registry.
+type pendingTask struct {
+	task     jobs.Task
+	outdated bool
+}
+
 // dispatchOne carries one persisted (Pending) Task through the rest of its
-// dispatch-state lifecycle: offline -> MarkUnreachable (terminal, never
-// sent); connected -> MarkDispatched, then Conduit.Dispatch. A send error
-// leaves the Task Dispatched (never Resolved) so it surfaces via
-// TaskRepository.InFlight() for restart reconciliation, and is reported
-// honestly as OutcomeFailure rather than fabricated as success.
+// dispatch-state lifecycle: outdated -> MarkVersionRefused (terminal, never
+// sent, ADR-0014); offline -> MarkUnreachable (terminal, never sent);
+// connected -> MarkDispatched, then Conduit.Dispatch. A send error leaves the
+// Task Dispatched (never Resolved) so it surfaces via TaskRepository.InFlight()
+// for restart reconciliation, and is reported honestly as OutcomeFailure
+// rather than fabricated as success.
+//
+// The version gate runs FIRST, before the Connected check: it is a Relay-side,
+// connectivity-independent refusal (ADR-0014's minimum-daemon-version gate),
+// so an outdated Node is refused whether or not it currently has a Tunnel, and
+// the Conduit is never opened for it. It runs AFTER the upstream blast-cap
+// check (Service.Run) — outdated Nodes still matched the Selector and still
+// count against the cap (invariant #5); only the send is refused.
 //
 // run persists every Task Pending before dispatching any of them, so a
 // concurrent CancelJob (ADR-0013) can legitimately MarkCancelled a Task
@@ -176,7 +196,14 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 // the Task already reached a terminal, truthful outcome (Resolved,
 // OutcomeCancelled) — so dispatchOne honors it rather than dispatching an
 // already-cancelled Task or fabricating OutcomeFailure over a real cancel.
-func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task) (jobs.Outcome, error) {
+func (e *jobEngine) dispatchOne(ctx context.Context, task jobs.Task, outdated bool) (jobs.Outcome, error) {
+	if outdated {
+		if err := e.tasksRepo.MarkVersionRefused(ctx, task.ID, e.now()); err != nil {
+			return jobs.OutcomeVersionRefused, fmt.Errorf("capability: mark task %q version-refused: %w", task.ID, err)
+		}
+		return jobs.OutcomeVersionRefused, nil
+	}
+
 	if !e.conduit.Connected(task.NodeID) {
 		if err := e.tasksRepo.MarkUnreachable(ctx, task.ID, e.now()); err != nil {
 			return jobs.OutcomeUnreachable, fmt.Errorf("capability: mark task %q unreachable: %w", task.ID, err)

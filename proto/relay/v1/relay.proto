@@ -176,6 +176,7 @@ enum Outcome {
   OUTCOME_DENIED_BY_POLICY = 4;
   OUTCOME_CANCELLED     = 5;   // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
   OUTCOME_UNREACHABLE   = 6;   // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
+  OUTCOME_VERSION_REFUSED = 7; // Relay-synthesized: the Node's daemon is below the Relay's configured minimum version (ADR-0014), so the Task was refused at dispatch and never sent; a daemon never emits this.
 }
 
 message StreamChunk {

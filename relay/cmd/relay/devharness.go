@@ -606,6 +606,8 @@ func outcomeString(o jobs.Outcome) string {
 		return "OUTCOME_CANCELLED"
 	case jobs.OutcomeUnreachable:
 		return "OUTCOME_UNREACHABLE"
+	case jobs.OutcomeVersionRefused:
+		return "OUTCOME_VERSION_REFUSED"
 	default:
 		return "OUTCOME_UNSPECIFIED"
 	}

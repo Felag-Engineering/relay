@@ -91,6 +91,7 @@ const (
 	Outcome_OUTCOME_DENIED_BY_POLICY Outcome = 4
 	Outcome_OUTCOME_CANCELLED        Outcome = 5 // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
 	Outcome_OUTCOME_UNREACHABLE      Outcome = 6 // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
+	Outcome_OUTCOME_VERSION_REFUSED  Outcome = 7 // Relay-synthesized: the Node's daemon is below the Relay's configured minimum version (ADR-0014), so the Task was refused at dispatch and never sent; a daemon never emits this.
 )
 
 // Enum value maps for Outcome.
@@ -103,6 +104,7 @@ var (
 		4: "OUTCOME_DENIED_BY_POLICY",
 		5: "OUTCOME_CANCELLED",
 		6: "OUTCOME_UNREACHABLE",
+		7: "OUTCOME_VERSION_REFUSED",
 	}
 	Outcome_value = map[string]int32{
 		"OUTCOME_UNSPECIFIED":      0,
@@ -112,6 +114,7 @@ var (
 		"OUTCOME_DENIED_BY_POLICY": 4,
 		"OUTCOME_CANCELLED":        5,
 		"OUTCOME_UNREACHABLE":      6,
+		"OUTCOME_VERSION_REFUSED":  7,
 	}
 )
 
@@ -1761,7 +1764,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\tRiskClass\x12\x1a\n" +
 	"\x16RISK_CLASS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fRISK_CLASS_READ\x10\x01\x12\x15\n" +
-	"\x11RISK_CLASS_MUTATE\x10\x02*\xaf\x01\n" +
+	"\x11RISK_CLASS_MUTATE\x10\x02*\xcc\x01\n" +
 	"\aOutcome\x12\x17\n" +
 	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOUTCOME_SUCCESS\x10\x01\x12\x13\n" +
@@ -1769,7 +1772,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x0fOUTCOME_TIMEOUT\x10\x03\x12\x1c\n" +
 	"\x18OUTCOME_DENIED_BY_POLICY\x10\x04\x12\x15\n" +
 	"\x11OUTCOME_CANCELLED\x10\x05\x12\x17\n" +
-	"\x13OUTCOME_UNREACHABLE\x10\x062\x83\x01\n" +
+	"\x13OUTCOME_UNREACHABLE\x10\x06\x12\x1b\n" +
+	"\x17OUTCOME_VERSION_REFUSED\x10\a2\x83\x01\n" +
 	"\n" +
 	"Enrollment\x12;\n" +
 	"\x06Enroll\x12\x17.relay.v1.EnrollRequest\x1a\x18.relay.v1.EnrollResponse\x128\n" +

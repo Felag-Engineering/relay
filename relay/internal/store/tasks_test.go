@@ -282,6 +282,81 @@ func TestMarkUnreachable_InvalidState(t *testing.T) {
 	}
 }
 
+// TestMarkVersionRefused_FromPending is the ADR-0014 dispatch-level gate's
+// store contract: a Pending Task moves straight to Resolved/
+// OutcomeVersionRefused with the legible VersionRefusedMessage as Stderr, no
+// DispatchedAt, and is absent from InFlight (it was never sent).
+func TestMarkVersionRefused_FromPending(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	resolvedAt := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	if err := taskRepo.MarkVersionRefused(ctx, "task-1", resolvedAt); err != nil {
+		t.Fatalf("MarkVersionRefused: %v", err)
+	}
+
+	got, err := taskRepo.Get(ctx, "task-1")
+	if err != nil {
+		t.Fatalf("Get after MarkVersionRefused: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved {
+		t.Errorf("state after MarkVersionRefused: got %v, want DispatchStateResolved", got.State)
+	}
+	if got.Outcome != jobs.OutcomeVersionRefused {
+		t.Errorf("Outcome after MarkVersionRefused: got %v, want OutcomeVersionRefused", got.Outcome)
+	}
+	if string(got.Stderr) != jobs.VersionRefusedMessage {
+		t.Errorf("Stderr after MarkVersionRefused: got %q, want %q", got.Stderr, jobs.VersionRefusedMessage)
+	}
+	if !got.DispatchedAt.IsZero() {
+		t.Errorf("DispatchedAt after MarkVersionRefused: got %v, want zero (never dispatched)", got.DispatchedAt)
+	}
+	if !got.ResolvedAt.Equal(resolvedAt) {
+		t.Errorf("ResolvedAt after MarkVersionRefused: got %v, want %v", got.ResolvedAt, resolvedAt)
+	}
+
+	inFlight, err := taskRepo.InFlight(ctx)
+	if err != nil {
+		t.Fatalf("InFlight after MarkVersionRefused: %v", err)
+	}
+	if len(inFlight) != 0 {
+		t.Errorf("InFlight after MarkVersionRefused: got %v, want empty (a version-refused Task was never dispatched)", inFlight)
+	}
+}
+
+// TestMarkVersionRefused_InvalidState mirrors TestMarkUnreachable_InvalidState:
+// that transition only applies to a Task that was never sent.
+func TestMarkVersionRefused_InvalidState(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	seedJobAndStage(t, st, "job-1", "stage-1")
+	taskRepo := st.Tasks()
+
+	task := jobs.Task{ID: "task-1", JobID: "job-1", StageID: "stage-1", NodeID: "node-1", Action: testAction(), CreatedAt: time.Now().UTC()}
+	if err := taskRepo.CreateTask(ctx, task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if err := taskRepo.MarkDispatched(ctx, "task-1", time.Now().UTC()); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+
+	// MarkVersionRefused on an already-dispatched Task must fail.
+	if err := taskRepo.MarkVersionRefused(ctx, "task-1", time.Now().UTC()); !errors.Is(err, jobs.ErrInvalidTaskState) {
+		t.Errorf("MarkVersionRefused on dispatched task: want ErrInvalidTaskState, got %v", err)
+	}
+
+	if err := taskRepo.MarkVersionRefused(ctx, "does-not-exist", time.Now().UTC()); !errors.Is(err, jobs.ErrTaskNotFound) {
+		t.Errorf("MarkVersionRefused unknown task: want ErrTaskNotFound, got %v", err)
+	}
+}
+
 func TestByJob(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()

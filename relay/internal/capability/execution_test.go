@@ -407,7 +407,7 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 		t.Fatalf("MarkCancelled: %v", err)
 	}
 
-	outcome, err := e.dispatchOne(ctx, task)
+	outcome, err := e.dispatchOne(ctx, task, false)
 	if err != nil {
 		t.Fatalf("dispatchOne: %v", err)
 	}
@@ -424,6 +424,120 @@ func TestEngineDispatchOneTreatsConcurrentCancelAsTerminal(t *testing.T) {
 	}
 	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeCancelled {
 		t.Errorf("Task = %+v, want Resolved/OutcomeCancelled unchanged by dispatchOne", got)
+	}
+}
+
+// TestEngineMixedFleetVersionGate is the DoD's mixed-fleet dispatch
+// integration test (issue #179, ADR-0014): against a real store-backed
+// registry with a minimum daemon version configured, a current Node executes
+// and is sent over the Conduit, while an outdated Node is refused per-Task
+// with OutcomeVersionRefused and NEVER reaches the Conduit — and the
+// version-refusal is present in the AuditKindDispatch entry's Results (the
+// audit trail), not a separate AuditKindRefusal.
+func TestEngineMixedFleetVersionGate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	st, err := store.Open(path, store.WithMinDaemonVersion("1.2.0"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+
+	reg := st.Registry()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-current", DaemonVersion: "1.2.0"}); err != nil {
+		t.Fatalf("Upsert node-current: %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-old", DaemonVersion: "1.0.0"}); err != nil {
+		t.Fatalf("Upsert node-old: %v", err)
+	}
+
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-current"] = true
+	conduit.connected["node-old"] = true // connected, but must still be refused: the gate is connectivity-independent
+	conduit.results["node-current"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	authz := &spyAuthorizer{}
+	capChecker := &spyCapChecker{}
+	audit := &spyAuditSink{}
+	freezeStore := &fakeFreezeStore{}
+
+	svc := New(reg,
+		WithAuthorizer(authz),
+		WithCapChecker(capChecker),
+		WithAuditSink(audit),
+		WithFreeze(freezeStore),
+		WithExecution(st.Jobs(), st.Tasks(), conduit),
+	)
+
+	sel := Selector{} // Selector{} matches every Node (see selector.go)
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassMutate}
+	results, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	want := map[string]jobs.Outcome{
+		"node-current": jobs.OutcomeSuccess,
+		"node-old":     jobs.OutcomeVersionRefused,
+	}
+	if len(results) != len(want) {
+		t.Fatalf("Run() returned %d results, want %d: %+v", len(results), len(want), results)
+	}
+	for _, r := range results {
+		wantOutcome, ok := want[r.NodeID]
+		if !ok {
+			t.Errorf("unexpected NodeResult for %q", r.NodeID)
+			continue
+		}
+		if r.Outcome != wantOutcome {
+			t.Errorf("NodeResult[%s].Outcome = %v, want %v", r.NodeID, r.Outcome, wantOutcome)
+		}
+	}
+
+	// node-current was sent to the Conduit; node-old, though Connected, was
+	// never dispatched — the gate runs before Conduit.Dispatch is ever called.
+	if len(log) != 1 || log[0] != "dispatch:node-current" {
+		t.Errorf("Conduit dispatch log = %v, want exactly [dispatch:node-current] (node-old must never reach the Conduit)", log)
+	}
+
+	// The audit trail: this is a AuditKindDispatch entry (the Job DID
+	// dispatch, to node-current) whose Results carry the version-refusal —
+	// not a whole-Job AuditKindRefusal.
+	if !audit.called {
+		t.Fatal("expected the audit sink to be called")
+	}
+	if audit.entry.Kind != AuditKindDispatch {
+		t.Errorf("audit entry Kind = %v, want AuditKindDispatch", audit.entry.Kind)
+	}
+	foundRefusal := false
+	for _, r := range audit.entry.Results {
+		if r.NodeID == "node-old" && r.Outcome == jobs.OutcomeVersionRefused {
+			foundRefusal = true
+		}
+	}
+	if !foundRefusal {
+		t.Errorf("audit entry Results = %+v, want a node-old/OutcomeVersionRefused entry (refusal must appear in the audit trail)", audit.entry.Results)
+	}
+
+	// The refused Task's persisted Stderr carries the legible reason.
+	tasks, err := st.Tasks().ByJob(context.Background(), audit.entry.JobID)
+	if err != nil {
+		t.Fatalf("ByJob(%s): %v", audit.entry.JobID, err)
+	}
+	var oldTask jobs.Task
+	for _, task := range tasks {
+		if task.NodeID == "node-old" {
+			oldTask = task
+		}
+	}
+	if oldTask.State != jobs.DispatchStateResolved {
+		t.Errorf("node-old Task state = %v, want DispatchStateResolved", oldTask.State)
+	}
+	if !oldTask.DispatchedAt.IsZero() {
+		t.Errorf("node-old Task DispatchedAt = %v, want zero (never sent)", oldTask.DispatchedAt)
+	}
+	if string(oldTask.Stderr) != jobs.VersionRefusedMessage {
+		t.Errorf("node-old Task Stderr = %q, want VersionRefusedMessage", oldTask.Stderr)
 	}
 }
 

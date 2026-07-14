@@ -96,6 +96,55 @@ func TestMCP_RunOperation_Plan_OfflineIsUnknown(t *testing.T) {
 	}
 }
 
+// TestMCP_RunOperation_Plan_OutdatedAdvisory is ADR-0014's plan-mode
+// surfacing, carried through the wire: an outdated matched Node's
+// PerNodeVerdict still reports the daemon's real verdict AND
+// outdated:true — a real dispatch would refuse it, but Plan mode never
+// gates or skips the PolicyQuery for it (invariant 12).
+func TestMCP_RunOperation_Plan_OutdatedAdvisory(t *testing.T) {
+	// Node A reports 1.1.0, Node B reports 1.3.0 (see newTestServerWithConfig).
+	ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.verdicts[ts.nodeA] = jobs.Verdict{Allowed: true}
+	ts.conduit.verdicts[ts.nodeB] = jobs.Verdict{Allowed: true}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	var out mcp.RunOrPlanOutput
+	decodeResult(t, res, &out)
+
+	byNode := verdictsByNode(*out.Plan)
+	a, ok := byNode[ts.nodeA]
+	if !ok {
+		t.Fatalf("verdicts missing %s: %+v", ts.nodeA, out.Plan.Verdicts)
+	}
+	if a.Verdict != "allow" {
+		t.Errorf("node A verdict = %+v, want allow (a real, queried verdict)", a)
+	}
+	if !a.Outdated {
+		t.Error("node A Outdated = false, want true (below the configured minimum)")
+	}
+
+	b, ok := byNode[ts.nodeB]
+	if !ok {
+		t.Fatalf("verdicts missing %s: %+v", ts.nodeB, out.Plan.Verdicts)
+	}
+	if b.Outdated {
+		t.Error("node B Outdated = true, want false (above the configured minimum)")
+	}
+
+	// Plan must still have queried the outdated Node.
+	foundA := false
+	for _, nodeID := range ts.conduit.queriedNodes() {
+		if nodeID == ts.nodeA {
+			foundA = true
+		}
+	}
+	if !foundA {
+		t.Errorf("Query was never called for outdated node %s; Plan must still query outdated Nodes", ts.nodeA)
+	}
+}
+
 // TestMCP_RunOperation_Plan_OverCap_ReportsNotErrors is the over-cap
 // acceptance line: a Plan against a Selector matching more Nodes than the
 // applicable cap reports would_be_rejected as DATA, not a tool error.
