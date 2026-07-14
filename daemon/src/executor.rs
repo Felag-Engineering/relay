@@ -78,7 +78,11 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
-            let msg = e.to_string();
+            let msg = format!(
+                "spawn {}: {}",
+                req.argv[0],
+                crate::config::clean_io_error(&e)
+            );
             return failure_result(&req.task_id, msg.as_bytes(), started);
         }
     };
@@ -427,6 +431,47 @@ mod tests {
         assert_eq!(result.outcome, Outcome::Success as i32);
     }
 
+    // 6b. Cap boundary, exact cap: output of exactly `cap` bytes is NOT truncated.
+    #[tokio::test]
+    async fn output_exactly_at_cap_is_not_truncated() {
+        let result = execute(ExecRequest {
+            task_id: "t6b".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "head -c 1024 /dev/zero".to_string(),
+            ],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 1024,
+            cancel: None,
+        })
+        .await;
+        assert_eq!(result.stdout.len(), 1024);
+        assert!(!result.truncated);
+        assert_eq!(result.outcome, Outcome::Success as i32);
+    }
+
+    // 6c. Cap boundary, cap+1: output one byte past the cap IS truncated and
+    // captured length stays exactly the cap (no off-by-one, memory stays bounded).
+    #[tokio::test]
+    async fn output_one_byte_past_cap_is_truncated() {
+        let result = execute(ExecRequest {
+            task_id: "t6c".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "head -c 1025 /dev/zero".to_string(),
+            ],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: 1024,
+            cancel: None,
+        })
+        .await;
+        assert_eq!(result.stdout.len(), 1024);
+        assert!(result.truncated);
+        assert_eq!(result.outcome, Outcome::Success as i32);
+    }
+
     // 7. Spawn failure maps to OUTCOME_FAILURE with OS error in stderr (no shell fallback).
     #[tokio::test]
     async fn spawn_failure_yields_failure() {
@@ -441,6 +486,31 @@ mod tests {
         assert_eq!(result.outcome, Outcome::Failure as i32);
         assert_eq!(result.exit_code, -1);
         assert!(!result.stderr.is_empty(), "OS error must appear in stderr");
+    }
+
+    // 7b. Spawn failure names argv[0] and strips the noisy "(os error N)" suffix.
+    #[tokio::test]
+    async fn spawn_failure_names_argv0() {
+        let result = execute(ExecRequest {
+            task_id: "t7b".to_string(),
+            argv: vec!["/nonexistent/relay-missing-xyz".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+        })
+        .await;
+        assert_eq!(result.outcome, Outcome::Failure as i32);
+        assert_eq!(result.exit_code, -1);
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.starts_with("spawn /nonexistent/relay-missing-xyz:"),
+            "got {stderr:?}"
+        );
+        assert!(
+            stderr.contains("No such file or directory"),
+            "got {stderr:?}"
+        );
+        assert!(!stderr.contains("(os error"), "got {stderr:?}");
     }
 
     // 8. Empty argv is guarded without panic.

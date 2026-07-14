@@ -64,7 +64,7 @@ pub fn file_read(task_id: &str, path: &str, cap: usize) -> TaskResult {
             outcome: Outcome::Failure as i32,
             exit_code: -1,
             stdout: vec![],
-            stderr: e.to_string().into_bytes(),
+            stderr: format!("read {}: {}", path, crate::config::clean_io_error(&e)).into_bytes(),
             truncated: false,
             duration_millis: 0,
         },
@@ -165,17 +165,24 @@ mod tests {
 
     #[test]
     fn file_read_missing_path_is_failure() {
-        let result = file_read("t1", "/nonexistent/relay-test-file-read", 1024);
+        let path = "/nonexistent/relay-test-file-read";
+        let result = file_read("t1", path, 1024);
         assert_eq!(
             result.outcome,
             Outcome::Failure as i32,
             "missing file must yield OUTCOME_FAILURE"
         );
         assert_eq!(result.exit_code, -1);
+        let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(
-            !result.stderr.is_empty(),
-            "stderr must contain the I/O error message"
+            stderr.contains(path),
+            "stderr must name the requested path; got {stderr:?}"
         );
+        assert!(
+            stderr.contains("No such file or directory"),
+            "got {stderr:?}"
+        );
+        assert!(!stderr.contains("(os error"), "got {stderr:?}");
         assert!(result.stdout.is_empty());
         assert!(!result.truncated);
     }

@@ -18,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use crate::config::MAX_OUTPUT_BYTES;
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
@@ -48,12 +49,9 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// silently clamped to this value.
 const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Per-Task output byte cap for stdout and stderr independently (ADR-0004).
-///
-/// Bytes past the cap are drained (to avoid blocking the child on a full pipe)
-/// but discarded; `truncated` is set in the [`TaskResult`]. Policy-configurable
-/// output caps are a v0.0.4 item.
-const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
+// MAX_OUTPUT_BYTES (per-Task output byte cap for stdout/stderr independently,
+// ADR-0004) is defined in `config.rs` — the daemon's single home for
+// compile-time hard limits — and imported above.
 
 // v1 arg-key contract (`OP_ARG_PATH`/`OP_ARG_UNIT`/`OP_ARG_NAME`/`OP_ARG_VERSION`):
 // relocated to `operations::schema` (ADR-0015) — the single definition site
