@@ -115,7 +115,7 @@ func (noopDispatcher) cancel(context.Context, string) error {
 func (noopDispatcher) query(_ context.Context, d dispatch) (planResult, error) {
 	verdicts := make([]NodeVerdict, 0, len(d.nodes))
 	for _, n := range d.nodes {
-		verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "not evaluated (noopDispatcher)"})
+		verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "not evaluated (noopDispatcher)", Outdated: n.Outdated})
 	}
 	return planResult{verdicts: verdicts}, nil
 }

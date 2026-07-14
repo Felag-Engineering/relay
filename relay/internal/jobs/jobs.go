@@ -47,7 +47,17 @@ const (
 	OutcomeDeniedByPolicy
 	OutcomeCancelled
 	OutcomeUnreachable
+	OutcomeVersionRefused
 )
+
+// VersionRefusedMessage is the legible, per-Node reason recorded as a
+// version-refused Task's Stderr (mirrors how a daemon denial explains itself,
+// and matches the FrozenError quality bar: explain, cite the ADR, say what to
+// do). It is Relay-synthesized text, not daemon output — no Task reporting
+// this outcome was ever sent.
+const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-daemon reports a version below " +
+	"the Relay's configured minimum (ADR-0014); the Task was never sent. Upgrade the daemon on this Node " +
+	"through your config-management / IaC pipeline — the Relay never pushes binaries."
 
 // RiskClass mirrors relayv1.RiskClass. The zero value, RiskClassUnspecified,
 // keeps the enum's zero value defined, matching how Outcome mirrors Unspecified.
@@ -199,6 +209,14 @@ type TaskRepository interface {
 	// ErrTaskNotFound if the Task does not exist, or ErrInvalidTaskState if
 	// the Task is not currently Pending.
 	MarkUnreachable(ctx context.Context, taskID string, at time.Time) error
+
+	// MarkVersionRefused transitions a Task from Pending directly to Resolved
+	// with OutcomeVersionRefused and Stderr = VersionRefusedMessage, leaving
+	// DispatchedAt unset — the Task was never sent because its Node's
+	// relay-daemon is below the Relay's configured minimum version
+	// (ADR-0014). Returns ErrTaskNotFound if the Task does not exist, or
+	// ErrInvalidTaskState if the Task is not currently Pending.
+	MarkVersionRefused(ctx context.Context, taskID string, at time.Time) error
 
 	// MarkCancelled transitions a Task from Pending directly to Resolved with
 	// OutcomeCancelled, leaving DispatchedAt unset — the Task was cancelled

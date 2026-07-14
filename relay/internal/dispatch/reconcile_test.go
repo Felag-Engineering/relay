@@ -86,6 +86,22 @@ func (f *fakeTaskRepository) MarkUnreachable(_ context.Context, taskID string, _
 	return nil
 }
 
+func (f *fakeTaskRepository) MarkVersionRefused(_ context.Context, taskID string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	task, ok := f.tasks[taskID]
+	if !ok {
+		return jobs.ErrTaskNotFound
+	}
+	if task.State != jobs.DispatchStatePending {
+		return jobs.ErrInvalidTaskState
+	}
+	task.State = jobs.DispatchStateResolved
+	task.Outcome = jobs.OutcomeVersionRefused
+	f.tasks[taskID] = task
+	return nil
+}
+
 func (f *fakeTaskRepository) MarkCancelled(_ context.Context, taskID string, _ time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

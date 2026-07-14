@@ -225,6 +225,46 @@ func TestMCP_RunOperation_PerNodeResults(t *testing.T) {
 	}
 }
 
+// TestMCP_RunOperation_OutdatedNodeVersionRefused is ADR-0014's dispatch-level
+// gate exercised end to end through run_operation: against a mixed fleet
+// (node A reports 1.1.0, node B reports 1.3.0 — see newTestServerWithConfig),
+// with a minimum of 1.2.0 configured, the outdated Node's result renders
+// outcome=version_refused and is never sent to the Conduit, while the current
+// Node executes normally.
+func TestMCP_RunOperation_OutdatedNodeVersionRefused(t *testing.T) {
+	ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
+	ts.conduit.connect(ts.nodeA, ts.nodeB) // nodeA (1.1.0, outdated) stays connected: the gate is connectivity-independent
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	var out mcp.ExecutionOutput
+	decodeResult(t, res, &out)
+
+	if len(out.Results) != 2 {
+		t.Fatalf("run_operation: got %d results, want 2: %+v", len(out.Results), out.Results)
+	}
+	byNode := map[string]mcp.PerNodeResult{}
+	for _, r := range out.Results {
+		byNode[r.NodeID] = r
+	}
+	if byNode[ts.nodeA].Outcome != "version_refused" {
+		t.Errorf("node A (outdated) outcome = %q, want version_refused", byNode[ts.nodeA].Outcome)
+	}
+	if byNode[ts.nodeA].Stderr == "" {
+		t.Error("node A (outdated) Stderr is empty, want the ADR-0014 refusal message")
+	}
+	if byNode[ts.nodeB].Outcome != "success" {
+		t.Errorf("node B (current) outcome = %q, want success", byNode[ts.nodeB].Outcome)
+	}
+
+	// node A must never have reached the Conduit's Dispatch: Dispatch records
+	// its Task's TimeoutSeconds, so an absent entry proves it was never called.
+	if _, dispatched := ts.conduit.timeoutSeconds[ts.nodeA]; dispatched {
+		t.Error("Conduit.Dispatch was called for the outdated Node, want it never sent")
+	}
+}
+
 // TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds is the raw_exec
 // acceptance line: raw_exec runs an allowed argv and is refused (per-Node,
 // by the daemon's Policy regex) for a denied one, while a structured

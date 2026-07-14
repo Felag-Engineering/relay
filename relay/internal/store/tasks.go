@@ -91,6 +91,21 @@ func (t *sqliteTasks) MarkUnreachable(ctx context.Context, taskID string, at tim
 	})
 }
 
+// MarkVersionRefused transitions a Task from Pending directly to Resolved
+// with jobs.OutcomeVersionRefused and Stderr = jobs.VersionRefusedMessage,
+// leaving dispatched_at NULL — the Task was never sent because its Node's
+// relay-daemon is below the Relay's configured minimum version (ADR-0014).
+// Returns jobs.ErrTaskNotFound if the Task does not exist, or
+// jobs.ErrInvalidTaskState if it is not currently Pending.
+func (t *sqliteTasks) MarkVersionRefused(ctx context.Context, taskID string, at time.Time) error {
+	return t.transition(ctx, taskID, "pending", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			UPDATE tasks SET state = 'resolved', outcome = ?, stderr = ?, resolved_at = ? WHERE task_id = ?`,
+			int(jobs.OutcomeVersionRefused), []byte(jobs.VersionRefusedMessage), formatTime(roundTripTime(at)), taskID)
+		return err
+	})
+}
+
 // MarkCancelled transitions a Task from Pending directly to Resolved with
 // jobs.OutcomeCancelled, leaving dispatched_at NULL — the Task was cancelled
 // before it was ever sent (ADR-0013). Returns jobs.ErrTaskNotFound if the

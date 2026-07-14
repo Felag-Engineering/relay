@@ -44,12 +44,18 @@ const (
 // NodeVerdict is one matched Node's Plan-mode result. DecidingRule is set
 // only on VerdictDeny (the daemon's PolicyVerdict.DecidingRule); Reason is
 // set only on VerdictUnknown (e.g. "offline", "query_failed") — never both,
-// mirroring jobs.Result's per-Node discipline.
+// mirroring jobs.Result's per-Node discipline. Outdated is ADVISORY ONLY
+// (ADR-0014): it never changes Status, which still comes solely from the
+// daemon's live PolicyVerdict (invariant 12) — a real dispatch (Run) would
+// refuse this Node with OutcomeVersionRefused regardless of what Status says
+// here, and Outdated tells the caller that in advance so an apply is not
+// surprised.
 type NodeVerdict struct {
 	NodeID       string
 	Status       VerdictStatus
 	DecidingRule string
 	Reason       string
+	Outdated     bool
 }
 
 // planResult is what dispatcher.query returns: just the per-Node verdicts.
@@ -78,11 +84,16 @@ type PlanResult struct {
 // guesses a verdict from a cached PolicySnapshot (invariant 12). It persists
 // nothing: no Job, no Stage, no Task, no MarkDispatched, so jobEngine
 // satisfying dispatcher.query adds no new store dependency.
+//
+// Outdated (ADR-0014) is set on every NodeVerdict from the Node's registry
+// flag, connected or not — plan mode never gates or skips the PolicyQuery for
+// an outdated Node; the gate is a Run-only, dispatch-level concern (invariant
+// 12: only the daemon's live engine decides Policy verdicts).
 func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 	verdicts := make([]NodeVerdict, 0, len(d.nodes))
 	for _, n := range d.nodes {
 		if !e.conduit.Connected(n.NodeID) {
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "offline"})
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "offline", Outdated: n.Outdated})
 			continue
 		}
 		v, err := e.conduit.Query(ctx, n.NodeID, d.action)
@@ -90,13 +101,13 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 			// Best-effort, never fabricated: a query that itself failed (e.g.
 			// the Tunnel dropped mid-query) is unknown, not a guessed allow or
 			// deny.
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "query_failed"})
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "query_failed", Outdated: n.Outdated})
 			continue
 		}
 		if v.Allowed {
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictAllow})
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictAllow, Outdated: n.Outdated})
 		} else {
-			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictDeny, DecidingRule: v.DecidingRule})
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictDeny, DecidingRule: v.DecidingRule, Outdated: n.Outdated})
 		}
 	}
 	return planResult{verdicts: verdicts}, nil

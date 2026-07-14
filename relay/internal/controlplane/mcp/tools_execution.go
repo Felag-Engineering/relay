@@ -152,6 +152,7 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 			Verdict:      verdictString(v.Status),
 			DecidingRule: v.DecidingRule,
 			Reason:       v.Reason,
+			Outdated:     v.Outdated,
 		})
 	}
 	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
@@ -200,6 +201,8 @@ func outcomeString(o jobs.Outcome) string {
 		return "cancelled"
 	case jobs.OutcomeUnreachable:
 		return "unreachable"
+	case jobs.OutcomeVersionRefused:
+		return "version_refused"
 	default:
 		return "unspecified"
 	}

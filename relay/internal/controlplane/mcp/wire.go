@@ -132,6 +132,11 @@ type PerNodeVerdict struct {
 	Verdict      string `json:"verdict"`
 	DecidingRule string `json:"deciding_rule,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// Outdated is the ADR-0014 apply-time-refusal hint: true when this
+	// Node's relay-daemon is below the Relay's configured minimum version,
+	// so a real dispatch (plan=false) would refuse it with
+	// version_refused regardless of Verdict.
+	Outdated bool `json:"outdated"`
 }
 
 // WouldBeRejected reports why real dispatch (plan=false against the same

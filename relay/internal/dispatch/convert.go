@@ -113,6 +113,8 @@ func outcome(o relayv1.Outcome) jobs.Outcome {
 		return jobs.OutcomeCancelled
 	case relayv1.Outcome_OUTCOME_UNREACHABLE:
 		return jobs.OutcomeUnreachable
+	case relayv1.Outcome_OUTCOME_VERSION_REFUSED:
+		return jobs.OutcomeVersionRefused
 	case relayv1.Outcome_OUTCOME_UNSPECIFIED:
 		return jobs.OutcomeUnspecified
 	default:

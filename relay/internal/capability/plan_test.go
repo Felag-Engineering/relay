@@ -235,6 +235,84 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 	}
 }
 
+// TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly is ADR-0014's plan-mode
+// contract: an outdated matched Node still gets a real, queried verdict
+// (invariant 12 — Plan mode never gates or skips the PolicyQuery for it) AND
+// NodeVerdict.Outdated is set as an advisory apply-time hint; a current
+// matched Node's Outdated is false.
+func TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly(t *testing.T) {
+	reg := registry.NewInMemory(registry.WithMinDaemonVersion("1.2.0"))
+	if _, err := reg.Upsert(registry.Report{
+		NodeID:        "node-current",
+		NodeLabels:    map[string]string{"role": "web"},
+		DaemonVersion: "1.2.0",
+	}); err != nil {
+		t.Fatalf("Upsert(node-current): %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{
+		NodeID:        "node-old",
+		NodeLabels:    map[string]string{"role": "web"},
+		DaemonVersion: "1.0.0",
+	}); err != nil {
+		t.Fatalf("Upsert(node-old): %v", err)
+	}
+
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-current"] = true
+	conduit.connected["node-old"] = true
+	conduit.verdicts["node-current"] = jobs.Verdict{Allowed: true}
+	conduit.verdicts["node-old"] = jobs.Verdict{Allowed: true}
+
+	svc, _, _ := newPlanTestService(t, reg, conduit)
+
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead})
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	got := map[string]NodeVerdict{}
+	for _, v := range pr.Verdicts {
+		got[v.NodeID] = v
+	}
+
+	current, ok := got["node-current"]
+	if !ok {
+		t.Fatalf("PlanResult.Verdicts missing node-current: %+v", pr.Verdicts)
+	}
+	if current.Status != VerdictAllow {
+		t.Errorf("node-current verdict = %+v, want VerdictAllow", current)
+	}
+	if current.Outdated {
+		t.Error("node-current Outdated = true, want false (at minimum version)")
+	}
+
+	old, ok := got["node-old"]
+	if !ok {
+		t.Fatalf("PlanResult.Verdicts missing node-old: %+v", pr.Verdicts)
+	}
+	// The verdict is the REAL daemon verdict, unchanged by Outdated — the gate
+	// is a Run-only, dispatch-level concern (invariant 12).
+	if old.Status != VerdictAllow {
+		t.Errorf("node-old verdict = %+v, want VerdictAllow (a real, queried verdict — plan mode never gates on Outdated)", old)
+	}
+	if !old.Outdated {
+		t.Error("node-old Outdated = false, want true (below configured minimum)")
+	}
+
+	// The PolicyQuery fan-out ran for the outdated Node too — Plan never
+	// skips it.
+	found := false
+	for _, entry := range log {
+		if entry == "query:node-old" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Conduit.Query was never called for node-old (log = %v); Plan must still query outdated Nodes", log)
+	}
+}
+
 // TestPlanAuthzDeniedRecordsRefusalNoVerdicts is the authz-gates acceptance
 // line (invariant 3, ADR-0011): a denied Principal gets an error and a
 // KindRefusal audit entry, never verdicts.

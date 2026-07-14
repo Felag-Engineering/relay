@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // TestRequirePrincipal_NoPrincipalInContextIsALegibleError is RB4's
@@ -66,5 +69,40 @@ func TestRunOrPlanOutput_PlanFieldOmittedWhenNil(t *testing.T) {
 	}
 	if _, ok := raw["plan"]; ok {
 		t.Errorf("marshaled output %s contains a \"plan\" key, want it omitted when Plan is nil", b)
+	}
+}
+
+// TestOutcomeString_VersionRefused is ADR-0014's dispatch-level gate render:
+// jobs.OutcomeVersionRefused must render as the distinct "version_refused"
+// string, never "denied_by_policy" (a Policy verdict, not a Relay-side gate)
+// or "unreachable" (a connectivity conclusion).
+func TestOutcomeString_VersionRefused(t *testing.T) {
+	if got := outcomeString(jobs.OutcomeVersionRefused); got != "version_refused" {
+		t.Errorf("outcomeString(OutcomeVersionRefused) = %q, want %q", got, "version_refused")
+	}
+}
+
+// TestRenderPlan_CarriesOutdatedIntoPerNodeVerdict is ADR-0014's plan-mode
+// wire contract: renderPlan copies capability.NodeVerdict.Outdated onto
+// PerNodeVerdict.Outdated verbatim, for both an outdated and a current Node.
+func TestRenderPlan_CarriesOutdatedIntoPerNodeVerdict(t *testing.T) {
+	pr := capability.PlanResult{
+		Matched: 2,
+		Verdicts: []capability.NodeVerdict{
+			{NodeID: "node-old", Status: capability.VerdictAllow, Outdated: true},
+			{NodeID: "node-current", Status: capability.VerdictAllow, Outdated: false},
+		},
+	}
+	out := renderPlan(pr)
+
+	byNode := map[string]PerNodeVerdict{}
+	for _, v := range out.Verdicts {
+		byNode[v.NodeID] = v
+	}
+	if !byNode["node-old"].Outdated {
+		t.Error(`renderPlan: node-old PerNodeVerdict.Outdated = false, want true`)
+	}
+	if byNode["node-current"].Outdated {
+		t.Error(`renderPlan: node-current PerNodeVerdict.Outdated = true, want false`)
 	}
 }
