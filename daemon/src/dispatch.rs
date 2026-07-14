@@ -30,7 +30,7 @@ use crate::operations::pkg_install::pkg_install;
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::operations::service_restart::service_restart;
 use crate::operations::system_facts::gather_facts;
-use crate::policy::{Decision, Policy, Rule};
+use crate::policy::{Decision, Policy};
 use crate::raw_exec::run_raw_exec;
 use crate::scheduler::{QueuedOutcome, Scheduler};
 
@@ -237,9 +237,13 @@ pub fn evaluate_policy_query(query: &PolicyQuery, policy: &Policy) -> PolicyVerd
 
 /// Convert an engine `Decision` into a `PolicyVerdict`.
 ///
-/// Derives the `deciding_rule` string from the engine's own `Rule` / `reason`,
-/// so a deny verdict names the same rule a real denial would attribute — no
-/// re-decision, no parallel evaluator.
+/// `deciding_rule` is the engine's own `reason` string verbatim, for every
+/// deny sub-case (explicit operation deny, explicit raw_exec deny, or
+/// deny-by-default with or without an args-mismatch). This is the same
+/// `reason` `denied_by_policy_result` writes to stderr on the execution
+/// path, so the plan-verdict text and the apply-path stderr text are
+/// identical for the same input — one shared source, no re-decision, no
+/// parallel evaluator (ADR-0011).
 fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
     match decision {
         Decision::Allow(_) => PolicyVerdict {
@@ -247,29 +251,11 @@ fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
             allowed: true,
             deciding_rule: String::new(),
         },
-        Decision::Deny { reason, rule } => {
-            let deciding_rule = match rule {
-                Some(Rule::OperationDeny { operation }) => {
-                    format!("operation deny: {operation}")
-                }
-                Some(Rule::RawExecDeny { pattern }) => format!("raw_exec deny: {pattern}"),
-                // These two variants are unreachable on a Deny decision but are
-                // required for exhaustive matching — the compiler cannot prove
-                // Allow-only variants never appear inside Deny.
-                Some(Rule::OperationAllow { operation }) => {
-                    format!("operation allow: {operation}")
-                }
-                Some(Rule::RawExecAllow { pattern }) => format!("raw_exec allow: {pattern}"),
-                // Deny-by-default: no specific rule fired; use the engine's
-                // reason string, which is always non-empty.
-                None => reason,
-            };
-            PolicyVerdict {
-                query_id,
-                allowed: false,
-                deciding_rule,
-            }
-        }
+        Decision::Deny { reason, .. } => PolicyVerdict {
+            query_id,
+            allowed: false,
+            deciding_rule: reason,
+        },
     }
 }
 
@@ -1330,6 +1316,93 @@ deny = ["secret"]
                 verdict.deciding_rule.contains("secret"),
                 "case (5) deciding_rule must name the deny pattern; got {:?}",
                 verdict.deciding_rule,
+            );
+        }
+    }
+
+    /// Identity test (issue #186): for each Policy-deny form on the Operation
+    /// path (no-rule, args-mismatch, explicit-deny), the plan-verdict
+    /// `deciding_rule` from `evaluate_policy_query` must be byte-for-byte
+    /// identical to the apply-path stderr from a real `dispatch`, for the
+    /// same input. This is the DoD's "identical for the same input" check,
+    /// exercised through both real code paths — not just the shared `reason`
+    /// source in isolation — mirroring the harness in
+    /// `policy_query_verdict_matches_execution` above.
+    #[tokio::test]
+    async fn deny_reason_identical_between_verdict_and_stderr() {
+        let policy = make_query_test_policy();
+        let state_dir = TempDir::new("deny-reason-identity");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let scheduler = Scheduler::new();
+
+        struct Case {
+            label: &'static str,
+            query: crate::gen::PolicyQuery,
+            task: TaskRequest,
+        }
+
+        let cases = vec![
+            // (a) no-rule: an operation name absent from the Policy entirely.
+            Case {
+                label: "no-rule (unknown operation)",
+                query: make_policy_query_operation("q-no-rule", "totally.unknown", "", ""),
+                task: TaskRequest {
+                    task_id: "identity-no-rule".to_string(),
+                    timeout_seconds: 5,
+                    action: Some(task_request::Action::Operation(crate::gen::Operation {
+                        name: "totally.unknown".to_string(),
+                        args: Default::default(),
+                    })),
+                },
+            },
+            // (b) args-mismatch: service.restart is an allowed operation, but
+            // "sshd" is not an allowed arg.
+            Case {
+                label: "args-mismatch (service.restart sshd)",
+                query: make_policy_query_operation(
+                    "q-args-mismatch",
+                    operations::SERVICE_RESTART,
+                    OP_ARG_UNIT,
+                    "sshd",
+                ),
+                task: make_task_service_restart("identity-args-mismatch", "sshd"),
+            },
+            // (c) explicit-deny: file.read /etc/shadow (deny-beats-allow).
+            Case {
+                label: "explicit-deny (file.read /etc/shadow)",
+                query: make_policy_query_operation(
+                    "q-explicit-deny",
+                    operations::FILE_READ,
+                    OP_ARG_PATH,
+                    "/etc/shadow",
+                ),
+                task: make_task_file_read("identity-explicit-deny", "/etc/shadow"),
+            },
+        ];
+
+        for case in &cases {
+            let verdict = evaluate_policy_query(&case.query, &policy);
+            let result = dispatch(
+                &case.task,
+                &policy,
+                &dedup,
+                &scheduler,
+                tokio::time::Instant::now(),
+                None,
+            )
+            .await;
+
+            assert_eq!(
+                result.outcome,
+                Outcome::DeniedByPolicy as i32,
+                "[{}] must be denied by policy",
+                case.label,
+            );
+            assert_eq!(
+                verdict.deciding_rule,
+                String::from_utf8_lossy(&result.stderr),
+                "[{}] plan-verdict deciding_rule must be identical to the apply-path stderr",
+                case.label,
             );
         }
     }
