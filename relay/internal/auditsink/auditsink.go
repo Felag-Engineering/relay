@@ -16,10 +16,22 @@
 // Truncated flag, copied verbatim — the sink never scrubs or redacts them
 // (Policy, ADR-0002, is where secret-emitting commands are prevented, not
 // here). Nothing else is added: no enrichment from tokens, keys, or other
-// in-memory secrets the sink never even sees. Record/RecordFreeze never log
-// an AuditEntry's or FreezeEvent's field values (including output); errors
-// propagate up to Service.Run, which wraps but does not dump the entry's
-// contents.
+// in-memory secrets the sink never even sees.
+//
+// Logging (#181): Record additionally emits exactly one structured slog Info
+// "audit decision" line per call, for each of the three Kinds it persists
+// (dispatch, refusal, plan) — the store and the log are written from the
+// same call so they cannot drift. That line carries ONLY the kind,
+// Principal's attribution string, the Selector as written, the Action's
+// kind and (for a typed Operation) name, the job_id (dispatch, omitted when
+// empty), the aggregate matched count and per-outcome counts (dispatch), and
+// the refusal reason (refusal) — a decision's routing/attribution metadata,
+// never its content. It never logs an Action's OperationArgs or
+// RawExecArgv, any NodeResult's Stdout/Stderr/Truncated, or any token/key
+// material; the log is supplementary and never influences a decision.
+// RecordFreeze and RecordCancel are unchanged and remain unlogged. Errors
+// from Record/RecordFreeze/RecordCancel propagate up to Service.Run, which
+// wraps but does not dump the entry's contents.
 package auditsink
 
 import (
@@ -28,6 +40,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
@@ -54,6 +68,7 @@ type Sink struct {
 	repo  audit.Repository
 	newID idGen
 	now   func() time.Time
+	log   *slog.Logger
 }
 
 var _ capability.AuditSink = (*Sink)(nil)
@@ -72,12 +87,25 @@ func WithClock(f func() time.Time) Option {
 	return func(s *Sink) { s.now = f }
 }
 
+// WithLogger overrides the Sink's logger seam (production default:
+// slog.Default()), so tests can assert on the decision lines Record emits
+// with a buffer-backed handler. A nil l falls back to slog.Default().
+func WithLogger(l *slog.Logger) Option {
+	return func(s *Sink) {
+		if l == nil {
+			l = slog.Default()
+		}
+		s.log = l
+	}
+}
+
 // New returns a Sink backed by repo.
 func New(repo audit.Repository, opts ...Option) *Sink {
 	s := &Sink{
 		repo:  repo,
 		newID: defaultID,
 		now:   func() time.Time { return time.Now().UTC() },
+		log:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -97,24 +125,35 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // Outcome, since a Plan never creates a Job or Task. Per-Record Append
 // failures are joined, not short-circuited, so one failing write does not
 // silently drop the rest.
+//
+// Record also emits exactly one structured "audit decision" log line per
+// call (see the package doc's Logging section), regardless of whether the
+// store Append below succeeds — the decision remains visible in logs even
+// if the SQLite write fails.
 func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	base := s.baseRecord(e.Principal, e.Selector, e.Action)
 
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
 		base.Reason = e.Reason
-		return s.append(ctx, base)
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindRefusal, e, 0, "")
+		return err
 	}
 
 	if e.Kind == capability.AuditKindPlan {
 		base.Kind = audit.KindPlan
-		return s.append(ctx, base)
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindPlan, e, 0, "")
+		return err
 	}
 
 	base.JobID = e.JobID
 	if len(e.Results) == 0 {
 		base.Kind = audit.KindDispatch
-		return s.append(ctx, base)
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindDispatch, e, 0, "")
+		return err
 	}
 
 	var errs []error
@@ -130,6 +169,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 			errs = append(errs, err)
 		}
 	}
+	s.logDecision(audit.KindDispatch, e, len(e.Results), outcomeCounts(e.Results))
 	return errors.Join(errs...)
 }
 
@@ -192,6 +232,96 @@ func actionKindString(k jobs.ActionKind) string {
 	default:
 		return "unspecified"
 	}
+}
+
+// logDecision emits exactly one structured slog Info "audit decision" line
+// for the Kind of decision e describes. It carries ONLY attribution/routing
+// metadata — never e.Action.OperationArgs, e.Action.RawExecArgv, or any
+// NodeResult's Stdout/Stderr/Truncated — so a decision line can never leak
+// request content or captured output, even though the store retains both.
+// matched and counts are dispatch-only (zero value/empty otherwise, and
+// zero-match dispatch itself passes matched=0 and an empty counts string).
+func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, counts string) {
+	attrs := []any{
+		"kind", kind,
+		"principal", e.Principal.Attribution(),
+		"selector", e.Selector.String(),
+		"action_kind", actionKindString(e.Action.Kind),
+	}
+	if e.Action.Kind == jobs.ActionOperation {
+		attrs = append(attrs, "operation", e.Action.OperationName)
+	}
+	switch kind {
+	case audit.KindDispatch:
+		if e.JobID != "" {
+			attrs = append(attrs, "job_id", e.JobID)
+		}
+		attrs = append(attrs, "matched", matched, "outcome_counts", counts)
+	case audit.KindRefusal:
+		attrs = append(attrs, "reason", e.Reason)
+	}
+	s.log.Info("audit decision", attrs...)
+}
+
+// outcomeOrder is outcomeCounts' fixed rendering order, so a decision line
+// is deterministic across runs. It is self-contained to this package (not a
+// reuse of internal/metrics's unexported outcomeLabel): OutcomeVersionRefused
+// gets its own bucket here rather than folding into "unspecified".
+var outcomeOrder = []jobs.Outcome{
+	jobs.OutcomeSuccess,
+	jobs.OutcomeFailure,
+	jobs.OutcomeTimeout,
+	jobs.OutcomeDeniedByPolicy,
+	jobs.OutcomeCancelled,
+	jobs.OutcomeUnreachable,
+	jobs.OutcomeVersionRefused,
+	jobs.OutcomeUnspecified,
+}
+
+// outcomeLabel renders a jobs.Outcome as the fixed-vocabulary string
+// outcomeCounts uses. Every named Outcome gets its own value; anything else
+// (including any future/out-of-range Outcome) is "unspecified".
+func outcomeLabel(o jobs.Outcome) string {
+	switch o {
+	case jobs.OutcomeSuccess:
+		return "success"
+	case jobs.OutcomeFailure:
+		return "failure"
+	case jobs.OutcomeTimeout:
+		return "timeout"
+	case jobs.OutcomeDeniedByPolicy:
+		return "denied_by_policy"
+	case jobs.OutcomeCancelled:
+		return "cancelled"
+	case jobs.OutcomeUnreachable:
+		return "unreachable"
+	case jobs.OutcomeVersionRefused:
+		return "version_refused"
+	default:
+		return "unspecified"
+	}
+}
+
+// outcomeCounts renders the aggregate per-Outcome tally across results as a
+// compact string, e.g. "success=2,denied_by_policy=1", in outcomeOrder,
+// omitting outcomes with a zero count. A nil/empty results yields "".
+func outcomeCounts(results []capability.NodeResult) string {
+	counts := make(map[jobs.Outcome]int, len(outcomeOrder))
+	for _, r := range results {
+		counts[r.Outcome]++
+	}
+	var b strings.Builder
+	for _, o := range outcomeOrder {
+		n := counts[o]
+		if n == 0 {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte(',')
+		}
+		fmt.Fprintf(&b, "%s=%d", outcomeLabel(o), n)
+	}
+	return b.String()
 }
 
 func (s *Sink) append(ctx context.Context, rec audit.Record) error {

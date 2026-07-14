@@ -178,13 +178,18 @@ $ docker compose down -v
 
 ## Where to read the audit trail
 
-Every dispatch and refusal is audited. Durable audit rows live in the Relay's
-SQLite store on the `relay-data` volume, and the decisions are also emitted to
-the Relay's logs:
+Every dispatch, refusal, and plan is audited. Each such decision emits exactly
+one structured log line — carrying the principal, selector, operation/action
+kind, outcome counts, and job ID — to the Relay's logs:
 
 ```console
 $ docker compose logs -f relay
 ```
+
+The durable, full record — including per-Node output — lives only in the
+Relay's SQLite store on the `relay-data` volume; the log lines deliberately
+omit operation args, raw-exec argv, and captured Stdout/Stderr, so they are a
+summary, not a substitute for the store.
 
 A dedicated audit **read** surface (an API/MCP route to query the trail) does not
 exist yet — it is future work. For now the logs and the store are the trail.

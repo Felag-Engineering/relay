@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -139,6 +140,70 @@ func TestRecordDispatchFanOutOnePerNodeResult(t *testing.T) {
 	}
 }
 
+// TestRecordDispatchLogsDecisionLine is #181's DoD #3 for the dispatch Kind:
+// Record emits exactly one structured decision line summarizing the whole
+// fan-out (aggregate matched + per-outcome counts), and — DoD #2 — that line
+// never contains any NodeResult's captured Stdout/Stderr bytes.
+func TestRecordDispatchLogsDecisionLine(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	var buf bytes.Buffer
+	sink := New(repo,
+		WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(&buf, nil))),
+	)
+
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	entry := capability.AuditEntry{
+		Kind:      capability.AuditKindDispatch,
+		Principal: principal,
+		Selector:  sel,
+		Action:    act,
+		JobID:     "job-1",
+		Results: []capability.NodeResult{
+			{NodeID: "node-ok", Outcome: jobs.OutcomeSuccess, Stdout: []byte("node-ok stdout"), Stderr: []byte(""), Truncated: false},
+			{NodeID: "node-denied", Outcome: jobs.OutcomeDeniedByPolicy},
+			{NodeID: "node-offline", Outcome: jobs.OutcomeUnreachable},
+			{NodeID: "node-cancelled", Outcome: jobs.OutcomeCancelled, Stdout: []byte(""), Stderr: []byte("cancelled mid-run"), Truncated: true},
+		},
+	}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Record emitted %d log lines, want 1: %q", len(lines), buf.String())
+	}
+	line := lines[0]
+
+	for attr, want := range map[string]string{
+		"msg":         "audit decision",
+		"kind":        "dispatch",
+		"principal":   principal.Attribution(),
+		"selector":    sel.String(),
+		"action_kind": "operation",
+		"operation":   "service.restart",
+		"job_id":      "job-1",
+		"matched":     "4",
+	} {
+		if !strings.Contains(line, attr+"="+want) && !strings.Contains(line, attr+"=\""+want+"\"") {
+			t.Errorf("decision line missing %s=%s: %q", attr, want, line)
+		}
+	}
+	wantCounts := "success=1,denied_by_policy=1,cancelled=1,unreachable=1"
+	if !strings.Contains(line, wantCounts) {
+		t.Errorf("decision line missing outcome_counts %q: %q", wantCounts, line)
+	}
+
+	if strings.Contains(line, "node-ok stdout") || strings.Contains(line, "cancelled mid-run") {
+		t.Fatalf("decision line leaked NodeResult Stdout/Stderr: %q", line)
+	}
+}
+
 func TestRecordDispatchZeroMatchOneJobLevelRow(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
@@ -212,6 +277,61 @@ func TestRecordRefusalOneRowNoNodeID(t *testing.T) {
 	}
 }
 
+// TestRecordRefusalLogsDecisionLine is #181's DoD #3 for the refusal Kind:
+// Record emits exactly one structured decision line carrying the refusal
+// Reason, and — DoD #2 — that line never contains the raw-exec argv (the
+// only fixture that sets RawExecArgv, since a refusal never reaches
+// e.Results, so it cannot structurally carry NodeResult output).
+func TestRecordRefusalLogsDecisionLine(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	var buf bytes.Buffer
+	sink := New(repo,
+		WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(&buf, nil))),
+	)
+
+	principal := capability.Principal{Account: "alice"}
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceRelay, Key: "quarantine", Value: "on"}}}
+	entry := capability.AuditEntry{
+		Kind:      capability.AuditKindRefusal,
+		Principal: principal,
+		Selector:  sel,
+		Action:    jobs.Action{Kind: jobs.ActionRawExec, RawExecArgv: []string{"/bin/rm", "-rf", "/"}, RiskClass: jobs.RiskClassMutate},
+		Reason:    "blast radius exceeded",
+	}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Record emitted %d log lines, want 1: %q", len(lines), buf.String())
+	}
+	line := lines[0]
+
+	for attr, want := range map[string]string{
+		"msg":         "audit decision",
+		"kind":        "refusal",
+		"principal":   principal.Attribution(),
+		"selector":    sel.String(),
+		"action_kind": "raw_exec",
+		"reason":      "blast radius exceeded",
+	} {
+		if !strings.Contains(line, attr+"="+want) && !strings.Contains(line, attr+"=\""+want+"\"") {
+			t.Errorf("decision line missing %s=%s: %q", attr, want, line)
+		}
+	}
+	if strings.Contains(line, "job_id=") {
+		t.Errorf("refusal decision line has job_id, want none: %q", line)
+	}
+
+	if strings.Contains(line, "/bin/rm") || strings.Contains(line, "-rf") {
+		t.Fatalf("decision line leaked raw-exec argv: %q", line)
+	}
+}
+
 // TestRecordPlanOneRowNoJobOrNode is #119's audit acceptance line: an
 // AuditKindPlan entry writes exactly one KindPlan row, with Principal/
 // Selector/Action set and JobID/NodeID/Outcome empty — a Plan creates no
@@ -257,6 +377,50 @@ func TestRecordPlanOneRowNoJobOrNode(t *testing.T) {
 	}
 	if rec.Outcome != jobs.OutcomeUnspecified {
 		t.Errorf("Outcome = %v, want OutcomeUnspecified", rec.Outcome)
+	}
+}
+
+// TestRecordPlanLogsDecisionLine is #181's DoD #3 for the plan Kind: Record
+// emits exactly one structured decision line carrying Principal/Selector/
+// Action, with no job_id (a Plan creates no Job).
+func TestRecordPlanLogsDecisionLine(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	var buf bytes.Buffer
+	sink := New(repo,
+		WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(&buf, nil))),
+	)
+
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+	entry := capability.AuditEntry{Kind: capability.AuditKindPlan, Principal: principal, Selector: sel, Action: act}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Record emitted %d log lines, want 1: %q", len(lines), buf.String())
+	}
+	line := lines[0]
+
+	for attr, want := range map[string]string{
+		"msg":         "audit decision",
+		"kind":        "plan",
+		"principal":   principal.Attribution(),
+		"selector":    sel.String(),
+		"action_kind": "operation",
+		"operation":   "service.restart",
+	} {
+		if !strings.Contains(line, attr+"="+want) && !strings.Contains(line, attr+"=\""+want+"\"") {
+			t.Errorf("decision line missing %s=%s: %q", attr, want, line)
+		}
+	}
+	if strings.Contains(line, "job_id=") {
+		t.Errorf("plan decision line has job_id, want none: %q", line)
 	}
 }
 
