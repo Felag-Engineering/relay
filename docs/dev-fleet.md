@@ -137,6 +137,14 @@ every dev Node and get a per-Node result:
 run_operation(selector="relay:env=dev", operation="system.facts")
 ```
 
+Read a file — the `file.read` example advertised by `list_operations`. The dev
+daemon image bakes in `/etc/os-release` (busybox has none), and the fixture Policy
+allows `file.read` on any path but `/etc/shadow`, so this succeeds verbatim per Node:
+
+```
+run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/etc/os-release"})
+```
+
 Policy-denied path — `service.restart sshd`. The fixture Policy allows
 `service.restart` only for `nginx` and `php-fpm`, so the daemon's live Policy
 engine refuses it:
