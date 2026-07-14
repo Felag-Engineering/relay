@@ -130,6 +130,28 @@ pub enum Rule {
     RawExecDeny { pattern: String },
 }
 
+/// One `[[operation]]` allow rule, as a display-only mirror of the Policy file
+/// for the `PolicySnapshot` (ADR-0002) — not an evaluated form. `allowed_args[i]`
+/// is the permitted-value set at argv position `i`; `"*"` marks a wildcard
+/// position; an empty outer list means the operation is allowed with zero
+/// arguments.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationAllowRule {
+    pub name: String,
+    pub allowed_args: Vec<Vec<String>>,
+}
+
+/// One `[[deny]]` rule, as a display-only mirror of the Policy file for the
+/// `PolicySnapshot` (ADR-0002) — not an evaluated form. `args[i]` is the
+/// denied-value set at argv position `i`; an empty outer list denies the
+/// whole operation regardless of arguments. Deny rules never carry a `"*"`
+/// wildcard (they list explicit values).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationDenyRule {
+    pub name: String,
+    pub args: Vec<Vec<String>>,
+}
+
 /// The outcome of a Policy evaluation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
@@ -569,6 +591,41 @@ impl Policy {
             }
         }
         names
+    }
+
+    /// Every `[[operation]]` allow block, in file order.
+    ///
+    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy file
+    /// for the `PolicySnapshot` the Relay displays. Unlike
+    /// [`Policy::allowed_operations`], this does NOT dedup by name — a name
+    /// may appear in multiple blocks with different `allowed_args`, and every
+    /// block is preserved. This is not a re-evaluation of what is actually
+    /// permitted (that would reimplement `Policy::evaluate`, forbidden by
+    /// ADR-0011); it is a verbatim copy of the loaded rules.
+    pub fn operation_allow_rules(&self) -> Vec<OperationAllowRule> {
+        self.operations
+            .iter()
+            .map(|op| OperationAllowRule {
+                name: op.name.clone(),
+                allowed_args: op.allowed_args.clone(),
+            })
+            .collect()
+    }
+
+    /// Every `[[deny]]` block, in file order.
+    ///
+    /// Report-only / display-only (ADR-0002): a raw mirror of the Policy
+    /// file's deny rules for the `PolicySnapshot` the Relay displays. It
+    /// never folds allow and deny together into an effective verdict — that
+    /// would reimplement `Policy::evaluate`, forbidden by ADR-0011.
+    pub fn deny_rules(&self) -> Vec<OperationDenyRule> {
+        self.denies
+            .iter()
+            .map(|d| OperationDenyRule {
+                name: d.name.clone(),
+                args: d.args.clone(),
+            })
+            .collect()
     }
 
     /// Evaluate whether `operation_name` may run with the given `args`.
@@ -1335,6 +1392,84 @@ allowed_args = [["php-fpm"]]
             policy.allowed_operations(),
             vec!["service.restart".to_string()],
             "duplicate operation names must appear once, first-appearance order"
+        );
+    }
+
+    #[test]
+    fn snapshot_operation_rules_from_fixture() {
+        let policy = fixture_policy();
+        assert_eq!(
+            policy.operation_allow_rules(),
+            vec![
+                OperationAllowRule {
+                    name: "service.restart".to_string(),
+                    allowed_args: vec![vec!["nginx".to_string(), "php-fpm".to_string()]],
+                },
+                OperationAllowRule {
+                    name: "system.facts".to_string(),
+                    allowed_args: vec![],
+                },
+                OperationAllowRule {
+                    name: "file.read".to_string(),
+                    allowed_args: vec![vec!["*".to_string()]],
+                },
+                OperationAllowRule {
+                    name: "pkg.install".to_string(),
+                    allowed_args: vec![
+                        vec!["nginx".to_string(), "curl".to_string()],
+                        vec!["*".to_string()],
+                    ],
+                },
+            ],
+            "operation_allow_rules must preserve every [[operation]] block, in file order"
+        );
+    }
+
+    #[test]
+    fn snapshot_deny_rules_from_fixture() {
+        let policy = fixture_policy();
+        assert_eq!(
+            policy.deny_rules(),
+            vec![OperationDenyRule {
+                name: "file.read".to_string(),
+                args: vec![vec!["/etc/shadow".to_string()]],
+            }]
+        );
+    }
+
+    #[test]
+    fn snapshot_operation_and_deny_rules_empty_policy() {
+        let policy = from_toml_str("").expect("empty TOML must parse as deny-all");
+        assert!(policy.operation_allow_rules().is_empty());
+        assert!(policy.deny_rules().is_empty());
+    }
+
+    #[test]
+    fn operation_allow_rules_keeps_duplicates_no_dedup() {
+        let toml = r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[[operation]]
+name = "service.restart"
+allowed_args = [["php-fpm"]]
+"#;
+        let policy = from_toml_str(toml).expect("inline policy must parse");
+        assert_eq!(
+            policy.operation_allow_rules(),
+            vec![
+                OperationAllowRule {
+                    name: "service.restart".to_string(),
+                    allowed_args: vec![vec!["nginx".to_string()]],
+                },
+                OperationAllowRule {
+                    name: "service.restart".to_string(),
+                    allowed_args: vec![vec!["php-fpm".to_string()]],
+                },
+            ],
+            "unlike allowed_operations, operation_allow_rules must keep every block \
+             (no dedup by name) since arg rules are per-block"
         );
     }
 

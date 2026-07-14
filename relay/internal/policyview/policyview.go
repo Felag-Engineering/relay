@@ -25,6 +25,25 @@ package policyview
 
 import "sync"
 
+// OperationRule is a proto-free mirror of relayv1.OperationRule: one
+// [[operation]] allow rule from the daemon's loaded Policy file, verbatim.
+// AllowedArgs[i] is the permitted-value set at argv position i; an empty
+// slice means the Operation is allowed with zero arguments. Display-only —
+// see package doc.
+type OperationRule struct {
+	Name        string
+	AllowedArgs [][]string
+}
+
+// DenyRule is a proto-free mirror of relayv1.DenyRule: one [[deny]] rule from
+// the daemon's loaded Policy file, verbatim. Args[i] is the denied-value set
+// at argv position i; an empty slice denies the whole Operation regardless
+// of arguments. Display-only — see package doc.
+type DenyRule struct {
+	Name string
+	Args [][]string
+}
+
 // Snapshot is a proto-free mirror of relayv1.PolicySnapshot: the
 // daemon-reported effective Policy for one Node, at the time it was last
 // reported. Display-only (see package doc).
@@ -34,6 +53,21 @@ type Snapshot struct {
 	RawDenyPatterns   []string
 	AllowedOperations []string
 	PolicyFingerprint string
+	OperationRules    []OperationRule
+	DenyRules         []DenyRule
+}
+
+// cloneArgSets returns a deep copy of a [][]string so no shared backing
+// array (outer or inner) escapes the cache.
+func cloneArgSets(sets [][]string) [][]string {
+	if sets == nil {
+		return nil
+	}
+	out := make([][]string, len(sets))
+	for i, s := range sets {
+		out[i] = append([]string(nil), s...)
+	}
+	return out
 }
 
 // clone returns a deep copy of s so Set/Get never let a caller mutate cached
@@ -43,6 +77,24 @@ func (s Snapshot) clone() Snapshot {
 	out.RawAllowPatterns = append([]string(nil), s.RawAllowPatterns...)
 	out.RawDenyPatterns = append([]string(nil), s.RawDenyPatterns...)
 	out.AllowedOperations = append([]string(nil), s.AllowedOperations...)
+	if s.OperationRules != nil {
+		out.OperationRules = make([]OperationRule, len(s.OperationRules))
+		for i, r := range s.OperationRules {
+			out.OperationRules[i] = OperationRule{
+				Name:        r.Name,
+				AllowedArgs: cloneArgSets(r.AllowedArgs),
+			}
+		}
+	}
+	if s.DenyRules != nil {
+		out.DenyRules = make([]DenyRule, len(s.DenyRules))
+		for i, r := range s.DenyRules {
+			out.DenyRules[i] = DenyRule{
+				Name: r.Name,
+				Args: cloneArgSets(r.Args),
+			}
+		}
+	}
 	return out
 }
 

@@ -38,6 +38,12 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 			AllowedOperations: []string{"system.facts"},
 			PolicyFingerprint: "sha256:node-a-fingerprint",
 			Reported:          true,
+			OperationRules: []OperationRuleOutput{
+				{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+			},
+			DenyRules: []DenyRuleOutput{
+				{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
+			},
 		},
 	}
 
@@ -52,7 +58,9 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		`"outdated":true,` +
 		`"effective_policy":{"raw_exec_enabled":true,"raw_allow_patterns":["^/usr/bin/systemctl restart .+$"],` +
 		`"raw_deny_patterns":[".*rm -rf.*"],"allowed_operations":["system.facts"],` +
-		`"policy_fingerprint":"sha256:node-a-fingerprint","reported":true}}`
+		`"policy_fingerprint":"sha256:node-a-fingerprint","reported":true,` +
+		`"operation_rules":[{"name":"service.restart","allowed_args":[["nginx","php-fpm"]]}],` +
+		`"deny_rules":[{"name":"file.read","args":[["/etc/shadow"]]}]}}`
 
 	if string(got) != want {
 		t.Errorf("json.Marshal(DescribeNodeOutput) =\n%s\nwant\n%s\n(NodeItem's fields must flatten into the "+

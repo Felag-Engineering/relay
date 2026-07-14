@@ -9,6 +9,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -35,6 +36,33 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 		item.RevokedAt = n.RevokedAt.UTC().Format(time.RFC3339)
 	}
 	return item
+}
+
+// operationRuleOutputsFromSnapshot renders the display-only, verbatim
+// [[operation]] allow-rule mirror (ADR-0002) for describe_node. It never
+// evaluates, dedups, or resolves wildcards — see policyview.OperationRule.
+func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []OperationRuleOutput {
+	if rules == nil {
+		return nil
+	}
+	out := make([]OperationRuleOutput, len(rules))
+	for i, r := range rules {
+		out[i] = OperationRuleOutput{Name: r.Name, AllowedArgs: r.AllowedArgs}
+	}
+	return out
+}
+
+// denyRuleOutputsFromSnapshot renders the display-only, verbatim [[deny]]
+// rule mirror (ADR-0002) for describe_node. See policyview.DenyRule.
+func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
+	if rules == nil {
+		return nil
+	}
+	out := make([]DenyRuleOutput, len(rules))
+	for i, r := range rules {
+		out[i] = DenyRuleOutput{Name: r.Name, Args: r.Args}
+	}
+	return out
 }
 
 // listNodesInput is list_nodes' argument: an optional Selector filter,
@@ -107,6 +135,8 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 				AllowedOperations: snap.AllowedOperations,
 				PolicyFingerprint: snap.PolicyFingerprint,
 				Reported:          true,
+				OperationRules:    operationRuleOutputsFromSnapshot(snap.OperationRules),
+				DenyRules:         denyRuleOutputsFromSnapshot(snap.DenyRules),
 			}
 		} else {
 			// No snapshot captured yet: still surface the registry's Policy

@@ -87,6 +87,90 @@ func TestCache_Get_CopyIsolation(t *testing.T) {
 	}
 }
 
+// TestCache_SetGet_OperationAndDenyRules_RoundTrip covers the #187 fields:
+// every [[operation]]/[[deny]] block, including a wildcard allow position,
+// must round-trip through Set/Get unchanged and in file order.
+func TestCache_SetGet_OperationAndDenyRules_RoundTrip(t *testing.T) {
+	c := New()
+	want := Snapshot{
+		OperationRules: []OperationRule{
+			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+			{Name: "file.read", AllowedArgs: [][]string{{"*"}}},
+		},
+		DenyRules: []DenyRule{
+			{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
+		},
+	}
+
+	c.Set("node-1", want)
+
+	got, ok := c.Get("node-1")
+	if !ok {
+		t.Fatal("Get(node-1): ok = false, want true")
+	}
+	if len(got.OperationRules) != 2 {
+		t.Fatalf("OperationRules = %+v, want 2 entries", got.OperationRules)
+	}
+	if got.OperationRules[0].Name != "service.restart" ||
+		len(got.OperationRules[0].AllowedArgs) != 1 ||
+		got.OperationRules[0].AllowedArgs[0][0] != "nginx" ||
+		got.OperationRules[0].AllowedArgs[0][1] != "php-fpm" {
+		t.Errorf("OperationRules[0] = %+v, want service.restart [nginx php-fpm]", got.OperationRules[0])
+	}
+	if got.OperationRules[1].Name != "file.read" || got.OperationRules[1].AllowedArgs[0][0] != "*" {
+		t.Errorf("OperationRules[1] = %+v, want file.read [*] (wildcard)", got.OperationRules[1])
+	}
+	if len(got.DenyRules) != 1 || got.DenyRules[0].Name != "file.read" ||
+		got.DenyRules[0].Args[0][0] != "/etc/shadow" {
+		t.Errorf("DenyRules = %+v, want [{file.read [[/etc/shadow]]}]", got.DenyRules)
+	}
+}
+
+// TestCache_OperationAndDenyRules_CopyIsolation proves clone() deep-copies
+// the nested [][]string in OperationRules/DenyRules: mutating the source
+// (before Set) or the returned value (after Get) must never reach the
+// cached Snapshot.
+func TestCache_OperationAndDenyRules_CopyIsolation(t *testing.T) {
+	c := New()
+	rules := []OperationRule{{Name: "service.restart", AllowedArgs: [][]string{{"nginx"}}}}
+	denies := []DenyRule{{Name: "file.read", Args: [][]string{{"/etc/shadow"}}}}
+	c.Set("node-1", Snapshot{OperationRules: rules, DenyRules: denies})
+
+	// Mutate the caller's slices after Set — must not reach the cache.
+	rules[0].AllowedArgs[0][0] = "mutated"
+	denies[0].Args[0][0] = "mutated"
+
+	got, ok := c.Get("node-1")
+	if !ok {
+		t.Fatal("Get(node-1): ok = false, want true")
+	}
+	if got.OperationRules[0].AllowedArgs[0][0] != "nginx" {
+		t.Errorf("OperationRules[0].AllowedArgs[0][0] = %q, want %q (Set must copy, not alias)",
+			got.OperationRules[0].AllowedArgs[0][0], "nginx")
+	}
+	if got.DenyRules[0].Args[0][0] != "/etc/shadow" {
+		t.Errorf("DenyRules[0].Args[0][0] = %q, want %q (Set must copy, not alias)",
+			got.DenyRules[0].Args[0][0], "/etc/shadow")
+	}
+
+	// Mutate the Get-returned value — must not reach a later Get.
+	got.OperationRules[0].AllowedArgs[0][0] = "mutated-again"
+	got.DenyRules[0].Args[0][0] = "mutated-again"
+
+	got2, ok := c.Get("node-1")
+	if !ok {
+		t.Fatal("second Get(node-1): ok = false, want true")
+	}
+	if got2.OperationRules[0].AllowedArgs[0][0] != "nginx" {
+		t.Errorf("OperationRules[0].AllowedArgs[0][0] = %q, want %q (Get must copy, not alias)",
+			got2.OperationRules[0].AllowedArgs[0][0], "nginx")
+	}
+	if got2.DenyRules[0].Args[0][0] != "/etc/shadow" {
+		t.Errorf("DenyRules[0].Args[0][0] = %q, want %q (Get must copy, not alias)",
+			got2.DenyRules[0].Args[0][0], "/etc/shadow")
+	}
+}
+
 func TestCache_Set_Overwrites(t *testing.T) {
 	c := New()
 	c.Set("node-1", Snapshot{PolicyFingerprint: "first"})

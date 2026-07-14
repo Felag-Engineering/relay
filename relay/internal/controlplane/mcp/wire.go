@@ -50,6 +50,26 @@ type ListNodesOutput struct {
 	Nodes []NodeItem `json:"nodes"`
 }
 
+// OperationRuleOutput is one [[operation]] allow rule, mirrored verbatim
+// from the daemon's loaded Policy (policyview.OperationRule; ADR-0002).
+// AllowedArgs[i] is the permitted-value set at argv position i; an empty
+// slice means the Operation is allowed with zero arguments. Display-only:
+// the Relay never evaluates these (ADR-0011).
+type OperationRuleOutput struct {
+	Name        string     `json:"name"`
+	AllowedArgs [][]string `json:"allowed_args"`
+}
+
+// DenyRuleOutput is one [[deny]] rule, mirrored verbatim from the daemon's
+// loaded Policy (policyview.DenyRule; ADR-0002). Args[i] is the denied-value
+// set at argv position i; an empty slice denies the whole Operation
+// regardless of arguments. Display-only: the Relay never evaluates these
+// (ADR-0011).
+type DenyRuleOutput struct {
+	Name string     `json:"name"`
+	Args [][]string `json:"args"`
+}
+
 // EffectivePolicyOutput is the display-only effective-Policy view
 // (policyview.Snapshot; invariant 12, ADR-0002/0011): the Relay never
 // evaluates Policy, only displays what the daemon last reported. Reported is
@@ -64,6 +84,14 @@ type EffectivePolicyOutput struct {
 	AllowedOperations []string `json:"allowed_operations"`
 	PolicyFingerprint string   `json:"policy_fingerprint"`
 	Reported          bool     `json:"reported"`
+	// OperationRules and DenyRules are raw mirrors of the daemon's loaded
+	// Policy file (every [[operation]]/[[deny]] block, in file order; no
+	// dedup, no evaluation) — see the OperationRuleOutput/DenyRuleOutput
+	// doc comments. They may be empty even when Reported is true (a Policy
+	// with no operation/deny blocks) — Reported is the only "no data yet"
+	// signal.
+	OperationRules []OperationRuleOutput `json:"operation_rules"`
+	DenyRules      []DenyRuleOutput      `json:"deny_rules"`
 }
 
 // DescribeNodeOutput is NodeItem's fields (flattened via Go's anonymous
