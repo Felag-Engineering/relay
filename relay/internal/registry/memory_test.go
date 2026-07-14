@@ -431,6 +431,44 @@ func TestSetRevoked_RoundTripAndRevokedNodeIDs(t *testing.T) {
 	}
 }
 
+func TestCount(t *testing.T) {
+	reg := NewInMemory()
+
+	total, revoked, err := reg.Count()
+	if err != nil {
+		t.Fatalf("Count on empty registry: %v", err)
+	}
+	if total != 0 || revoked != 0 {
+		t.Errorf("Count on empty registry = (%d, %d), want (0, 0)", total, revoked)
+	}
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		if _, err := reg.Upsert(Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	total, revoked, err = reg.Count()
+	if err != nil {
+		t.Fatalf("Count with 3 enrolled: %v", err)
+	}
+	if total != 3 || revoked != 0 {
+		t.Errorf("Count with 3 enrolled, none revoked = (%d, %d), want (3, 0)", total, revoked)
+	}
+
+	if err := reg.SetRevoked("node-b", time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+
+	total, revoked, err = reg.Count()
+	if err != nil {
+		t.Fatalf("Count with one revoked: %v", err)
+	}
+	if total != 3 || revoked != 1 {
+		t.Errorf("Count with 3 enrolled, 1 revoked = (%d, %d), want (3, 1)", total, revoked)
+	}
+}
+
 func TestOutdated_NoMinimumConfigured(t *testing.T) {
 	reg := NewInMemory()
 

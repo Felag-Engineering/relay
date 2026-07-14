@@ -244,7 +244,7 @@ func TestPlanAuthzDeniedRecordsRefusalNoVerdicts(t *testing.T) {
 	capChecker := &spyCapChecker{}
 	disp := &spyDispatcher{}
 	audit := &spyAuditSink{}
-	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
 
 	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, jobs.Action{RiskClass: jobs.RiskClassRead})

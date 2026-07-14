@@ -124,7 +124,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	nodes := sel.Resolve(s.reg)
 
 	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
-		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, err)
+		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
 	frozen, _ := s.freeze.Frozen(ctx)

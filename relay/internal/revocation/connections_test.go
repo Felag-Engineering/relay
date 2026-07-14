@@ -97,3 +97,37 @@ func TestConnections_DisconnectUnknownNodeIsNoOp(t *testing.T) {
 	// Should not panic.
 	c.Disconnect("unknown-node")
 }
+
+// TestConnections_Count is the "connected Nodes" gauge source: it counts
+// distinct node_ids with at least one live Tunnel stream, not the number of
+// tracked streams (a Node with two concurrent streams still counts once).
+func TestConnections_Count(t *testing.T) {
+	c := revocation.NewConnections()
+	if got := c.Count(); got != 0 {
+		t.Fatalf("Count on empty tracker = %d, want 0", got)
+	}
+
+	_, release1 := c.Track(context.Background(), "node-1")
+	defer release1()
+	if got := c.Count(); got != 1 {
+		t.Errorf("Count after tracking node-1 = %d, want 1", got)
+	}
+
+	// A second concurrent stream for the SAME node must not double-count.
+	_, release1b := c.Track(context.Background(), "node-1")
+	defer release1b()
+	if got := c.Count(); got != 1 {
+		t.Errorf("Count after a second stream for node-1 = %d, want 1 (distinct node_ids only)", got)
+	}
+
+	_, release2 := c.Track(context.Background(), "node-2")
+	defer release2()
+	if got := c.Count(); got != 2 {
+		t.Errorf("Count after tracking node-2 = %d, want 2", got)
+	}
+
+	c.Disconnect("node-1")
+	if got := c.Count(); got != 1 {
+		t.Errorf("Count after disconnecting node-1 = %d, want 1", got)
+	}
+}

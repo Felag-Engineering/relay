@@ -22,6 +22,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
@@ -119,6 +120,9 @@ type appDeps struct {
 	// Connected before dispatching, rather than racing the offline
 	// fail-fast (ADR-0004). Nil when the control plane is disabled.
 	dispatch *dispatch.Router
+	// metrics is the real capability.MetricsSink/enroll.EnrollmentObserver
+	// (#182), exposed so tests can assert on its counters/gauges directly.
+	metrics *metrics.Metrics
 }
 
 // opvocabLister adapts opvocab.Operations (a package-level func) to the
@@ -335,6 +339,17 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	})
 	reg := st.Registry()
 
+	// appMetrics is the real capability.MetricsSink/enroll.EnrollmentObserver
+	// (#182): its counters are always live (wired into enrollSrv and base
+	// below), independent of Config.ControlEnabled; only the /metrics HTTP
+	// surface itself is gated on ControlEnabled (no control listener
+	// otherwise), mirroring every other control-plane surface.
+	appMetrics := metrics.New(metrics.GaugeSources{
+		Connected: conns.Count,
+		Nodes:     reg.Count,
+		Frozen:    func() (bool, error) { return st.Freeze().Frozen(context.Background()) },
+	})
+
 	// Rehydrate the denylist from the persisted authority before the listener
 	// accepts any connection: the Denylist is a derived cache of
 	// registry.RevokedNodeIDs(); the store is the source of truth (issue #133,
@@ -351,7 +366,8 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	revocationSvc := revocation.NewService(denylist, conns, reg, tokenSvc)
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
-		enroll.WithRateLimiter(limiter))
+		enroll.WithRateLimiter(limiter),
+		enroll.WithEnrollmentObserver(appMetrics))
 
 	// policyCache is the display-only effective-Policy cache (#117, invariant
 	// 12 / ADR-0002): the tunnel handler records what a daemon reports in
@@ -381,6 +397,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(auditsink.New(st.Audit())),
 		capability.WithFreeze(st.Freeze()),
+		capability.WithMetrics(appMetrics),
 	}
 
 	var capSvc *capability.Service
@@ -457,6 +474,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			revocation: revocationSvc,
 			audit:      st.Audit(),
 			now:        func() time.Time { return time.Now().UTC() },
+			metrics:    appMetrics,
 		}
 		for _, s := range defaultControlSurfaces() {
 			s.Mount(controlSrv.Mux(), sd)
@@ -492,6 +510,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		tunnel:     ts,
 		control:    controlSrv,
 		dispatch:   dispatchRouter,
+		metrics:    appMetrics,
 	}
 	return srv, deps, nil
 }

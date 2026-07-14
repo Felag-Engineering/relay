@@ -35,6 +35,10 @@ type Service struct {
 	audit  AuditSink
 	freeze FreezeStore
 
+	// metrics is best-effort observability only (MetricsSink, seams.go); it
+	// never affects a dispatch, authz, cap, or Freeze decision.
+	metrics MetricsSink
+
 	// realDispatcher is set by WithExecution (execution.go) once a real Job
 	// engine is wired. New's end-of-construction guard uses it to refuse a
 	// real dispatcher riding the allow-all/no-op default seams — see the
@@ -77,6 +81,14 @@ func WithFreeze(f FreezeStore) Option {
 	return func(s *Service) { s.freeze = f }
 }
 
+// WithMetrics overrides the default noopMetricsSink. Metrics are never
+// security-relevant, so — unlike WithAuthorizer/WithCapChecker/WithAuditSink/
+// WithFreeze — New's real-dispatcher fail-open guard does not require this
+// option to have been supplied.
+func WithMetrics(m MetricsSink) Option {
+	return func(s *Service) { s.metrics = m }
+}
+
 // New returns a Service backed by reg, with allowAllAuthorizer,
 // noopCapChecker, noopDispatcher, noopAuditSink, and noopFreezeStore
 // defaults (functional-option pattern, mirroring registry.NewInMemory).
@@ -103,12 +115,13 @@ func WithFreeze(f FreezeStore) Option {
 // dispatcher's doc comment in dispatch.go.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
-		reg:    reg,
-		authz:  allowAllAuthorizer{},
-		cap:    noopCapChecker{},
-		disp:   noopDispatcher{},
-		audit:  noopAuditSink{},
-		freeze: noopFreezeStore{},
+		reg:     reg,
+		authz:   allowAllAuthorizer{},
+		cap:     noopCapChecker{},
+		disp:    noopDispatcher{},
+		audit:   noopAuditSink{},
+		freeze:  noopFreezeStore{},
+		metrics: noopMetricsSink{},
 	}
 	for _, o := range opts {
 		o(s)
@@ -162,24 +175,28 @@ func New(reg registry.Repository, opts ...Option) *Service {
 func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.Action) ([]NodeResult, error) {
 	frozen, err := s.freeze.Frozen(ctx)
 	if err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, fmt.Errorf("capability: read freeze state: %w", err))
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: read freeze state: %w", err))
 	}
 	if frozen {
-		return nil, s.recordRefusal(ctx, p, sel, act, &FrozenError{})
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
 	nodes := sel.Resolve(s.reg)
 
 	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, err)
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
 	if err := s.cap.Check(act.RiskClass, len(nodes)); err != nil {
-		return nil, s.recordRefusal(ctx, p, sel, act, err)
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalBlastCap, err)
 	}
 
 	d := newDispatch(p, sel, nodes, act)
 	res, dispatchErr := s.disp.run(ctx, d)
+
+	for _, r := range res.results {
+		s.metrics.IncDispatch(r.Outcome)
+	}
 
 	// The AuditSink is recorded unconditionally, even when the dispatcher
 	// errors: dispatch.run may execute some Nodes before failing on others
@@ -209,10 +226,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 
 // recordRefusal audits a Freeze-engaged, authz-deny, or cap-reject
 // short-circuit — the dispatcher was never reached, so there is no JobID or
-// Results, only the refusal's Reason. It returns refusalErr, joined with a
-// wrapped audit-write error if the audit write itself failed, so a failed
-// audit write is never silently swallowed.
-func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, refusalErr error) error {
+// Results, only the refusal's Reason. It also increments the MetricsSink for
+// kind. It returns refusalErr, joined with a wrapped audit-write error if the
+// audit write itself failed, so a failed audit write is never silently
+// swallowed.
+func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
+	s.metrics.IncRefusal(kind)
 	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error()}
 	var auditErr error
 	if err := s.audit.Record(ctx, entry); err != nil {
