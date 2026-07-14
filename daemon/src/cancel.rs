@@ -82,6 +82,28 @@ impl CancelRegistry {
             let _ = tx.send(());
         }
     }
+
+    /// Sends the cancel signal to every currently-registered Task and empties
+    /// the registry. Used at graceful-shutdown grace expiry to force-terminate
+    /// whatever is still in flight (issue #177).
+    ///
+    /// Returns the number of entries the registry held at the time of the
+    /// call — i.e. the number of cancels ATTEMPTED, not a count of children
+    /// confirmed killed. Per the honest-race contract, a Task that finishes
+    /// concurrently with this call may already have been deregistered (so it
+    /// is not counted) or may see its `send(())` land as a harmless no-op if
+    /// its own `recv_cancel` has already resolved by the time it's delivered
+    /// (ADR-0013) — either way, the returned count is an upper bound on
+    /// force-terminated Tasks, log-only, with no correctness dependence.
+    pub fn cancel_all(&self) -> usize {
+        let mut map = self.0.lock().expect("CancelRegistry Mutex not poisoned");
+        let n = map.len();
+        for (_id, tx) in map.drain() {
+            // Ignore send error: the receiver may have already resolved (honest race).
+            let _ = tx.send(());
+        }
+        n
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +146,32 @@ mod tests {
             rx.await.is_err(),
             "after deregister, the receiver must resolve to Err (no explicit send)"
         );
+    }
+
+    /// cancel_all delivers to every registered receiver, returns the count,
+    /// and empties the registry.
+    #[tokio::test]
+    async fn cancel_all_delivers_to_all_and_empties_registry() {
+        let registry = CancelRegistry::new();
+        let rx_a = registry.register("a");
+        let rx_b = registry.register("b");
+        let rx_c = registry.register("c");
+
+        let n = registry.cancel_all();
+        assert_eq!(n, 3, "cancel_all must return the number of entries held");
+
+        assert!(rx_a.await.is_ok(), "a must receive the cancel signal");
+        assert!(rx_b.await.is_ok(), "b must receive the cancel signal");
+        assert!(rx_c.await.is_ok(), "c must receive the cancel signal");
+
+        // The registry is now empty: a following cancel is a no-op.
+        registry.cancel("a"); // must not panic
+    }
+
+    /// cancel_all on an empty registry is a no-op that returns 0.
+    #[test]
+    fn cancel_all_on_empty_registry_returns_zero() {
+        let registry = CancelRegistry::new();
+        assert_eq!(registry.cancel_all(), 0);
     }
 }

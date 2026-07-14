@@ -19,11 +19,13 @@ mod policy_check;
 mod raw_exec;
 mod renew;
 mod scheduler;
+mod shutdown;
 mod tunnel;
 
 use cancel::CancelRegistry;
 use config::Config;
 use scheduler::Scheduler;
+use shutdown::{Inflight, Shutdown, ShutdownContext};
 use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
 #[allow(dead_code, unused_imports, clippy::all)]
@@ -144,6 +146,10 @@ enum TunnelExit {
     /// The stream errored mid-session after a healthy `open()`. The backoff
     /// IS reset.
     DroppedMidSession(Box<dyn std::error::Error + Send + Sync>),
+    /// A shutdown signal was received; in-flight Tasks were drained (or
+    /// killed at grace expiry) and the stream was closed cleanly. The caller
+    /// must NOT reconnect — the process is exiting (issue #177).
+    ShutdownComplete,
 }
 
 /// Sends the initial Hello, followed by a `PolicySnapshot` of the live Policy
@@ -184,6 +190,7 @@ async fn run_tunnel(
     policy: Arc<policy::Policy>,
     dedup: Arc<dedup::DedupStore>,
     scheduler: Arc<Scheduler>,
+    ctx: &ShutdownContext,
 ) -> TunnelExit {
     let mut client = TunnelClient::new(channel);
     let (tx, rx) = mpsc::channel::<DaemonMessage>(32);
@@ -227,7 +234,7 @@ async fn run_tunnel(
     // configures the base interval (default 30 s); each iteration re-samples so
     // the spread is maintained over the lifetime of the connection.
     let tx_hb = tx.clone();
-    tokio::spawn(async move {
+    let hb_handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(heartbeat_delay(interval, 0.2, rand_unit())).await;
             if tx_hb
@@ -245,6 +252,8 @@ async fn run_tunnel(
     });
     // Keep tx alive for the inbound loop (Task results are sent on it).
     // The heartbeat task has its own tx_hb clone; this tx is for Task results.
+    // hb_handle is aborted on graceful shutdown (below) to release tx_hb
+    // promptly so the outbound stream half-closes without waiting on it.
 
     let response = match client.open(ReceiverStream::new(rx)).await {
         Ok(response) => response,
@@ -275,8 +284,18 @@ async fn run_tunnel(
     // Drive the inbound stream. Spawning a detached task per Task keeps the loop
     // readable so TaskCancel and PolicyQuery messages can arrive while a Task is
     // in flight or queued. The inbound loop never touches the scheduler.
+    //
+    // The `ctx.shutdown` arm ONLY breaks — it must not move `tx`/`inbound`, or
+    // the borrow checker rejects it against the inbound-message arm below. All
+    // non-shutdown exits `return` directly, so the code after this loop is
+    // reached only via the shutdown break (issue #177).
     loop {
-        match inbound.message().await {
+        tokio::select! {
+            biased;
+            _ = ctx.shutdown.requested_fut() => {
+                break;
+            }
+            msg = inbound.message() => match msg {
             Ok(Some(msg)) => {
                 match msg.body {
                     Some(relay_message::Body::Task(task_req)) => {
@@ -288,6 +307,13 @@ async fn run_tunnel(
                         // Register BEFORE spawn: eliminates the window where
                         // a TaskCancel could arrive before the registry entry exists.
                         let cancel_rx = registry.register(&task_id);
+                        // Counts this Task from acceptance until its result is
+                        // enqueued on `tx` (below) — spans strictly more than the
+                        // cancel registry entry, which deregisters BEFORE the
+                        // send. This makes inflight-idle a correct "all results
+                        // enqueued" signal for the graceful-shutdown drain
+                        // (issue #177).
+                        let guard = ctx.inflight.enter();
                         let policy = Arc::clone(&policy);
                         let dedup = Arc::clone(&dedup);
                         let scheduler = Arc::clone(&scheduler);
@@ -320,6 +346,10 @@ async fn run_tunnel(
                             {
                                 error!("outbound channel closed while sending TaskResult");
                             }
+                            // Dropped last: the guard must outlive the send above so
+                            // the drain's `wait_idle()` only wakes once the result is
+                            // actually enqueued.
+                            drop(guard);
                         });
                     }
                     Some(relay_message::Body::TaskCancel(tc)) => {
@@ -349,8 +379,41 @@ async fn run_tunnel(
             }
             Ok(None) => return TunnelExit::ClosedClean,
             Err(e) => return TunnelExit::DroppedMidSession(Box::new(e)),
+            },
         }
     }
+
+    // Reached only via the shutdown break above: stop accepting new Tasks
+    // (the loop is gone), drain whatever is in flight under the bounded grace
+    // period, then close the outbound stream cleanly (issue #177).
+    //
+    // hb_handle is aborted BEFORE the drain so its `tx_hb` clone is released
+    // promptly — otherwise it would keep the outbound stream open and the
+    // post-close inbound read below would never see `None` within its budget.
+    hb_handle.abort();
+    let summary = shutdown::drain(&ctx.inflight, &registry, ctx.grace).await;
+    info!(
+        reason = ctx.shutdown.reason(),
+        in_flight = summary.in_flight,
+        drained = summary.drained,
+        killed = summary.killed,
+        "graceful shutdown: in-flight Tasks drained"
+    );
+    // Drop the last outbound sender: half-closes the request stream so the
+    // Relay sees end-of-stream once its buffered TaskResults are consumed.
+    drop(tx);
+    // Confirm the buffered TaskResults flushed onto the wire — but only if
+    // something was actually in flight. When nothing was in flight, nothing
+    // was enqueued on `tx` after the handshake, so there is nothing to
+    // confirm; skipping the read here gives an immediate clean exit on an
+    // idle shutdown instead of an up-to-`FLUSH_CONFIRM_BUDGET` wait.
+    if summary.in_flight > 0 {
+        let _ = tokio::time::timeout(shutdown::FLUSH_CONFIRM_BUDGET, async {
+            while let Ok(Some(_)) = inbound.message().await {}
+        })
+        .await;
+    }
+    TunnelExit::ShutdownComplete
 }
 
 /// Drives the daemon's connect → run → reconnect lifecycle forever, so the
@@ -383,6 +446,15 @@ async fn run_tunnel(
 /// and retried instead of exiting the process. The one exception is
 /// `IdentityError::EndpointScheme`, a non-transient configuration error that
 /// can never succeed on retry — that remains fatal (fail closed).
+///
+/// `ctx` (issue #177) carries the graceful-shutdown signal, the in-flight
+/// gauge, and the grace period as one bundle rather than three separate
+/// params — see `ShutdownContext`'s doc comment for why. A signal that
+/// arrives while disconnected (no live stream, so no Task can possibly be in
+/// flight) exits immediately; one arriving mid-connect races `connect_mtls`
+/// so the daemon never blocks past the grace period waiting on an unreachable
+/// Relay. Neither path can violate at-most-once (ADR-0004): both fire only
+/// before any Task could have been accepted.
 async fn reconnect_loop(
     config: &Config,
     startup_identity: identity::Identity,
@@ -390,11 +462,18 @@ async fn reconnect_loop(
     dedup: Arc<dedup::DedupStore>,
     scheduler: Arc<Scheduler>,
     interval: Duration,
+    ctx: ShutdownContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut backoff = Backoff::new(RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP);
     let mut renew_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     loop {
+        // A signal that arrived while disconnected: no live stream, so no
+        // Task can be in flight — exit immediately (issue #177).
+        if ctx.shutdown.is_requested() {
+            return Ok(());
+        }
+
         // Reload identity from disk to adopt any cert the renew task rotated;
         // fall back to the startup identity on None/Err. NEVER re-enroll here.
         let identity = identity::load_identity(&config.state_dir)
@@ -402,13 +481,22 @@ async fn reconnect_loop(
             .flatten()
             .unwrap_or_else(|| startup_identity.clone());
 
-        match tunnel::connect_mtls(
-            config.endpoint.clone(),
-            config.relay_domain.clone(),
-            &identity,
-        )
-        .await
-        {
+        // Race the connect against shutdown: `build_channel` sets no
+        // connect_timeout, so without this race a signal arriving mid-connect
+        // to an unreachable Relay would be invisible until connect() resolves
+        // (issue #177). No Task is at risk pre-connect, so returning here is
+        // invariant-#4-safe.
+        let outcome = tokio::select! {
+            biased;
+            _ = ctx.shutdown.requested_fut() => return Ok(()),
+            res = tunnel::connect_mtls(
+                config.endpoint.clone(),
+                config.relay_domain.clone(),
+                &identity,
+            ) => res,
+        };
+
+        match outcome {
             Ok(channel) => {
                 // Rebind the renew task to the fresh channel + freshly-reloaded
                 // identity on every reconnect (ADR-0006 Amendment 3 — see doc
@@ -432,6 +520,7 @@ async fn reconnect_loop(
                     Arc::clone(&policy),
                     Arc::clone(&dedup),
                     Arc::clone(&scheduler),
+                    &ctx,
                 )
                 .await
                 {
@@ -448,9 +537,18 @@ async fn reconnect_loop(
                         warn!(relay = %config.relay_addr, "Relay rejected stream open; will retry");
                         debug!(error = ?e, "stream-open failure detail");
                     }
+                    TunnelExit::ShutdownComplete => {
+                        if let Some(h) = renew_handle.take() {
+                            h.abort();
+                        }
+                        info!("graceful shutdown complete; exiting");
+                        return Ok(());
+                    }
                 }
                 let delay = backoff.next_delay(rand_unit());
-                tokio::time::sleep(delay).await;
+                if shutdown::sleep_or_shutdown(delay, &ctx.shutdown).await {
+                    return Ok(());
+                }
             }
             Err(identity::IdentityError::EndpointScheme { scheme }) => {
                 // Fatal, non-transient config error: retrying can never
@@ -461,7 +559,9 @@ async fn reconnect_loop(
             Err(e) => {
                 let delay = backoff.next_delay(rand_unit());
                 tunnel::log_connect_failure(&e, &config.relay_addr, delay);
-                tokio::time::sleep(delay).await;
+                if shutdown::sleep_or_shutdown(delay, &ctx.shutdown).await {
+                    return Ok(());
+                }
             }
         }
     }
@@ -553,7 +653,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // task is no longer spawned here — reconnect_loop rebinds it to the fresh
     // channel + identity on every successful connect (ADR-0006 Amendment 3).
     let interval = heartbeat_interval();
-    reconnect_loop(&config, identity, policy, dedup, scheduler, interval).await?;
+
+    // Graceful shutdown (issue #177): a signal listener triggers `shutdown`
+    // on SIGTERM/SIGINT; `reconnect_loop`/`run_tunnel` react to it, draining
+    // any in-flight Task under the bounded `grace` period before exiting.
+    let shutdown = Shutdown::new();
+    shutdown::spawn_signal_listener(shutdown.clone());
+    let ctx = ShutdownContext {
+        shutdown,
+        inflight: Inflight::default(),
+        grace: shutdown::grace_period(),
+    };
+
+    reconnect_loop(&config, identity, policy, dedup, scheduler, interval, ctx).await?;
 
     Ok(())
 }
