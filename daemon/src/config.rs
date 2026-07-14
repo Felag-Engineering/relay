@@ -1,6 +1,10 @@
 //! The daemon's single environment/config surface, read once at startup and
 //! threaded down. Centralizes the previously double-read RELAY_ADDR /
 //! RELAY_DOMAIN / HOSTNAME and the http→https scheme normalization.
+//!
+//! Also hosts daemon-local hard limits (e.g. [`MAX_OUTPUT_BYTES`]) that are
+//! compile-time constants, not env-derived — kept here as the daemon's single
+//! neutral config-adjacent home rather than scattered per call site.
 
 use std::path::PathBuf;
 
@@ -71,6 +75,28 @@ impl Config {
             facts,
         }
     }
+}
+
+/// Per-stream output byte cap for stdout and stderr independently. Daemon-local
+/// and wire-immutable: the Relay can never raise it over the wire (invariant #11
+/// analog for the daemon; ADR-0004). Bytes past the cap are drained but discarded
+/// and `truncated` is set. Sane default; a Policy/env-tunable value is future work.
+pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// Renders an `io::Error`'s human message without the trailing `" (os error N)"`.
+///
+/// E.g. `NotFound` -> `"No such file or directory"`, not
+/// `"No such file or directory (os error 2)"`. Used to build subject-naming
+/// error strings (`spawn <argv0>: <reason>`, `read <path>: <reason>`) without
+/// noisy errno suffixes. Errors without a raw OS error code pass through unchanged.
+pub(crate) fn clean_io_error(e: &std::io::Error) -> String {
+    let s = e.to_string();
+    if e.raw_os_error().is_some() {
+        if let Some(idx) = s.rfind(" (os error ") {
+            return s[..idx].to_string();
+        }
+    }
+    s
 }
 
 /// Normalizes `http://` to `https://` in a Relay address.
@@ -201,5 +227,24 @@ mod tests {
         assert_eq!(cfg.endpoint, "https://relay:8080");
 
         std::env::remove_var("RELAY_ADDR");
+    }
+
+    // --- clean_io_error ------------------------------------------------------
+
+    #[test]
+    fn clean_io_error_strips_os_error_suffix() {
+        let e = std::io::Error::from_raw_os_error(2); // ENOENT
+        let cleaned = clean_io_error(&e);
+        assert!(
+            cleaned.contains("No such file or directory"),
+            "got {cleaned:?}"
+        );
+        assert!(!cleaned.contains("(os error"), "got {cleaned:?}");
+    }
+
+    #[test]
+    fn clean_io_error_non_os_error_passthrough() {
+        let e = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        assert_eq!(clean_io_error(&e), "boom");
     }
 }
