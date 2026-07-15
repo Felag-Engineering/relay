@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,12 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		RawDenyPatterns:   []string{`.*rm -rf.*`},
 		AllowedOperations: []string{"system.facts", "file.read"},
 		PolicyFingerprint: "sha256:node-a-fingerprint",
+		OperationRules: []policyview.OperationRule{
+			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+		},
+		DenyRules: []policyview.DenyRule{
+			{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
+		},
 	})
 	// nodeB intentionally has no captured snapshot: describe_node(nodeB) must
 	// show reported=false, proving absence isn't confused with "unrestricted".
@@ -459,6 +466,22 @@ func TestMCP_DescribeNode(t *testing.T) {
 		if out.EffectivePolicy.PolicyFingerprint == "" {
 			t.Error("EffectivePolicy.PolicyFingerprint is empty, want set")
 		}
+		// DoD (#187): describe_node must show the per-Operation allowed-arg
+		// rule and the explicit deny rule, verbatim from the daemon's Policy.
+		wantOperationRules := []mcp.OperationRuleOutput{
+			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+		}
+		if !reflect.DeepEqual(out.EffectivePolicy.OperationRules, wantOperationRules) {
+			t.Errorf("EffectivePolicy.OperationRules = %+v, want %+v",
+				out.EffectivePolicy.OperationRules, wantOperationRules)
+		}
+		wantDenyRules := []mcp.DenyRuleOutput{
+			{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
+		}
+		if !reflect.DeepEqual(out.EffectivePolicy.DenyRules, wantDenyRules) {
+			t.Errorf("EffectivePolicy.DenyRules = %+v, want %+v",
+				out.EffectivePolicy.DenyRules, wantDenyRules)
+		}
 	})
 
 	t.Run("node with no captured Policy snapshot", func(t *testing.T) {
@@ -476,6 +499,10 @@ func TestMCP_DescribeNode(t *testing.T) {
 		// when no snapshot has been captured.
 		if out.PolicyFingerprint == "" {
 			t.Error("top-level PolicyFingerprint is empty, want the registry's Hello-reported fingerprint")
+		}
+		if len(out.EffectivePolicy.OperationRules) != 0 || len(out.EffectivePolicy.DenyRules) != 0 {
+			t.Errorf("EffectivePolicy.OperationRules/DenyRules = %+v/%+v, want both empty (Reported=false)",
+				out.EffectivePolicy.OperationRules, out.EffectivePolicy.DenyRules)
 		}
 	})
 

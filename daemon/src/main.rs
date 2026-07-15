@@ -34,8 +34,8 @@ mod gen {
 }
 
 use gen::{
-    daemon_message, relay_message, tunnel_client::TunnelClient, DaemonMessage, Facts, Heartbeat,
-    Hello, PolicySnapshot,
+    daemon_message, relay_message, tunnel_client::TunnelClient, ArgMatcher, DaemonMessage,
+    DenyRule, Facts, Heartbeat, Hello, OperationRule, PolicySnapshot,
 };
 
 fn now_millis() -> i64 {
@@ -118,7 +118,8 @@ async fn acquire_identity(
 /// straight from `policy`'s own accessors — no re-evaluation, nothing
 /// Relay-derived. `policy_fingerprint` calls the SAME [`policy::Policy::fingerprint`]
 /// Hello uses, so a snapshot and the Hello sent from the same `Policy` always
-/// agree.
+/// agree. `operation_rules` and `deny_rules` are verbatim mirrors of every
+/// `[[operation]]`/`[[deny]]` block (file order, no dedup, no evaluation).
 fn policy_snapshot(policy: &policy::Policy) -> PolicySnapshot {
     PolicySnapshot {
         raw_exec_enabled: policy.raw_exec_enabled(),
@@ -126,6 +127,30 @@ fn policy_snapshot(policy: &policy::Policy) -> PolicySnapshot {
         raw_deny_patterns: policy.raw_deny_patterns(),
         allowed_operations: policy.allowed_operations(),
         policy_fingerprint: policy.fingerprint().to_string(),
+        operation_rules: policy
+            .operation_allow_rules()
+            .into_iter()
+            .map(|r| OperationRule {
+                name: r.name,
+                allowed_args: r
+                    .allowed_args
+                    .into_iter()
+                    .map(|values| ArgMatcher { values })
+                    .collect(),
+            })
+            .collect(),
+        deny_rules: policy
+            .deny_rules()
+            .into_iter()
+            .map(|r| DenyRule {
+                name: r.name,
+                args: r
+                    .args
+                    .into_iter()
+                    .map(|values| ArgMatcher { values })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 
@@ -672,7 +697,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{gen::Facts, heartbeat_delay, now_millis, parse_interval_secs, policy_snapshot};
+    use super::{
+        gen::Facts, heartbeat_delay, now_millis, parse_interval_secs, policy_snapshot, ArgMatcher,
+        DenyRule,
+    };
     use crate::policy;
     use std::time::Duration;
 
@@ -782,6 +810,47 @@ mod tests {
         assert_eq!(snapshot.raw_deny_patterns, p.raw_deny_patterns());
         assert_eq!(snapshot.allowed_operations, p.allowed_operations());
         assert_eq!(snapshot.policy_fingerprint, p.fingerprint());
+
+        // operation_rules / deny_rules must map 1:1 to the accessors: same
+        // name + ArgMatcher.values per position, in file order.
+        let expected_rules = p.operation_allow_rules();
+        assert_eq!(snapshot.operation_rules.len(), expected_rules.len());
+        for (got, want) in snapshot.operation_rules.iter().zip(expected_rules.iter()) {
+            assert_eq!(got.name, want.name);
+            let got_args: Vec<Vec<String>> =
+                got.allowed_args.iter().map(|m| m.values.clone()).collect();
+            assert_eq!(got_args, want.allowed_args);
+        }
+        // The wildcard rule (file.read -> ["*"]) must be carried verbatim.
+        let file_read = snapshot
+            .operation_rules
+            .iter()
+            .find(|r| r.name == "file.read")
+            .expect("fixture has a file.read allow rule");
+        assert_eq!(
+            file_read.allowed_args,
+            vec![ArgMatcher {
+                values: vec!["*".to_string()]
+            }]
+        );
+
+        let expected_denies = p.deny_rules();
+        assert_eq!(snapshot.deny_rules.len(), expected_denies.len());
+        for (got, want) in snapshot.deny_rules.iter().zip(expected_denies.iter()) {
+            assert_eq!(got.name, want.name);
+            let got_args: Vec<Vec<String>> = got.args.iter().map(|m| m.values.clone()).collect();
+            assert_eq!(got_args, want.args);
+        }
+        // The /etc/shadow deny must be present verbatim.
+        assert_eq!(
+            snapshot.deny_rules,
+            vec![DenyRule {
+                name: "file.read".to_string(),
+                args: vec![ArgMatcher {
+                    values: vec!["/etc/shadow".to_string()]
+                }],
+            }]
+        );
     }
 
     #[test]

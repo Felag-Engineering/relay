@@ -1423,8 +1423,16 @@ type PolicySnapshot struct {
 	RawDenyPatterns   []string               `protobuf:"bytes,3,rep,name=raw_deny_patterns,json=rawDenyPatterns,proto3" json:"raw_deny_patterns,omitempty"`
 	AllowedOperations []string               `protobuf:"bytes,4,rep,name=allowed_operations,json=allowedOperations,proto3" json:"allowed_operations,omitempty"` // operation names permitted on this Node
 	PolicyFingerprint string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"` // hash of the effective Policy this snapshot describes; display-only (ADR-0002)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// raw mirror of the loaded Policy for legibility; the Relay never evaluates
+	// these (ADR-0011). Unlike allowed_operations (deduped names only),
+	// operation_rules preserves EVERY [[operation]] block in file order — a
+	// name may repeat with different allowed_args.
+	OperationRules []*OperationRule `protobuf:"bytes,6,rep,name=operation_rules,json=operationRules,proto3" json:"operation_rules,omitempty"`
+	// raw mirror of the loaded Policy's [[deny]] blocks, verbatim, in file
+	// order; display-only (ADR-0002). The Relay never evaluates these (ADR-0011).
+	DenyRules     []*DenyRule `protobuf:"bytes,7,rep,name=deny_rules,json=denyRules,proto3" json:"deny_rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicySnapshot) Reset() {
@@ -1492,6 +1500,178 @@ func (x *PolicySnapshot) GetPolicyFingerprint() string {
 	return ""
 }
 
+func (x *PolicySnapshot) GetOperationRules() []*OperationRule {
+	if x != nil {
+		return x.OperationRules
+	}
+	return nil
+}
+
+func (x *PolicySnapshot) GetDenyRules() []*DenyRule {
+	if x != nil {
+		return x.DenyRules
+	}
+	return nil
+}
+
+// One [[operation]] allow rule, mirrored for display (ADR-0002). allowed_args is
+// positional: allowed_args[i] is the permitted-value set at argv position i; an
+// empty list means the Operation is allowed with zero arguments.
+type OperationRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	AllowedArgs   []*ArgMatcher          `protobuf:"bytes,2,rep,name=allowed_args,json=allowedArgs,proto3" json:"allowed_args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OperationRule) Reset() {
+	*x = OperationRule{}
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OperationRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OperationRule) ProtoMessage() {}
+
+func (x *OperationRule) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OperationRule.ProtoReflect.Descriptor instead.
+func (*OperationRule) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *OperationRule) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *OperationRule) GetAllowedArgs() []*ArgMatcher {
+	if x != nil {
+		return x.AllowedArgs
+	}
+	return nil
+}
+
+// One [[deny]] rule, mirrored for display. args is positional like allowed_args;
+// an empty list denies the whole Operation regardless of arguments. Deny rules
+// never carry a "*" wildcard (they list explicit values) — deny-beats-allow.
+type DenyRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Args          []*ArgMatcher          `protobuf:"bytes,2,rep,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DenyRule) Reset() {
+	*x = DenyRule{}
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DenyRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DenyRule) ProtoMessage() {}
+
+func (x *DenyRule) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DenyRule.ProtoReflect.Descriptor instead.
+func (*DenyRule) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *DenyRule) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DenyRule) GetArgs() []*ArgMatcher {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+// The value set permitted (allow) or denied (deny) at ONE argument position.
+// Carried as a message so PolicySnapshot can express the repeated-of-repeated
+// shape proto3 cannot nest directly. In an allow rule, a values entry of "*"
+// marks a wildcard position; deny rules use only explicit values.
+type ArgMatcher struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []string               `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArgMatcher) Reset() {
+	*x = ArgMatcher{}
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ArgMatcher) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ArgMatcher) ProtoMessage() {}
+
+func (x *ArgMatcher) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ArgMatcher.ProtoReflect.Descriptor instead.
+func (*ArgMatcher) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ArgMatcher) GetValues() []string {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
 // PolicyQuery asks the daemon whether its Policy WOULD allow an action —
 // executing nothing (ADR-0011). Deliberately not a flag on TaskRequest and
 // deliberately carries no task_id: query_id is correlation-only and cannot
@@ -1511,7 +1691,7 @@ type PolicyQuery struct {
 
 func (x *PolicyQuery) Reset() {
 	*x = PolicyQuery{}
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1523,7 +1703,7 @@ func (x *PolicyQuery) String() string {
 func (*PolicyQuery) ProtoMessage() {}
 
 func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[19]
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1536,7 +1716,7 @@ func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyQuery.ProtoReflect.Descriptor instead.
 func (*PolicyQuery) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{19}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *PolicyQuery) GetQueryId() string {
@@ -1604,7 +1784,7 @@ type PolicyVerdict struct {
 
 func (x *PolicyVerdict) Reset() {
 	*x = PolicyVerdict{}
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1616,7 +1796,7 @@ func (x *PolicyVerdict) String() string {
 func (*PolicyVerdict) ProtoMessage() {}
 
 func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[20]
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1629,7 +1809,7 @@ func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyVerdict.ProtoReflect.Descriptor instead.
 func (*PolicyVerdict) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{20}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *PolicyVerdict) GetQueryId() string {
@@ -1745,13 +1925,25 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x16\n" +
 	"\x06kernel\x18\x03 \x01(\tR\x06kernel\x12\x12\n" +
 	"\x04arch\x18\x04 \x01(\tR\x04arch\x12!\n" +
-	"\fip_addresses\x18\x05 \x03(\tR\vipAddresses\"\xf2\x01\n" +
+	"\fip_addresses\x18\x05 \x03(\tR\vipAddresses\"\xe7\x02\n" +
 	"\x0ePolicySnapshot\x12(\n" +
 	"\x10raw_exec_enabled\x18\x01 \x01(\bR\x0erawExecEnabled\x12,\n" +
 	"\x12raw_allow_patterns\x18\x02 \x03(\tR\x10rawAllowPatterns\x12*\n" +
 	"\x11raw_deny_patterns\x18\x03 \x03(\tR\x0frawDenyPatterns\x12-\n" +
 	"\x12allowed_operations\x18\x04 \x03(\tR\x11allowedOperations\x12-\n" +
-	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\"\x97\x01\n" +
+	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\x12@\n" +
+	"\x0foperation_rules\x18\x06 \x03(\v2\x17.relay.v1.OperationRuleR\x0eoperationRules\x121\n" +
+	"\n" +
+	"deny_rules\x18\a \x03(\v2\x12.relay.v1.DenyRuleR\tdenyRules\"\\\n" +
+	"\rOperationRule\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x127\n" +
+	"\fallowed_args\x18\x02 \x03(\v2\x14.relay.v1.ArgMatcherR\vallowedArgs\"H\n" +
+	"\bDenyRule\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12(\n" +
+	"\x04args\x18\x02 \x03(\v2\x14.relay.v1.ArgMatcherR\x04args\"$\n" +
+	"\n" +
+	"ArgMatcher\x12\x16\n" +
+	"\x06values\x18\x01 \x03(\tR\x06values\"\x97\x01\n" +
 	"\vPolicyQuery\x12\x19\n" +
 	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x123\n" +
 	"\toperation\x18\x02 \x01(\v2\x13.relay.v1.OperationH\x00R\toperation\x12.\n" +
@@ -1794,7 +1986,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 }
 
 var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(RiskClass)(0),              // 0: relay.v1.RiskClass
 	(Outcome)(0),                // 1: relay.v1.Outcome
@@ -1817,9 +2009,12 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*Label)(nil),               // 18: relay.v1.Label
 	(*Facts)(nil),               // 19: relay.v1.Facts
 	(*PolicySnapshot)(nil),      // 20: relay.v1.PolicySnapshot
-	(*PolicyQuery)(nil),         // 21: relay.v1.PolicyQuery
-	(*PolicyVerdict)(nil),       // 22: relay.v1.PolicyVerdict
-	nil,                         // 23: relay.v1.Operation.ArgsEntry
+	(*OperationRule)(nil),       // 21: relay.v1.OperationRule
+	(*DenyRule)(nil),            // 22: relay.v1.DenyRule
+	(*ArgMatcher)(nil),          // 23: relay.v1.ArgMatcher
+	(*PolicyQuery)(nil),         // 24: relay.v1.PolicyQuery
+	(*PolicyVerdict)(nil),       // 25: relay.v1.PolicyVerdict
+	nil,                         // 26: relay.v1.Operation.ArgsEntry
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
 	18, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
@@ -1830,31 +2025,35 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	16, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
 	17, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
 	20, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
-	22, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
+	25, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
 	10, // 9: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
 	11, // 10: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
 	12, // 11: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
-	21, // 12: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
+	24, // 12: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
 	19, // 13: relay.v1.Hello.facts:type_name -> relay.v1.Facts
 	18, // 14: relay.v1.Hello.labels:type_name -> relay.v1.Label
 	13, // 15: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
 	15, // 16: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
-	23, // 17: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
+	26, // 17: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
 	0,  // 18: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
 	1,  // 19: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
-	13, // 20: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
-	15, // 21: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
-	2,  // 22: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
-	4,  // 23: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
-	6,  // 24: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
-	3,  // 25: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
-	5,  // 26: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
-	7,  // 27: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
-	25, // [25:28] is the sub-list for method output_type
-	22, // [22:25] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	21, // 20: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
+	22, // 21: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
+	23, // 22: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
+	23, // 23: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
+	13, // 24: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
+	15, // 25: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
+	2,  // 26: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
+	4,  // 27: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
+	6,  // 28: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
+	3,  // 29: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
+	5,  // 30: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
+	7,  // 31: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
+	29, // [29:32] is the sub-list for method output_type
+	26, // [26:29] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
@@ -1880,7 +2079,7 @@ func file_relay_v1_relay_proto_init() {
 		(*TaskRequest_Operation)(nil),
 		(*TaskRequest_RawExec)(nil),
 	}
-	file_relay_v1_relay_proto_msgTypes[19].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[22].OneofWrappers = []any{
 		(*PolicyQuery_Operation)(nil),
 		(*PolicyQuery_RawExec)(nil),
 	}
@@ -1890,7 +2089,7 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

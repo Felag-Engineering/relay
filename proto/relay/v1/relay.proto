@@ -209,6 +209,39 @@ message PolicySnapshot {
   repeated string raw_deny_patterns  = 3;
   repeated string allowed_operations = 4; // operation names permitted on this Node
   string policy_fingerprint    = 5;   // hash of the effective Policy this snapshot describes; display-only (ADR-0002)
+
+  // raw mirror of the loaded Policy for legibility; the Relay never evaluates
+  // these (ADR-0011). Unlike allowed_operations (deduped names only),
+  // operation_rules preserves EVERY [[operation]] block in file order — a
+  // name may repeat with different allowed_args.
+  repeated OperationRule operation_rules = 6;
+  // raw mirror of the loaded Policy's [[deny]] blocks, verbatim, in file
+  // order; display-only (ADR-0002). The Relay never evaluates these (ADR-0011).
+  repeated DenyRule      deny_rules      = 7;
+}
+
+// One [[operation]] allow rule, mirrored for display (ADR-0002). allowed_args is
+// positional: allowed_args[i] is the permitted-value set at argv position i; an
+// empty list means the Operation is allowed with zero arguments.
+message OperationRule {
+  string name = 1;
+  repeated ArgMatcher allowed_args = 2;
+}
+
+// One [[deny]] rule, mirrored for display. args is positional like allowed_args;
+// an empty list denies the whole Operation regardless of arguments. Deny rules
+// never carry a "*" wildcard (they list explicit values) — deny-beats-allow.
+message DenyRule {
+  string name = 1;
+  repeated ArgMatcher args = 2;
+}
+
+// The value set permitted (allow) or denied (deny) at ONE argument position.
+// Carried as a message so PolicySnapshot can express the repeated-of-repeated
+// shape proto3 cannot nest directly. In an allow rule, a values entry of "*"
+// marks a wildcard position; deny rules use only explicit values.
+message ArgMatcher {
+  repeated string values = 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -251,11 +251,42 @@ func nodeLabelsFromHello(labels []*relayv1.Label) map[string]string {
 // conversion never evaluates or validates the Policy it carries (ADR-0002,
 // invariant 12) — it only reshapes the reported values for storage.
 func snapshotFromProto(ps *relayv1.PolicySnapshot) policyview.Snapshot {
+	var operationRules []policyview.OperationRule
+	for _, r := range ps.GetOperationRules() {
+		operationRules = append(operationRules, policyview.OperationRule{
+			Name:        r.GetName(),
+			AllowedArgs: argMatchersToArgSets(r.GetAllowedArgs()),
+		})
+	}
+	var denyRules []policyview.DenyRule
+	for _, r := range ps.GetDenyRules() {
+		denyRules = append(denyRules, policyview.DenyRule{
+			Name: r.GetName(),
+			Args: argMatchersToArgSets(r.GetArgs()),
+		})
+	}
 	return policyview.Snapshot{
 		RawExecEnabled:    ps.GetRawExecEnabled(),
 		RawAllowPatterns:  ps.GetRawAllowPatterns(),
 		RawDenyPatterns:   ps.GetRawDenyPatterns(),
 		AllowedOperations: ps.GetAllowedOperations(),
 		PolicyFingerprint: ps.GetPolicyFingerprint(),
+		OperationRules:    operationRules,
+		DenyRules:         denyRules,
 	}
+}
+
+// argMatchersToArgSets converts a repeated relayv1.ArgMatcher into the
+// positional [][]string shape policyview carries, deep-copying each
+// position's values so no proto-owned backing array escapes the cache.
+// Display-only conversion (ADR-0002) — never resolves wildcards.
+func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
+	if matchers == nil {
+		return nil
+	}
+	out := make([][]string, len(matchers))
+	for i, m := range matchers {
+		out[i] = append([]string(nil), m.GetValues()...)
+	}
+	return out
 }

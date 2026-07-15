@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"net"
+	"reflect"
 	"testing"
 	"time"
 
@@ -415,6 +416,28 @@ func TestSnapshotFromProto(t *testing.T) {
 		RawDenyPatterns:   []string{`.*rm -rf.*`},
 		AllowedOperations: []string{"system.facts", "file.read"},
 		PolicyFingerprint: "sha256:abc123",
+		OperationRules: []*relayv1.OperationRule{
+			{
+				Name: "service.restart",
+				AllowedArgs: []*relayv1.ArgMatcher{
+					{Values: []string{"nginx", "php-fpm"}},
+				},
+			},
+			{
+				Name: "file.read",
+				AllowedArgs: []*relayv1.ArgMatcher{
+					{Values: []string{"*"}},
+				},
+			},
+		},
+		DenyRules: []*relayv1.DenyRule{
+			{
+				Name: "file.read",
+				Args: []*relayv1.ArgMatcher{
+					{Values: []string{"/etc/shadow"}},
+				},
+			},
+		},
 	}
 
 	got := snapshotFromProto(ps)
@@ -440,6 +463,35 @@ func TestSnapshotFromProto(t *testing.T) {
 	}
 	if len(got.AllowedOperations) != 2 {
 		t.Errorf("AllowedOperations = %v, want 2 entries", got.AllowedOperations)
+	}
+
+	wantOperationRules := []policyview.OperationRule{
+		{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+		{Name: "file.read", AllowedArgs: [][]string{{"*"}}},
+	}
+	if !reflect.DeepEqual(got.OperationRules, wantOperationRules) {
+		t.Errorf("OperationRules = %+v, want %+v", got.OperationRules, wantOperationRules)
+	}
+
+	wantDenyRules := []policyview.DenyRule{
+		{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
+	}
+	if !reflect.DeepEqual(got.DenyRules, wantDenyRules) {
+		t.Errorf("DenyRules = %+v, want %+v", got.DenyRules, wantDenyRules)
+	}
+
+	// Deep-copy check: mutating the source proto's nested values must not
+	// reach into the converted policyview.Snapshot (display-only cache
+	// discipline; ADR-0002).
+	ps.OperationRules[0].AllowedArgs[0].Values[0] = "MUTATED"
+	ps.DenyRules[0].Args[0].Values[0] = "MUTATED"
+	if got.OperationRules[0].AllowedArgs[0][0] != "nginx" {
+		t.Errorf("OperationRules were not deep-copied: got %q, want %q",
+			got.OperationRules[0].AllowedArgs[0][0], "nginx")
+	}
+	if got.DenyRules[0].Args[0][0] != "/etc/shadow" {
+		t.Errorf("DenyRules were not deep-copied: got %q, want %q",
+			got.DenyRules[0].Args[0][0], "/etc/shadow")
 	}
 }
 
