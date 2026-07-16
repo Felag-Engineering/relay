@@ -92,6 +92,68 @@ pure Gleipnir. **"Support elicitation in Gleipnir and we're off to the races."**
 - **Gate config stays above the AI's reach** (root-owned Relay config decides *when*
   approval is required); elicitation/webhook are only the *delivery*.
 
+## The Tasks async pattern (deep-dive)
+
+MCP's **Tasks extension** (SEP-2663, targeting the 2026-07-28 RC) is the async envelope a
+long human wait needs. Plain `tools/call` is synchronous — the server holds the connection
+until it returns — which is fine for a read and terrible for a 20-minute approval. Tasks
+lets the server hand back a handle and let the client poll.
+
+**Mechanics:**
+- **Create:** the server answers `tools/call` with `resultType: "task"` and a
+  `CreateTaskResult` — a **Task** with an `id`, a `status`, and `pollIntervalMilliseconds`
+  guidance, instead of a final result.
+- **Methods:** `tasks/get` (poll status + pending server→client requests + terminal
+  result/error), `tasks/update` (client **answers** a server-initiated request and acks),
+  `tasks/cancel` (best-effort — the server may ignore it).
+- **Task fields:** `status` (pending / in-progress / completed / failed / cancelled), `id`,
+  `inputRequests` (pending server→client asks), `result`/`error` (terminal only), and a
+  **TTL** (auto-expires).
+- **Polling, not push.** MCP now forbids unsolicited server→client messages (SEP-2260), so
+  the server cannot push an elicitation — it surfaces inside a `tasks/get` response.
+
+**Elicitation rides *inside* the task** — this is the fit. While the Job is parked, the
+approval elicitation arrives under `inputRequests` on a `tasks/get`; the client answers via
+`tasks/update`. One async construct carries both the wait and the approval:
+
+```
+client: tools/call run_operation(… needs approval)
+Relay:  → resultType:"task"                 (Job parks in pending-approval)
+client: tasks/get  ──▶ Relay: { status:"in-progress",
+                                inputRequests:[ elicitation: "approve service.restart on 12 nodes?" ] }
+Gleipnir: routes that elicitation to the agent's AUDIENCE → human decides
+client: tasks/update(inputResponses:[ accept ])
+client: tasks/get  ──▶ Relay: { status:"in-progress" }        (Relay now dispatching)
+client: tasks/get  ──▶ Relay: { status:"completed", result:[ per-node results ] }
+```
+
+**⚠️ Naming landmine — MCP "Task" ≠ Relay "Task".** In Relay's glossary a **Task** is the
+per-Node unit of a Job (at-most-once, ADR-0004). In MCP a **Task** is an async handle for a
+long-running tool call. Same word, different concept — a homonym, worse than a synonym. The
+granularity mapping:
+
+```
+1 run_operation tool call  →  1 MCP task handle  →  1 Relay Job  →  N Relay Tasks (one per Node)
+```
+
+The MCP task lives at **Job** granularity. **Never let "MCP task" leak into Relay's
+vocabulary** — always qualify it ("MCP task handle"), keep it a protocol-boundary term, and
+add a disambiguating note to CONTEXT.md when the approval ADR lands.
+
+**Why it fits Relay well:** (a) the coming **stateless** MCP needs task handles resolvable
+by any instance — Relay Job IDs are already durable/persisted (SQLite), so a Job ID maps
+straight to an MCP task id, aligning with future HA; (b) `tasks/cancel` is best-effort,
+which is exactly Relay's honest-cancel semantics (ADR-0004 caveat); (c) human-scale polling
+is fine (same shape as any status poll).
+
+**Maturity caveat:** it's an official **extension, not core** — deliberately incubating,
+harness support will be uneven for a while. So do **not** hard-depend on it. Three delivery
+envelopes for the same decision (Relay parks the Job; the human decides off the AI's
+channel):
+- short approval, elicitation-capable harness → **held elicitation**
+- long approval, Tasks-capable harness (Gleipnir) → **Tasks + nested elicitation** (premium)
+- API-control mode / no-Tasks / no-elicitation harness → **out-of-band webhook** (universal)
+
 ## Sources
 - Elicitation — MCP spec 2025-06-18: https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation
 - MCP client concepts (human-in-the-loop / consent): https://modelcontextprotocol.io/docs/learn/client-concepts
