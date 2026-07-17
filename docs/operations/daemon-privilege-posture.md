@@ -10,11 +10,18 @@ for a follow-up audit.
 
 This is **v0.0.7 groundwork** — a "restricted user" posture that bounds everything the
 daemon does *not* need, shipped as an example hardened `systemd` unit plus this map from
-Operation to privilege. It is explicitly **not** the v0.0.8 capability/syscall audit: the
-unit deliberately omits `SystemCallFilter` and `MemoryDenyWriteExecute` (see
-[What the unit restricts](#what-the-unit-restricts) below), and the capability set here
-is "the minimal set that keeps today's five Operations working," not a syscall-level
-proof of minimality.
+Operation to privilege — **plus, as of the v0.0.8 audit below, the static-derivation
+portion of the capability/syscall audit**: a derived candidate `SystemCallFilter`
+allowlist and minimal capability set (see
+[Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)),
+each backed by daemon-source-plus-`systemd-analyze` evidence rather than a guess. What
+this document does **not** yet cover is the LIVE apply-and-verify on a real systemd host —
+applying the candidate to the shipped unit, tracing it under load, and confirming no
+legitimate syscall is denied — which is the **follow-up (#224)**. The shipped unit
+(`daemon/packaging/relay-daemon.service`) still deliberately omits `SystemCallFilter` and
+`MemoryDenyWriteExecute` today (see
+[What the unit restricts](#what-the-unit-restricts) below): the candidate that closes that
+omission is derived below, and #224 is what applies it.
 
 ## Why the daemon is privileged
 
@@ -40,7 +47,7 @@ unit to remove every privilege the daemon does not exercise.**
 | `system.facts` (read) | `/proc/sys/kernel/{hostname,osrelease}` reads + `libc::getifaddrs` over an `AF_NETLINK` socket; no subprocess (`daemon/src/operations/system_facts.rs`) | None beyond default process privilege; needs the `AF_NETLINK` address family available. Fully compatible with the strict hardened baseline. |
 | `file.read` (read) | `std::fs::File::open` on an arbitrary target path; no subprocess (`daemon/src/operations/file_read.rs`) | Read access to whatever path Policy's argument constraints allow. `CAP_DAC_READ_SEARCH` grants universal read (no write, no privilege bypass) so `file.read` isn't limited to files the process's own UID happens to own. |
 | `service.restart` (mutate) | `["systemctl", "restart", <unit>]` argv, unit name validated against a strict charset (`daemon/src/operations/service_restart.rs`) | Root to authorize systemctl → PID 1. The daemon itself performs no filesystem writes for this Operation, so it works unmodified under `ProtectSystem=strict`. |
-| `pkg.install` (mutate) | `["apt-get"\|"dnf"\|"yum", "install", "-y", <pkgspec>]` argv, name/version validated against a strict charset before argv is built (`daemon/src/operations/pkg_install.rs`) | Broad root: the package manager writes `/usr`, `/etc`, `/var` and typically needs `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP` to install file ownership/permissions/capabilities correctly. **Conflicts** with the strict baseline's `ProtectSystem=strict` and minimal `CapabilityBoundingSet` — see [Documented exceptions](#documented-exceptions). |
+| `pkg.install` (mutate) | `["apt-get"\|"dnf"\|"yum", "install", "-y", <pkgspec>]` argv, name/version validated against a strict charset before argv is built (`daemon/src/operations/pkg_install.rs`) | Broad root: the package manager writes `/usr`, `/etc`, `/var` and needs (derived and confirmed by the audit below) `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`, `CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP` to install file ownership/permissions/capabilities correctly — see [Candidate minimal capability set](#candidate-minimal-capability-set). **Conflicts** with the strict baseline's `ProtectSystem=strict` and minimal `CapabilityBoundingSet` — see [Documented exceptions](#documented-exceptions). |
 | Raw Exec (mutate) | Arbitrary argv, gated by Policy allow/deny regexes (ADR-0001/0002); no daemon-side restriction beyond what Policy admits | Unbounded — whatever the operator's Policy allows. A read-only Raw Exec command works under the strict baseline; a filesystem-mutating one needs the same relaxations as `pkg.install`. |
 
 ## What the unit restricts
@@ -95,12 +102,15 @@ Directive-by-directive, from `daemon/packaging/relay-daemon.service`:
   `AF_NETLINK` socket internally to enumerate interfaces. Omitting it would silently
   break a `read`-class Operation. Every other address family (e.g. `AF_PACKET`) is
   denied.
-- **`SystemCallFilter` and `MemoryDenyWriteExecute` are intentionally omitted.** Both
-  require enumerating the exact syscall surface the daemon and its spawned executors
+- **`SystemCallFilter` and `MemoryDenyWriteExecute` are intentionally omitted from the
+  shipped unit.** A derived (not guessed) candidate for both now exists — see
+  [Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)
+  below, which enumerates the syscall surface the daemon and its spawned executors
   (`systemctl`, `apt-get`/`dnf`/`yum`, and whatever Raw Exec's Policy allows) legitimately
-  use. Guessing an allowlist now risks silently breaking `pkg.install` or a
-  Policy-permitted Raw Exec command in the field. This is the **v0.0.8 syscall/capability
-  audit's** job, not this change's.
+  use and derives a candidate allowlist from it. The shipped unit is not updated by this
+  change: applying the candidate and live-validating it against `pkg.install` and a
+  Policy-permitted Raw Exec command in the field is the **follow-up (#224)'s** job, not
+  this one's.
 
 ## Documented exceptions
 
@@ -244,6 +254,182 @@ above). Policy is the gate against running that command at all; the cgroup
 is the systemd unit: raise `TasksMax=` and/or add a scoped `MemoryMax=` in the
 `pkg-install.conf` drop-in for Nodes whose installs need more headroom.
 
+## Syscall and capability surface (v0.0.8 audit)
+
+### Method and provenance
+
+The numbers in this section are a **static derivation** — daemon source (the single spawn
+chokepoint and each Operation's executor code) plus its crate surface (`tokio`, `tonic`,
+`rustls`/`ring`, `libc`) mapped onto the real `systemd-analyze syscall-filter` group
+vocabulary, cross-checked against the shipped unit with
+`systemd-analyze security --offline=true`. They are **not** a live `strace`/seccomp trace of
+a running daemon on this box: `strace`, `perf`, and `auditctl` are absent here, this
+environment is non-root with no passwordless `sudo`, and the dev fleet
+(`docs/dev-fleet.md`) runs daemons under Docker rather than `systemd` — none of which can
+exercise a real privileged trace. Every number below is reproducible with two unprivileged
+commands:
+
+```console
+$ systemd-analyze syscall-filter @system-service
+$ systemd-analyze security --offline=true daemon/packaging/relay-daemon.service
+```
+
+`scripts/daemon-privilege-audit.sh` runs both (plus `systemd-analyze verify`) and prints the
+same evidence; it also carries the full live-tracing procedure as a commented, never-executed
+reference block. Numbers were measured against **systemd 257 (257.13-1~deb13u1)**; a re-run
+on a different systemd version may report different counts (see
+[What the derivation did and did NOT cover](#what-the-derivation-did-and-did-not-cover-residual-risk)
+below) — that is expected, not a regression.
+
+### Derived syscall surface
+
+| Surface | Representative syscalls | Covering `@group` | In `@system-service`? |
+| --- | --- | --- | --- |
+| Daemon runtime (`tokio`, full multi-thread) | `epoll_create1`/`epoll_ctl`/`epoll_wait`, `eventfd2`, `futex`, `clone`/`clone3`, `membarrier`, `rseq`, `timerfd_*` | `@io-event`, `@default`, `@process`, `@timer` | yes |
+| Transport (`tonic`+`rustls`/`ring`, over `AF_INET`/`AF_INET6`) | `socket`, `connect`, `sendmsg`, `recvmsg`, `getrandom` | `@network-io`, `@default` | yes |
+| Spawn chokepoint (`executor.rs::execute`) | `clone`/`clone3`+`execve` (fork+exec), `setpgid` (`process_group(0)`), `setrlimit`×5 (`apply_rlimits`), `kill(-pgid)`, `wait4`/`waitid` (reap) | `@process`, `@default`, `@resources`, `@system-service` (direct: `setpgid`) | yes |
+| `system_facts.rs` (`system.facts`) | `/proc/sys` reads (`open`/`openat`/`read`/`close`), `libc::getifaddrs` → `AF_NETLINK` `socket`/`bind`/`sendto`/`recvmsg` | `@file-system`, `@basic-io`, `@network-io` | yes |
+| `file_read.rs` (`file.read`) | `open`/`openat`, `read`, `close` | `@file-system`, `@basic-io` | yes |
+| `service_restart.rs` child (`systemctl`) | `AF_UNIX` `socket`/`connect`/`sendmsg`/`recvmsg` to PID 1 over D-Bus | `@network-io` | yes |
+| `pkg_install.rs` child (`apt-get`/`dnf`/`yum`) | `openat`/`write`/`chmod`/`chown`/`rename`/`mkdir`/`unlink`-family (metadata + writes under `/usr`,`/etc`,`/var`) | `@file-system`, `@chown` | yes (bounded surface only — see residual risk below) |
+
+**Checkable result:** every syscall the daemon itself and its non-Raw-Exec children (the
+`systemctl` child of `service.restart`, the package-manager binary's own syscalls for
+`pkg.install`) issue maps into `@system-service` — flattening `@system-service`'s 16
+subgroups (`@aio @basic-io @chown @default @file-system @io-event @ipc @keyring @memlock
+@network-io @process @resources @setuid @signal @sync @timer`) plus its own direct members
+into one deduplicated set gives **390 concrete syscalls on systemd 257** (systemd-version
+dependent; `scripts/daemon-privilege-audit.sh` recomputes this on any box it runs on). The
+specific load-bearing syscalls — `setrlimit`/`prlimit64`, `clone`/`clone3`/`execve`/
+`execveat`, `kill`/`tgkill`, `wait4`/`waitid`/`pidfd_open`/`pidfd_send_signal`,
+`socket`/`connect`/`sendmsg`/`recvmsg`, `epoll_create`/`epoll_ctl`/`epoll_wait`/`eventfd2`/
+`futex`/`membarrier`/`rseq`, `getrandom`, `getifaddrs`'s netlink path (`socket`/`bind`/
+`sendto`/`recvmsg` over `AF_NETLINK`), `open`/`openat`/`read`/`write`/`mkdir`/`rename`/
+`fsync`/`getdents64` — were each individually confirmed as a member of `@system-service`
+against `systemd-analyze syscall-filter` output, not merely assumed from the group names.
+
+### Candidate `SystemCallFilter` allowlist
+
+- **Base (BOTH profiles share it): `SystemCallFilter=@system-service`.** This is systemd's
+  own documented recommended base allowlist for a general system service. It already
+  contains `@resources` (⇒ covers `setrlimit`), `@setuid`, `@chown` (⇒ the package manager's
+  ownership syscalls), `@signal`, `@process`, `@network-io` (⇒ the `AF_UNIX` `systemctl`
+  child and the `AF_INET`/`AF_INET6` mTLS transport), `@file-system` (⇒ the package manager's
+  writes), `@io-event`, `@basic-io`, `@sync`.
+
+- **DECISION — the two profiles (strict vs. the `pkg.install`/mutating-Raw-Exec drop-in)
+  share the SAME `SystemCallFilter`; they differ ONLY in `ProtectSystem` +
+  `CapabilityBoundingSet`, exactly as the existing drop-in already does.** Justification
+  (checkable): `pkg.install`'s writes to `/usr`, `/etc`, `/var` are blocked by
+  `ProtectSystem=strict` — a mount/namespace restriction — **not** by the syscall filter; the
+  underlying `openat(O_WRONLY)`/`chmod`/`chown`/`mkdir`/`rename`/`unlink` calls are all
+  members of `@system-service`. So the drop-in needs to relax `ProtectSystem` (to `full`) and
+  add capabilities (it already does both — see
+  [Documented exceptions](#documented-exceptions)), but needs **no wider
+  `SystemCallFilter`**. The drop-in inherits `@system-service` from the base unit; it does not
+  repeat or widen it.
+
+- **Adjacent cheap hardening the offline analysis surfaces, applied by #224 alongside:**
+  `SystemCallArchitectures=native` (closes the "service may execute system calls with all
+  ABIs" 0.2-point row) and `MemoryDenyWriteExecute=yes` — recommended for the strict base.
+  Like the `SystemCallFilter` candidate itself, both are **static candidates, unvalidated
+  until #224's live trace** — flag in particular that `MemoryDenyWriteExecute` for the
+  drop-in must be live-validated under a representative `pkg.install` (a maintainer-script
+  interpreter that needs W^X memory would break under it); if a trace shows that, the drop-in
+  sets `MemoryDenyWriteExecute=no` explicitly rather than inheriting the strict base's `yes`.
+
+- **Real evidence (reproduce by applying the candidate lines to a scratch copy of the unit
+  and re-running `systemd-analyze security --offline=true`):**
+  - Shipped unit today: `Overall exposure level for relay-daemon.service: 3.7 OK` — every
+    `SystemCallFilter=~@*` row is `✗` (no filter yet).
+  - Candidate (base `@system-service` + `SystemCallArchitectures=native` +
+    `MemoryDenyWriteExecute=yes`, applied to a scratch copy):
+    `Overall exposure level for candidate.service: 2.1 OK`. Rows that flip ✗→✓: `@clock`,
+    `@cpu-emulation`, `@debug`, `@module`, `@mount`, `@obsolete`, `@raw-io`, `@reboot`,
+    `@swap`, plus the `SystemCallArchitectures=` and `MemoryDenyWriteExecute=` rows.
+  - Rows that **stay ✗ and why** (documented, intentional residual — analogous to the
+    existing `AF_NETLINK`/`AF_UNIX` residual in [Verification](#verification)):
+    `SystemCallFilter=~@resources` ("`@resources` is included, e.g. `ioprio_set` is
+    allowed") — `@resources` contains `setrlimit`, which is load-bearing: denying it makes
+    `apply_rlimits`' `setrlimit` call return `EPERM`, `cmd.spawn()` returns `Err`, and every
+    exec Operation returns `OUTCOME_FAILURE` (see
+    [Deny-closed behavior](#resource-limits-on-spawned-children-v008-exec-audit) above), so
+    it **must** stay allowed. `SystemCallFilter=~@privileged` ("`@privileged` is included,
+    e.g. `chown` is allowed") — `@system-service` pulls in `@chown` and the `setuid`-class
+    syscalls that overlap `@privileged`; in the strict profile those syscalls are allowed by
+    the filter but `EPERM` at the kernel's capability check without the caps that back them,
+    so there is no real privilege; in the drop-in they are intentionally cap-backed.
+  - Placement matters: pasting the three candidate lines **after** `[Install]` instead of
+    inside `[Service]` does not error loudly — systemd only logs a low-visibility `Unknown
+    key ... in section [Install], ignoring` warning per line — and the exposure score stays
+    at the unmodified `3.7`, silently no-opping the change. Verified against a scratch copy
+    while producing the numbers above.
+
+  ```ini
+  [Service]
+  # ... existing directives (User=root, ProtectSystem=strict, CapabilityBoundingSet=
+  # CAP_DAC_READ_SEARCH, AmbientCapabilities=, RestrictAddressFamilies=..., etc.) ...
+
+  # CANDIDATE — derived by this audit, NOT YET applied to the shipped unit (see #224).
+  # These three lines MUST go within this [Service] section (e.g. immediately after the
+  # existing RestrictAddressFamilies= line, before [Install]) — placing them after
+  # [Install] silently no-ops (see "Placement matters" above).
+  SystemCallFilter=@system-service
+  SystemCallArchitectures=native
+  MemoryDenyWriteExecute=yes
+  ```
+
+  The existing `pkg-install.conf` drop-in (see [Documented exceptions](#documented-exceptions))
+  needs **no `SystemCallFilter` addition** — it inherits `@system-service` from the base
+  unit above it. These are candidate config for **#224** to apply; this issue does not edit
+  `daemon/packaging/relay-daemon.service`.
+
+### Candidate minimal capability set
+
+Split by profile, confirmed against source:
+
+- **Strict (read + `service.restart`): `CAP_DAC_READ_SEARCH` only.** `file_read.rs` needs
+  universal read of non-root-owned files (the load-bearing case); `service_restart.rs`'s
+  `systemctl` child is authorized by `UID 0` talking to PID 1 over `AF_UNIX` D-Bus, not by a
+  capability; `system_facts.rs`'s `/proc/sys` reads and `getifaddrs` call need no capability
+  either. **Audit result: this set is already minimal — no reduction possible.**
+- **Drop-in (`pkg.install` / fs-mutating Raw Exec): adds `CAP_CHOWN`, `CAP_DAC_OVERRIDE`,
+  `CAP_FOWNER`, `CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP`** — identical to the existing
+  drop-in's `CapabilityBoundingSet=` line (see
+  [Documented exceptions](#documented-exceptions)); cite `pkg_install.rs`. **Audit result:
+  CONFIRMS the existing set** — each capability maps to a documented package-manager need
+  (file ownership, permission bits, file capabilities, and the user/group provisioning some
+  packages perform), and no capability can be dropped without a live trace proving a given
+  package family never exercises it. The audit **validates rather than shrinks** the
+  capability sets — stated honestly, not as a reduction.
+
+### What the derivation did and did NOT cover (residual risk)
+
+The derivation above covers the daemon itself and its fixed-argv children — `systemctl`,
+and `apt-get`/`dnf`/`yum`'s own syscalls — all of which land inside `@system-service`. It
+does **not** bound two things:
+
+1. **Raw Exec.** Its Policy-gated argv is arbitrary by design (ADR-0001/0002), so its
+   syscall surface is unbounded by definition — a read-only command fits the strict profile,
+   an fs-mutating one needs the drop-in, and nothing in this audit can enumerate every
+   command an operator's Policy might permit.
+2. **Package-manager MAINTAINER SCRIPTS.** `dpkg`/`rpm` run arbitrary shell/Perl/Python
+   post-install hooks as part of `apt-get`/`dnf`/`yum install`; that surface is near-arbitrary
+   and not reducible to the package manager's own syscalls.
+
+A maintainer script or Raw Exec command that invokes a syscall **outside** `@system-service`
+(e.g. `@mount`, `quotactl`, a `@privileged`-only call, `bpf`) would be `SIGSYS`/`EPERM`'d
+under the candidate allowlist — unlike the `ProtectSystem` case, this is a **hard syscall
+block**, not a soft one. Only a **LIVE** `strace`/seccomp trace on a real systemd host (the
+**#224** follow-up) closes this gap. If a live trace shows a real, legitimate need outside
+`@system-service`, the fix is a targeted, trace-validated **additive**
+`SystemCallFilter=@mount` (or whichever specific group) line in the `pkg-install.conf`
+drop-in — never a speculative widening of the shipped base.
+
+**Provenance caveat, restated:** every number in this section comes from static analysis —
+daemon source plus `systemd-analyze` — not a live `strace` trace on this box. See
+[Method and provenance](#method-and-provenance) above.
+
 ## Verification
 
 Static validation (runnable in CI/dev environments, no real Node needed):
@@ -278,21 +464,91 @@ exposure — the tool has no way to know those are load-bearing for `file.read` 
 whole point of this document.
 
 **What this does not cover**: a live real-host `enroll → connect → execute
-(system.facts) → report` cycle running the daemon *under this unit* on real `systemd`.
-The dev fleet (`docs/dev-fleet.md`) runs daemons in Docker containers, not under
-`systemd`, so that path cannot be exercised there. Running the daemon under
-`relay-daemon.service` on an actual systemd host (with policy.toml and an Enrollment
-Token in place) and confirming it enrolls, connects, and successfully executes
-`system.facts` is a manual verification step for a real deployment target, not something
+(system.facts) → report` cycle running the daemon *under this unit* on real `systemd`, and
+— per the [Syscall and capability surface](#syscall-and-capability-surface-v008-audit)
+section above — a live trace that validates the derived candidate allowlist and capability
+sets against real daemon behavior. The dev fleet (`docs/dev-fleet.md`) runs daemons in
+Docker containers, not under `systemd`, so neither path can be exercised there. Running the
+daemon under `relay-daemon.service` on an actual systemd host (with policy.toml and an
+Enrollment Token in place), confirming it enrolls, connects, and successfully executes
+`system.facts`, and running the tracing procedure below against every Operation — promoting
+the derived candidate to an applied, live-validated one — is exactly what the **follow-up
+(#224)** does; it is a manual verification step for a real deployment target, not something
 this repository's automated checks can currently run.
+
+### Live tracing procedure (real systemd host)
+
+The reproducible procedure **#224** runs to validate the candidate derived above. The same
+content lives, verbatim, as a commented (never-executed) block in
+`scripts/daemon-privilege-audit.sh`, so the procedure travels with the repo rather than only
+this doc.
+
+**Environment:** a real systemd host, `relay-daemon` installed at
+`/usr/local/bin/relay-daemon` under `relay-daemon.service`, `policy.toml` and an Enrollment
+Token in place, `strace`/`auditctl` (or equivalent) available.
+
+1. **Syscall union including children** — seccomp is inherited across `execve`, so the trace
+   must follow forked children through their own `execve` (`service.restart`'s `systemctl`
+   child is the load-bearing example):
+
+   ```console
+   $ strace -f -qq -e trace=all -o /tmp/relay-trace.log \
+       -p "$(systemctl show -p MainPID --value relay-daemon)"
+   ```
+
+   While attached, drive one of each Operation — `system.facts`, `file.read`,
+   `service.restart`, `pkg.install`, and a representative Policy-permitted Raw Exec — from
+   the Relay. Then extract the syscall set and diff it against the candidate:
+
+   ```console
+   $ grep -oE '^[0-9]+ +[a-z_]+\(' /tmp/relay-trace.log \
+       | sed -E 's/^[0-9]+ +([a-z_]+)\(/\1/' | sort -u
+   ```
+
+   Map each syscall to its `@group` (`systemd-analyze syscall-filter <group>`) and confirm
+   it lands inside `@system-service`; anything outside it is a trace-validated candidate
+   addition, never a speculative one.
+
+2. **Seccomp audit-mode alternative** (no `strace` needed): set
+   `SystemCallFilter=@system-service` plus `SystemCallLog=@system-service` in the unit (or
+   run under the kernel's `SECCOMP_RET_LOG` action) and read
+   `journalctl -u relay-daemon | grep SECCOMP` for any denied syscall while exercising every
+   Operation.
+
+3. **Capability confirmation:** run under the candidate `CapabilityBoundingSet` and confirm
+   `file.read` of a non-root-owned, otherwise-unreadable file still succeeds (exercises
+   `CAP_DAC_READ_SEARCH`), and that `pkg.install` succeeds only under the `pkg-install.conf`
+   drop-in (see [Documented exceptions](#documented-exceptions)), never under the strict
+   baseline.
+
+`scripts/daemon-privilege-audit.sh` runs the unprivileged portion of this audit — the two
+`systemd-analyze` commands from
+[Method and provenance](#method-and-provenance) — and prints the same evidence this section
+cites; it carries steps 1-3 above as a commented, never-executed reference block, since none
+of them are runnable in this repository's dev/CI environment.
 
 ## Forward pointer
 
 Resource limits on spawned children (rlimits + the `TasksMax` cgroup backstop) are now
 addressed by this document's
 [Resource limits on spawned children](#resource-limits-on-spawned-children-v008-exec-audit)
-section. What remains outstanding for the v0.0.8 audit is the exact syscall surface (a
-real `SystemCallFilter` allowlist, derived from tracing the daemon and its executor
-children rather than guessed) and the precise minimal capability set (rather than "the
-capabilities `pkg.install`'s package managers typically need"). This document and unit are
-the restricted-user baseline that audit builds on, not a substitute for it.
+section. The exact syscall surface and the precise minimal capability set are **no longer
+outstanding as guesses**: both are now delivered above as static-derived candidates — a
+base `SystemCallFilter=@system-service` shared by both profiles, and confirmed strict
+(`CAP_DAC_READ_SEARCH` only) / drop-in (adds `CAP_CHOWN`, `CAP_DAC_OVERRIDE`, `CAP_FOWNER`,
+`CAP_SETUID`, `CAP_SETGID`, `CAP_SETFCAP`) capability sets — see
+[Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit).
+The "capabilities `pkg.install`'s package managers typically need" framing is retired: the
+drop-in's capability set is now audit-confirmed, not guessed.
+
+What **now** remains for **#224** (apply-and-verify): apply the candidate
+`SystemCallFilter=`/`SystemCallArchitectures=`/`MemoryDenyWriteExecute=` lines to the
+shipped unit, run the [live tracing procedure](#live-tracing-procedure-real-systemd-host)
+to confirm no legitimate syscall is denied — especially package-manager maintainer scripts
+and a representative Policy-permitted Raw Exec command, the two surfaces this audit
+explicitly could not bound (see
+[What the derivation did and did NOT cover](#what-the-derivation-did-and-did-not-cover-residual-risk)) —
+measure the resulting `systemd-analyze security` exposure on the applied unit, and finalize
+the drop-in's `MemoryDenyWriteExecute` stance. This document and unit are the
+restricted-user baseline plus the static-derived candidate that audit builds on and applies,
+not a substitute for it.
