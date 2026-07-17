@@ -20,7 +20,9 @@
 
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use regex::Regex;
@@ -186,6 +188,14 @@ pub enum PolicyError {
     #[error("policy file has insecure owner (uid {uid}); must be owned by root or the daemon euid — refusing to load (fail closed)")]
     InsecureOwner { uid: u32 },
 
+    /// The Policy file path is (or ends in) a symlink; refused via O_NOFOLLOW.
+    #[error("policy file path is a symlink; refusing to follow (fail closed)")]
+    SymlinkPath,
+
+    /// The Policy file is not a regular file (FIFO, device, socket, directory).
+    #[error("policy file is not a regular file; refusing to load (fail closed)")]
+    NotRegularFile,
+
     /// Filesystem I/O error reading the Policy file.
     #[error(transparent)]
     Io(#[from] std::io::Error),
@@ -281,20 +291,71 @@ fn compile_regexes(patterns: Vec<String>) -> Result<Vec<CompiledRe>, PolicyError
 ///
 /// **Local only** — takes a `&Path`; there is no network branch.
 ///
-/// Fail-closed on permission checks (ADR-0002):
-/// 1. Refuses to load if the file has group- or world-write bits set (`mode &
+/// **Single-descriptor validate-then-read**: the file is opened exactly once;
+/// every check below (symlink, regular-file, mode, owner) is performed via
+/// `fstat` on that *open descriptor*, and the bytes are read from the same
+/// descriptor. This closes the metadata/read TOCTOU race that a path-based
+/// check-then-read has — the bytes validated are always the bytes loaded.
+///
+/// Fail-closed checks (ADR-0002), in order:
+/// 1. Refuses to load if the final path component is a symlink. Enforced via
+///    `O_NOFOLLOW` at `open()` (an `ELOOP` open error, not an `lstat`
+///    afterward — re-checking the path after open would reopen the race).
+/// 2. Refuses to load if the opened file is not a regular file (FIFO, device,
+///    socket, directory), via the `fstat`'d file type. `O_NONBLOCK` at
+///    `open()` guarantees this check can't be starved by a FIFO with no
+///    writer (regular-file reads are unaffected by `O_NONBLOCK`).
+/// 3. Refuses to load if the file has group- or world-write bits set (`mode &
 ///    0o022 != 0`). Logged via `tracing::error!` with path and mode; file
 ///    contents are never logged.
-/// 2. Refuses to load if the file owner is neither root (uid 0) nor the
+/// 4. Refuses to load if the file owner is neither root (uid 0) nor the
 ///    daemon's effective uid (`rustix::process::geteuid()`). The euid branch
 ///    allows the check to pass on a non-root CI runner while remaining
 ///    more-restrictive than the floor requirement (group/world-write only).
 ///
-/// TOCTOU note: the metadata check and `read_to_string` are not atomic. Full
-/// hardening (open-then-fstat, directory-writability, symlink/FIFO checks) is
-/// deferred as future work.
+/// **Residual (documented, not closed here):** parent-directory writability.
+/// `O_NOFOLLOW` only guards the final path component — a rename-swap of the
+/// Policy file within an attacker-writable *parent* directory remains
+/// possible even though the file itself is root-owned and mode-correct.
+/// This is mitigated operationally by requiring the Policy file to live in a
+/// root-owned directory (e.g. `/etc/relay-daemon/`); fully closing it would
+/// require validating the parent directory itself (e.g. `openat` from a
+/// validated directory descriptor), which is out of scope here.
 pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
-    let meta = fs::metadata(path)?;
+    // Open once. O_NOFOLLOW: a symlink final component fails open() with
+    // ELOOP — the only race-free way to reject a symlink, since fstat on the
+    // already-opened fd can never see it (open() already resolved it).
+    // O_NONBLOCK: opening a FIFO O_RDONLY would otherwise block until a
+    // writer appears; with O_NONBLOCK the open returns immediately so the
+    // fstat below can reject it. Regular-file reads are unaffected.
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| match e.raw_os_error() {
+            Some(libc::ELOOP) => {
+                tracing::error!(
+                    path = %path.display(),
+                    "policy file path is a symlink; refusing to follow (fail closed)"
+                );
+                PolicyError::SymlinkPath
+            }
+            _ => PolicyError::Io(e),
+        })?;
+
+    // fstat the open descriptor (NOT the path) for every check below.
+    let meta = file.metadata()?;
+
+    // Reject non-regular files (FIFO, device, socket, directory): the fstat'd
+    // file type reflects exactly what open() returned a descriptor to.
+    if !meta.is_file() {
+        tracing::error!(
+            path = %path.display(),
+            "policy file is not a regular file; refusing to load (fail closed)"
+        );
+        return Err(PolicyError::NotRegularFile);
+    }
+
     let mode = meta.mode() & 0o777;
 
     // Permission floor: group- or world-write means the file can be modified
@@ -323,7 +384,10 @@ pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
         return Err(PolicyError::InsecureOwner { uid: file_uid });
     }
 
-    let contents = fs::read_to_string(path)?;
+    // Read from the SAME descriptor that was validated above — this is the
+    // line that closes the metadata/read TOCTOU race.
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
     from_toml_str(&contents)
 }
 
@@ -1909,6 +1973,148 @@ mod raw_exec_redteam {
             matches!(decision, Decision::Deny { .. }),
             "anchored per-element deny ^--force$ must not be evadable by merging the denied \
              token into an adjacent argv element (#227); got {decision:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loader hardening tests (#216) — TOCTOU close, symlink rejection, non-regular
+// rejection. Kept as a separate trailing module so it never touches `mod
+// tests` or `mod raw_exec_redteam` above.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod loader_hardening_tests {
+    use super::*;
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    // The fixture is the example policy file checked into the repo (mirrors
+    // `mod tests::FIXTURE`).
+    const FIXTURE: &str = include_str!("../policy.example.toml");
+
+    // -------------------------------------------------------------------
+    // Unique temp path + secure-mode writer, mirroring `mod tests::TempFile`
+    // (unique path via SystemTime nanos + pid; mode set via both
+    // OpenOptions::mode and a post-hoc chmod to defeat the process umask).
+    // -------------------------------------------------------------------
+
+    fn unique_temp_path(label: &str) -> std::path::PathBuf {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "relay-policy-loader-test-{}-{}-{}",
+            label,
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    fn write_secure_policy(path: &Path, content: &[u8], mode: u32) {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(path)
+            .unwrap();
+        f.write_all(content).unwrap();
+        // chmod is not umask-masked, unlike OpenOptions::mode(); force the
+        // exact mode so a runner umask can't spuriously affect these tests.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// RAII cleanup for a path this module created — covers a regular file,
+    /// a symlink, or a FIFO, all removable via `remove_file`.
+    struct Cleanup(std::path::PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // loader_rejects_symlink
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn loader_rejects_symlink() {
+        let target = unique_temp_path("symlink-target");
+        write_secure_policy(&target, FIXTURE.as_bytes(), 0o600);
+        let _target_cleanup = Cleanup(target.clone());
+
+        // Sanity: the real target loads fine on its own, so the symlink is
+        // provably the sole cause of the rejection below.
+        assert!(
+            load_policy(&target).is_ok(),
+            "the symlink target itself must load cleanly"
+        );
+
+        let link = unique_temp_path("symlink-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let _link_cleanup = Cleanup(link.clone());
+
+        let result = load_policy(&link);
+        assert!(
+            matches!(result, Err(PolicyError::SymlinkPath)),
+            "a symlinked policy path must be rejected via O_NOFOLLOW; got {result:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // loader_rejects_fifo — also proves open() does not hang (O_NONBLOCK)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn loader_rejects_fifo() {
+        let path = unique_temp_path("fifo");
+        let path_cstr =
+            std::ffi::CString::new(path.to_str().expect("temp path must be valid UTF-8"))
+                .expect("temp path must not contain a NUL byte");
+
+        // SAFETY: `path_cstr` is a valid NUL-terminated C string for the
+        // lifetime of this call; mkfifo has no other preconditions.
+        let rc = unsafe { libc::mkfifo(path_cstr.as_ptr(), 0o600) };
+        assert_eq!(
+            rc,
+            0,
+            "mkfifo must succeed; errno={:?}",
+            std::io::Error::last_os_error()
+        );
+        let _cleanup = Cleanup(path.clone());
+
+        // If load_policy ever regressed to blocking O_RDONLY open, this call
+        // would hang forever (no writer ever opens the FIFO) instead of
+        // returning promptly with NotRegularFile.
+        let result = load_policy(&path);
+        assert!(
+            matches!(result, Err(PolicyError::NotRegularFile)),
+            "a FIFO at the policy path must be rejected as not-a-regular-file; got {result:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // loader_reads_validated_descriptor_bytes — descriptor identity: the
+    // bytes read from the validated fd are exactly the fixture bytes.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn loader_reads_validated_descriptor_bytes() {
+        let path = unique_temp_path("descriptor-identity");
+        write_secure_policy(&path, FIXTURE.as_bytes(), 0o600);
+        let _cleanup = Cleanup(path.clone());
+
+        let file_policy = load_policy(&path).expect("secure-mode fixture must load");
+        let str_policy = from_toml_str(FIXTURE).expect("fixture must parse");
+        assert_eq!(
+            file_policy.fingerprint(),
+            str_policy.fingerprint(),
+            "load_policy must read exactly the validated descriptor's bytes: its \
+             fingerprint must match from_toml_str(FIXTURE)'s"
         );
     }
 }
