@@ -10,7 +10,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs
+        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay
 
 build: build-relay build-daemon
 
@@ -146,6 +146,33 @@ vuln-relay:
 # Install: cargo install cargo-audit --version 0.22.2 --locked # pinned for supply-chain reproducibility
 vuln-daemon:
 	cd daemon && cargo audit
+
+## --- wire fuzzing (nightly; bounded) — issue #217 ---
+# Native Go fuzzing. `go test -fuzz` fuzzes ONE target per invocation, so each
+# target gets its own call (anchored regex) with `-run=^$$` so unit tests
+# don't re-run. The seed corpus (f.Add(...) in each FuzzXxx) ALSO runs under
+# the normal test gate (no -fuzz, see test-relay), so PRs stay green without
+# open-ended fuzzing. Override FUZZTIME for longer nightly runs:
+# `make fuzz-relay FUZZTIME=120s`.
+#
+# Recipe lines below are NOT `-`-prefixed, so `make` stops at the first
+# failing target: a red nightly run surfaces the first crasher, and the next
+# run (after that reproducer is committed as a regression seed) surfaces the
+# next one. This is intentional — one crasher at a time keeps each failure
+# triageable — not a bug.
+#
+# The fuzz corpus cache ($GOCACHE/fuzz) is not persisted across nightly runs
+# (no cache step below, unlike the Go-modules cache); each run starts fresh
+# from the in-code f.Add seeds. Known limitation — persisting the corpus
+# across runs is a future follow-up, not required for issue #217's DoD.
+FUZZTIME ?= 30s
+fuzz-relay:
+	cd relay && go test -run=^$$ -fuzz='^FuzzSignCSR$$'                -fuzztime=$(FUZZTIME) ./internal/ca/
+	cd relay && go test -run=^$$ -fuzz='^FuzzFactsFromProto$$'         -fuzztime=$(FUZZTIME) ./internal/protoconv/
+	cd relay && go test -run=^$$ -fuzz='^FuzzParseNodeLabel$$'         -fuzztime=$(FUZZTIME) ./internal/protoconv/
+	cd relay && go test -run=^$$ -fuzz='^FuzzSnapshotFromProto$$'      -fuzztime=$(FUZZTIME) ./cmd/relay/
+	cd relay && go test -run=^$$ -fuzz='^FuzzNodeLabelsFromHello$$'    -fuzztime=$(FUZZTIME) ./cmd/relay/
+	cd relay && go test -run=^$$ -fuzz='^FuzzDaemonMessageUnmarshal$$' -fuzztime=$(FUZZTIME) ./cmd/relay/
 
 ## --- local dev fleet (DEV-ONLY; requires Docker + compose v2) ---
 # Thin convenience wrappers over `docker compose` for the laptop dev fleet
