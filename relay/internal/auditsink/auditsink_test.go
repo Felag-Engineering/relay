@@ -623,3 +623,85 @@ func TestRecordRedactsTokensAndKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordDispatchDecisionLineExcludesOperationArgs is issue #222's audit
+// coverage for logDecision's "never OperationArgs/RawExecArgv/output" claim:
+// no existing test set Action.OperationArgs, so the exclusion was previously
+// unverified. The decision line must omit the secret-bearing arg value and
+// the captured Stdout/Stderr, while the store — by the accepted verbatim-
+// audit-output decision (not a bug) — still retains all three.
+func TestRecordDispatchDecisionLineExcludesOperationArgs(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	var buf bytes.Buffer
+	sink := New(repo,
+		WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(&buf, nil))),
+	)
+
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "service.restart",
+		OperationArgs: map[string]string{"password": "hunter2-SENTINEL"},
+		RiskClass:     jobs.RiskClassMutate,
+	}
+	entry := capability.AuditEntry{
+		Kind:      capability.AuditKindDispatch,
+		Principal: principal,
+		Selector:  sel,
+		Action:    act,
+		JobID:     "job-args",
+		Results: []capability.NodeResult{
+			{NodeID: "node-1", Outcome: jobs.OutcomeSuccess, Stdout: []byte("STDOUT-SENTINEL"), Stderr: []byte("STDERR-SENTINEL"), Truncated: false},
+		},
+	}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("Record emitted %d log lines, want 1: %q", len(lines), buf.String())
+	}
+	line := lines[0]
+
+	for attr, want := range map[string]string{
+		"kind":        "dispatch",
+		"action_kind": "operation",
+		"operation":   "service.restart",
+		"matched":     "1",
+	} {
+		if !strings.Contains(line, attr+"="+want) && !strings.Contains(line, attr+"=\""+want+"\"") {
+			t.Errorf("decision line missing %s=%s: %q", attr, want, line)
+		}
+	}
+
+	if strings.Contains(line, "hunter2-SENTINEL") {
+		t.Fatalf("decision line leaked OperationArgs value: %q", line)
+	}
+	if strings.Contains(line, "STDOUT-SENTINEL") || strings.Contains(line, "STDERR-SENTINEL") {
+		t.Fatalf("decision line leaked NodeResult Stdout/Stderr: %q", line)
+	}
+
+	// The verbatim-audit-output decision (ADR-0002/-0004; accepted, not a
+	// bug) means the store retains what the decision line omits.
+	byJob, err := repo.ByJob(context.Background(), "job-args")
+	if err != nil {
+		t.Fatalf("ByJob: %v", err)
+	}
+	if len(byJob) != 1 {
+		t.Fatalf("ByJob(job-args) returned %d records, want 1", len(byJob))
+	}
+	if got := byJob[0].Args["password"]; got != "hunter2-SENTINEL" {
+		t.Errorf("stored Args[password] = %q, want hunter2-SENTINEL", got)
+	}
+	if got := string(byJob[0].Stdout); got != "STDOUT-SENTINEL" {
+		t.Errorf("stored Stdout = %q, want STDOUT-SENTINEL", got)
+	}
+	if got := string(byJob[0].Stderr); got != "STDERR-SENTINEL" {
+		t.Errorf("stored Stderr = %q, want STDERR-SENTINEL", got)
+	}
+}
