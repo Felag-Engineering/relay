@@ -2,7 +2,10 @@
 #
 # This bounds everything the daemon does NOT need; it does not — and cannot
 # without breaking Operations — remove root, because service.restart commands
-# PID1 via systemctl and pkg.install writes the system package database.
+# PID1 via systemctl and pkg.install writes the system package database. It
+# also carries a resource-containment stanza (v0.0.8 exec audit) — a
+# pids-cgroup `TasksMax` fork-bomb backstop that complements the per-Task
+# `setrlimit` bounds the daemon itself applies (`daemon/src/executor.rs`).
 # See docs/operations/daemon-privilege-posture.md for the per-Operation
 # privilege map, the rationale behind every directive below, and the
 # documented exception for Nodes running pkg.install / fs-mutating Raw Exec.
@@ -81,6 +84,21 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 # (issue scope: this unit is restricted-user groundwork, not that audit).
 # Shipping a guessed syscall allowlist now risks silently breaking
 # pkg.install or Policy-permitted Raw Exec commands.
+
+# --- resource containment (v0.0.8 exec audit) ---
+# pids cgroup controller: hard-caps total tasks (processes + threads) in this
+# service's cgroup. Defense-in-depth fork-bomb backstop. Under THIS hardened unit,
+# CapabilityBoundingSet=CAP_DAC_READ_SEARCH strips CAP_SYS_RESOURCE from the daemon
+# and every child (bounded at execve even for a UID-0 child, capabilities(7)), so
+# RLIMIT_NPROC (set per-Task in the executor) already bounds even a root fork bomb.
+# TasksMax matters for deployments run WITHOUT this cap-bounded unit (bare ExecStart,
+# or the Docker dev-fleet), where a UID-0 child keeps CAP_SYS_RESOURCE and can
+# bypass RLIMIT_NPROC; the pids controller is not CAP_SYS_RESOURCE-bypassable and is
+# scoped to this cgroup. Sized above tokio's default thread pools (blocking-pool
+# default 512 + worker threads + main) plus a heavy pkg.install process tree; see
+# docs/operations/daemon-privilege-posture.md for the budget. Raise it in the
+# pkg-install drop-in for packages whose maintainer scripts need more.
+TasksMax=4096
 
 [Install]
 WantedBy=multi-user.target

@@ -130,6 +130,120 @@ Then `systemctl daemon-reload && systemctl restart relay-daemon` on that Node. K
 override scoped to Nodes whose Policy actually permits `pkg.install` or write-heavy Raw
 Exec; every other Node keeps the strict baseline.
 
+For Nodes whose `pkg.install` traffic is unusually heavy (a large maintainer-script
+fan-out, or many concurrent installs), the same drop-in is the place to raise
+`TasksMax=` above the shipped `4096` (see
+[Resource limits on spawned children](#resource-limits-on-spawned-children-v008-exec-audit)
+below) and, optionally, add a `MemoryMax=` scoped to this unit's cgroup — the shipped
+unit intentionally ships without one (see that section for why).
+
+## Resource limits on spawned children (v0.0.8 exec audit)
+
+**The gap being closed:** before this change, a spawned child (Raw Exec, or the
+`systemctl`/`apt-get`/`dnf`/`yum` child of `service.restart`/`pkg.install`) ran under only
+a wall-clock timeout and a 1 MiB per-stream output cap (`MAX_OUTPUT_BYTES`,
+`daemon/src/config.rs`). There was no `setrlimit`, no `pre_exec`, and no cgroup
+`TasksMax`/`MemoryMax` anywhere in the tree. A Policy-permitted Raw Exec fork bomb,
+memory hog, fd exhauster, or runaway writer ran unbounded — the timeout eventually killed
+the process group, but not before resource exhaustion.
+
+**The choice: BOTH `setrlimit` and a cgroup `TasksMax` backstop, with a clear division of
+labor.**
+
+- `setrlimit` via a tokio `pre_exec` hook (`daemon/src/executor.rs::execute`,
+  `apply_rlimits`) is the **primary, in-tree, per-Task, unit-tested layer**. It runs in
+  the forked child after `fork()` and before `exec()`, for every child at the single spawn
+  chokepoint that Raw Exec, `service.restart`, and `pkg.install` all funnel through — no
+  per-Operation duplication.
+- The systemd unit's pids-cgroup `TasksMax=4096` (`daemon/packaging/relay-daemon.service`)
+  is a **defense-in-depth fork-bomb backstop**, stated here **conditionally** because the
+  naive claim "a root child always bypasses `RLIMIT_NPROC`" is **false** under the shipped
+  hardened unit:
+  - The kernel's fork-time `RLIMIT_NPROC` check gates the bypass on
+    `task_ns_capable(CAP_SYS_RESOURCE)`: a process holding `CAP_SYS_RESOURCE` can exceed
+    `RLIMIT_NPROC`; a process **without** it cannot, regardless of its UID.
+  - The shipped unit sets `CapabilityBoundingSet=CAP_DAC_READ_SEARCH`, which strips
+    `CAP_SYS_RESOURCE` from the daemon. Per `capabilities(7)`, a child's capabilities at
+    `execve` are bounded by the parent's capability bounding set even for a UID-0 child, so
+    **no process spawned by the hardened daemon can hold `CAP_SYS_RESOURCE`** — including
+    under the `pkg-install.conf` drop-in above, which also never adds it back. Its
+    fork-time check therefore returns false, and `RLIMIT_NPROC` (set per-Task by the
+    executor) **does** contain even a root Raw Exec fork bomb under the shipped unit.
+  - The "root bypasses `RLIMIT_NPROC`" premise is true **only** for deployments run
+    **without** this capability-bounded unit: the dev-fleet's Docker containers
+    (`docs/dev-fleet.md`), or a bare `ExecStart` with no hardening block. There a UID-0
+    child retains `CAP_SYS_RESOURCE` and can out-fork `RLIMIT_NPROC` — that is exactly the
+    gap `TasksMax` closes. The pids controller is not `CAP_SYS_RESOURCE`-bypassable and
+    counts only this service's cgroup, so it backstops those non-hardened deployments while
+    being redundant (never harmful) under the hardened one.
+
+**The specific rlimits, defaults, and why** (`ResourceLimits::DEFAULT`,
+`daemon/src/config.rs`) — a single generous global profile, not a per-Operation-class
+split:
+
+| Limit | Default | Why |
+| --- | --- | --- |
+| `RLIMIT_NPROC` | 2048 | Processes/threads per real UID — the fork-bomb bound (see above for its conditional root-bypass caveat and how `TasksMax` covers the non-hardened case). |
+| `RLIMIT_DATA` | 2 GiB | Bounds `brk` + anonymous `mmap` — the malloc/alloc-bomb surface on Linux ≥ 4.7 — **not** `RLIMIT_AS`. `RLIMIT_AS` would also count file-backed `mmap` (package files, shared libs, mmap'd DBs), risking breaking `pkg.install`; `RLIMIT_DATA` contains an allocation bomb without that risk. On kernels older than 4.7, `RLIMIT_DATA` caps only `brk` (weaker alloc containment) — the fleet targets modern Linux. |
+| `RLIMIT_NOFILE` | 4096 | Open file descriptors — the fd-exhaustion bound. |
+| `RLIMIT_CPU` | 600 s | A pure backstop **above** the 300 s wall-clock `MAX_TIMEOUT` (`dispatch.rs`), and it bounds **CPU-bound** (spin/compute) runaways specifically. A sleeping / wall-clock-bound / hung-I/O child accrues little CPU time and is instead bounded by the existing wall-clock timeout kill, not by `RLIMIT_CPU` — do not mistake this for a wall-clock bound. |
+| `RLIMIT_FSIZE` | 4 GiB | Largest single file a child may write — the runaway-write bound. |
+
+`pkg.install`'s headroom comes from this single generous global default rather than a
+class-specific profile: the bomb-vs-legitimate gap is orders of magnitude (a bomb wants
+unbounded; `apt`/`dnf` want a few hundred MB of heap, a few dozen processes, a few
+thousand fds), so one generous default contains bombs while comfortably accommodating the
+heaviest legitimate Operation. A class split would add `ExecRequest`/operation-fn
+plumbing and test churn for no security or functional gain.
+
+**The `TasksMax=4096` sizing budget.** The daemon runs under a bare `#[tokio::main]`
+(`main.rs`), so tokio's builder defaults apply — `max_blocking_threads=512`, worker
+threads ≈ #CPUs, plus the main thread — all in the **same cgroup** as any spawned child
+process tree, all counting toward `TasksMax`:
+
+| Component | Budget |
+| --- | --- |
+| tokio blocking-pool ceiling (`max_blocking_threads` default) | 512 |
+| tokio worker threads (≈ #CPUs; budgeted for a large host) | 256 |
+| main thread + tracing/signal/misc runtime threads | 8 |
+| largest legitimate child process tree (`pkg.install`'s `dpkg`/`apt` maintainer-script fan-out) | 256 |
+| **subtotal (legitimate ceiling)** | **≈ 1032** |
+| headroom/slack (≈ 4× the legitimate ceiling; still far below a fork bomb) | → **`TasksMax=4096`** |
+
+`4096` is deliberately **not** left at `512` — tokio's own `max_blocking_threads`
+default — so the two ceilings don't coincidentally collide; it sits materially above both
+the ~1032 legitimate ceiling and the 512 blocking-pool default, and orders of magnitude
+below an unbounded fork bomb, so it never clips legitimate work while still bounding a
+bomb. Operators raise it (and may add a scoped `MemoryMax=`) in the `pkg-install.conf`
+drop-in for unusually heavy installs.
+
+**Deny-closed behavior.** Each configured limit sets `rlim_cur == rlim_max` to a finite
+constant, so a spawned child is always bounded even when the inherited hard limit is
+unlimited. If any `setrlimit` call in `pre_exec` fails (e.g. a value that would require
+raising a hard limit the process cannot raise), the closure returns `Err`, `cmd.spawn()`
+returns `Err`, and `execute()` maps it to `OUTCOME_FAILURE` via the same path already used
+for spawn errors — the daemon **never** spawns a child with weaker-than-configured limits.
+The shipped defaults sit below systemd's own default hard limits (`DefaultLimitNOFILE`
+hard ~524288, unlimited `DATA`/`CPU`/`FSIZE`, a high `NPROC`), so in production
+`setrlimit` lowers and succeeds out of the box. A host that has **already** tightened a
+hard limit below a shipped default (e.g. `LimitNOFILE` hard < 4096) would make `setrlimit`
+require a raise, fail with `EPERM`, and the affected exec Operations return
+`OUTCOME_FAILURE` on that host — this is the intended deny-closed behavior (refuse rather
+than run unbounded); operators in that situation tune the constant.
+
+**Threat-model framing.** This closes ACCIDENTAL/naive resource exhaustion (a
+Policy-permitted command that forks, allocates, opens fds, or writes without bound by
+mistake) and adds defense-in-depth. It is **not** a sandbox against a Policy-permitted
+**malicious** command that deliberately raises its own limits — that is only possible if
+the command holds `CAP_SYS_RESOURCE`, which requires a non-hardened deployment (see
+above). Policy is the gate against running that command at all; the cgroup
+`TasksMax`/`MemoryMax` narrow even that residual case.
+
+**Operator tuning.** `ResourceLimits::DEFAULT` is a compile-time constant today (the
+`MAX_OUTPUT_BYTES` precedent); env-tunability is future work. The operator's runtime lever
+is the systemd unit: raise `TasksMax=` and/or add a scoped `MemoryMax=` in the
+`pkg-install.conf` drop-in for Nodes whose installs need more headroom.
+
 ## Verification
 
 Static validation (runnable in CI/dev environments, no real Node needed):
@@ -174,8 +288,11 @@ this repository's automated checks can currently run.
 
 ## Forward pointer
 
-v0.0.8 is where the exact syscall surface (a real `SystemCallFilter` allowlist, derived
-from tracing the daemon and its executor children rather than guessed) and the precise
-minimal capability set (rather than "the capabilities `pkg.install`'s package managers
-typically need") get audited and locked down. This document and unit are the restricted-
-user baseline that audit builds on, not a substitute for it.
+Resource limits on spawned children (rlimits + the `TasksMax` cgroup backstop) are now
+addressed by this document's
+[Resource limits on spawned children](#resource-limits-on-spawned-children-v008-exec-audit)
+section. What remains outstanding for the v0.0.8 audit is the exact syscall surface (a
+real `SystemCallFilter` allowlist, derived from tracing the daemon and its executor
+children rather than guessed) and the precise minimal capability set (rather than "the
+capabilities `pkg.install`'s package managers typically need"). This document and unit are
+the restricted-user baseline that audit builds on, not a substitute for it.

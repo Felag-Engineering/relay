@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
+use crate::config::ResourceLimits;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{Outcome, RawExec, RiskClass, TaskResult};
 use crate::policy::{Decision, Policy};
@@ -69,6 +70,7 @@ pub async fn run_raw_exec(
                 timeout,
                 max_output_bytes,
                 cancel,
+                limits: ResourceLimits::DEFAULT,
             })
             .await
         }

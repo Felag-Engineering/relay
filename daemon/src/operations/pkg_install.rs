@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use tokio::sync::oneshot;
 
+use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
 
@@ -243,6 +244,7 @@ where
         timeout,
         max_output_bytes,
         cancel,
+        limits: ResourceLimits::DEFAULT,
     };
     run(req).await
 }
