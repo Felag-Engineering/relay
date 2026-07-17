@@ -107,12 +107,63 @@ is its client cert; at-most-once Task dedup blunts replay of a captured Task
 [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md),
 [ADR-0004](../adr/0004-async-job-execution-model.md), invariants #6, #4).
 
+## Architecture invariants → boundaries
+
+The table below maps each of the fourteen architecture invariants declared in `CLAUDE.md` to
+the ADR(s) that back it, the trust boundary (or boundaries) it defends, the adversary it
+primarily counters, and its residual risk.
+
+| Invariant | ADR(s) | Boundary defended | Primary adversary | Residual risk |
+| --- | --- | --- | --- | --- |
+| #1 — Typed argv Operations, regex-gated Raw Exec | [ADR-0001](../adr/0001-structured-operations-with-regex-gated-raw-exec.md) | relay-daemon ↔ Node OS | Jailbroken AI-agent (also Malicious Relay) | Raw Exec safety is only as tight as the operator-authored regex; a loose regex re-opens arbitrary execution, and typed Operations still invoke real binaries whose own arg-parsing bugs are out of scope. |
+| #2 — Policy locally-rooted & remotely-immutable | [ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md) | Operator ↔ Policy file (primary); Relay ↔ relay-daemon (query-only) | Malicious Relay | A Node's own root can rewrite its local Policy (the Compromised Node case, in-scope by design); Policy is only as strong as authored. |
+| #3 — Deny-by-default, deny-beats-allow, arg-level granularity | [ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md) | relay-daemon ↔ Node OS | Malicious Relay (also Jailbroken AI-agent) | An over-broad allow rule authored locally still widens what runs; deny-beats-allow only helps where a deny rule exists. |
+| #4 — At-most-once Task execution (dedup across reconnects) | [ADR-0004](../adr/0004-async-job-execution-model.md) | Relay ↔ relay-daemon | Network attacker | At-most-once is not exactly-once — a dropped Task may run zero times and is not auto-retried; dedup depends on the daemon retaining Task IDs. |
+| #5 — Blast-radius cap enforced on the Relay before dispatch | [ADR-0004](../adr/0004-async-job-execution-model.md) | AI-agent ↔ Relay | Jailbroken AI-agent (also Stolen API credential) | The cap is a Relay-side control, so a Malicious Relay is above it (which is why per-Node Policy still enforces); the cap value is operator config. |
+| #6 — mTLS everywhere; daemon refuses an untrusted Relay; Node identity = client cert | [ADR-0005](../adr/0005-grpc-bidi-over-mtls-transport.md), [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md) | Relay ↔ relay-daemon | Network attacker (also Malicious Relay) | mTLS authenticates the transport, not intent — an authenticated-but-hostile Relay is still distrusted (invariant #2/#3's job); a CA compromise breaks the trust root (see Enrollment ↔ CA). |
+| #7 — Two label namespaces (node:/relay:), each immutable from the other side | [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md) | Enrollment (certless) ↔ CA; Relay ↔ relay-daemon | Compromised Node | A Compromised Node freely forges its own node: labels, so routine node:-targeting trusts the Node only as much as the Node; the security-sensitive lane must target relay:. |
+| #8 — `/proto` is the single source of truth (wire protocol + Operation vocabulary) | [ADR-0007](../adr/0007-polyglot-rust-daemon-go-relay.md) | None as a runtime control — it defines what crosses Relay ↔ relay-daemon | None at runtime | Enforced at build time by CI (proto-check, proto-breaking), not by any runtime boundary; see Findings. |
+| #9 — System Model advisory; AI-immutable grounding facts; never desired-state, no auto-reconcile | [ADR-0008](../adr/0008-system-model-git-backed-semantic-graph.md) | AI-agent ↔ Relay | Jailbroken AI-agent | The AI-agent may still create/update Services/Dependencies/Annotations (audited via git provenance); a wrong-but-authorized model can mislead the AI-agent's own reasoning but never bypasses Selectors → Policy → blast cap. |
+| #10 — One capability layer, three thin surfaces; Console has no execution surface | [ADR-0009](../adr/0009-admin-console-web-ui.md), [ADR-0010](../adr/0010-control-api-and-account-model.md) | AI-agent ↔ Relay | Stolen API credential (also Jailbroken AI-agent) | Largely an internal-architecture invariant; its runtime teeth are the single AI-agent ↔ Relay gate and the Console's no-execution property. |
+| #11 — Control API manages runtime objects, never Relay configuration; can't raise its own limits | [ADR-0010](../adr/0010-control-api-and-account-model.md) | AI-agent ↔ Relay | Stolen API credential | Relay configuration is a root-owned local file out of the API's reach; a root compromise on the Relay host is above this line (and above the whole control plane). |
+| #12 — Policy evaluated only by the daemon's live engine, incl. hypotheticals (PolicyQuery, plan mode) | [ADR-0011](../adr/0011-plan-mode-daemon-evaluated-policy-queries.md) | relay-daemon ↔ Node OS (enforcement); Relay ↔ relay-daemon (plan/PolicyQuery answers) | Malicious Relay | Plan / PolicyQuery answers are point-in-time and advisory — never a reservation; Policy can change before execution. |
+| #13 — Every Operation declares a risk class (read/mutate); blast caps by class; Raw Exec takes the mutate-cap; class is `/proto` contract | [ADR-0012](../adr/0012-operation-risk-classes-and-split-blast-cap.md) | AI-agent ↔ Relay | Jailbroken AI-agent (also Stolen API credential) | The class lives in `/proto` (shares invariant #8's build-time contract-integrity property); a misclassified Operation would mis-cap — guarded by `/proto` review, not a runtime boundary. |
+| #14 — Daemon never self-upgrades; Relay never pushes binaries; upgrades via config management; dispatch-level min-version gate | [ADR-0014](../adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md) | Relay ↔ relay-daemon | Malicious Relay | Daemon version currency depends on the customer's config-management discipline; the min-version gate can refuse dispatch but cannot force an upgrade, and a compromised config-management pipeline is upstream / out of scope. |
+
+### Findings
+
+**Finding 1 — unmapped invariant:** invariant #8 (`/proto` single source of truth) maps to no
+runtime trust boundary. It is a build-time / contract-integrity invariant enforced by CI gates
+(`proto-check`, `proto-breaking`), not by any point in the AI-agent → Relay → relay-daemon →
+Node OS request path — it underpins what crosses Relay ↔ relay-daemon rather than acting at
+it. This is not a defect; it is disclosed here so the milestone's "every invariant maps to a
+boundary" line has an honest, recorded exception. Invariant #13's risk-class-contract half
+shares this same build-time property.
+
+**Finding 2 — boundary coverage:** all five trust boundaries are defended by at least one
+invariant — there is no undefended boundary. AI-agent ↔ Relay: #5, #9, #10, #11, #13; Relay ↔
+relay-daemon: #2, #4, #6, #7, #12, #14; relay-daemon ↔ Node OS: #1, #3, #12; Operator ↔ Policy
+file: #2; Enrollment (certless) ↔ CA: #7.
+
+**Observation (not a finding):** the Trust boundaries table names AI-agent ↔ Relay by the
+AI-agent surface; the Control API and Admin Console are additional crossings of the same
+caller ↔ Relay boundary, all gated by the one capability layer (invariant #10), and the
+Console adds no execution surface.
+
+**Framing (not a finding):** ADR-0003, ADR-0013, ADR-0015, and ADR-0016 back no numbered
+invariant — expected, since they are design decisions rather than load-bearing distrust
+invariants.
+
+These findings are recorded for the residual-risk register created by the closer issue
+**#225** (consistent with the "Kept current" section below); this document does not create
+that register.
+
 ## Scope
 
-This document is the *frame* only: the product bet and kill criterion, the trust boundaries,
-and the adversary catalogue above. It deliberately does not attempt the exhaustive mapping
-from every architecture invariant in `CLAUDE.md` to the boundary it defends — that is the
-scope of the follow-up issue **#213**. The Ansible-MCP foil demo (issue #140) is out of scope
+This document covers the product bet and kill criterion, the trust boundaries, the adversary
+catalogue, and the architecture-invariant → boundary map above. The mapping from every
+architecture invariant in `CLAUDE.md` to the boundary it defends now exists in the section
+above, produced by issue **#213**. The Ansible-MCP foil demo (issue #140) is out of scope
 for this milestone; it is a separate positioning exercise, not part of the threat model.
 
 ## Kept current
