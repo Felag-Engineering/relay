@@ -1720,3 +1720,195 @@ deny = ["[invalid"]
         assert!(!parse_err.has_warnings());
     }
 }
+
+// ---------------------------------------------------------------------------
+// Raw Exec red-team harness (issue #214)
+// ---------------------------------------------------------------------------
+
+/// Adversarial, table-driven red-team suite against `evaluate_raw_exec`'s
+/// matching model: regex anchoring, argv-join ambiguity, and the deny/allow
+/// asymmetry (deny is tested against the joined command OR any element;
+/// allow is tested against the joined command only — policy.rs:749-771).
+///
+/// Test-only: this module never touches `evaluate_raw_exec`, `from_toml_str`,
+/// `compile_regexes`, the loader, or the lint code above. It asserts current
+/// behavior (green rows, some of which document accepted footguns rather than
+/// bugs) plus one genuine deny-evasion bypass, committed as a standalone
+/// `#[ignore]`d test tagged with the filed finding (#227) rather than fixed
+/// here — closing it would be a Policy-evaluation semantics change requiring
+/// an ADR (ADR-0001, ADR-0002).
+///
+/// `redteam_cases()` is the single extension point later red-team issues
+/// (e.g. argv-smuggling/encoding) append rows to.
+#[cfg(test)]
+mod raw_exec_redteam {
+    use super::*;
+
+    /// Build an argv `Vec<String>` from string-literal elements. Mirrors the
+    /// `args` helper in `mod tests`, renamed to Raw Exec vocabulary.
+    fn argv(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Coarse red-team classification of a Raw Exec `Decision`: does the
+    /// command run, is it denied by a specific rule, or denied by default.
+    /// Deliberately coarser than `Decision` itself — the exact `reason`
+    /// string is owned by the golden-reason tests in `mod tests`, not this
+    /// harness.
+    #[derive(Debug, Clone, Copy)]
+    enum Expect {
+        /// `Decision::Allow(_)`.
+        Allow,
+        /// `Decision::Deny` with a specific `Rule::RawExecDeny` attributed.
+        DenyByPattern,
+        /// `Decision::Deny` with `rule: None` (no allow pattern matched).
+        DenyByDefault,
+    }
+
+    /// One red-team case: a self-contained Policy fixture, an argv, and the
+    /// expected coarse decision. `redteam_cases()` is the extension point for
+    /// follow-up red-team issues to append rows to.
+    struct Case {
+        name: &'static str,
+        policy_toml: &'static str,
+        argv: &'static [&'static str],
+        expect: Expect,
+        note: &'static str,
+    }
+
+    fn redteam_cases() -> Vec<Case> {
+        vec![
+            // --- Axis 1: regex anchoring / unanchored substring -------------
+            Case {
+                name: "anchored_allow_rejects_suffix_injection",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx", ";", "touch", "/tmp/pwn"],
+                expect: Expect::DenyByDefault,
+                note: "trailing tokens appended after the injected command break the anchored $, so the anchored allow correctly refuses the suffix-injection attempt",
+            },
+            Case {
+                name: "anchored_allow_rejects_prefix_injection",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/bin/sh", "-c", "/usr/bin/systemctl restart nginx"],
+                expect: Expect::DenyByDefault,
+                note: "argv[0] is the literal /bin/sh (no shell is invoked — ADR-0001), so the joined form starts with /bin/sh and the anchored ^ fails",
+            },
+            Case {
+                name: "unanchored_allow_admits_foreign_argv0",
+                policy_toml: "[raw_exec]\nallow = [\"/usr/bin/systemctl (status|restart) nginx\"]\n",
+                argv: &["/bin/rm", "-rf", "/var/log", "&&", "/usr/bin/systemctl", "restart", "nginx"],
+                expect: Expect::Allow,
+                note: "documented-intended (#214): an operator's unanchored 'obvious' pattern is only ever a substring match anywhere in the joined command, so it admits a hostile argv whose real argv[0] is /bin/rm; RE2-style substring semantics are by design (module doc), and the mitigation is operator anchoring (policy.example.toml:94), never an engine change",
+            },
+            Case {
+                name: "anchored_allow_blocks_same_foreign_argv0",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/bin/rm", "-rf", "/var/log", "&&", "/usr/bin/systemctl", "restart", "nginx"],
+                expect: Expect::DenyByDefault,
+                note: "paired contrast with unanchored_allow_admits_foreign_argv0: the identical hostile argv is refused once the allow pattern is anchored, proving anchoring is the mitigation",
+            },
+            // --- Axis 2: argv-join ambiguity ---------------------------------
+            Case {
+                name: "join_collapse_two_args_same_decision_two_elements",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx"],
+                expect: Expect::Allow,
+                note: "documented-intended (#214): three-element argv, the intended shape; paired with join_collapse_two_args_same_decision_merged_element to show the joined gate cannot distinguish this from a different real argv",
+            },
+            Case {
+                name: "join_collapse_two_args_same_decision_merged_element",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart nginx"],
+                expect: Expect::Allow,
+                note: "documented-intended (#214): the second element carries the space that used to separate two argv elements; argv.join(\" \") (policy.rs:749) is blind to the element boundary, so this two-element argv gets the identical decision as join_collapse_two_args_same_decision_two_elements though the real argv differs",
+            },
+            Case {
+                name: "join_single_element_whole_command",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl restart nginx"],
+                expect: Expect::Allow,
+                note: "documented-intended (#214): sharpest 'what the gate cannot see' — a single argv element containing the whole command joins to the same string and is allowed, though execv's real target would be a literal filename containing spaces (ENOENT); no shell re-parses argv (ADR-0001), so the non-injective join is a legibility limit, not an exploitable escalation under argv exec",
+            },
+            // --- Axis 3: deny/allow asymmetry --------------------------------
+            Case {
+                name: "deny_matches_joined_only",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl .+$\"]\ndeny = [\"restart nginx\"]\n",
+                argv: &["systemctl", "restart", "nginx"],
+                expect: Expect::DenyByPattern,
+                note: "duplicates the existing raw_exec_deny_matches_joined_string_only test in mod tests (policy.rs:1121-1143); kept here only to seed the self-contained extensible table with the joined disjunct of the deny pass",
+            },
+            Case {
+                name: "deny_matches_per_element_only_beats_allow",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force"],
+                expect: Expect::DenyByPattern,
+                note: "the allow pattern is anchored to match this exact joined command, so the allow pass alone would let it through, but the deny pass runs first (deny-beats-allow) and the anchored deny ^--force$ fires on the --force argv element even though it does not match the joined string; exercises the per-element disjunct of the deny pass",
+            },
+            Case {
+                name: "allow_joined_only_is_fail_closed",
+                policy_toml: "[raw_exec]\nallow = [\"^nginx$\"]\n",
+                argv: &["systemctl", "restart", "nginx"],
+                expect: Expect::DenyByDefault,
+                note: "key red-team result: the deny/allow asymmetry cannot widen allow — an allow pattern that matches only an individual argv element ('nginx') never fires because the allow pass tests the joined string only (policy.rs:765-771); the gate stays fail-closed",
+            },
+        ]
+    }
+
+    #[test]
+    fn raw_exec_redteam_table() {
+        for case in redteam_cases() {
+            let policy = from_toml_str(case.policy_toml)
+                .unwrap_or_else(|e| panic!("case {}: policy TOML failed to parse: {e}", case.name));
+            let decision = policy.evaluate_raw_exec(&argv(case.argv));
+            let matched = matches!(
+                (case.expect, &decision),
+                (Expect::Allow, Decision::Allow(_))
+                    | (
+                        Expect::DenyByPattern,
+                        Decision::Deny {
+                            rule: Some(Rule::RawExecDeny { .. }),
+                            ..
+                        },
+                    )
+                    | (Expect::DenyByDefault, Decision::Deny { rule: None, .. })
+            );
+            assert!(
+                matched,
+                "case {}: {}: expected {:?}, got {decision:?}",
+                case.name, case.note, case.expect
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Cross-axis (Axis 2 x Axis 3) — genuine bypass, filed as finding #227
+    // -------------------------------------------------------------------
+    //
+    // A deny rule can be evaded by merging the denied token into an
+    // adjacent argv element: an anchored per-element deny (`^--force$`)
+    // only ever sees the exact element `--force`, so appending anything to
+    // that element ("--force x") slips past both the joined-string disjunct
+    // and the per-element disjunct of the deny pass, while an anchored
+    // allow pattern written for the merged form still matches the joined
+    // command. This defeats a deny rule outright — more severe than the
+    // unanchored-allow footgun above, which only ever over-widens an allow.
+    // Committed here as a known, tracked bypass rather than silently fixed:
+    // closing it needs a Policy-evaluation semantics change (e.g.
+    // argv-structure-aware or normalized per-element deny matching), which
+    // is an ADR-gated decision (ADR-0001, ADR-0002), not a test-only change.
+    #[test]
+    #[ignore = "finding #227: anchored per-element deny (^--force$) evaded by merging the denied token into an adjacent argv element; desired=Deny, current=Allow; fixing needs a Policy-semantics change gated on an ADR (ADR-0001/0002) — do NOT change evaluate_raw_exec here"]
+    fn deny_anchored_per_element_evaded_by_element_merge() {
+        let policy = from_toml_str(
+            "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force$\"]\n",
+        )
+        .expect("policy must parse");
+        let decision =
+            policy.evaluate_raw_exec(&argv(&["systemctl", "restart", "nginx", "--force x"]));
+        assert!(
+            matches!(decision, Decision::Deny { .. }),
+            "anchored per-element deny ^--force$ must not be evadable by merging the denied \
+             token into an adjacent argv element (#227); got {decision:?}"
+        );
+    }
+}
