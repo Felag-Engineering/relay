@@ -463,3 +463,26 @@ mod tests {
         );
     }
 }
+
+/// Compile-time guarantee that the secret-bearing `Identity` (which holds
+/// the Node PKCS#8 private key in `key_pem`) never derives `Debug`. The
+/// manual `NoDebug` impl below conflicts (E0119) with the blanket impl the
+/// instant `Identity` gains a `Debug` impl, turning a silent secret-leak
+/// regression into a build failure. Pins the ADR-0006 "never logged"
+/// guarantee at the type level (issue #222).
+#[cfg(test)]
+mod no_debug_guard {
+    use super::Identity;
+    use std::fmt::Debug;
+
+    trait NoDebug {}
+    impl<T: Debug> NoDebug for T {}
+    impl NoDebug for Identity {}
+
+    fn assert_no_debug<T: NoDebug>() {}
+
+    #[test]
+    fn identity_does_not_derive_debug() {
+        assert_no_debug::<Identity>();
+    }
+}

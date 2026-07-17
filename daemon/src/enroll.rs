@@ -600,3 +600,26 @@ mod tests {
         );
     }
 }
+
+/// Compile-time guarantee that the secret-bearing `EnrollConfig` (which holds
+/// the Enrollment Token in `token`) never derives `Debug`. The manual
+/// `NoDebug` impl below conflicts (E0119) with the blanket impl the instant
+/// `EnrollConfig` gains a `Debug` impl, turning a silent secret-leak
+/// regression into a build failure. Pins the ADR-0006 "never logged"
+/// guarantee at the type level (issue #222).
+#[cfg(test)]
+mod no_debug_guard {
+    use super::EnrollConfig;
+    use std::fmt::Debug;
+
+    trait NoDebug {}
+    impl<T: Debug> NoDebug for T {}
+    impl NoDebug for EnrollConfig {}
+
+    fn assert_no_debug<T: NoDebug>() {}
+
+    #[test]
+    fn enroll_config_does_not_derive_debug() {
+        assert_no_debug::<EnrollConfig>();
+    }
+}
