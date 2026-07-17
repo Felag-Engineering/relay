@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
+use crate::config::ResourceLimits;
 use crate::gen::{Outcome, TaskResult};
 
 /// Grace period between SIGTERM and SIGKILL when killing a Task's group.
@@ -25,7 +26,9 @@ const TERM_GRACE: Duration = Duration::from_secs(5);
 ///
 /// Adding `cancel: Option<oneshot::Receiver<()>>` makes this type non-Clone.
 /// Confirm no call site constructs ExecRequest via `.clone()` or struct-update
-/// (`{ ..base }`); each site must construct fresh.
+/// (`{ ..base }`); each site must construct fresh. `limits` is `Copy`, which is
+/// fine under this rule — it does not enable `.clone()`/struct-update of the
+/// whole (still non-Clone) `ExecRequest`.
 pub struct ExecRequest {
     /// The Task's unique identifier, echoed into the returned [`TaskResult`].
     pub task_id: String,
@@ -45,6 +48,10 @@ pub struct ExecRequest {
     /// which `recv_cancel` maps to `pending()` — never a spurious cancel.
     /// `None` makes the Task uncancellable (used in tests and data-only handlers).
     pub cancel: Option<oneshot::Receiver<()>>,
+    /// Resource limits (`setrlimit`) applied to the spawned child in `pre_exec`
+    /// (post-fork, pre-exec). Copy; does not affect the non-Clone status.
+    /// Deny-closed: a setrlimit failure aborts the spawn -> `OUTCOME_FAILURE`.
+    pub limits: ResourceLimits,
 }
 
 /// Executes `req` and returns a fully-populated [`TaskResult`].
@@ -74,6 +81,15 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     // kill_on_drop is a panic-time safety net for the direct child only.
     // The authoritative no-orphan path is the explicit kill(-pgid) in kill_group_graceful.
     cmd.kill_on_drop(true);
+
+    // Copy into the closure (async-signal-safe capture).
+    let limits = req.limits;
+    // SAFETY: runs in the forked child before exec; performs only async-signal-safe
+    // work (stack-only libc::setrlimit syscalls, Copy capture, no heap/locks). A
+    // setrlimit failure returns Err, failing the spawn closed (never an unbounded child).
+    unsafe {
+        cmd.pre_exec(move || apply_rlimits(&limits));
+    }
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -258,6 +274,67 @@ fn signal_group(pgid: i32, signal: libc::c_int) {
     unsafe { libc::kill(-pgid, signal) };
 }
 
+/// Applies `limits` to the calling process via `setrlimit`. Async-signal-safe: only
+/// stack `libc::rlimit` values and `setrlimit` syscalls; no heap, no locks. Returns
+/// `Err` on the first failure so the caller (the `pre_exec` closure in [`execute`])
+/// fails the spawn closed. `rlim_t` is `u64` on Linux (glibc and musl), so limit
+/// values need no cast; each `libc::RLIMIT_*` constant is passed directly to
+/// `setrlimit` so no target-specific resource-type cast is needed (portable across
+/// the glibc dev/CI build and the musl release build).
+fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
+    if let Some(v) = limits.nproc {
+        let rl = libc::rlimit {
+            rlim_cur: v,
+            rlim_max: v,
+        };
+        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(v) = limits.data_bytes {
+        let rl = libc::rlimit {
+            rlim_cur: v,
+            rlim_max: v,
+        };
+        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
+        if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(v) = limits.nofile {
+        let rl = libc::rlimit {
+            rlim_cur: v,
+            rlim_max: v,
+        };
+        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(v) = limits.cpu_seconds {
+        let rl = libc::rlimit {
+            rlim_cur: v,
+            rlim_max: v,
+        };
+        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
+        if unsafe { libc::setrlimit(libc::RLIMIT_CPU, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    if let Some(v) = limits.fsize_bytes {
+        let rl = libc::rlimit {
+            rlim_cur: v,
+            rlim_max: v,
+        };
+        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
+        if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &rl) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// Synthesizes a failure [`TaskResult`] for spawn errors and empty-argv guards.
 ///
 /// `OUTCOME_ERROR` does not exist in proto; `OUTCOME_FAILURE` + `exit_code -1` +
@@ -277,11 +354,24 @@ fn failure_result(task_id: &str, stderr: &[u8], started: Instant) -> TaskResult 
 #[cfg(test)]
 mod tests {
     use super::{execute, ExecRequest};
+    use crate::config::ResourceLimits;
     use crate::gen::Outcome;
     use std::time::{Duration, Instant};
 
     fn big_cap() -> usize {
         64 * 1024 * 1024 // 64 MiB — effectively unlimited for most tests
+    }
+
+    /// No resource bounds applied — existing tests stay behaviorally identical
+    /// to pre-#220 behavior (no limits) regardless of the CI host's own limits.
+    fn no_limits() -> ResourceLimits {
+        ResourceLimits {
+            nproc: None,
+            data_bytes: None,
+            nofile: None,
+            cpu_seconds: None,
+            fsize_bytes: None,
+        }
     }
 
     // 1. /bin/true → OUTCOME_SUCCESS, exit 0
@@ -293,6 +383,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Success as i32);
@@ -309,6 +400,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -324,6 +416,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.stdout, b"hello\n");
@@ -345,6 +438,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.stderr, b"boom\n");
@@ -369,6 +463,7 @@ mod tests {
             timeout: Duration::from_secs(1),
             max_output_bytes: 4096,
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Timeout as i32);
@@ -424,6 +519,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: 1024,
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.stdout.len(), 1024);
@@ -444,6 +540,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: 1024,
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.stdout.len(), 1024);
@@ -465,6 +562,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: 1024,
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.stdout.len(), 1024);
@@ -481,6 +579,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -497,6 +596,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -522,6 +622,7 @@ mod tests {
             timeout: Duration::from_secs(5),
             max_output_bytes: big_cap(),
             cancel: None,
+            limits: no_limits(),
         })
         .await;
         assert_eq!(result.outcome, Outcome::Failure as i32);
@@ -553,6 +654,7 @@ mod tests {
             timeout: Duration::from_secs(30), // long — cancel fires before timeout
             max_output_bytes: 4096,
             cancel: Some(cancel_rx),
+            limits: no_limits(),
         })
         .await;
 
@@ -611,6 +713,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             max_output_bytes: 1024,
             cancel: Some(cancel_rx),
+            limits: no_limits(),
         })
         .await;
 
@@ -679,6 +782,7 @@ mod tests {
                 timeout: Duration::from_millis(5),
                 max_output_bytes: 4096,
                 cancel: Some(rx),
+                limits: no_limits(),
             }));
 
             // Let the spawned task run up to (and register) its select!'s first poll.
@@ -703,5 +807,177 @@ mod tests {
             );
             assert_eq!(result.exit_code, -1);
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Resource limits (issue #220)
+    // -------------------------------------------------------------------------
+
+    /// Finds the `/proc/self/limits` line whose label matches `label` exactly
+    /// (labels start at column 0, so no ambiguity with e.g. "Max cpu time" vs
+    /// "Max cpu time" prefixed variants) and returns its Soft Limit column.
+    fn soft_limit_value(limits_text: &str, label: &str) -> String {
+        let line = limits_text
+            .lines()
+            .find(|l| l.starts_with(label))
+            .unwrap_or_else(|| panic!("no line starting with {label:?} in:\n{limits_text}"));
+        line[label.len()..]
+            .split_whitespace()
+            .next()
+            .unwrap_or_else(|| panic!("no soft-limit column in line: {line:?}"))
+            .to_string()
+    }
+
+    // 12. Applied-limits / fork- & alloc-bomb containment, by configuration
+    //     inspection. /bin/cat /proc/self/limits reports the exec'd child's own
+    //     enforced rlimits; the kernel cannot let the child exceed "Max
+    //     processes"/"Max data size" (etc), so a fork or allocation bomb is
+    //     provably bounded — without ever triggering a real fork storm or a
+    //     real memory-alloc detonation in CI.
+    #[tokio::test]
+    async fn child_runs_under_configured_rlimits() {
+        let limits = ResourceLimits {
+            nproc: Some(111),
+            data_bytes: Some(200_000_000),
+            nofile: Some(222),
+            cpu_seconds: Some(333),
+            fsize_bytes: Some(44_000_000),
+        };
+
+        let result = execute(ExecRequest {
+            task_id: "t-rlimits".to_string(),
+            argv: vec!["/bin/cat".to_string(), "/proc/self/limits".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+            limits,
+        })
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Success as i32);
+        let stdout = String::from_utf8_lossy(&result.stdout);
+
+        assert_eq!(soft_limit_value(&stdout, "Max processes"), "111");
+        assert_eq!(soft_limit_value(&stdout, "Max data size"), "200000000");
+        assert_eq!(soft_limit_value(&stdout, "Max open files"), "222");
+        assert_eq!(soft_limit_value(&stdout, "Max cpu time"), "333");
+        assert_eq!(soft_limit_value(&stdout, "Max file size"), "44000000");
+    }
+
+    // 13. LIVE runaway-write containment: RLIMIT_FSIZE actually trips SIGXFSZ
+    //     on a write that would exceed the configured cap. This is the one
+    //     LIVE-detonation test in this suite (coreutils only; unique temp
+    //     path; cleaned up after).
+    #[tokio::test]
+    async fn fsize_limit_caps_runaway_write() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "relay-executor-fsize-test-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let path_str = path.to_string_lossy().into_owned();
+
+        let fsize_cap: u64 = 1024 * 1024; // 1 MiB
+        let limits = ResourceLimits {
+            nproc: None,
+            data_bytes: None,
+            nofile: None,
+            cpu_seconds: None,
+            fsize_bytes: Some(fsize_cap),
+        };
+
+        // Attempt a 100 MiB write — far past the 1 MiB cap.
+        let cmd = format!("head -c 104857600 /dev/zero > {path_str}");
+        let result = execute(ExecRequest {
+            task_id: "t-fsize".to_string(),
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), cmd],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+            limits,
+        })
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Failure as i32,
+            "a write past RLIMIT_FSIZE raises SIGXFSZ, yielding a non-success exit"
+        );
+
+        let written_len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        assert!(
+            written_len > 0,
+            "some bytes must have been written before the cap tripped"
+        );
+        assert!(
+            written_len <= fsize_cap,
+            "written file ({written_len} bytes) must not exceed the configured \
+             FSIZE cap ({fsize_cap} bytes)"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // 14. Deny-closed: a setrlimit failure in pre_exec must fail the spawn
+    //     closed — the child is refused, never spawned unbounded. `nofile:
+    //     Some(1 << 40)` exceeds `fs.nr_open` (sysctl, default ~1048576 ==
+    //     1<<20), the unconditional ceiling `do_prlimit` enforces for
+    //     RLIMIT_NOFILE — NOT INT_MAX, and NOT CAP_SYS_RESOURCE-gated — so
+    //     setrlimit fails EPERM for root and non-root alike.
+    #[tokio::test]
+    async fn misconfigured_limit_fails_closed() {
+        let limits = ResourceLimits {
+            nproc: None,
+            data_bytes: None,
+            nofile: Some(1 << 40),
+            cpu_seconds: None,
+            fsize_bytes: None,
+        };
+
+        let result = execute(ExecRequest {
+            task_id: "t-deny-closed".to_string(),
+            argv: vec!["/bin/echo".to_string(), "hi".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+            limits,
+        })
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Failure as i32,
+            "a setrlimit failure in pre_exec must fail the spawn closed"
+        );
+        assert_eq!(result.exit_code, -1);
+        assert!(
+            !result.stderr.is_empty(),
+            "the spawn error must be surfaced in stderr"
+        );
+    }
+
+    // 15. Regression guard: the shipped defaults don't break a legitimate
+    //     command (and, transitively, that raw_exec/service_restart/pkg_install
+    //     under ResourceLimits::DEFAULT are safe).
+    #[tokio::test]
+    async fn default_limits_allow_normal_command() {
+        let result = execute(ExecRequest {
+            task_id: "t-default-limits".to_string(),
+            argv: vec!["/bin/echo".to_string(), "hi".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+            limits: ResourceLimits::DEFAULT,
+        })
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Success as i32);
+        assert_eq!(result.stdout, b"hi\n");
     }
 }
