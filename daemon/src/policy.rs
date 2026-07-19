@@ -1975,6 +1975,188 @@ mod raw_exec_redteam {
              token into an adjacent argv element (#227); got {decision:?}"
         );
     }
+
+    // ---------------------------------------------------------------------------
+    // Structured-Operation path-argument red-team (issue #215)
+    // ---------------------------------------------------------------------------
+    //
+    // This second table drives `Policy::evaluate` (the structured-Operation
+    // path, policy.rs:705) via `evaluate("file.read", ...)`, NOT
+    // `evaluate_raw_exec` above. `file.read` takes a filesystem-path
+    // argument and is the representative case for path-taking Operations.
+    // It asserts the documented-intended behaviors GREEN (exact-string deny
+    // fires on the exact literal, wildcard allow admits an ordinary path,
+    // arg-count mismatch is deny-by-default) and captures the confirmed
+    // exact-string-deny path bypass as a separate `#[ignore]`d test below,
+    // rather than fixing it here — see the comment above that test.
+
+    /// Shared fixture: mirrors the shipped example policy's `file.read`
+    /// rules (policy.example.toml:56-85) — a `["*"]` wildcard allow paired
+    /// with an exact-string `[[deny]]` for `/etc/shadow` — inlined so this
+    /// table stays self-contained, like the Raw Exec fixtures above.
+    const FILE_READ_SHADOW_POLICY: &str =
+        "[[operation]]\nname = \"file.read\"\nallowed_args = [[\"*\"]]\n\n\
+         [[deny]]\nname = \"file.read\"\nargs = [[\"/etc/shadow\"]]\n";
+
+    /// Coarse red-team classification of a structured-Operation `Decision`,
+    /// mirroring `Expect` above but over `Policy::evaluate`'s
+    /// `Rule::Operation*` variants. Kept separate from `Expect` because the
+    /// two entry points return different `Rule` variants (RawExec* vs
+    /// Operation*), so a shared enum would be wrong.
+    #[derive(Debug, Clone, Copy)]
+    enum PathExpect {
+        /// `Decision::Allow(Rule::OperationAllow { .. })`.
+        Allow,
+        /// `Decision::Deny` with a specific `Rule::OperationDeny` attributed.
+        DenyByRule,
+        /// `Decision::Deny` with `rule: None` (no allow rule matched).
+        DenyByDefault,
+    }
+
+    /// One structured-op path-argument red-team case: a self-contained
+    /// Policy fixture, an Operation name + argv, and the expected coarse
+    /// decision. `op` is always "file.read" today but carried per-row for
+    /// legibility and to let later red-team issues extend this table to
+    /// other path-taking Operations. Reuses the module's `argv` helper for
+    /// `args`, so no new helper is needed.
+    struct PathCase {
+        name: &'static str,
+        policy_toml: &'static str,
+        op: &'static str,
+        args: &'static [&'static str],
+        expect: PathExpect,
+        note: &'static str,
+    }
+
+    /// The GREEN extension point: documented-intended structured-op
+    /// behaviors against `FILE_READ_SHADOW_POLICY`.
+    ///
+    /// Deliberately does NOT include a zero-arg row: under this fixture the
+    /// `/etc/shadow` deny fires *vacuously* on a shorter invocation
+    /// (policy.rs:726-732, see vacuous_deny_fires_on_shorter_invocation), so
+    /// a zero-arg `file.read` call is `DenyByRule`, not `DenyByDefault` — a
+    /// zero-arg row expecting `DenyByDefault` would be wrong here.
+    fn file_read_path_cases() -> Vec<PathCase> {
+        vec![
+            PathCase {
+                name: "exact_string_deny_fires_on_exact_path",
+                policy_toml: FILE_READ_SHADOW_POLICY,
+                op: "file.read",
+                args: &["/etc/shadow"],
+                expect: PathExpect::DenyByRule,
+                note: "documented-intended: the [[deny]] protects the EXACT literal /etc/shadow; deny-beats-allow fires (policy.rs:731)",
+            },
+            PathCase {
+                name: "wildcard_allow_admits_ordinary_path",
+                policy_toml: FILE_READ_SHADOW_POLICY,
+                op: "file.read",
+                args: &["/etc/hostname"],
+                expect: PathExpect::Allow,
+                note: "documented-intended: the [\"*\"] wildcard admits any path the exact deny does not list (mirrors arg_constraint_wildcard_allows_any_path, policy.rs:1034)",
+            },
+            PathCase {
+                name: "wrong_arg_count_two_args_deny_by_default",
+                policy_toml: FILE_READ_SHADOW_POLICY,
+                op: "file.read",
+                args: &["/etc/hostname", "extra"],
+                expect: PathExpect::DenyByDefault,
+                note: "documented-intended: two args vs the one-arg allow shape → count mismatch → deny-by-default (policy.rs:751)",
+            },
+        ]
+    }
+
+    #[test]
+    fn file_read_path_redteam_table() {
+        for case in file_read_path_cases() {
+            let policy = from_toml_str(case.policy_toml)
+                .unwrap_or_else(|e| panic!("case {}: policy TOML failed to parse: {e}", case.name));
+            let decision = policy.evaluate(case.op, &argv(case.args));
+            let matched = matches!(
+                (case.expect, &decision),
+                (
+                    PathExpect::Allow,
+                    Decision::Allow(Rule::OperationAllow { .. })
+                ) | (
+                    PathExpect::DenyByRule,
+                    Decision::Deny {
+                        rule: Some(Rule::OperationDeny { .. }),
+                        ..
+                    },
+                ) | (PathExpect::DenyByDefault, Decision::Deny { rule: None, .. })
+            );
+            assert!(
+                matched,
+                "case {}: {}: expected {:?}, got {decision:?}",
+                case.name, case.note, case.expect
+            );
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // Confirmed bypass, filed as finding #236 — exact-string [[deny]] for
+    // file.read /etc/shadow is evaded by any non-canonical path spelling.
+    // -------------------------------------------------------------------
+    //
+    // Root cause: `Policy::evaluate`'s deny pass compares each argument by
+    // exact byte equality (`denied_vals.contains(&args[i])`, policy.rs:731)
+    // with NO path canonicalization anywhere in daemon/src (grep-confirmed:
+    // zero `canonicalize`/`read_link` hits). The `file.read` executor
+    // delegates path restriction to Policy entirely and then `File::open`s
+    // the literal string (operations/file_read.rs:15-17, 34/52), so the
+    // kernel resolves `..`/`//`/`.`/`/proc/self/root` only *after* the deny
+    // has already been evaded. So every alternate spelling of /etc/shadow
+    // slips the exact-string deny and is admitted by the `["*"]` allow.
+    //
+    // Why committed-but-ignored: closing this is a Policy-EVALUATION
+    // semantics change (canonicalize-before-eval, fail-closed on
+    // non-canonical, or a typed prefix path matcher), which is ADR-gated
+    // (ADR-0001, ADR-0002) and out of scope for a red-team harness issue —
+    // do NOT change `evaluate` here.
+    //
+    // Symlink / bind-mount / Unicode-normalization siblings: at the Policy
+    // string layer a symlink or bind-mount alias is simply a DIFFERENT
+    // literal the deny does not list — the SAME root cause — but only fully
+    // demonstrable through the executor against a real filesystem (out of
+    // scope here, confined to policy.rs). They are documented here and in
+    // finding #236, not asserted as string-layer rows. The "/etc/Shadow"
+    // case row below is included as fs-normalization-dependent: its
+    // desired=Deny only holds on a case-folding/normalizing mount, and
+    // canonicalize-alone would NOT close it (or any Unicode-fold sibling) —
+    // canonicalize only folds `..`/`.`/`//`/symlinks, not case or Unicode
+    // normalization. This is relevant to weighing the fix directions in the
+    // finding.
+    #[test]
+    #[ignore = "finding #236: exact-string [[deny]] file.read /etc/shadow evaded by any non-canonical spelling (/etc/../etc/shadow, //etc/shadow, /etc//shadow, /etc/./shadow, /etc/shadow/, /proc/self/root/etc/shadow, /proc/<pid>/root/etc/shadow, case/Unicode); desired=Deny, current=Allow; fixing needs a Policy-semantics change gated on an ADR (ADR-0001/0002) — do NOT change evaluate here"]
+    fn exact_string_deny_evaded_by_noncanonical_path() {
+        const BYPASS_VARIANTS: &[(&str, &str)] = &[
+            ("/etc/../etc/shadow", "parent-dir traversal"),
+            ("//etc/shadow", "doubled leading slash"),
+            ("/etc//shadow", "doubled interior slash"),
+            ("/etc/./shadow", "dot segment"),
+            (
+                "/etc/shadow/",
+                "trailing slash (note: File::open on a regular file with a trailing \
+                 slash is ENOTDIR at the executor; kept as a string-layer evasion, \
+                 same normalization root cause)",
+            ),
+            ("/proc/self/root/etc/shadow", "/proc/self/root prefix"),
+            ("/proc/1/root/etc/shadow", "/proc/<pid>/root prefix"),
+            (
+                "/etc/Shadow",
+                "case variant — fs-normalization-dependent (see comment above)",
+            ),
+        ];
+
+        let policy = from_toml_str(FILE_READ_SHADOW_POLICY).expect("policy must parse");
+        for (path, why) in BYPASS_VARIANTS {
+            let decision = policy.evaluate("file.read", &argv(&[path]));
+            assert!(
+                matches!(decision, Decision::Deny { .. }),
+                "exact-string deny for /etc/shadow must not be evadable by {why} ({path:?}, \
+                 finding #236); got {decision:?}"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
