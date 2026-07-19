@@ -2054,3 +2054,413 @@ allow = ["^/bin/sh "]
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Property tests (issue #218) — bounded proptest fuzzing of the dispatch
+// pipeline, the risk-class/timeout helpers, and the Operation validators.
+// ---------------------------------------------------------------------------
+//
+// Red-team posture: this suite ATTACKS the dedup -> schedule -> Policy ->
+// execute pipeline for panics and invariant violations. It asserts only
+// invariants the pipeline already implements — a Deny never reaches the
+// runner, the gate-allowed argv is byte-identical to the runner-received
+// argv (ADR-0001), at-most-once dedup (ADR-0004), the strict risk-class lane
+// (ADR-0012), and the bounded timeout — and never changes dispatch, the
+// scheduler, or the validators. A drift between an assertion and the real
+// behavior is a TEST bug — fix the test, never the production code.
+//
+// This module is a sibling of `mod tests` above; it never edits it and
+// builds its own fixtures and its own self-cleaning temp-dir helper rather
+// than reaching into that private sibling module's `TempDir`.
+#[cfg(test)]
+mod proptests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::gen::RawExec;
+    use crate::policy::from_toml_str;
+    use crate::scheduler::Class;
+
+    // -------------------------------------------------------------------
+    // Self-cleaning temp dir for a fresh `DedupStore` per proptest case.
+    // Deliberately NOT the private `TempDir` in `mod tests` (disjointness:
+    // this module must not touch that sibling test module).
+    // -------------------------------------------------------------------
+
+    static PT_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct PtTempDir(PathBuf);
+
+    impl PtTempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "relay-pt-{}-{}",
+                std::process::id(),
+                PT_SEQ.fetch_add(1, Ordering::SeqCst)
+            ));
+            fs::create_dir_all(&path).expect("create PtTempDir");
+            PtTempDir(path)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for PtTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A canned `OUTCOME_SUCCESS` result — existing tests inline this; a
+    /// helper keeps the fake runners in this module terse.
+    fn ok_result(task_id: String) -> TaskResult {
+        TaskResult {
+            task_id,
+            outcome: Outcome::Success as i32,
+            exit_code: 0,
+            stdout: vec![],
+            stderr: vec![],
+            truncated: false,
+            duration_millis: 0,
+        }
+    }
+
+    /// The ONLY policy used by the pipeline properties (P1, P3): allows
+    /// `service.restart` with any single unit, everything else is
+    /// deny-by-default. This is the single design choice that keeps the
+    /// pipeline properties fully hermetic and host-independent — every
+    /// fuzzed action other than an allowed `service.restart` is denied
+    /// before any spawn / file-read / `detect_package_manager` call, and the
+    /// one path that does reach the injected recording runner produces the
+    /// deterministic argv `[systemctl, restart, <unit>]`.
+    fn pipeline_policy() -> Policy {
+        from_toml_str("[[operation]]\nname = \"service.restart\"\nallowed_args = [[\"*\"]]\n")
+            .expect("pipeline_policy TOML must parse")
+    }
+
+    // -------------------------------------------------------------------
+    // Bounded strategies
+    // -------------------------------------------------------------------
+
+    /// A non-empty, short task id — `record_marker` (dedup.rs) never fails
+    /// on a filename this small.
+    fn arb_task_id() -> impl Strategy<Value = String> {
+        prop::string::string_regex("[A-Za-z0-9._-]{1,24}").unwrap()
+    }
+
+    /// One argv/arg element: full-Unicode (including control chars), 0-8
+    /// chars — bounded but wide enough to probe the panic surface.
+    fn arb_argv_elem() -> impl Strategy<Value = String> {
+        prop::collection::vec(any::<char>(), 0..8).prop_map(|cs| cs.into_iter().collect())
+    }
+
+    /// A bounded argv vector, 0-6 elements.
+    fn arb_argv() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::vec(arb_argv_elem(), 0..6)
+    }
+
+    /// A `service.restart` unit: usually a plausible name, occasionally an
+    /// arbitrary (possibly charset-invalid) element.
+    fn arb_unit() -> impl Strategy<Value = String> {
+        prop_oneof![
+            Just("nginx".to_string()),
+            Just("curl".to_string()),
+            arb_argv_elem(),
+        ]
+    }
+
+    /// One `TaskRequest::action` variant: RawExec, one of the four known
+    /// Operations, or an unknown Operation name.
+    fn arb_action() -> impl Strategy<Value = task_request::Action> {
+        prop_oneof![
+            arb_argv().prop_map(|argv| task_request::Action::RawExec(RawExec { argv })),
+            arb_unit().prop_map(|unit| {
+                let mut args = std::collections::HashMap::new();
+                args.insert(OP_ARG_UNIT.to_string(), unit);
+                task_request::Action::Operation(Operation {
+                    name: operations::SERVICE_RESTART.to_string(),
+                    args,
+                })
+            }),
+            arb_argv_elem().prop_map(|path| {
+                let mut args = std::collections::HashMap::new();
+                args.insert(OP_ARG_PATH.to_string(), path);
+                task_request::Action::Operation(Operation {
+                    name: operations::FILE_READ.to_string(),
+                    args,
+                })
+            }),
+            (arb_argv_elem(), arb_argv_elem()).prop_map(|(name, version)| {
+                let mut args = std::collections::HashMap::new();
+                args.insert(OP_ARG_NAME.to_string(), name);
+                args.insert(OP_ARG_VERSION.to_string(), version);
+                task_request::Action::Operation(Operation {
+                    name: operations::PKG_INSTALL.to_string(),
+                    args,
+                })
+            }),
+            arb_argv_elem().prop_map(|name| {
+                task_request::Action::Operation(Operation {
+                    name,
+                    args: std::collections::HashMap::new(),
+                })
+            }),
+        ]
+    }
+
+    /// A full `TaskRequest`: bounded task id, an arbitrary (possibly
+    /// out-of-range) timeout, and an optional action — `Just(None)` covers
+    /// the missing-action protocol-error case.
+    fn arb_task() -> impl Strategy<Value = TaskRequest> {
+        (
+            arb_task_id(),
+            any::<i32>(),
+            prop_oneof![arb_action().prop_map(Some), Just(None)],
+        )
+            .prop_map(|(task_id, timeout_seconds, action)| TaskRequest {
+                task_id,
+                timeout_seconds,
+                action,
+            })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        // ---------------------------------------------------------------
+        // P1 `pipeline_never_panics_deny_never_reaches_runner_argv_identity`
+        // ---------------------------------------------------------------
+        #[test]
+        fn pipeline_never_panics_deny_never_reaches_runner_argv_identity(task in arb_task()) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let pt_dir = PtTempDir::new();
+            let dedup = DedupStore::open(pt_dir.path()).expect("open dedup");
+            let policy = pipeline_policy();
+            let scheduler = Scheduler::new();
+
+            let recorded: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
+            let rec = Arc::clone(&recorded);
+            let run = move |req: ExecRequest| {
+                *rec.lock().unwrap() = Some(req.argv.clone());
+                let task_id = req.task_id.clone();
+                async move { ok_result(task_id) }
+            };
+
+            let result = rt.block_on(dispatch_scheduled_with_runner(
+                &task,
+                &policy,
+                &dedup,
+                &scheduler,
+                tokio::time::Instant::now(),
+                run,
+                None,
+            ));
+
+            // Never panics is implicit — the case completes. task_id is echoed
+            // on every outcome.
+            prop_assert_eq!(&result.task_id, &task.task_id, "task_id must be echoed");
+
+            let recorded_snapshot = recorded.lock().unwrap().clone();
+
+            if result.outcome == Outcome::DeniedByPolicy as i32 {
+                prop_assert!(
+                    recorded_snapshot.is_none(),
+                    "a Deny must never reach the runner"
+                );
+            }
+
+            // IMPLEMENTATION NOTE: an ALLOWED service.restart whose unit passes
+            // Policy but FAILS validate_unit_name's charset check (e.g. a
+            // leading '-' or a non-ASCII unit — reachable because arb_unit()
+            // includes arb_argv_elem()) returns Outcome::Failure with
+            // recorded == None. So recorded_snapshot.is_none() can ALSO occur
+            // for an allowed service.restart, not only for a Deny. Therefore
+            // assert argv-identity ONLY on the recorded == Some(argv) branch
+            // below, and do NOT assert the converse ("allowed => runner
+            // always called") — an allowed-but-invalid-unit case legitimately
+            // leaves the runner uncalled.
+            if let Some(argv) = recorded_snapshot {
+                match &task.action {
+                    Some(task_request::Action::Operation(op))
+                        if op.name == operations::SERVICE_RESTART =>
+                    {
+                        let unit = op.args.get(OP_ARG_UNIT).cloned().unwrap_or_default();
+                        prop_assert_eq!(
+                            argv,
+                            vec!["systemctl".to_string(), "restart".to_string(), unit],
+                            "the gate-allowed argv must be byte-identical to the \
+                             runner-received argv (no mutation between decision \
+                             and exec, ADR-0001)"
+                        );
+                    }
+                    _ => prop_assert!(
+                        false,
+                        "under pipeline_policy() the runner is reachable only \
+                         via an allowed service.restart"
+                    ),
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // P3 `dedup_holds_across_duplicate_task_ids`
+        // ---------------------------------------------------------------
+        #[test]
+        fn dedup_holds_across_duplicate_task_ids(task in arb_task()) {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let pt_dir = PtTempDir::new();
+            let dedup = DedupStore::open(pt_dir.path()).expect("open dedup");
+            let policy = pipeline_policy();
+            let scheduler = Scheduler::new();
+
+            let calls = Arc::new(AtomicUsize::new(0));
+            let c = Arc::clone(&calls);
+            let run = move |req: ExecRequest| {
+                c.fetch_add(1, Ordering::SeqCst);
+                let task_id = req.task_id.clone();
+                async move { ok_result(task_id) }
+            };
+
+            let r2 = rt.block_on(async {
+                let _r1 = dispatch_scheduled_with_runner(
+                    &task,
+                    &policy,
+                    &dedup,
+                    &scheduler,
+                    tokio::time::Instant::now(),
+                    run.clone(),
+                    None,
+                )
+                .await;
+                dispatch_scheduled_with_runner(
+                    &task,
+                    &policy,
+                    &dedup,
+                    &scheduler,
+                    tokio::time::Instant::now(),
+                    run,
+                    None,
+                )
+                .await
+            });
+
+            prop_assert!(
+                calls.load(Ordering::SeqCst) <= 1,
+                "at-most-once: runner called {} times for the same task_id",
+                calls.load(Ordering::SeqCst)
+            );
+            prop_assert!(
+                r2.stderr
+                    .windows(b"already processed".len())
+                    .any(|w| w == b"already processed"),
+                "the second dispatch of a duplicate task_id must be the benign \
+                 already-processed result"
+            );
+            prop_assert_eq!(&r2.task_id, &task.task_id);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        // ---------------------------------------------------------------
+        // P4 `classify_strict_lane` — proves RawExec/unknown-op/missing-action
+        // -> Mutate (ADR-0012 risk lane).
+        // ---------------------------------------------------------------
+        #[test]
+        fn classify_strict_lane(task in arb_task()) {
+            let class = Scheduler::classify(&task);
+            match &task.action {
+                None => prop_assert_eq!(class, Class::Mutate, "missing action must classify Mutate"),
+                Some(task_request::Action::RawExec(_)) => {
+                    prop_assert_eq!(class, Class::Mutate, "RawExec must always classify Mutate")
+                }
+                Some(task_request::Action::Operation(op)) => match op.name.as_str() {
+                    operations::SYSTEM_FACTS | operations::FILE_READ => {
+                        prop_assert_eq!(class, Class::Read, "{} must classify Read", op.name)
+                    }
+                    _ => prop_assert_eq!(
+                        class,
+                        Class::Mutate,
+                        "{} (mutate or unknown) must classify Mutate",
+                        op.name
+                    ),
+                },
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // P5 `effective_timeout_always_bounded`
+        // ---------------------------------------------------------------
+        #[test]
+        fn effective_timeout_always_bounded(secs in any::<i32>()) {
+            let d = effective_timeout(secs);
+
+            prop_assert!(d <= MAX_TIMEOUT, "effective_timeout must never exceed MAX_TIMEOUT");
+            prop_assert!(d >= Duration::from_secs(1), "effective_timeout must never be below 1s");
+
+            if secs <= 0 {
+                prop_assert_eq!(d, DEFAULT_TIMEOUT);
+            } else if secs >= 300 {
+                prop_assert_eq!(d, MAX_TIMEOUT);
+            } else {
+                prop_assert_eq!(d, Duration::from_secs(secs as u64));
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // P6 `validators_never_panic_ok_implies_charset` — mirrors the
+        // exhaustive proof style in operations/schema.rs:390.
+        // ---------------------------------------------------------------
+        #[test]
+        fn validators_never_panic_ok_implies_charset(
+            s in prop_oneof![
+                arb_argv_elem(),
+                // Second arm biases toward Ok-hits so the Ok branch is
+                // actually exercised, not just the reject branch.
+                prop::string::string_regex("[A-Za-z0-9@._:+~-]{0,12}").unwrap(),
+            ],
+        ) {
+            if crate::operations::service_restart::validate_unit_name(&s).is_ok() {
+                prop_assert!(!s.is_empty());
+                prop_assert!(!s.starts_with('-'));
+                prop_assert!(s.chars().all(|c| matches!(
+                    c,
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '@' | '.' | '_' | '-'
+                )));
+            }
+
+            if crate::operations::pkg_install::validate_pkg_name(&s).is_ok() {
+                prop_assert!(s.chars().all(|c| matches!(
+                    c,
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '.' | '_' | '-'
+                )));
+                prop_assert!(s.chars().next().unwrap().is_ascii_alphanumeric());
+                prop_assert!(s.chars().next_back().unwrap().is_ascii_alphanumeric());
+            }
+
+            if crate::operations::pkg_install::validate_pkg_version(&s).is_ok() {
+                prop_assert!(s.chars().all(|c| matches!(
+                    c,
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '+' | '.' | ':' | '~' | '_' | '-'
+                )));
+                prop_assert!(s.chars().next().unwrap().is_ascii_alphanumeric());
+                prop_assert!(s.chars().next_back().unwrap().is_ascii_alphanumeric());
+            }
+        }
+    }
+}

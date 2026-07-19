@@ -77,6 +77,7 @@ time = "0.3"
 # x509-parser is already a runtime dependency; this just enables rcgen's optional
 # gate for it during test builds without affecting the production binary.
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring", "x509-parser"] }
+proptest = "1"
 
 [build-dependencies]
 tonic-build = "0.12"
