@@ -141,17 +141,19 @@ Enrollment Token in place, seccomp/audit available.
    only under the pkg-install.conf drop-in, not under the strict baseline.
 
 Placement note (load-bearing for reproducing the doc's numbers): the
-candidate SystemCallFilter=/SystemCallArchitectures=/MemoryDenyWriteExecute=
-lines go WITHIN the unit's [Service] section — e.g. immediately after the
-existing RestrictAddressFamilies=... line, before [Install]. Pasting them
-after [Install] instead does NOT error loudly: systemd only logs a
-low-visibility "Unknown key ... in section [Install], ignoring" warning per
-line, the directives silently no-op, and `systemd-analyze security
---offline=true` keeps reporting the unmodified 3.7 exposure instead of the
-expected 2.1 — verified against a scratch copy of the unit while producing
-the numbers in docs/operations/daemon-privilege-posture.md. Applying the
-candidate to the shipped unit is #224's job, not this script's or this
-issue's; do it only against a scratch copy.
+SystemCallFilter=/SystemCallArchitectures=/MemoryDenyWriteExecute= lines go
+WITHIN the unit's [Service] section — e.g. immediately after the existing
+RestrictAddressFamilies=... line, before [Install]. Pasting them after
+[Install] instead does NOT error loudly: systemd only logs a low-visibility
+"Unknown key ... in section [Install], ignoring" warning per line, the
+directives silently no-op, and `systemd-analyze security --offline=true`
+reports the unmodified 3.7 exposure instead of the expected 2.1 — verified
+against a scratch copy of the unit while producing the numbers in
+docs/operations/daemon-privilege-posture.md. The shipped unit now CARRIES
+these three lines (applied by #224); Section A above already validates them
+in place on the shipped unit. Use a scratch copy only when experimenting
+with a DIFFERENT candidate (e.g. testing an additive SystemCallFilter=@mount
+line before proposing it for the pkg-install.conf drop-in).
 EOF
 }
 

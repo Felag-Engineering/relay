@@ -5,7 +5,9 @@
 # PID1 via systemctl and pkg.install writes the system package database. It
 # also carries a resource-containment stanza (v0.0.8 exec audit) — a
 # pids-cgroup `TasksMax` fork-bomb backstop that complements the per-Task
-# `setrlimit` bounds the daemon itself applies (`daemon/src/executor.rs`).
+# `setrlimit` bounds the daemon itself applies (`daemon/src/executor.rs`) —
+# and, as of #224, a v0.0.8 syscall + W^X hardening stanza (SystemCallFilter/
+# SystemCallArchitectures/MemoryDenyWriteExecute).
 # See docs/operations/daemon-privilege-posture.md for the per-Operation
 # privilege map, the rationale behind every directive below, and the
 # documented exception for Nodes running pkg.install / fs-mutating Raw Exec.
@@ -78,12 +80,19 @@ LockPersonality=yes
 # Operation or the daemon's own connection.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
-# SystemCallFilter and MemoryDenyWriteExecute are intentionally OMITTED here.
-# The exact syscall surface (a SystemCallFilter allowlist) and the precise
-# minimal capability set are deferred to the v0.0.8 capability/syscall audit
-# (issue scope: this unit is restricted-user groundwork, not that audit).
-# Shipping a guessed syscall allowlist now risks silently breaking
-# pkg.install or Policy-permitted Raw Exec commands.
+# Applied by #224 from the v0.0.8 audit's derived allowlist (docs/operations/
+# daemon-privilege-posture.md, "Syscall and capability surface (v0.0.8
+# audit)"). @system-service is systemd's recommended base and is shared by
+# BOTH profiles — the pkg-install drop-in below relaxes only ProtectSystem +
+# CapabilityBoundingSet, never the syscall filter. The drop-in overrides
+# MemoryDenyWriteExecute to =no for its maintainer-script interpreters (see
+# the posture doc's "Documented exceptions").
+# STATUS: applied by #224; offline exposure 3.7 -> 2.1; NOT YET live-verified
+# on a real systemd host — the enroll->connect->execute-all-Operations trace
+# remains a REQUIRED manual step (see the posture doc's Verification section).
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=yes
 
 # --- resource containment (v0.0.8 exec audit) ---
 # pids cgroup controller: hard-caps total tasks (processes + threads) in this
