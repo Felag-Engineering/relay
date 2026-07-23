@@ -1804,6 +1804,18 @@ deny = ["[invalid"]
 ///
 /// `redteam_cases()` is the single extension point later red-team issues
 /// (e.g. argv-smuggling/encoding) append rows to.
+///
+/// Issue #223 appended three further axes on top of #214's anchoring/join
+/// baseline above: interpreter smuggling (argv[0] / permitted wrapper),
+/// whitespace/control bytes against the space-join, and encoding/inert-data
+/// (regex-as-if-shell footguns). That red-team pass found NO new genuine
+/// bypass — every appended row is a green regression, either fail-closed
+/// (safe) or a documented operator footgun where the engine matches exactly
+/// what the pattern literally says. The only tracked bypass against
+/// `evaluate_raw_exec` remains #227 (element-merge deny evasion, above);
+/// #236 is a file.read (structured-Operation, `evaluate()`) finding covered
+/// by the second table further below in this module — it is unrelated to
+/// the Raw Exec argv gate this section's `redteam_cases()` covers.
 #[cfg(test)]
 mod raw_exec_redteam {
     use super::*;
@@ -1914,6 +1926,135 @@ mod raw_exec_redteam {
                 argv: &["systemctl", "restart", "nginx"],
                 expect: Expect::DenyByDefault,
                 note: "key red-team result: the deny/allow asymmetry cannot widen allow — an allow pattern that matches only an individual argv element ('nginx') never fires because the allow pass tests the joined string only (policy.rs:765-771); the gate stays fail-closed",
+            },
+            // --- Axis 4: interpreter smuggling (argv[0] / permitted wrapper) ---
+            Case {
+                name: "interp_anchored_allow_rejects_shell_wrapper_argv0",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/ansible-playbook /etc/ansible/site.yml$\"]\n",
+                argv: &["/bin/sh", "-c", "/usr/bin/ansible-playbook /etc/ansible/site.yml"],
+                expect: Expect::DenyByDefault,
+                note: "interpreter-flavored sibling of anchored_allow_rejects_prefix_injection: argv[0] is the literal /bin/sh (no shell is invoked — ADR-0001), so the joined form starts with /bin/sh and the anchored ^ fails; anchoring at argv[0] blocks this interpreter-smuggling attempt",
+            },
+            Case {
+                name: "interp_unanchored_allow_admits_shell_argv0",
+                policy_toml: "[raw_exec]\nallow = [\"/usr/bin/ansible-playbook\"]\n",
+                argv: &["/bin/sh", "-c", "/usr/bin/ansible-playbook --check"],
+                expect: Expect::Allow,
+                note: "documented-intended (#214)-class footgun: an unanchored 'obvious' pattern is only ever a substring match anywhere in the joined command, so it admits a hostile argv whose real argv[0] is a shell — the tool name merely appears later as data; same class as unanchored_allow_admits_foreign_argv0, mitigation is operator anchoring, NOT a code bug, NOT a new finding",
+            },
+            Case {
+                name: "interp_env_wrapper_full_anchor_allows_intended",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/env python3 /opt/deploy/run.py$\"]\n",
+                argv: &["/usr/bin/env", "python3", "/opt/deploy/run.py"],
+                expect: Expect::Allow,
+                note: "documented-intended baseline: the intended env-wrapped invocation, fully anchored end-to-end, is allowed; pairs with interp_env_wrapper_argv0_anchor_admits_arbitrary_interpreter to show that anchoring the WHOLE command (not just argv[0]) is what makes this safe",
+            },
+            Case {
+                name: "interp_env_wrapper_argv0_anchor_admits_arbitrary_interpreter",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/env \"]\n",
+                argv: &["/usr/bin/env", "bash", "-c", "id"],
+                expect: Expect::Allow,
+                note: "KEY interpreter-smuggling result, materially higher severity than the others: even anchoring at argv[0]+space is INSUFFICIENT when argv[0] is an exec-wrapper (/usr/bin/env), because env re-dispatches to argv[1] and thus reaches bash — a plausible, seemingly-careful anchored allow still yields arbitrary command execution; not a code bug (the engine matched the pattern exactly; the regex engine has no model of which binaries re-dispatch, and denylisting them would be an ADR-gated binary-semantics change), so no finding is filed, but operator guidance (top item to fold into #225 policy-authoring docs / threat model) is: anchor the WHOLE command for wrapper interpreters (env, xargs, nice, timeout, sudo, nohup, setsid, ...), never just argv[0]",
+            },
+            // --- Axis 5: whitespace / control bytes vs the space-join (policy.rs:813) ---
+            Case {
+                name: "ctl_tab_in_arg_breaks_anchored_class_allow",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx\tevil"],
+                expect: Expect::DenyByDefault,
+                note: "the space-join emits a single ASCII space between elements; an embedded tab stays INSIDE the element rather than becoming a separator, so the regex sees the restart target as \"nginx<TAB>evil\" — the restrictive character class matches \"nginx\" and then $ meets the tab (not end-of-string), so the anchored allow fails closed; pins that control bytes are outside [A-Za-z0-9@._-] and cannot satisfy the anchored allow",
+            },
+            Case {
+                name: "ctl_cr_in_arg_breaks_anchored_class_allow",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx\revil"],
+                expect: Expect::DenyByDefault,
+                note: "same mechanism as ctl_tab_in_arg_breaks_anchored_class_allow with an embedded carriage return instead of a tab — CR also stays inside the element and is outside [A-Za-z0-9@._-], so the anchored allow fails closed",
+            },
+            Case {
+                name: "ctl_nul_in_arg_breaks_anchored_class_allow",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx\0"],
+                expect: Expect::DenyByDefault,
+                note: "an embedded NUL likewise cannot satisfy [class]$ at the gate, so this fails closed too — independently, any NUL anywhere in argv also fails closed at execv, pinned end-to-end by raw_exec.rs::nul_in_argv_fails_closed_at_executor",
+            },
+            Case {
+                name: "ctl_newline_in_arg_dot_does_not_cross",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl restart .+$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx\n; rm -rf /"],
+                expect: Expect::DenyByDefault,
+                note: "pins RE2-style semantics: `.` does NOT match newline by default, so `.+` matches only \"nginx\" and cannot cross the embedded newline to reach the trailing \"; rm -rf /\"; with content after the newline and a non-multiline $, the anchored allow fails closed",
+            },
+            Case {
+                name: "ctl_trailing_newline_defeats_dollar_anchor",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl restart nginx$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "nginx\n"],
+                expect: Expect::DenyByDefault,
+                note: "pins the Rust `regex` crate's non-multiline $ semantics: $ matches only end-of-haystack and does NOT match before a trailing newline (contrast PCRE/Perl, where $ matches before a final \\n), so a trailing newline in the last element defeats the anchored allow and fails closed",
+            },
+            Case {
+                name: "ctl_slash_s_matches_unicode_nbsp",
+                policy_toml: "[raw_exec]\nallow = ['^x\\s$']\n",
+                argv: &["x\u{00A0}"],
+                expect: Expect::Allow,
+                note: "semantics pin: Unicode-mode \\s (the regex crate default) matches U+00A0 NBSP, in addition to tab/CR/LF; operator relevance: a \\s-based deny DOES catch NBSP used as a separator. Trivial ^x\\s$ fixture, not an escalation",
+            },
+            Case {
+                name: "ctl_slash_s_does_not_match_nul",
+                policy_toml: "[raw_exec]\nallow = ['^x\\s$']\n",
+                argv: &["x\0"],
+                expect: Expect::DenyByDefault,
+                note: "semantics pin, paired with ctl_slash_s_matches_unicode_nbsp: \\s does NOT match NUL, so an operator writing \\s to catch 'any separator' catches NBSP/tab/CR/LF but not NUL; independently inert either way, since a NUL-bearing argv fails closed at execv regardless (executor test). NOT a new finding",
+            },
+            Case {
+                name: "ctl_join_emits_ascii_space_matched_by_slash_s",
+                policy_toml: "[raw_exec]\nallow = ['^/bin/rm -rf /$']\ndeny = ['rm\\s+-rf']\n",
+                argv: &["/bin/rm", "-rf", "/"],
+                expect: Expect::DenyByPattern,
+                note: "positive pin: the space-join always emits ASCII 0x20 between elements (attacker-uncontrolled at the token boundary), which \\s+ matches, so a cross-token \\s-based deny fires on this canonical argv (deny-beats-allow); NUL-in-argv is independently inert regardless of any deny/allow outcome — any NUL anywhere in argv fails closed at execv, pinned by raw_exec.rs::nul_in_argv_fails_closed_at_executor, so it never reaches execution",
+            },
+            Case {
+                name: "ctl_homoglyph_fails_anchored_ascii_allow_closed",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl restart nginx$\"]\n",
+                argv: &["/usr/bin/systemctl", "restart", "ng\u{0456}nx"],
+                expect: Expect::DenyByDefault,
+                note: "a homoglyph in \"ng\u{0456}nx\" (Cyrillic U+0456, not Latin 'i') cannot satisfy an ASCII-literal allow — different bytes, no match, fail-closed — and cannot reach the real nginx unit either, since it is a different byte sequence; homoglyphs are inert to the argv gate, they never widen an allow",
+            },
+            // --- Axis 6: encoding / inert data + regex-as-if-shell footguns ---
+            Case {
+                name: "enc_dollar_paren_deny_matches_literal_inert",
+                policy_toml: "[raw_exec]\nallow = ['^/bin/echo .+$']\ndeny = ['\\$\\(']\n",
+                argv: &["/bin/echo", "$(id)"],
+                expect: Expect::DenyByPattern,
+                note: "regex-as-if-shell footgun: an operator writes deny = \\$\\( believing it 'blocks command substitution'; under argv exec there is NO shell (ADR-0001), so \"$(id)\" is inert literal data to /bin/echo — there was never a substitution to block. The deny DOES fire, on the literal characters, giving false confidence AND a false positive (it would also block a legitimate command that merely prints \"$(\"). Fold into #225. NOT a code bug",
+            },
+            Case {
+                name: "enc_ampersand_deny_matches_literal_inert",
+                policy_toml: "[raw_exec]\nallow = [\"^/bin/echo .+$\"]\ndeny = [\"&&\"]\n",
+                argv: &["/bin/echo", "&&", "id"],
+                expect: Expect::DenyByPattern,
+                note: "regex-as-if-shell footgun, same class as enc_dollar_paren_deny_matches_literal_inert: deny = && ('block chaining') fires on the literal \"&&\" element, but /bin/echo receives \"&&\" and \"id\" as two literal, inert arguments — no shell chaining occurs. False-confidence footgun for &&/|/; deny patterns. Fold into #225. NOT a code bug",
+            },
+            Case {
+                name: "enc_percent_encoding_is_literal_data",
+                policy_toml: "[raw_exec]\nallow = [\"^/bin/echo .+$\"]\n",
+                argv: &["/bin/echo", "%2fetc%2fshadow"],
+                expect: Expect::Allow,
+                note: "argv-is-data pin: percent-encoding is never decoded by the argv gate or the executor; \"%2fetc%2fshadow\" is literal bytes, not \"/etc/shadow\". Percent-encoding buys an attacker nothing at the argv gate — there is no decoding layer. A deny listing \"/etc/shadow\" would not match this either; expected, they are different strings, and Raw Exec does no decoding (any decoding is the target program's business, out of scope)",
+            },
+            Case {
+                name: "enc_backslash_escapes_are_literal_data",
+                policy_toml: "[raw_exec]\nallow = [\"^/bin/echo .+$\"]\n",
+                argv: &["/bin/echo", "\\x2f\\t"],
+                expect: Expect::Allow,
+                note: "argv-is-data pin: backslash escape sequences are NOT C-unescaped anywhere on this path; argv carries the literal backslash bytes (\\x2f\\t is the 6 literal characters backslash-x-2-f-backslash-t, not a slash and a tab). `.+` matches them (no newline present), so the anchored allow admits it — pins that backslash-encoding is inert data",
+            },
+            Case {
+                name: "enc_ifs_token_is_literal_not_expanded",
+                policy_toml: "[raw_exec]\nallow = [\"^/bin/echo .+$\"]\n",
+                argv: &["/bin/echo", "$IFS"],
+                expect: Expect::Allow,
+                note: "argv-is-data pin: $IFS (like $HOME, backticks) is a literal argv token to the gate; there is no shell, so no variable expansion or word-splitting ever happens (ADR-0001). The gate sees the literal string \"$IFS\"; the executor passes it literally too, re-pinned end-to-end by raw_exec.rs::argv_is_data_not_shell_expanded",
             },
         ]
     }
