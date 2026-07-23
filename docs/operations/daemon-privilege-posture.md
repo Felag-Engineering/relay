@@ -14,14 +14,13 @@ Operation to privilege — **plus, as of the v0.0.8 audit below, the static-deri
 portion of the capability/syscall audit**: a derived candidate `SystemCallFilter`
 allowlist and minimal capability set (see
 [Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)),
-each backed by daemon-source-plus-`systemd-analyze` evidence rather than a guess. What
-this document does **not** yet cover is the LIVE apply-and-verify on a real systemd host —
-applying the candidate to the shipped unit, tracing it under load, and confirming no
-legitimate syscall is denied — which is the **follow-up (#224)**. The shipped unit
-(`daemon/packaging/relay-daemon.service`) still deliberately omits `SystemCallFilter` and
-`MemoryDenyWriteExecute` today (see
-[What the unit restricts](#what-the-unit-restricts) below): the candidate that closes that
-omission is derived below, and #224 is what applies it.
+each backed by daemon-source-plus-`systemd-analyze` evidence rather than a guess. The
+shipped unit (`daemon/packaging/relay-daemon.service`) now **carries** the derived
+`SystemCallFilter`/`SystemCallArchitectures`/`MemoryDenyWriteExecute` directives, applied
+by #224 (see [What the unit restricts](#what-the-unit-restricts) below). What this
+document does **not** yet cover is the LIVE apply-and-verify on a real systemd host —
+tracing the applied unit under load and confirming no legitimate syscall is denied — which
+remains **#224's** outstanding manual step.
 
 ## Why the daemon is privileged
 
@@ -102,15 +101,20 @@ Directive-by-directive, from `daemon/packaging/relay-daemon.service`:
   `AF_NETLINK` socket internally to enumerate interfaces. Omitting it would silently
   break a `read`-class Operation. Every other address family (e.g. `AF_PACKET`) is
   denied.
-- **`SystemCallFilter` and `MemoryDenyWriteExecute` are intentionally omitted from the
-  shipped unit.** A derived (not guessed) candidate for both now exists — see
+- **`SystemCallFilter=@system-service`, `SystemCallArchitectures=native`, and
+  `MemoryDenyWriteExecute=yes` are now applied to the shipped unit (#224).** They are the
+  derived (not guessed) allowlist from
   [Syscall and capability surface (v0.0.8 audit)](#syscall-and-capability-surface-v008-audit)
   below, which enumerates the syscall surface the daemon and its spawned executors
   (`systemctl`, `apt-get`/`dnf`/`yum`, and whatever Raw Exec's Policy allows) legitimately
-  use and derives a candidate allowlist from it. The shipped unit is not updated by this
-  change: applying the candidate and live-validating it against `pkg.install` and a
-  Policy-permitted Raw Exec command in the field is the **follow-up (#224)'s** job, not
-  this one's.
+  use and derives the allowlist from it. The strict base above keeps
+  `MemoryDenyWriteExecute=yes`; the `pkg-install.conf` drop-in (see
+  [Documented exceptions](#documented-exceptions)) overrides it to `=no` for its
+  maintainer-script interpreters. **Live trace still pending:** applying these lines is
+  done, but validating them against `pkg.install` and a Policy-permitted Raw Exec command
+  on a real systemd host is **#224's** outstanding manual step — see
+  [What the derivation did and did NOT cover](#what-the-derivation-did-and-did-not-cover-residual-risk)
+  for the residual risk this leaves open.
 
 ## Documented exceptions
 
@@ -134,6 +138,13 @@ ProtectSystem=full
 # bits, and capabilities on installed files, and to create/adjust the
 # users/groups some packages provision.
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETUID CAP_SETGID CAP_SETFCAP
+
+# Conservative default: the base's inherited MemoryDenyWriteExecute=yes could
+# silently break a maintainer-script interpreter that needs W^X memory on the
+# very Nodes that opt into running pkg.install. This is a documented choice
+# PENDING the live trace (#224), not a verified fact — the live trace can
+# promote this back to inheriting the base's =yes if it proves safe.
+MemoryDenyWriteExecute=no
 ```
 
 Then `systemctl daemon-reload && systemctl restart relay-daemon` on that Node. Keep this
@@ -318,35 +329,41 @@ against `systemd-analyze syscall-filter` output, not merely assumed from the gro
   writes), `@io-event`, `@basic-io`, `@sync`.
 
 - **DECISION — the two profiles (strict vs. the `pkg.install`/mutating-Raw-Exec drop-in)
-  share the SAME `SystemCallFilter`; they differ ONLY in `ProtectSystem` +
-  `CapabilityBoundingSet`, exactly as the existing drop-in already does.** Justification
-  (checkable): `pkg.install`'s writes to `/usr`, `/etc`, `/var` are blocked by
+  share the SAME `SystemCallFilter`; they differ in `ProtectSystem` +
+  `CapabilityBoundingSet` (see [Documented exceptions](#documented-exceptions)) and — as of
+  #224 — a scoped, pending-live-verification `MemoryDenyWriteExecute=no` override on the
+  drop-in only; the `SystemCallFilter` itself is identical across both profiles.**
+  Justification (checkable): `pkg.install`'s writes to `/usr`, `/etc`, `/var` are blocked by
   `ProtectSystem=strict` — a mount/namespace restriction — **not** by the syscall filter; the
   underlying `openat(O_WRONLY)`/`chmod`/`chown`/`mkdir`/`rename`/`unlink` calls are all
   members of `@system-service`. So the drop-in needs to relax `ProtectSystem` (to `full`) and
   add capabilities (it already does both — see
   [Documented exceptions](#documented-exceptions)), but needs **no wider
   `SystemCallFilter`**. The drop-in inherits `@system-service` from the base unit; it does not
-  repeat or widen it.
+  repeat or widen it. The `MemoryDenyWriteExecute=no` override is a documented choice
+  pending the live trace, not a verified fact (see [Documented exceptions](#documented-exceptions)).
 
 - **Adjacent cheap hardening the offline analysis surfaces, applied by #224 alongside:**
   `SystemCallArchitectures=native` (closes the "service may execute system calls with all
-  ABIs" 0.2-point row) and `MemoryDenyWriteExecute=yes` — recommended for the strict base.
-  Like the `SystemCallFilter` candidate itself, both are **static candidates, unvalidated
-  until #224's live trace** — flag in particular that `MemoryDenyWriteExecute` for the
-  drop-in must be live-validated under a representative `pkg.install` (a maintainer-script
-  interpreter that needs W^X memory would break under it); if a trace shows that, the drop-in
-  sets `MemoryDenyWriteExecute=no` explicitly rather than inheriting the strict base's `yes`.
+  ABIs" 0.2-point row) and `MemoryDenyWriteExecute=yes` — applied to the strict base. Like
+  the `SystemCallFilter` itself, both are **static candidates, unvalidated until a live
+  trace** — flag in particular that `MemoryDenyWriteExecute` for the drop-in still needs
+  live validation under a representative `pkg.install` (a maintainer-script interpreter
+  that needs W^X memory would break under it); #224 already sets the drop-in's
+  `MemoryDenyWriteExecute=no` explicitly rather than inheriting the strict base's `yes` (see
+  [Documented exceptions](#documented-exceptions)), as the documented choice pending that
+  live confirmation.
 
-- **Real evidence (reproduce by applying the candidate lines to a scratch copy of the unit
-  and re-running `systemd-analyze security --offline=true`):**
-  - Shipped unit today: `Overall exposure level for relay-daemon.service: 3.7 OK` — every
-    `SystemCallFilter=~@*` row is `✗` (no filter yet).
-  - Candidate (base `@system-service` + `SystemCallArchitectures=native` +
-    `MemoryDenyWriteExecute=yes`, applied to a scratch copy):
-    `Overall exposure level for candidate.service: 2.1 OK`. Rows that flip ✗→✓: `@clock`,
-    `@cpu-emulation`, `@debug`, `@module`, `@mount`, `@obsolete`, `@raw-io`, `@reboot`,
-    `@swap`, plus the `SystemCallArchitectures=` and `MemoryDenyWriteExecute=` rows.
+- **Real evidence (reproduce with `systemd-analyze security --offline=true
+  daemon/packaging/relay-daemon.service` against the shipped unit):**
+  - Before this change (pre-#224): `Overall exposure level for relay-daemon.service: 3.7
+    OK` — every `SystemCallFilter=~@*` row was `✗` (no filter).
+  - After #224 (base `@system-service` + `SystemCallArchitectures=native` +
+    `MemoryDenyWriteExecute=yes`, now applied to the shipped unit): `Overall exposure level
+    for relay-daemon.service: 2.1 OK`, reproducible on this box (systemd 257 — confirmed).
+    Rows that flip ✗→✓: `@clock`, `@cpu-emulation`, `@debug`, `@module`, `@mount`,
+    `@obsolete`, `@raw-io`, `@reboot`, `@swap`, plus the `SystemCallArchitectures=` and
+    `MemoryDenyWriteExecute=` rows.
   - Rows that **stay ✗ and why** (documented, intentional residual — analogous to the
     existing `AF_NETLINK`/`AF_UNIX` residual in [Verification](#verification)):
     `SystemCallFilter=~@resources` ("`@resources` is included, e.g. `ioprio_set` is
@@ -370,19 +387,19 @@ against `systemd-analyze syscall-filter` output, not merely assumed from the gro
   # ... existing directives (User=root, ProtectSystem=strict, CapabilityBoundingSet=
   # CAP_DAC_READ_SEARCH, AmbientCapabilities=, RestrictAddressFamilies=..., etc.) ...
 
-  # CANDIDATE — derived by this audit, NOT YET applied to the shipped unit (see #224).
-  # These three lines MUST go within this [Service] section (e.g. immediately after the
-  # existing RestrictAddressFamilies= line, before [Install]) — placing them after
+  # APPLIED to the shipped unit by #224. These three lines MUST go within this
+  # [Service] section (e.g. immediately after the existing
+  # RestrictAddressFamilies= line, before [Install]) — placing them after
   # [Install] silently no-ops (see "Placement matters" above).
   SystemCallFilter=@system-service
   SystemCallArchitectures=native
   MemoryDenyWriteExecute=yes
   ```
 
-  The existing `pkg-install.conf` drop-in (see [Documented exceptions](#documented-exceptions))
+  The `pkg-install.conf` drop-in (see [Documented exceptions](#documented-exceptions))
   needs **no `SystemCallFilter` addition** — it inherits `@system-service` from the base
-  unit above it. These are candidate config for **#224** to apply; this issue does not edit
-  `daemon/packaging/relay-daemon.service`.
+  unit above it, and adds its own `MemoryDenyWriteExecute=no` override. These three lines
+  are now applied to `daemon/packaging/relay-daemon.service` by **#224**.
 
 ### Candidate minimal capability set
 
@@ -463,25 +480,44 @@ exposure — the tool has no way to know those are load-bearing for `file.read` 
 `system.facts` rather than an oversight. `User=root` is, as always, flagged; that is the
 whole point of this document.
 
-**What this does not cover**: a live real-host `enroll → connect → execute
-(system.facts) → report` cycle running the daemon *under this unit* on real `systemd`, and
-— per the [Syscall and capability surface](#syscall-and-capability-surface-v008-audit)
-section above — a live trace that validates the derived candidate allowlist and capability
-sets against real daemon behavior. The dev fleet (`docs/dev-fleet.md`) runs daemons in
+**What this does not cover**: the shipped unit now carries the derived `SystemCallFilter`,
+`SystemCallArchitectures`, and `MemoryDenyWriteExecute` directives (offline exposure `2.1`,
+applied by #224), but a live real-host `enroll → connect → execute (system.facts) →
+report` cycle running the daemon *under this unit* on real `systemd`, and — per the
+[Syscall and capability surface](#syscall-and-capability-surface-v008-audit) section
+above — a live `strace`/seccomp trace of all five Operations plus a permitted Raw Exec
+against the applied allowlist and capability sets, are **STILL pending** and **MUST** be
+run by a human on a real systemd host. The dev fleet (`docs/dev-fleet.md`) runs daemons in
 Docker containers, not under `systemd`, so neither path can be exercised there. Running the
 daemon under `relay-daemon.service` on an actual systemd host (with policy.toml and an
 Enrollment Token in place), confirming it enrolls, connects, and successfully executes
 `system.facts`, and running the tracing procedure below against every Operation — promoting
-the derived candidate to an applied, live-validated one — is exactly what the **follow-up
-(#224)** does; it is a manual verification step for a real deployment target, not something
-this repository's automated checks can currently run.
+the applied profile to a live-validated one — is the **outstanding manual step of #224**;
+it is not something this repository's automated checks can currently run.
+
+### #224 apply status
+
+- **Applied:** `SystemCallFilter=@system-service`, `SystemCallArchitectures=native`, and
+  `MemoryDenyWriteExecute=yes` are now in `daemon/packaging/relay-daemon.service`'s
+  `[Service]` section (see [What the unit restricts](#what-the-unit-restricts)).
+- **Offline exposure confirmed:** `3.7 -> 2.1` on this box, systemd 257 (see
+  [Real evidence](#candidate-systemcallfilter-allowlist) above).
+- **Drop-in `MemoryDenyWriteExecute` decided:** the `pkg-install.conf` drop-in adds
+  `MemoryDenyWriteExecute=no` as the conservative default (see
+  [Documented exceptions](#documented-exceptions)) — a documented choice pending the live
+  trace, not a verified fact.
+- **[ ] Live-systemd verification run — REQUIRED, NOT YET DONE.** Human must, on a real
+  systemd host: install the unit, enroll a Node, run all five Operations (`system.facts`,
+  `file.read`, `service.restart`, `pkg.install`) + a permitted Raw Exec under the filter,
+  confirm none break (esp. `pkg.install` maintainer scripts + Raw Exec, the two surfaces
+  the static audit could not bound), and record the run here.
 
 ### Live tracing procedure (real systemd host)
 
-The reproducible procedure **#224** runs to validate the candidate derived above. The same
-content lives, verbatim, as a commented (never-executed) block in
-`scripts/daemon-privilege-audit.sh`, so the procedure travels with the repo rather than only
-this doc.
+The reproducible procedure a human runs on a real systemd host to close out #224 and
+validate the applied profile. The same content lives, verbatim, as a commented
+(never-executed) block in `scripts/daemon-privilege-audit.sh`, so the procedure travels
+with the repo rather than only this doc.
 
 **Environment:** a real systemd host, `relay-daemon` installed at
 `/usr/local/bin/relay-daemon` under `relay-daemon.service`, `policy.toml` and an Enrollment
@@ -541,14 +577,21 @@ base `SystemCallFilter=@system-service` shared by both profiles, and confirmed s
 The "capabilities `pkg.install`'s package managers typically need" framing is retired: the
 drop-in's capability set is now audit-confirmed, not guessed.
 
-What **now** remains for **#224** (apply-and-verify): apply the candidate
-`SystemCallFilter=`/`SystemCallArchitectures=`/`MemoryDenyWriteExecute=` lines to the
-shipped unit, run the [live tracing procedure](#live-tracing-procedure-real-systemd-host)
-to confirm no legitimate syscall is denied — especially package-manager maintainer scripts
-and a representative Policy-permitted Raw Exec command, the two surfaces this audit
-explicitly could not bound (see
+**Apply-to-unit and measure-offline-exposure: DONE.** `daemon/packaging/relay-daemon.service`
+now carries `SystemCallFilter=@system-service`, `SystemCallArchitectures=native`, and
+`MemoryDenyWriteExecute=yes`, and the offline exposure measured `2.1` (down from `3.7`) on
+systemd 257 (see [#224 apply status](#224-apply-status)). **The drop-in `MemoryDenyWriteExecute`
+stance: DECIDED** — `=no`, pending live confirmation (see
+[Documented exceptions](#documented-exceptions)).
+
+What **remains** for **#224**: run the
+[live tracing procedure](#live-tracing-procedure-real-systemd-host) on a real systemd host to
+confirm no legitimate syscall is denied — especially package-manager maintainer scripts and a
+representative Policy-permitted Raw Exec command, the two surfaces this audit explicitly could
+not bound (see
 [What the derivation did and did NOT cover](#what-the-derivation-did-and-did-not-cover-residual-risk)) —
-measure the resulting `systemd-analyze security` exposure on the applied unit, and finalize
-the drop-in's `MemoryDenyWriteExecute` stance. This document and unit are the
-restricted-user baseline plus the static-derived candidate that audit builds on and applies,
-not a substitute for it.
+and either confirm or revise the drop-in's `MemoryDenyWriteExecute=no` stance from that trace.
+This is the sole **remaining human step**; it cannot be performed in this environment (no real
+systemd host, no root/strace, Docker-only dev fleet). This document and unit are the
+restricted-user baseline plus the applied, statically-derived profile that audit builds on,
+not a substitute for the live verification it still requires.
