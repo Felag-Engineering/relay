@@ -268,6 +268,96 @@ allow = ["^/bin/echo"]
     }
 
     // -----------------------------------------------------------------------
+    // 4a. argv is data, never shell-expanded — re-pins the DoD property for
+    // #223 across a richer encoding/shell-metacharacter token vector than
+    // no_implicit_shell_injected above ($IFS, backticks, $(...), &&, |,
+    // percent-encoding, backslash-escapes).
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn argv_is_data_not_shell_expanded() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // Every token below is shell-meaningful in some interpreter but must
+        // arrive at /bin/echo as a literal argument (ADR-0001: argv-only,
+        // never /bin/sh — no expansion, no word-splitting, no C-unescape).
+        let raw = make_raw_exec(argv(&[
+            "/bin/echo",
+            "$HOME;ls",
+            "$IFS",
+            "`id`",
+            "$(id)",
+            "&&",
+            "|",
+            "%2f",
+            "\\x2f",
+        ]));
+        let result = run_raw_exec(
+            "t-argv-is-data".to_string(),
+            &raw,
+            Duration::from_secs(5),
+            big_cap(),
+            &policy,
+            None, // cancel: uncancellable in tests
+        )
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Success as i32, "must succeed");
+        assert_eq!(
+            result.stdout, b"$HOME;ls $IFS `id` $(id) && | %2f \\x2f\n",
+            "every token must arrive literally — no shell expansion, word-splitting, or \
+             C-unescape of any element"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 4b. A NUL anywhere in argv fails closed at the executor (execv), not
+    // just at the Policy gate — the "real argv that reaches Command::new"
+    // pin for control bytes referenced by policy.rs red-team rows
+    // ctl_nul_in_arg_breaks_anchored_class_allow / ctl_slash_s_does_not_match_nul.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn nul_in_argv_fails_closed_at_executor() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/echo"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // Policy allows this argv (joined form starts with "/bin/echo"), but
+        // an interior NUL in an argument makes Command::spawn fail with
+        // InvalidInput — the process never runs, regardless of what the
+        // Policy gate decided.
+        let raw = make_raw_exec(argv(&["/bin/echo", "a\0b"]));
+        let result = run_raw_exec(
+            "t-nul-argv".to_string(),
+            &raw,
+            Duration::from_secs(5),
+            big_cap(),
+            &policy,
+            None, // cancel: uncancellable in tests
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Failure as i32,
+            "a NUL in argv must fail closed at spawn, not run"
+        );
+        assert_eq!(result.exit_code, -1);
+        assert!(result.stdout.is_empty(), "nothing must have been spawned");
+    }
+
+    // -----------------------------------------------------------------------
     // 5. RAW_EXEC_RISK_CLASS is always Mutate (ADR-0012)
     // -----------------------------------------------------------------------
 
