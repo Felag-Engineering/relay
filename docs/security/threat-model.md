@@ -123,9 +123,9 @@ primarily counters, and its residual risk.
 
 | Invariant | ADR(s) | Boundary defended | Primary adversary | Residual risk |
 | --- | --- | --- | --- | --- |
-| #1 — Typed argv Operations, regex-gated Raw Exec | [ADR-0001](../adr/0001-structured-operations-with-regex-gated-raw-exec.md) | relay-daemon ↔ Node OS | Jailbroken AI-agent (also Malicious Relay) | Raw Exec safety is only as tight as the operator-authored regex; a loose regex re-opens arbitrary execution, and typed Operations still invoke real binaries whose own arg-parsing bugs are out of scope. |
+| #1 — Typed argv Operations, regex-gated Raw Exec | [ADR-0001](../adr/0001-structured-operations-with-regex-gated-raw-exec.md) | relay-daemon ↔ Node OS | Jailbroken AI-agent (also Malicious Relay) | Raw Exec safety is only as tight as the operator-authored regex; a loose regex re-opens arbitrary execution, and typed Operations still invoke real binaries whose own arg-parsing bugs are out of scope. **Red-team (v0.0.8) confirmed two concrete deny-evasions on this boundary — see the residual-risk register R1/R2 (#227, #236):** an anchored per-element *deny* is defeated by argv-element merge, and a wrapper-interpreter allow re-dispatches (R4). |
 | #2 — Policy locally-rooted & remotely-immutable | [ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md) | Operator ↔ Policy file (primary); Relay ↔ relay-daemon (query-only) | Malicious Relay | A Node's own root can rewrite its local Policy (the Compromised Node case, in-scope by design); Policy is only as strong as authored. |
-| #3 — Deny-by-default, deny-beats-allow, arg-level granularity | [ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md) | relay-daemon ↔ Node OS | Malicious Relay (also Jailbroken AI-agent) | An over-broad allow rule authored locally still widens what runs; deny-beats-allow only helps where a deny rule exists. |
+| #3 — Deny-by-default, deny-beats-allow, arg-level granularity | [ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md) | relay-daemon ↔ Node OS | Malicious Relay (also Jailbroken AI-agent) | An over-broad allow rule authored locally still widens what runs; deny-beats-allow only helps where a deny rule exists. **Red-team (v0.0.8) found deny rules evaded with no authoring error:** exact-string `file.read` denies fall to non-canonical path spellings (R2/#236 — no canonicalization in the daemon) and Raw Exec per-element denies to argv-element merge (R1/#227). Both are held open as ADR-gated decisions; see the residual-risk register. |
 | #4 — At-most-once Task execution (dedup across reconnects) | [ADR-0004](../adr/0004-async-job-execution-model.md) | Relay ↔ relay-daemon | Network attacker | At-most-once is not exactly-once — a dropped Task may run zero times and is not auto-retried; dedup depends on the daemon retaining Task IDs. |
 | #5 — Blast-radius cap enforced on the Relay before dispatch | [ADR-0004](../adr/0004-async-job-execution-model.md) | AI-agent ↔ Relay | Jailbroken AI-agent (also Stolen API credential) | The cap is a Relay-side control, so a Malicious Relay is above it (which is why per-Node Policy still enforces); the cap value is operator config. |
 | #6 — mTLS everywhere; daemon refuses an untrusted Relay; Node identity = client cert | [ADR-0005](../adr/0005-grpc-bidi-over-mtls-transport.md), [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md) | Relay ↔ relay-daemon | Network attacker (also Malicious Relay) | mTLS authenticates the transport, not intent — an authenticated-but-hostile Relay is still distrusted (invariant #2/#3's job); a CA compromise breaks the trust root (see Enrollment ↔ CA). |
@@ -162,9 +162,67 @@ Console adds no execution surface.
 invariant — expected, since they are design decisions rather than load-bearing distrust
 invariants.
 
-These findings are recorded for the residual-risk register created by the closer issue
-**#225** (consistent with the "Kept current" section below); this document does not create
-that register.
+These findings are folded into the residual-risk register below, created by the closer issue
+**#225**.
+
+## Residual-risk register
+
+The v0.0.8 pass produced findings across the Raw Exec red-team (#214, #215, #223), the Policy
+loader (#216), wire fuzzing (#217, #218), the privileged-daemon audit (#219, #220, #224), the
+secret-handling audit (#222), and the node-origin label-trust decision (#221). Each is
+recorded below with its boundary, disposition, rationale/compensating control, and reference.
+Dispositions: **fixed** (defect closed, regression-tested), **mitigated** (compensating
+control, residual bounded), **accepted** (documented, not eliminated — with a qualifier for
+*why*).
+
+| ID | Risk | Boundary | Disposition | Rationale / compensating control | Ref |
+| --- | --- | --- | --- | --- | --- |
+| **R1** | Anchored per-element Raw Exec **deny** (`^--force$`) evaded by merging the denied token into an adjacent argv element (argv is space-joined for matching). | relay-daemon ↔ Node OS | **Accepted — pending decision** | Deny-by-flag on a space-joined form is unreliable; interim guidance is to gate Raw Exec by *allow-list*, never by denying flags. A structural fix (boundary-aware / structured-argv matching) is ADR-gated (ADR-0001/0002). Human owns the disposition. | #227; `daemon/src/policy.rs:2105` (`#[ignore]`d test asserting desired `Deny`) |
+| **R2** | Exact-string `file.read` **deny** (e.g. `/etc/shadow`) evaded by any non-canonical spelling (`/etc/../etc/shadow`, `//etc/shadow`, `/proc/self/root/…`, symlink, case) — no `canonicalize` anywhere in `daemon/src`; the shipped `policy.example.toml` deny does not hold. | relay-daemon ↔ Node OS | **Accepted — pending decision** | Fix directions (canonicalize-before-eval / reject-non-canonical fail-closed / typed prefix-path matcher in `/proto`) are ADR-gated (ADR-0001/0002/0012). The misleading example comment must be corrected as part of the resolution. Human owns the disposition. | #236; `daemon/src/policy.rs:2270` (`#[ignore]`d test) |
+| **R3** | A compromised Node forges its own `node:` labels. | Relay ↔ relay-daemon (routine targeting) | **Accepted — for launch** | The security lane targets the un-forgeable `relay:` namespace; residual is confined to the routine lane (trusted only as much as the Node). Making the security lane's `relay:`-targeting structural is tracked post-beta. | [ADR-0017](../adr/0017-node-origin-label-trust.md); #243 |
+| **R4** | A fully-anchored Raw Exec allow of a wrapper interpreter (`^/usr/bin/env `) still admits re-dispatch (`env bash -c …`). | relay-daemon ↔ Node OS | **Accepted — operator guidance** | Not an engine defect: the operator must anchor the *whole* command for wrapper interpreters. Folded into Raw Exec authoring guidance. | #223 (row R4) |
+| **R5** | Raw Exec and package-manager maintainer scripts have unbounded syscall surface under `SystemCallFilter` (a syscall outside `@system-service` is a hard `SIGSYS`). | relay-daemon ↔ Node OS | **Accepted — disclosed** | Static derivation cannot bound an arbitrary-command surface; the `pkg-install` drop-in relaxes the filter for that unit only, strict profile elsewhere. | #219; `docs/operations/daemon-privilege-posture.md` |
+| **R6** | Policy loader parent-dir rename-swap not fully closed. | Operator ↔ Policy file | **Mitigated** | Open-once + `fstat`-on-descriptor + `O_NOFOLLOW` + non-regular-file rejection close the symlink/TOCTOU-on-file gap; the residual rename-swap is bounded by a root-owned policy directory. | #216; `daemon/src/policy.rs::load_policy` |
+| **R7** | `setrlimit` NPROC bound may interact with process availability on busy nodes. | relay-daemon ↔ Node OS | **Accepted — trade-off** | Deny-closed caps (NPROC/DATA/NOFILE/CPU/FSIZE) + cgroup `TasksMax=4096` bound fork/alloc/fd bombs at the spawn chokepoint; the NPROC value is tunable. | #220; `daemon/src/executor.rs`, `relay-daemon.service:110` |
+| **R8** | Verbatim audit-output retention (captured Operation output stored in full) can carry secrets the operator put in output. | AI-agent ↔ Relay (audit) | **Accepted — decision** | A conscious posture: no secret was found leaking through relay/daemon logs (5×3 audit matrix); secrets in *captured output* are the operator's responsibility. | #222; `docs/security/secret-handling-audit.md` |
+| **R9** | Invariant #8 (`/proto`) and invariant #13's class-contract half map to no runtime boundary. | (build-time) | **Accepted — disclosed** | Enforced by CI gates (`proto-check`, `proto-breaking`), not a runtime control. Finding 1 above. | §Findings |
+
+**Resolved during the pass (no residual):** the Policy loader symlink/TOCTOU-on-file gap (#216, now `O_NOFOLLOW` + fstat-on-fd), unbounded child resources (#220, `setrlimit` at the spawn chokepoint), and the comment-only Rust "never logged" guarantee (#222, now a compile-time `E0119` guard on `EnrollConfig`/`Identity`). Wire fuzzing (#217 Go, #218 Rust) found **no engine bypass and zero crashes**; #218 also strengthened the deny-branch regression net.
+
+## Acceptance (v0.0.8 sign-off)
+
+The milestone's four acceptance criteria, each with its evidence location and honest status.
+Sign-off is a **human decision** (this milestone is human-led); two criteria are met only
+conditionally and are called out.
+
+1. **Threat-model doc + every invariant mapped to a boundary — MET.** This document: Trust
+   boundaries, Adversary catalogue, and the 14-row invariant→boundary map, with Finding 1
+   recording invariant #8 as a disclosed build-time exception. The register above completes
+   the "Kept current" deliverable.
+2. **Raw Exec red-team regression suite, no surviving bypass — MET only if R1/R2 are
+   accepted.** The suite exists (`daemon/src/policy.rs` `mod raw_exec_redteam`, rows R1–R18 +
+   the `file.read` path-argument table; re-pins in `daemon/src/raw_exec.rs`). Two `#[ignore]`d
+   tests encode **surviving bypasses deliberately held open as ADR-gated decisions** — #227
+   (`policy.rs:2105`) and #236 (`policy.rs:2270`). There is **no *un-escalated* bypass**, but
+   an unconditional sign-off requires consciously accepting R1/R2 as residual **or** gating
+   the milestone on resolving #227/#236 first.
+3. **Bounded fuzzers in CI, zero known crashes — MET.** Go native fuzz (6 targets incl.
+   `FuzzSignCSR` on the certless CSR path) run bounded nightly (`.github/workflows/security-nightly.yml`
+   fuzz job; `make fuzz-relay`); Rust `proptest` suites over policy and dispatch
+   (`daemon/src/policy.rs`, `daemon/src/dispatch.rs`) under `cargo test`. No crash reproducers
+   committed. Coverage-guided `cargo-fuzz` is deferred to #238.
+4. **Daemon runs a documented least-privilege profile — applied + documented; live
+   verification OUTSTANDING.** The shipped unit carries `SystemCallFilter=@system-service`,
+   `SystemCallArchitectures=native`, `MemoryDenyWriteExecute=yes`, `CapabilityBoundingSet=CAP_DAC_READ_SEARCH`,
+   and `TasksMax=4096` (`daemon/packaging/relay-daemon.service`); the posture is documented in
+   `docs/operations/daemon-privilege-posture.md` (offline `systemd-analyze` exposure 3.7→2.1).
+   The profile has **not been exercised on a live systemd host** (the dev fleet is Docker);
+   verifying all five Operations plus a permitted Raw Exec under the filter **requires a human
+   on real hardware** and is the one outstanding acceptance task (#224).
+
+**Sign-off status: pending human decision.** Two items block an unconditional sign-off — the
+disposition of #227 and #236 (accept as documented residual for launch, or fix first), and
+the live least-privilege verification (#224). Every other criterion is met.
 
 ## Scope
 
@@ -177,6 +235,9 @@ for this milestone; it is a separate positioning exercise, not part of the threa
 ## Kept current
 
 This is a living document: as the system and its security posture change, this document
-should be updated alongside it, not left to drift. The residual-risk register — the record of
-findings accepted, mitigated, or still open at the end of the v0.0.8 milestone — does not
-exist yet; it is created by the closer issue **#225**, which will link back here.
+should be updated alongside it, not left to drift. The **residual-risk register** and the
+**Acceptance (v0.0.8 sign-off)** section above are the record of findings fixed, mitigated,
+or accepted at the end of the v0.0.8 milestone (closer issue **#225**). Keep the register
+current: when an accepted-pending-decision entry (R1/#227, R2/#236) is resolved, or when the
+live least-privilege verification (#224) is run, update the entry and the Acceptance status
+rather than letting the doc drift from reality.
