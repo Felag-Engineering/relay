@@ -35,8 +35,11 @@ and both fail quietly rather than loudly, so they are guarded: bumping *early* �
 `v0.0.9` while `Cargo.toml` already says `0.0.10` — would publish an artifact reporting
 `0.0.10-dev+g<sha>`, a prerelease of a version that has not shipped, under the `v0.0.9`
 release. `TestReleaseTagMatchesCargoVersion` fails whenever `HEAD` carries a `v*` tag that
-is not `v<Cargo.toml version>`; it skips in a tagless clone, so the release job must
-additionally reject any artifact whose stamped version contains `-dev`. The daemon is never
+is not `v<Cargo.toml version>`; it skips in a tagless clone, so the release job additionally
+asserts that each published binary's stamped version **equals the tag that triggered the
+build** — which subsumes rejecting `-dev` and also catches a commit carrying several `v*`
+tags, where the stamp can be clean but wrong ([release-artifacts.md](release-artifacts.md)).
+The daemon is never
 upgraded by the Relay — upgrades flow only through the customer's config management
 (ADR-0014, invariant #14) — so this version string, and the registry view built from it, is
 how an operator sees upgrade progress across the fleet.
@@ -45,7 +48,8 @@ how an operator sees upgrade progress across the fleet.
 carry the same stamp, and the stamp's build date is the *wall-clock* UTC date. A rebuild of
 the same tag on a different day therefore produces a different binary hash. Pin
 `SOURCE_DATE_EPOCH` (honoured by `scripts/build-version.sh`) in any pipeline that needs
-rebuild-and-compare verification or artifact signing.
+rebuild-and-compare verification or artifact signing; the release workflow pins it to the
+tag commit's commit date.
 
 **Version history:** the daemon's reported version jumps from `0.0.1` to the `0.0.9` line
 in v0.0.9 — `Cargo.toml` had never been bumped, so every daemon reported `0.0.1` regardless

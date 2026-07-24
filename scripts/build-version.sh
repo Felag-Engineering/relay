@@ -63,8 +63,15 @@ version="${base}-dev"
 # (say `nightly`) could hide the real `v<base>` tag and silently demote a
 # release build to a dev build. --points-at lists every tag on HEAD, annotated
 # and lightweight, so the match is on presence rather than on describe's choice.
+#
+# grep -F: `base` is data, not a pattern. Without it the dots in "v0.0.9" are
+# regex wildcards, so a tag named `v0a0b9` would also match and stamp a build
+# as the 0.0.9 release. Note this match alone is NOT the release gate — the
+# release job asserts the stamped version equals the tag it was triggered by
+# (scripts/release-artifacts.sh), which is what actually keeps a published
+# artifact honest when a commit carries more than one v* tag.
 if [ "$in_git" -eq 1 ] && [ -z "$dirty" ] &&
-   git tag --points-at HEAD 2>/dev/null | grep -qx "v${base}"; then
+   git tag --points-at HEAD 2>/dev/null | grep -qxF "v${base}"; then
   # An exact, clean release build: report exactly the release version, with no
   # prerelease and no metadata.
   version="$base"

@@ -1,0 +1,214 @@
+# CD — publish checksummed release artifacts on a v* tag (issue #250, closes #44).
+#
+# What this produces, and why it exists: the relay-daemon reaches a fleet only
+# through the customer's own config management (ADR-0014, CLAUDE.md invariant
+# #14 — the daemon never self-upgrades and the Relay never pushes binaries).
+# That makes a pinnable, digest-verifiable artifact the ONLY supported upgrade
+# path, so this workflow is the supply-chain root of it. The operator-facing
+# contract — artifact names, the pinning convention, and the verify-then-install
+# steps — is docs/operations/release-artifacts.md.
+#
+# Everything this workflow can get wrong, it is made to get wrong LOUDLY:
+# scripts/release-artifacts.sh refuses to stage anything it cannot vouch for,
+# and `gh release create` runs only after it exits 0. A release that does not
+# happen costs a re-tag; a release that publishes a mislabelled binary onto a
+# root-privileged fleet is the failure this product argues against.
+
+name: Release
+
+on:
+  push:
+    # Tags only. There is deliberately no `branches:` trigger and no
+    # workflow_dispatch: a push to main must never publish, and a hand-fired
+    # run has no tag to derive a version from (see the version assertion in
+    # scripts/release-artifacts.sh, which would reject it anyway).
+    tags:
+      - 'v*'
+
+# Unlike ci.yml, in-progress runs are NOT cancelled: cancelling a run that has
+# already begun `gh release create` would leave a half-populated release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+
+  release:
+    name: Publish release artifacts
+    runs-on: ubuntu-latest
+    # Narrower than the workflow default only where it must be: creating a
+    # Release and uploading assets needs contents: write. No other job exists
+    # here, so the elevated scope is confined to the publishing job.
+    permissions:
+      contents: write
+
+    steps:
+      # fetch-depth: 0 is load-bearing, not hygiene. scripts/build-version.sh
+      # stamps a bare release version only when `git tag --points-at HEAD`
+      # shows v<version>; on a shallow, tagless checkout it sees no tag and
+      # every artifact silently takes the `-dev` path. That is caught by the
+      # version assertion below, but as a failed release rather than as a
+      # correct one — so fetch the tags rather than rely on checkout's
+      # version-dependent default behaviour.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: relay/go.mod
+
+      - name: Set up Rust stable (musl target)
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      # ring (via rustls) compiles C, so the musl target needs a musl C
+      # toolchain — the rust-std component alone is not enough.
+      - name: Install musl linker
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache Go modules
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('relay/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      # Same cache key shape as ci.yml's release-build job, so a tag cut from a
+      # green main usually starts warm.
+      - name: Cache Cargo registry and build
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon/target
+          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-musl-
+
+      # The build stamp carries a UTC build DATE, and the date is compiled in,
+      # so without this a rebuild of the same tag tomorrow yields a different
+      # binary and therefore a different SHA256. The published SHA256SUMS still
+      # verifies downloads either way; what pinning the epoch preserves is
+      # rebuild-and-compare verification — rebuild the tag, get the same digest.
+      # scripts/build-version.sh already honours SOURCE_DATE_EPOCH; nothing set
+      # it until now. The tag commit's own commit date is the natural value: it
+      # is a property of the tagged commit, so it is identical on every rebuild.
+      - name: Pin SOURCE_DATE_EPOCH to the tag commit date
+        run: |
+          epoch="$(git log -1 --pretty=%ct "$GITHUB_SHA")"
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$epoch ($(date -u -d "@$epoch" --iso-8601=seconds))"
+
+      # Builds both binaries stamped, then runs every guard: the tag is semver;
+      # both binaries exist; each one's STAMPED VERSION EQUALS THE TAG (which
+      # subsumes rejecting `-dev`, and additionally catches a commit carrying
+      # several v* tags, where the stamp can be a clean but wrong version); the
+      # daemon and the Relay are both statically linked; and the generated
+      # SHA256SUMS verifies. Non-zero here means nothing is published.
+      #
+      # The tag is passed as an ENVIRONMENT value, not as
+      # `make release-artifacts TAG=...`. A tag name is attacker-chosen and may
+      # legally contain `$(shell ...)`, which make executes while processing a
+      # command-line variable assignment — measured, and not defusable from
+      # inside the Makefile. An environment value is never expanded that way
+      # and reaches the script byte-for-byte. (`env:` interpolation of
+      # `${{ }}` is likewise a value assignment, not shell text.)
+      - name: Build, verify, and stage release artifacts
+        id: artifacts
+        env:
+          TAG: ${{ github.ref_name }}
+        run: make release-artifacts
+
+      # gh is preinstalled on GitHub-hosted runners, so publishing needs no
+      # additional third-party action to pin and audit.
+      #
+      # This deliberately does NOT pass --clobber and never deletes an existing
+      # release: an artifact someone may already have pinned by digest is never
+      # silently replaced.
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.artifacts.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+
+          flags=()
+          # Pre-1.0 tags publish as pre-releases: 0.y.z makes no compatibility
+          # promise, and neither does an explicit -beta/-rc suffix.
+          #
+          # Tested against "false", not "true", so the failure direction is
+          # safe: an empty value — the staging step's output renamed, or not
+          # written — would otherwise publish the tag as a FULL, `latest`
+          # release. Over-marking a release as a prerelease is a one-click fix;
+          # under-marking it hands `gh release download` and every "latest"
+          # consumer an artifact that never claimed to be stable.
+          if [ "$PRERELEASE" != "false" ]; then
+            flags+=(--prerelease)
+          fi
+
+          # PRE-FLIGHT: refuse to run if anything already exists for this tag.
+          #
+          # This check is doing real work, not belt-and-braces. `gh release
+          # create` runs its own duplicate-tag check only when it is given
+          # assets AND is not a draft (cli/cli, pkg/cmd/release/create.go), so
+          # the `--draft`-with-no-assets form below skips that check entirely.
+          # Drafts are also not tag-unique server-side — a draft's tag is not
+          # bound until it is published. So without this:
+          #
+          #   * A failed run leaves a partial draft. The natural next action is
+          #     "Re-run jobs", not "go delete the draft" — and a re-run would
+          #     create a SECOND draft for the same tag rather than failing.
+          #   * `gh release upload`/`edit` resolve a draft by tag name through
+          #     a GraphQL `release(tagName:)` query that returns a single match
+          #     with no defined selection among duplicates and no ambiguity
+          #     warning (pkg/cmd/release/shared/fetch.go) — so the re-run could
+          #     publish the EARLIER, PARTIAL draft.
+          #
+          # That is precisely the outcome the draft sequence exists to prevent,
+          # so the "delete it and re-run" instruction has to be enforced rather
+          # than merely written down. The published case is checked too, for
+          # the same reason: with the duplicate check skipped, `gh` would no
+          # longer be the thing stopping a re-publish over a released tag.
+          if existing="$(gh release view "$GITHUB_REF_NAME" --json isDraft -q .isDraft 2>/dev/null)"; then
+            if [ "$existing" = "true" ]; then
+              echo "::error::A draft release for $GITHUB_REF_NAME already exists, left by a previous run."
+              echo "Re-running would create a second draft and may publish the earlier, partial one." >&2
+              echo "Delete it first:  gh release delete $GITHUB_REF_NAME --yes" >&2
+            else
+              echo "::error::$GITHUB_REF_NAME is already published. Refusing to republish."
+              echo "Artifacts may already be pinned by digest; ship a corrected build under a new tag." >&2
+            fi
+            exit 1
+          fi
+
+          # Create as a DRAFT, upload, then un-draft — not `gh release create
+          # <assets>`, which publishes the release first and uploads assets
+          # sequentially afterwards. A failure part-way through that upload
+          # leaves a public, non-draft release carrying a SUBSET of the
+          # assets: a binary with no SHA256SUMS, or a SHA256SUMS naming an
+          # asset that is not there. Even a fully successful run would be
+          # publicly visible in that incomplete state for the length of the
+          # upload.
+          #
+          # A draft is invisible to consumers and to `gh release download`, so
+          # the release becomes visible only once every asset is attached:
+          # atomic from a consumer's point of view. A failed run leaves a draft
+          # that was never public — delete it (the pre-flight above will tell
+          # you so) and re-run.
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            "${flags[@]}"
+
+          gh release upload "$GITHUB_REF_NAME" dist/*
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false

@@ -101,4 +101,5 @@ Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical sl
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
+- **[docs/operations/release-artifacts.md](docs/operations/release-artifacts.md)** — what a `v*` tag publishes, the naming/pinning convention config management pins against, and the verify-then-install path.
 - **[ROADMAP.md](ROADMAP.md)** — what we're building and in what order.

@@ -9,6 +9,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 .PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
+        build-relay-release build-release release-artifacts \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay
 
@@ -109,8 +110,82 @@ build-daemon:
 	cd daemon && $(DAEMON_STAMP) cargo build
 
 # Release artifact for the fleet: small static musl binary (ADR-0007).
+#
+# --remap-path-prefix rewrites the absolute build paths that rustc otherwise
+# compiles in: the generated proto module's path, and ~400 registry paths from
+# dependency panic locations. Without it, two clones of the SAME tag at
+# different paths produce different binaries (measured: 21 differing bytes plus
+# every `$(HOME)/.cargo/registry/...` string), so rebuild-and-compare
+# verification would be impossible anywhere but the original builder's machine
+# — and the published artifact would leak that builder's home directory and
+# checkout layout to every customer who runs `strings` on it. Cargo's
+# `[profile.release] trim-paths` is the tidier spelling but is still
+# nightly-gated on 1.94.1. Deliberately overrides any ambient RUSTFLAGS: the
+# release build's output must not depend on the builder's environment.
+RELEASE_RUSTFLAGS := --remap-path-prefix=$(CURDIR)=/build --remap-path-prefix=$(HOME)/.cargo=/cargo
+
 build-daemon-release:
-	cd daemon && $(DAEMON_STAMP) cargo build --release --target x86_64-unknown-linux-musl
+	cd daemon && $(DAEMON_STAMP) RUSTFLAGS="$(RELEASE_RUSTFLAGS)" \
+		cargo build --release --target x86_64-unknown-linux-musl
+
+## --- release artifacts (issue #250, closes #44) ---
+# What a v* tag publishes. See docs/operations/release-artifacts.md.
+#
+# The Relay's release build is NOT build-relay: CGO_ENABLED=0 makes it
+# libc-independent for the same reason the daemon targets musl (ADR-0007) —
+# the default cgo build would link against the build machine's glibc and then
+# refuse to start on any older one. -trimpath drops absolute build paths, which
+# (with SOURCE_DATE_EPOCH pinned by the release workflow) is what keeps two
+# builds of one tag byte-identical.
+build-relay-release:
+	cd relay && CGO_ENABLED=0 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o bin/relay ./cmd/relay
+
+build-release: build-relay-release build-daemon-release
+
+# Verify + stage + checksum into dist/. Never publishes: the workflow's
+# `gh release create` step runs only if this exits 0. Depends on build-release
+# so `make release-artifacts TAG=v0.0.9` is the whole local rehearsal, with no
+# way to check yesterday's binaries by accident.
+# Usage: make release-artifacts TAG=v0.0.9   (TAG defaults to $GITHUB_REF_NAME)
+#
+# A TAG IS UNTRUSTED DATA. `git check-ref-format` accepts `;`, `&`, `|`, `>`,
+# `$`, `'` and backticks in a tag name, so whoever can push a tag chooses this
+# string — and it is consumed by a job holding `contents: write` and
+# `github.token`. Two separate expanders want to eat it, and only one of them
+# is closed by anything written here:
+#
+#  1. THE SHELL. make hands each recipe line to /bin/sh, so interpolating
+#     $(TAG) into the recipe is a command-injection sink that fires before the
+#     script's tag-shape guard ever runs. Quoting is NOT a fix, and was
+#     measured not to be: `"$(TAG)"` stops `;` and `&` but still lets `` ` ``
+#     and `$(...)` substitute, since the shell expands those inside double
+#     quotes; single quotes just move the hole to `'`, also a legal tag
+#     character. Hence TAG does not appear in the recipe text at all — `export`
+#     puts it in the child's environment verbatim, with no shell parsing.
+#
+#  2. MAKE ITSELF, for variables set on the MAKE COMMAND LINE, which it
+#     expands during command-line processing — `make TAG='v1$(shell ...)'`
+#     runs that shell function, and there is no defusal (`$(value TAG)` was
+#     tried; the substitution had already happened before it could see the
+#     text). This one is NOT reachable from a real tag: make's `$(shell ...)`
+#     needs whitespace after the function name, and `git check-ref-format`
+#     rejects both space and tab in a ref, so the pushable form `$(shellid)`
+#     is just an undefined variable that expands to nothing. All measured.
+#     Environment-origin values are not expanded this way at all.
+#
+#     Belt and braces regardless: *** CI PASSES THE TAG THROUGH THE
+#     ENVIRONMENT, NEVER AS `make release-artifacts TAG=...` ***
+#     (.github/workflows/release.yml). The command-line form stays supported
+#     for local use, where the developer typing it chose the value.
+#
+# No `export` is needed or wanted here: make already places both
+# environment-origin and command-line-origin variables in a recipe's
+# environment, so the script sees TAG either way — and without the export
+# directive, TAG stays out of the environment of every OTHER recipe (the
+# cargo and go builds) when it is not set. Verified in both origins.
+TAG ?=
+release-artifacts: build-release
+	bash scripts/release-artifacts.sh
 
 test-daemon:
 	cd daemon && cargo test
