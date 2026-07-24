@@ -97,9 +97,34 @@ args = [["/etc/shadow"]]
 #
 #   allow — list of RE2-compatible regexes; the joined command must match at
 #            least one to be considered. Anchored (^...$) is recommended.
-#   deny  — list of RE2-compatible regexes tested against the joined command
-#            AND against each individual argv element. Any match → deny, even
-#            if an allow regex also matched (deny-beats-allow).
+#   deny  — list of RE2-compatible regexes tested against THREE forms: the
+#            joined command, each individual argv element, AND each CANONICAL
+#            element — the joined command re-split on whitespace (ADR-0019).
+#            Any match → deny, even if an allow regex also matched
+#            (deny-beats-allow). The deny message names which of the three
+#            forms matched and the text it matched, since a canonical element
+#            need not appear literally in the argv that was sent.
+#
+# Writing a deny (ADR-0019): the canonical pass is what makes an element-
+# anchored deny hold. `^--force$` fires whether the caller sends the token on
+# its own or merged into a neighbouring element ("--force x", "--force\tx",
+# "  --force  "), because canonicalization collapses caller-chosen element
+# boundaries onto one normal form. Write the deny against the TOKEN as it
+# appears in the command; do not write it against a merged spelling
+# (`^--force x$`), which matches only that one raw element.
+#
+# argv[0] — the program to execute — must be exactly one non-empty token: a Raw
+# Exec whose argv[0] is empty or contains whitespace is refused (ADR-0019),
+# because the joined form cannot show which program an argv like
+# ["systemctl restart", "nginx"] would really run. Consequence for operators: a
+# program whose own path contains a space (/opt/Some App/bin/tool) cannot be run
+# via Raw Exec at all — invoke it through a space-free path (a symlink in
+# /usr/local/bin) or, better, promote it to an Operation.
+#
+# Standing guidance: gate Raw Exec by a tight, fully-anchored ALLOW list. A
+# deny list is a backstop, never the primary control — and anchor the WHOLE
+# command for wrapper interpreters (env, xargs, nice, timeout, sudo, nohup,
+# setsid, ...), which re-dispatch to their own arguments.
 #
 # No allow regex → all Raw Exec commands denied (deny-by-default).
 # ---------------------------------------------------------------------------
@@ -110,8 +135,8 @@ allow = [
     "^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$",
 ]
 
-# Deny --force and the word "rm" anywhere in the command (element or joined),
-# even if an allow regex matched.
+# Deny --force and the word "rm" anywhere in the command (joined, raw element,
+# or canonical element), even if an allow regex matched.
 deny = [
     "--force",
     "\\brm\\b",

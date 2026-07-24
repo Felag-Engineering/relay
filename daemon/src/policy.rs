@@ -13,7 +13,11 @@
 //!   argument positions, not just the operation name.
 //! - **Raw Exec regex-gated** (ADR-0001): Raw Exec commands are only permitted
 //!   when the full `argv.join(" ")` matches an allow regex and no deny regex
-//!   matches any element or the joined command.
+//!   matches the joined command, any raw argv element, or any canonical
+//!   element (the joined command re-split on whitespace — ADR-0019); the Deny
+//!   reason names which form matched. A Raw Exec whose `argv[0]` is not a
+//!   single non-empty program token (empty, or containing whitespace) is
+//!   refused (ADR-0019).
 //!
 //! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
 //! wiring lands in a later v0.0.3 issue.
@@ -77,7 +81,9 @@ struct DenyRuleRaw {
 /// The `[raw_exec]` section from the Policy file.
 ///
 /// `allow` patterns are tested against `argv.join(" ")`.
-/// `deny` patterns are tested against `argv.join(" ")` and each element.
+/// `deny` patterns are tested against `argv.join(" ")`, each raw argv element,
+/// and each canonical element (the joined command re-split on whitespace —
+/// ADR-0019).
 #[derive(Debug, Deserialize, Default)]
 struct RawExecRaw {
     #[serde(default)]
@@ -602,6 +608,62 @@ fn allow_is_shadowed_by_deny(allow: &OperationRuleRaw, deny: &DenyRuleRaw) -> bo
 }
 
 // ---------------------------------------------------------------------------
+// Raw Exec deny-match reporting helpers
+// ---------------------------------------------------------------------------
+
+/// The first form of a Raw Exec command that a `[raw_exec]` deny pattern
+/// matches, as `(form label, matched text)`; `None` if the pattern matches no
+/// form.
+///
+/// The three forms are tried in the same order the deny pass has always
+/// evaluated them — joined command, raw argv element, canonical element — so
+/// this decides nothing new; it only records *which* disjunct fired, for the
+/// Deny reason. Reporting it matters because a canonical element (ADR-0019)
+/// need not appear anywhere in argv: attributing a deny to `^--force$` on the
+/// argv `["prog", "--force x"]` without saying "canonical element" leaves an
+/// operator unable to reconcile the verdict with what they sent.
+fn first_raw_deny_match<'a>(
+    re: &Regex,
+    joined: &'a str,
+    argv: &'a [String],
+    canonical: &[&'a str],
+) -> Option<(&'static str, &'a str)> {
+    if re.is_match(joined) {
+        return Some(("joined command", joined));
+    }
+    if let Some(arg) = argv.iter().find(|arg| re.is_match(arg)) {
+        return Some(("argv element", arg.as_str()));
+    }
+    if let Some(elem) = canonical.iter().find(|elem| re.is_match(elem)) {
+        return Some(("canonical element", elem));
+    }
+    None
+}
+
+/// Character budget for matched text quoted into a Deny reason.
+const REASON_FRAGMENT_BUDGET: usize = 120;
+
+/// Bound a caller-controlled fragment before it is quoted into a Deny reason.
+///
+/// Used for every caller-controlled string this module quotes: the text a deny
+/// pattern matched, and `argv[0]` in the ADR-0019 guard reason. The reason
+/// travels as `PolicyVerdict.deciding_rule` and into the audit trail, while the
+/// fragment can be arbitrarily long (a `.*` deny against a megabyte of argv
+/// matches the whole joined command; the guard reason needs no pattern at all,
+/// so an empty Policy still emits it). Truncation keeps the explanation useful
+/// without letting a caller choose the size of an audit record.
+///
+/// Cuts on a **character** boundary via `char_indices` and marks the cut — a
+/// byte-index slice (`&text[..BUDGET]`) would panic on multi-byte input, which
+/// here is attacker-controlled argv.
+fn reason_fragment(text: &str) -> String {
+    match text.char_indices().nth(REASON_FRAGMENT_BUDGET) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Evaluation engine (pure methods on Policy)
 // ---------------------------------------------------------------------------
 
@@ -821,15 +883,43 @@ impl Policy {
 
     /// Evaluate whether the Raw Exec command `argv` may run.
     ///
-    /// Semantics (ADR-0001, ADR-0002):
+    /// Semantics (ADR-0001, ADR-0002, ADR-0019):
     /// - No shell is invoked; `argv` is the exact argument vector the executor
     ///   will pass to `execv`. The join here is only for regex matching.
-    /// - Allow patterns are tested against `argv.join(" ")` (the canonical
-    ///   joined form).
-    /// - Deny patterns are tested against `argv.join(" ")` AND each individual
-    ///   `argv[i]`. This catches deny patterns that are substrings of elements
-    ///   (e.g. `--force`) regardless of their position.
-    /// - Deny pass is evaluated first (deny-beats-allow).
+    /// - Allow patterns are tested against `argv.join(" ")` (the **joined
+    ///   form** — not the canonical elements) — unchanged by ADR-0019.
+    /// - Deny patterns are tested against three forms; **any** match denies:
+    ///   1. the joined command;
+    ///   2. each raw `argv[i]` — catches deny patterns that are substrings of
+    ///      elements (e.g. `--force`) regardless of position, and is the only
+    ///      form that can match a deny written against a *merged* element
+    ///      (`^--force x$`);
+    ///   3. each **canonical element** — `argv.join(" ")` re-split on
+    ///      whitespace (ADR-0019). This closes finding #227: an element-anchored
+    ///      deny (`^--force$`) was evaded by merging the denied token into a
+    ///      neighbouring element (`"--force x"`), which changes no raw element
+    ///      the deny matches and leaves the joined string untouched, so the
+    ///      allow still fired.
+    ///
+    ///   The union is **monotonic in the deny direction**: adding a disjunct to
+    ///   a deny pass can only turn Allows into Denies, never the reverse — no
+    ///   Policy that denies something today stops denying it. The Deny reason
+    ///   names **which** form matched and the text it matched, so an operator
+    ///   can reconcile the verdict against the argv they sent (a canonical
+    ///   element need not appear in argv at all).
+    /// - **`argv[0]` must be exactly one non-empty program token** (ADR-0019):
+    ///   an empty or whitespace-bearing `argv[0]` is Deny (fail closed). The
+    ///   joined form is a lossy projection of argv, so without this an allow
+    ///   pattern could approve a joined string whose `argv[0]` is not the
+    ///   program that will actually execute (`["systemctl restart", "nginx"]`
+    ///   joins identically to the legitimate three-element form). Invariant #1:
+    ///   an argument must never change *which* command runs.
+    /// - Deny pass is evaluated first (deny-beats-allow), then the `argv[0]`
+    ///   guard, then the allow pass. The guard runs **after** the deny pass on
+    ///   purpose: a command a deny pattern would have attributed keeps that
+    ///   attribution (`rule: Some(RawExecDeny)`), and the guard only catches
+    ///   what no deny pattern claimed. Both orders Deny, so this is an
+    ///   audit-legibility choice, not a semantic one.
     /// - Deny-by-default: no allow match → deny with `rule: None`.
     pub fn evaluate_raw_exec(&self, argv: &[String]) -> Decision {
         // Empty argv is always denied (nothing to run).
@@ -842,17 +932,59 @@ impl Policy {
 
         let joined = argv.join(" ");
 
+        // Canonical elements: the joined command re-split on whitespace. This
+        // collapses attacker-chosen element boundaries (merged, padded, empty,
+        // or tab/newline/CR-separated) onto one normal form, so an
+        // element-anchored deny sees the tokens an operator wrote it against
+        // (ADR-0019). Computed once; the deny lists are short.
+        let canonical: Vec<&str> = joined.split_whitespace().collect();
+
         // --- Deny pass (deny-beats-allow, evaluated first) ------------------
-        // Test deny patterns against the joined command AND each element.
+        // Test deny patterns against the joined command, each raw element, AND
+        // each canonical element. All three are kept: dropping the raw-element
+        // pass would lose the only form that matches a deny written against a
+        // merged element (`^--force x$`).
         for compiled in &self.raw_deny {
-            if compiled.re.is_match(&joined) || argv.iter().any(|arg| compiled.re.is_match(arg)) {
+            if let Some((form, matched)) =
+                first_raw_deny_match(&compiled.re, &joined, argv, &canonical)
+            {
                 return Decision::Deny {
-                    reason: format!("raw exec denied by pattern {:?}", compiled.pattern),
+                    reason: format!(
+                        "raw exec denied by pattern {:?} (matched {form} {:?})",
+                        compiled.pattern,
+                        reason_fragment(matched)
+                    ),
                     rule: Some(Rule::RawExecDeny {
                         pattern: compiled.pattern.clone(),
                     }),
                 };
             }
+        }
+
+        // --- argv[0] guard (ADR-0019) ---------------------------------------
+        // Fail closed: the program to execute must be exactly one non-empty
+        // argv element. Whitespace is the Unicode definition, matching
+        // `split_whitespace` above so the guard and the canonical split agree
+        // on what a separator is. Runs after the deny pass so an attributable
+        // deny keeps its attribution, and before the allow pass so no allow
+        // pattern can approve an argv[0] that is not a single program token.
+        //
+        // `argv[0]` is caller-controlled and goes into `deciding_rule` and the
+        // audit trail, so it is bounded by `reason_fragment` like every other
+        // quoted fragment on this path. This reason is the CHEAPEST one to
+        // provoke — it needs no allow and no deny pattern, so even an empty
+        // Policy emits it — which is exactly why it must not be able to carry
+        // a caller-sized payload.
+        if argv[0].is_empty() || argv[0].chars().any(char::is_whitespace) {
+            return Decision::Deny {
+                reason: format!(
+                    "raw exec argv[0] {:?} is not a single program token (empty or containing \
+                     whitespace): the program to execute must be exactly one argv element \
+                     (ADR-0019)",
+                    reason_fragment(&argv[0])
+                ),
+                rule: None,
+            };
         }
 
         // --- Allow pass -----------------------------------------------------
@@ -1821,16 +1953,17 @@ deny = ["[invalid"]
 
 /// Adversarial, table-driven red-team suite against `evaluate_raw_exec`'s
 /// matching model: regex anchoring, argv-join ambiguity, and the deny/allow
-/// asymmetry (deny is tested against the joined command OR any element;
-/// allow is tested against the joined command only — policy.rs:749-771).
+/// asymmetry (deny is tested against the joined command, any raw element, OR
+/// any canonical element; allow is tested against the joined command only).
 ///
 /// Test-only: this module never touches `evaluate_raw_exec`, `from_toml_str`,
 /// `compile_regexes`, the loader, or the lint code above. It asserts current
 /// behavior (green rows, some of which document accepted footguns rather than
-/// bugs) plus one genuine deny-evasion bypass, committed as a standalone
-/// `#[ignore]`d test tagged with the filed finding (#227) rather than fixed
-/// here — closing it would be a Policy-evaluation semantics change requiring
-/// an ADR (ADR-0001, ADR-0002).
+/// bugs). The one genuine deny-evasion bypass it found (#227) was committed as
+/// a standalone `#[ignore]`d test while the fix was an open ADR-gated decision;
+/// that decision is ADR-0019 (canonical-element deny matching + the argv[0]
+/// whitespace guard), so the test is now enabled and pins the fix, with the
+/// neighbouring shapes added as Axis 7 rows.
 ///
 /// `redteam_cases()` is the single extension point later red-team issues
 /// (e.g. argv-smuggling/encoding) append rows to.
@@ -1841,11 +1974,14 @@ deny = ["[invalid"]
 /// (regex-as-if-shell footguns). That red-team pass found NO new genuine
 /// bypass — every appended row is a green regression, either fail-closed
 /// (safe) or a documented operator footgun where the engine matches exactly
-/// what the pattern literally says. The only tracked bypass against
-/// `evaluate_raw_exec` remains #227 (element-merge deny evasion, above);
-/// #236 is a file.read (structured-Operation, `evaluate()`) finding covered
-/// by the second table further below in this module — it is unrelated to
-/// the Raw Exec argv gate this section's `redteam_cases()` covers.
+/// what the pattern literally says. The one tracked bypass against
+/// `evaluate_raw_exec` was #227 (element-merge deny evasion), fixed under
+/// ADR-0019 and pinned by the Axis 7 rows and
+/// `deny_element_merge_closed_by_canonical_elements` below; #236 is a
+/// file.read (structured-Operation, `evaluate()`) finding covered by the
+/// second table further below in this module — it is unrelated to the Raw
+/// Exec argv gate this section's `redteam_cases()` covers. No `#[ignore]`d
+/// bypass remains in either table.
 #[cfg(test)]
 mod raw_exec_redteam {
     use super::*;
@@ -1857,9 +1993,12 @@ mod raw_exec_redteam {
     }
 
     /// Coarse red-team classification of a Raw Exec `Decision`: does the
-    /// command run, is it denied by a specific rule, or denied by default.
-    /// Deliberately coarser than `Decision` itself — the exact `reason`
-    /// string is owned by the golden-reason tests in `mod tests`, not this
+    /// command run, is it denied by a specific rule, refused by the ADR-0019
+    /// `argv[0]` guard, or denied by default. Deliberately coarser than
+    /// `Decision` itself — the exact `reason` string is owned by the
+    /// golden-reason tests in `mod tests`, and on this path by
+    /// `argv0_refused_unless_single_program_token` and
+    /// `deny_reason_names_the_matched_form_and_text` below, not by this
     /// harness.
     #[derive(Debug, Clone, Copy)]
     enum Expect {
@@ -1867,7 +2006,13 @@ mod raw_exec_redteam {
         Allow,
         /// `Decision::Deny` with a specific `Rule::RawExecDeny` attributed.
         DenyByPattern,
-        /// `Decision::Deny` with `rule: None` (no allow pattern matched).
+        /// `Decision::Deny` with `rule: None` from the ADR-0019 `argv[0]`
+        /// guard (argv[0] empty or containing whitespace). Structurally
+        /// identical to `DenyByDefault` in `Decision`, so the table
+        /// distinguishes the two by the reason naming `argv[0]`.
+        DenyByGuard,
+        /// `Decision::Deny` with `rule: None` because no allow pattern
+        /// matched — and specifically *not* the `argv[0]` guard.
         DenyByDefault,
     }
 
@@ -1932,8 +2077,8 @@ mod raw_exec_redteam {
                 name: "join_single_element_whole_command",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl restart nginx"],
-                expect: Expect::Allow,
-                note: "documented-intended (#214): sharpest 'what the gate cannot see' — a single argv element containing the whole command joins to the same string and is allowed, though execv's real target would be a literal filename containing spaces (ENOENT); no shell re-parses argv (ADR-0001), so the non-injective join is a legibility limit, not an exploitable escalation under argv exec",
+                expect: Expect::DenyByGuard,
+                note: "was the sharpest 'what the gate cannot see' row under #214 (a single argv element containing the whole command joins to the same string and was ALLOWED, though execv's real target is a literal filename containing spaces); the ADR-0019 argv[0]-whitespace guard now refuses it before any pattern is consulted — argv[0] is the program, and the joined form must not be able to disguise which program that is (invariant #1). Deny carries rule: None (a fail-closed precondition, not a matched deny pattern)",
             },
             // --- Axis 3: deny/allow asymmetry --------------------------------
             Case {
@@ -2024,17 +2169,17 @@ mod raw_exec_redteam {
             },
             Case {
                 name: "ctl_slash_s_matches_unicode_nbsp",
-                policy_toml: "[raw_exec]\nallow = ['^x\\s$']\n",
-                argv: &["x\u{00A0}"],
+                policy_toml: "[raw_exec]\nallow = ['^x y\\sz$']\n",
+                argv: &["x", "y\u{00A0}z"],
                 expect: Expect::Allow,
-                note: "semantics pin: Unicode-mode \\s (the regex crate default) matches U+00A0 NBSP, in addition to tab/CR/LF; operator relevance: a \\s-based deny DOES catch NBSP used as a separator. Trivial ^x\\s$ fixture, not an escalation",
+                note: "semantics pin: Unicode-mode \\s (the regex crate default) matches U+00A0 NBSP, in addition to tab/CR/LF; operator relevance: a \\s-based deny DOES catch NBSP used as a separator. Trivial fixture, not an escalation. The NBSP sits in a NON-argv[0] element deliberately: under the ADR-0019 guard an argv[0] carrying NBSP (Unicode whitespace) is refused outright, which would mask the \\s pin this row exists for",
             },
             Case {
                 name: "ctl_slash_s_does_not_match_nul",
-                policy_toml: "[raw_exec]\nallow = ['^x\\s$']\n",
-                argv: &["x\0"],
+                policy_toml: "[raw_exec]\nallow = ['^x y\\sz$']\n",
+                argv: &["x", "y\0z"],
                 expect: Expect::DenyByDefault,
-                note: "semantics pin, paired with ctl_slash_s_matches_unicode_nbsp: \\s does NOT match NUL, so an operator writing \\s to catch 'any separator' catches NBSP/tab/CR/LF but not NUL; independently inert either way, since a NUL-bearing argv fails closed at execv regardless (executor test). NOT a new finding",
+                note: "semantics pin, paired with ctl_slash_s_matches_unicode_nbsp (same fixture shape): \\s does NOT match NUL, so an operator writing \\s to catch 'any separator' catches NBSP/tab/CR/LF but not NUL; NUL is likewise not Unicode whitespace, so it neither trips the ADR-0019 argv[0] guard nor splits a canonical element. Independently inert either way, since a NUL-bearing argv fails closed at execv regardless (executor test). NOT a new finding",
             },
             Case {
                 name: "ctl_join_emits_ascii_space_matched_by_slash_s",
@@ -2086,6 +2231,125 @@ mod raw_exec_redteam {
                 expect: Expect::Allow,
                 note: "argv-is-data pin: $IFS (like $HOME, backticks) is a literal argv token to the gate; there is no shell, so no variable expansion or word-splitting ever happens (ADR-0001). The gate sees the literal string \"$IFS\"; the executor passes it literally too, re-pinned end-to-end by raw_exec.rs::argv_is_data_not_shell_expanded",
             },
+            // --- Axis 7: argv canonicalization before the deny pass (#227 / ADR-0019) ---
+            //
+            // Every row below uses the #227 fixture: an anchored allow written
+            // for the merged joined command plus the most precise deny an
+            // operator can write for the flag (`^--force$`). Before ADR-0019
+            // each merge/padding shape ALLOWED; the canonical-element disjunct
+            // (joined re-split on whitespace) denies them all.
+            Case {
+                name: "canon_element_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force x"],
+                expect: Expect::DenyByPattern,
+                note: "the #227 reproduction, table form: merging the denied token into the next element leaves the joined string (and so the allow) intact and defeats the raw-element deny, but the canonical elements are [systemctl, restart, nginx, --force, x] and ^--force$ fires on --force (ADR-0019)",
+            },
+            Case {
+                name: "canon_unmerged_form_still_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force", "x"],
+                expect: Expect::DenyByPattern,
+                note: "control for canon_element_merge_denied: the honest, unmerged argv was denied before ADR-0019 (raw-element pass) and still is — monotonic in the deny direction, nothing that denied stops denying",
+            },
+            Case {
+                name: "canon_merged_form_deny_still_fires_via_raw_element",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force x$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force x"],
+                expect: Expect::DenyByPattern,
+                note: "proves the RAW-element pass is still live and was not replaced by the canonical one: a deny anchored to the merged element (^--force x$) matches neither the joined command (anchors) nor any canonical element ([--force], [x]) — only the raw element \"--force x\". Dropping the raw pass would silently lose this deny path",
+            },
+            Case {
+                name: "canon_merged_form_deny_does_not_cover_unmerged_argv",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force x$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force", "x"],
+                expect: Expect::Allow,
+                note: "honest limit, paired with canon_merged_form_deny_still_fires_via_raw_element: a deny anchored to a merged element is NARROW — it does not cover the unmerged argv, whose elements are \"--force\" and \"x\". Not a regression and not a bypass of anything ADR-0019 claims: the correct deny for this operator is ^--force$, which after ADR-0019 covers both shapes",
+            },
+            Case {
+                name: "canon_leading_trailing_whitespace_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "  --force  "],
+                expect: Expect::DenyByPattern,
+                note: "padding the denied token with leading/trailing whitespace inside one element does not survive canonicalization — split_whitespace discards leading and trailing runs, so the canonical element is exactly \"--force\" and the anchored deny fires",
+            },
+            Case {
+                name: "canon_repeated_whitespace_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force     x"],
+                expect: Expect::DenyByPattern,
+                note: "a repeated-whitespace run between the merged tokens collapses under split_whitespace (runs are one separator, no empty canonical elements), so the deny still sees a bare \"--force\"",
+            },
+            Case {
+                name: "canon_tab_separator_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force\tx"],
+                expect: Expect::DenyByPattern,
+                note: "TAB is Unicode whitespace, so it is a canonical-element separator even though the space-join never emits one: the merged element splits into [--force, x] and the anchored deny fires. Contrast ctl_tab_in_arg_breaks_anchored_class_allow, where a tab defeats an anchored ALLOW — canonicalization is deny-side only",
+            },
+            Case {
+                name: "canon_newline_separator_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx (.|\\n)*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force\nx"],
+                expect: Expect::DenyByPattern,
+                note: "LF likewise splits the merged element. The allow here spells (.|\\n)* because RE2-style `.` does not cross a newline (ctl_newline_in_arg_dot_does_not_cross) — the point of the row is that the deny fires even where an allow WOULD have matched, so the allow must genuinely match",
+            },
+            Case {
+                name: "canon_cr_separator_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force\rx"],
+                expect: Expect::DenyByPattern,
+                note: "CR splits the merged element too (Unicode whitespace), so a CR-separated merge is denied like the space- and tab-separated forms",
+            },
+            Case {
+                name: "canon_nbsp_separator_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart", "nginx", "--force\u{00A0}x"],
+                expect: Expect::DenyByPattern,
+                note: "U+00A0 NBSP is Unicode whitespace, so split_whitespace treats it as a separator and the merge is denied; consistent with ctl_slash_s_matches_unicode_nbsp (the same Unicode notion of whitespace the regex crate's \\s uses) and with the ADR-0019 argv[0] guard, which is written against the same predicate",
+            },
+            Case {
+                name: "canon_empty_elements_do_not_perturb_split",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl .*$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "", "restart", "nginx", "", "--force x"],
+                expect: Expect::DenyByPattern,
+                note: "empty argv elements inject extra spaces into the join (\"systemctl  restart nginx  --force x\") but produce NO empty canonical elements (split_whitespace skips runs), so a merged token surrounded by empty elements is still canonicalized to a bare \"--force\" and denied",
+            },
+            Case {
+                name: "canon_three_token_merge_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["systemctl", "restart nginx --force x"],
+                expect: Expect::DenyByPattern,
+                note: "the whole tail collapsed into ONE element (four tokens merged): the joined string is unchanged so the anchored allow still matches, but canonicalization recovers every token and the anchored deny fires. argv[0] is clean here, so this is the canonical pass doing the work, not the ADR-0019 argv[0] guard",
+            },
+            Case {
+                name: "guard_argv0_whitespace_refused_though_joined_form_allows",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx$\"]\n",
+                argv: &["systemctl restart", "nginx"],
+                expect: Expect::DenyByGuard,
+                note: "ADR-0019 companion guard: the joined form \"systemctl restart nginx\" matches the anchored allow, but argv[0] is the literal two-word string \"systemctl restart\" — NOT the program the operator authorized (execv would look for a file of that name, which is ENOENT unless someone planted one). Refused with rule: None and a reason naming argv[0]. Pairs with guard_argv0_clean_same_joined_form_allowed",
+            },
+            Case {
+                name: "guard_argv0_clean_same_joined_form_allowed",
+                policy_toml: "[raw_exec]\nallow = [\"^systemctl restart nginx$\"]\n",
+                argv: &["systemctl", "restart", "nginx"],
+                expect: Expect::Allow,
+                note: "control for guard_argv0_whitespace_refused_though_joined_form_allows: the identical joined string with a single-token argv[0] is still allowed — the guard rejects only the ambiguity about WHICH program runs, it does not narrow legitimate Raw Exec whose argv[0] is a single token",
+            },
+            Case {
+                name: "guard_empty_argv0_refused",
+                policy_toml: "[raw_exec]\nallow = [\"^ nginx$\"]\n",
+                argv: &["", "nginx"],
+                expect: Expect::DenyByGuard,
+                note: "an EMPTY argv[0] is not a program either: the join emits a leading space so a (peculiar) allow can match, but execv would get \"\" and fail with ENOENT. Refusing it at the gate removes a 'Policy said yes' audit record for a command that can never run — same guard, same monotonic direction",
+            },
+            Case {
+                name: "guard_runs_after_deny_pass_so_attribution_is_kept",
+                policy_toml: "[raw_exec]\nallow = [\".*\"]\ndeny = [\"^--force$\"]\n",
+                argv: &["prog x", "--force"],
+                expect: Expect::DenyByPattern,
+                note: "ordering pin: argv[0] here trips the guard AND a deny pattern matches. The deny pass runs first, so the Deny is attributed to ^--force$ (rule: Some) rather than collapsing to the guard's rule: None — same outcome either way, but the operator keeps the more specific explanation. Reordering the guard ahead of the deny pass flips this row to DenyByGuard",
+            },
         ]
     }
 
@@ -2095,18 +2359,26 @@ mod raw_exec_redteam {
             let policy = from_toml_str(case.policy_toml)
                 .unwrap_or_else(|e| panic!("case {}: policy TOML failed to parse: {e}", case.name));
             let decision = policy.evaluate_raw_exec(&argv(case.argv));
-            let matched = matches!(
-                (case.expect, &decision),
-                (Expect::Allow, Decision::Allow(_))
-                    | (
-                        Expect::DenyByPattern,
-                        Decision::Deny {
-                            rule: Some(Rule::RawExecDeny { .. }),
-                            ..
-                        },
-                    )
-                    | (Expect::DenyByDefault, Decision::Deny { rule: None, .. })
-            );
+            // `DenyByGuard` and `DenyByDefault` are both `Deny { rule: None }`;
+            // the ADR-0019 guard is the one whose reason names argv[0], and
+            // each expectation asserts the *absence* of the other.
+            let matched = match (case.expect, &decision) {
+                (Expect::Allow, Decision::Allow(_)) => true,
+                (
+                    Expect::DenyByPattern,
+                    Decision::Deny {
+                        rule: Some(Rule::RawExecDeny { .. }),
+                        ..
+                    },
+                ) => true,
+                (Expect::DenyByGuard, Decision::Deny { rule: None, reason }) => {
+                    reason.contains("argv[0]")
+                }
+                (Expect::DenyByDefault, Decision::Deny { rule: None, reason }) => {
+                    !reason.contains("argv[0]")
+                }
+                _ => false,
+            };
             assert!(
                 matched,
                 "case {}: {}: expected {:?}, got {decision:?}",
@@ -2116,35 +2388,301 @@ mod raw_exec_redteam {
     }
 
     // -------------------------------------------------------------------
-    // Cross-axis (Axis 2 x Axis 3) — genuine bypass, filed as finding #227
+    // Cross-axis (Axis 2 x Axis 3) — finding #227, RESOLVED by ADR-0019
     // -------------------------------------------------------------------
     //
-    // A deny rule can be evaded by merging the denied token into an
+    // A deny rule could be evaded by merging the denied token into an
     // adjacent argv element: an anchored per-element deny (`^--force$`)
-    // only ever sees the exact element `--force`, so appending anything to
-    // that element ("--force x") slips past both the joined-string disjunct
-    // and the per-element disjunct of the deny pass, while an anchored
-    // allow pattern written for the merged form still matches the joined
-    // command. This defeats a deny rule outright — more severe than the
-    // unanchored-allow footgun above, which only ever over-widens an allow.
-    // Committed here as a known, tracked bypass rather than silently fixed:
-    // closing it needs a Policy-evaluation semantics change (e.g.
-    // argv-structure-aware or normalized per-element deny matching), which
-    // is an ADR-gated decision (ADR-0001, ADR-0002), not a test-only change.
+    // only ever saw the exact element `--force`, so appending anything to
+    // that element ("--force x") slipped past both the joined-string
+    // disjunct and the per-element disjunct of the deny pass, while an
+    // anchored allow pattern written for the merged form still matched the
+    // joined command. That defeated a deny rule outright — more severe than
+    // the unanchored-allow footgun above, which only ever over-widens an
+    // allow — and, unlike that footgun, it was not fixable by operator
+    // anchoring discipline: the operator wrote the most precise rule
+    // available and still lost.
+    //
+    // RESOLVED by ADR-0019: the deny pass now also runs over the CANONICAL
+    // elements (`argv.join(" ").split_whitespace()`), in addition to the
+    // joined string and the raw elements. This test was `#[ignore]`d while
+    // the finding was open; it now pins the fix. The neighbouring shapes
+    // (padding, tab/LF/CR/NBSP separators, empty elements, three-token
+    // merge, and the raw-element pass still firing on a merged-form deny)
+    // are the Axis 7 rows in `redteam_cases()` above.
     #[test]
-    #[ignore = "finding #227: anchored per-element deny (^--force$) evaded by merging the denied token into an adjacent argv element; desired=Deny, current=Allow; fixing needs a Policy-semantics change gated on an ADR (ADR-0001/0002) — do NOT change evaluate_raw_exec here"]
-    fn deny_anchored_per_element_evaded_by_element_merge() {
+    fn deny_element_merge_closed_by_canonical_elements() {
         let policy = from_toml_str(
             "[raw_exec]\nallow = [\"^systemctl restart nginx --force x$\"]\ndeny = [\"^--force$\"]\n",
         )
         .expect("policy must parse");
+
+        // The exact #227 reproduction: merged form must now be denied, and
+        // denied *by the deny pattern* (not by deny-by-default) — the allow
+        // still matches the joined string, so only the deny pass can stop it.
         let decision =
             policy.evaluate_raw_exec(&argv(&["systemctl", "restart", "nginx", "--force x"]));
         assert!(
-            matches!(decision, Decision::Deny { .. }),
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::RawExecDeny { pattern }),
+                    ..
+                } if pattern == "^--force$"
+            ),
             "anchored per-element deny ^--force$ must not be evadable by merging the denied \
-             token into an adjacent argv element (#227); got {decision:?}"
+             token into an adjacent argv element (#227 / ADR-0019); got {decision:?}"
         );
+
+        // The unmerged form stays denied — the change is monotonic in the
+        // deny direction, it never turns a Deny into an Allow.
+        let unmerged =
+            policy.evaluate_raw_exec(&argv(&["systemctl", "restart", "nginx", "--force", "x"]));
+        assert!(
+            matches!(unmerged, Decision::Deny { .. }),
+            "the unmerged argv must remain denied; got {unmerged:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // ADR-0019 companion guard — argv[0] must be one non-empty program token
+    // -------------------------------------------------------------------
+    //
+    // The joined form is a lossy projection of argv: `["systemctl restart",
+    // "nginx"]` joins identically to the legitimate three-element form, so an
+    // allow pattern can approve a joined string whose argv[0] is not the
+    // program that will actually execute. Invariant #1 is that an argument
+    // must never change *which* command runs; for Raw Exec that is argv[0].
+    // The guard is fail-closed, so the Deny carries `rule: None` and a reason
+    // naming argv[0]; it runs AFTER the deny pass (so an attributable deny
+    // keeps its attribution) and BEFORE the allow pass.
+    #[test]
+    fn argv0_refused_unless_single_program_token() {
+        // A permissive allow and no deny, so nothing but the guard can produce
+        // the Deny.
+        let policy = from_toml_str("[raw_exec]\nallow = [\".*\"]\n").expect("policy must parse");
+
+        // Every Unicode-whitespace shape, in every position within argv[0],
+        // plus the empty argv[0].
+        for bad in [
+            "",                                 // empty: not a program at all
+            "systemctl restart",                // interior ASCII space (the #227-adjacent shape)
+            "systemctl\trestart",               // interior tab
+            "systemctl\nrestart",               // interior newline
+            "systemctl\rrestart",               // interior carriage return
+            "systemctl\u{00A0}restart",         // interior NBSP (Unicode whitespace)
+            " systemctl",                       // leading space
+            "systemctl ",                       // trailing space
+            "/usr/bin/systemctl restart nginx", // the whole command as one element
+        ] {
+            let decision = policy.evaluate_raw_exec(&argv(&[bad, "nginx"]));
+            assert!(
+                matches!(
+                    &decision,
+                    Decision::Deny { rule: None, reason }
+                    if reason.contains("argv[0]")
+                ),
+                "argv[0] {bad:?} is not a single non-empty program token and must be refused \
+                 with an argv[0] reason (ADR-0019); got {decision:?}"
+            );
+        }
+
+        // Control: the same permissive allow admits a clean argv[0], so the
+        // guard is what rejects the cases above — and NUL, which is not
+        // Unicode whitespace, is not caught by this guard (it fails closed
+        // later, at execv — raw_exec.rs::nul_in_argv_fails_closed_at_executor).
+        for good in ["systemctl", "systemctl\0x"] {
+            let decision = policy.evaluate_raw_exec(&argv(&[good, "nginx"]));
+            assert!(
+                matches!(decision, Decision::Allow(_)),
+                "argv[0] {good:?} is a single non-empty token with no whitespace and must not \
+                 be caught by the ADR-0019 guard; got {decision:?}"
+            );
+        }
+
+        // Ordering: the guard runs after the deny pass, so a command that a
+        // deny pattern claims keeps the pattern attribution instead of
+        // collapsing to the guard's rule: None.
+        let with_deny = from_toml_str("[raw_exec]\nallow = [\".*\"]\ndeny = [\"^--force$\"]\n")
+            .expect("policy must parse");
+        let decision = with_deny.evaluate_raw_exec(&argv(&["prog x", "--force"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::RawExecDeny { pattern }),
+                    ..
+                } if pattern == "^--force$"
+            ),
+            "an argv that trips BOTH the deny pass and the argv[0] guard must be attributed to \
+             the deny pattern (deny pass runs first); got {decision:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Deny reasons name which form matched, and the text it matched
+    // -------------------------------------------------------------------
+    //
+    // The reason is `PolicyVerdict.deciding_rule` verbatim (dispatch.rs
+    // `decision_to_verdict`), so it is the wire-visible explanation in
+    // PolicyQuery, plan mode and `policy check`. A canonical element need not
+    // appear anywhere in argv, so a bare "denied by pattern X" is not
+    // reconcilable against the argv the caller sent.
+    #[test]
+    fn deny_reason_names_the_matched_form_and_text() {
+        let policy = from_toml_str(
+            "[raw_exec]\nallow = [\".*\"]\ndeny = [\"restart nginx\", \"^--force x$\", \"^--force$\"]\n",
+        )
+        .expect("policy must parse");
+
+        // (argv, expected fragment of the reason)
+        let cases: &[(&[&str], &str)] = &[
+            (
+                &["systemctl", "restart", "nginx"],
+                "raw exec denied by pattern \"restart nginx\" \
+                 (matched joined command \"systemctl restart nginx\")",
+            ),
+            (
+                &["systemctl", "--force x"],
+                "raw exec denied by pattern \"^--force x$\" (matched argv element \"--force x\")",
+            ),
+            (
+                &["systemctl", "--force y"],
+                "raw exec denied by pattern \"^--force$\" (matched canonical element \"--force\")",
+            ),
+        ];
+
+        for (command, expected) in cases {
+            let decision = policy.evaluate_raw_exec(&argv(command));
+            match &decision {
+                Decision::Deny { reason, .. } => assert_eq!(
+                    reason, expected,
+                    "the deny reason for {command:?} must name the matched form and text"
+                ),
+                other => panic!("{command:?} must be denied; got {other:?}"),
+            }
+        }
+
+        // Form precedence is contract, not incidental: a pattern that matches
+        // more than one form must report the FIRST form in the documented
+        // order (joined command, then raw argv element, then canonical
+        // element), since that is the most concrete thing the caller sent.
+        // Without these two rows, swapping arms in `first_raw_deny_match`
+        // leaves the whole suite green while silently changing both the label
+        // and the quoted text an operator sees.
+        let precedence: &[(&str, &[&str], &str)] = &[
+            (
+                // Matches the joined command AND the raw element "prog".
+                "prog",
+                &["prog", "x"],
+                "raw exec denied by pattern \"prog\" (matched joined command \"prog x\")",
+            ),
+            (
+                // Anchored at ^, so it cannot match the joined command
+                // ("prog …"), but matches the raw element "--force x" AND the
+                // canonical element "--force".
+                "^--force",
+                &["prog", "--force x"],
+                "raw exec denied by pattern \"^--force\" (matched argv element \"--force x\")",
+            ),
+        ];
+        for (pattern, command, expected) in precedence {
+            let policy = from_toml_str(&format!("[raw_exec]\ndeny = [{pattern:?}]\n"))
+                .expect("policy must parse");
+            match &policy.evaluate_raw_exec(&argv(command)) {
+                Decision::Deny { reason, .. } => assert_eq!(
+                    reason, expected,
+                    "a pattern matching several forms must report the first form in the \
+                     documented order (joined, raw element, canonical element)"
+                ),
+                other => panic!("{command:?} must be denied; got {other:?}"),
+            }
+        }
+
+        // Caller-controlled text is bounded, on BOTH reasons that quote it: a
+        // `.*`-style deny against a long joined command, and the ADR-0019
+        // argv[0] guard — which is the cheaper one to provoke, since it needs
+        // no allow and no deny pattern (an empty Policy still emits it).
+        //
+        // The fixtures are deliberately NOT uniform-width: with an ASCII byte
+        // ahead of 4-byte codepoints, byte index REASON_FRAGMENT_BUDGET falls
+        // INSIDE a character, so a future `&text[..BUDGET]` "simplification"
+        // panics here (on attacker-controlled argv) instead of passing.
+        let mixed_width = format!("x{}", "🔥".repeat(1024));
+        let combining = format!("x{}", "e\u{0301}".repeat(1024));
+        let long_texts = [
+            ("ascii", "x".repeat(4096)),
+            ("mixed-width 4-byte codepoints", mixed_width),
+            ("combining marks", combining),
+        ];
+
+        let wide = from_toml_str("[raw_exec]\ndeny = [\"^x\"]\n").expect("policy must parse");
+        let empty_policy = from_toml_str("").expect("an empty policy must parse");
+
+        // The property that matters is INDEPENDENCE from caller size, not a
+        // magic number: the same input four times longer must produce the
+        // byte-identical reason. An absolute cap is asserted too, generous
+        // enough for `{:?}` escaping — a combining mark quotes as `\u{301}`,
+        // so an escaped character can be ~10 times its own width. That
+        // expansion is bounded by the fragment budget; the caller's length is
+        // not a factor either way.
+        const REASON_CHAR_CAP: usize = 1_500;
+
+        let reason_of = |decision: Decision, which: &str, label: &str| -> String {
+            match decision {
+                Decision::Deny { reason, .. } => reason,
+                other => panic!("{which} ({label}): must be denied; got {other:?}"),
+            }
+        };
+
+        for (label, text) in &long_texts {
+            let longer = text.repeat(4);
+            for (which, short, long) in [
+                // 1. deny-matched text (needs a deny pattern).
+                (
+                    "deny reason",
+                    reason_of(wide.evaluate_raw_exec(&argv(&[text])), "deny reason", label),
+                    reason_of(
+                        wide.evaluate_raw_exec(&argv(&[&longer])),
+                        "deny reason",
+                        label,
+                    ),
+                ),
+                // 2. the argv[0] guard reason: the same text with a space
+                //    appended so the guard fires, against a Policy with NO
+                //    patterns at all — the cheapest reason to provoke.
+                (
+                    "guard reason",
+                    reason_of(
+                        empty_policy.evaluate_raw_exec(&argv(&[&format!("{text} ")])),
+                        "guard reason",
+                        label,
+                    ),
+                    reason_of(
+                        empty_policy.evaluate_raw_exec(&argv(&[&format!("{longer} ")])),
+                        "guard reason",
+                        label,
+                    ),
+                ),
+            ] {
+                assert!(
+                    short.contains('…'),
+                    "{which} ({label}): an over-long fragment must be truncated and marked; \
+                     got {short:?}"
+                );
+                assert_eq!(
+                    short, long,
+                    "{which} ({label}): a 4x longer argv must produce the identical reason — \
+                     the caller must not be able to size an audit record"
+                );
+                assert!(
+                    short.chars().count() < REASON_CHAR_CAP,
+                    "{which} ({label}): the reason must stay small; got {} chars ({} bytes)",
+                    short.chars().count(),
+                    short.len()
+                );
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -2485,9 +3023,9 @@ mod loader_hardening_tests {
 // already implements — deny-by-default (PB1) and deny-beats-allow (PB2, PB3)
 // — and never reimplements Policy evaluation (ADR-0011): every oracle below
 // calls the real engine and compares against a literal-string mirror of its
-// documented semantics (`evaluate` at policy.rs:695-790, `evaluate_raw_exec`
-// at policy.rs:792-842). A drift between an oracle and the engine is a TEST
-// bug — fix the test, never the engine (see the module CONSTRAINTS note).
+// documented semantics (`Policy::evaluate` / `Policy::evaluate_raw_exec`).
+// A drift between an oracle and the engine is a TEST bug — fix the test,
+// never the engine (see the module CONSTRAINTS note).
 //
 // This module is a sibling of `mod tests`, `mod raw_exec_redteam`, and
 // `mod loader_hardening_tests` above; it never edits them and builds its own
@@ -2568,7 +3106,7 @@ deny = ["--force", "\\brm\\b"]
     }
 
     // -------------------------------------------------------------------
-    // PB3 fixture — Raw Exec deny-beats-allow (policy.rs:792-842).
+    // PB3 fixture — Raw Exec deny-beats-allow (`evaluate_raw_exec`).
     // -------------------------------------------------------------------
 
     fn raw_exec_pb3_policy() -> Policy {
@@ -2671,7 +3209,8 @@ deny = ["--force", "\\brm\\b"]
         }
 
         // ---------------------------------------------------------------
-        // PB3 `raw_exec_deny_beats_allow` — mirrors policy.rs:792-842 exactly.
+        // PB3 `raw_exec_deny_beats_allow` — mirrors `evaluate_raw_exec`
+        // exactly, including the ADR-0019 argv[0] guard.
         // ---------------------------------------------------------------
         #[test]
         fn raw_exec_deny_beats_allow(argv in arb_argv_with_secret()) {
@@ -2679,18 +3218,51 @@ deny = ["--force", "\\brm\\b"]
             let decision = policy.evaluate_raw_exec(&argv);
 
             if argv.is_empty() {
-                // Empty argv rule (policy.rs:806): always denied, before any
-                // allow/deny pattern is even consulted.
+                // Empty argv rule: always denied, before any allow/deny
+                // pattern is even consulted.
                 let is_deny = matches!(decision, Decision::Deny { .. });
                 prop_assert!(is_deny, "empty argv must always be denied");
             } else {
+                // Mirrors the engine's order exactly: deny pass, then the
+                // ADR-0019 argv[0] guard, then the allow pass.
+                //
                 // "secret" is a literal regex, so is_match <=> contains; deny
-                // is tested against the joined string OR any element.
+                // is tested against the joined string, any raw element, OR any
+                // canonical element (ADR-0019 — for a substring pattern this
+                // third disjunct is implied by the joined one, since every
+                // canonical element is a substring of the joined string; it is
+                // spelled out so the oracle mirrors the engine's three
+                // disjuncts rather than a simplification of them).
                 let joined = argv.join(" ");
-                let hits = joined.contains("secret") || argv.iter().any(|a| a.contains("secret"));
+                let hits = joined.contains("secret")
+                    || argv.iter().any(|a| a.contains("secret"))
+                    || joined.split_whitespace().any(|c| c.contains("secret"));
+                // The guard: argv[0] must be exactly one non-empty program
+                // token. `arb_argv_elem()` is full-Unicode and 0-8 chars, so it
+                // generates both empty and whitespace-bearing argv[0] regularly.
+                let guarded = argv[0].is_empty() || argv[0].chars().any(char::is_whitespace);
                 if hits {
-                    let is_deny = matches!(decision, Decision::Deny { .. });
-                    prop_assert!(is_deny, "argv containing 'secret' must be denied despite the .* allow");
+                    // Deny-beats-allow AND deny-beats-guard: a deny pattern
+                    // keeps its attribution even when the guard would also fire.
+                    let attributed = matches!(
+                        decision,
+                        Decision::Deny { rule: Some(Rule::RawExecDeny { .. }), .. }
+                    );
+                    prop_assert!(
+                        attributed,
+                        "argv containing 'secret' must be denied by the deny pattern, with the \
+                         pattern attributed, despite the .* allow (and despite the argv[0] guard)"
+                    );
+                } else if guarded {
+                    let is_guard_deny = matches!(
+                        &decision,
+                        Decision::Deny { rule: None, reason } if reason.contains("argv[0]")
+                    );
+                    prop_assert!(
+                        is_guard_deny,
+                        "an empty or whitespace-bearing argv[0] with no deny hit must be refused \
+                         by the ADR-0019 guard"
+                    );
                 } else {
                     let is_allow = matches!(decision, Decision::Allow(_));
                     prop_assert!(is_allow, "argv not containing 'secret' must be allowed by .*");

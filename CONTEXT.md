@@ -57,6 +57,22 @@ relay-daemon, queryable by the Relay, never changeable over the wire. The last l
 of defense.
 _Avoid_: ACL, ruleset, permissions
 
+**Canonical form**:
+The single normalized spelling a value is reduced to — or required to already be in —
+before Policy matches it, so that one thing has one representation an operator's rules can
+be written against. Two instances today, both deny-side and both purely lexical (no I/O):
+a **path argument** must already be in canonical form — absolute, no `.`, `..`, or empty
+segment, no trailing slash — or Policy denies it (ADR-0018); and a Raw Exec command's
+**canonical elements** are `argv.join(" ")` re-split on whitespace, which the deny pass
+matches in addition to the joined command and the raw argv elements (ADR-0019).
+Canonicalization never widens an allow. What each folds is specific to it: the **path**
+rule folds `.`, `..` and `//` (and, at the executor, symlinks and `/proc` aliases), but
+never case and never Unicode normalization — `/etc/Shadow` is canonical form (ADR-0018);
+the **Raw Exec** split folds element boundaries using the Unicode `White_Space` definition,
+so a tab or an NBSP separates canonical elements exactly like an ASCII space (ADR-0019).
+_Avoid_: normalized form, sanitizing, cleaning (and don't say "canonical" for the
+*joined* Raw Exec command — that is the joined form)
+
 **Job**:
 A single dispatch of an Operation or Raw Exec across the Nodes matched by a Selector.
 Comprises one Task per matched Node and is the unit of audit and blast-radius control.
