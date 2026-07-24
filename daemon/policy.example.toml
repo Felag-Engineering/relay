@@ -80,6 +80,11 @@ allowed_args = [["nginx", "curl"], ["*"]]
 # ---------------------------------------------------------------------------
 
 # Deny `file.read /etc/shadow` even though [[operation]] file.read allows "*".
+# Path denies are matched in CANONICAL FORM (ADR-0018): a non-canonical spelling
+# of the same file (/etc/../etc/shadow, //etc/shadow, /etc/shadow/, ...) is
+# itself denied, and the daemon re-checks the RESOLVED target it actually opens,
+# so a symlink or /proc/self/root/... alias to /etc/shadow is denied too. Write
+# the deny in canonical form, as below.
 [[deny]]
 name = "file.read"
 args = [["/etc/shadow"]]

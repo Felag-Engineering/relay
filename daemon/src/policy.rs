@@ -703,6 +703,36 @@ impl Policy {
     ///    and all positions satisfied (or `"*"` wildcard) → `Allow`.
     /// 3. **Deny-by-default** — no rule matched → `Deny{rule: None}`.
     pub fn evaluate(&self, operation_name: &str, args: &[String]) -> Decision {
+        // --- 0. Path-argument canonical-form precondition (ADR-0018) --------
+        // `file.read`'s `path` is the only path-typed argument today. A path
+        // argument must be in strict canonical form, else Deny (fail closed):
+        // this makes an exact-string path deny (e.g. `/etc/shadow`) hold
+        // against lexical evasions like `/etc/../etc/shadow` or `//etc/shadow`.
+        // Pure lexical test, no I/O — does NOT fold case/Unicode (ADR-0018
+        // records that as a narrow residual). The executor additionally
+        // re-checks the *resolved* target for `/proc`-magic and symlink
+        // evasions that are canonical in form (ADR-0018 layer 2).
+        if operation_name == operations::FILE_READ {
+            if let Some(path) = args.first() {
+                let canonical = path == "/"
+                    || (path.starts_with('/')
+                        && !path.ends_with('/')
+                        && !path
+                            .split('/')
+                            .skip(1)
+                            .any(|seg| seg.is_empty() || seg == "." || seg == ".."));
+                if !canonical {
+                    return Decision::Deny {
+                        reason: format!(
+                            "path argument {path:?} is not in canonical form (ADR-0018): must \
+                             be absolute with no '.', '..', '//', or trailing-slash segment"
+                        ),
+                        rule: None,
+                    };
+                }
+            }
+        }
+
         // --- 1. Deny pass (deny-beats-allow, evaluated first) ---------------
         for deny_rule in &self.denies {
             if deny_rule.name != operation_name {
@@ -2234,8 +2264,8 @@ mod raw_exec_redteam {
     }
 
     // -------------------------------------------------------------------
-    // Confirmed bypass, filed as finding #236 — exact-string [[deny]] for
-    // file.read /etc/shadow is evaded by any non-canonical path spelling.
+    // Finding #236 — exact-string [[deny]] for file.read /etc/shadow evaded
+    // by any non-canonical path spelling — RESOLVED by ADR-0018.
     // -------------------------------------------------------------------
     //
     // Root cause: `Policy::evaluate`'s deny pass compares each argument by
@@ -2248,55 +2278,59 @@ mod raw_exec_redteam {
     // has already been evaded. So every alternate spelling of /etc/shadow
     // slips the exact-string deny and is admitted by the `["*"]` allow.
     //
-    // Why committed-but-ignored: closing this is a Policy-EVALUATION
-    // semantics change (canonicalize-before-eval, fail-closed on
-    // non-canonical, or a typed prefix path matcher), which is ADR-gated
-    // (ADR-0001, ADR-0002) and out of scope for a red-team harness issue —
-    // do NOT change `evaluate` here.
+    // RESOLVED by ADR-0018: `Policy::evaluate` now fail-closes on a
+    // non-canonical `file.read` path (layer 1) and the executor re-checks the
+    // resolved target off the open descriptor (layer 2). This test was
+    // `#[ignore]`d while the finding was open; it now pins the layer-1 fix.
     //
     // Symlink / bind-mount / Unicode-normalization siblings: at the Policy
     // string layer a symlink or bind-mount alias is simply a DIFFERENT
     // literal the deny does not list — the SAME root cause — but only fully
     // demonstrable through the executor against a real filesystem (out of
     // scope here, confined to policy.rs). They are documented here and in
-    // finding #236, not asserted as string-layer rows. The "/etc/Shadow"
-    // case row below is included as fs-normalization-dependent: its
+    // finding #236, not asserted as string-layer rows. `/etc/Shadow`
+    // (case/Unicode) is canonical *form* and fs-fold-dependent: its
     // desired=Deny only holds on a case-folding/normalizing mount, and
-    // canonicalize-alone would NOT close it (or any Unicode-fold sibling) —
-    // canonicalize only folds `..`/`.`/`//`/symlinks, not case or Unicode
-    // normalization. This is relevant to weighing the fix directions in the
-    // finding.
+    // canonical-form matching (like canonicalize) folds `..`/`.`/`//`/symlinks
+    // but never case or Unicode. ADR-0018 records it as a narrow residual, so
+    // it is not asserted here.
     #[test]
-    #[ignore = "finding #236: exact-string [[deny]] file.read /etc/shadow evaded by any non-canonical spelling (/etc/../etc/shadow, //etc/shadow, /etc//shadow, /etc/./shadow, /etc/shadow/, /proc/self/root/etc/shadow, /proc/<pid>/root/etc/shadow, case/Unicode); desired=Deny, current=Allow; fixing needs a Policy-semantics change gated on an ADR (ADR-0001/0002) — do NOT change evaluate here"]
-    fn exact_string_deny_evaded_by_noncanonical_path() {
-        const BYPASS_VARIANTS: &[(&str, &str)] = &[
+    fn noncanonical_path_denied_by_canonical_form_precondition() {
+        // Only the LEXICAL respellings — the ones the canonical-form
+        // precondition (ADR-0018 layer 1) closes at the Policy layer.
+        // `/proc/self/root/...`, `/proc/<pid>/root/...`, and symlinks are
+        // canonical *form* and are closed by the executor re-checking the
+        // resolved target (ADR-0018 layer 2 — see operations/file_read.rs
+        // `resolved_target_recheck_*` tests). `/etc/Shadow` (case/Unicode) is
+        // canonical form and fs-fold-dependent; ADR-0018 records it as a
+        // narrow residual, so it is not asserted here.
+        const LEXICAL_EVASIONS: &[(&str, &str)] = &[
             ("/etc/../etc/shadow", "parent-dir traversal"),
             ("//etc/shadow", "doubled leading slash"),
             ("/etc//shadow", "doubled interior slash"),
             ("/etc/./shadow", "dot segment"),
-            (
-                "/etc/shadow/",
-                "trailing slash (note: File::open on a regular file with a trailing \
-                 slash is ENOTDIR at the executor; kept as a string-layer evasion, \
-                 same normalization root cause)",
-            ),
-            ("/proc/self/root/etc/shadow", "/proc/self/root prefix"),
-            ("/proc/1/root/etc/shadow", "/proc/<pid>/root prefix"),
-            (
-                "/etc/Shadow",
-                "case variant — fs-normalization-dependent (see comment above)",
-            ),
+            ("/etc/shadow/", "trailing slash"),
         ];
 
         let policy = from_toml_str(FILE_READ_SHADOW_POLICY).expect("policy must parse");
-        for (path, why) in BYPASS_VARIANTS {
+        for (path, why) in LEXICAL_EVASIONS {
             let decision = policy.evaluate("file.read", &argv(&[path]));
             assert!(
                 matches!(decision, Decision::Deny { .. }),
-                "exact-string deny for /etc/shadow must not be evadable by {why} ({path:?}, \
-                 finding #236); got {decision:?}"
+                "non-canonical path must be denied by the canonical-form precondition \
+                 ({why}: {path:?}, finding #236 / ADR-0018); got {decision:?}"
             );
         }
+
+        // The canonical spelling stays denied — by its [[deny]] rule, proving
+        // the precondition does not shadow the real deny.
+        assert!(
+            matches!(
+                policy.evaluate("file.read", &argv(&["/etc/shadow"])),
+                Decision::Deny { .. }
+            ),
+            "canonical /etc/shadow must remain denied by its [[deny]] rule"
+        );
     }
 }
 
