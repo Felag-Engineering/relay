@@ -302,10 +302,12 @@ Nothing here is new surface — it is the last mile of the existing one.
 **Deliverables**
 - **Close the last known Raw Exec bypass** (#227 → #248): an anchored per-element deny is
   evadable by merging the denied token into an adjacent argv element, because argv element
-  boundaries are attacker-controlled and are not canonicalized before matching. Decide the
-  canonicalization rule, write the short ADR (the ADR-0018 precedent for `file.read` paths),
-  fix it, and turn the neighbouring shapes into regression tests. No known bypass may
-  survive into a milestone that ships binaries.
+  boundaries are attacker-controlled and are not canonicalized before matching. **Canonicalize
+  argv before the deny pass** (decided 2026-07-24, following the ADR-0018 precedent for
+  `file.read` paths): match deny patterns against the whitespace-split canonical elements as
+  well as the raw ones — strictly additive, so the change can only turn Allows into Denies.
+  Short ADR (0019), plus a guard on whitespace in `argv[0]` and the neighbouring shapes as
+  regression tests. No known bypass may survive into a milestone that ships binaries.
 - **Version identity on both binaries** (#249): the daemon has reported a hardcoded `0.0.1`
   since v0.0.1 and the Relay reports nothing at all — which makes the ADR-0014
   minimum-version dispatch gate (correct plumbing, fictional input) untruthful and a tagged
