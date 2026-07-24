@@ -118,8 +118,11 @@ the non-override rule is structural in both directions.
   security lane, without per-Node human label assignment.
 - **Accepted limitation:** a compromised Node can forge its own `node:` labels. Routine
   targeting accepts this; the security lane does not. Deeper hardening of node-origin label
-  trust (e.g. CM-signed node attributes) and the daemon's privilege model are deferred to a
-  pre-launch security pass.
+  trust (e.g. CM-signed node attributes) and the daemon's privilege model were deferred to a
+  pre-launch security pass. **Resolved (v0.0.8):** the node-origin label-trust question is
+  discharged by [ADR-0017](0017-node-origin-label-trust.md) — accepted for launch, with the
+  `relay:`-only security lane as the load-bearing control and CM-signed node attributes
+  shelved as a future option.
 
 ## History / superseded decisions
 
