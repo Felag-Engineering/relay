@@ -26,7 +26,7 @@ use crate::gen::{
     TaskResult,
 };
 use crate::operations;
-use crate::operations::file_read::file_read;
+use crate::operations::file_read::{file_read, PathCheck};
 use crate::operations::pkg_install::pkg_install;
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::operations::service_restart::service_restart;
@@ -386,7 +386,16 @@ where
                     // single-flight; move to spawn_blocking in v0.0.4
                     // (mirrors executor.rs:117-120).
                     let path = positional.first().map(String::as_str).unwrap_or("");
-                    file_read(&task_id, path, MAX_OUTPUT_BYTES)
+                    // ADR-0018 layer 2: file_read resolves the target it opens
+                    // and calls back here to re-evaluate Policy on the RESOLVED
+                    // path, closing `/proc`-magic and symlink evasions that are
+                    // canonical in form and so pass layer 1.
+                    file_read(&task_id, path, MAX_OUTPUT_BYTES, |resolved| {
+                        match policy.evaluate(operations::FILE_READ, &[resolved.to_string()]) {
+                            Decision::Deny { reason, .. } => PathCheck::Denied(reason),
+                            Decision::Allow(_) => PathCheck::Allowed,
+                        }
+                    })
                 }
                 operations::SERVICE_RESTART => {
                     let unit = positional.into_iter().next().unwrap_or_default();
