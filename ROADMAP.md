@@ -21,6 +21,12 @@ it realizes.
 > fleet management, never configuration management** — if Ansible could check it in
 > check-mode, it is out of realm.
 
+> **Added 2026-07-24:** **v0.0.9** (release readiness & residual hardening) between the
+> security pass and the beta — the v0.0.8 register's residuals plus the artifact/version
+> work `v0.1.0-beta` depends on, so the beta stays purely about proving the path on real
+> machines. Decision issues #135–#138 closed as discharged into the milestones above
+> (v0.8.0, v0.8.0, v0.4.0, v0.7.0 respectively).
+
 ---
 
 ## `v0.0.1` — Walking Skeleton ✅
@@ -282,6 +288,57 @@ pre-launch security pass" (node-origin label trust, the daemon privilege model).
 
 **ADRs:** discharges the ADR-0006 pre-launch-security-pass debt; may spawn new ADRs
 from findings.
+
+---
+
+## `v0.0.9` — Release Readiness & Residual Hardening
+
+The step between "the security pass is done" and "binaries go on machines that matter."
+v0.0.8 ended with a signed-off threat model and a residual-risk register; this milestone
+discharges what that register carried, and makes the build **publishable and
+identifiable** so `v0.1.0-beta` can be purely about proving the path on real hardware.
+Nothing here is new surface — it is the last mile of the existing one.
+
+**Deliverables**
+- **Close the last known Raw Exec bypass** (#227 → #248): an anchored per-element deny is
+  evadable by merging the denied token into an adjacent argv element, because argv element
+  boundaries are attacker-controlled and are not canonicalized before matching. Decide the
+  canonicalization rule, write the short ADR (the ADR-0018 precedent for `file.read` paths),
+  fix it, and turn the neighbouring shapes into regression tests. No known bypass may
+  survive into a milestone that ships binaries.
+- **Version identity on both binaries** (#249): the daemon has reported a hardcoded `0.0.1`
+  since v0.0.1 and the Relay reports nothing at all — which makes the ADR-0014
+  minimum-version dispatch gate (correct plumbing, fictional input) untruthful and a tagged
+  release unverifiable. Stamped builds, `--version`, fleet-visible version in the registry.
+- **CD: publish checksummed release artifacts on tag** (#44 → #250): static musl
+  `relay-daemon` + `relay`, `SHA256SUMS`, GitHub pre-release, and a documented
+  naming/pinning convention config management can pin against and **verify before install**.
+  Container images, SBOM, and cosign signing stay follow-ups (artifact signing revisits
+  alongside v0.8.0's key-custody work).
+- **Finish the fuzzing deliverable** (#238 → #252): nightly `cargo-fuzz` over the prost
+  decode surface — the untrusted-bytes entry point #218's stable-toolchain proptest suite
+  could not reach. Nightly-only; per-PR CI stays stable.
+- **Close the lint-gate hole** (#239 → #251): `cargo clippy` never compiled `#[cfg(test)]`
+  code, so lint findings in the daemon's test modules — where the Policy red-team harness
+  lives — were invisible to the merge gate.
+- **MCP result-shape legibility** (#207 → #253): `exit_code: -1` as a did-not-run sentinel,
+  an empty `job_id` on plan responses, and `allowed_args` mixing `null` with `[]`.
+  Legibility is security-relevant (ADR-0001/0003), not cosmetics.
+
+**Acceptance**
+- The #227 reproduction is denied, its neighbouring shapes are covered by tests, and the
+  register entry is discharged or explicitly narrowed.
+- Pushing a `v*` tag publishes verified, checksummed, self-identifying artifacts; a
+  digest mismatch fails the documented install path.
+- A daemon installed **from a published artifact** enrolls, connects over mTLS, is
+  dispatched to, enforces Policy, and is audited — across ≥2 Nodes; its true version drives
+  the `outdated` gate correctly (#254, the milestone gate).
+- `cargo clippy --all-targets -D warnings` is clean and gated; the nightly Rust fuzz job
+  runs bounded with a zero known-crash count.
+
+**ADRs:** new ADR (argv canonicalization for Raw Exec); 0014 (version gate, IaC-distributed
+upgrades), 0007 (static musl artifact), 0001/0002 (the gate being hardened), 0003 (MCP
+surface legibility). Discharges residuals from the v0.0.8 register.
 
 ---
 
