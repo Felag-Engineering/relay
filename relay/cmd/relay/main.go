@@ -31,6 +31,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/transport"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/version"
 	"google.golang.org/grpc"
 )
 
@@ -348,6 +349,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		Connected: conns.Count,
 		Nodes:     reg.Count,
 		Frozen:    func() (bool, error) { return st.Freeze().Frozen(context.Background()) },
+		// This binary's own build stamp (#249) — the composition root is the
+		// only place that knows it; internal/metrics never imports
+		// internal/version.
+		Build: metrics.BuildInfo{
+			Version:   version.Version,
+			Commit:    version.Commit,
+			BuildDate: version.BuildDate,
+		},
 	})
 
 	// Rehydrate the denylist from the persisted authority before the listener
@@ -525,6 +534,19 @@ func main() {
 		return
 	}
 
+	// `relay --version` prints the build stamp and exits (#249). Checked here,
+	// alongside hash-credential and before flag.Parse/parseConfig, because the
+	// flag package would otherwise reject it as an unknown flag: an operator
+	// must be able to identify a binary without a valid startup config.
+	//
+	// All three spellings are accepted, and relay-daemon accepts exactly the
+	// same three (daemon/src/main.rs) — the two binaries are operated together
+	// and must not disagree about how to ask them what they are.
+	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version" || os.Args[1] == "-V") {
+		fmt.Println(version.String())
+		return
+	}
+
 	cfg := parseConfig()
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -552,6 +574,9 @@ func main() {
 		os.Exit(1)
 	}
 	slog.Info("relay listening",
+		"version", version.Version,
+		"commit", version.Commit,
+		"build_date", version.BuildDate,
 		"addr", cfg.Addr,
 		"mtls", true,
 		"ca_dir", cfg.CADir,

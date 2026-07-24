@@ -1,6 +1,14 @@
 [package]
 name = "relay-daemon"
-version = "0.0.1"
+# The single source of the SEMANTIC version for both binaries (issue #249).
+# It names the release this working tree is developing toward; a build whose
+# HEAD is the clean, exact `v<this version>` tag reports exactly this string,
+# and every other build reports it as a `-dev` prerelease. `Hello.daemon_version`
+# is derived from it (src/version.rs) and is the input to the Relay's ADR-0014
+# minimum-version gate, so it must always be valid semver. Bump it to the next
+# release immediately after a release tag is cut — see
+# docs/operations/version-stamping.md.
+version = "0.0.9"
 edition = "2021"
 description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
 license = "Proprietary"

@@ -21,6 +21,7 @@ mod renew;
 mod scheduler;
 mod shutdown;
 mod tunnel;
+mod version;
 
 use cancel::CancelRegistry;
 use config::Config;
@@ -228,7 +229,11 @@ async fn run_tunnel(
         .send(DaemonMessage {
             body: Some(daemon_message::Body::Hello(Hello {
                 node_id: identity.node_id.clone(),
-                daemon_version: env!("CARGO_PKG_VERSION").to_string(),
+                // The build-stamped version (issue #249, ADR-0014): this is the
+                // sole input to the Relay's minimum-daemon-version dispatch
+                // gate, so it is always valid semver and always ordered
+                // truthfully against the release it precedes — see version.rs.
+                daemon_version: version::version().to_string(),
                 facts: Some(facts),
                 labels: enroll::node_labels_to_proto(&node_labels),
                 policy_fingerprint: policy.fingerprint().to_string(),
@@ -602,6 +607,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // dropped. `args.get(1)/.get(2)` (not direct indexing) keeps normal
     // `relay-daemon` startup (argv len == 1) panic-free.
     let args: Vec<String> = std::env::args().collect();
+
+    // `--version` is the same kind of fully offline, synchronous subcommand as
+    // `policy check` / `dump-operation-schema` below (issue #249): it prints
+    // the build stamp and exits, touching no Config, identity, network, or
+    // tracing. It is checked first so an operator can always identify a binary
+    // regardless of how the rest of the process would fail.
+    //
+    // The three accepted spellings are deliberately IDENTICAL to the Relay's
+    // (relay/cmd/relay/main.go): the two binaries are operated together, and an
+    // operator should never have to remember which one wants a single dash.
+    // `-version` is the Go `flag` package's idiom, `-V` the short form.
+    if matches!(
+        args.get(1).map(String::as_str),
+        Some("--version") | Some("-version") | Some("-V")
+    ) {
+        let code = version::run();
+        std::process::exit(code);
+    }
+
     if args.get(1).map(String::as_str) == Some("policy")
         && args.get(2).map(String::as_str) == Some("check")
     {
