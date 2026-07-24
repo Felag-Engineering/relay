@@ -186,3 +186,37 @@ func TestIncEnrollment(t *testing.T) {
 		t.Errorf("body missing relay_enrollments_total 3; body = %s", body)
 	}
 }
+
+// --------------------------------------------------------------------------
+// relay_build_info (#249)
+// --------------------------------------------------------------------------
+
+func TestHandler_BuildInfo(t *testing.T) {
+	m := New(GaugeSources{
+		Build: BuildInfo{Version: "0.0.9-dev+g0a0f22f03dcf", Commit: "0a0f22f03dcf", BuildDate: "2026-07-24"},
+	})
+	_, body := scrape(t, m)
+
+	wantLines := []string{
+		"# TYPE relay_build_info gauge",
+		`relay_build_info{version="0.0.9-dev+g0a0f22f03dcf",commit="0a0f22f03dcf",build_date="2026-07-24"} 1`,
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing line %q; body = %s", want, body)
+		}
+	}
+	// Exactly one series: build info is per-process, not per-anything-else.
+	if got := strings.Count(body, "relay_build_info{"); got != 1 {
+		t.Errorf("relay_build_info series count = %d, want 1; body = %s", got, body)
+	}
+}
+
+// An unset Build omits the metric entirely rather than exporting an empty
+// stamp — the same skip-when-absent rule the gauge closures follow.
+func TestHandler_BuildInfoOmittedWhenUnset(t *testing.T) {
+	_, body := scrape(t, New(GaugeSources{}))
+	if strings.Contains(body, "relay_build_info") {
+		t.Errorf("body must omit relay_build_info when Build is unset; body = %s", body)
+	}
+}

@@ -12,6 +12,37 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay
 
+## --- build stamping (issue #249, ADR-0014) ---
+# scripts/build-version.sh derives "<version> <commit> <build-date>" once per
+# make invocation. No tags, or no git at all, is a normal case there, not an
+# error: it still yields valid semver ("<base>-dev"). The version's semantic
+# part comes from daemon/Cargo.toml, so both binaries carry the same version by
+# construction. See docs/operations/version-stamping.md.
+#
+# The relay-daemon stamp is a cargo build-script input (daemon/build.rs), so a
+# changed stamp correctly recompiles the daemon crate — which also means the
+# unstamped `test-daemon`/`lint-daemon` targets recompile it once after a
+# stamped `build-daemon`. That churn is deliberate: it keeps the stamp honest
+# and leaves `cargo test` exercising the unstamped fallback path.
+#
+# The $(or ...) fallbacks cover only the case where the script produced nothing
+# at all (unreadable Cargo.toml, no bash). They are exactly the compiled-in
+# unstamped defaults of relay/internal/version, so a broken stamp degrades to an
+# honest "this build is unidentified" rather than to a blank or fake version;
+# 0.0.0-unknown is valid semver and sorts below every real release.
+BUILD_STAMP    := $(shell bash scripts/build-version.sh)
+BUILD_VERSION  := $(or $(word 1,$(BUILD_STAMP)),0.0.0-unknown)
+BUILD_COMMIT   := $(or $(word 2,$(BUILD_STAMP)),unknown)
+BUILD_DATE     := $(or $(word 3,$(BUILD_STAMP)),unknown)
+
+VERSION_PKG := github.com/Felag-Engineering/gleipnir-relay/relay/internal/version
+GO_LDFLAGS  := -X $(VERSION_PKG).Version=$(BUILD_VERSION) \
+               -X $(VERSION_PKG).Commit=$(BUILD_COMMIT) \
+               -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+DAEMON_STAMP := RELAY_BUILD_VERSION=$(BUILD_VERSION) \
+                RELAY_BUILD_COMMIT=$(BUILD_COMMIT) \
+                RELAY_BUILD_DATE=$(BUILD_DATE)
+
 build: build-relay build-daemon
 
 test: test-relay test-daemon
@@ -52,7 +83,7 @@ proto-breaking:
 # Emit the actual `relay` binary (into the gitignored relay/bin/), not just a
 # compile check. `go build ./...` validates but produces no artifact.
 build-relay:
-	cd relay && go build -o bin/relay ./cmd/relay
+	cd relay && go build -ldflags "$(GO_LDFLAGS)" -o bin/relay ./cmd/relay
 
 test-relay:
 	cd relay && go test ./...
@@ -75,11 +106,11 @@ fmt: fmt-relay fmt-daemon
 
 ## --- relay-daemon (Rust) ---
 build-daemon:
-	cd daemon && cargo build
+	cd daemon && $(DAEMON_STAMP) cargo build
 
 # Release artifact for the fleet: small static musl binary (ADR-0007).
 build-daemon-release:
-	cd daemon && cargo build --release --target x86_64-unknown-linux-musl
+	cd daemon && $(DAEMON_STAMP) cargo build --release --target x86_64-unknown-linux-musl
 
 test-daemon:
 	cd daemon && cargo test

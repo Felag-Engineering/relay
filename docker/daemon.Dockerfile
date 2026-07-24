@@ -4,7 +4,16 @@
 # proto contract from ../proto relative to /daemon).
 #
 # There is no host Rust toolchain assumption: the daemon is compiled inside this
-# image as a musl static binary, mirroring the CI release-build job.
+# image as a musl static binary, using the same target as the CI release-build
+# job.
+#
+# NOT a release recipe. It deliberately does NOT build-stamp the binary (issue
+# #249): the build below sets no RELAY_BUILD_* variables, so the daemon in the
+# dev fleet reports the unstamped fallback (`<Cargo.toml version>-dev`, commit
+# and build date "unknown"), which is honest for a dev image and keeps that
+# fallback path exercised. A real release artifact must be produced by
+# `make build-daemon-release`, which derives and passes the stamp — see
+# docs/operations/version-stamping.md.
 
 # ---- build stage: compile the relay-daemon (Rust) as a musl static binary -----
 FROM rust:1-bookworm AS build
@@ -21,7 +30,9 @@ WORKDIR /src
 COPY proto/ ./proto/
 COPY daemon/ ./daemon/
 
-# Mirrors `make build-daemon-release` / the CI release-build job.
+# Same profile and target as `make build-daemon-release`, but intentionally
+# UNSTAMPED (see the header): no RELAY_BUILD_* here, so this is a dev-fleet
+# binary, not a release artifact.
 RUN cd daemon && cargo build --release --target x86_64-unknown-linux-musl
 
 # ---- final stage: minimal runtime image ---------------------------------------

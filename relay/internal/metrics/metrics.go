@@ -15,6 +15,14 @@
 // would be an unbounded-cardinality label and a secrets-in-metrics risk
 // (CLAUDE.md). This package has no execution capability: it only reads
 // gauge-source closures and formats counters (invariant #10).
+//
+// relay_build_info (#249) is the one metric with free-form label values. It is
+// still bounded: its labels are this process's own build stamp, fixed for the
+// process's lifetime, so the series cardinality is exactly one per running
+// Relay — the standard Prometheus build-info idiom. The values are injected by
+// the composition root (main.go passes internal/version's linker-set
+// variables), which is why this package still imports nothing but capability
+// and jobs.
 package metrics
 
 import (
@@ -51,6 +59,20 @@ type GaugeSources struct {
 	// root's closure supplies its own (main.go), keeping this seam as simple
 	// as Connected/Nodes.
 	Frozen func() (bool, error)
+	// Build is this Relay's build stamp (#249), rendered as the constant
+	// relay_build_info gauge. A value, not a closure: unlike the gauges above
+	// it never changes while the process runs. A zero Build (empty Version)
+	// omits the metric entirely, matching the nil-closure behaviour above.
+	Build BuildInfo
+}
+
+// BuildInfo is the Relay binary's build identity as exposed on /metrics. The
+// composition root fills it from internal/version; this package deliberately
+// does not import that package, so metrics stays a leaf of the control plane.
+type BuildInfo struct {
+	Version   string
+	Commit    string
+	BuildDate string
 }
 
 // outcomeLabel maps o to its Prometheus label value. Every named jobs.Outcome
@@ -177,6 +199,10 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 // logging at debug and omitting that gauge line rather than emitting a false
 // value.
 func (m *Metrics) appendGauges(buf []byte) []byte {
+	if m.src.Build.Version != "" {
+		buf = appendBuildInfo(buf, m.src.Build)
+	}
+
 	if m.src.Connected != nil {
 		buf = appendGauge(buf, "relay_nodes_connected",
 			"Number of Nodes with at least one live Tunnel stream.", int64(m.src.Connected()))
@@ -223,6 +249,18 @@ func appendRefusals(buf []byte, refusals *[nRefusalKinds]atomic.Int64) []byte {
 		buf = fmt.Appendf(buf, "relay_refusals_total{reason=%q} %d\n", refusalLabel(k), refusals[int(k)].Load())
 	}
 	return buf
+}
+
+// appendBuildInfo renders the constant relay_build_info series: always the
+// value 1, carrying this process's build stamp as labels (the standard
+// Prometheus build-info idiom — the labels are the payload). Label values go
+// through %q, the same escaping every other labelled series here uses.
+func appendBuildInfo(buf []byte, b BuildInfo) []byte {
+	buf = appendHelp(buf, "relay_build_info",
+		"Relay build identity; always 1, the build stamp is in the labels.")
+	buf = appendType(buf, "relay_build_info", "gauge")
+	return fmt.Appendf(buf, "relay_build_info{version=%q,commit=%q,build_date=%q} 1\n",
+		b.Version, b.Commit, b.BuildDate)
 }
 
 func appendGauge(buf []byte, name, help string, value int64) []byte {
