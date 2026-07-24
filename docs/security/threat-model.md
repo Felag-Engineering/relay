@@ -57,6 +57,14 @@ security-sensitive lane it would need to attract into or evade is Relay-set and 
 ([ADR-0002](../adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md),
 [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md), invariants #3, #7).
 
+**Recorded disposition (v0.0.8):** the forgeability of `node:` labels is **accepted for
+launch** by [ADR-0017](../adr/0017-node-origin-label-trust.md), which maps the forge-to-attract
+and forge-to-evade attacks to the lanes: both are blocked in the security lane (it targets
+`relay:`) and residual only in the routine lane, which is trusted as much as the Node by
+design. The pass verified the `relay:` namespace is structurally un-forgeable but the
+security lane's *use* of it is convention today; **#243** tracks making that structural when
+the security-lane actions are built.
+
 ### Stolen API credential
 
 **Assumed capabilities:** A valid API Token, usable at its Account's role.
@@ -121,7 +129,7 @@ primarily counters, and its residual risk.
 | #4 — At-most-once Task execution (dedup across reconnects) | [ADR-0004](../adr/0004-async-job-execution-model.md) | Relay ↔ relay-daemon | Network attacker | At-most-once is not exactly-once — a dropped Task may run zero times and is not auto-retried; dedup depends on the daemon retaining Task IDs. |
 | #5 — Blast-radius cap enforced on the Relay before dispatch | [ADR-0004](../adr/0004-async-job-execution-model.md) | AI-agent ↔ Relay | Jailbroken AI-agent (also Stolen API credential) | The cap is a Relay-side control, so a Malicious Relay is above it (which is why per-Node Policy still enforces); the cap value is operator config. |
 | #6 — mTLS everywhere; daemon refuses an untrusted Relay; Node identity = client cert | [ADR-0005](../adr/0005-grpc-bidi-over-mtls-transport.md), [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md) | Relay ↔ relay-daemon | Network attacker (also Malicious Relay) | mTLS authenticates the transport, not intent — an authenticated-but-hostile Relay is still distrusted (invariant #2/#3's job); a CA compromise breaks the trust root (see Enrollment ↔ CA). |
-| #7 — Two label namespaces (node:/relay:), each immutable from the other side | [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md) | Enrollment (certless) ↔ CA; Relay ↔ relay-daemon | Compromised Node | A Compromised Node freely forges its own node: labels, so routine node:-targeting trusts the Node only as much as the Node; the security-sensitive lane must target relay:. |
+| #7 — Two label namespaces (node:/relay:), each immutable from the other side | [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md), [ADR-0017](../adr/0017-node-origin-label-trust.md) | Enrollment (certless) ↔ CA; Relay ↔ relay-daemon | Compromised Node | A Compromised Node freely forges its own node: labels, so routine node:-targeting trusts the Node only as much as the Node; the security-sensitive lane must target relay:. Node-origin label trust is accepted for launch (ADR-0017); #243 tracks making the security lane's relay:-targeting structural. |
 | #8 — `/proto` is the single source of truth (wire protocol + Operation vocabulary) | [ADR-0007](../adr/0007-polyglot-rust-daemon-go-relay.md) | None as a runtime control — it defines what crosses Relay ↔ relay-daemon | None at runtime | Enforced at build time by CI (proto-check, proto-breaking), not by any runtime boundary; see Findings. |
 | #9 — System Model advisory; AI-immutable grounding facts; never desired-state, no auto-reconcile | [ADR-0008](../adr/0008-system-model-git-backed-semantic-graph.md) | AI-agent ↔ Relay | Jailbroken AI-agent | The AI-agent may still create/update Services/Dependencies/Annotations (audited via git provenance); a wrong-but-authorized model can mislead the AI-agent's own reasoning but never bypasses Selectors → Policy → blast cap. |
 | #10 — One capability layer, three thin surfaces; Console has no execution surface | [ADR-0009](../adr/0009-admin-console-web-ui.md), [ADR-0010](../adr/0010-control-api-and-account-model.md) | AI-agent ↔ Relay | Stolen API credential (also Jailbroken AI-agent) | Largely an internal-architecture invariant; its runtime teeth are the single AI-agent ↔ Relay gate and the Console's no-execution property. |
