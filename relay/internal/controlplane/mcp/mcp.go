@@ -181,7 +181,12 @@ func New(nodes NodeReader, policy PolicyReader, ops OperationLister, exec Execut
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results)
 
+	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
+	// the 2026-07-28 protocol only in stateless mode, and every tool here is
+	// already stateless request/response over shared backing stores — a Job ID
+	// is the durable handle, never an Mcp-Session-Id. Also removes the
+	// per-instance session map that would break behind a round-robin LB (#139).
 	return sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return srv
-	}, nil)
+	}, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 }
