@@ -30,21 +30,29 @@ Rules that override normal dashboard instincts:
    expand-on-demand ("10 allow · 1 deny · 1 offline") are the standard pattern; the
    disclosure ladder is count → segmented bar → groups → sampled members → full list only
    on explicit demand.
-3. **One decision per screen.** Decision surfaces (approval, execution) contain exactly one
+3. **The user's taxonomy is the organizing axis.** The customer already named their world
+   in their own labels (`env=prod`, `role=web`, `team=payments`); screens organize by
+   *those* names first. The server's internal machinery (enrollment state, certificate
+   fingerprints, tokens) is data on the row and an available grouping — never the default
+   frame. Two boundaries keep this honest: show only what the server truthfully knows
+   (connectivity, versions, config drift, command history — no CPU/latency/app-health,
+   this is not a monitoring product), and render groups as *observations*, never as
+   desired-vs-actual (no "expected 40, found 39, fix it" affordances).
+4. **One decision per screen.** Decision surfaces (approval, execution) contain exactly one
    primary action and nothing competing with it. No sidebars of stats, no secondary CTAs.
-4. **Two-lane identity grammar, used everywhere identically:** a **solid chip** = identity
+5. **Two-lane identity grammar, used everywhere identically:** a **solid chip** = identity
    verified by the server; an **outlined chip** = caller-asserted, unverified. These must
    never look equally authoritative.
-5. **Three label namespaces, visually distinct everywhere:** `node:` labels (set on the
+6. **Three label namespaces, visually distinct everywhere:** `node:` labels (set on the
    machine) and `tag:` labels (set by operators) are ordinary quiet chips, subtly
    differentiated; `relay:` labels are the security lane — visually weightier (filled,
    distinct hue, small lock glyph). A viewer must sense `relay:` means business.
-6. **Live but stable.** Counters and lists may update live; anything a human is reading to
+7. **Live but stable.** Counters and lists may update live; anything a human is reading to
    make a decision (an open approval card, a rendered plan) is pinned and never reflows.
-7. Layout skeleton: slim left nav (Fleet, Jobs, Approvals, Audit, Tokens, Accounts,
+8. Layout skeleton: slim left nav (Fleet, Jobs, Approvals, Audit, Tokens, Accounts,
    Lifecycle), full-width content, and a slot above content for the global Freeze banner
    (amber, unmissable, present on every screen when the fleet freeze is engaged).
-8. **No settings pages exist, ever.** Server configuration (blast caps, listeners, gates)
+9. **No settings pages exist, ever.** Server configuration (blast caps, listeners, gates)
    appears only as *effects in context* — a cap shown inside a plan line, an `outdated`
    flag on a row — never as an inventory of editable values.
 
@@ -52,27 +60,37 @@ Rules that override normal dashboard instincts:
 
 ## Screen 1 — Fleet view (the landing screen)
 
-A live registry of all Nodes, built as three stacked layers. Eyes-only in phase one: no
-action buttons on rows (phase two adds exactly one action: bulk-apply a `tag:` label to
-the current filter result).
+The user's whole fleet, organized by *their* names — group-by-first, not a raw registry
+table. Eyes-only in phase one: no action buttons on rows (phase two adds exactly one
+action: bulk-apply a `tag:` label to the current filter result).
 
-- **Top: filter + facts.** A single search box whose query language is the same Selector
-  syntax used to target commands (browsing trains targeting). Beside or beneath it, a slim
-  facet rail: OS, daemon version, labels, liveness — each facet showing its value
-  distribution as counts ("1.4.2 — 9,990 · 1.3.9 — 10"); clicking a value filters. The
-  facets are the summary statistics.
-- **Middle: the pixel wall.** The whole (filtered) fleet as a grid of tiny colored cells,
-  one per Node — 10,000 fit on one screen; the lone amber cell is findable with zero
+- **Top bar: view controls.** A search box whose query language is the same Selector
+  syntax used to target commands (browsing trains targeting) · a **"Group by"** control
+  accepting any label key (`env`, `role`, `team`…) · a **saved-views** switcher. Landing
+  is the signed-in user's default saved view (their filter + grouping — "my slice"), not
+  the global registry; the global everything-view is just another view.
+- **Grouped state (the default): rollup cards.** One calm card per value of the grouping
+  key, headlined with the user's own name for it: "**prod** · 4,012 nodes · 3 offline ·
+  12 outdated". Healthy groups compress to a single line; only deviating groups show
+  detail. Opening a card reveals the layers below, scoped to that group. "Group by
+  nothing" degrades to the flat machinery view.
+- **Inside a group (or ungrouped): the pixel wall.** The group's Nodes as a grid of tiny
+  colored cells — 10,000 fit on one screen; the lone amber cell is findable with zero
   reading. Click a cell to jump to that Node.
-- **Bottom: the deviation table.** Compact rows (~40px), sorted **anomaly-first** (by
-  rarity/deviation, never alphabetical — the weird Node is row one). Columns: liveness dot
-  + name · label chips (three namespaces per rule 5) · facts summary (OS, daemon version)
-  · Policy fingerprint (short mono hash) with an `outdated` tag when stale · last seen.
-- A quiet "since you last looked" delta line under the top bar: "2 enrolled · 1 went
-  offline · 3 became outdated."
+- **Below it: facets + the deviation table.** A slim facet rail (OS, daemon version,
+  labels, liveness) showing value distributions as counts ("1.4.2 — 9,990 · 1.3.9 — 10");
+  clicking filters. The table: compact rows (~40px), sorted **anomaly-first** (by
+  rarity/deviation, never alphabetical — the weird Node is row one). Columns: liveness
+  dot + name · label chips (three namespaces per rule 6) · facts summary · Policy
+  fingerprint (short mono hash) with an `outdated` tag when stale · last seen.
+- A quiet "since you last looked" delta line under the top bar, **scoped to the current
+  view**: "2 enrolled · 1 went offline · 3 became outdated."
 - Node detail (linked from a row): facts panel, cert/enrollment info, effective-Policy
   viewer (read-only), recent Tasks, and pin-to-compare (2–3 Nodes side-by-side diff of
   facts/Policy).
+- **Forward socket:** design the rollup card so a future named, shared, described group
+  (a "Service" from the post-1.0 semantic model) is the same card with a richer source —
+  a data upgrade, not a redesign.
 
 ## Screen 2 — Job detail (grouped outcomes)
 

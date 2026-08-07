@@ -48,15 +48,16 @@ monitoring phase (v0.6.0), so it is built once, first.
 
 **v0.6.0 — Monitoring (eyes only; zero mutating routes)**
 - Login (password; OIDC later).
-- Fleet view: live registry — liveness, facts summary, `node:`/`tag:`/`relay:` labels
-  (the three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` is the
-  security lane and must read as such), Policy + template-set fingerprints, `outdated`
-  flags.
+- Fleet view: live registry, **group-by-first** (see Organizing principle) — group by any
+  label key with rollup cards; per-Account saved views (landing = the operator's slice);
+  view-scoped delta lane; liveness, facts summary, `node:`/`tag:`/`relay:` labels (the
+  three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` is the security
+  lane and must read as such), Policy + template-set fingerprints, `outdated` flags.
 - Node detail: facts, effective Policy (rendered from `policyview`), template
   vocabulary, cert/enrollment info, recent Tasks.
 - Jobs: list + detail — per-Node outcomes with the full outcome vocabulary
   (`success / denied(rule) / unreachable / unsupported / cancelled / timeout`) grouped,
-  not listed.
+  not listed; list filterable to "Jobs that touched my current fleet view".
 - Audit trail: filterable; verified/asserted lanes distinct (below).
 - Approval queue, **read-only**: pending approvals with their Plans and quorum state.
 - Enrollment Token inventory, CA/cert lifecycle, Freeze state (global banner on every
@@ -113,6 +114,30 @@ the layout anticipates histogram-by-output so v0.9.0 slots into the same compone
 **Live-but-stable:** SSE updates must never reflow content under a cursor mid-decision.
 Approval cards and rendered Plans are pinned once open; liveness is for lists and
 counters, not for the thing being read.
+
+## Organizing principle: Relay-centric data, user-centric organization
+
+The Console shows the operator *their* fleet, not Relay's bookkeeping. The facts on
+screen are necessarily Relay's — liveness, versions, Policy drift, Job history — but the
+*structure* of every screen comes from the customer's own taxonomy: their `node:` labels
+(written in their IaC), their `tag:` labels (ADR-0020). Concretely:
+
+- **Group-by-first fleet view**: group by any label key; the user's names (`prod`,
+  `payments`, `web`) become the headline structure as rollup cards ("prod · 4,012 nodes ·
+  3 offline · 12 outdated"); Relay's machinery view is just "group by nothing".
+- **Saved views per Account**: landing is the operator's slice (filter + grouping), not
+  the global registry; the "since you last looked" delta lane scopes to the current view.
+- **Jobs mirror it**: the Jobs list filters to "Jobs that touched my view", not only the
+  global stream.
+- **System Model socket**: the rollup-card/group component is designed so a post-1.0
+  Service (ADR-0008, v1.1.0) is just a named, shared group with provenance — the semantic
+  layer arrives as a data upgrade, not a redesign.
+
+Two boundaries keep this honest. (1) **No health theater**: rollups say
+offline/outdated/quarantined — connection and lifecycle truth Relay actually knows —
+never CPU, latency, or app health; the Console must not imitate a monitoring product.
+(2) **Observations, never desired state**: a group card never grows "expected N / found
+M / reconcile" affordances — Relay does not auto-reconcile (invariant #9).
 
 ## Fleet-scale display patterns (legible at 10 and at 10,000 Nodes)
 

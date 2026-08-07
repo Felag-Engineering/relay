@@ -20,6 +20,7 @@ Console milestones are sequenced by real dependencies rather than optimism.
 | **Approval queue** | pending-approval Job state + decision endpoint | ❌ = the Approval Callout milestone ([2/6], [3/6]) |
 | **Browser security** (CSRF tokens, CSP, cookie sessions) | new middleware | ❌ bearer-token-only today; #264 puts XSS/CSRF on the most dangerous path |
 | Large-fleet result rendering | aggregation/histogram primitive | ❌ deferred (read-lane milestone); paginate short-term |
+| Saved views + group-by fleet view (`ui-advisory.md` Organizing principle) | per-Account view persistence (small preference store keyed to Accounts) | ❌ depends on Accounts; group-by itself is a pure read over existing registry labels |
 | Label management: `relay:` quarantine lane + `tag:` grouping (ADR-0020) | capability + API endpoints — one mechanism, two authz tiers (`admin`+step-up / `operator`) | ❌ labels set only via token scope at enrollment; scheduled v0.7.0 |
 
 ## Planning consequences
