@@ -217,10 +217,33 @@ func truncateOutput(b []byte) (string, bool) {
 	return string(b[:maxRenderedOutputBytes]), true
 }
 
+// exitCodePtr returns the exit_code to render for task, or nil when no real
+// process exit status exists — the #207/#253 did-not-run disambiguation (see
+// PerNodeResult's doc comment). A real status exists only when the Task
+// actually resolved as success/failure AND the daemon reported a non-negative
+// code: the daemon uses -1 exclusively as its "no exit status" sentinel
+// (spawn failure, wait failure, signal-kill, timeout/cancel kill,
+// denied-before-spawn — a real Unix exit status is always 0-255), and
+// Relay-synthesized outcomes (unreachable, version_refused) never carry one
+// at all, only a zero value. This is pure presentation — the stored
+// jobs.Task and the wire contract (/proto) are untouched.
+func exitCodePtr(task jobs.Task) *int32 {
+	switch task.Outcome {
+	case jobs.OutcomeSuccess, jobs.OutcomeFailure:
+		if task.ExitCode >= 0 {
+			code := task.ExitCode
+			return &code
+		}
+	}
+	return nil
+}
+
 // perNodeResultFromTask renders one jobs.Task as a PerNodeResult.
 // DurationMS is 0 when the Task was never dispatched (DispatchedAt zero —
 // e.g. OutcomeUnreachable/an offline Node, or a Pending Task cancelled
 // before it was ever sent), never a fabricated negative/huge value.
+// ExitCode is omitted whenever no real process exit status exists — see
+// exitCodePtr.
 func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 	stdout, stdoutTruncated := truncateOutput(task.Stdout)
 	stderr, stderrTruncated := truncateOutput(task.Stderr)
@@ -233,7 +256,7 @@ func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 	return PerNodeResult{
 		NodeID:          task.NodeID,
 		Outcome:         outcomeString(task.Outcome),
-		ExitCode:        task.ExitCode,
+		ExitCode:        exitCodePtr(task),
 		Stdout:          stdout,
 		Stderr:          stderr,
 		StdoutTruncated: stdoutTruncated,
@@ -386,6 +409,18 @@ const planModeClause = "Plan mode — the no-execution preview of whether each N
 	"the action (ADR-0011) — is the sanctioned probe before mutating; prefer it over learning Policy " +
 	"boundaries by triggering real executions."
 
+// resultShapeClause is the SINGLE, IDENTICAL result-shape contract sentence
+// shared by run_operation's and raw_exec's Description (#207/#253, mirroring
+// planModeClause's pattern): both tools render the same RunOrPlanOutput, so
+// the documented job_id/exit_code presence semantics must be stated once and
+// never drift between the two.
+const resultShapeClause = "Result shape: per-Node exit_code is present only when a process actually ran and " +
+	"exited with a status — a Task that never executed (denied_by_policy, unreachable, version_refused) or " +
+	"was killed without one (timeout, cancelled, spawn failure) has no exit_code key at all, and outcome is " +
+	"the authoritative state. job_id is present only when a Job was created; it is absent on plan=true " +
+	"responses (a Plan executes nothing) and zero-match dispatches, so an absent job_id always means " +
+	"nothing was dispatched."
+
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build
 // the Action -> requirePrincipal -> branch on plan -> render. Neither
@@ -411,7 +446,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			planModeClause + " If a result comes back outcome=denied_by_policy, call describe_node to see the " +
 			"Node's effective Policy and narrow your request rather than guessing again. Blocks until every " +
 			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
-			"get_job re-reads the same Job later.",
+			"get_job re-reads the same Job later. " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[runOperationInput](),
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
@@ -435,7 +470,9 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			if err != nil {
 				return nil, RunOrPlanOutput{}, err
 			}
-			return nil, RunOrPlanOutput{Plan: &plan}, nil
+			// JobID stays absent (a Plan creates no Job) and Results stays an
+			// empty array, never null — #207/#253, see RunOrPlanOutput.
+			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
@@ -454,7 +491,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"regardless of what argv does — raw_exec always takes the strict mutate-cap, even for a " +
 			"read-only-looking command. argv runs verbatim — no shell, no client-side splitting — and the " +
 			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
-			"outcome=denied_by_policy). " + planModeClause,
+			"outcome=denied_by_policy). " + planModeClause + " " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[rawExecInput](),
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
@@ -486,7 +523,9 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			if err != nil {
 				return nil, RunOrPlanOutput{}, err
 			}
-			return nil, RunOrPlanOutput{Plan: &plan}, nil
+			// JobID stays absent (a Plan creates no Job) and Results stays an
+			// empty array, never null — #207/#253, see RunOrPlanOutput.
+			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
 		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)

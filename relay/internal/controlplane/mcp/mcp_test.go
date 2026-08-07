@@ -183,6 +183,10 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		PolicyFingerprint: "sha256:node-a-fingerprint",
 		OperationRules: []policyview.OperationRule{
 			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+			// A zero-arg Operation's rule arrives with nil AllowedArgs (proto
+			// empty repeated field) — describe_node must render it as [] and
+			// never null (#207/#253).
+			{Name: "system.facts", AllowedArgs: nil},
 		},
 		DenyRules: []policyview.DenyRule{
 			{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
@@ -283,8 +287,10 @@ func callTool(t *testing.T, session *sdkmcp.ClientSession, name string, args map
 	return res
 }
 
-// decodeResult unmarshals a successful CallToolResult's text content into out.
-func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
+// resultText returns a successful CallToolResult's raw JSON text — for
+// asserting the EMITTED wire shape (key presence/absence, null vs []) that
+// a struct round-trip would mask (#207/#253).
+func resultText(t *testing.T, res *sdkmcp.CallToolResult) string {
 	t.Helper()
 	if res.IsError {
 		t.Fatalf("tool call returned IsError=true unexpectedly; content = %+v", res.Content)
@@ -296,8 +302,15 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 	if !ok {
 		t.Fatalf("CallToolResult.Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
 	}
-	if err := json.Unmarshal([]byte(tc.Text), out); err != nil {
-		t.Fatalf("json.Unmarshal(%q): %v", tc.Text, err)
+	return tc.Text
+}
+
+// decodeResult unmarshals a successful CallToolResult's text content into out.
+func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
+	t.Helper()
+	text := resultText(t, res)
+	if err := json.Unmarshal([]byte(text), out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", text, err)
 	}
 }
 
@@ -468,12 +481,25 @@ func TestMCP_DescribeNode(t *testing.T) {
 		}
 		// DoD (#187): describe_node must show the per-Operation allowed-arg
 		// rule and the explicit deny rule, verbatim from the daemon's Policy.
+		// The zero-arg system.facts rule decodes as a non-nil empty slice —
+		// its allowed_args were emitted as [], never null (#207/#253).
 		wantOperationRules := []mcp.OperationRuleOutput{
 			{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+			{Name: "system.facts", AllowedArgs: [][]string{}},
 		}
 		if !reflect.DeepEqual(out.EffectivePolicy.OperationRules, wantOperationRules) {
 			t.Errorf("EffectivePolicy.OperationRules = %+v, want %+v",
 				out.EffectivePolicy.OperationRules, wantOperationRules)
+		}
+		// Assert the emitted JSON, not just the decoded struct: a zero-arg
+		// rule renders "allowed_args":[] and no "allowed_args":null appears
+		// anywhere in the response (#207/#253).
+		text := resultText(t, res)
+		if !strings.Contains(text, `"allowed_args":[]`) {
+			t.Errorf("describe_node JSON = %s, want it to contain %q (the zero-arg system.facts rule)", text, `"allowed_args":[]`)
+		}
+		if strings.Contains(text, `"allowed_args":null`) {
+			t.Errorf("describe_node JSON = %s, must never contain %q", text, `"allowed_args":null`)
 		}
 		wantDenyRules := []mcp.DenyRuleOutput{
 			{Name: "file.read", Args: [][]string{{"/etc/shadow"}}},
@@ -503,6 +529,13 @@ func TestMCP_DescribeNode(t *testing.T) {
 		if len(out.EffectivePolicy.OperationRules) != 0 || len(out.EffectivePolicy.DenyRules) != 0 {
 			t.Errorf("EffectivePolicy.OperationRules/DenyRules = %+v/%+v, want both empty (Reported=false)",
 				out.EffectivePolicy.OperationRules, out.EffectivePolicy.DenyRules)
+		}
+		// The emitted JSON must carry empty ARRAYS, never null (#207/#253):
+		// reported=false is the only "no Policy data yet" signal.
+		text := resultText(t, res)
+		if !strings.Contains(text, `"operation_rules":[]`) || !strings.Contains(text, `"deny_rules":[]`) {
+			t.Errorf("describe_node (reported=false) JSON = %s, want it to contain %q and %q — arrays, never null",
+				text, `"operation_rules":[]`, `"deny_rules":[]`)
 		}
 	})
 

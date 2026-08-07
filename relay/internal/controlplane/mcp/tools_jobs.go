@@ -61,7 +61,9 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 		Description: "Re-read a Job's per-Node results by id — the result-retrieval/polling shape for a " +
 			"Job started via run_operation/raw_exec (which already block and return full results; " +
 			"get_job re-reads the same Job later, e.g. after cancel_job, or to check on a still-in-flight " +
-			"Job from a second call).",
+			"Job from a second call). Per-Node exit_code is present only when a process actually ran and " +
+			"exited with a status; a Task that never executed or was killed without one has no exit_code " +
+			"key — outcome is the authoritative state.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, ExecutionOutput, error) {
 		logPrincipal(ctx, "get_job")
 

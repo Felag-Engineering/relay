@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -305,6 +306,47 @@ func TestMCP_RawExec_AllowedVsDenied_ThenStructuredSucceeds(t *testing.T) {
 		if r.Outcome != "success" {
 			t.Errorf("run_operation (typed path) node %s outcome = %q, want success", r.NodeID, r.Outcome)
 		}
+	}
+}
+
+// TestMCP_ExitCode_OmittedWhenNoProcessRan is #207/#253 item 1 end to end:
+// through the real tool pipeline, a Node whose Task actually ran and exited
+// renders an exit_code, while a Node whose Task was denied by Policy — which
+// the daemon reports with its -1 "no exit status" sentinel — renders NO
+// exit_code key at all. The two states must be distinguishable from the
+// emitted JSON alone, without special-casing a magic -1.
+func TestMCP_ExitCode_OmittedWhenNoProcessRan(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0}
+	// The daemon reports a Policy refusal with its exit_code -1 sentinel —
+	// exactly the wire value #207 found ambiguous.
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte("no allow rule matched")}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/usr/bin/systemctl", "restart", "nginx"}})
+
+	var out struct {
+		Results []map[string]json.RawMessage `json:"results"`
+	}
+	decodeResult(t, res, &out)
+	if len(out.Results) != 2 {
+		t.Fatalf("raw_exec: got %d results, want 2", len(out.Results))
+	}
+	byNode := map[string]map[string]json.RawMessage{}
+	for _, r := range out.Results {
+		var nodeID string
+		if err := json.Unmarshal(r["node_id"], &nodeID); err != nil {
+			t.Fatalf("unmarshal node_id: %v", err)
+		}
+		byNode[nodeID] = r
+	}
+
+	if got, present := byNode[ts.nodeA]["exit_code"]; !present || string(got) != "0" {
+		t.Errorf("node %s (ran, exited 0): exit_code = %s (present=%t), want 0 present", ts.nodeA, got, present)
+	}
+	if got, present := byNode[ts.nodeB]["exit_code"]; present {
+		t.Errorf("node %s (denied_by_policy, never ran): exit_code = %s, want NO exit_code key — outcome is the authoritative state", ts.nodeB, got)
 	}
 }
 
