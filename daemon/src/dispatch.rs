@@ -705,7 +705,7 @@ allowed_args = [["*"]]
         let tmp = TempFile::new("content", content);
         let task = make_task_file_read("t-file-read", &tmp.path_str());
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
 
         assert_eq!(result.task_id, "t-file-read");
         assert_eq!(
@@ -739,7 +739,7 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/echo".to_string(), "hello".to_string()],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
 
         assert_eq!(result.outcome, Outcome::Success as i32);
         assert_eq!(result.stdout, b"hello\n");
@@ -781,7 +781,7 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/sh".to_string(), "-c".to_string(), cmd],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
 
         assert_eq!(
             result.outcome,
@@ -1011,7 +1011,7 @@ allow = ["^/bin/echo hello$"]
             ],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
 
         assert_eq!(
             result.outcome,
@@ -1045,7 +1045,7 @@ allowed_args = []
         .expect("parse policy");
 
         let task = make_task_system_facts("t-facts");
-        let result = dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), None).await;
+        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
 
         assert_eq!(
             result.outcome,
@@ -1274,8 +1274,7 @@ deny = ["secret"]
 
         for case in &cases {
             let verdict = evaluate_policy_query(&case.query, &policy);
-            let result =
-                dispatch_with_runner(&case.task, &policy, &dedup, fake_run.clone(), None).await;
+            let result = dispatch_with_runner(&case.task, &policy, &dedup, fake_run, None).await;
 
             // Core assertion: verdict matches execution outcome.
             let exec_allowed = result.outcome != Outcome::DeniedByPolicy as i32;
@@ -1551,8 +1550,7 @@ allow = ["^/bin/sh "]
             .expect("cancel send must succeed (buffered)");
 
         // First dispatch: real execute runner; cancel fires immediately.
-        let r1 =
-            dispatch_with_runner(&task, &policy, &dedup, |req| execute(req), Some(cancel_rx)).await;
+        let r1 = dispatch_with_runner(&task, &policy, &dedup, execute, Some(cancel_rx)).await;
 
         assert_eq!(
             r1.outcome,
