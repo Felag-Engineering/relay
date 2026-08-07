@@ -38,29 +38,42 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 	return item
 }
 
+// normalizeArgSets maps a nil positional arg-set list to an empty one, so a
+// rule's allowed_args/args always render as a JSON array, never null
+// (#207/#253): a policyview rule whose sets arrived as nil (proto empty
+// repeated field) means exactly the same zero-argument set an explicit []
+// does, and null carried no distinct semantics — it only forced consumers to
+// branch on two spellings. Non-nil sets pass through verbatim (display-only,
+// ADR-0002).
+func normalizeArgSets(sets [][]string) [][]string {
+	if sets == nil {
+		return [][]string{}
+	}
+	return sets
+}
+
 // operationRuleOutputsFromSnapshot renders the display-only, verbatim
 // [[operation]] allow-rule mirror (ADR-0002) for describe_node. It never
 // evaluates, dedups, or resolves wildcards — see policyview.OperationRule.
+// Always returns a non-nil slice with non-nil AllowedArgs, so
+// operation_rules and every allowed_args render as JSON arrays, never null
+// (#207/#253 — see normalizeArgSets and OperationRuleOutput).
 func operationRuleOutputsFromSnapshot(rules []policyview.OperationRule) []OperationRuleOutput {
-	if rules == nil {
-		return nil
-	}
-	out := make([]OperationRuleOutput, len(rules))
-	for i, r := range rules {
-		out[i] = OperationRuleOutput{Name: r.Name, AllowedArgs: r.AllowedArgs}
+	out := make([]OperationRuleOutput, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, OperationRuleOutput{Name: r.Name, AllowedArgs: normalizeArgSets(r.AllowedArgs)})
 	}
 	return out
 }
 
 // denyRuleOutputsFromSnapshot renders the display-only, verbatim [[deny]]
-// rule mirror (ADR-0002) for describe_node. See policyview.DenyRule.
+// rule mirror (ADR-0002) for describe_node. See policyview.DenyRule. Always
+// returns a non-nil slice with non-nil Args (#207/#253, mirroring
+// operationRuleOutputsFromSnapshot).
 func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
-	if rules == nil {
-		return nil
-	}
-	out := make([]DenyRuleOutput, len(rules))
-	for i, r := range rules {
-		out[i] = DenyRuleOutput{Name: r.Name, Args: r.Args}
+	out := make([]DenyRuleOutput, 0, len(rules))
+	for _, r := range rules {
+		out = append(out, DenyRuleOutput{Name: r.Name, Args: normalizeArgSets(r.Args)})
 	}
 	return out
 }
@@ -117,7 +130,12 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 		Description: "Describe one Node in full, including its effective Policy as last " +
 			"reported by the daemon. Display-only: the Relay never evaluates Policy itself " +
 			"(ADR-0002/0011). `outdated` flags a Node below the Relay's configured minimum " +
-			"daemon version (ADR-0014); always false when no minimum is set.",
+			"daemon version (ADR-0014); always false when no minimum is set. In " +
+			"effective_policy, operation_rules[].allowed_args and deny_rules[].args are " +
+			"always arrays, never null: an empty allowed_args means the Operation is allowed " +
+			"with zero arguments only ('*' is the explicit per-position any-value wildcard), " +
+			"and an empty deny args denies the Operation regardless of arguments. " +
+			"reported=false — never a null — is the only 'no Policy data captured yet' signal.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
 		logPrincipal(ctx, "describe_node")
 
@@ -142,10 +160,14 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			// No snapshot captured yet: still surface the registry's Policy
 			// fingerprint (the Hello-reported drift signal) but mark
 			// reported=false so a caller never mistakes "nothing captured
-			// yet" for "no restrictions".
+			// yet" for "no restrictions". OperationRules/DenyRules stay
+			// empty arrays, never null (#207/#253) — reported=false is the
+			// only "no data yet" signal.
 			out.EffectivePolicy = EffectivePolicyOutput{
 				PolicyFingerprint: n.PolicyFingerprint,
 				Reported:          false,
+				OperationRules:    []OperationRuleOutput{},
+				DenyRules:         []DenyRuleOutput{},
 			}
 		}
 

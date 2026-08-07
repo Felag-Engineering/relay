@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,81 @@ func TestMCP_ExecutionToolsInputSchemaConstraints(t *testing.T) {
 		if timeout.Maximum == nil || *timeout.Maximum != 86400 {
 			t.Errorf("%s timeout_seconds Maximum = %v, want 86400", toolName, timeout.Maximum)
 		}
+	}
+}
+
+// TestMCP_ResultShapeSemanticsAdvertisedInOutputSchema is #207/#253's
+// documented-contract floor: the presence/absence semantics the result
+// shapes now rely on — exit_code omitted when no process ran, job_id omitted
+// when no Job was created, allowed_args always an array and never null —
+// must be stated in the tools' advertised OutputSchema, so an MCP client can
+// learn them from the schema text instead of by trial-and-error (the exact
+// probing behavior ADR-0001/0003's legibility posture is meant to prevent).
+// Asserted as substrings of the whole marshalled schema document, so the
+// test stays robust to $ref/$defs layout.
+func TestMCP_ResultShapeSemanticsAdvertisedInOutputSchema(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	outputSchemas := make(map[string]string, len(res.Tools))
+	for _, tool := range res.Tools {
+		if tool.OutputSchema == nil {
+			continue
+		}
+		raw, err := json.Marshal(tool.OutputSchema)
+		if err != nil {
+			t.Fatalf("marshal %s OutputSchema: %v", tool.Name, err)
+		}
+		outputSchemas[tool.Name] = string(raw)
+	}
+
+	tests := []struct {
+		tool        string
+		wantPhrases []string
+	}{
+		{"run_operation", []string{
+			"exit_code",
+			"Present only when a process actually ran and exited with a status",
+			"Present only when a Job was created",
+			"an absent job_id always means nothing was dispatched",
+		}},
+		{"raw_exec", []string{
+			"exit_code",
+			"Present only when a process actually ran and exited with a status",
+			"Present only when a Job was created",
+			"an absent job_id always means nothing was dispatched",
+		}},
+		{"get_job", []string{
+			"exit_code",
+			"Present only when a process actually ran and exited with a status",
+		}},
+		{"describe_node", []string{
+			"allowed_args",
+			"Always an array, never null",
+			"an empty array means the Operation is allowed with zero arguments only",
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.tool, func(t *testing.T) {
+			doc, ok := outputSchemas[tt.tool]
+			if !ok {
+				t.Fatalf("tool %q advertises no OutputSchema", tt.tool)
+			}
+			for _, phrase := range tt.wantPhrases {
+				if !strings.Contains(doc, phrase) {
+					t.Errorf("%s OutputSchema does not contain %q — the documented contract must state the "+
+						"presence/absence semantics the emitted shape relies on. Schema: %s", tt.tool, phrase, doc)
+				}
+			}
+		})
 	}
 }
 
