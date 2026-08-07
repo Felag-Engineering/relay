@@ -594,6 +594,11 @@ hands the keys to the AI. The wall is the same wall.
 **Deliverables**
 - Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes, engage/release the
   Freeze — through the shared capability layer.
+- **Label management** (ADR-0020): post-enrollment `relay:` set/remove — the quarantine
+  lever (`admin` + step-up; incident ladder quarantine < revoke < Freeze) — and
+  operator-set `tag:` grouping labels, with bulk tag-from-filter as the fleet view's one
+  action; both namespaces through the capability layer + Control API, one mechanism with
+  two authz tiers.
 - **Access management**: view/create/disable Accounts (incl. machine Accounts for
   AI-agents), assign roles, revoke API Tokens.
 - **Step-up re-authentication** on privilege-granting actions and on mutate apply —
@@ -614,9 +619,13 @@ hands the keys to the AI. The wall is the same wall.
   attributed in audit; a `viewer` is refused all of it.
 - With `console_execution = off`, the composer is absent and no execution route exists.
 - A Console route that attempts to dispatch outside the capability layer does not compile.
+- An `operator` filters the fleet and bulk-applies a `tag:` label without step-up;
+  setting `relay:quarantine` on a Node demands `admin` + step-up; no surface anywhere can
+  write a `node:` label.
 
-**ADRs:** #264's superseding ADR (Console execution), 0009 (remainder stands), 0010.
-Amends CLAUDE.md invariant #10 in the same change → human-merge lane.
+**ADRs:** #264's superseding ADR (Console execution), 0009 (remainder stands), 0010,
+0020 (label management). Amends CLAUDE.md invariant #10 in the same change →
+human-merge lane.
 
 ---
 

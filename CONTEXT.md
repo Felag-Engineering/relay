@@ -97,14 +97,18 @@ just a Selector that matches one.
 _Avoid_: filter, query, target spec
 
 **Label**:
-A key/value tag on a Node used by Selectors to target it. Lives in one of two
-non-overlapping namespaces, each immutable from the other side: **node-space** (`node:…`,
+A key/value tag on a Node used by Selectors to target it. Lives in one of three
+non-overlapping namespaces, each immutable from the other sides: **node-space** (`node:…`,
 rooted on the Node and set out-of-band via config management; the Relay records but never
 modifies or removes them; authoritative for routine targeting, trusted only as much as the
-Node) or **relay-space** (`relay:…`, set by the Relay and immutable to the Node; reserved for
-the security-sensitive lane). Remediation/quarantine and secret-distribution Selectors target
-`relay:` labels.
-_Avoid_: tag, attribute, annotation
+Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment or managed
+post-enrollment by an `admin` with step-up — and immutable to the Node; reserved for the
+security-sensitive lane), or **tag-space** (`tag:…`, set by operators through the control
+plane with standard auth; immutable to the Node; ad-hoc grouping and routine targeting only,
+never a valid security-lane target — ADR-0020). Remediation/quarantine and secret-distribution
+Selectors target `relay:` labels only.
+_Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
+annotation
 
 **Facts**:
 Descriptive properties a daemon self-reports about its Node (OS, kernel, hostname, IP,

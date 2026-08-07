@@ -20,7 +20,7 @@ Console milestones are sequenced by real dependencies rather than optimism.
 | **Approval queue** | pending-approval Job state + decision endpoint | ❌ = the Approval Callout milestone ([2/6], [3/6]) |
 | **Browser security** (CSRF tokens, CSP, cookie sessions) | new middleware | ❌ bearer-token-only today; #264 puts XSS/CSRF on the most dangerous path |
 | Large-fleet result rendering | aggregation/histogram primitive | ❌ deferred (read-lane milestone); paginate short-term |
-| `relay:` label management (quarantine lane) | capability + API endpoints | ❌ labels set only via token scope at enrollment; no management surface |
+| Label management: `relay:` quarantine lane + `tag:` grouping (ADR-0020) | capability + API endpoints — one mechanism, two authz tiers (`admin`+step-up / `operator`) | ❌ labels set only via token scope at enrollment; scheduled v0.7.0 |
 
 ## Planning consequences
 
@@ -38,6 +38,10 @@ Console milestones are sequenced by real dependencies rather than optimism.
 3. **Suggested build order:** Accounts → Approval Callout backend → Console monitoring
    (with the SSE seam) → Console admin (step-up) → Console execution composer; the
    aggregation primitive slots in wherever fleet sizes demand it.
+4. **Label management ships as one mechanism with two tiers** (ADR-0020): the same
+   capability/API endpoints serve `tag:` writes (`operator`, standard auth) and `relay:`
+   writes (`admin` + step-up). The Console surfaces are bulk tag-from-filter in the fleet
+   view and `relay:` set/remove on Node detail — both v0.7.0, since they mutate.
 
 ## What must never appear in the UI
 
