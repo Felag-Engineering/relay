@@ -1,0 +1,9 @@
+# Build output of the standalone fuzz workspace.
+target/
+# libFuzzer crash reproducers: never committed as-is — a crash gets triaged
+# and filed as a finding issue with its reproducer (#214/#215/#227/#236 pattern).
+artifacts/
+# cargo fuzz coverage output.
+coverage/
+# NOTE: corpus/ is deliberately NOT ignored — the seed corpus is committed
+# (regenerate with `cargo run --example gen_corpus`).

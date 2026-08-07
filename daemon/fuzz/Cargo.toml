@@ -1,0 +1,62 @@
+# Coverage-guided wire fuzzing for the relay-daemon (issues #238/#252).
+#
+# This crate fuzzes the prost decode surface — the untrusted-bytes entry
+# points the daemon parses off the wire — with cargo-fuzz (libFuzzer).
+# It NEEDS the nightly Rust toolchain (cargo-fuzz passes -Z sanitizer flags),
+# which is exactly why it is a standalone workspace root: the stable per-PR
+# gate (`cd daemon && cargo build/test/clippy`) never sees this crate, and the
+# only consumer is the nightly `make fuzz-daemon` target wired into
+# .github/workflows/security-nightly.yml.
+#
+# Message types are generated at build time from /proto (the single source of
+# truth, ADR-0007) by this crate's own build.rs — never hand-copied and never
+# hand-edited.
+[package]
+name = "relay-daemon-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+description = "cargo-fuzz targets over the relay-daemon's prost wire-decode surface."
+license = "Proprietary"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Match the daemon's wire stack (daemon/Cargo.toml pins prost 0.13 via tonic 0.12).
+prost = "0.13"
+
+[build-dependencies]
+# prost-build alone (no tonic-build): the fuzz surface is message decoding,
+# not gRPC services, so service codegen is deliberately skipped.
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+# Standalone workspace root. Keeps this nightly-only crate out of the parent
+# package's build graph so `make build`/`make test`/`make lint` stay stable-only.
+[workspace]
+members = ["."]
+
+# One [[bin]] per fuzz target; cargo-fuzz enumerates targets from these.
+# Keep each target small and focused on ONE externally-reachable decode path.
+[[bin]]
+name = "fuzz_relay_message_decode"
+path = "fuzz_targets/fuzz_relay_message_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_enroll_response_decode"
+path = "fuzz_targets/fuzz_enroll_response_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_renew_response_decode"
+path = "fuzz_targets/fuzz_renew_response_decode.rs"
+test = false
+doc = false
+bench = false
