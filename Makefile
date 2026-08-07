@@ -126,7 +126,7 @@ test-integration: build
 	cd relay && RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon go test -tags integration ./cmd/relay/...
 
 lint-daemon:
-	cd daemon && cargo fmt --check && cargo clippy -- -D warnings
+	cd daemon && cargo fmt --check && cargo clippy --all-targets -- -D warnings
 
 ## --- opschema golden (ADR-0015: daemon is the single source of truth for what
 ## it enforces) ---
