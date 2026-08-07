@@ -14,22 +14,38 @@
 //! # The scheme
 //!
 //! The **semantic** version is `Cargo.toml`'s `version` — the release this
-//! working tree is developing toward. Git supplies *identity* (commit,
-//! dirtiness), never ordering.
+//! working tree is developing toward, possibly itself a prerelease
+//! (`0.1.0-beta`). Git supplies *identity* (commit, dirtiness), never
+//! ordering. Dev builds report the target's **numeric core** (`X.Y.Z`, any
+//! prerelease suffix dropped) with the `-0.dev` prerelease marker:
 //!
 //! | build | reported version |
 //! |---|---|
-//! | HEAD is the clean, exact `v<Cargo.toml version>` tag | `0.0.9` |
-//! | any other stamped build (untagged, post-tag, or dirty tree) | `0.0.9-dev+g<sha>[.dirty]` |
-//! | unstamped (`cargo build` with no `RELAY_BUILD_*` env) | `0.0.9-dev` |
+//! | HEAD is the clean, exact `v<Cargo.toml version>` tag | `0.0.9` (or `0.1.0-beta`, exactly the target) |
+//! | any other stamped build (untagged, post-tag, or dirty tree) | `0.0.9-0.dev+g<sha>[.dirty]` |
+//! | unstamped (`cargo build` with no `RELAY_BUILD_*` env) | `0.0.9-0.dev` |
 //!
-//! The `-dev` suffix is a semver **prerelease**, so a dev build sorts strictly
-//! *below* the release it precedes (`0.0.9-dev < 0.0.9`). That is the truthful
-//! ordering: a build of the 0.0.9 line that is not the 0.0.9 tag is not yet
-//! 0.0.9, and a Relay configured with `min-daemon-version = 0.0.9` correctly
-//! refuses to dispatch to it (fail-closed direction).
+//! `-0.dev` is a semver **prerelease** whose *first identifier is numeric*,
+//! and semver orders every numeric identifier below every alphanumeric one —
+//! so a dev build sorts strictly *below* the release it precedes even when
+//! that release is itself a prerelease: `0.0.9-0.dev < 0.0.9` and
+//! `0.1.0-0.dev < 0.1.0-beta < 0.1.0`. That is the truthful ordering: a build
+//! of the 0.0.9 line that is not the 0.0.9 tag is not yet 0.0.9, and a Relay
+//! configured with `min-daemon-version = 0.0.9` correctly refuses to dispatch
+//! to it (fail-closed direction). Any further identifiers must stay *after*
+//! `0.dev` so the leading numeric identifier keeps deciding the order.
 //!
-//! Two semver behaviours drove this and rule out the obvious alternative:
+//! The original scheme (issue #249) appended `-dev` to the full target and
+//! was fail-**open** for prerelease targets: `0.1.0-beta-dev` is a single
+//! identifier lexically *greater* than `beta`, so an unreleased dev build
+//! reported as newer than `0.1.0-beta` and passed a `min-daemon-version =
+//! 0.1.0-beta` gate. Issue #261 replaced it with the numeric marker — one
+//! rule for plain and prerelease targets alike, verified by executing the
+//! Relay's real comparator (`golang.org/x/mod/semver`) in
+//! `relay/internal/registry/daemon_version_contract_test.go`.
+//!
+//! Two further semver behaviours drove this and rule out the obvious
+//! alternative:
 //!
 //! 1. **A prerelease sorts below its release.** `git describe` after tag
 //!    `v0.0.9` yields `0.0.9-14-gabc1234` — a *prerelease of 0.0.9* — so a
@@ -38,7 +54,7 @@
 //!    deriving from the version being developed toward is not.
 //! 2. **Build metadata is ignored when comparing.** `0.0.9+dirty` compares
 //!    exactly equal to `0.0.9`, so dirtiness must never be expressed as
-//!    metadata alone. Here a dirty tree forces the `-dev` prerelease, which
+//!    metadata alone. Here a dirty tree forces the `-0.dev` prerelease, which
 //!    *is* comparable; the `+g<sha>[.dirty]` suffix carries only identity —
 //!    fleet-visible in the registry, deliberately invisible to the gate.
 //!
@@ -47,10 +63,20 @@
 //! stamp actually recompiles the crate. Nothing here shells out at runtime.
 
 /// Version reported when the build was not stamped — a plain `cargo build`
-/// with no `RELAY_BUILD_VERSION` in the environment. A prerelease of the
-/// version in `Cargo.toml`, so an unstamped developer build is honestly
-/// ordered below the release it is heading for.
-const DEV_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "-dev");
+/// with no `RELAY_BUILD_VERSION` in the environment. The `-0.dev` prerelease
+/// of the `Cargo.toml` version's numeric core, so an unstamped developer
+/// build is honestly ordered below the release it is heading for — including
+/// below a prerelease target (`0.1.0-0.dev < 0.1.0-beta`). Built from the
+/// MAJOR/MINOR/PATCH env pieces, not `CARGO_PKG_VERSION`, precisely so a
+/// prerelease suffix on the target is dropped at compile time.
+const DEV_VERSION: &str = concat!(
+    env!("CARGO_PKG_VERSION_MAJOR"),
+    ".",
+    env!("CARGO_PKG_VERSION_MINOR"),
+    ".",
+    env!("CARGO_PKG_VERSION_PATCH"),
+    "-0.dev"
+);
 
 /// Placeholder for the git identity fields of an unstamped build.
 const UNKNOWN: &str = "unknown";
@@ -111,23 +137,49 @@ pub fn run() -> i32 {
 mod tests {
     use super::{banner, build_date, commit, run, version, DEV_VERSION};
 
+    /// The numeric core of the Cargo.toml version: `X.Y.Z` with any
+    /// prerelease suffix dropped — what dev builds report ahead of `-0.dev`.
+    fn cargo_core() -> String {
+        format!(
+            "{}.{}.{}",
+            env!("CARGO_PKG_VERSION_MAJOR"),
+            env!("CARGO_PKG_VERSION_MINOR"),
+            env!("CARGO_PKG_VERSION_PATCH")
+        )
+    }
+
+    /// The dev marker must be `<core>-0.dev`: the numeric core (never the
+    /// full, possibly-prerelease target) plus the numeric-first `0.dev`
+    /// prerelease. Appending to the full target is exactly the #261 defect —
+    /// `0.1.0-beta-dev` sorts ABOVE `0.1.0-beta`.
     #[test]
-    fn dev_version_is_a_prerelease_of_the_cargo_version() {
-        assert_eq!(DEV_VERSION, format!("{}-dev", env!("CARGO_PKG_VERSION")));
+    fn dev_version_is_the_numeric_dev_prerelease_of_the_cargo_core() {
+        assert_eq!(DEV_VERSION, format!("{}-0.dev", cargo_core()));
+        let prerelease = DEV_VERSION
+            .split_once('-')
+            .expect("DEV_VERSION carries a prerelease")
+            .1;
+        assert!(
+            prerelease.starts_with("0."),
+            "the dev prerelease {prerelease:?} must LEAD with the numeric identifier `0`, \
+             or it stops sorting below alphanumeric prerelease targets (issue #261)"
+        );
     }
 
     /// The load-bearing invariant: whatever the build stamps, the reported
-    /// version's semantic core is `Cargo.toml`'s version. This holds on both
-    /// paths — unstamped (`X-dev`) and stamped (`X` or `X-dev+g<sha>`) — so it
-    /// also catches a `Makefile`/`scripts/build-version.sh` stamp that drifted
-    /// away from `Cargo.toml`.
+    /// version is either exactly `Cargo.toml`'s version (a release build) or
+    /// the `-0.dev` prerelease of its numeric core (any dev build, stamped or
+    /// not). This also catches a `Makefile`/`scripts/build-version.sh` stamp
+    /// that drifted away from `Cargo.toml` — or away from this scheme.
     #[test]
-    fn reported_version_starts_with_the_cargo_version() {
+    fn reported_version_is_the_release_or_its_numeric_dev_prerelease() {
         let base = env!("CARGO_PKG_VERSION");
+        let dev = format!("{}-0.dev", cargo_core());
         let v = version();
         assert!(
-            v == base || v.starts_with(&format!("{base}-")),
-            "reported version {v:?} is not the Cargo.toml version {base:?} or a prerelease of it"
+            v == base || v == dev || v.starts_with(&format!("{dev}+")),
+            "reported version {v:?} is neither the Cargo.toml version {base:?} \
+             nor the {dev:?} dev prerelease of its numeric core"
         );
     }
 

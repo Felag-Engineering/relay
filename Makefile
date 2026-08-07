@@ -15,7 +15,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 ## --- build stamping (issue #249, ADR-0014) ---
 # scripts/build-version.sh derives "<version> <commit> <build-date>" once per
 # make invocation. No tags, or no git at all, is a normal case there, not an
-# error: it still yields valid semver ("<base>-dev"). The version's semantic
+# error: it still yields valid semver ("<core>-0.dev"). The version's semantic
 # part comes from daemon/Cargo.toml, so both binaries carry the same version by
 # construction. See docs/operations/version-stamping.md.
 #

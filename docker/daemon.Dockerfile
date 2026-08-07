@@ -9,7 +9,7 @@
 #
 # NOT a release recipe. It deliberately does NOT build-stamp the binary (issue
 # #249): the build below sets no RELAY_BUILD_* variables, so the daemon in the
-# dev fleet reports the unstamped fallback (`<Cargo.toml version>-dev`, commit
+# dev fleet reports the unstamped fallback (`<Cargo.toml numeric core>-0.dev`, commit
 # and build date "unknown"), which is honest for a dev image and keeps that
 # fallback path exercised. A real release artifact must be produced by
 # `make build-daemon-release`, which derives and passes the stamp — see

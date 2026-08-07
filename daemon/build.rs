@@ -9,7 +9,7 @@
 /// serve a stale stamp. Reading the ambient env from `option_env!` alone would
 /// not be tracked by cargo. An unset (or empty) variable is simply not
 /// forwarded — `src/version.rs` then falls back to its Cargo.toml-derived
-/// `-dev` version, so a plain `cargo build` needs no environment at all.
+/// `-0.dev` version, so a plain `cargo build` needs no environment at all.
 const BUILD_STAMP_VARS: [&str; 3] = [
     "RELAY_BUILD_VERSION",
     "RELAY_BUILD_COMMIT",

@@ -9,23 +9,34 @@
 #
 #   base            = daemon/Cargo.toml's [package] version — the SEMANTIC
 #                     version of both binaries, i.e. the release this working
-#                     tree is developing toward.
+#                     tree is developing toward. May itself be a prerelease
+#                     (e.g. "0.1.0-beta").
+#   core            = base with any prerelease suffix dropped ("X.Y.Z").
 #   clean + HEAD is exactly tag v<base>  ->  "<base>"
-#   anything else                        ->  "<base>-dev[+g<sha>[.dirty]]"
+#   anything else                        ->  "<core>-0.dev[+g<sha>[.dirty]]"
 #
-# Git supplies IDENTITY, never ordering. `-dev` is a semver prerelease, so a
-# dev build sorts strictly BELOW the release it precedes — the truthful
-# ordering, and the fail-closed direction for the Relay's min-daemon-version
-# gate. Deriving from the LAST tag instead (`git describe` -> 0.0.9-14-gabc)
-# would be backwards: that is a prerelease of 0.0.9 and would report a build
-# made *after* the 0.0.9 release as older than it.
+# Git supplies IDENTITY, never ordering. `-0.dev` is a semver prerelease whose
+# FIRST identifier is numeric, and semver orders every numeric identifier below
+# every alphanumeric one — so a dev build sorts strictly BELOW the release it
+# precedes even when that release is itself a prerelease:
+#     0.0.9-0.dev < 0.0.9      and      0.1.0-0.dev < 0.1.0-beta < 0.1.0
+# That is the truthful ordering, and the fail-closed direction for the Relay's
+# min-daemon-version gate. The earlier `<base>-dev` marker (issue #249) got
+# this WRONG for prerelease targets: `0.1.0-beta-dev` sorts ABOVE `0.1.0-beta`
+# (a single identifier, lexically greater), inverting the gate fail-open —
+# fixed by issue #261, and why the target's prerelease suffix is dropped for
+# dev builds instead of appended to. Any further identifiers must stay AFTER
+# `0.dev`, so the leading numeric identifier keeps deciding the order.
+# Deriving from the LAST tag instead (`git describe` -> 0.0.9-14-gabc) would
+# be backwards: that is a prerelease of 0.0.9 and would report a build made
+# *after* the 0.0.9 release as older than it.
 #
-# Dirtiness is deliberately expressed by the `-dev` prerelease, not only by the
-# `.dirty` build-metadata suffix: semver comparison IGNORES build metadata, so
-# `<base>+dirty` would be invisible to the gate.
+# Dirtiness is deliberately expressed by the `-0.dev` prerelease, not only by
+# the `.dirty` build-metadata suffix: semver comparison IGNORES build metadata,
+# so `<base>+dirty` would be invisible to the gate.
 #
 # No tags, no git, or no bash-visible repo at all: the untagged/unknown path is
-# taken and still yields valid semver ("<base>-dev"). This script never fails
+# taken and still yields valid semver ("<core>-0.dev"). This script never fails
 # the build.
 set -euo pipefail
 
@@ -57,7 +68,12 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   fi
 fi
 
-version="${base}-dev"
+# The numeric core: any prerelease suffix on the target is DROPPED for dev
+# builds ("0.1.0-beta" -> "0.1.0"), so the dev marker is always the first —
+# and numerically-least — prerelease identifier. See the scheme note above.
+core="${base%%-*}"
+
+version="${core}-0.dev"
 # `git tag --points-at`, not `git describe --exact-match`: describe returns ONE
 # tag and picks it by its own ordering, so an unrelated tag also sitting on HEAD
 # (say `nightly`) could hide the real `v<base>` tag and silently demote a
