@@ -10,7 +10,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay
+        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon
 
 ## --- build stamping (issue #249, ADR-0014) ---
 # scripts/build-version.sh derives "<version> <commit> <build-date>" once per
@@ -204,6 +204,40 @@ fuzz-relay:
 	cd relay && go test -run=^$$ -fuzz='^FuzzSnapshotFromProto$$'      -fuzztime=$(FUZZTIME) ./cmd/relay/
 	cd relay && go test -run=^$$ -fuzz='^FuzzNodeLabelsFromHello$$'    -fuzztime=$(FUZZTIME) ./cmd/relay/
 	cd relay && go test -run=^$$ -fuzz='^FuzzDaemonMessageUnmarshal$$' -fuzztime=$(FUZZTIME) ./cmd/relay/
+
+## --- wire fuzzing, Rust half (nightly-only; bounded) — issues #238/#252 ---
+# cargo-fuzz (libFuzzer) over the prost decode surface: the untrusted-bytes
+# entry points the daemon parses off the wire (RelayMessage from the Tunnel
+# stream, ADR-0005; EnrollResponse/RenewResponse from the Enrollment service,
+# ADR-0006). Completes the coverage-guided half that #218's stable-toolchain
+# proptest suite deliberately deferred.
+#
+# REQUIRES the NIGHTLY Rust toolchain plus cargo-fuzz
+# (`rustup toolchain install nightly` then
+#  `cargo install cargo-fuzz --version 0.13.2 --locked`).
+# That is exactly why this target is wired ONLY into security-nightly.yml and
+# must never be pulled into per-PR CI (ci.yml stays stable-only); the fuzz
+# crate itself (daemon/fuzz) is a standalone workspace root, so the stable
+# build/test/lint targets above never compile it.
+#
+# Bounds (documented per #238's DoD): -max_total_time caps wall-clock per
+# target, -rss_limit_mb turns runaway allocation into a reported OOM crash,
+# -max_len keeps inputs message-sized. Seed corpus is committed under
+# daemon/fuzz/corpus/<target>/ (regenerate:
+# `cd daemon/fuzz && cargo run --example gen_corpus`).
+#
+# Recipe lines are NOT `-`-prefixed, so `make` stops at the first crashing
+# target — same one-crasher-at-a-time convention as fuzz-relay above. A crash
+# leaves its minimized reproducer under daemon/fuzz/artifacts/<target>/; file
+# it as a finding issue (#214/#215/#227/#236 pattern), never paper over it.
+FUZZ_TOTAL_TIME ?= 60
+FUZZ_RSS_MB     ?= 2048
+FUZZ_MAX_LEN    ?= 65536
+FUZZ_FLAGS      := -max_total_time=$(FUZZ_TOTAL_TIME) -rss_limit_mb=$(FUZZ_RSS_MB) -max_len=$(FUZZ_MAX_LEN)
+fuzz-daemon:
+	cd daemon && cargo +nightly fuzz run fuzz_relay_message_decode   -- $(FUZZ_FLAGS)
+	cd daemon && cargo +nightly fuzz run fuzz_enroll_response_decode -- $(FUZZ_FLAGS)
+	cd daemon && cargo +nightly fuzz run fuzz_renew_response_decode  -- $(FUZZ_FLAGS)
 
 ## --- local dev fleet (DEV-ONLY; requires Docker + compose v2) ---
 # Thin convenience wrappers over `docker compose` for the laptop dev fleet
