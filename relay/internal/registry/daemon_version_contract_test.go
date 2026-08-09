@@ -143,8 +143,8 @@ func TestNumericDevMarkerSortsBelowEveryShippableBase(t *testing.T) {
 	}
 	for _, base := range bases {
 		devForms := []string{
-			numericCore(base) + "-0.dev",                    // unstamped
-			numericCore(base) + "-0.dev+g0a0f22f03dcf",      // stamped, git identity as build metadata
+			numericCore(base) + "-0.dev",               // unstamped
+			numericCore(base) + "-0.dev+g0a0f22f03dcf", // stamped, git identity as build metadata
 			numericCore(base) + "-0.dev+g0a0f22f03dcf.dirty",
 			// Defense in depth: even carried as PRERELEASE identifiers rather
 			// than metadata, anything after `0.dev` must not flip the order.
