@@ -81,6 +81,25 @@ The same sequence applies to the `relay` binary on the (far fewer) Relay hosts.
 
 ## Release-cutting discipline
 
+**Cut a release by pushing a tag, not from the GitHub UI:**
+
+```sh
+git fetch origin && git tag v<version> origin/main && git push origin v<version>
+```
+
+The workflow creates the GitHub Release itself, with generated notes and the artifacts
+attached. Creating a Release through the UI *also* creates the tag, and that tag push is
+what triggers this workflow — so the Release exists a second before the build starts. The
+workflow handles that (it uploads into the existing Release rather than failing), but the
+notes and title are then whatever was typed by hand, not the generated ones. Pushing the
+tag is the path the convention above describes.
+
+The publish step is idempotent: re-running a failed release job uploads into whatever
+Release exists and replaces same-named assets, so a run that failed after publishing can
+simply be re-run. Because `SOURCE_DATE_EPOCH` is pinned to the tagged commit, a rebuild of
+the same tag reproduces byte-identical artifacts — a re-run's digests must match the first
+run's, and a mismatch is a real finding, not noise.
+
 The workflow enforces what [version-stamping.md](version-stamping.md) documents: tag
 `v<version>` must sit on a clean commit whose `daemon/Cargo.toml` says exactly
 `<version>`. If `Cargo.toml` was not bumped, or was bumped past the tag, or the tag is
