@@ -99,6 +99,12 @@ Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical sl
 - **[CONTEXT.md](CONTEXT.md)** — the ubiquitous language. Every term here is canonical.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
+- **[docs/operations/relay-install.md](docs/operations/relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, flags/env, example `systemd` unit.
+- **[docs/operations/relay-daemon-install.md](docs/operations/relay-daemon-install.md)** — installing and running the relay-daemon on a Node: artifact, env config, Policy, the shipped unit.
+- **[docs/operations/enrollment.md](docs/operations/enrollment.md)** — joining Nodes to the fleet: scoped Enrollment Tokens, single-Node and bulk (Ansible) enrollment.
+- **[docs/operations/policy-as-code.md](docs/operations/policy-as-code.md)** — Policy files in the IaC repo: `policy check` in CI, config-management distribution, fingerprint-verified rollout.
+- **[docs/operations/iac-upgrades.md](docs/operations/iac-upgrades.md)** — daemon upgrades through config management, consuming the CD artifacts, observed by the `min-daemon-version` gate (ADR-0014).
+- **[docs/operations/ca-disaster-recovery.md](docs/operations/ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
 - **[ROADMAP.md](ROADMAP.md)** — what we're building and in what order.
