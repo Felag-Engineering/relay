@@ -17,6 +17,7 @@
 
 pub mod file_read;
 pub mod pkg_install;
+pub mod registry;
 pub mod schema;
 pub mod service_restart;
 pub mod system_facts;
@@ -40,50 +41,35 @@ pub const SERVICE_RESTART: &str = "service.restart";
 pub const PKG_INSTALL: &str = "pkg.install";
 
 // ---------------------------------------------------------------------------
-// Risk-class registry — one place a reviewer verifies all name→class mappings
-// against the proto comment at relay.proto (ADR-0012).
+// Vocabulary views over the registry ([`registry::REGISTRY`] — the single
+// name→(handler, arg-shape, risk class) table, issue #289; ADR-0012).
 // ---------------------------------------------------------------------------
 
-/// Returns all v1 Operation descriptors in canonical order.
+/// Returns all v1 Operation descriptors in canonical order, derived from
+/// [`registry::REGISTRY`] — the one place a reviewer verifies the full
+/// name→class mapping; misclassification is security-relevant (ADR-0012).
 ///
-/// A reviewer can verify the full name→class mapping here in one place;
-/// misclassification is security-relevant (ADR-0012).
-///
-/// Only referenced in tests; the dispatch pipeline routes by name string.
+/// Only referenced in tests; the dispatch pipeline resolves entries from the
+/// same registry directly.
 #[allow(dead_code)]
 pub fn descriptors() -> Vec<OperationDescriptor> {
-    vec![
-        OperationDescriptor {
-            name: SYSTEM_FACTS.to_string(),
-            risk_class: RiskClass::Read as i32,
-        },
-        OperationDescriptor {
-            name: FILE_READ.to_string(),
-            risk_class: RiskClass::Read as i32,
-        },
-        OperationDescriptor {
-            name: SERVICE_RESTART.to_string(),
-            risk_class: RiskClass::Mutate as i32,
-        },
-        OperationDescriptor {
-            name: PKG_INSTALL.to_string(),
-            risk_class: RiskClass::Mutate as i32,
-        },
-    ]
+    registry::REGISTRY
+        .iter()
+        .map(|e| OperationDescriptor {
+            name: e.name.to_string(),
+            risk_class: e.risk as i32,
+        })
+        .collect()
 }
 
 /// Returns the [`RiskClass`] for a named Operation, or `None` if the name is
-/// not in the v1 vocabulary.
+/// not in the v1 vocabulary — a [`registry::lookup`] view.
 ///
 /// Called by [`crate::scheduler::Scheduler::classify`] to route Tasks to the
-/// correct concurrency gate. The dispatch pipeline routes by name string, not
-/// by risk class (Policy evaluates at the dispatch layer, not here).
+/// correct concurrency gate, and by the Policy linter's unknown-name check
+/// (Policy itself evaluates at the dispatch layer, not here).
 pub fn risk_class(name: &str) -> Option<RiskClass> {
-    match name {
-        SYSTEM_FACTS | FILE_READ => Some(RiskClass::Read),
-        SERVICE_RESTART | PKG_INSTALL => Some(RiskClass::Mutate),
-        _ => None,
-    }
+    registry::lookup(name).map(|e| e.risk)
 }
 
 // ---------------------------------------------------------------------------
