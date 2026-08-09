@@ -37,12 +37,26 @@ A managed Linux server that runs a relay-daemon.
 _Avoid_: host, machine, target
 
 **Operation**:
-A structured, typed administrative action from a fixed vocabulary (e.g. restart a
-service, read a file, install a package). The primary execution primitive. Every
-Operation declares a **risk class** — `read` (cannot change Node state) or `mutate` —
-used for blast-radius control, never as a substitute for Policy (ADR-0012). Raw Exec
-is always `mutate`.
+A structured, typed administrative action from a declared vocabulary (e.g. restart a
+service, read a file, install a package). The primary execution primitive. Two kinds:
+**Native Operations**, built into the daemon (frozen at four — ADR-0021), and
+**Template Operations**, loaded per Node (see Template Operation). Every Operation
+declares a **risk class** — `read` (cannot change Node state) or `mutate` — used for
+blast-radius control, never as a substitute for Policy (ADR-0012). Raw Exec is always
+`mutate`.
 _Avoid_: command, task
+
+**Template Operation**:
+An Operation defined by an operator-authored shell template with named, typed-validated
+parameter slots — the extensibility tier between Native Operations and Raw Exec
+(ADR-0001 tier 2, realized by ADR-0021). The author fixes the command structure;
+substitution can never alter it. Mandatory risk class; governed by Policy exactly like a
+Native Operation. Loaded from root-owned local files beside the Policy file (same trust
+root, ADR-0002); the daemon reports a **template-set fingerprint** beside the Policy
+fingerprint. A directory of templates installed and versioned as a unit is a **template
+pack**; the first-party **shipped read catalog** is one, installed with the daemon
+package. A Node without a given template reports the distinct `unsupported` outcome.
+_Avoid_: script, macro, custom command, snippet
 
 **Raw Exec**:
 The escape hatch: arbitrary command execution, permitted only when it matches a
