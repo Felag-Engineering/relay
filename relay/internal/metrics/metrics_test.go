@@ -193,13 +193,13 @@ func TestIncEnrollment(t *testing.T) {
 
 func TestHandler_BuildInfo(t *testing.T) {
 	m := New(GaugeSources{
-		Build: BuildInfo{Version: "0.0.9-dev+g0a0f22f03dcf", Commit: "0a0f22f03dcf", BuildDate: "2026-07-24"},
+		Build: BuildInfo{Version: "0.0.9-0.dev+g0a0f22f03dcf", Commit: "0a0f22f03dcf", BuildDate: "2026-07-24"},
 	})
 	_, body := scrape(t, m)
 
 	wantLines := []string{
 		"# TYPE relay_build_info gauge",
-		`relay_build_info{version="0.0.9-dev+g0a0f22f03dcf",commit="0a0f22f03dcf",build_date="2026-07-24"} 1`,
+		`relay_build_info{version="0.0.9-0.dev+g0a0f22f03dcf",commit="0a0f22f03dcf",build_date="2026-07-24"} 1`,
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(body, want) {
