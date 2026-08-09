@@ -105,6 +105,11 @@ the other's:
 Because the namespaces cannot collide, each side augments labels without overriding the other —
 the non-override rule is structural in both directions.
 
+**2026-08-07 — third namespace added:** [ADR-0020](0020-tag-labels-operator-grouping-namespace.md)
+adds operator-set **`tag:…`** grouping labels (Relay-stored, Node-immutable, never a valid
+security-lane target) and post-enrollment `relay:` label management (`admin` + step-up — the
+quarantine lever). The authority rules above for `node:`/`relay:` are unchanged.
+
 ## Consequences
 
 - Making the Node authoritative for its own routine identity prevents careless Relay-side
@@ -141,3 +146,5 @@ The entries below are historical. The body above is authoritative.
   and Relay-generated identity").
 - **2026-06-30 — added Certificate renewal over mTLS** (now in the body under "Certificate
   renewal over mTLS").
+- **2026-08-07 — two namespaces extended to three:** ADR-0020 added the operator-set `tag:`
+  grouping namespace and post-enrollment `relay:` label management (see note in the body).

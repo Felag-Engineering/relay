@@ -4,7 +4,8 @@
 design plan #264 references; it feeds the #264 ADR (Console execution surface), the
 v0.5.0 approval-record schema, and the v0.6.0/v0.7.0 Console milestones. Companions:
 `console-backend-coverage.md` (what backend each screen needs),
-`approval-and-attribution.md` (the identity/approval model the screens render).
+`approval-and-attribution.md` (the identity/approval model the screens render),
+`console-wireframe-brief.md` (designer-facing prompts for the four key screens).
 
 ## Design intent
 
@@ -47,14 +48,16 @@ monitoring phase (v0.6.0), so it is built once, first.
 
 **v0.6.0 — Monitoring (eyes only; zero mutating routes)**
 - Login (password; OIDC later).
-- Fleet view: live registry — liveness, facts summary, `node:`/`relay:` labels
-  (namespaces visually distinct — `relay:` is the security lane and must read as such),
-  Policy + template-set fingerprints, `outdated` flags.
+- Fleet view: live registry, **group-by-first** (see Organizing principle) — group by any
+  label key with rollup cards; per-Account saved views (landing = the operator's slice);
+  view-scoped delta lane; liveness, facts summary, `node:`/`tag:`/`relay:` labels (the
+  three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` is the security
+  lane and must read as such), Policy + template-set fingerprints, `outdated` flags.
 - Node detail: facts, effective Policy (rendered from `policyview`), template
   vocabulary, cert/enrollment info, recent Tasks.
 - Jobs: list + detail — per-Node outcomes with the full outcome vocabulary
   (`success / denied(rule) / unreachable / unsupported / cancelled / timeout`) grouped,
-  not listed.
+  not listed; list filterable to "Jobs that touched my current fleet view".
 - Audit trail: filterable; verified/asserted lanes distinct (below).
 - Approval queue, **read-only**: pending approvals with their Plans and quorum state.
 - Enrollment Token inventory, CA/cert lifecycle, Freeze state (global banner on every
@@ -70,6 +73,10 @@ monitoring phase (v0.6.0), so it is built once, first.
 - Accounts & tokens: create/disable Accounts (human + machine), roles, token
   mint/revoke — all step-up.
 - Lifecycle: token mint/revoke, Node revoke, Freeze engage/release.
+- Labels (ADR-0020): bulk tag-from-filter in the fleet view (`tag:`, `operator`, no
+  step-up — the fleet view's one and only action); `relay:` set/remove on Node detail
+  (`admin` + step-up) — the quarantine lever, sitting beside Revoke and Freeze as the
+  incident ladder quarantine < revoke < Freeze.
 
 ## Key screen requirements (these shape backend schemas — read before v0.5.0 lands)
 
@@ -107,6 +114,65 @@ the layout anticipates histogram-by-output so v0.9.0 slots into the same compone
 **Live-but-stable:** SSE updates must never reflow content under a cursor mid-decision.
 Approval cards and rendered Plans are pinned once open; liveness is for lists and
 counters, not for the thing being read.
+
+## Organizing principle: Relay-centric data, user-centric organization
+
+The Console shows the operator *their* fleet, not Relay's bookkeeping. The facts on
+screen are necessarily Relay's — liveness, versions, Policy drift, Job history — but the
+*structure* of every screen comes from the customer's own taxonomy: their `node:` labels
+(written in their IaC), their `tag:` labels (ADR-0020). Concretely:
+
+- **Group-by-first fleet view**: group by any label key; the user's names (`prod`,
+  `payments`, `web`) become the headline structure as rollup cards ("prod · 4,012 nodes ·
+  3 offline · 12 outdated"); Relay's machinery view is just "group by nothing".
+- **Saved views per Account**: landing is the operator's slice (filter + grouping), not
+  the global registry; the "since you last looked" delta lane scopes to the current view.
+- **Jobs mirror it**: the Jobs list filters to "Jobs that touched my view", not only the
+  global stream.
+- **System Model socket**: the rollup-card/group component is designed so a post-1.0
+  Service (ADR-0008, v1.1.0) is just a named, shared group with provenance — the semantic
+  layer arrives as a data upgrade, not a redesign.
+
+Two boundaries keep this honest. (1) **No health theater**: rollups say
+offline/outdated/quarantined — connection and lifecycle truth Relay actually knows —
+never CPU, latency, or app health; the Console must not imitate a monitoring product.
+(2) **Observations, never desired state**: a group card never grows "expected N / found
+M / reconcile" affordances — Relay does not auto-reconcile (invariant #9).
+
+## Fleet-scale display patterns (legible at 10 and at 10,000 Nodes)
+
+The governing rule: **the UI computes what is interesting; the human only ever reads
+exceptions.** At fleet scale a list is a bug — every screen renders the *mode* (the normal
+state) as one compressed, calm line and spends its pixels on deviations. The patterns,
+shared across screens:
+
+- **Histogram-by-output** (the v0.9.0 aggregation primitive; grouped-outcomes-with-counts
+  until then): never show 9,800 results — cluster identical outputs and render "9,797
+  Nodes: identical output (view one) · 3 differ," outliers expanded by default. Same move
+  for facts and versions ("9,990 on daemon 1.4.2 · 10 on 1.3.9").
+- **The pixel wall**: fleet liveness as a grid of tiny colored cells, one per Node —
+  10,000 fit on one screen and preattentive vision finds the single amber cell with zero
+  reading. The fleet view's at-a-glance layer above the table; click a cell to drill.
+- **Faceted filtering with counts**: a slim rail of facets (OS, daemon version, labels,
+  liveness), each showing its value distribution as counts. The facets *are* the summary
+  statistics; clicking one filters. Distribution anomalies are visible before reading a
+  single row.
+- **Selector-as-search**: the fleet view's filter box is literally the Selector language
+  used for targeting. Browsing trains operators in targeting, and "what would this Job
+  hit?" is answered by the filter already on screen — one mental model, and very much the
+  trust-building wedge.
+- **Anomaly-first ordering**: default sort is by deviation/rarity, never alphabetical.
+  The weird Node is row one.
+- **Deltas, not states**: the SSE seam feeds a "what changed" lane — since last look:
+  2 enrolled, 1 offline, 3 became `outdated`. The operator's daily question is "what's
+  different," not "what's everything."
+- **Progressive-disclosure ladder, uniformly**: count → segmented bar → groups → sampled
+  members → full list only on explicit demand. Never skip a rung.
+- **Pin-and-compare**: select 2–3 Nodes for a side-by-side diff of facts / effective
+  Policy — the "why did only this one deny" flow in one screen.
+
+Elegance falls out structurally: if the default render of 10,000 Nodes is one segmented
+bar, a pixel wall, and three interesting rows, the screen cannot get busy.
 
 ## What the Console never shows
 
