@@ -308,7 +308,7 @@ mod tests {
 
     #[test]
     fn clean_io_error_non_os_error_passthrough() {
-        let e = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let e = std::io::Error::other("boom");
         assert_eq!(clean_io_error(&e), "boom");
     }
 

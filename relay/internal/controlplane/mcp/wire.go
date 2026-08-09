@@ -52,22 +52,29 @@ type ListNodesOutput struct {
 
 // OperationRuleOutput is one [[operation]] allow rule, mirrored verbatim
 // from the daemon's loaded Policy (policyview.OperationRule; ADR-0002).
-// AllowedArgs[i] is the permitted-value set at argv position i; an empty
-// slice means the Operation is allowed with zero arguments. Display-only:
+// AllowedArgs[i] is the permitted-value set at argv position i, with "*" as
+// the explicit per-position wildcard. AllowedArgs is ALWAYS a JSON array,
+// never null (#207/#253): an empty array means the Operation is allowed with
+// zero arguments — an empty set of argv positions, not an absent constraint
+// ("any value" is only ever spelled as the explicit "*"). A policyview rule
+// whose AllowedArgs arrived as nil (proto empty repeated) means exactly the
+// same zero-argument set, so the renderer (tools_nodes.go) normalizes nil to
+// [] rather than making consumers branch on two spellings. Display-only:
 // the Relay never evaluates these (ADR-0011).
 type OperationRuleOutput struct {
 	Name        string     `json:"name"`
-	AllowedArgs [][]string `json:"allowed_args"`
+	AllowedArgs [][]string `json:"allowed_args" jsonschema:"Always an array, never null. allowed_args[i] is the permitted-value set at argv position i ('*' is the explicit any-value wildcard for that position); an empty array means the Operation is allowed with zero arguments only."`
 }
 
 // DenyRuleOutput is one [[deny]] rule, mirrored verbatim from the daemon's
 // loaded Policy (policyview.DenyRule; ADR-0002). Args[i] is the denied-value
-// set at argv position i; an empty slice denies the whole Operation
-// regardless of arguments. Display-only: the Relay never evaluates these
-// (ADR-0011).
+// set at argv position i. Args is ALWAYS a JSON array, never null
+// (#207/#253, same normalization as OperationRuleOutput.AllowedArgs): an
+// empty array denies the whole Operation regardless of arguments.
+// Display-only: the Relay never evaluates these (ADR-0011).
 type DenyRuleOutput struct {
 	Name string     `json:"name"`
-	Args [][]string `json:"args"`
+	Args [][]string `json:"args" jsonschema:"Always an array, never null. args[i] is the denied-value set at argv position i; an empty array denies the whole Operation regardless of arguments."`
 }
 
 // EffectivePolicyOutput is the display-only effective-Policy view
@@ -87,11 +94,12 @@ type EffectivePolicyOutput struct {
 	// OperationRules and DenyRules are raw mirrors of the daemon's loaded
 	// Policy file (every [[operation]]/[[deny]] block, in file order; no
 	// dedup, no evaluation) — see the OperationRuleOutput/DenyRuleOutput
-	// doc comments. They may be empty even when Reported is true (a Policy
-	// with no operation/deny blocks) — Reported is the only "no data yet"
-	// signal.
-	OperationRules []OperationRuleOutput `json:"operation_rules"`
-	DenyRules      []DenyRuleOutput      `json:"deny_rules"`
+	// doc comments. Both are ALWAYS JSON arrays, never null (#207/#253):
+	// empty when the reported Policy has no operation/deny blocks, and also
+	// when Reported is false — Reported is the only "no data yet" signal,
+	// never a null here.
+	OperationRules []OperationRuleOutput `json:"operation_rules" jsonschema:"Always an array, never null: empty when the reported Policy has no [[operation]] blocks, or when reported is false. reported is the only no-data-yet signal."`
+	DenyRules      []DenyRuleOutput      `json:"deny_rules" jsonschema:"Always an array, never null: empty when the reported Policy has no [[deny]] blocks, or when reported is false. reported is the only no-data-yet signal."`
 }
 
 // DescribeNodeOutput is NodeItem's fields (flattened via Go's anonymous
@@ -130,10 +138,19 @@ type ListOperationsOutput struct {
 // render (renderJob, tools_execution.go). Outcome/denied_by_policy come
 // straight off the Task the daemon resolved: this package never evaluates
 // Policy itself (invariant 12).
+//
+// ExitCode is a pointer so a Task with no real process exit status renders
+// with NO exit_code key at all (#207/#253): the daemon's -1 "no exit status"
+// sentinel (spawn failure, timeout/cancel kill, signal-kill,
+// denied_by_policy) and the Relay's synthesized zero value (unreachable,
+// version_refused) both read as plausible real exit codes, which is exactly
+// the ambiguity ADR-0001/0003's legibility posture forbids. Present iff a
+// process actually ran and exited with a status (exitCodePtr,
+// tools_execution.go); Outcome is always the authoritative did-it-run state.
 type PerNodeResult struct {
 	NodeID          string `json:"node_id"`
 	Outcome         string `json:"outcome"`
-	ExitCode        int32  `json:"exit_code"`
+	ExitCode        *int32 `json:"exit_code,omitempty" jsonschema:"Present only when a process actually ran and exited with a status. Absent when nothing executed (denied_by_policy, unreachable, version_refused) or the process was killed without an exit status (timeout, cancelled, spawn failure) — outcome is the authoritative state, see stderr for the reason."`
 	Stdout          string `json:"stdout"`
 	Stderr          string `json:"stderr"`
 	StdoutTruncated bool   `json:"stdout_truncated"`
@@ -141,11 +158,10 @@ type PerNodeResult struct {
 	DurationMS      int64  `json:"duration_ms"`
 }
 
-// ExecutionOutput is run_operation/raw_exec/get_job's shared result shape:
-// the Job id (so a caller can later cancel_job/get_job it) plus every
-// matched Node's rendered result. A zero-match dispatch (no Node matched the
-// Selector) renders as {job_id: "", results: []} — Run never reached the
-// dispatcher, so there is no Job to read back.
+// ExecutionOutput is get_job's result shape: the Job id (echoed back, always
+// present — get_job is keyed by it) plus every one of the Job's rendered
+// per-Node results. run_operation/raw_exec render the superset
+// RunOrPlanOutput instead — see its JobID presence rules.
 type ExecutionOutput struct {
 	JobID   string          `json:"job_id"`
 	Results []PerNodeResult `json:"results"`
@@ -192,12 +208,17 @@ type PlanOutput struct {
 }
 
 // RunOrPlanOutput is run_operation/raw_exec's shared result shape (#119):
-// additive over #118's ExecutionOutput. JobID/Results keep EXACTLY
-// ExecutionOutput's tags — no omitempty — so a zero-match plan=false run
-// still renders {"job_id":"","results":[]}, byte-identical to #118; Plan is
-// the only new, omitempty field, populated only when plan=true.
+// additive over ExecutionOutput. JobID carries omitempty (#207/#253,
+// superseding #119's byte-identical-to-#118 freeze): it is present exactly
+// when a Job was created, and absent on a plan=true response (a Plan
+// executes nothing — an empty "job_id" read as a missing/failed id) and on
+// a zero-match plan=false run (Run never reached the dispatcher, so there
+// is no Job to read back). An absent job_id therefore always means "nothing
+// was dispatched", never a failed id. Results is always an array — empty,
+// never null, when nothing was dispatched (plan=true or zero-match). Plan
+// is omitempty, populated only when plan=true.
 type RunOrPlanOutput struct {
-	JobID   string          `json:"job_id"`
-	Results []PerNodeResult `json:"results"`
+	JobID   string          `json:"job_id,omitempty" jsonschema:"Present only when a Job was created (a real dispatch that matched at least one Node); use it with get_job/cancel_job. Absent on plan=true responses and zero-match dispatches — an absent job_id always means nothing was dispatched, never a failed id."`
+	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or zero Nodes matched)."`
 	Plan    *PlanOutput     `json:"plan,omitempty"`
 }

@@ -41,6 +41,16 @@ func TestMCP_RunOperation_Plan_VerdictsNoExecution(t *testing.T) {
 	if len(out.Results) != 0 {
 		t.Errorf("results = %+v, want empty (a Plan never dispatches)", out.Results)
 	}
+	// #207/#253 item 2: assert the EMITTED JSON — a plan response carries no
+	// job_id key at all (a Plan creates no Job; an empty "" read as a
+	// missing/failed id), and results is an explicit empty array, never null.
+	text := resultText(t, res)
+	if strings.Contains(text, `"job_id"`) {
+		t.Errorf("plan response JSON = %s, must not contain a job_id key (a Plan creates no Job)", text)
+	}
+	if !strings.Contains(text, `"results":[]`) {
+		t.Errorf("plan response JSON = %s, want it to contain %q (an empty array, never null)", text, `"results":[]`)
+	}
 	if out.Plan == nil {
 		t.Fatal("plan field is nil, want a populated PlanOutput")
 	}

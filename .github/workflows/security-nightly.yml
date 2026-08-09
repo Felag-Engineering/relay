@@ -113,3 +113,60 @@ jobs:
         run: |
           echo "Fuzz run failed — reproducers under testdata/fuzz:"
           find relay -path '*/testdata/fuzz/*' -type f -print -exec cat {} \; || true
+
+  # Bounded wire fuzzing, Rust half (issues #238/#252): cargo-fuzz (libFuzzer)
+  # over the prost decode surface — the untrusted-bytes entry points the daemon
+  # parses off the wire (RelayMessage from the Tunnel stream; EnrollResponse /
+  # RenewResponse from the Enrollment service). Coverage-guided complement to
+  # the stable-toolchain proptest suite from #218. cargo-fuzz REQUIRES the
+  # nightly Rust toolchain, which is exactly why this job lives here and never
+  # in per-PR CI: ci.yml stays stable-only.
+  fuzz-daemon:
+    name: Wire fuzzing (Rust, bounded)
+    runs-on: ubuntu-latest
+    # Least-privilege: like the Go fuzz job above, this only reads the repo and
+    # runs the bounded fuzzers; it never files issues.
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # Same pinned action as the stable setup in `scan`; the `toolchain` input
+      # selects nightly, which cargo-fuzz needs for its -Z sanitizer flags.
+      - name: Set up Rust nightly
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo registry
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('daemon/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fuzz-
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.13.2 --locked # pinned for supply-chain reproducibility
+
+      # Bounds live in the Makefile (FUZZ_RSS_MB / FUZZ_MAX_LEN); only the
+      # per-target wall-clock cap is overridden for the nightly run. Like the
+      # Go job, `make` stops at the first failing target, so a red run
+      # surfaces one crasher at a time. The committed seed corpus
+      # (daemon/fuzz/corpus/<target>/) is the starting point of each run; the
+      # coverage-grown corpus is not persisted across runs (same known
+      # limitation as the Go job above).
+      - name: Bounded fuzz (per-target time cap)
+        run: make fuzz-daemon FUZZ_TOTAL_TIME=300
+
+      # Mirror the Go job's reproducer dumping so the crasher survives in the
+      # Actions log without adding a new pinned action for artifact upload.
+      # base64 (not cat) because libFuzzer reproducers are raw binary.
+      - name: Dump any crash reproducers
+        if: failure()
+        run: |
+          echo "Fuzz run failed — reproducers under daemon/fuzz/artifacts (base64):"
+          find daemon/fuzz/artifacts -type f -print -exec base64 {} \; || true

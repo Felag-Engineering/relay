@@ -36,21 +36,99 @@ func TestResolveTimeoutSeconds_RejectsOutOfRange(t *testing.T) {
 	}
 }
 
-// TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape is the PLAN-REVIEWER
-// ADDENDUM A2 regression guard: job_id/results carry NO omitempty on
-// RunOrPlanOutput (mirroring ExecutionOutput's own tags exactly), so a
-// zero-match plan=false run still renders {"job_id":"","results":[]} —
-// byte-identical to #118 — never a bare {}. plan, the only new field, is
-// omitempty and absent entirely when nil.
-func TestRunOrPlanOutput_ZeroMatchMatchesIssue118Shape(t *testing.T) {
+// TestRunOrPlanOutput_ZeroMatchOmitsJobID is #207/#253's job_id contract
+// (deliberately superseding #119's byte-identical-to-#118 freeze, which
+// pinned {"job_id":"","results":[]} here): a zero-match plan=false run
+// created no Job, so it renders NO job_id key at all — an empty-string id
+// read as a missing/failed id. results stays an explicit empty array, never
+// null and never a bare {}.
+func TestRunOrPlanOutput_ZeroMatchOmitsJobID(t *testing.T) {
 	out := RunOrPlanOutput{Results: []PerNodeResult{}}
 	b, err := json.Marshal(out)
 	if err != nil {
 		t.Fatalf("json.Marshal: %v", err)
 	}
-	want := `{"job_id":"","results":[]}`
+	want := `{"results":[]}`
 	if string(b) != want {
-		t.Errorf("json.Marshal(zero-match RunOrPlanOutput) = %s, want %s", b, want)
+		t.Errorf("json.Marshal(zero-match RunOrPlanOutput) = %s, want %s (no Job was created, so no job_id key)", b, want)
+	}
+}
+
+// TestRunOrPlanOutput_PlanResponseOmitsJobID is #207/#253 item 2's emitted-
+// JSON assertion: a plan=true response (the exact shape both execution
+// tools' plan branches construct) carries NO job_id key — a Plan creates no
+// Job — while results stays an explicit empty array, never null.
+func TestRunOrPlanOutput_PlanResponseOmitsJobID(t *testing.T) {
+	plan := renderPlan(capability.PlanResult{Matched: 0})
+	out := RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}
+	b, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if _, ok := raw["job_id"]; ok {
+		t.Errorf("plan response %s contains a \"job_id\" key, want it omitted (a Plan creates no Job)", b)
+	}
+	if string(raw["results"]) != "[]" {
+		t.Errorf("plan response results = %s, want [] (an explicit empty array, never null)", raw["results"])
+	}
+	if _, ok := raw["plan"]; !ok {
+		t.Errorf("plan response %s has no \"plan\" key, want one", b)
+	}
+}
+
+// TestPerNodeResult_ExitCodePresence is #207/#253 item 1's shape decision:
+// exit_code is present in the emitted JSON iff a real process exit status
+// exists — outcome success/failure with a daemon-reported code >= 0. The
+// daemon's -1 "no exit status" sentinel (denied-before-spawn, spawn failure,
+// signal-kill, timeout/cancel kill) and the Relay's synthesized zero value
+// (unreachable, version_refused) must never surface as a plausible real
+// exit code; outcome is the authoritative did-it-run state.
+func TestPerNodeResult_ExitCodePresence(t *testing.T) {
+	tests := []struct {
+		name     string
+		outcome  jobs.Outcome
+		exitCode int32
+		want     string // exact rendered value, "" = key must be absent
+	}{
+		{"success exits 0", jobs.OutcomeSuccess, 0, "0"},
+		{"failure with a real non-zero exit", jobs.OutcomeFailure, 2, "2"},
+		{"spawn failure (daemon -1 sentinel)", jobs.OutcomeFailure, -1, ""},
+		{"denied_by_policy never ran (daemon -1 sentinel)", jobs.OutcomeDeniedByPolicy, -1, ""},
+		{"timeout killed without an exit status", jobs.OutcomeTimeout, -1, ""},
+		{"cancelled killed without an exit status", jobs.OutcomeCancelled, -1, ""},
+		{"unreachable never dispatched (Relay zero value)", jobs.OutcomeUnreachable, 0, ""},
+		{"version_refused never dispatched (Relay zero value)", jobs.OutcomeVersionRefused, 0, ""},
+		{"pending/unspecified has not run", jobs.OutcomeUnspecified, 0, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res := perNodeResultFromTask(jobs.Task{NodeID: "node-a", Outcome: tt.outcome, ExitCode: tt.exitCode})
+			b, err := json.Marshal(res)
+			if err != nil {
+				t.Fatalf("json.Marshal: %v", err)
+			}
+			var raw map[string]json.RawMessage
+			if err := json.Unmarshal(b, &raw); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			got, present := raw["exit_code"]
+			if tt.want == "" {
+				if present {
+					t.Errorf("%s: emitted %s, want NO exit_code key (no real process exit status exists)", tt.name, b)
+				}
+				return
+			}
+			if !present {
+				t.Errorf("%s: emitted %s, want exit_code %s present", tt.name, b, tt.want)
+			} else if string(got) != tt.want {
+				t.Errorf("%s: exit_code = %s, want %s", tt.name, got, tt.want)
+			}
+		})
 	}
 }
 

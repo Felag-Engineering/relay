@@ -3,6 +3,8 @@ package mcp
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 )
 
 // TestDescribeNodeOutput_JSONShapeIsFlattened is the golden-JSON assertion
@@ -66,5 +68,51 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		t.Errorf("json.Marshal(DescribeNodeOutput) =\n%s\nwant\n%s\n(NodeItem's fields must flatten into the "+
 			"top level — describe_node's wire shape must stay byte-identical now that DescribeNodeOutput/NodeItem "+
 			"are exported)", got, want)
+	}
+}
+
+// TestOperationRuleOutputs_ArgSetsNeverNull is #207/#253 item 3's golden-JSON
+// assertion: describe_node's operation_rules/deny_rules — and every rule's
+// allowed_args/args — render as JSON arrays, never null, whatever the
+// policyview snapshot carried. A zero-arg rule arrives from the daemon with
+// nil arg sets (proto empty repeated field) and means exactly "allowed (or
+// denied) with zero arguments", the same thing an explicit [] means — so a
+// consumer must never have to branch on null vs [], and "no constraint" is
+// only ever spelled as the explicit per-position "*" wildcard.
+func TestOperationRuleOutputs_ArgSetsNeverNull(t *testing.T) {
+	opRules := operationRuleOutputsFromSnapshot([]policyview.OperationRule{
+		{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}},
+		{Name: "system.facts", AllowedArgs: nil}, // zero-arg Operation: nil from the wire
+		{Name: "file.read", AllowedArgs: [][]string{{"*"}}},
+	})
+	got, err := json.Marshal(opRules)
+	if err != nil {
+		t.Fatalf("json.Marshal(operation rules): %v", err)
+	}
+	want := `[{"name":"service.restart","allowed_args":[["nginx","php-fpm"]]},` +
+		`{"name":"system.facts","allowed_args":[]},` +
+		`{"name":"file.read","allowed_args":[["*"]]}]`
+	if string(got) != want {
+		t.Errorf("operation_rules JSON = %s, want %s (allowed_args must always be an array, never null)", got, want)
+	}
+
+	denyRules := denyRuleOutputsFromSnapshot([]policyview.DenyRule{
+		{Name: "service.restart", Args: nil}, // whole-Operation deny: nil from the wire
+	})
+	got, err = json.Marshal(denyRules)
+	if err != nil {
+		t.Fatalf("json.Marshal(deny rules): %v", err)
+	}
+	want = `[{"name":"service.restart","args":[]}]`
+	if string(got) != want {
+		t.Errorf("deny_rules JSON = %s, want %s (args must always be an array, never null)", got, want)
+	}
+
+	// A snapshot with no rule blocks at all still renders arrays, never null.
+	if b, _ := json.Marshal(operationRuleOutputsFromSnapshot(nil)); string(b) != `[]` {
+		t.Errorf("operation_rules (no blocks) JSON = %s, want []", b)
+	}
+	if b, _ := json.Marshal(denyRuleOutputsFromSnapshot(nil)); string(b) != `[]` {
+		t.Errorf("deny_rules (no blocks) JSON = %s, want []", b)
 	}
 }

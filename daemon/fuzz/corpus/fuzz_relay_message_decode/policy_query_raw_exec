@@ -1,0 +1,6 @@
+"1
+
+query-0002#
+/usr/bin/systemctl
+status
+nginx
