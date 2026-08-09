@@ -122,6 +122,25 @@ pub struct ArgSpec {
     validate: Option<ValidateFn>,
 }
 
+impl ArgSpec {
+    /// An unconstrained-data argument (`charset: None`, no validator; Policy
+    /// arg-constraints are the gate) — the ONLY `ArgSpec` form constructible
+    /// outside this module (the `validate` field is private). Deliberately
+    /// restrictive: a charset-validated argument can only be declared here in
+    /// `schema.rs`, next to the ADR-0015 proof tests that bind its charset to
+    /// its real validator.
+    pub(crate) const fn data_only(key: &'static str, kind: ArgKind) -> Self {
+        ArgSpec {
+            key,
+            charset: None,
+            first_last_alnum: false,
+            no_leading_dash: false,
+            kind,
+            validate: None,
+        }
+    }
+}
+
 /// One Operation's full schema: name, risk class, and its documented args.
 pub struct OpSchema {
     pub name: &'static str,
@@ -163,76 +182,69 @@ const PKG_VERSION_CHARSET: CharsetSpec = CharsetSpec {
 };
 
 // ---------------------------------------------------------------------------
-// The schema table
+// The arg-shape tables — the single definition of each Operation's declared
+// args, referenced by the vocabulary registry ([`super::registry::REGISTRY`],
+// issue #289), which feeds dispatch's arg mapping, this golden schema, and
+// `opvocab`'s prose alike.
 // ---------------------------------------------------------------------------
 
-/// Returns the canonical v1 Operation schema, in the same fixed order as
-/// [`super::descriptors`]. Names and risk classes are read straight off the
-/// existing vocabulary registry ([`super::risk_class`]) — this table adds
-/// only the arg-level detail `descriptors()` doesn't carry.
-pub fn schemas() -> Vec<OpSchema> {
-    vec![
-        OpSchema {
-            name: super::SYSTEM_FACTS,
-            risk: risk_of(super::SYSTEM_FACTS),
-            args: &[],
-        },
-        OpSchema {
-            name: super::FILE_READ,
-            risk: risk_of(super::FILE_READ),
-            args: &[ArgSpec {
-                key: OP_ARG_PATH,
-                charset: None,
-                first_last_alnum: false,
-                no_leading_dash: false,
-                kind: ArgKind::Required,
-                validate: None,
-            }],
-        },
-        OpSchema {
-            name: super::SERVICE_RESTART,
-            risk: risk_of(super::SERVICE_RESTART),
-            args: &[ArgSpec {
-                key: OP_ARG_UNIT,
-                charset: Some(UNIT_CHARSET),
-                first_last_alnum: false,
-                no_leading_dash: true,
-                kind: ArgKind::Required,
-                validate: Some(service_restart::validate_unit_name),
-            }],
-        },
-        OpSchema {
-            name: super::PKG_INSTALL,
-            risk: risk_of(super::PKG_INSTALL),
-            args: &[
-                ArgSpec {
-                    key: OP_ARG_NAME,
-                    charset: Some(PKG_NAME_CHARSET),
-                    first_last_alnum: true,
-                    no_leading_dash: false,
-                    kind: ArgKind::Required,
-                    validate: Some(pkg_install::validate_pkg_name),
-                },
-                ArgSpec {
-                    key: OP_ARG_VERSION,
-                    charset: Some(PKG_VERSION_CHARSET),
-                    first_last_alnum: true,
-                    no_leading_dash: false,
-                    kind: ArgKind::Optional,
-                    validate: Some(pkg_install::validate_pkg_version),
-                },
-            ],
-        },
-    ]
-}
+/// `system.facts` takes no arguments.
+pub(crate) static SYSTEM_FACTS_ARGS: [ArgSpec; 0] = [];
 
-/// Looks up `name`'s risk class via [`super::risk_class`] — the single
-/// name→class registry (also used by `descriptors()`) — panicking if `name`
-/// is somehow missing from the v1 vocabulary. Only called with the vocabulary
-/// name constants above, so this can never actually panic in practice.
-fn risk_of(name: &str) -> crate::gen::RiskClass {
-    super::risk_class(name)
-        .unwrap_or_else(|| panic!("{name} must be in the v1 Operation vocabulary"))
+/// `file.read`'s `path` is first-class "unconstrained data" (`charset: None`):
+/// Operation-level charset does not apply; Policy arg-constraints are the gate
+/// for which paths are readable.
+pub(crate) static FILE_READ_ARGS: [ArgSpec; 1] =
+    [ArgSpec::data_only(OP_ARG_PATH, ArgKind::Required)];
+
+/// `service.restart`'s single validated `unit` argument.
+pub(crate) static SERVICE_RESTART_ARGS: [ArgSpec; 1] = [ArgSpec {
+    key: OP_ARG_UNIT,
+    charset: Some(UNIT_CHARSET),
+    first_last_alnum: false,
+    no_leading_dash: true,
+    kind: ArgKind::Required,
+    validate: Some(service_restart::validate_unit_name),
+}];
+
+/// `pkg.install`'s stable 2-position arg-shape: `[name, version]`.
+pub(crate) static PKG_INSTALL_ARGS: [ArgSpec; 2] = [
+    ArgSpec {
+        key: OP_ARG_NAME,
+        charset: Some(PKG_NAME_CHARSET),
+        first_last_alnum: true,
+        no_leading_dash: false,
+        kind: ArgKind::Required,
+        validate: Some(pkg_install::validate_pkg_name),
+    },
+    ArgSpec {
+        key: OP_ARG_VERSION,
+        charset: Some(PKG_VERSION_CHARSET),
+        first_last_alnum: true,
+        no_leading_dash: false,
+        kind: ArgKind::Optional,
+        validate: Some(pkg_install::validate_pkg_version),
+    },
+];
+
+// ---------------------------------------------------------------------------
+// The schema view
+// ---------------------------------------------------------------------------
+
+/// Returns the canonical v1 Operation schema, derived from the vocabulary
+/// registry ([`super::registry::REGISTRY`]) in its canonical order — the same
+/// single source of truth that feeds dispatch, arg validation, and risk
+/// classification (issue #289), so this golden schema can never drift from
+/// what the daemon actually executes.
+pub fn schemas() -> Vec<OpSchema> {
+    super::registry::REGISTRY
+        .iter()
+        .map(|e| OpSchema {
+            name: e.name,
+            risk: e.risk,
+            args: e.args,
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

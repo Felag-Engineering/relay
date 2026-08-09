@@ -51,6 +51,25 @@ pub fn gather_facts() -> Facts {
     }
 }
 
+/// Formats a [`Facts`] struct as newline-terminated `key=value` lines.
+///
+/// `ip_addresses` is comma-joined on a single line. This is the daemon-local
+/// encoding for the `system.facts` Operation's stdout: it is NOT a proto-level
+/// encoding and may change in future milestones without a wire-protocol change.
+/// (Relocated verbatim from dispatch.rs by the issue #289 registry refactor —
+/// consumed by the `system.facts` handler in `operations::registry`.)
+pub fn format_facts_as_kv(facts: &Facts) -> Vec<u8> {
+    format!(
+        "hostname={}\nos={}\narch={}\nkernel={}\nip_addresses={}\n",
+        facts.hostname,
+        facts.os,
+        facts.arch,
+        facts.kernel,
+        facts.ip_addresses.join(","),
+    )
+    .into_bytes()
+}
+
 /// Reads a `/proc` pseudo-file, trims whitespace, and returns `None` on any
 /// I/O error or if the trimmed result is empty.
 fn read_proc_trimmed(path: &str) -> Option<String> {

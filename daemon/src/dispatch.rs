@@ -25,14 +25,12 @@ use crate::gen::{
     policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, TaskRequest,
     TaskResult,
 };
+#[cfg(test)]
 use crate::operations;
-use crate::operations::file_read::{file_read, PathCheck};
-use crate::operations::pkg_install::pkg_install;
+use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration};
+#[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
-use crate::operations::service_restart::service_restart;
-use crate::operations::system_facts::gather_facts;
 use crate::policy::{Decision, Policy};
-use crate::raw_exec::run_raw_exec;
 use crate::scheduler::{QueuedOutcome, Scheduler};
 
 // ---------------------------------------------------------------------------
@@ -54,10 +52,10 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 // compile-time hard limits — and imported above.
 
 // v1 arg-key contract (`OP_ARG_PATH`/`OP_ARG_UNIT`/`OP_ARG_NAME`/`OP_ARG_VERSION`):
-// relocated to `operations::schema` (ADR-0015) — the single definition site
-// for every side of the arg-key contract (this dispatch pipeline reads them
-// out of `Operation.args`; the schema module also advertises them in the
-// golden Operation schema). Re-exported here via the `use` above.
+// defined in `operations::schema` (ADR-0015) and consumed by this pipeline
+// through each Operation's registered arg-shape (`operations::registry`,
+// issue #289) — dispatch no longer names individual keys; the `#[cfg(test)]`
+// re-import above exists only for the test fixtures below.
 
 // ---------------------------------------------------------------------------
 // Public dispatch entry
@@ -122,8 +120,8 @@ async fn dispatch_with_runner<R, Fut>(
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
-    R: Fn(ExecRequest) -> Fut + Clone,
-    Fut: Future<Output = TaskResult>,
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
 {
     dedup
         .run_once(&task.task_id, move || async move {
@@ -164,8 +162,8 @@ async fn dispatch_scheduled_with_runner<R, Fut>(
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
-    R: Fn(ExecRequest) -> Fut + Clone,
-    Fut: Future<Output = TaskResult>,
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
 {
     dedup
         .run_once(&task.task_id, move || async move {
@@ -259,37 +257,20 @@ fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
 
 /// Map an `Operation`'s named args to the positional arg vector the Policy engine expects.
 ///
-/// This is the **single definition** of the arg-map → positional mapping used by
-/// both the execution path (`handle_operation`) and the query path
-/// (`evaluate_policy_query`). Both paths MUST call this function; duplicating
-/// the match would risk silent drift between "would allow" and "actually allows"
-/// (ADR-0011).
+/// Derived from the Operation's registered arg-shape
+/// ([`OpRegistration::positional_args`] — the single mapping definition), so
+/// the execution path (`handle_operation`) and the query path
+/// (`evaluate_policy_query`) can never drift between "would allow" and
+/// "actually allows" (ADR-0011), and a newly registered Operation needs no
+/// edit here (issue #289).
 ///
 /// Unknown operation names receive an empty positional list, which causes
 /// deny-by-default to fire in the Policy engine — identical to what execution
 /// would report.
 fn operation_positional_args(op: &Operation) -> Vec<String> {
-    match op.name.as_str() {
-        operations::SYSTEM_FACTS => vec![],
-        operations::FILE_READ => {
-            let path = op.args.get(OP_ARG_PATH).cloned().unwrap_or_default();
-            vec![path]
-        }
-        operations::SERVICE_RESTART => {
-            let unit = op.args.get(OP_ARG_UNIT).cloned().unwrap_or_default();
-            vec![unit]
-        }
-        operations::PKG_INSTALL => {
-            // Stable 2-position schema: [name, version]. version defaults to ""
-            // when absent — matched by a Policy "*" wildcard rule (ADR-0011: the
-            // same mapping feeds both the query and execution paths, so a
-            // PolicyQuery verdict can never diverge from what dispatch decides).
-            let name = op.args.get(OP_ARG_NAME).cloned().unwrap_or_default();
-            let version = op.args.get(OP_ARG_VERSION).cloned().unwrap_or_default();
-            vec![name, version]
-        }
-        _ => vec![], // deny-by-default will catch this
-    }
+    registry::lookup(&op.name)
+        .map(|entry| entry.positional_args(op))
+        .unwrap_or_default() // unknown name: deny-by-default will catch this
 }
 
 // ---------------------------------------------------------------------------
@@ -304,15 +285,30 @@ async fn evaluate_and_execute<R, Fut>(
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
-    R: Fn(ExecRequest) -> Fut + Clone,
-    Fut: Future<Output = TaskResult>,
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
 {
     let task_id = task.task_id.clone();
 
     match &task.action {
         Some(task_request::Action::RawExec(raw)) => {
-            // Raw Exec: fully gated by Policy regex before any spawn (ADR-0001, ADR-0002).
-            run_raw_exec(task_id, raw, timeout, MAX_OUTPUT_BYTES, policy, cancel).await
+            // Raw Exec: resolves through the registry's dedicated entry
+            // (issue #289) — same handler seam as the native Operations, but
+            // reached only from this protocol oneof arm, never by name. Fully
+            // gated by Policy regex before any spawn (ADR-0001, ADR-0002);
+            // the regex gate lives inside the handler's run_raw_exec call,
+            // unchanged.
+            let runner = FnRunner(run);
+            let ctx = OpCtx {
+                task_id,
+                positional: raw.argv.clone(),
+                timeout,
+                max_output_bytes: MAX_OUTPUT_BYTES,
+                policy,
+                cancel,
+                runner: &runner,
+            };
+            (registry::RAW_EXEC.handler)(ctx).await
         }
         Some(task_request::Action::Operation(op)) => {
             handle_operation(task_id, op, timeout, policy, run, cancel).await
@@ -325,6 +321,8 @@ where
     }
 }
 
+/// Production Operation path: [`handle_operation_in`] bound to the single
+/// vocabulary registry ([`registry::REGISTRY`]).
 async fn handle_operation<R, Fut>(
     task_id: String,
     op: &Operation,
@@ -334,15 +332,48 @@ async fn handle_operation<R, Fut>(
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
 where
-    R: Fn(ExecRequest) -> Fut + Clone,
-    Fut: Future<Output = TaskResult>,
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
 {
-    // Build the positional arg vector from the named args map (v1 arg-key contract).
-    // Unknown operations receive an empty positional list and are denied by
-    // Policy's deny-by-default (no allow rule can exist for an unknown name).
-    // Shared with evaluate_policy_query via operation_positional_args so query
-    // and execution derive args through the same function (ADR-0011: no drift).
-    let positional = operation_positional_args(op);
+    handle_operation_in(
+        &registry::REGISTRY,
+        task_id,
+        op,
+        timeout,
+        policy,
+        run,
+        cancel,
+    )
+    .await
+}
+
+/// Policy gate + registry-resolved handler invocation, over an explicit entry
+/// slice (issue #289: the structural test proves a new Operation needs only a
+/// registration by pointing this exact function at an extended slice — there
+/// is no per-name match arm left to edit).
+#[allow(clippy::too_many_arguments)]
+async fn handle_operation_in<R, Fut>(
+    entries: &[OpRegistration],
+    task_id: String,
+    op: &Operation,
+    timeout: Duration,
+    policy: &Policy,
+    run: R,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult
+where
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
+{
+    // Resolve the registration and derive the positional arg vector from its
+    // declared arg-shape (v1 arg-key contract). Unknown operations receive an
+    // empty positional list and are denied by Policy's deny-by-default (no
+    // allow rule can exist for an unknown name). The same
+    // OpRegistration::positional_args mapping feeds evaluate_policy_query, so
+    // query and execution derive args through the same definition (ADR-0011:
+    // no drift).
+    let entry = registry::lookup_in(entries, &op.name);
+    let positional = entry.map(|e| e.positional_args(op)).unwrap_or_default();
 
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
     match policy.evaluate(&op.name, &positional) {
@@ -358,81 +389,28 @@ where
             );
             denied_by_policy_result(task_id, &reason)
         }
-        Decision::Allow(_rule) => {
-            match op.name.as_str() {
-                operations::SYSTEM_FACTS => {
-                    // Data-only: no process spawned; cancel is irrelevant.
-                    let _ = cancel;
-                    // KNOWN LIMITATION: gather_facts calls fs::read_to_string
-                    // (blocking) and libc::getifaddrs (blocking syscall) inside
-                    // this async context. Safe for v0.0.3 single-flight; move to
-                    // spawn_blocking in v0.0.4 (mirrors executor.rs:117-120).
-                    let facts = gather_facts();
-                    TaskResult {
-                        task_id,
-                        outcome: Outcome::Success as i32,
-                        exit_code: 0,
-                        stdout: format_facts_as_kv(&facts),
-                        stderr: vec![],
-                        truncated: false,
-                        duration_millis: 0,
-                    }
-                }
-                operations::FILE_READ => {
-                    // Data-only: no process spawned; cancel is irrelevant.
-                    let _ = cancel;
-                    // KNOWN LIMITATION: file_read calls std::fs::File::open
-                    // (blocking) inside this async context. Safe for v0.0.3
-                    // single-flight; move to spawn_blocking in v0.0.4
-                    // (mirrors executor.rs:117-120).
-                    let path = positional.first().map(String::as_str).unwrap_or("");
-                    // ADR-0018 layer 2: file_read resolves the target it opens
-                    // and calls back here to re-evaluate Policy on the RESOLVED
-                    // path, closing `/proc`-magic and symlink evasions that are
-                    // canonical in form and so pass layer 1.
-                    file_read(&task_id, path, MAX_OUTPUT_BYTES, |resolved| {
-                        match policy.evaluate(operations::FILE_READ, &[resolved.to_string()]) {
-                            Decision::Deny { reason, .. } => PathCheck::Denied(reason),
-                            Decision::Allow(_) => PathCheck::Allowed,
-                        }
-                    })
-                }
-                operations::SERVICE_RESTART => {
-                    let unit = positional.into_iter().next().unwrap_or_default();
-                    service_restart(
-                        task_id,
-                        &unit,
-                        timeout,
-                        MAX_OUTPUT_BYTES,
-                        cancel,
-                        run.clone(),
-                    )
-                    .await
-                }
-                operations::PKG_INSTALL => {
-                    let mut it = positional.into_iter();
-                    let name = it.next().unwrap_or_default();
-                    let version = it.next().filter(|v| !v.is_empty());
-                    pkg_install(
-                        task_id,
-                        &name,
-                        version.as_deref(),
-                        timeout,
-                        MAX_OUTPUT_BYTES,
-                        cancel,
-                        run.clone(),
-                    )
-                    .await
-                }
-                _ => {
-                    // Policy allowed a name this daemon does not implement.
-                    // FAILURE (not DENIED_BY_POLICY): the Policy engine is not at fault.
-                    // cancel drops naturally here — no process spawned.
-                    let _ = cancel;
-                    failure_result(task_id, b"unknown operation")
-                }
+        Decision::Allow(_rule) => match entry {
+            Some(entry) => {
+                let runner = FnRunner(run);
+                let ctx = OpCtx {
+                    task_id,
+                    positional,
+                    timeout,
+                    max_output_bytes: MAX_OUTPUT_BYTES,
+                    policy,
+                    cancel,
+                    runner: &runner,
+                };
+                (entry.handler)(ctx).await
             }
-        }
+            None => {
+                // Policy allowed a name this daemon does not implement.
+                // FAILURE (not DENIED_BY_POLICY): the Policy engine is not at fault.
+                // cancel drops naturally here — no process spawned.
+                let _ = cancel;
+                failure_result(task_id, b"unknown operation")
+            }
+        },
     }
 }
 
@@ -512,22 +490,9 @@ fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
     }
 }
 
-/// Formats a [`Facts`] struct as newline-terminated `key=value` lines.
-///
-/// `ip_addresses` is comma-joined on a single line. This is the daemon-local
-/// encoding for the `system.facts` Operation's stdout: it is NOT a proto-level
-/// encoding and may change in future milestones without a wire-protocol change.
-fn format_facts_as_kv(facts: &crate::gen::Facts) -> Vec<u8> {
-    format!(
-        "hostname={}\nos={}\narch={}\nkernel={}\nip_addresses={}\n",
-        facts.hostname,
-        facts.os,
-        facts.arch,
-        facts.kernel,
-        facts.ip_addresses.join(","),
-    )
-    .into_bytes()
-}
+// format_facts_as_kv (the `system.facts` stdout encoding) moved to
+// `operations::system_facts` with the issue #289 registry refactor — it is
+// consumed by the `system.facts` handler in `operations::registry`.
 
 // ---------------------------------------------------------------------------
 // Tests — pipeline acceptance criteria (a)–(e) Rust-half
@@ -2059,6 +2024,152 @@ allow = ["^/bin/sh "]
              regression handing the executor a fresh budget would record 5s \
              here instead"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Structural proof (issue #289 acceptance): adding an Operation requires
+    // ONLY a registration — one `OpRegistration` — with no dispatch edits.
+    //
+    // The test appends a test-only Operation to a copy of the production
+    // registry and drives it through `handle_operation_in`, the EXACT
+    // function the production Operation path calls (via `handle_operation`,
+    // which merely binds `registry::REGISTRY`). Arg mapping, the Policy
+    // gate, handler invocation, and risk class all derive from the single
+    // registration; there is no per-name match arm left to edit.
+    // -----------------------------------------------------------------------
+
+    use crate::gen::RiskClass;
+    use crate::operations::registry::{lookup_in, OpFuture, REGISTRY};
+    use crate::operations::schema::{ArgKind, ArgSpec};
+
+    /// The test-only Operation's arg-shape: one required, unconstrained-data
+    /// argument (the only `ArgSpec` form constructible outside `schema.rs` —
+    /// deliberately restrictive; see `ArgSpec::data_only`).
+    static TEST_ECHO_ARGS: [ArgSpec; 1] = [ArgSpec::data_only("msg", ArgKind::Required)];
+
+    /// The test-only handler: data-only echo of the single positional arg.
+    fn test_echo_handler(ctx: OpCtx<'_>) -> OpFuture<'_> {
+        Box::pin(async move {
+            TaskResult {
+                task_id: ctx.task_id,
+                outcome: Outcome::Success as i32,
+                exit_code: 0,
+                stdout: ctx
+                    .positional
+                    .first()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_bytes(),
+                stderr: vec![],
+                truncated: false,
+                duration_millis: 0,
+            }
+        })
+    }
+
+    /// The registration — the ONLY thing a new Operation adds.
+    const TEST_ECHO: OpRegistration = OpRegistration {
+        name: "test.echo",
+        risk: RiskClass::Read,
+        args: &TEST_ECHO_ARGS,
+        handler: test_echo_handler,
+    };
+
+    #[tokio::test]
+    async fn registering_a_test_operation_requires_no_dispatch_edits() {
+        // Registration is the whole change: production table + one entry.
+        let mut entries: Vec<OpRegistration> = REGISTRY.to_vec();
+        entries.push(TEST_ECHO);
+
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "test.echo"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("test.echo policy must parse");
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("msg".to_string(), "hello registry".to_string());
+        let op = crate::gen::Operation {
+            name: "test.echo".to_string(),
+            args,
+        };
+
+        // End-to-end through the real Operation path (Policy gate included),
+        // pointed at the extended registry — zero dispatch edits.
+        let result = handle_operation_in(
+            &entries,
+            "t-echo".to_string(),
+            &op,
+            Duration::from_secs(5),
+            &policy,
+            execute,
+            None,
+        )
+        .await;
+        assert_eq!(
+            result.outcome,
+            Outcome::Success as i32,
+            "registered test.echo must execute; stderr={:?}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert_eq!(result.stdout, b"hello registry");
+
+        // Arg mapping and risk class equally derive from the registration.
+        let entry = lookup_in(&entries, "test.echo").expect("registered entry must resolve");
+        assert_eq!(entry.positional_args(&op), ["hello registry"]);
+        assert_eq!(entry.risk, RiskClass::Read);
+
+        // Deny path still Policy-owned: an arg outside the allow rule denies
+        // before the handler runs, exactly like any native Operation.
+        let deny_policy = from_toml_str(
+            r#"
+[[operation]]
+name = "test.echo"
+allowed_args = [["only-this"]]
+"#,
+        )
+        .expect("deny-side policy must parse");
+        let denied = handle_operation_in(
+            &entries,
+            "t-echo-denied".to_string(),
+            &op,
+            Duration::from_secs(5),
+            &deny_policy,
+            execute,
+            None,
+        )
+        .await;
+        assert_eq!(denied.outcome, Outcome::DeniedByPolicy as i32);
+
+        // WITHOUT the registration, the same request stays unknown: the
+        // production registry does not resolve it, its args map to the empty
+        // positional list, and even a Policy that allows the (argless) name
+        // yields FAILURE "unknown operation" — the baseline behavior for
+        // unregistered names, unchanged.
+        assert!(lookup_in(&REGISTRY, "test.echo").is_none());
+        let allow_argless_policy = from_toml_str(
+            r#"
+[[operation]]
+name = "test.echo"
+allowed_args = []
+"#,
+        )
+        .expect("argless policy must parse");
+        let unregistered = handle_operation_in(
+            &REGISTRY,
+            "t-echo-unregistered".to_string(),
+            &op,
+            Duration::from_secs(5),
+            &allow_argless_policy,
+            execute,
+            None,
+        )
+        .await;
+        assert_eq!(unregistered.outcome, Outcome::Failure as i32);
+        assert_eq!(unregistered.stderr, b"unknown operation");
     }
 }
 
