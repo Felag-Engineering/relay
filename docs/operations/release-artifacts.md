@@ -84,18 +84,16 @@ The same sequence applies to the `relay` binary on the (far fewer) Relay hosts.
 The workflow enforces what [version-stamping.md](version-stamping.md) documents: tag
 `v<version>` must sit on a clean commit whose `daemon/Cargo.toml` says exactly
 `<version>`. If `Cargo.toml` was not bumped, or was bumped past the tag, or the tag is
-not visible in the checkout, the stamp takes the `-dev` path (or stamps a different
-version) and the **stamped-version-equals-tag guard fails the release** instead of
+not visible in the checkout, the stamp takes the dev path (`X.Y.Z-0.dev+g<sha>`, see
+below) and the **stamped-version-equals-tag guard fails the release** instead of
 publishing a binary that misreports itself. The build also pins `SOURCE_DATE_EPOCH` to
 the tagged commit's date so a rebuild of the same tag reproduces the published digest.
 
-> **Known caveat (issue #261, unresolved):** the version scheme's `-dev` suffix inverts
-> for *prerelease* targets — `0.1.0-beta-dev+g<sha>` sorts **above** `0.1.0-beta` under
-> the Relay's comparator, so a dev build of a prerelease line would pass a
-> `min-daemon-version` set to that prerelease (fail-open). Until #261 is resolved, do not
-> set `min-daemon-version` to a prerelease version. This workflow will happily publish
-> prerelease tags (e.g. `v0.1.0-beta`) — publishing is unaffected; only the gate
-> semantics around prerelease *targets* are. Remove this caveat when #261 lands.
+Dev builds stamp the target's numeric core as a `-0.dev` prerelease
+(`0.1.0-0.dev+g<sha>[.dirty]`). The leading numeric `0` sorts below any alphabetic
+prerelease label under the Relay's comparator (`0.1.0-0.dev < 0.1.0-beta`, issue #261),
+so a dev build can never satisfy a `min-daemon-version` gate set to a prerelease or
+release target — prerelease minimums (e.g. `0.1.0-beta`) are safe to set.
 
 ## Out of scope (deliberate follow-ups, not omissions)
 
