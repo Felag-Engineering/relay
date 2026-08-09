@@ -1,0 +1,118 @@
+# Relay — shipped default Node Policy (ADR-0022)
+#
+# POSTURE:
+#   - `read`-class Operations are pre-allowed out of the box, so a freshly
+#     enrolled Node is fully interrogable with zero Policy authoring.
+#   - A confidentiality deny-list overrides the read pre-allowance
+#     (deny-beats-allow): `read` means "cannot change Node state", NOT "safe
+#     for the AI to see" — a read result flows to the model provider, so
+#     reading is exfiltration by construction (ADR-0021 data-egress
+#     governance).
+#   - `mutate` Operations and Raw Exec are opt-in: no allow rules here, so
+#     deny-by-default applies until you add them (ADR-0002).
+#
+# This file is YOURS the moment it is installed: locally-rooted and
+# remotely-immutable (ADR-0002) — the Relay can query it but never change it
+# over the wire. Narrow it freely; the annotated syntax reference is
+# policy.example.toml, and docs/operations/policy-as-code.md covers authoring
+# and distribution. The egress-hardening move is replacing file.read's "*"
+# with an explicit path allow-list.
+#
+# ENGINE SEMANTICS (unchanged by this file): deny-by-default,
+# deny-beats-allow, argument-level granularity, path arguments matched in
+# canonical form with a resolved-target re-check (ADR-0018).
+#
+# FILE PLACEMENT:
+#   /etc/relay-daemon/policy.toml   (root-owned, not group/world-writable —
+#   the daemon's fail-closed loader refuses it otherwise)
+
+# ---------------------------------------------------------------------------
+# Read class — pre-allowed (ADR-0022)
+# ---------------------------------------------------------------------------
+
+# Facts self-report: OS, kernel, hostname, IP, packages. No arguments.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Read any canonical path, EXCEPT the confidentiality deny-list below
+# (deny-beats-allow makes the deny-list authoritative over this wildcard).
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+# ---------------------------------------------------------------------------
+# Confidentiality deny-list (ADR-0022, applying ADR-0021's data-egress
+# governance)
+#
+# Exact canonical paths (ADR-0018): lexical evasions (/etc/../etc/shadow,
+# //etc/shadow, ...) are denied as non-canonical form, and the executor
+# re-checks the resolved target it actually opened, so symlink and
+# /proc/self/root/... aliases to these paths are denied too.
+#
+# There is no subtree/wildcard deny (recorded residual, ADR-0022): this list
+# cannot cover /etc/ssl/private/*, per-pid /proc/<pid>/* aliases, or other
+# unenumerable secrets. If your Node holds key material at other paths, add
+# them here — or narrow file.read's allow to an explicit path list.
+# ---------------------------------------------------------------------------
+
+# Local credential databases (password/group hashes + shadow-utility backups).
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-"]]
+
+# Host key material: SSH host private keys and the Kerberos keytab.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_dsa_key",
+    "/etc/krb5.keytab",
+]]
+
+# Root's default SSH private keys.
+[[deny]]
+name = "file.read"
+args = [[
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ecdsa",
+    "/root/.ssh/id_ed25519",
+    "/root/.ssh/id_dsa",
+]]
+
+# The daemon's own config and credentials (consistent with the #287
+# self-reference posture): the Policy file itself, the env file carrying the
+# Enrollment Token, the pinned CA bundle, and the Node's identity private key.
+[[deny]]
+name = "file.read"
+args = [[
+    "/etc/relay-daemon/policy.toml",
+    "/etc/relay-daemon/relay-daemon.env",
+    "/etc/relay-daemon/ca-bundle.pem",
+    "/var/lib/relay-daemon/key.pem",
+]]
+
+# Kernel/process memory and environment oracles: kernel memory images, and
+# the daemon's own memory/environment (the environment carries the Enrollment
+# Token on first boot).
+[[deny]]
+name = "file.read"
+args = [[
+    "/proc/kcore",
+    "/dev/mem",
+    "/dev/kmem",
+    "/proc/self/mem",
+    "/proc/self/environ",
+]]
+
+# ---------------------------------------------------------------------------
+# Mutate class + Raw Exec — opt-in (nothing shipped)
+#
+# No allow rules for service.restart or pkg.install, and no [raw_exec]
+# allow patterns: deny-by-default refuses every state change and every
+# arbitrary command until you deliberately allow it. See policy.example.toml
+# for the syntax and the standing Raw Exec guidance (tight, fully-anchored
+# allow list; deny list only as a backstop).
+# ---------------------------------------------------------------------------
