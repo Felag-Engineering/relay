@@ -6,7 +6,11 @@ strategy is to build *one thin path through every layer* rather than any one lay
 the agentic development loop always has an end-to-end target with a pass/fail signal.
 
 Every milestone lists **acceptance criteria** (the loop's definition of done) and the **ADRs**
-it realizes.
+it realizes. Every milestone also ships a **manual validation script** —
+`docs/testing/validate-vX.Y.Z.md` (convention: [docs/testing/README.md](docs/testing/README.md))
+— a human-runnable end-to-end walkthrough of its acceptance criteria through the product's real
+surfaces; writing/updating it is part of the milestone's definition of done. The baseline
+covering everything shipped through v0.0.9 is `docs/testing/validate-v0.0.9-current.md`.
 
 > **Renumbered 2026-07-02** (milestones split for manageability). Mapping from older docs/ADRs:
 > old v0.0.3 → v0.0.3 + v0.0.4 · old v0.0.4 → v0.0.5 + v0.0.6 · old v0.3.0 → v0.3.0 + v0.4.0 ·
@@ -379,6 +383,8 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted
   Operation from an MCP client, and read the audit trail — on real machines.
 - Documented, repeatable setup from a clean environment.
+- Manual validation: `docs/testing/validate-v0.1.0-beta.md` (the real-hardware runbook)
+  executed and signed off.
 
 **ADRs:** all of 0001–0014; security posture proven in v0.0.8.
 
@@ -431,6 +437,7 @@ is. v0.8.0 shrinks to signing + courier distribution of the same objects.
 - A Node enrolled with the shipped default Policy answers the full read catalog with zero
   local authoring; a deny-listed path is refused.
 - `policy check` lints templates and flags a self-referential allow rule.
+- Manual validation: `docs/testing/validate-v0.2.0.md` written and signed off.
 
 **ADRs:** new template-tier ADR (realizes ADR-0001 tier 2), new short default-Policy ADR,
 0012; ADR-0002 unchanged.
@@ -472,6 +479,7 @@ login, audit needs the verified/asserted split.
 - Revoking a token immediately cuts its access; the audit trail attributes each action to
   its Account and records asserted context in the separate lane.
 - The seeded credential still works and appears in audit as the founding admin Account.
+- Manual validation: `docs/testing/validate-v0.3.0.md` written and signed off.
 
 **ADRs:** 0010 (Account model); builds on 0003. Auth code → human-merge lane, always.
 
@@ -505,6 +513,7 @@ porcelain: the Console renders what this API manages.
 - A client generated from the OpenAPI spec can drive the fleet.
 - The CLI runs a `mutate` Operation only after showing its Plan and receiving `--apply`;
   its actions appear in audit attributed to the operator's Account like any API caller.
+- Manual validation: `docs/testing/validate-v0.4.0.md` written and signed off.
 
 **ADRs:** 0010 (Control API); builds on 0003 (capability surface), 0004 (Jobs).
 
@@ -550,6 +559,7 @@ approver sees; the guarantee never depends on harness behavior.
 - Registry drift between approval and dispatch re-parks the Job; an expired approval
   cannot dispatch.
 - A machine Account can never satisfy its own gate on any channel.
+- Manual validation: `docs/testing/validate-v0.5.0.md` written and signed off.
 
 **ADRs:** new approval ADR (#268); builds on 0011 (Plans), 0010 (Accounts), 0013
 (Job states).
@@ -579,6 +589,7 @@ The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
 - An operator logs in and watches fleet state, Jobs, pending approvals, and audit live —
   with zero mutating routes in the Console (verified by review).
 - A `viewer` Account sees everything and can change nothing.
+- Manual validation: `docs/testing/validate-v0.6.0.md` written and signed off.
 
 **ADRs:** 0009 (Console, monitoring phase); renders 0010's Account model.
 
@@ -622,6 +633,7 @@ hands the keys to the AI. The wall is the same wall.
 - An `operator` filters the fleet and bulk-applies a `tag:` label without step-up;
   setting `relay:quarantine` on a Node demands `admin` + step-up; no surface anywhere can
   write a `node:` label.
+- Manual validation: `docs/testing/validate-v0.7.0.md` written and signed off.
 
 **ADRs:** #264's superseding ADR (Console execution), 0009 (remainder stands), 0010,
 0020 (label management). Amends CLAUDE.md invariant #10 in the same change →
@@ -655,6 +667,7 @@ semantics landed in v0.2.0; this milestone signs and couriers the same objects.
   version replayed — is refused.
 - A compromised-Relay simulation (forged/wrong-key bundle over the wire) cannot widen any
   Node's Policy or template set.
+- Manual validation: `docs/testing/validate-v0.8.0.md` written and signed off.
 
 **ADRs:** rewrites 0002; new signing ADR; 0012.
 
@@ -681,6 +694,7 @@ on-demand, Policy-gated questions against live state, never a metrics pipeline.
 - A fleet-wide `file.checksum` returns an aggregated histogram; a divergent Node is
   identified without reading per-Node output.
 - A streamed `log tail --follow` delivers live output over MCP/API and stops on cancel.
+- Manual validation: `docs/testing/validate-v0.9.0.md` written and signed off.
 
 **ADRs:** 0012, 0004 (streaming caveat).
 
