@@ -1,0 +1,170 @@
+# Release CD (issue #250, closes #44): on a v* tag, build both stamped binaries,
+# verify the stamp equals the tag, and publish a checksummed GitHub Release.
+#
+# The daemon is distributed to the fleet by the customer's config management
+# (ADR-0014: the Relay never pushes binaries), so the artifact set here is the
+# contract config management pins against — naming, checksums, and the
+# verify-then-install path are documented in docs/operations/release-artifacts.md.
+# Change the convention there and here together.
+#
+# Deliberately out of scope (docs/operations/release-artifacts.md, "Out of
+# scope"): container images, SBOM, cosign/sigstore signing.
+
+name: Release
+
+on:
+  push:
+    # Tags only — never branch pushes. `v*` matches every release tag this
+    # project cuts (vX.Y.Z and prerelease forms like vX.Y.Z-beta).
+    tags: ['v*']
+
+# The default GITHUB_TOKEN needs contents:write to create the Release. Nothing
+# here needs more; keep the surface minimal (principle as in ci.yml).
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, verify, publish
+    runs-on: ubuntu-latest
+    steps:
+      # fetch-depth: 0 is load-bearing, not a convenience: the version stamp
+      # (scripts/build-version.sh) reports the release version ONLY when the
+      # tag v<Cargo.toml version> is visible on a clean HEAD. A shallow,
+      # tagless checkout would stamp `<base>-dev+g<sha>` and the guard below
+      # would fail the release. Whether a default-depth checkout of a tag ref
+      # exposes the tag to `git tag --points-at HEAD` is version-dependent
+      # actions/checkout behaviour — so fetch everything, explicitly.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: relay/go.mod
+
+      - name: Set up Rust stable (musl target)
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl linker
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache Go modules
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('relay/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Cargo registry and build
+        uses: actions/cache@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            daemon/target
+          key: ${{ runner.os }}-cargo-musl-${{ hashFiles('daemon/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-musl-
+
+      # Pin the build date to the tagged commit's committer date so a rebuild of
+      # the same tag reproduces the same bytes — and therefore the same SHA256.
+      # Without this the stamp carries the wall-clock UTC date and a rebuild on
+      # another day hashes differently, foreclosing rebuild-and-compare
+      # verification (docs/operations/version-stamping.md, "Reproducibility
+      # limit"). scripts/build-version.sh honours SOURCE_DATE_EPOCH.
+      - name: Pin SOURCE_DATE_EPOCH to the tagged commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+      # Both binaries via the Makefile's stamped targets — the same recipes as
+      # local builds and CI, no parallel build path. (docker/daemon.Dockerfile is
+      # deliberately NOT the release recipe: it builds unstamped, for the dev
+      # fleet.)
+      - name: Build relay (stamped)
+        run: make build-relay
+
+      - name: Build relay-daemon (stamped, static musl)
+        run: make build-daemon-release
+
+      # ---- stamped-version-equals-tag guard ----
+      # The single assertion that keeps "the published artifact reports its true
+      # version" from being silently false. Asserting equality with the
+      # triggering tag (not merely "no -dev") also catches the multi-tag case:
+      # two v* tags on one commit would stamp whichever matches Cargo.toml, and
+      # a CD run for the other tag must fail, not publish a mislabeled binary.
+      # Failure modes this catches (see issue #250):
+      #   - Cargo.toml not bumped to the tag's version -> stamp is X.Y.Z-dev+g<sha>
+      #   - Cargo.toml bumped past the tag             -> stamp is a -dev of an unshipped version
+      #   - tag invisible to the checkout              -> stamp takes the -dev path
+      - name: Guard - stamped version equals tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          relay_v="$(relay/bin/relay --version | awk '{print $2}')"
+          daemon_v="$(daemon/target/x86_64-unknown-linux-musl/release/relay-daemon --version | awk '{print $2}')"
+          echo "tag=${tag} relay=${relay_v} relay-daemon=${daemon_v}"
+          fail=0
+          if [ "v${relay_v}" != "${tag}" ]; then
+            echo "::error::relay stamped version '${relay_v}' does not equal tag '${tag}'"
+            fail=1
+          fi
+          if [ "v${daemon_v}" != "${tag}" ]; then
+            echo "::error::relay-daemon stamped version '${daemon_v}' does not equal tag '${tag}'"
+            fail=1
+          fi
+          exit "${fail}"
+
+      # The daemon artifact must be static (ADR-0007): it drops onto arbitrary
+      # fleet Nodes with no libc expectations. ldd prints "statically linked"
+      # (static-pie) or "not a dynamic executable" depending on version; accept
+      # either, fail on anything else.
+      - name: Guard - relay-daemon is static
+        run: |
+          set -uo pipefail
+          out="$(ldd daemon/target/x86_64-unknown-linux-musl/release/relay-daemon 2>&1 || true)"
+          echo "${out}"
+          echo "${out}" | grep -Eq 'statically linked|not a dynamic executable'
+
+      # ---- stage artifacts under the documented naming convention ----
+      # <binary>-<version>-<target-triple>; <version> is the tag without the
+      # leading v, so the filename, the tag, and `--version` all agree. The
+      # convention is contract (docs/operations/release-artifacts.md).
+      - name: Stage artifacts and generate SHA256SUMS
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          cp daemon/target/x86_64-unknown-linux-musl/release/relay-daemon \
+             "dist/relay-daemon-${version}-x86_64-unknown-linux-musl"
+          cp relay/bin/relay \
+             "dist/relay-${version}-x86_64-unknown-linux-gnu"
+          cd dist
+          # Bare filenames in SHA256SUMS so `sha256sum --check` works from any
+          # download directory.
+          sha256sum relay-daemon-"${version}"-x86_64-unknown-linux-musl \
+                    relay-"${version}"-x86_64-unknown-linux-gnu > SHA256SUMS
+          cat SHA256SUMS
+
+      # gh is preinstalled on the runner and uses the job's GITHUB_TOKEN — no
+      # third-party release action to pin or audit. --verify-tag refuses to
+      # invent a release for a tag the remote doesn't have. Pre-1.0 tags (0.x)
+      # and any tag with a prerelease component publish as pre-releases.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prerelease=""
+          case "${tag}" in
+            v0.*|*-*) prerelease="--prerelease" ;;
+          esac
+          gh release create "${tag}" dist/* \
+            --title "${tag}" \
+            --generate-notes \
+            --verify-tag \
+            ${prerelease}
