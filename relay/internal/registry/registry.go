@@ -57,6 +57,13 @@ type Node struct {
 	EnrollingTokenID  string // provenance: the Enrollment Token ID used at first enrollment
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, reported on Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
 	DaemonVersion     string // relay-daemon version self-reported on Hello; report-only, refreshed on each (re)connect (ADR-0014)
+	// TemplateSetFingerprint is the SHA-256 hex of the Node's loaded Template
+	// Operation set, reported on Hello beside PolicyFingerprint (ADR-0021).
+	// Report-only drift signal — the Relay never sets a Node's templates, any
+	// more than it sets Policy (ADR-0002). Empty means "no templates
+	// installed"; the literal "unloadable" means the Node's local template set
+	// failed to load and its template vocabulary is empty (fail closed).
+	TemplateSetFingerprint string
 
 	// RevokedAt is the persisted revocation state. Zero value means active
 	// (never revoked). Relay-set, Node-immutable — the structural sibling of
@@ -86,6 +93,9 @@ type Report struct {
 	EnrollingTokenID  string
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, sourced from Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
 	DaemonVersion     string // relay-daemon version self-reported on Hello; report-only drift/upgrade-progress signal (ADR-0014)
+	// TemplateSetFingerprint is the Node's reported template-set fingerprint,
+	// sourced from Hello; report-only drift signal (ADR-0021/ADR-0002).
+	TemplateSetFingerprint string
 }
 
 // Repository is the interface for the Node registry.
@@ -98,9 +108,10 @@ type Repository interface {
 	// reached. On UPDATE (existing Node): the cap is never checked — reconnects
 	// and Hello Upserts must never be throttled.
 	//
-	// PolicyFingerprint and DaemonVersion are overwritten on both INSERT and
-	// UPDATE (like Facts and NodeLabels), so each (re)connect refreshes the
-	// stored values to what the Node currently reports. RelayLabels and
+	// PolicyFingerprint, DaemonVersion, and TemplateSetFingerprint are
+	// overwritten on both INSERT and UPDATE (like Facts and NodeLabels), so
+	// each (re)connect refreshes the stored values to what the Node currently
+	// reports. RelayLabels and
 	// EnrollingTokenID provenance are never touched.
 	Upsert(r Report) (Node, error)
 

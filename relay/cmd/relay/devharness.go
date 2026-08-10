@@ -238,6 +238,11 @@ type harnessResponse struct {
 	Stdout            string `json:"stdout,omitempty"`
 	Stderr            string `json:"stderr,omitempty"`
 	PolicyFingerprint string `json:"policy_fingerprint,omitempty"`
+	// TemplateSetFingerprint is get_node's Template Operation drift signal
+	// (ADR-0021), reported beside policy_fingerprint. No `omitempty` reason to
+	// differ from policy_fingerprint's: an empty value legitimately means "no
+	// templates installed on that Node".
+	TemplateSetFingerprint string `json:"template_set_fingerprint,omitempty"`
 	// NodeLabels/RelayLabels intentionally have no `omitempty`: an empty-but-
 	// present map (get_node on a Node with no labels) must still round-trip as
 	// `{}`, not be silently dropped from the response.
@@ -413,11 +418,12 @@ func harnessGetNode(st *harnessState, req harnessRequest) harnessResponse {
 		return harnessResponse{Error: fmt.Sprintf("get_node: node %q not found", req.NodeID)}
 	}
 	return harnessResponse{
-		NodeID:            node.NodeID,
-		PolicyFingerprint: node.PolicyFingerprint,
-		NodeLabels:        node.NodeLabels,
-		RelayLabels:       node.RelayLabels,
-		Connected:         st.router.Connected(req.NodeID),
+		NodeID:                 node.NodeID,
+		PolicyFingerprint:      node.PolicyFingerprint,
+		TemplateSetFingerprint: node.TemplateSetFingerprint,
+		NodeLabels:             node.NodeLabels,
+		RelayLabels:            node.RelayLabels,
+		Connected:              st.router.Connected(req.NodeID),
 	}
 }
 
@@ -608,6 +614,8 @@ func outcomeString(o jobs.Outcome) string {
 		return "OUTCOME_UNREACHABLE"
 	case jobs.OutcomeVersionRefused:
 		return "OUTCOME_VERSION_REFUSED"
+	case jobs.OutcomeUnsupported:
+		return "OUTCOME_UNSUPPORTED"
 	default:
 		return "OUTCOME_UNSPECIFIED"
 	}

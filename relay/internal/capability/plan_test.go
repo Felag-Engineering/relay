@@ -34,6 +34,51 @@ func webSelector() Selector {
 	return Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
 }
 
+// TestPlanReportsUnsupportedDistinctFromDeny is #291's plan half (ADR-0021):
+// a Node whose daemon answers "that Operation is not in my vocabulary" gets
+// VerdictUnsupported — never VerdictDeny (its Policy was never asked) and
+// never VerdictUnknown (the Relay did reach it). This is what keeps a Plan
+// truthful about what a real dispatch would report (OutcomeUnsupported).
+func TestPlanReportsUnsupportedDistinctFromDeny(t *testing.T) {
+	reg := seedNodes(t, 2)
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-0"] = true
+	conduit.connected["node-1"] = true
+	conduit.verdicts["node-0"] = jobs.Verdict{
+		Allowed:      false,
+		Unsupported:  true,
+		DecidingRule: "operation is not in this Node's vocabulary",
+	}
+	conduit.verdicts["node-1"] = jobs.Verdict{Allowed: true}
+
+	svc, _, _ := newPlanTestService(t, reg, conduit)
+
+	act := jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "disk.usage",
+		RiskClass:     jobs.RiskClassRead,
+	}
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, webSelector(), act)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	got := map[string]NodeVerdict{}
+	for _, v := range pr.Verdicts {
+		got[v.NodeID] = v
+	}
+	if v := got["node-0"]; v.Status != VerdictUnsupported {
+		t.Errorf("node-0 verdict = %+v, want VerdictUnsupported", v)
+	}
+	if v := got["node-0"]; v.DecidingRule == "" {
+		t.Error("an unsupported verdict must still explain itself")
+	}
+	if v := got["node-1"]; v.Status != VerdictAllow {
+		t.Errorf("node-1 verdict = %+v, want VerdictAllow (same Operation, a Node that has it)", v)
+	}
+}
+
 // TestPlanReturnsPerNodeVerdictsNoJobOrTask is the core acceptance line: a
 // Plan against two connected Nodes (one allow, one deny-with-rule) returns
 // both verdicts and creates NO Job/Task — the repos are never touched.

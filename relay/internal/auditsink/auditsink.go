@@ -275,6 +275,7 @@ var outcomeOrder = []jobs.Outcome{
 	jobs.OutcomeCancelled,
 	jobs.OutcomeUnreachable,
 	jobs.OutcomeVersionRefused,
+	jobs.OutcomeUnsupported,
 	jobs.OutcomeUnspecified,
 }
 
@@ -297,6 +298,8 @@ func outcomeLabel(o jobs.Outcome) string {
 		return "unreachable"
 	case jobs.OutcomeVersionRefused:
 		return "version_refused"
+	case jobs.OutcomeUnsupported:
+		return "unsupported"
 	default:
 		return "unspecified"
 	}

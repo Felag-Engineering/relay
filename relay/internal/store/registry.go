@@ -71,10 +71,12 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO nodes (node_id, cert_fingerprint, hostname, os, kernel, arch,
-				ip_addresses, enrolling_token_id, policy_fingerprint, daemon_version, last_seen, revoked_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+				ip_addresses, enrolling_token_id, policy_fingerprint, daemon_version,
+				template_set_fingerprint, last_seen, revoked_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 			rep.NodeID, rep.CertFingerprint, rep.Facts.Hostname, rep.Facts.OS, rep.Facts.Kernel, rep.Facts.Arch,
-			ipJSON, rep.EnrollingTokenID, rep.PolicyFingerprint, rep.DaemonVersion, formatTime(now),
+			ipJSON, rep.EnrollingTokenID, rep.PolicyFingerprint, rep.DaemonVersion,
+			rep.TemplateSetFingerprint, formatTime(now),
 		); err != nil {
 			return registry.Node{}, fmt.Errorf("insert node: %w", err)
 		}
@@ -84,10 +86,12 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 	} else {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE nodes SET cert_fingerprint = ?, hostname = ?, os = ?, kernel = ?, arch = ?,
-				ip_addresses = ?, policy_fingerprint = ?, daemon_version = ?, last_seen = ?
+				ip_addresses = ?, policy_fingerprint = ?, daemon_version = ?,
+				template_set_fingerprint = ?, last_seen = ?
 			WHERE node_id = ?`,
 			rep.CertFingerprint, rep.Facts.Hostname, rep.Facts.OS, rep.Facts.Kernel, rep.Facts.Arch,
-			ipJSON, rep.PolicyFingerprint, rep.DaemonVersion, formatTime(now), rep.NodeID,
+			ipJSON, rep.PolicyFingerprint, rep.DaemonVersion, rep.TemplateSetFingerprint,
+			formatTime(now), rep.NodeID,
 		); err != nil {
 			return registry.Node{}, fmt.Errorf("update node: %w", err)
 		}
@@ -282,16 +286,18 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 		certFingerprint, hostname, osName, kernel, arch string
 		ipAddresses                                     sql.NullString
 		enrollingTokenID, policyFingerprint             string
-		daemonVersion                                   string
+		daemonVersion, templateSetFingerprint           string
 		lastSeen                                        string
 		revokedAt                                       sql.NullString
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT cert_fingerprint, hostname, os, kernel, arch, ip_addresses,
-			enrolling_token_id, policy_fingerprint, daemon_version, last_seen, revoked_at
+			enrolling_token_id, policy_fingerprint, daemon_version,
+			template_set_fingerprint, last_seen, revoked_at
 		FROM nodes WHERE node_id = ?`, nodeID,
 	).Scan(&certFingerprint, &hostname, &osName, &kernel, &arch, &ipAddresses,
-		&enrollingTokenID, &policyFingerprint, &daemonVersion, &lastSeen, &revokedAt)
+		&enrollingTokenID, &policyFingerprint, &daemonVersion, &templateSetFingerprint,
+		&lastSeen, &revokedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return registry.Node{}, false, nil
 	}
@@ -332,13 +338,14 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 			Arch:        arch,
 			IPAddresses: ips,
 		},
-		NodeLabels:        nodeLabels,
-		RelayLabels:       relayLabels,
-		LastSeen:          lastSeenTime,
-		EnrollingTokenID:  enrollingTokenID,
-		PolicyFingerprint: policyFingerprint,
-		DaemonVersion:     daemonVersion,
-		RevokedAt:         revokedAtTime,
+		NodeLabels:             nodeLabels,
+		RelayLabels:            relayLabels,
+		LastSeen:               lastSeenTime,
+		EnrollingTokenID:       enrollingTokenID,
+		PolicyFingerprint:      policyFingerprint,
+		DaemonVersion:          daemonVersion,
+		RevokedAt:              revokedAtTime,
+		TemplateSetFingerprint: templateSetFingerprint,
 	}, true, nil
 }
 

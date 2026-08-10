@@ -27,6 +27,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -195,6 +196,26 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 	// nodeB intentionally has no captured snapshot: describe_node(nodeB) must
 	// show reported=false, proving absence isn't confused with "unrestricted".
 
+	// nodeA has a reported Template Operation vocabulary (#291, ADR-0021);
+	// nodeB deliberately has none captured, so describe_node(nodeB) shows
+	// template_vocabulary.reported=false — "not reported yet", never "this
+	// Node has no templates".
+	vocabCache := nodevocab.New()
+	vocabCache.Set(nodeA, nodevocab.Snapshot{
+		Fingerprint: "sha256:node-a-template-set",
+		Templates: []nodevocab.Template{
+			{Name: "disk.usage", RiskClass: int32(jobs.RiskClassRead)},
+			{
+				Name:      "log.tail",
+				RiskClass: int32(jobs.RiskClassRead),
+				Slots: []nodevocab.Slot{
+					{Name: "lines", Type: "integer"},
+					{Name: "path", Type: "path"},
+				},
+			},
+		},
+	})
+
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
@@ -211,7 +232,7 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 	)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(reg, policyCache, opsLister{}, capSvc, results)
+	handler := mcp.New(reg, policyCache, vocabCache, opsLister{}, capSvc, results)
 
 	cert := selfSignedCert(t)
 	sum := sha256.Sum256([]byte(testToken))
@@ -539,10 +560,156 @@ func TestMCP_DescribeNode(t *testing.T) {
 		}
 	})
 
+	// #291 (ADR-0021): describe_node reports the Node's Template Operation
+	// vocabulary beside its effective Policy, with the same "reported is the
+	// only no-data-yet signal" discipline.
+	t.Run("node with a captured template vocabulary", func(t *testing.T) {
+		res := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
+		var out mcp.DescribeNodeOutput
+		decodeResult(t, res, &out)
+
+		if !out.TemplateVocabulary.Reported {
+			t.Fatal("TemplateVocabulary.Reported = false, want true (a snapshot was captured for node A)")
+		}
+		if out.TemplateVocabulary.Fingerprint != "sha256:node-a-template-set" {
+			t.Errorf("TemplateVocabulary.Fingerprint = %q, want the reported template-set fingerprint",
+				out.TemplateVocabulary.Fingerprint)
+		}
+		want := []mcp.TemplateOperationOutput{
+			{Name: "disk.usage", RiskClass: "read", Slots: []mcp.TemplateSlotOutput{}},
+			{
+				Name:      "log.tail",
+				RiskClass: "read",
+				Slots: []mcp.TemplateSlotOutput{
+					{Name: "lines", Type: "integer", EnumValues: []string{}},
+					{Name: "path", Type: "path", EnumValues: []string{}},
+				},
+			},
+		}
+		if !reflect.DeepEqual(out.TemplateVocabulary.Templates, want) {
+			t.Errorf("TemplateVocabulary.Templates = %+v, want %+v", out.TemplateVocabulary.Templates, want)
+		}
+		// The template BODY never crosses the wire (ADR-0021): only the
+		// daemon renders it, so no response may carry one.
+		text := resultText(t, res)
+		if strings.Contains(text, `"body"`) {
+			t.Errorf("describe_node JSON = %s, must never carry a template body", text)
+		}
+		if strings.Contains(text, `"slots":null`) || strings.Contains(text, `"templates":null`) {
+			t.Errorf("describe_node JSON = %s, must use empty arrays, never null", text)
+		}
+	})
+
+	t.Run("node with no captured template vocabulary", func(t *testing.T) {
+		res := callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeB})
+		var out mcp.DescribeNodeOutput
+		decodeResult(t, res, &out)
+
+		if out.TemplateVocabulary.Reported {
+			t.Error("TemplateVocabulary.Reported = true, want false (nothing captured for node B)")
+		}
+		if len(out.TemplateVocabulary.Templates) != 0 {
+			t.Errorf("TemplateVocabulary.Templates = %+v, want empty", out.TemplateVocabulary.Templates)
+		}
+		text := resultText(t, res)
+		if !strings.Contains(text, `"templates":[]`) {
+			t.Errorf("describe_node (reported=false) JSON = %s, want %q — an array, never null",
+				text, `"templates":[]`)
+		}
+	})
+
 	t.Run("unknown node is a tool error", func(t *testing.T) {
 		res := callTool(t, session, "describe_node", map[string]any{"node_id": "no-such-node"})
 		if !res.IsError {
 			t.Fatal("describe_node(no-such-node): IsError = false, want true")
+		}
+	})
+}
+
+// TestMCP_ListOperations_PerNode is #291's discovery half (ADR-0021): the
+// vocabulary is per-Node, so list_operations(node_id) returns that Node's
+// Template Operations alongside the frozen native four, each tagged with its
+// source, and a Node with nothing reported says so rather than implying it has
+// no templates.
+func TestMCP_ListOperations_PerNode(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	t.Run("without node_id: natives only", func(t *testing.T) {
+		res := callTool(t, session, "list_operations", nil)
+		var out mcp.ListOperationsOutput
+		decodeResult(t, res, &out)
+
+		if out.NodeID != "" {
+			t.Errorf("NodeID = %q, want empty when no Node was named", out.NodeID)
+		}
+		for _, op := range out.Operations {
+			if op.Source != "native" {
+				t.Errorf("list_operations()[%q].Source = %q, want \"native\" (no Node was named)", op.Name, op.Source)
+			}
+		}
+		if len(out.Operations) != len(opvocab.Operations()) {
+			t.Errorf("list_operations(): got %d entries, want the %d native Operations",
+				len(out.Operations), len(opvocab.Operations()))
+		}
+	})
+
+	t.Run("with node_id: natives plus that Node's templates", func(t *testing.T) {
+		res := callTool(t, session, "list_operations", map[string]any{"node_id": ts.nodeA})
+		var out mcp.ListOperationsOutput
+		decodeResult(t, res, &out)
+
+		if out.NodeID != ts.nodeA {
+			t.Errorf("NodeID = %q, want %q", out.NodeID, ts.nodeA)
+		}
+		if !out.TemplatesReported {
+			t.Error("TemplatesReported = false, want true (node A reported a template set)")
+		}
+		if out.TemplateSetFingerprint != "sha256:node-a-template-set" {
+			t.Errorf("TemplateSetFingerprint = %q, want the reported fingerprint", out.TemplateSetFingerprint)
+		}
+
+		bySource := map[string][]mcp.OperationItem{}
+		for _, op := range out.Operations {
+			bySource[op.Source] = append(bySource[op.Source], op)
+		}
+		if got := len(bySource["native"]); got != len(opvocab.Operations()) {
+			t.Errorf("native entries = %d, want %d", got, len(opvocab.Operations()))
+		}
+		if got := len(bySource["template"]); got != 2 {
+			t.Fatalf("template entries = %d, want 2: %+v", got, bySource["template"])
+		}
+		for _, op := range bySource["template"] {
+			if op.RiskClass != "read" {
+				t.Errorf("template %q RiskClass = %q, want \"read\"", op.Name, op.RiskClass)
+			}
+			// Legibility bar (ADR-0001): a template entry must be as usable as
+			// a native one — purpose, example, and per-slot constraint prose.
+			if strings.TrimSpace(op.Purpose) == "" || op.Example == "" || op.ArgConstraints == nil {
+				t.Errorf("template %q is not legible: %+v", op.Name, op)
+			}
+			if op.Name == "log.tail" {
+				for _, slot := range []string{"lines", "path"} {
+					if strings.TrimSpace(op.ArgConstraints[slot]) == "" {
+						t.Errorf("template log.tail ArgConstraints[%q] is empty, want constraint prose", slot)
+					}
+				}
+			}
+		}
+	})
+
+	t.Run("with a node that has reported nothing", func(t *testing.T) {
+		res := callTool(t, session, "list_operations", map[string]any{"node_id": ts.nodeB})
+		var out mcp.ListOperationsOutput
+		decodeResult(t, res, &out)
+
+		if out.TemplatesReported {
+			t.Error("TemplatesReported = true, want false (node B reported no template set)")
+		}
+		for _, op := range out.Operations {
+			if op.Source == "template" {
+				t.Errorf("list_operations(node B) returned template %q; nothing was reported for that Node", op.Name)
+			}
 		}
 	})
 }

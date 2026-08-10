@@ -75,6 +75,7 @@ message DaemonMessage {
     StreamChunk stream_chunk = 4; // reserved for future live output
     PolicySnapshot policy   = 5;   // effective Policy, for the Relay to display only
     PolicyVerdict policy_verdict = 6; // daemon's answer to a PolicyQuery; evaluated by the real enforcement engine (ADR-0011)
+    TemplateSnapshot templates = 7;  // this Node's loaded Template Operation vocabulary, for the Relay to display only (ADR-0021)
   }
 }
 
@@ -93,6 +94,7 @@ message Hello {
   Facts  facts            = 3;
   repeated Label labels   = 4;   // node-space + relay-space (relay-space is authoritative)
   string policy_fingerprint = 5; // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
+  string template_set_fingerprint = 6; // hash of the loaded Template Operation set, beside policy_fingerprint; report-only drift signal, never settable over the wire (ADR-0021/ADR-0002). Empty = no templates loaded; the literal "unloadable" = the local template set failed to load and the Node's template vocabulary is empty (fail closed)
 }
 
 message Heartbeat { int64 unix_millis = 1; }
@@ -177,6 +179,7 @@ enum Outcome {
   OUTCOME_CANCELLED     = 5;   // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
   OUTCOME_UNREACHABLE   = 6;   // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
   OUTCOME_VERSION_REFUSED = 7; // Relay-synthesized: the Node's daemon is below the Relay's configured minimum version (ADR-0014), so the Task was refused at dispatch and never sent; a daemon never emits this.
+  OUTCOME_UNSUPPORTED   = 8;   // daemon-reported: the Operation name is not in THIS Node's vocabulary (an unloaded Template Operation, or an unknown name) — the Task was never executed and Policy was never asked to decide. Distinct from OUTCOME_DENIED_BY_POLICY (Policy decided) and OUTCOME_FAILURE (something ran and failed). Vocabulary is per-Node once templates exist (ADR-0021); discover it with describe_node/list_operations.
 }
 
 message StreamChunk {
@@ -236,6 +239,49 @@ message DenyRule {
   repeated ArgMatcher args = 2;
 }
 
+// ---------------------------------------------------------------------------
+// Per-Node Template Operation vocabulary (ADR-0021). Templates are loaded from
+// root-owned local files on the Node (same trust root as Policy, ADR-0002): the
+// Relay may READ a Node's template set, never set or modify it. Reported for
+// display and discovery only — the daemon remains the sole enforcer.
+// ---------------------------------------------------------------------------
+
+// TemplateSnapshot is the daemon's report of its loaded Template Operations.
+// Sent after PolicySnapshot on every (re)connect, so the Relay's view is
+// refreshed the same way the Policy view is.
+message TemplateSnapshot {
+  // Same value as Hello.template_set_fingerprint, from the same loaded set —
+  // the drift signal an operator confirms a template rollout with.
+  string template_set_fingerprint = 1;
+  // Every loaded Template Operation, in canonical (name-sorted) order. Empty
+  // when the Node has no templates — which is also what an unloadable template
+  // set reports (fail closed: an unreadable set yields NO vocabulary, and the
+  // fingerprint then reads "unloadable").
+  repeated TemplateDescriptor templates = 2;
+}
+
+// TemplateDescriptor declares one Template Operation on one Node: the name it
+// registers in the Policy vocabulary, its mandatory risk class (ADR-0012), and
+// its typed parameter slots. The template BODY is deliberately absent: the
+// Relay never needs the command to route or display it, and shipping it would
+// invite Relay-side rendering — substitution happens only on the daemon.
+message TemplateDescriptor {
+  string name              = 1;   // Operation name, e.g. "proc.list"
+  RiskClass risk_class     = 2;   // mandatory on every template (ADR-0012)
+  repeated TemplateSlot slots = 3; // parameter slots, in declaration order (= positional order for Policy args)
+}
+
+// TemplateSlot is one typed parameter slot. `type` is the daemon's slot-type
+// name — "identifier", "integer", "path", or "enum" — carried as a string
+// rather than an enum so a daemon that grows a slot type stays legible to an
+// older Relay (which displays vocabulary, never validates it: validation is
+// the daemon's, at execution time). enum_values is populated only for "enum".
+message TemplateSlot {
+  string name = 1;
+  string type = 2;
+  repeated string enum_values = 3;
+}
+
 // The value set permitted (allow) or denied (deny) at ONE argument position.
 // Carried as a message so PolicySnapshot can express the repeated-of-repeated
 // shape proto3 cannot nest directly. In an allow rule, a values entry of "*"
@@ -272,4 +318,10 @@ message PolicyVerdict {
   string query_id      = 1;   // echoes the PolicyQuery
   bool   allowed       = 2;   // allow = true, deny = false
   string deciding_rule = 3;   // set only on deny; empty on allow
+  // The queried Operation name is not in this Node's vocabulary, so Policy was
+  // never asked to decide — the plan-mode mirror of OUTCOME_UNSUPPORTED, which
+  // is what a real dispatch of the same action would report (ADR-0011 parity).
+  // Always accompanied by allowed=false; deciding_rule then explains the
+  // vocabulary miss rather than naming a Policy rule.
+  bool   unsupported   = 4;
 }

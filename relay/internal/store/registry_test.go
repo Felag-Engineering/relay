@@ -17,16 +17,20 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 	reg := st.Registry()
 
 	n1, err := reg.Upsert(registry.Report{
-		NodeID:            "node-a",
-		CertFingerprint:   "fp-a",
-		Facts:             registry.Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
-		NodeLabels:        map[string]string{"role": "web"},
-		EnrollingTokenID:  "tok-1",
-		PolicyFingerprint: "abc123",
-		DaemonVersion:     "1.0.0",
+		NodeID:                 "node-a",
+		CertFingerprint:        "fp-a",
+		Facts:                  registry.Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
+		NodeLabels:             map[string]string{"role": "web"},
+		EnrollingTokenID:       "tok-1",
+		PolicyFingerprint:      "abc123",
+		DaemonVersion:          "1.0.0",
+		TemplateSetFingerprint: "tmpl-abc",
 	})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
+	}
+	if n1.TemplateSetFingerprint != "tmpl-abc" {
+		t.Errorf("insert TemplateSetFingerprint: got %q, want tmpl-abc", n1.TemplateSetFingerprint)
 	}
 	if n1.NodeID != "node-a" || n1.CertFingerprint != "fp-a" || n1.Facts.Hostname != "host-a" ||
 		n1.NodeLabels["role"] != "web" || n1.PolicyFingerprint != "abc123" || n1.EnrollingTokenID != "tok-1" ||
@@ -46,16 +50,21 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 
 	// Update path: new fingerprint/facts/labels, different (ignored) token.
 	n2, err := reg.Upsert(registry.Report{
-		NodeID:            "node-a",
-		CertFingerprint:   "fp-new",
-		Facts:             registry.Facts{Hostname: "host-a-new", OS: "linux"},
-		NodeLabels:        map[string]string{"role": "db"},
-		EnrollingTokenID:  "tok-ignored",
-		PolicyFingerprint: "def456",
-		DaemonVersion:     "1.1.0",
+		NodeID:                 "node-a",
+		CertFingerprint:        "fp-new",
+		Facts:                  registry.Facts{Hostname: "host-a-new", OS: "linux"},
+		NodeLabels:             map[string]string{"role": "db"},
+		EnrollingTokenID:       "tok-ignored",
+		PolicyFingerprint:      "def456",
+		DaemonVersion:          "1.1.0",
+		TemplateSetFingerprint: "tmpl-def",
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
+	}
+	if n2.TemplateSetFingerprint != "tmpl-def" {
+		t.Errorf("update TemplateSetFingerprint: got %q, want tmpl-def (refreshed on reconnect)",
+			n2.TemplateSetFingerprint)
 	}
 	if n2.CertFingerprint != "fp-new" {
 		t.Errorf("update CertFingerprint: got %q, want fp-new", n2.CertFingerprint)

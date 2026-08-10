@@ -370,6 +370,7 @@ mod tests {
     /// No env vars are read — fields are set directly.
     fn fake_config() -> Config {
         Config {
+            template_dir: std::path::PathBuf::from("/nonexistent/templates.d"),
             relay_addr: "http://relay:7654".to_string(),
             endpoint: "https://relay:7654".to_string(),
             relay_domain: None,

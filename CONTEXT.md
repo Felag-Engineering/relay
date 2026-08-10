@@ -138,6 +138,23 @@ Node's Policy (ADR-0002). Lets an operator confirm a Policy rollout landed every
 comparison against the registry (ADR-0002, ADR-0006).
 _Avoid_: policy hash, checksum, policy version
 
+**Template-set fingerprint**:
+The Policy fingerprint's sibling for Template Operations (ADR-0021): a hash of the Node's
+loaded template set, reported in `Hello` and every `TemplateSnapshot` and recorded in the
+registry — fleet-wide template *drift visibility* without the templates themselves ever
+traveling. Report-only: the Relay observes it but never sets a Node's templates. Empty means
+no templates are installed; the literal `unloadable` means the Node's local template set
+failed to load, so its template vocabulary is empty (fail closed).
+_Avoid_: template hash, template version
+
+**`unsupported`**:
+The per-Node outcome for an Operation that is not in *that Node's* vocabulary — an unloaded
+Template Operation, or an unknown name. Nothing executed and Policy was never consulted, so it
+is neither a failure (nothing ran) nor a denial (the Node was never asked to decide). Plan mode
+reports the same conclusion for the same Node. Vocabulary is per-Node once templates exist;
+`list_operations`/`describe_node` report what a given Node actually has (ADR-0021).
+_Avoid_: unknown operation, not found, unimplemented
+
 **Enrollment Token**:
 The reusable, scoped, expiring, revocable credential a daemon presents to join the fleet.
 Distinct from a Node's identity certificate: the token authorizes *enrollment* and stamps

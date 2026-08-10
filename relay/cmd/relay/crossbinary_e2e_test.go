@@ -324,7 +324,12 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		t.Fatal("CA bundle is empty")
 	}
 
-	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
+	// The shared fixture plus the one allow rule the template pack needs: the
+	// rule lives with this suite (relaytest.FixtureTemplatePolicyRule) because
+	// other suites assert FixturePolicy's rule set exactly.
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml",
+		relaytest.FixturePolicy+relaytest.FixtureTemplatePolicyRule)
+	templateRoot := relaytest.WriteTemplatePack(t, relaytest.FixtureTemplatePack)
 	stateDir := t.TempDir()
 
 	env := append(os.Environ(),
@@ -334,6 +339,7 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		"RELAY_ENROLL_ENDPOINT=https://"+addr,
 		"RELAY_STATE_DIR="+stateDir,
 		"RELAY_POLICY_PATH="+policyPath,
+		"RELAY_TEMPLATE_DIR="+templateRoot,
 		"RELAY_DOMAIN=localhost",
 		"HOSTNAME=e2e-crossbinary-node",
 		// Disable rustls provider conflict on some environments (matches
@@ -373,6 +379,17 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	if fingerprint == "" {
 		t.Error("get_node: policy_fingerprint is empty")
 	}
+	// #291/ADR-0021: the template-set fingerprint travels beside the Policy
+	// fingerprint on Hello, over the same real wire, and the registry records
+	// it — the drift signal an operator confirms a template rollout with.
+	templateFingerprint, _ := getNodeResp["template_set_fingerprint"].(string)
+	if len(templateFingerprint) != 64 {
+		t.Errorf("get_node: template_set_fingerprint = %q, want a 64-hex digest of the loaded pack",
+			templateFingerprint)
+	}
+	if templateFingerprint == fingerprint {
+		t.Error("get_node: template_set_fingerprint equals policy_fingerprint; the two must be domain-separated")
+	}
 	if _, ok := getNodeResp["node_labels"]; !ok {
 		t.Error("get_node: node_labels missing from response")
 	}
@@ -401,6 +418,39 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 	}
 	if stdout, _ := readResp["stdout"].(string); stdout != wantContent {
 		t.Errorf("file.read stdout: got %q, want %q", stdout, wantContent)
+	}
+
+	// -------------------------------------------------------------------
+	// Template Operation (ADR-0021, #291): a template loaded from a local
+	// root-owned file runs over the real wire like a Native Operation — and a
+	// name this Node has NOT loaded reports OUTCOME_UNSUPPORTED, never a
+	// failure and never a Policy denial (nothing ran; Policy was never asked).
+	// -------------------------------------------------------------------
+	tmplResp := harness.call(t, map[string]any{
+		"op":              "dispatch",
+		"node_id":         nodeID,
+		"task_id":         "crossbinary-template-1",
+		"operation":       "e2e.template",
+		"timeout_seconds": 15,
+	})
+	if outcome, _ := tmplResp["outcome"].(string); outcome != "OUTCOME_SUCCESS" {
+		t.Errorf("template outcome: got %v, want OUTCOME_SUCCESS; stderr=%v",
+			tmplResp["outcome"], tmplResp["stderr"])
+	}
+	if stdout, _ := tmplResp["stdout"].(string); stdout != "template-ran\n" {
+		t.Errorf("template stdout: got %q, want %q", stdout, "template-ran\n")
+	}
+
+	unsupportedResp := harness.call(t, map[string]any{
+		"op":              "dispatch",
+		"node_id":         nodeID,
+		"task_id":         "crossbinary-template-missing-1",
+		"operation":       "not.loaded.here",
+		"timeout_seconds": 15,
+	})
+	if outcome, _ := unsupportedResp["outcome"].(string); outcome != "OUTCOME_UNSUPPORTED" {
+		t.Errorf("missing-template outcome: got %v, want OUTCOME_UNSUPPORTED; stderr=%v",
+			unsupportedResp["outcome"], unsupportedResp["stderr"])
 	}
 
 	// -------------------------------------------------------------------

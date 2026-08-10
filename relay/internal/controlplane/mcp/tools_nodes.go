@@ -9,6 +9,8 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -25,9 +27,10 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 			Arch:        n.Facts.Arch,
 			IPAddresses: n.Facts.IPAddresses,
 		},
-		PolicyFingerprint: n.PolicyFingerprint,
-		Revoked:           !n.RevokedAt.IsZero(),
-		Outdated:          n.Outdated,
+		PolicyFingerprint:      n.PolicyFingerprint,
+		TemplateSetFingerprint: n.TemplateSetFingerprint,
+		Revoked:                !n.RevokedAt.IsZero(),
+		Outdated:               n.Outdated,
 	}
 	if !n.LastSeen.IsZero() {
 		item.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
@@ -78,6 +81,35 @@ func denyRuleOutputsFromSnapshot(rules []policyview.DenyRule) []DenyRuleOutput {
 	return out
 }
 
+// templateVocabularyOutput renders a Node's reported Template Operation
+// vocabulary for describe_node (nodevocab.Snapshot; ADR-0021). Display-only:
+// it never validates a slot or decides anything (invariant 12). Templates and
+// every Slots/EnumValues are ALWAYS arrays, never null (#207/#253 discipline) —
+// `reported` is the sole "no data captured yet" signal.
+func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVocabularyOutput {
+	templates := make([]TemplateOperationOutput, 0, len(snap.Templates))
+	for _, t := range snap.Templates {
+		slots := make([]TemplateSlotOutput, 0, len(t.Slots))
+		for _, sl := range t.Slots {
+			values := sl.EnumValues
+			if values == nil {
+				values = []string{}
+			}
+			slots = append(slots, TemplateSlotOutput{Name: sl.Name, Type: sl.Type, EnumValues: values})
+		}
+		templates = append(templates, TemplateOperationOutput{
+			Name:      t.Name,
+			RiskClass: riskClassString(jobs.RiskClass(t.RiskClass)),
+			Slots:     slots,
+		})
+	}
+	return TemplateVocabularyOutput{
+		Fingerprint: snap.Fingerprint,
+		Reported:    reported,
+		Templates:   templates,
+	}
+}
+
 // listNodesInput is list_nodes' argument: an optional Selector filter,
 // parsed via capability.ParseSelector — the single source of truth for the
 // "node:key=value"/"relay:key=value" grammar every Selector-consuming
@@ -93,7 +125,7 @@ type describeNodeInput struct {
 }
 
 // registerNodeTools registers list_nodes and describe_node on srv.
-func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader) {
+func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
@@ -135,7 +167,11 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"always arrays, never null: an empty allowed_args means the Operation is allowed " +
 			"with zero arguments only ('*' is the explicit per-position any-value wildcard), " +
 			"and an empty deny args denies the Operation regardless of arguments. " +
-			"reported=false — never a null — is the only 'no Policy data captured yet' signal.",
+			"reported=false — never a null — is the only 'no Policy data captured yet' signal. " +
+			"template_vocabulary lists the Template Operations THIS Node has loaded from its local " +
+			"root-owned template files (ADR-0021) — vocabulary is per-Node: dispatching a template a " +
+			"Node has not loaded reports the `unsupported` outcome, which is neither a failure nor a " +
+			"Policy denial.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
 		logPrincipal(ctx, "describe_node")
 
@@ -145,6 +181,8 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 		}
 
 		out := DescribeNodeOutput{NodeItem: nodeItemFromNode(n)}
+		vsnap, vok := vocab.Get(in.NodeID)
+		out.TemplateVocabulary = templateVocabularyOutput(vsnap, vok)
 		if snap, ok := policy.Get(in.NodeID); ok {
 			out.EffectivePolicy = EffectivePolicyOutput{
 				RawExecEnabled:    snap.RawExecEnabled,

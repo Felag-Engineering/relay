@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -47,6 +48,12 @@ type tunnelServer struct {
 	// like reg/conns so existing tests that construct &tunnelServer{} directly
 	// keep compiling; nil in any test that doesn't need the capture.
 	policy *policyview.Cache
+	// vocab is the display-only per-Node Template Operation vocabulary cache
+	// (#291, ADR-0021): the Relay records what a daemon reports in
+	// DaemonMessage.templates so describe_node/list_operations can show a
+	// Node's live vocabulary. It never sets a Node's templates, exactly as it
+	// never sets Policy (ADR-0002). Nil-guarded like policy/reg/conns.
+	vocab *nodevocab.Cache
 	// sink is set by newServer when Config.ControlEnabled (production
 	// execution, #154), by installDevHarness in a devharness-tagged build, or
 	// injected directly by tests; nil when the control plane is disabled.
@@ -123,6 +130,10 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			NodeLabels:        nodeLabelsFromHello(hello.GetLabels()),
 			PolicyFingerprint: hello.GetPolicyFingerprint(),
 			DaemonVersion:     hello.GetDaemonVersion(),
+			// Report-only, beside the Policy fingerprint (ADR-0021): the
+			// fleet-wide template-drift signal. Recording it never gives the
+			// Relay the power to change it (ADR-0002).
+			TemplateSetFingerprint: hello.GetTemplateSetFingerprint(),
 		}); err != nil {
 			slog.Warn("registry upsert on hello failed", "node_id", nodeID, "err", err)
 		}
@@ -218,6 +229,15 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 			if ps := m.GetPolicy(); ps != nil && s.policy != nil {
 				s.policy.Set(nodeID, snapshotFromProto(ps))
 			}
+			// Capture a reported TemplateSnapshot into the display-only
+			// nodevocab.Cache (#291). Same posture as the PolicySnapshot
+			// capture above: it RECORDS a report-only daemon value for
+			// discovery, and can never set or modify the Node's templates
+			// (ADR-0002, ADR-0021). Keyed by the cert-derived nodeID, never a
+			// wire value.
+			if ts := m.GetTemplates(); ts != nil && s.vocab != nil {
+				s.vocab.Set(nodeID, vocabFromProto(ts))
+			}
 		}
 	}
 }
@@ -273,6 +293,34 @@ func snapshotFromProto(ps *relayv1.PolicySnapshot) policyview.Snapshot {
 		PolicyFingerprint: ps.GetPolicyFingerprint(),
 		OperationRules:    operationRules,
 		DenyRules:         denyRules,
+	}
+}
+
+// vocabFromProto converts a daemon-reported relayv1.TemplateSnapshot into the
+// proto-free nodevocab.Snapshot the display-only cache stores, keeping that
+// package proto-free (mirrors snapshotFromProto's role for policyview).
+// Display-only: this conversion never validates a slot, renders a body (there
+// is no body on the wire), or decides anything (ADR-0011, invariant 12).
+func vocabFromProto(ts *relayv1.TemplateSnapshot) nodevocab.Snapshot {
+	templates := make([]nodevocab.Template, 0, len(ts.GetTemplates()))
+	for _, t := range ts.GetTemplates() {
+		slots := make([]nodevocab.Slot, 0, len(t.GetSlots()))
+		for _, sl := range t.GetSlots() {
+			slots = append(slots, nodevocab.Slot{
+				Name:       sl.GetName(),
+				Type:       sl.GetType(),
+				EnumValues: append([]string(nil), sl.GetEnumValues()...),
+			})
+		}
+		templates = append(templates, nodevocab.Template{
+			Name:      t.GetName(),
+			RiskClass: int32(t.GetRiskClass()),
+			Slots:     slots,
+		})
+	}
+	return nodevocab.Snapshot{
+		Fingerprint: ts.GetTemplateSetFingerprint(),
+		Templates:   templates,
 	}
 }
 

@@ -59,22 +59,13 @@
 //! engine is name-agnostic; the template's name simply enters the same
 //! vocabulary. There is no second evaluator (ADR-0011).
 //!
-//! # Scope (issue #290, the ENGINE only)
+//! # Scope
 //!
-//! In-memory definitions only. File loading, the template-set fingerprint, the
-//! `unsupported` per-Node outcome, and live discovery are #291; the shipped
-//! read catalog is #293. The definition structs derive `serde` so #291 can
-//! deserialize into them, but **no file loader is committed here**.
-
-// The template engine is the ENGINE half of the tier (issue #290). It is
-// exercised end-to-end by this module's own tests and by the structural test in
-// dispatch.rs, but it is not yet wired into the production per-Node dispatch
-// path — that wiring (file loading, the per-Node vocabulary, discovery, and the
-// `unsupported` outcome) is issue #291, which consumes this public surface
-// wholesale. Until then it has no production caller, so allow dead_code
-// module-wide with this explicit rationale rather than scattering per-item
-// allows across an API that lands complete in the next issue.
-#![allow(dead_code)]
+//! This module is the engine (issue #290): definitions, compilation, typed
+//! validation, quoting, and rendering. Loading those definitions from
+//! root-owned local files, the template-set fingerprint, the `unsupported`
+//! per-Node outcome, and live discovery are [`crate::templates`] (issue #291);
+//! the shipped read catalog is #293.
 
 use std::collections::HashSet;
 
@@ -301,6 +292,18 @@ impl TemplateOp {
     /// The declared risk class (ADR-0012).
     pub fn risk(&self) -> RiskClass {
         self.risk
+    }
+
+    /// The declared parameter slots as `(name, type)`, in declaration order —
+    /// which is also the positional order Policy evaluates args in. The
+    /// discovery surface (#291) renders these into `TemplateDescriptor.slots`
+    /// so `list_operations`/`describe_node` can show a Node's live vocabulary
+    /// with its argument constraints.
+    pub fn slot_specs(&self) -> Vec<(&str, &SlotType)> {
+        self.slots
+            .iter()
+            .map(|s| (s.name.as_str(), &s.ty))
+            .collect()
     }
 
     /// Map a caller `Operation`'s named args to the positional vector the Policy
@@ -666,13 +669,25 @@ fn parse_body(body: &str, slots: &[Slot]) -> Result<(Vec<Segment>, HashSet<usize
 // ---------------------------------------------------------------------------
 
 impl SlotType {
-    /// A stable label for error messages / audit (never the value).
-    fn type_name(&self) -> &'static str {
+    /// A stable label for error messages / audit (never the value), and the
+    /// wire `TemplateSlot.type` string a surface renders for discovery (#291).
+    pub fn type_name(&self) -> &'static str {
         match self {
             SlotType::Identifier => "identifier",
             SlotType::Integer => "integer",
             SlotType::Path => "path",
             SlotType::Enum(_) => "enum",
+        }
+    }
+
+    /// The author-supplied allow-list for an `Enum` slot; empty for every other
+    /// type. Part of the discovery surface (#291): an `enum` slot's finite
+    /// value set is exactly what a caller needs to build valid args without
+    /// trial-and-error (ADR-0001 legibility).
+    pub fn enum_values(&self) -> &[String] {
+        match self {
+            SlotType::Enum(values) => values,
+            _ => &[],
         }
     }
 

@@ -28,6 +28,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
@@ -41,6 +42,7 @@ import (
 type surfaceDeps struct {
 	registry   registry.Repository
 	policy     *policyview.Cache
+	vocab      *nodevocab.Cache
 	ops        mcp.OperationLister
 	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
 	jobs       jobs.JobRepository
@@ -64,7 +66,7 @@ type controlSurface interface {
 type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
-	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.ops, d.capability,
+	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.vocab, d.ops, d.capability,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks}))
 }
 

@@ -92,6 +92,7 @@ const (
 	Outcome_OUTCOME_CANCELLED        Outcome = 5 // Task killed by TaskCancel before it finished; a Task that already completed reports its real outcome, never a retroactive cancel (ADR-0013)
 	Outcome_OUTCOME_UNREACHABLE      Outcome = 6 // Relay-synthesized: the Node was offline at dispatch, so the Task was never sent; a daemon never emits this (ADR-0004 fail-fast, no store-and-forward)
 	Outcome_OUTCOME_VERSION_REFUSED  Outcome = 7 // Relay-synthesized: the Node's daemon is below the Relay's configured minimum version (ADR-0014), so the Task was refused at dispatch and never sent; a daemon never emits this.
+	Outcome_OUTCOME_UNSUPPORTED      Outcome = 8 // daemon-reported: the Operation name is not in THIS Node's vocabulary (an unloaded Template Operation, or an unknown name) — the Task was never executed and Policy was never asked to decide. Distinct from OUTCOME_DENIED_BY_POLICY (Policy decided) and OUTCOME_FAILURE (something ran and failed). Vocabulary is per-Node once templates exist (ADR-0021); discover it with describe_node/list_operations.
 )
 
 // Enum value maps for Outcome.
@@ -105,6 +106,7 @@ var (
 		5: "OUTCOME_CANCELLED",
 		6: "OUTCOME_UNREACHABLE",
 		7: "OUTCOME_VERSION_REFUSED",
+		8: "OUTCOME_UNSUPPORTED",
 	}
 	Outcome_value = map[string]int32{
 		"OUTCOME_UNSPECIFIED":      0,
@@ -115,6 +117,7 @@ var (
 		"OUTCOME_CANCELLED":        5,
 		"OUTCOME_UNREACHABLE":      6,
 		"OUTCOME_VERSION_REFUSED":  7,
+		"OUTCOME_UNSUPPORTED":      8,
 	}
 )
 
@@ -401,6 +404,7 @@ type DaemonMessage struct {
 	//	*DaemonMessage_StreamChunk
 	//	*DaemonMessage_Policy
 	//	*DaemonMessage_PolicyVerdict
+	//	*DaemonMessage_Templates
 	Body          isDaemonMessage_Body `protobuf_oneof:"body"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -497,6 +501,15 @@ func (x *DaemonMessage) GetPolicyVerdict() *PolicyVerdict {
 	return nil
 }
 
+func (x *DaemonMessage) GetTemplates() *TemplateSnapshot {
+	if x != nil {
+		if x, ok := x.Body.(*DaemonMessage_Templates); ok {
+			return x.Templates
+		}
+	}
+	return nil
+}
+
 type isDaemonMessage_Body interface {
 	isDaemonMessage_Body()
 }
@@ -525,6 +538,10 @@ type DaemonMessage_PolicyVerdict struct {
 	PolicyVerdict *PolicyVerdict `protobuf:"bytes,6,opt,name=policy_verdict,json=policyVerdict,proto3,oneof"` // daemon's answer to a PolicyQuery; evaluated by the real enforcement engine (ADR-0011)
 }
 
+type DaemonMessage_Templates struct {
+	Templates *TemplateSnapshot `protobuf:"bytes,7,opt,name=templates,proto3,oneof"` // this Node's loaded Template Operation vocabulary, for the Relay to display only (ADR-0021)
+}
+
 func (*DaemonMessage_Hello) isDaemonMessage_Body() {}
 
 func (*DaemonMessage_Heartbeat) isDaemonMessage_Body() {}
@@ -536,6 +553,8 @@ func (*DaemonMessage_StreamChunk) isDaemonMessage_Body() {}
 func (*DaemonMessage_Policy) isDaemonMessage_Body() {}
 
 func (*DaemonMessage_PolicyVerdict) isDaemonMessage_Body() {}
+
+func (*DaemonMessage_Templates) isDaemonMessage_Body() {}
 
 type RelayMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -652,14 +671,15 @@ func (*RelayMessage_TaskCancel) isRelayMessage_Body() {}
 func (*RelayMessage_PolicyQuery) isRelayMessage_Body() {}
 
 type Hello struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	DaemonVersion     string                 `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
-	Facts             *Facts                 `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
-	Labels            []*Label               `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"`                                                // node-space + relay-space (relay-space is authoritative)
-	PolicyFingerprint string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"` // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	NodeId                 string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	DaemonVersion          string                 `protobuf:"bytes,2,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
+	Facts                  *Facts                 `protobuf:"bytes,3,opt,name=facts,proto3" json:"facts,omitempty"`
+	Labels                 []*Label               `protobuf:"bytes,4,rep,name=labels,proto3" json:"labels,omitempty"`                                                                 // node-space + relay-space (relay-space is authoritative)
+	PolicyFingerprint      string                 `protobuf:"bytes,5,opt,name=policy_fingerprint,json=policyFingerprint,proto3" json:"policy_fingerprint,omitempty"`                  // hash of the loaded Policy; report-only, for the Relay to detect drift/display; the Relay never sets Policy (ADR-0002)
+	TemplateSetFingerprint string                 `protobuf:"bytes,6,opt,name=template_set_fingerprint,json=templateSetFingerprint,proto3" json:"template_set_fingerprint,omitempty"` // hash of the loaded Template Operation set, beside policy_fingerprint; report-only drift signal, never settable over the wire (ADR-0021/ADR-0002). Empty = no templates loaded; the literal "unloadable" = the local template set failed to load and the Node's template vocabulary is empty (fail closed)
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Hello) Reset() {
@@ -723,6 +743,13 @@ func (x *Hello) GetLabels() []*Label {
 func (x *Hello) GetPolicyFingerprint() string {
 	if x != nil {
 		return x.PolicyFingerprint
+	}
+	return ""
+}
+
+func (x *Hello) GetTemplateSetFingerprint() string {
+	if x != nil {
+		return x.TemplateSetFingerprint
 	}
 	return ""
 }
@@ -1624,6 +1651,197 @@ func (x *DenyRule) GetArgs() []*ArgMatcher {
 	return nil
 }
 
+// TemplateSnapshot is the daemon's report of its loaded Template Operations.
+// Sent after PolicySnapshot on every (re)connect, so the Relay's view is
+// refreshed the same way the Policy view is.
+type TemplateSnapshot struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Same value as Hello.template_set_fingerprint, from the same loaded set —
+	// the drift signal an operator confirms a template rollout with.
+	TemplateSetFingerprint string `protobuf:"bytes,1,opt,name=template_set_fingerprint,json=templateSetFingerprint,proto3" json:"template_set_fingerprint,omitempty"`
+	// Every loaded Template Operation, in canonical (name-sorted) order. Empty
+	// when the Node has no templates — which is also what an unloadable template
+	// set reports (fail closed: an unreadable set yields NO vocabulary, and the
+	// fingerprint then reads "unloadable").
+	Templates     []*TemplateDescriptor `protobuf:"bytes,2,rep,name=templates,proto3" json:"templates,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TemplateSnapshot) Reset() {
+	*x = TemplateSnapshot{}
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TemplateSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TemplateSnapshot) ProtoMessage() {}
+
+func (x *TemplateSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TemplateSnapshot.ProtoReflect.Descriptor instead.
+func (*TemplateSnapshot) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TemplateSnapshot) GetTemplateSetFingerprint() string {
+	if x != nil {
+		return x.TemplateSetFingerprint
+	}
+	return ""
+}
+
+func (x *TemplateSnapshot) GetTemplates() []*TemplateDescriptor {
+	if x != nil {
+		return x.Templates
+	}
+	return nil
+}
+
+// TemplateDescriptor declares one Template Operation on one Node: the name it
+// registers in the Policy vocabulary, its mandatory risk class (ADR-0012), and
+// its typed parameter slots. The template BODY is deliberately absent: the
+// Relay never needs the command to route or display it, and shipping it would
+// invite Relay-side rendering — substitution happens only on the daemon.
+type TemplateDescriptor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`                                                     // Operation name, e.g. "proc.list"
+	RiskClass     RiskClass              `protobuf:"varint,2,opt,name=risk_class,json=riskClass,proto3,enum=relay.v1.RiskClass" json:"risk_class,omitempty"` // mandatory on every template (ADR-0012)
+	Slots         []*TemplateSlot        `protobuf:"bytes,3,rep,name=slots,proto3" json:"slots,omitempty"`                                                   // parameter slots, in declaration order (= positional order for Policy args)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TemplateDescriptor) Reset() {
+	*x = TemplateDescriptor{}
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TemplateDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TemplateDescriptor) ProtoMessage() {}
+
+func (x *TemplateDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TemplateDescriptor.ProtoReflect.Descriptor instead.
+func (*TemplateDescriptor) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *TemplateDescriptor) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TemplateDescriptor) GetRiskClass() RiskClass {
+	if x != nil {
+		return x.RiskClass
+	}
+	return RiskClass_RISK_CLASS_UNSPECIFIED
+}
+
+func (x *TemplateDescriptor) GetSlots() []*TemplateSlot {
+	if x != nil {
+		return x.Slots
+	}
+	return nil
+}
+
+// TemplateSlot is one typed parameter slot. `type` is the daemon's slot-type
+// name — "identifier", "integer", "path", or "enum" — carried as a string
+// rather than an enum so a daemon that grows a slot type stays legible to an
+// older Relay (which displays vocabulary, never validates it: validation is
+// the daemon's, at execution time). enum_values is populated only for "enum".
+type TemplateSlot struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	EnumValues    []string               `protobuf:"bytes,3,rep,name=enum_values,json=enumValues,proto3" json:"enum_values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TemplateSlot) Reset() {
+	*x = TemplateSlot{}
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TemplateSlot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TemplateSlot) ProtoMessage() {}
+
+func (x *TemplateSlot) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TemplateSlot.ProtoReflect.Descriptor instead.
+func (*TemplateSlot) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *TemplateSlot) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TemplateSlot) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *TemplateSlot) GetEnumValues() []string {
+	if x != nil {
+		return x.EnumValues
+	}
+	return nil
+}
+
 // The value set permitted (allow) or denied (deny) at ONE argument position.
 // Carried as a message so PolicySnapshot can express the repeated-of-repeated
 // shape proto3 cannot nest directly. In an allow rule, a values entry of "*"
@@ -1637,7 +1855,7 @@ type ArgMatcher struct {
 
 func (x *ArgMatcher) Reset() {
 	*x = ArgMatcher{}
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1649,7 +1867,7 @@ func (x *ArgMatcher) String() string {
 func (*ArgMatcher) ProtoMessage() {}
 
 func (x *ArgMatcher) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[21]
+	mi := &file_relay_v1_relay_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1662,7 +1880,7 @@ func (x *ArgMatcher) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArgMatcher.ProtoReflect.Descriptor instead.
 func (*ArgMatcher) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{21}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ArgMatcher) GetValues() []string {
@@ -1691,7 +1909,7 @@ type PolicyQuery struct {
 
 func (x *PolicyQuery) Reset() {
 	*x = PolicyQuery{}
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1703,7 +1921,7 @@ func (x *PolicyQuery) String() string {
 func (*PolicyQuery) ProtoMessage() {}
 
 func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[22]
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1716,7 +1934,7 @@ func (x *PolicyQuery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyQuery.ProtoReflect.Descriptor instead.
 func (*PolicyQuery) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{22}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *PolicyQuery) GetQueryId() string {
@@ -1774,17 +1992,23 @@ func (*PolicyQuery_RawExec) isPolicyQuery_Action() {}
 // the Policy rule that denied (acceptable extra detail per ADR-0011, since
 // describe_node already exposes effective Policy to authorized callers).
 type PolicyVerdict struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	QueryId       string                 `protobuf:"bytes,1,opt,name=query_id,json=queryId,proto3" json:"query_id,omitempty"`                // echoes the PolicyQuery
-	Allowed       bool                   `protobuf:"varint,2,opt,name=allowed,proto3" json:"allowed,omitempty"`                              // allow = true, deny = false
-	DecidingRule  string                 `protobuf:"bytes,3,opt,name=deciding_rule,json=decidingRule,proto3" json:"deciding_rule,omitempty"` // set only on deny; empty on allow
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	QueryId      string                 `protobuf:"bytes,1,opt,name=query_id,json=queryId,proto3" json:"query_id,omitempty"`                // echoes the PolicyQuery
+	Allowed      bool                   `protobuf:"varint,2,opt,name=allowed,proto3" json:"allowed,omitempty"`                              // allow = true, deny = false
+	DecidingRule string                 `protobuf:"bytes,3,opt,name=deciding_rule,json=decidingRule,proto3" json:"deciding_rule,omitempty"` // set only on deny; empty on allow
+	// The queried Operation name is not in this Node's vocabulary, so Policy was
+	// never asked to decide — the plan-mode mirror of OUTCOME_UNSUPPORTED, which
+	// is what a real dispatch of the same action would report (ADR-0011 parity).
+	// Always accompanied by allowed=false; deciding_rule then explains the
+	// vocabulary miss rather than naming a Policy rule.
+	Unsupported   bool `protobuf:"varint,4,opt,name=unsupported,proto3" json:"unsupported,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PolicyVerdict) Reset() {
 	*x = PolicyVerdict{}
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1796,7 +2020,7 @@ func (x *PolicyVerdict) String() string {
 func (*PolicyVerdict) ProtoMessage() {}
 
 func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[23]
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1809,7 +2033,7 @@ func (x *PolicyVerdict) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PolicyVerdict.ProtoReflect.Descriptor instead.
 func (*PolicyVerdict) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{23}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *PolicyVerdict) GetQueryId() string {
@@ -1833,6 +2057,13 @@ func (x *PolicyVerdict) GetDecidingRule() string {
 	return ""
 }
 
+func (x *PolicyVerdict) GetUnsupported() bool {
+	if x != nil {
+		return x.Unsupported
+	}
+	return false
+}
+
 var File_relay_v1_relay_proto protoreflect.FileDescriptor
 
 const file_relay_v1_relay_proto_rawDesc = "" +
@@ -1854,7 +2085,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\rRenewResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12 \n" +
 	"\vcertificate\x18\x02 \x01(\fR\vcertificate\x12\x1b\n" +
-	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\xe0\x02\n" +
+	"\tca_bundle\x18\x03 \x01(\fR\bcaBundle\"\x9c\x03\n" +
 	"\rDaemonMessage\x12'\n" +
 	"\x05hello\x18\x01 \x01(\v2\x0f.relay.v1.HelloH\x00R\x05hello\x123\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x13.relay.v1.HeartbeatH\x00R\theartbeat\x127\n" +
@@ -1862,7 +2093,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"taskResult\x12:\n" +
 	"\fstream_chunk\x18\x04 \x01(\v2\x15.relay.v1.StreamChunkH\x00R\vstreamChunk\x122\n" +
 	"\x06policy\x18\x05 \x01(\v2\x18.relay.v1.PolicySnapshotH\x00R\x06policy\x12@\n" +
-	"\x0epolicy_verdict\x18\x06 \x01(\v2\x17.relay.v1.PolicyVerdictH\x00R\rpolicyVerdictB\x06\n" +
+	"\x0epolicy_verdict\x18\x06 \x01(\v2\x17.relay.v1.PolicyVerdictH\x00R\rpolicyVerdict\x12:\n" +
+	"\ttemplates\x18\a \x01(\v2\x1a.relay.v1.TemplateSnapshotH\x00R\ttemplatesB\x06\n" +
 	"\x04body\"\xde\x01\n" +
 	"\fRelayMessage\x12$\n" +
 	"\x04ping\x18\x01 \x01(\v2\x0e.relay.v1.PingH\x00R\x04ping\x12+\n" +
@@ -1870,13 +2102,14 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\vtask_cancel\x18\x03 \x01(\v2\x14.relay.v1.TaskCancelH\x00R\n" +
 	"taskCancel\x12:\n" +
 	"\fpolicy_query\x18\x04 \x01(\v2\x15.relay.v1.PolicyQueryH\x00R\vpolicyQueryB\x06\n" +
-	"\x04body\"\xc6\x01\n" +
+	"\x04body\"\x80\x02\n" +
 	"\x05Hello\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12%\n" +
 	"\x0edaemon_version\x18\x02 \x01(\tR\rdaemonVersion\x12%\n" +
 	"\x05facts\x18\x03 \x01(\v2\x0f.relay.v1.FactsR\x05facts\x12'\n" +
 	"\x06labels\x18\x04 \x03(\v2\x0f.relay.v1.LabelR\x06labels\x12-\n" +
-	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\",\n" +
+	"\x12policy_fingerprint\x18\x05 \x01(\tR\x11policyFingerprint\x128\n" +
+	"\x18template_set_fingerprint\x18\x06 \x01(\tR\x16templateSetFingerprint\",\n" +
 	"\tHeartbeat\x12\x1f\n" +
 	"\vunix_millis\x18\x01 \x01(\x03R\n" +
 	"unixMillis\"'\n" +
@@ -1940,7 +2173,20 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\fallowed_args\x18\x02 \x03(\v2\x14.relay.v1.ArgMatcherR\vallowedArgs\"H\n" +
 	"\bDenyRule\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12(\n" +
-	"\x04args\x18\x02 \x03(\v2\x14.relay.v1.ArgMatcherR\x04args\"$\n" +
+	"\x04args\x18\x02 \x03(\v2\x14.relay.v1.ArgMatcherR\x04args\"\x88\x01\n" +
+	"\x10TemplateSnapshot\x128\n" +
+	"\x18template_set_fingerprint\x18\x01 \x01(\tR\x16templateSetFingerprint\x12:\n" +
+	"\ttemplates\x18\x02 \x03(\v2\x1c.relay.v1.TemplateDescriptorR\ttemplates\"\x8a\x01\n" +
+	"\x12TemplateDescriptor\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x122\n" +
+	"\n" +
+	"risk_class\x18\x02 \x01(\x0e2\x13.relay.v1.RiskClassR\triskClass\x12,\n" +
+	"\x05slots\x18\x03 \x03(\v2\x16.relay.v1.TemplateSlotR\x05slots\"W\n" +
+	"\fTemplateSlot\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
+	"\venum_values\x18\x03 \x03(\tR\n" +
+	"enumValues\"$\n" +
 	"\n" +
 	"ArgMatcher\x12\x16\n" +
 	"\x06values\x18\x01 \x03(\tR\x06values\"\x97\x01\n" +
@@ -1948,15 +2194,16 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x123\n" +
 	"\toperation\x18\x02 \x01(\v2\x13.relay.v1.OperationH\x00R\toperation\x12.\n" +
 	"\braw_exec\x18\x03 \x01(\v2\x11.relay.v1.RawExecH\x00R\arawExecB\b\n" +
-	"\x06action\"i\n" +
+	"\x06action\"\x8b\x01\n" +
 	"\rPolicyVerdict\x12\x19\n" +
 	"\bquery_id\x18\x01 \x01(\tR\aqueryId\x12\x18\n" +
 	"\aallowed\x18\x02 \x01(\bR\aallowed\x12#\n" +
-	"\rdeciding_rule\x18\x03 \x01(\tR\fdecidingRule*S\n" +
+	"\rdeciding_rule\x18\x03 \x01(\tR\fdecidingRule\x12 \n" +
+	"\vunsupported\x18\x04 \x01(\bR\vunsupported*S\n" +
 	"\tRiskClass\x12\x1a\n" +
 	"\x16RISK_CLASS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fRISK_CLASS_READ\x10\x01\x12\x15\n" +
-	"\x11RISK_CLASS_MUTATE\x10\x02*\xcc\x01\n" +
+	"\x11RISK_CLASS_MUTATE\x10\x02*\xe5\x01\n" +
 	"\aOutcome\x12\x17\n" +
 	"\x13OUTCOME_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fOUTCOME_SUCCESS\x10\x01\x12\x13\n" +
@@ -1965,7 +2212,8 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x18OUTCOME_DENIED_BY_POLICY\x10\x04\x12\x15\n" +
 	"\x11OUTCOME_CANCELLED\x10\x05\x12\x17\n" +
 	"\x13OUTCOME_UNREACHABLE\x10\x06\x12\x1b\n" +
-	"\x17OUTCOME_VERSION_REFUSED\x10\a2\x83\x01\n" +
+	"\x17OUTCOME_VERSION_REFUSED\x10\a\x12\x17\n" +
+	"\x13OUTCOME_UNSUPPORTED\x10\b2\x83\x01\n" +
 	"\n" +
 	"Enrollment\x12;\n" +
 	"\x06Enroll\x12\x17.relay.v1.EnrollRequest\x1a\x18.relay.v1.EnrollResponse\x128\n" +
@@ -1986,7 +2234,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 }
 
 var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(RiskClass)(0),              // 0: relay.v1.RiskClass
 	(Outcome)(0),                // 1: relay.v1.Outcome
@@ -2011,10 +2259,13 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*PolicySnapshot)(nil),      // 20: relay.v1.PolicySnapshot
 	(*OperationRule)(nil),       // 21: relay.v1.OperationRule
 	(*DenyRule)(nil),            // 22: relay.v1.DenyRule
-	(*ArgMatcher)(nil),          // 23: relay.v1.ArgMatcher
-	(*PolicyQuery)(nil),         // 24: relay.v1.PolicyQuery
-	(*PolicyVerdict)(nil),       // 25: relay.v1.PolicyVerdict
-	nil,                         // 26: relay.v1.Operation.ArgsEntry
+	(*TemplateSnapshot)(nil),    // 23: relay.v1.TemplateSnapshot
+	(*TemplateDescriptor)(nil),  // 24: relay.v1.TemplateDescriptor
+	(*TemplateSlot)(nil),        // 25: relay.v1.TemplateSlot
+	(*ArgMatcher)(nil),          // 26: relay.v1.ArgMatcher
+	(*PolicyQuery)(nil),         // 27: relay.v1.PolicyQuery
+	(*PolicyVerdict)(nil),       // 28: relay.v1.PolicyVerdict
+	nil,                         // 29: relay.v1.Operation.ArgsEntry
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
 	18, // 0: relay.v1.EnrollRequest.self_labels:type_name -> relay.v1.Label
@@ -2025,35 +2276,39 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	16, // 5: relay.v1.DaemonMessage.task_result:type_name -> relay.v1.TaskResult
 	17, // 6: relay.v1.DaemonMessage.stream_chunk:type_name -> relay.v1.StreamChunk
 	20, // 7: relay.v1.DaemonMessage.policy:type_name -> relay.v1.PolicySnapshot
-	25, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
-	10, // 9: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
-	11, // 10: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
-	12, // 11: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
-	24, // 12: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
-	19, // 13: relay.v1.Hello.facts:type_name -> relay.v1.Facts
-	18, // 14: relay.v1.Hello.labels:type_name -> relay.v1.Label
-	13, // 15: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
-	15, // 16: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
-	26, // 17: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
-	0,  // 18: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
-	1,  // 19: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
-	21, // 20: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
-	22, // 21: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
-	23, // 22: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
-	23, // 23: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
-	13, // 24: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
-	15, // 25: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
-	2,  // 26: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
-	4,  // 27: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
-	6,  // 28: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
-	3,  // 29: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
-	5,  // 30: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
-	7,  // 31: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
-	29, // [29:32] is the sub-list for method output_type
-	26, // [26:29] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	28, // 8: relay.v1.DaemonMessage.policy_verdict:type_name -> relay.v1.PolicyVerdict
+	23, // 9: relay.v1.DaemonMessage.templates:type_name -> relay.v1.TemplateSnapshot
+	10, // 10: relay.v1.RelayMessage.ping:type_name -> relay.v1.Ping
+	11, // 11: relay.v1.RelayMessage.task:type_name -> relay.v1.TaskRequest
+	12, // 12: relay.v1.RelayMessage.task_cancel:type_name -> relay.v1.TaskCancel
+	27, // 13: relay.v1.RelayMessage.policy_query:type_name -> relay.v1.PolicyQuery
+	19, // 14: relay.v1.Hello.facts:type_name -> relay.v1.Facts
+	18, // 15: relay.v1.Hello.labels:type_name -> relay.v1.Label
+	13, // 16: relay.v1.TaskRequest.operation:type_name -> relay.v1.Operation
+	15, // 17: relay.v1.TaskRequest.raw_exec:type_name -> relay.v1.RawExec
+	29, // 18: relay.v1.Operation.args:type_name -> relay.v1.Operation.ArgsEntry
+	0,  // 19: relay.v1.OperationDescriptor.risk_class:type_name -> relay.v1.RiskClass
+	1,  // 20: relay.v1.TaskResult.outcome:type_name -> relay.v1.Outcome
+	21, // 21: relay.v1.PolicySnapshot.operation_rules:type_name -> relay.v1.OperationRule
+	22, // 22: relay.v1.PolicySnapshot.deny_rules:type_name -> relay.v1.DenyRule
+	26, // 23: relay.v1.OperationRule.allowed_args:type_name -> relay.v1.ArgMatcher
+	26, // 24: relay.v1.DenyRule.args:type_name -> relay.v1.ArgMatcher
+	24, // 25: relay.v1.TemplateSnapshot.templates:type_name -> relay.v1.TemplateDescriptor
+	0,  // 26: relay.v1.TemplateDescriptor.risk_class:type_name -> relay.v1.RiskClass
+	25, // 27: relay.v1.TemplateDescriptor.slots:type_name -> relay.v1.TemplateSlot
+	13, // 28: relay.v1.PolicyQuery.operation:type_name -> relay.v1.Operation
+	15, // 29: relay.v1.PolicyQuery.raw_exec:type_name -> relay.v1.RawExec
+	2,  // 30: relay.v1.Enrollment.Enroll:input_type -> relay.v1.EnrollRequest
+	4,  // 31: relay.v1.Enrollment.Renew:input_type -> relay.v1.RenewRequest
+	6,  // 32: relay.v1.Tunnel.Open:input_type -> relay.v1.DaemonMessage
+	3,  // 33: relay.v1.Enrollment.Enroll:output_type -> relay.v1.EnrollResponse
+	5,  // 34: relay.v1.Enrollment.Renew:output_type -> relay.v1.RenewResponse
+	7,  // 35: relay.v1.Tunnel.Open:output_type -> relay.v1.RelayMessage
+	33, // [33:36] is the sub-list for method output_type
+	30, // [30:33] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_relay_v1_relay_proto_init() }
@@ -2068,6 +2323,7 @@ func file_relay_v1_relay_proto_init() {
 		(*DaemonMessage_StreamChunk)(nil),
 		(*DaemonMessage_Policy)(nil),
 		(*DaemonMessage_PolicyVerdict)(nil),
+		(*DaemonMessage_Templates)(nil),
 	}
 	file_relay_v1_relay_proto_msgTypes[5].OneofWrappers = []any{
 		(*RelayMessage_Ping)(nil),
@@ -2079,7 +2335,7 @@ func file_relay_v1_relay_proto_init() {
 		(*TaskRequest_Operation)(nil),
 		(*TaskRequest_RawExec)(nil),
 	}
-	file_relay_v1_relay_proto_msgTypes[22].OneofWrappers = []any{
+	file_relay_v1_relay_proto_msgTypes[25].OneofWrappers = []any{
 		(*PolicyQuery_Operation)(nil),
 		(*PolicyQuery_RawExec)(nil),
 	}
@@ -2089,7 +2345,7 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   25,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

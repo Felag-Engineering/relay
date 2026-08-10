@@ -32,6 +32,7 @@ use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, Resolve
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::policy::{Decision, Policy};
 use crate::scheduler::{QueuedOutcome, Scheduler};
+use crate::templates::TemplateSet;
 
 // ---------------------------------------------------------------------------
 // Daemon-level v0.0.3 constants
@@ -76,16 +77,27 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 /// `cancel` is forwarded through scheduling into the executor so the in-flight
 /// cancel path (ADR-0013 honest-race) is intact for Tasks that make it past the
 /// queue.
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch(
     task: &TaskRequest,
     policy: &Policy,
+    templates: &TemplateSet,
     dedup: &DedupStore,
     scheduler: &Scheduler,
     received_at: Instant,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult {
-    dispatch_scheduled_with_runner(task, policy, dedup, scheduler, received_at, execute, cancel)
-        .await
+    dispatch_scheduled_with_runner(
+        task,
+        policy,
+        templates,
+        dedup,
+        scheduler,
+        received_at,
+        execute,
+        cancel,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +127,7 @@ pub async fn dispatch(
 async fn dispatch_with_runner<R, Fut>(
     task: &TaskRequest,
     policy: &Policy,
+    templates: &TemplateSet,
     dedup: &DedupStore,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
@@ -126,7 +139,7 @@ where
     dedup
         .run_once(&task.task_id, move || async move {
             let timeout = effective_timeout(task.timeout_seconds);
-            evaluate_and_execute(task, timeout, policy, run, cancel).await
+            evaluate_and_execute(task, timeout, policy, templates, run, cancel).await
         })
         .await
 }
@@ -152,9 +165,11 @@ where
 ///   clock never restarts at dispatch time.
 /// - The still-owned `cancel` receiver is forwarded to the executor so the
 ///   in-flight cancel path and honest-race (ADR-0013) remain intact.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_scheduled_with_runner<R, Fut>(
     task: &TaskRequest,
     policy: &Policy,
+    templates: &TemplateSet,
     dedup: &DedupStore,
     scheduler: &Scheduler,
     received_at: Instant,
@@ -169,7 +184,10 @@ where
         .run_once(&task.task_id, move || async move {
             let effective = effective_timeout(task.timeout_seconds);
             let deadline = received_at + effective;
-            let class = Scheduler::classify(task);
+            // Classify against the per-Node vocabulary: a `mutate` Template
+            // Operation must take the serial lane exactly like a native one
+            // (ADR-0004/0012), and an unknown name stays conservatively mutate.
+            let class = Scheduler::classify(task, templates);
             let mut cancel = cancel;
             match scheduler.acquire(class, deadline, &mut cancel).await {
                 Err(QueuedOutcome::Timeout) => timeout_result(task.task_id.clone(), received_at),
@@ -188,7 +206,7 @@ where
                     } else {
                         // _permit held across evaluate_and_execute: keeps the gate
                         // occupied for the duration of execution (mutate serial).
-                        evaluate_and_execute(task, remaining, policy, run, cancel).await
+                        evaluate_and_execute(task, remaining, policy, templates, run, cancel).await
                     }
                     // _permit drops here, releasing the gate for the next Task.
                 }
@@ -205,15 +223,32 @@ where
 ///
 /// This function takes **no** `DedupStore` and never reaches the executor — it
 /// is structurally incapable of recording a marker or spawning a process
-/// (ADR-0011). It calls the exact same `policy.evaluate` /
-/// `policy.evaluate_raw_exec` entry points that the execution path uses (via
-/// `operation_positional_args`), so the verdict can never diverge from what a
-/// real Task dispatch would decide (ADR-0011 invariant 12).
-pub fn evaluate_policy_query(query: &PolicyQuery, policy: &Policy) -> PolicyVerdict {
+/// (ADR-0011). It resolves the name through the same [`resolve`] vocabulary
+/// lookup and calls the exact same `policy.evaluate` /
+/// `policy.evaluate_raw_exec` entry points that the execution path uses, so the
+/// verdict can never diverge from what a real Task dispatch would decide
+/// (ADR-0011 invariant 12) — including the `unsupported` answer.
+pub fn evaluate_policy_query(
+    query: &PolicyQuery,
+    policy: &Policy,
+    templates: &TemplateSet,
+) -> PolicyVerdict {
     let query_id = query.query_id.clone();
     match &query.action {
         Some(policy_query::Action::Operation(op)) => {
-            let positional = operation_positional_args(op);
+            // Vocabulary before Policy, exactly as on the execution path
+            // (`gate_and_invoke`) — otherwise a Plan would report
+            // deny-by-default for a name a real dispatch reports `unsupported`,
+            // which is precisely the plan/apply divergence ADR-0011 forbids.
+            let Some(entry) = resolve(&registry::REGISTRY, templates, &op.name) else {
+                return PolicyVerdict {
+                    query_id,
+                    allowed: false,
+                    deciding_rule: UNSUPPORTED_REASON.to_string(),
+                    unsupported: true,
+                };
+            };
+            let positional = entry.positional_args(op);
             let decision = policy.evaluate(&op.name, &positional);
             decision_to_verdict(query_id, decision)
         }
@@ -227,6 +262,7 @@ pub fn evaluate_policy_query(query: &PolicyQuery, policy: &Policy) -> PolicyVerd
             query_id,
             allowed: false,
             deciding_rule: "empty policy query action".to_string(),
+            unsupported: false,
         },
     }
 }
@@ -246,32 +282,23 @@ fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
             query_id,
             allowed: true,
             deciding_rule: String::new(),
+            unsupported: false,
         },
         Decision::Deny { reason, .. } => PolicyVerdict {
             query_id,
             allowed: false,
             deciding_rule: reason,
+            unsupported: false,
         },
     }
 }
 
-/// Map an `Operation`'s named args to the positional arg vector the Policy engine expects.
-///
-/// Derived from the Operation's registered arg-shape
-/// ([`OpRegistration::positional_args`] — the single mapping definition), so
-/// the execution path (`handle_operation`) and the query path
-/// (`evaluate_policy_query`) can never drift between "would allow" and
-/// "actually allows" (ADR-0011), and a newly registered Operation needs no
-/// edit here (issue #289).
-///
-/// Unknown operation names receive an empty positional list, which causes
-/// deny-by-default to fire in the Policy engine — identical to what execution
-/// would report.
-fn operation_positional_args(op: &Operation) -> Vec<String> {
-    registry::lookup(&op.name)
-        .map(|entry| entry.positional_args(op))
-        .unwrap_or_default() // unknown name: deny-by-default will catch this
-}
+// The named-args → positional mapping lives on the resolved entry itself
+// (`ResolvedOp::positional_args` — the single mapping definition, ADR-0011), so
+// the execution path (`gate_and_invoke`) and the query path
+// (`evaluate_policy_query`) derive args through the very same call and can never
+// drift between "would allow" and "actually allows". Both reach it through
+// [`resolve`], so both see the same per-Node vocabulary too (issue #291).
 
 // ---------------------------------------------------------------------------
 // Policy gate and handler dispatch
@@ -281,6 +308,7 @@ async fn evaluate_and_execute<R, Fut>(
     task: &TaskRequest,
     timeout: Duration,
     policy: &Policy,
+    templates: &TemplateSet,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
@@ -311,7 +339,7 @@ where
             (registry::RAW_EXEC.handler)(ctx).await
         }
         Some(task_request::Action::Operation(op)) => {
-            handle_operation(task_id, op, timeout, policy, run, cancel).await
+            handle_operation(task_id, op, timeout, policy, templates, run, cancel).await
         }
         None => {
             // Missing action: protocol error → FAILURE (not DENIED_BY_POLICY).
@@ -322,12 +350,15 @@ where
 }
 
 /// Production Operation path: [`handle_operation_in`] bound to the single
-/// vocabulary registry ([`registry::REGISTRY`]).
+/// vocabulary registry ([`registry::REGISTRY`]) plus this Node's loaded
+/// Template Operations.
+#[allow(clippy::too_many_arguments)]
 async fn handle_operation<R, Fut>(
     task_id: String,
     op: &Operation,
     timeout: Duration,
     policy: &Policy,
+    templates: &TemplateSet,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult
@@ -337,6 +368,7 @@ where
 {
     handle_operation_in(
         &registry::REGISTRY,
+        templates,
         task_id,
         op,
         timeout,
@@ -347,6 +379,26 @@ where
     .await
 }
 
+/// Resolve an Operation name against this Node's **effective vocabulary**:
+/// Native Operations first (frozen at four, ADR-0021), then the Template
+/// Operations loaded from local root-owned files (issue #291).
+///
+/// Natives win by construction, and the loader refuses a template that would
+/// shadow one ([`TemplateSet::load`]), so the two halves can never disagree
+/// about which entry a name resolves to.
+///
+/// `None` means the name is not in this Node's vocabulary at all — the
+/// `unsupported` case, not a Policy question.
+fn resolve<'a>(
+    entries: &'a [OpRegistration],
+    templates: &'a TemplateSet,
+    name: &str,
+) -> Option<&'a dyn ResolvedOp> {
+    registry::lookup_in(entries, name)
+        .map(|e| e as &dyn ResolvedOp)
+        .or_else(|| templates.lookup(name).map(|t| t as &dyn ResolvedOp))
+}
+
 /// Policy gate + registry-resolved handler invocation, over an explicit entry
 /// slice (issue #289: the structural test proves a new Operation needs only a
 /// registration by pointing this exact function at an extended slice — there
@@ -354,6 +406,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn handle_operation_in<R, Fut>(
     entries: &[OpRegistration],
+    templates: &TemplateSet,
     task_id: String,
     op: &Operation,
     timeout: Duration,
@@ -366,13 +419,11 @@ where
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
     // Resolve the registration and gate + invoke it through the uniform
-    // `&dyn ResolvedOp` seam. Native Operations resolve from `entries`; the
-    // same `gate_and_invoke` core serves Template Operations (issue #290) with
-    // no per-name arm, so the structural test can prove a template needs zero
-    // dispatch edits by pointing this core at a template entry.
-    let entry = registry::lookup_in(entries, &op.name);
+    // `&dyn ResolvedOp` seam. Native Operations resolve from `entries`,
+    // Template Operations from the Node's loaded set (issue #291) — the same
+    // `gate_and_invoke` core serves both with no per-name arm.
     gate_and_invoke(
-        entry.map(|e| e as &dyn ResolvedOp),
+        resolve(entries, templates, &op.name),
         task_id,
         op,
         timeout,
@@ -384,16 +435,26 @@ where
 }
 
 /// The single Policy gate + handler-invocation core, over a resolved entry
-/// (`&dyn ResolvedOp`) or `None` (unknown name).
+/// (`&dyn ResolvedOp`) or `None` (not in this Node's vocabulary).
 ///
 /// This is where a Template Operation attains **exact Policy parity** with a
 /// Native Operation: the positional vector comes from the entry's
 /// `positional_args` (ADR-0011 single mapping) and is gated by the one
 /// `policy.evaluate(name, positional)` call — deny-by-default, deny-beats-allow,
 /// argument-level constraints — before any handler runs. A denied action never
-/// reaches `invoke`; an unknown name (no allow rule can exist) is denied by
-/// default, and a name Policy allowed but no entry implements is a FAILURE (the
-/// Policy engine is not at fault).
+/// reaches `invoke`.
+///
+/// **Vocabulary before Policy** (ADR-0021, issue #291): a name this Node does
+/// not implement short-circuits to `OUTCOME_UNSUPPORTED` *without consulting
+/// Policy*, because there is nothing to decide — the Node was never asked. This
+/// replaces the pre-template behavior, where an unknown name fell through to
+/// deny-by-default (and, if some Policy allowed the name anyway, to a FAILURE
+/// "unknown operation"). Both old answers were true but misleading once the
+/// vocabulary is per-Node: `denied_by_policy` reads as "this Node refuses to do
+/// it", when the truth is "this Node has never heard of it — ask a Node that
+/// has, or install the template pack here". Nothing executes either way, so the
+/// deny-by-default guarantee (ADR-0002, invariant #3) is untouched: an entry
+/// must exist AND Policy must allow before any handler runs.
 #[allow(clippy::too_many_arguments)]
 async fn gate_and_invoke<R, Fut>(
     entry: Option<&dyn ResolvedOp>,
@@ -408,7 +469,18 @@ where
     R: Fn(ExecRequest) -> Fut + Sync,
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
-    let positional = entry.map(|e| e.positional_args(op)).unwrap_or_default();
+    let Some(entry) = entry else {
+        // cancel drops naturally here — nothing was spawned, nothing queued.
+        let _ = cancel;
+        tracing::info!(
+            task_id = %task_id,
+            operation = %op.name,
+            "operation is not in this Node's vocabulary; reporting unsupported"
+        );
+        return unsupported_result(task_id);
+    };
+
+    let positional = entry.positional_args(op);
 
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
     match policy.evaluate(&op.name, &positional) {
@@ -424,28 +496,19 @@ where
             );
             denied_by_policy_result(task_id, &reason)
         }
-        Decision::Allow(_rule) => match entry {
-            Some(entry) => {
-                let runner = FnRunner(run);
-                let ctx = OpCtx {
-                    task_id,
-                    positional,
-                    timeout,
-                    max_output_bytes: MAX_OUTPUT_BYTES,
-                    policy,
-                    cancel,
-                    runner: &runner,
-                };
-                entry.invoke(ctx).await
-            }
-            None => {
-                // Policy allowed a name this daemon does not implement.
-                // FAILURE (not DENIED_BY_POLICY): the Policy engine is not at fault.
-                // cancel drops naturally here — no process spawned.
-                let _ = cancel;
-                failure_result(task_id, b"unknown operation")
-            }
-        },
+        Decision::Allow(_rule) => {
+            let runner = FnRunner(run);
+            let ctx = OpCtx {
+                task_id,
+                positional,
+                timeout,
+                max_output_bytes: MAX_OUTPUT_BYTES,
+                policy,
+                cancel,
+                runner: &runner,
+            };
+            entry.invoke(ctx).await
+        }
     }
 }
 
@@ -512,7 +575,35 @@ fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
     }
 }
 
-/// Synthesizes an `OUTCOME_FAILURE` result for protocol errors and unknown operations.
+/// The one reason string for an out-of-vocabulary Operation, shared by the
+/// execution path (`unsupported_result`'s stderr) and the query path
+/// (`evaluate_policy_query`'s `deciding_rule`) so a Plan and a real dispatch
+/// explain the same input with the same bytes (ADR-0011 parity).
+///
+/// A fixed string: it deliberately does **not** echo the requested name, which
+/// is caller-controlled and unbounded. The Relay already knows which Operation
+/// it dispatched, and per-Node vocabulary is discoverable through
+/// `describe_node`/`list_operations`.
+pub(crate) const UNSUPPORTED_REASON: &str =
+    "operation is not in this Node's vocabulary (no Native Operation and no loaded Template \
+     Operation of that name); nothing executed and Policy was not consulted";
+
+/// Synthesizes an `OUTCOME_UNSUPPORTED` result: the Operation name is not in
+/// this Node's vocabulary, so nothing ran and Policy was never consulted
+/// (ADR-0021, issue #291).
+fn unsupported_result(task_id: String) -> TaskResult {
+    TaskResult {
+        task_id,
+        outcome: Outcome::Unsupported as i32,
+        exit_code: -1,
+        stdout: Vec::new(),
+        stderr: UNSUPPORTED_REASON.as_bytes().to_vec(),
+        truncated: false,
+        duration_millis: 0,
+    }
+}
+
+/// Synthesizes an `OUTCOME_FAILURE` result for protocol errors.
 fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
     TaskResult {
         task_id,
@@ -705,7 +796,15 @@ allowed_args = [["*"]]
         let tmp = TempFile::new("content", content);
         let task = make_task_file_read("t-file-read", &tmp.path_str());
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
 
         assert_eq!(result.task_id, "t-file-read");
         assert_eq!(
@@ -739,7 +838,15 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/echo".to_string(), "hello".to_string()],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
 
         assert_eq!(result.outcome, Outcome::Success as i32);
         assert_eq!(result.stdout, b"hello\n");
@@ -781,7 +888,15 @@ allow = ["^/bin/echo hello$"]
             vec!["/bin/sh".to_string(), "-c".to_string(), cmd],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -828,7 +943,15 @@ allow = ["^/bin/echo hello$"]
         };
 
         let task = make_task_service_restart("t-nginx", "nginx");
-        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -872,7 +995,15 @@ allow = ["^/bin/echo hello$"]
         };
 
         let task = make_task_service_restart("t-sshd", "sshd");
-        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -921,7 +1052,15 @@ allow = ["^/bin/echo hello$"]
         };
 
         let task = make_task_pkg_install("t-pkg-netcat", "netcat", "");
-        let result = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -965,8 +1104,24 @@ allow = ["^/bin/echo hello$"]
 
         let task = make_task_service_restart("dedup-id-1", "nginx");
 
-        let r1 = dispatch_with_runner(&task, &policy, &dedup, fake_run.clone(), None).await;
-        let r2 = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+        let r1 = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        let r2 = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run,
+            None,
+        )
+        .await;
 
         assert_eq!(
             runner_calls.load(Ordering::SeqCst),
@@ -1011,7 +1166,15 @@ allow = ["^/bin/echo hello$"]
             ],
         );
 
-        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -1045,7 +1208,15 @@ allowed_args = []
         .expect("parse policy");
 
         let task = make_task_system_facts("t-facts");
-        let result = dispatch_with_runner(&task, &policy, &dedup, execute, None).await;
+        let result = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            None,
+        )
+        .await;
 
         assert_eq!(
             result.outcome,
@@ -1273,8 +1444,16 @@ deny = ["secret"]
         ];
 
         for case in &cases {
-            let verdict = evaluate_policy_query(&case.query, &policy);
-            let result = dispatch_with_runner(&case.task, &policy, &dedup, fake_run, None).await;
+            let verdict = evaluate_policy_query(&case.query, &policy, TemplateSet::empty_static());
+            let result = dispatch_with_runner(
+                &case.task,
+                &policy,
+                TemplateSet::empty_static(),
+                &dedup,
+                fake_run,
+                None,
+            )
+            .await;
 
             // Core assertion: verdict matches execution outcome.
             let exec_allowed = result.outcome != Outcome::DeniedByPolicy as i32;
@@ -1307,7 +1486,8 @@ deny = ["secret"]
 
         // Case (3): file.read /etc/shadow — deny-beats-allow; deciding_rule must name the rule.
         {
-            let verdict = evaluate_policy_query(&cases[2].query, &policy);
+            let verdict =
+                evaluate_policy_query(&cases[2].query, &policy, TemplateSet::empty_static());
             assert!(
                 verdict.deciding_rule.contains("file.read"),
                 "case (3) deciding_rule must name the file.read deny rule; got {:?}",
@@ -1317,7 +1497,8 @@ deny = ["secret"]
 
         // Case (5): /bin/echo secret — deny-beats-allow; deciding_rule must name the deny pattern.
         {
-            let verdict = evaluate_policy_query(&cases[4].query, &policy);
+            let verdict =
+                evaluate_policy_query(&cases[4].query, &policy, TemplateSet::empty_static());
             assert!(
                 verdict.deciding_rule.contains("secret"),
                 "case (5) deciding_rule must name the deny pattern; got {:?}",
@@ -1348,15 +1529,17 @@ deny = ["secret"]
         }
 
         let cases = vec![
-            // (a) no-rule: an operation name absent from the Policy entirely.
+            // (a) no-rule: an Operation this Node implements (so it IS in the
+            // vocabulary — the `unsupported` short-circuit does not apply) but
+            // which the Policy has no rule for at all → deny-by-default.
             Case {
-                label: "no-rule (unknown operation)",
-                query: make_policy_query_operation("q-no-rule", "totally.unknown", "", ""),
+                label: "no-rule (system.facts, no Policy rule)",
+                query: make_policy_query_operation("q-no-rule", operations::SYSTEM_FACTS, "", ""),
                 task: TaskRequest {
                     task_id: "identity-no-rule".to_string(),
                     timeout_seconds: 5,
                     action: Some(task_request::Action::Operation(crate::gen::Operation {
-                        name: "totally.unknown".to_string(),
+                        name: operations::SYSTEM_FACTS.to_string(),
                         args: Default::default(),
                     })),
                 },
@@ -1387,10 +1570,11 @@ deny = ["secret"]
         ];
 
         for case in &cases {
-            let verdict = evaluate_policy_query(&case.query, &policy);
+            let verdict = evaluate_policy_query(&case.query, &policy, TemplateSet::empty_static());
             let result = dispatch(
                 &case.task,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 tokio::time::Instant::now(),
@@ -1447,7 +1631,7 @@ allow = ["^/bin/sh"]
         let query =
             make_policy_query_raw_exec("pq-no-spawn", vec!["/bin/sh".into(), "-c".into(), cmd]);
 
-        let verdict = evaluate_policy_query(&query, &policy);
+        let verdict = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
 
         // Verdict must be "allowed" so we know the policy gate passed.
         assert!(
@@ -1466,7 +1650,7 @@ allow = ["^/bin/sh"]
         let state_dir = TempDir::new("pq-no-dedup");
         // evaluate_policy_query is a sync fn; call it — compile-time proof that
         // it does not accept a DedupStore parameter.
-        let _verdict2 = evaluate_policy_query(&query, &policy);
+        let _verdict2 = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
 
         // The seen-tasks dir may not even exist (DedupStore was never opened).
         // Treat "absent or empty" as pass.
@@ -1491,7 +1675,7 @@ allow = ["^/bin/sh"]
             query_id: "pq-malformed-none".to_string(),
             action: None,
         };
-        let verdict = evaluate_policy_query(&query_none, &policy);
+        let verdict = evaluate_policy_query(&query_none, &policy, TemplateSet::empty_static());
         assert!(!verdict.allowed, "None action must be denied");
         assert!(
             !verdict.deciding_rule.is_empty(),
@@ -1499,17 +1683,24 @@ allow = ["^/bin/sh"]
             verdict.deciding_rule,
         );
 
-        // (b) Unknown operation name — deny-by-default, no panic.
+        // (b) A name outside this Node's vocabulary — never allowed, and
+        // reported as `unsupported` rather than a Policy deny (ADR-0021): the
+        // Node was never asked to decide. No panic either way.
         let query_unknown =
             make_policy_query_operation("pq-malformed-op", "completely.unknown.operation", "", "");
-        let verdict_unknown = evaluate_policy_query(&query_unknown, &policy);
+        let verdict_unknown =
+            evaluate_policy_query(&query_unknown, &policy, TemplateSet::empty_static());
         assert!(
             !verdict_unknown.allowed,
-            "unknown operation must be denied by default"
+            "an out-of-vocabulary operation is never allowed"
+        );
+        assert!(
+            verdict_unknown.unsupported,
+            "an out-of-vocabulary operation must be flagged unsupported, not a Policy deny"
         );
         assert!(
             !verdict_unknown.deciding_rule.is_empty(),
-            "unknown operation deny must carry a non-empty deciding_rule; got {:?}",
+            "an unsupported verdict must still explain itself; got {:?}",
             verdict_unknown.deciding_rule,
         );
     }
@@ -1550,7 +1741,15 @@ allow = ["^/bin/sh "]
             .expect("cancel send must succeed (buffered)");
 
         // First dispatch: real execute runner; cancel fires immediately.
-        let r1 = dispatch_with_runner(&task, &policy, &dedup, execute, Some(cancel_rx)).await;
+        let r1 = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            execute,
+            Some(cancel_rx),
+        )
+        .await;
 
         assert_eq!(
             r1.outcome,
@@ -1577,7 +1776,15 @@ allow = ["^/bin/sh "]
             }
         };
 
-        let r2 = dispatch_with_runner(&task, &policy, &dedup, fake_run, None).await;
+        let r2 = dispatch_with_runner(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            fake_run,
+            None,
+        )
+        .await;
 
         assert_eq!(
             runner_calls.load(Ordering::SeqCst),
@@ -1639,6 +1846,7 @@ allow = ["^/bin/sh "]
             dispatch_scheduled_with_runner(
                 &task1,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 received_at,
@@ -1648,6 +1856,7 @@ allow = ["^/bin/sh "]
             dispatch_scheduled_with_runner(
                 &task2,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 received_at,
@@ -1704,6 +1913,7 @@ allow = ["^/bin/sh "]
         let result = dispatch_scheduled_with_runner(
             &task,
             &policy,
+            TemplateSet::empty_static(),
             &dedup,
             &scheduler,
             received_at,
@@ -1728,6 +1938,7 @@ allow = ["^/bin/sh "]
         let result2 = dispatch_scheduled_with_runner(
             &task,
             &policy,
+            TemplateSet::empty_static(),
             &dedup,
             &scheduler,
             tokio::time::Instant::now(),
@@ -1802,6 +2013,7 @@ allow = ["^/bin/sh "]
         let result = dispatch_scheduled_with_runner(
             &task,
             &policy,
+            TemplateSet::empty_static(),
             &dedup,
             &scheduler,
             received_at,
@@ -1827,6 +2039,7 @@ allow = ["^/bin/sh "]
         let result2 = dispatch_scheduled_with_runner(
             &task,
             &policy,
+            TemplateSet::empty_static(),
             &dedup,
             &scheduler,
             tokio::time::Instant::now(),
@@ -1926,6 +2139,7 @@ allow = ["^/bin/sh "]
         let result = dispatch_scheduled_with_runner(
             &task,
             &policy,
+            TemplateSet::empty_static(),
             &dedup,
             &scheduler,
             received_at,
@@ -2019,6 +2233,7 @@ allow = ["^/bin/sh "]
             dispatch_scheduled_with_runner(
                 &task1,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 received_at,
@@ -2028,6 +2243,7 @@ allow = ["^/bin/sh "]
             dispatch_scheduled_with_runner(
                 &task2,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 received_at,
@@ -2136,6 +2352,7 @@ allowed_args = [["*"]]
         // pointed at the extended registry — zero dispatch edits.
         let result = handle_operation_in(
             &entries,
+            TemplateSet::empty_static(),
             "t-echo".to_string(),
             &op,
             Duration::from_secs(5),
@@ -2169,6 +2386,7 @@ allowed_args = [["only-this"]]
         .expect("deny-side policy must parse");
         let denied = handle_operation_in(
             &entries,
+            TemplateSet::empty_static(),
             "t-echo-denied".to_string(),
             &op,
             Duration::from_secs(5),
@@ -2179,11 +2397,12 @@ allowed_args = [["only-this"]]
         .await;
         assert_eq!(denied.outcome, Outcome::DeniedByPolicy as i32);
 
-        // WITHOUT the registration, the same request stays unknown: the
-        // production registry does not resolve it, its args map to the empty
-        // positional list, and even a Policy that allows the (argless) name
-        // yields FAILURE "unknown operation" — the baseline behavior for
-        // unregistered names, unchanged.
+        // WITHOUT the registration, the same request stays outside this Node's
+        // vocabulary: the production registry does not resolve it and no
+        // template supplies it, so even a Policy that allows the (argless) name
+        // yields OUTCOME_UNSUPPORTED — nothing runs, and Policy is never
+        // consulted (ADR-0021; the pre-template answer here was a FAILURE
+        // "unknown operation").
         assert!(lookup_in(&REGISTRY, "test.echo").is_none());
         let allow_argless_policy = from_toml_str(
             r#"
@@ -2195,6 +2414,7 @@ allowed_args = []
         .expect("argless policy must parse");
         let unregistered = handle_operation_in(
             &REGISTRY,
+            TemplateSet::empty_static(),
             "t-echo-unregistered".to_string(),
             &op,
             Duration::from_secs(5),
@@ -2203,8 +2423,155 @@ allowed_args = []
             None,
         )
         .await;
-        assert_eq!(unregistered.outcome, Outcome::Failure as i32);
-        assert_eq!(unregistered.stderr, b"unknown operation");
+        assert_eq!(
+            unregistered.outcome,
+            Outcome::Unsupported as i32,
+            "a name outside this Node's vocabulary reports unsupported, even when \
+             Policy would have allowed it — the Node was never asked to decide"
+        );
+        assert_eq!(unregistered.stderr, UNSUPPORTED_REASON.as_bytes());
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-Node vocabulary wiring (issue #291, ADR-0021): a LOADED template is
+    // reachable through the production resolution path, and a name this Node
+    // does not have reports `unsupported` on both the apply and the plan path.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_loaded_template_resolves_through_the_production_operation_path() {
+        let templates = crate::templates::TemplateSet::for_test(&[TemplateDef {
+            name: "disk.usage".to_string(),
+            risk_class: crate::operations::template::RiskClassDef::Read,
+            body: "df -PT {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }]);
+
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["/var"]]
+"#,
+        )
+        .expect("policy parses");
+
+        let recorded = Arc::new(Mutex::new(None::<Vec<String>>));
+        let rec = recorded.clone();
+        let fake_run = move |req: ExecRequest| {
+            *rec.lock().unwrap() = Some(req.argv.clone());
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("path".to_string(), "/var".to_string());
+        let op = crate::gen::Operation {
+            name: "disk.usage".to_string(),
+            args,
+        };
+
+        // Resolution is the whole wiring: no dispatch arm names the template.
+        let result = handle_operation_in(
+            &REGISTRY,
+            &templates,
+            "t-tmpl-loaded".to_string(),
+            &op,
+            Duration::from_secs(5),
+            &policy,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(result.outcome, Outcome::Success as i32);
+        assert_eq!(
+            recorded.lock().unwrap().clone().expect("runner must run"),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "df -PT '/var'".to_string()
+            ],
+        );
+
+        // The SAME name on a Node without the template is `unsupported` — not a
+        // Policy deny, even though this Policy would allow it.
+        let elsewhere = handle_operation_in(
+            &REGISTRY,
+            TemplateSet::empty_static(),
+            "t-tmpl-missing".to_string(),
+            &op,
+            Duration::from_secs(5),
+            &policy,
+            fake_run,
+            None,
+        )
+        .await;
+        assert_eq!(elsewhere.outcome, Outcome::Unsupported as i32);
+        assert_eq!(elsewhere.exit_code, -1, "nothing ran, so no exit status");
+    }
+
+    /// ADR-0011 parity for the `unsupported` answer: a Plan on a Node without
+    /// the template and a real dispatch on the same Node must agree — same
+    /// "won't run" conclusion, same explanation bytes.
+    #[tokio::test]
+    async fn plan_and_apply_agree_on_unsupported() {
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("policy parses");
+        let state_dir = TempDir::new("unsupported-parity");
+        let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
+        let scheduler = Scheduler::new();
+
+        let query = make_policy_query_operation("q-unsupported", "disk.usage", "path", "/var");
+        let verdict = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
+        assert!(!verdict.allowed);
+        assert!(verdict.unsupported);
+
+        let mut args = std::collections::HashMap::new();
+        args.insert("path".to_string(), "/var".to_string());
+        let task = TaskRequest {
+            task_id: "t-unsupported-parity".to_string(),
+            timeout_seconds: 5,
+            action: Some(task_request::Action::Operation(crate::gen::Operation {
+                name: "disk.usage".to_string(),
+                args,
+            })),
+        };
+        let result = dispatch(
+            &task,
+            &policy,
+            TemplateSet::empty_static(),
+            &dedup,
+            &scheduler,
+            tokio::time::Instant::now(),
+            None,
+        )
+        .await;
+
+        assert_eq!(result.outcome, Outcome::Unsupported as i32);
+        assert_eq!(
+            verdict.deciding_rule,
+            String::from_utf8_lossy(&result.stderr),
+            "plan and apply must explain an unsupported Operation with the same bytes",
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2597,6 +2964,7 @@ mod proptests {
             let result = rt.block_on(dispatch_scheduled_with_runner(
                 &task,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 tokio::time::Instant::now(),
@@ -2676,6 +3044,7 @@ mod proptests {
                 let _r1 = dispatch_scheduled_with_runner(
                     &task,
                     &policy,
+                    TemplateSet::empty_static(),
                     &dedup,
                     &scheduler,
                     tokio::time::Instant::now(),
@@ -2686,6 +3055,7 @@ mod proptests {
                 dispatch_scheduled_with_runner(
                     &task,
                     &policy,
+                    TemplateSet::empty_static(),
                     &dedup,
                     &scheduler,
                     tokio::time::Instant::now(),
@@ -2720,7 +3090,7 @@ mod proptests {
         // ---------------------------------------------------------------
         #[test]
         fn classify_strict_lane(task in arb_task()) {
-            let class = Scheduler::classify(&task);
+            let class = Scheduler::classify(&task, TemplateSet::empty_static());
             match &task.action {
                 None => prop_assert_eq!(class, Class::Mutate, "missing action must classify Mutate"),
                 Some(task_request::Action::RawExec(_)) => {
