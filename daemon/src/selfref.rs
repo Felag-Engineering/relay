@@ -360,7 +360,9 @@ allowed_args = [["*"]]
 
         let findings = lint(&policy, &["file.checksum".to_string()]);
         assert!(
-            findings.iter().any(|f| f.location.contains("file.checksum")),
+            findings
+                .iter()
+                .any(|f| f.location.contains("file.checksum")),
             "expected a finding for the path-slotted template rule; got {findings:#?}"
         );
     }
@@ -401,7 +403,9 @@ allowed_args = [["*"]]
         .expect("policy parses");
         let findings = lint(&read_only, &[]);
         assert!(
-            findings.iter().all(|f| !f.message.contains("rewrite the wire")),
+            findings
+                .iter()
+                .all(|f| !f.message.contains("rewrite the wire")),
             "a read rule must not be described as rewriting the gate; got {findings:#?}"
         );
 
@@ -414,7 +418,9 @@ allow = ["^/usr/bin/sed .*$"]
         .expect("policy parses");
         let findings = lint(&writable, &[]);
         assert!(
-            findings.iter().any(|f| f.message.contains("rewrite the wire")),
+            findings
+                .iter()
+                .any(|f| f.message.contains("rewrite the wire")),
             "a write-capable Raw Exec rule must say so; got {findings:#?}"
         );
     }
