@@ -577,6 +577,38 @@ pub fn lint_with_vocabulary(
     }
 }
 
+/// The ADR-0018 lexical canonical-form test for a path argument: absolute, and
+/// with no empty, `.`, `..`, or trailing-slash segment.
+///
+/// Pure and I/O-free — it does NOT fold case or Unicode (ADR-0018 records that
+/// as a narrow residual), and it is deliberately the SINGLE definition used
+/// both by [`Policy::evaluate`]'s `file.read` precondition and by the dispatch
+/// gate that applies the same precondition to a Template Operation's
+/// `path`-typed slots (issue #293). One predicate, two call sites — never two
+/// notions of "canonical".
+pub fn path_is_canonical(path: &str) -> bool {
+    path == "/"
+        || (path.starts_with('/')
+            && !path.ends_with('/')
+            && !path
+                .split('/')
+                .skip(1)
+                .any(|seg| seg.is_empty() || seg == "." || seg == ".."))
+}
+
+/// The `Decision` a non-canonical path argument produces, with the reason text
+/// shared by every caller of [`path_is_canonical`] so the plan verdict, the
+/// apply-path stderr, and the audit record all read identically.
+pub fn non_canonical_path_denial(path: &str) -> Decision {
+    Decision::Deny {
+        reason: format!(
+            "path argument {path:?} is not in canonical form (ADR-0018): must be absolute \
+             with no '.', '..', '//', or trailing-slash segment"
+        ),
+        rule: None,
+    }
+}
+
 /// Checks every pattern in a `[raw_exec]` allow/deny list for regex validity.
 fn lint_raw_exec_regexes(patterns: &[String], section: &str, findings: &mut Vec<LintFinding>) {
     for (i, pattern) in patterns.iter().enumerate() {
@@ -825,21 +857,8 @@ impl Policy {
         // evasions that are canonical in form (ADR-0018 layer 2).
         if operation_name == operations::FILE_READ {
             if let Some(path) = args.first() {
-                let canonical = path == "/"
-                    || (path.starts_with('/')
-                        && !path.ends_with('/')
-                        && !path
-                            .split('/')
-                            .skip(1)
-                            .any(|seg| seg.is_empty() || seg == "." || seg == ".."));
-                if !canonical {
-                    return Decision::Deny {
-                        reason: format!(
-                            "path argument {path:?} is not in canonical form (ADR-0018): must \
-                             be absolute with no '.', '..', '//', or trailing-slash segment"
-                        ),
-                        rule: None,
-                    };
+                if !path_is_canonical(path) {
+                    return non_canonical_path_denial(path);
                 }
             }
         }
@@ -3401,11 +3420,16 @@ mod default_policy_tests {
         "/root/.ssh/id_ecdsa",
         "/root/.ssh/id_ed25519",
         "/root/.ssh/id_dsa",
-        // The daemon's own config and credentials (#287 posture).
+        // The daemon's own config and credentials (#287 posture). The last
+        // three were added with the shipped read catalog (#293), surfaced by
+        // pointing `policy check`'s own self-reference lint at this file.
         "/etc/relay-daemon/policy.toml",
         "/etc/relay-daemon/relay-daemon.env",
         "/etc/relay-daemon/ca-bundle.pem",
         "/var/lib/relay-daemon/key.pem",
+        "/var/lib/relay-daemon/cert.pem",
+        "/usr/local/bin/relay-daemon",
+        "/etc/systemd/system/relay-daemon.service",
         // Kernel/process memory and environment oracles.
         "/proc/kcore",
         "/dev/mem",
@@ -3429,10 +3453,21 @@ mod default_policy_tests {
 
     #[test]
     fn default_file_lints_clean() {
-        // Same check `relay-daemon policy check` performs: no parse error, no
-        // findings (the wildcard-allow + partial deny-list is a PARTIAL
-        // shadow and must not be flagged).
-        let report = lint(DEFAULT);
+        // Same check `relay-daemon policy check --templates <shipped pack>`
+        // performs: no parse error, no findings (the wildcard-allow + partial
+        // deny-list is a PARTIAL shadow and must not be flagged).
+        //
+        // The template names are supplied because the shipped file now names
+        // the shipped read catalog's Operations (issue #293): they are real
+        // vocabulary on a Node with the pack installed, which is exactly the
+        // Node this file is shipped to. Linting it WITHOUT them is checked
+        // below — it must warn, never error, since the linter cannot see the
+        // target Node's template root (ADR-0021).
+        let names: Vec<String> = SHIPPED_TEMPLATE_NAMES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let report = lint_with_vocabulary(DEFAULT, &names, true);
         assert!(
             report.parse_error.is_none(),
             "default file must parse cleanly; got {:?}",
@@ -3444,6 +3479,41 @@ mod default_policy_tests {
             report.findings
         );
     }
+
+    /// Linting the shipped file with no template root supplied: the catalog
+    /// names cannot be confirmed, so they warn (naming the fix) and never
+    /// error — a pipeline that lints the shipped default without pointing at
+    /// the pack must not fail (ADR-0021's per-Node vocabulary, issue #292).
+    #[test]
+    fn default_file_without_a_template_root_warns_but_does_not_error() {
+        let report = lint(DEFAULT);
+        assert!(!report.has_errors(), "got {:?}", report.findings);
+        assert!(
+            report.has_warnings(),
+            "the catalog names must at least be surfaced; got {:?}",
+            report.findings
+        );
+        for f in &report.findings {
+            assert!(
+                f.message.contains("--templates"),
+                "every such warning must name the fix; got {:?}",
+                f.message
+            );
+        }
+    }
+
+    /// The catalog names the shipped default Policy allows, as a list this test
+    /// module owns; `catalog.rs` binds the same names to the packaged pack, so
+    /// the two files cannot drift apart silently.
+    const SHIPPED_TEMPLATE_NAMES: [&str; 7] = [
+        "proc.list",
+        "disk.usage",
+        "net.listening",
+        "pkg.inventory",
+        "service.status",
+        "log.tail",
+        "file.checksum",
+    ];
 
     // -- Read class pre-allowed (ADR-0022) ---------------------------------
 
@@ -3514,7 +3584,7 @@ mod default_policy_tests {
         assert_eq!(
             in_file, expected,
             "policy.default.toml's file.read deny values must exactly mirror \
-             the ADR-0022 deny-list pinned in this test"
+             the ADR-0022 deny-list pinned in this test (as amended by #293)"
         );
     }
 

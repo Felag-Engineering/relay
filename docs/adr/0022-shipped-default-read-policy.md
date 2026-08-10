@@ -90,3 +90,23 @@ read posture nobody enables.
 - The shipped catalog's template allowances (ADR-0021) land in this file with the
   catalog, in the human-merge lane — the default Policy file is Policy surface, always
   reviewed by a person.
+
+## Amendment (2026-08-10, issue #293): the shipped read catalog, and three more denied paths
+
+The shipped file now also allows the seven `read` Template Operations of the first-party
+catalog (ADR-0021, #293) and mirrors the confidentiality deny-list onto `file.checksum` — a
+digest is a content oracle, so every path denied to `file.read` must be denied to it. A
+Policy rule never creates vocabulary: on a Node without the pack these rules are inert and
+dispatch reports `unsupported`.
+
+Pointing `policy check`'s own self-reference lint (#287) at this file also surfaced three
+paths the original list missed, now denied: `/var/lib/relay-daemon/cert.pem`,
+`/usr/local/bin/relay-daemon`, and `/etc/systemd/system/relay-daemon.service`.
+
+**Recorded residual, unchanged in kind:** the template files under
+`/etc/relay-daemon/templates.d/` cannot be denied by exact path — their names are whatever
+the installed packs use, and Policy still has no subtree deny. With `file.read`'s `"*"` allow
+in place, the AI-agent can read a Node's template files (disclosing its vocabulary; it can
+never change them, ADR-0002/0021). `policy check --strict` reports this truthfully rather
+than the file being tuned to silence its own linter, and the remedy is the one this ADR
+already names: replace `file.read`'s wildcard with an explicit path allow-list.

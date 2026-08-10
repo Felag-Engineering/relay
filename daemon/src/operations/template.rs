@@ -296,10 +296,11 @@ impl TemplateOp {
 
     /// The positions of `path`-typed slots, in positional (Policy) order.
     ///
-    /// Consumed by the self-reference lint (#287/#292), which probes only
-    /// path-slotted templates with a path — a unit-name or enum slot rejects a
-    /// path at the template's own typed gate, so probing those would report a
-    /// reach that cannot exist.
+    /// Consumed by the dispatch gate (issue #293) to apply ADR-0018's
+    /// canonical-form precondition to a template's path arguments BEFORE Policy
+    /// evaluates them — so an exact-path `[[deny]]` on a template cannot be
+    /// evaded by a non-canonical spelling like `/etc/../etc/shadow`, exactly as
+    /// it cannot be for `file.read`.
     pub fn path_slot_positions(&self) -> Vec<usize> {
         self.slots
             .iter()
@@ -397,6 +398,10 @@ impl ResolvedOp for TemplateOp {
 
     fn positional_args(&self, op: &Operation) -> Vec<String> {
         TemplateOp::positional_args(self, op)
+    }
+
+    fn path_arg_positions(&self) -> Vec<usize> {
+        TemplateOp::path_slot_positions(self)
     }
 
     fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a> {

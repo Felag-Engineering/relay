@@ -41,6 +41,53 @@ allowed_args = []
 name = "file.read"
 allowed_args = [["*"]]
 
+# --- The shipped read catalog (ADR-0021, issue #293) -----------------------
+# These names are Template Operations, not Native Operations: they exist only
+# on a Node that has the first-party pack installed
+# (/etc/relay-daemon/templates.d/relay-read/). On a Node without it, dispatch
+# reports `unsupported` and these rules are simply inert — a Policy rule never
+# creates vocabulary, it only permits it.
+#
+# `policy check --templates /etc/relay-daemon/templates.d` resolves these
+# names; without that flag the linter warns that it cannot confirm them.
+
+# No arguments: the whole process table, filesystem capacity, listening
+# sockets, and the package inventory.
+[[operation]]
+name = "proc.list"
+allowed_args = []
+
+[[operation]]
+name = "disk.usage"
+allowed_args = []
+
+[[operation]]
+name = "net.listening"
+allowed_args = []
+
+[[operation]]
+name = "pkg.inventory"
+allowed_args = []
+
+# One unit name each ("*" is the per-position any-value wildcard). NARROW
+# THESE FIRST: a journal carries whatever a service logs, so log.tail is the
+# catalog's widest egress surface — replacing "*" with your actual unit list
+# is the single highest-value edit in this file.
+[[operation]]
+name = "service.status"
+allowed_args = [["*"]]
+
+[[operation]]
+name = "log.tail"
+allowed_args = [["*"]]
+
+# One canonical path. A digest is a content oracle — it confirms a guessed
+# file byte-for-byte — so the confidentiality deny-list below covers
+# file.checksum exactly as it covers file.read.
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+
 # ---------------------------------------------------------------------------
 # Confidentiality deny-list (ADR-0022, applying ADR-0021's data-egress
 # governance)
@@ -92,13 +139,79 @@ args = [[
     "/etc/relay-daemon/relay-daemon.env",
     "/etc/relay-daemon/ca-bundle.pem",
     "/var/lib/relay-daemon/key.pem",
+    "/var/lib/relay-daemon/cert.pem",
+    "/usr/local/bin/relay-daemon",
+    "/etc/systemd/system/relay-daemon.service",
 ]]
+
+# KNOWN RESIDUAL (surfaced by `policy check`'s self-reference lint): the
+# template files under /etc/relay-daemon/templates.d/ cannot be denied by exact
+# path — their names are whatever the installed packs use, and Policy has no
+# subtree deny (the same residual ADR-0022 already records for /etc/ssl/private
+# and per-pid /proc paths). With file.read's "*" allow in place, the AI-agent
+# can therefore read this Node's template files, which discloses its vocabulary
+# but cannot change it (templates are root-owned, ADR-0002/0021). The fix is
+# the same one this file recommends throughout: replace file.read's "*" with an
+# explicit path allow-list. Until you do, `policy check --strict` will report
+# it — truthfully.
 
 # Kernel/process memory and environment oracles: kernel memory images, and
 # the daemon's own memory/environment (the environment carries the Enrollment
 # Token on first boot).
 [[deny]]
 name = "file.read"
+args = [[
+    "/proc/kcore",
+    "/dev/mem",
+    "/dev/kmem",
+    "/proc/self/mem",
+    "/proc/self/environ",
+]]
+
+# --- The same confidentiality list, applied to file.checksum ---------------
+# A digest confirms a guessed file byte-for-byte, so every path denied to
+# file.read is denied to the catalog's checksum template too. Kept as an
+# explicit mirror rather than a shared list because Policy rules are per
+# Operation name by design (ADR-0002): one name, one rule, visible in review.
+#
+# The dispatch gate holds a template's `path` slot to the same ADR-0018
+# canonical-form precondition as file.read's, so these exact-path denies also
+# refuse /etc/../etc/shadow and //etc/shadow.
+
+[[deny]]
+name = "file.checksum"
+args = [["/etc/shadow", "/etc/shadow-", "/etc/gshadow", "/etc/gshadow-"]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/ssh/ssh_host_rsa_key",
+    "/etc/ssh/ssh_host_ecdsa_key",
+    "/etc/ssh/ssh_host_ed25519_key",
+    "/etc/ssh/ssh_host_dsa_key",
+    "/etc/krb5.keytab",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/root/.ssh/id_rsa",
+    "/root/.ssh/id_ecdsa",
+    "/root/.ssh/id_ed25519",
+    "/root/.ssh/id_dsa",
+]]
+
+[[deny]]
+name = "file.checksum"
+args = [[
+    "/etc/relay-daemon/policy.toml",
+    "/etc/relay-daemon/relay-daemon.env",
+    "/etc/relay-daemon/ca-bundle.pem",
+    "/var/lib/relay-daemon/key.pem",
+]]
+
+[[deny]]
+name = "file.checksum"
 args = [[
     "/proc/kcore",
     "/dev/mem",

@@ -7,6 +7,7 @@ use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 
 mod cancel;
+mod catalog;
 mod config;
 mod dedup;
 mod dispatch;
