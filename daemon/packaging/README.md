@@ -18,6 +18,10 @@ $ sudo install -m 0600 -o root -g root relay-daemon.env.example /etc/relay-daemo
 $ sudo "$EDITOR" /etc/relay-daemon/relay-daemon.env   # fill in RELAY_* values, see below
 ```
 
+If you have not authored a Policy yet, install the shipped default
+([`../policy.default.toml`](../policy.default.toml), ADR-0022): `read` pre-allowed with a
+confidentiality deny-list; `mutate` + Raw Exec stay opt-in.
+
 Policy (`/etc/relay-daemon/policy.toml`) must be root-owned and not group/world-writable
 — the daemon's fail-closed loader refuses it otherwise. Policy is delivered by the
 customer's config management, **never over the wire**: the Relay may query a Node's

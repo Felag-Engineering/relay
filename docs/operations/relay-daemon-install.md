@@ -108,7 +108,10 @@ Where the pieces come from:
   or filesystem-mutating Raw Exec).
 - **`policy.toml`** comes from your IaC repo
   ([policy-as-code.md](policy-as-code.md)); the annotated example is
-  [`daemon/policy.example.toml`](../../daemon/policy.example.toml). Root-owned,
+  [`daemon/policy.example.toml`](../../daemon/policy.example.toml), and the
+  shipped default — `read` pre-allowed with a confidentiality deny-list,
+  `mutate` + Raw Exec opt-in (ADR-0022) — is
+  [`daemon/policy.default.toml`](../../daemon/policy.default.toml). Root-owned,
   not group/world-writable.
 - **`ca-bundle.pem`** is the Relay CA's `ca-cert.pem`, distributed by config
   management ([enrollment.md](enrollment.md)). It contains no secrets.

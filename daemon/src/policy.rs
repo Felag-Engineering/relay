@@ -3271,3 +3271,213 @@ deny = ["--force", "\\brm\\b"]
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Shipped default Policy tests (ADR-0022)
+//
+// The shipped default file (`daemon/policy.default.toml`) is validated here
+// against the REAL engine — the same `from_toml_str` the fail-closed loader
+// uses and the same `lint` that backs `relay-daemon policy check` — so the
+// posture ADR-0022 records (read pre-allowed, confidentiality deny-list
+// authoritative, mutate + Raw Exec opt-in) is CI-enforced, not aspirational.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod default_policy_tests {
+    use super::*;
+
+    /// The shipped default Policy file, included verbatim so the checked-in
+    /// artifact is exactly what these tests validate.
+    const DEFAULT: &str = include_str!("../policy.default.toml");
+
+    /// The full confidentiality deny-list ADR-0022 records, in canonical form
+    /// (ADR-0018). `deny_list_mirrors_adr_0022_exactly` asserts the file
+    /// carries exactly this set, so file, ADR, and tests cannot drift apart
+    /// silently.
+    const DENY_LISTED_PATHS: &[&str] = &[
+        // Local credential databases.
+        "/etc/shadow",
+        "/etc/shadow-",
+        "/etc/gshadow",
+        "/etc/gshadow-",
+        // Host key material.
+        "/etc/ssh/ssh_host_rsa_key",
+        "/etc/ssh/ssh_host_ecdsa_key",
+        "/etc/ssh/ssh_host_ed25519_key",
+        "/etc/ssh/ssh_host_dsa_key",
+        "/etc/krb5.keytab",
+        // Root's default SSH private keys.
+        "/root/.ssh/id_rsa",
+        "/root/.ssh/id_ecdsa",
+        "/root/.ssh/id_ed25519",
+        "/root/.ssh/id_dsa",
+        // The daemon's own config and credentials (#287 posture).
+        "/etc/relay-daemon/policy.toml",
+        "/etc/relay-daemon/relay-daemon.env",
+        "/etc/relay-daemon/ca-bundle.pem",
+        "/var/lib/relay-daemon/key.pem",
+        // Kernel/process memory and environment oracles.
+        "/proc/kcore",
+        "/dev/mem",
+        "/dev/kmem",
+        "/proc/self/mem",
+        "/proc/self/environ",
+    ];
+
+    fn default_policy() -> Policy {
+        from_toml_str(DEFAULT).expect("policy.default.toml must parse with the fail-closed loader")
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn default_file_parses_with_real_loader() {
+        default_policy();
+    }
+
+    #[test]
+    fn default_file_lints_clean() {
+        // Same check `relay-daemon policy check` performs: no parse error, no
+        // findings (the wildcard-allow + partial deny-list is a PARTIAL
+        // shadow and must not be flagged).
+        let report = lint(DEFAULT);
+        assert!(
+            report.parse_error.is_none(),
+            "default file must parse cleanly; got {:?}",
+            report.parse_error
+        );
+        assert!(
+            report.findings.is_empty(),
+            "default file must lint with zero findings; got {:?}",
+            report.findings
+        );
+    }
+
+    // -- Read class pre-allowed (ADR-0022) ---------------------------------
+
+    #[test]
+    fn system_facts_is_allowed_with_zero_authoring() {
+        let policy = default_policy();
+        assert_eq!(
+            policy.evaluate(operations::SYSTEM_FACTS, &[]),
+            Decision::Allow(Rule::OperationAllow {
+                operation: operations::SYSTEM_FACTS.to_string()
+            }),
+            "a freshly enrolled Node must answer system.facts out of the box"
+        );
+    }
+
+    #[test]
+    fn file_read_of_innocuous_paths_is_allowed() {
+        let policy = default_policy();
+        for path in ["/etc/hostname", "/etc/os-release", "/var/log/syslog"] {
+            assert_eq!(
+                policy.evaluate(operations::FILE_READ, &args(&[path])),
+                Decision::Allow(Rule::OperationAllow {
+                    operation: operations::FILE_READ.to_string()
+                }),
+                "file.read {path} must be allowed by the shipped default"
+            );
+        }
+    }
+
+    // -- Confidentiality deny-list (deny-beats-allow) ----------------------
+
+    #[test]
+    fn every_deny_listed_path_is_denied_with_attribution() {
+        let policy = default_policy();
+        for path in DENY_LISTED_PATHS {
+            let decision = policy.evaluate(operations::FILE_READ, &args(&[path]));
+            assert_eq!(
+                decision,
+                Decision::Deny {
+                    reason: format!(
+                        "denied by explicit rule for operation '{}'",
+                        operations::FILE_READ
+                    ),
+                    rule: Some(Rule::OperationDeny {
+                        operation: operations::FILE_READ.to_string()
+                    }),
+                },
+                "file.read {path} must be denied by an ATTRIBUTED deny rule \
+                 (deny-beats-allow over the wildcard read allow)"
+            );
+        }
+    }
+
+    #[test]
+    fn deny_list_mirrors_adr_0022_exactly() {
+        // Set equality both ways: a path added to the file without the
+        // ADR/test being updated fails here, and so does a path silently
+        // dropped from the file.
+        let policy = default_policy();
+        let in_file: std::collections::BTreeSet<String> = policy
+            .deny_rules()
+            .iter()
+            .filter(|r| r.name == operations::FILE_READ)
+            .flat_map(|r| r.args.iter().flatten().cloned())
+            .collect();
+        let expected: std::collections::BTreeSet<String> =
+            DENY_LISTED_PATHS.iter().map(|s| s.to_string()).collect();
+        assert_eq!(
+            in_file, expected,
+            "policy.default.toml's file.read deny values must exactly mirror \
+             the ADR-0022 deny-list pinned in this test"
+        );
+    }
+
+    #[test]
+    fn lexical_evasions_of_deny_listed_paths_are_denied() {
+        // Non-canonical spellings never reach string matching: ADR-0018's
+        // canonical-form precondition denies them outright.
+        let policy = default_policy();
+        for path in [
+            "/etc/../etc/shadow",
+            "//etc/shadow",
+            "/etc/shadow/",
+            "/etc/./shadow",
+            "/var/lib/relay-daemon//key.pem",
+        ] {
+            assert!(
+                matches!(
+                    policy.evaluate(operations::FILE_READ, &args(&[path])),
+                    Decision::Deny { .. }
+                ),
+                "non-canonical spelling {path} must be denied (ADR-0018)"
+            );
+        }
+    }
+
+    // -- Mutate class + Raw Exec stay opt-in -------------------------------
+
+    #[test]
+    fn mutate_operations_are_denied_by_default() {
+        let policy = default_policy();
+        for (name, invocation_args) in [
+            (operations::SERVICE_RESTART, vec!["nginx"]),
+            (operations::PKG_INSTALL, vec!["nginx", ""]),
+        ] {
+            let decision = policy.evaluate(name, &args(&invocation_args));
+            assert!(
+                matches!(decision, Decision::Deny { rule: None, .. }),
+                "{name} must be deny-by-default (no shipped mutate allow); got {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_exec_is_denied_by_default() {
+        let policy = default_policy();
+        assert!(
+            !policy.raw_exec_enabled(),
+            "the shipped default must carry no [raw_exec] allow patterns"
+        );
+        let decision = policy.evaluate_raw_exec(&args(&["/usr/bin/uptime"]));
+        assert!(
+            matches!(decision, Decision::Deny { rule: None, .. }),
+            "Raw Exec must be deny-by-default under the shipped default; got {decision:?}"
+        );
+    }
+}
