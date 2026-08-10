@@ -27,7 +27,7 @@ use crate::gen::{
 };
 #[cfg(test)]
 use crate::operations;
-use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration};
+use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, ResolvedOp};
 #[cfg(test)]
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::policy::{Decision, Policy};
@@ -365,14 +365,49 @@ where
     R: Fn(ExecRequest) -> Fut + Sync,
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
-    // Resolve the registration and derive the positional arg vector from its
-    // declared arg-shape (v1 arg-key contract). Unknown operations receive an
-    // empty positional list and are denied by Policy's deny-by-default (no
-    // allow rule can exist for an unknown name). The same
-    // OpRegistration::positional_args mapping feeds evaluate_policy_query, so
-    // query and execution derive args through the same definition (ADR-0011:
-    // no drift).
+    // Resolve the registration and gate + invoke it through the uniform
+    // `&dyn ResolvedOp` seam. Native Operations resolve from `entries`; the
+    // same `gate_and_invoke` core serves Template Operations (issue #290) with
+    // no per-name arm, so the structural test can prove a template needs zero
+    // dispatch edits by pointing this core at a template entry.
     let entry = registry::lookup_in(entries, &op.name);
+    gate_and_invoke(
+        entry.map(|e| e as &dyn ResolvedOp),
+        task_id,
+        op,
+        timeout,
+        policy,
+        run,
+        cancel,
+    )
+    .await
+}
+
+/// The single Policy gate + handler-invocation core, over a resolved entry
+/// (`&dyn ResolvedOp`) or `None` (unknown name).
+///
+/// This is where a Template Operation attains **exact Policy parity** with a
+/// Native Operation: the positional vector comes from the entry's
+/// `positional_args` (ADR-0011 single mapping) and is gated by the one
+/// `policy.evaluate(name, positional)` call — deny-by-default, deny-beats-allow,
+/// argument-level constraints — before any handler runs. A denied action never
+/// reaches `invoke`; an unknown name (no allow rule can exist) is denied by
+/// default, and a name Policy allowed but no entry implements is a FAILURE (the
+/// Policy engine is not at fault).
+#[allow(clippy::too_many_arguments)]
+async fn gate_and_invoke<R, Fut>(
+    entry: Option<&dyn ResolvedOp>,
+    task_id: String,
+    op: &Operation,
+    timeout: Duration,
+    policy: &Policy,
+    run: R,
+    cancel: Option<oneshot::Receiver<()>>,
+) -> TaskResult
+where
+    R: Fn(ExecRequest) -> Fut + Sync,
+    Fut: Future<Output = TaskResult> + Send + 'static,
+{
     let positional = entry.map(|e| e.positional_args(op)).unwrap_or_default();
 
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
@@ -401,7 +436,7 @@ where
                     cancel,
                     runner: &runner,
                 };
-                (entry.handler)(ctx).await
+                entry.invoke(ctx).await
             }
             None => {
                 // Policy allowed a name this daemon does not implement.
@@ -2170,6 +2205,190 @@ allowed_args = []
         .await;
         assert_eq!(unregistered.outcome, Outcome::Failure as i32);
         assert_eq!(unregistered.stderr, b"unknown operation");
+    }
+
+    // -----------------------------------------------------------------------
+    // Template-tier structural + Policy-parity proof (issue #290, ADR-0021).
+    //
+    // A compiled Template Operation is driven through `gate_and_invoke` — the
+    // EXACT Policy-gate + invoke core the production Operation path calls (via
+    // handle_operation_in) — as a `&dyn ResolvedOp`. This proves, through the
+    // same code, that:
+    //   (1) a template registers with ZERO dispatch edits (no per-name arm);
+    //   (2) Policy governs it exactly like a Native Operation: an allowed arg
+    //       runs, a denied arg is DENIED_BY_POLICY before the runner is called,
+    //       and deny-beats-allow fires — all from the one policy.evaluate call;
+    //   (3) a parameter that violates the slot's typed validation is refused
+    //       daemon-side (OUTCOME_FAILURE), NEVER spawning — even when Policy
+    //       allowed the raw value (the template's stricter second gate).
+    // -----------------------------------------------------------------------
+
+    use crate::operations::template::{self, RiskClassDef, SlotDef, SlotType, TemplateDef};
+
+    fn build_template() -> template::TemplateOp {
+        template::compile(&TemplateDef {
+            name: "svc.status".to_string(),
+            risk_class: RiskClassDef::Read,
+            body: "systemctl status {{unit}}".to_string(),
+            slots: vec![SlotDef {
+                name: "unit".to_string(),
+                ty: SlotType::Identifier,
+            }],
+        })
+        .expect("template must compile")
+    }
+
+    fn svc_status_op(unit: &str) -> crate::gen::Operation {
+        let mut args = std::collections::HashMap::new();
+        args.insert("unit".to_string(), unit.to_string());
+        crate::gen::Operation {
+            name: "svc.status".to_string(),
+            args,
+        }
+    }
+
+    #[tokio::test]
+    async fn template_registers_and_is_policy_governed_with_zero_dispatch_edits() {
+        let tmpl = build_template();
+        // The registration is the whole change: a &dyn ResolvedOp handed to the
+        // production gate+invoke core. No dispatch match arm exists to edit.
+        let entry: &dyn ResolvedOp = &tmpl;
+
+        // The resolved contract is the full name→(handler, arg-shape, risk class)
+        // lookup: name + risk class come from the same entry a Native Operation
+        // would expose (ADR-0012 risk class is mandatory on every template).
+        assert_eq!(entry.name(), "svc.status");
+        assert_eq!(entry.risk(), crate::gen::RiskClass::Read);
+
+        // Positional mapping is the SAME contract as a Native Operation, so the
+        // Policy engine evaluates the template identically.
+        assert_eq!(entry.positional_args(&svc_status_op("nginx")), ["nginx"]);
+
+        // Recording runner: proves the template rendered `/bin/sh -c <cmd>` and
+        // that a denied/refused path NEVER reaches it.
+        let recorded = Arc::new(Mutex::new(None::<Vec<String>>));
+        let rec = recorded.clone();
+        let fake_run = move |req: ExecRequest| {
+            *rec.lock().unwrap() = Some(req.argv.clone());
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        // (a) Policy ALLOWS unit=nginx → renders + runs; argv is the quoted
+        //     shell command with author-fixed structure.
+        let allow_policy = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.status"
+allowed_args = [["nginx"]]
+"#,
+        )
+        .expect("allow policy parses");
+        let r = gate_and_invoke(
+            Some(entry),
+            "t-tmpl-allow".to_string(),
+            &svc_status_op("nginx"),
+            Duration::from_secs(5),
+            &allow_policy,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(r.outcome, Outcome::Success as i32);
+        assert_eq!(
+            recorded.lock().unwrap().clone().expect("runner called"),
+            ["/bin/sh", "-c", "systemctl status 'nginx'"],
+            "template must render /bin/sh -c with the value quoted at the slot position"
+        );
+
+        // (b) Policy DENIES unit=sshd (not in allow list) → DENIED_BY_POLICY,
+        //     runner never called. Same deny-by-default as a Native Operation.
+        *recorded.lock().unwrap() = None;
+        let denied = gate_and_invoke(
+            Some(entry),
+            "t-tmpl-deny".to_string(),
+            &svc_status_op("sshd"),
+            Duration::from_secs(5),
+            &allow_policy,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(denied.outcome, Outcome::DeniedByPolicy as i32);
+        assert!(
+            recorded.lock().unwrap().is_none(),
+            "a Policy-denied template must never reach the runner"
+        );
+
+        // (c) deny-beats-allow: an explicit [[deny]] overrides the allow, exactly
+        //     as for a Native Operation.
+        let deny_beats = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.status"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "svc.status"
+args = [["nginx"]]
+"#,
+        )
+        .expect("deny-beats-allow policy parses");
+        *recorded.lock().unwrap() = None;
+        let dba = gate_and_invoke(
+            Some(entry),
+            "t-tmpl-dba".to_string(),
+            &svc_status_op("nginx"),
+            Duration::from_secs(5),
+            &deny_beats,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(dba.outcome, Outcome::DeniedByPolicy as i32);
+        assert!(recorded.lock().unwrap().is_none());
+
+        // (d) Policy ALLOWS the raw value (wildcard) but it fails the slot's
+        //     typed validation → OUTCOME_FAILURE, runner never called. The
+        //     template's stricter typed gate stops the injection before spawn.
+        let wildcard = from_toml_str(
+            r#"
+[[operation]]
+name = "svc.status"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("wildcard policy parses");
+        *recorded.lock().unwrap() = None;
+        let injected = gate_and_invoke(
+            Some(entry),
+            "t-tmpl-inject".to_string(),
+            &svc_status_op("nginx; reboot"),
+            Duration::from_secs(5),
+            &wildcard,
+            fake_run,
+            None,
+        )
+        .await;
+        assert_eq!(
+            injected.outcome,
+            Outcome::Failure as i32,
+            "an injection that Policy's wildcard allowed must still be refused by the slot's typed validation"
+        );
+        assert!(
+            recorded.lock().unwrap().is_none(),
+            "a validation-refused template must never reach the runner (fail closed, no spawn)"
+        );
     }
 }
 

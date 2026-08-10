@@ -21,6 +21,7 @@ pub mod registry;
 pub mod schema;
 pub mod service_restart;
 pub mod system_facts;
+pub mod template;
 
 use crate::gen::{OperationDescriptor, RiskClass};
 

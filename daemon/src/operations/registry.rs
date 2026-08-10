@@ -128,6 +128,77 @@ pub struct OpRegistration {
     pub handler: Handler,
 }
 
+// ---------------------------------------------------------------------------
+// The uniform resolution contract — `name → (handler, arg-shape, risk class)`
+// as a trait, so the vocabulary can hold BOTH the static Native Operations and
+// the runtime-loaded Template Operations behind one lookup (issue #290, ADR-0021).
+// ---------------------------------------------------------------------------
+
+/// The behavior dispatch needs from a resolved vocabulary entry, independent of
+/// whether it is a Native Operation ([`OpRegistration`], a `'static` `fn`-pointer
+/// handler) or a Template Operation
+/// ([`crate::operations::template::TemplateOp`], a runtime value carrying a
+/// compiled shell template).
+///
+/// Dispatch's Policy gate + handler invocation
+/// ([`crate::dispatch`]'s `gate_and_invoke`) is written once against
+/// `&dyn ResolvedOp`, so:
+///
+/// - **Policy parity is structural**: both kinds derive their positional args
+///   through [`ResolvedOp::positional_args`] and are gated by the same
+///   `policy.evaluate(name, positional)` call — a Template Operation is denied,
+///   allowed, and argument-constrained exactly like a Native Operation
+///   (deny-by-default, deny-beats-allow), because the Policy engine is
+///   name-agnostic and there is only one gate.
+/// - **Adding a template is a registration, not a dispatch edit**: a new
+///   `TemplateOp` implements this trait and resolves through the same lookup —
+///   no per-name match arm (the #310 seam, extended; proven by the structural
+///   test in dispatch.rs).
+///
+/// `Send + Sync` because a resolved entry is borrowed across the `.await` inside
+/// `tokio::spawn` (the tunnel loop).
+pub trait ResolvedOp: Send + Sync {
+    /// The wire/Policy name. Part of the resolved contract; consumed by the
+    /// per-Node vocabulary discovery / classification that issue #291 wires
+    /// (and asserted by the template structural test). No production caller in
+    /// the dispatch path yet, so `dead_code`-allowed with that rationale.
+    #[allow(dead_code)]
+    fn name(&self) -> &str;
+    /// ADR-0012 risk class — the third element of `name → (handler, arg-shape,
+    /// risk class)`. Consumed by #291's per-Node classify/discovery (native
+    /// dispatch reads the concrete `OpRegistration::risk` field today); allowed
+    /// dead until then.
+    #[allow(dead_code)]
+    fn risk(&self) -> RiskClass;
+    /// Named-args → positional vector, in the entry's declared order. MUST be
+    /// the exact vector Policy evaluates (ADR-0011: no drift between "would
+    /// allow" and "actually allows").
+    fn positional_args(&self, op: &Operation) -> Vec<String>;
+    /// Execute, AFTER the Policy gate has allowed the action. For a Native
+    /// Operation this is its `fn`-pointer handler; for a Template Operation it
+    /// validates + quotes the parameters and runs the rendered `/bin/sh -c`.
+    fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a>;
+}
+
+impl ResolvedOp for OpRegistration {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn risk(&self) -> RiskClass {
+        self.risk
+    }
+
+    fn positional_args(&self, op: &Operation) -> Vec<String> {
+        // Delegate to the inherent method (the single mapping definition).
+        OpRegistration::positional_args(self, op)
+    }
+
+    fn invoke<'a>(&'a self, ctx: OpCtx<'a>) -> OpFuture<'a> {
+        (self.handler)(ctx)
+    }
+}
+
 impl OpRegistration {
     /// Maps an `Operation`'s named args to the positional vector the Policy
     /// engine expects, in this entry's declared arg order; a missing key maps
