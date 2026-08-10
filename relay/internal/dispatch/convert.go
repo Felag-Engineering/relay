@@ -75,12 +75,13 @@ func policyQuery(queryID string, act jobs.Action) *relayv1.PolicyQuery {
 
 // verdict converts a wire PolicyVerdict into the domain jobs.Verdict that
 // capability.Conduit.Query returns. There is no "unrecognized" case to
-// default here — Allowed is a plain bool and DecidingRule a plain string, so
-// every wire value maps unambiguously.
+// default here — Allowed and Unsupported are plain bools and DecidingRule a
+// plain string, so every wire value maps unambiguously.
 func verdict(pv *relayv1.PolicyVerdict) jobs.Verdict {
 	return jobs.Verdict{
 		Allowed:      pv.GetAllowed(),
 		DecidingRule: pv.GetDecidingRule(),
+		Unsupported:  pv.GetUnsupported(),
 	}
 }
 
@@ -116,6 +117,8 @@ func outcome(o relayv1.Outcome) jobs.Outcome {
 		return jobs.OutcomeUnreachable
 	case relayv1.Outcome_OUTCOME_VERSION_REFUSED:
 		return jobs.OutcomeVersionRefused
+	case relayv1.Outcome_OUTCOME_UNSUPPORTED:
+		return jobs.OutcomeUnsupported
 	case relayv1.Outcome_OUTCOME_UNSPECIFIED:
 		return jobs.OutcomeUnspecified
 	default:

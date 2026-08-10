@@ -35,10 +35,45 @@ allowed_args = []
 name = "service.restart"
 allowed_args = [["nginx"]]
 
+[[operation]]
+name = "e2e.template"
+allowed_args = []
+
 [raw_exec]
 allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$", "^/bin/sleep [0-9]+$"]
 deny  = ["--force", "\\brm\\b"]
 `
+
+// FixtureTemplatePack is the Template Operation pack a daemon subprocess loads
+// across the cmd/relay integration e2e suites (ADR-0021, #291). One
+// zero-parameter read template, so the e2e can prove the whole local-loading
+// path — file on disk -> compiled -> fingerprinted -> reported -> dispatchable
+// -> Policy-governed — without depending on any host binary beyond `echo`.
+// FixturePolicy allows it by name (deny-by-default means loading is never
+// enough on its own).
+const FixtureTemplatePack = `
+[[template]]
+name = "e2e.template"
+risk_class = "read"
+body = "echo template-ran"
+`
+
+// WriteTemplatePack writes content as a single *.toml file inside a fresh
+// template-root directory under t.TempDir() (mode 0600 file in a 0755 dir, the
+// daemon loader's requirements) and returns the ROOT directory path — the
+// value RELAY_TEMPLATE_DIR takes.
+func WriteTemplatePack(t *testing.T, content string) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "templates.d")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("create template root: %v", err)
+	}
+	path := filepath.Join(root, "pack.toml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write template file: %v", err)
+	}
+	return root
+}
 
 // WriteTempFile writes content to a new 0600 temp file under t.TempDir() and
 // returns its path.

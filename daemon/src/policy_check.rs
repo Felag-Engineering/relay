@@ -24,9 +24,11 @@
 
 use std::collections::HashMap;
 
+use crate::config;
 use crate::dispatch::evaluate_policy_query;
 use crate::gen::{policy_query, Operation, PolicyQuery, RawExec};
 use crate::policy;
+use crate::templates;
 
 // ---------------------------------------------------------------------------
 // Exit codes (stable, documented for IaC pipeline gating)
@@ -125,9 +127,22 @@ pub fn run(argv: &[String]) -> i32 {
         let compiled = policy::from_toml_str(&contents)
             .expect("policy::lint reported no errors; from_toml_str must succeed");
         let query = build_query(would_allow);
-        let verdict = evaluate_policy_query(&query, &compiled);
+        // Resolve names against the same per-Node vocabulary the live engine
+        // uses (ADR-0011): Native Operations plus whatever Template Operations
+        // are installed on THIS machine (issue #291). Loaded silently — this
+        // subcommand runs before tracing is initialized and its stdout/stderr
+        // are a machine-readable contract — and fail-closed, so a broken or
+        // absent template root simply yields no template vocabulary and a
+        // template name then answers `unsupported`, exactly as a dispatch here
+        // would. Linting the templates themselves is #292.
+        let templates = templates::TemplateSet::load(&config::template_dir_from_env())
+            .unwrap_or_else(|_| templates::TemplateSet::unloadable());
+        let verdict = evaluate_policy_query(&query, &compiled, &templates);
         if verdict.allowed {
             println!("would-allow: ALLOW");
+        } else if verdict.unsupported {
+            println!("would-allow: UNSUPPORTED ({})", verdict.deciding_rule);
+            return EXIT_WOULD_DENY;
         } else {
             println!(
                 "would-allow: DENY (deciding rule: {})",
@@ -278,6 +293,7 @@ fn build_query(would_allow: &WouldAllow) -> PolicyQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::templates::TemplateSet;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -683,8 +699,10 @@ deny = ["secret"]
             let would_allow = parsed.would_allow.expect("must have a would_allow spec");
             let cli_query = build_query(&would_allow);
 
-            let verdict_cli = evaluate_policy_query(&cli_query, &policy);
-            let verdict_manual = evaluate_policy_query(&case.manual_query, &policy);
+            let verdict_cli =
+                evaluate_policy_query(&cli_query, &policy, TemplateSet::empty_static());
+            let verdict_manual =
+                evaluate_policy_query(&case.manual_query, &policy, TemplateSet::empty_static());
 
             assert_eq!(
                 verdict_cli.allowed, verdict_manual.allowed,
@@ -743,6 +761,7 @@ deny = ["secret"]
         use crate::dedup::DedupStore;
         use crate::gen::{task_request, Outcome, RawExec as GenRawExec, TaskRequest};
         use crate::scheduler::Scheduler;
+        use crate::templates::TemplateSet;
 
         let policy = matrix_policy();
         let state_dir = TempDir::new("parity");
@@ -811,7 +830,7 @@ deny = ["secret"]
             let parsed = parse_args(&full_args).expect("must parse");
             let would_allow = parsed.would_allow.expect("must have a would_allow spec");
             let query = build_query(&would_allow);
-            let verdict = evaluate_policy_query(&query, &policy);
+            let verdict = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
 
             // Actual dispatch of the equivalent TaskRequest.
             let task = TaskRequest {
@@ -822,6 +841,7 @@ deny = ["secret"]
             let result = crate::dispatch::dispatch(
                 &task,
                 &policy,
+                TemplateSet::empty_static(),
                 &dedup,
                 &scheduler,
                 tokio::time::Instant::now(),

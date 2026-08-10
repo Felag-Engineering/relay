@@ -39,11 +39,19 @@ const (
 	VerdictUnknown VerdictStatus = iota
 	VerdictAllow
 	VerdictDeny
+	// VerdictUnsupported: the Node answered that the Operation is not in its
+	// vocabulary, so its Policy was never asked (ADR-0021). Distinct from
+	// VerdictDeny (the Node's Policy decided) and from VerdictUnknown (the
+	// Relay could not ask). A real dispatch to this Node would report
+	// OutcomeUnsupported — the plan/apply parity ADR-0011 requires.
+	VerdictUnsupported
 )
 
-// NodeVerdict is one matched Node's Plan-mode result. DecidingRule is set
-// only on VerdictDeny (the daemon's PolicyVerdict.DecidingRule); Reason is
-// set only on VerdictUnknown (e.g. "offline", "query_failed") — never both,
+// NodeVerdict is one matched Node's Plan-mode result. DecidingRule is set on
+// VerdictDeny (the daemon's PolicyVerdict.DecidingRule) and on
+// VerdictUnsupported (where it explains the vocabulary miss instead of naming
+// a rule); Reason is set only on VerdictUnknown (e.g. "offline",
+// "query_failed") — never both a Reason and a DecidingRule,
 // mirroring jobs.Result's per-Node discipline. Outdated is ADVISORY ONLY
 // (ADR-0014): it never changes Status, which still comes solely from the
 // daemon's live PolicyVerdict (invariant 12) — a real dispatch (Run) would
@@ -104,7 +112,11 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnknown, Reason: "query_failed", Outdated: n.Outdated})
 			continue
 		}
-		if v.Allowed {
+		if v.Unsupported {
+			// The Node has no such Operation — its Policy was never consulted,
+			// so this is not a deny (ADR-0021).
+			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictUnsupported, DecidingRule: v.DecidingRule, Outdated: n.Outdated})
+		} else if v.Allowed {
 			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictAllow, Outdated: n.Outdated})
 		} else {
 			verdicts = append(verdicts, NodeVerdict{NodeID: n.NodeID, Status: VerdictDeny, DecidingRule: v.DecidingRule, Outdated: n.Outdated})

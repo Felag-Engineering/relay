@@ -36,6 +36,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::gen::{task_request, RiskClass, TaskRequest};
 use crate::operations;
+use crate::templates::TemplateSet;
 
 /// Fixed upper bound on concurrent read Tasks per Node.
 ///
@@ -94,21 +95,28 @@ impl Scheduler {
     /// Classifies a [`TaskRequest`] into a risk [`Class`].
     ///
     /// - `RawExec` → always [`Class::Mutate`] (arbitrary-command path, ADR-0001).
-    /// - `Operation` → looked up via [`operations::risk_class`]; unknown names
-    ///   fall to [`Class::Mutate`] (strict lane; Policy denies them before
-    ///   execution, so the gate is held only momentarily).
+    /// - `Operation` → the Node's effective vocabulary: [`operations::risk_class`]
+    ///   for a Native Operation, then the loaded [`TemplateSet`] for a Template
+    ///   Operation's authored `risk_class` (ADR-0012/0021 — a `mutate` template
+    ///   takes the serial lane exactly like a native one). A name in neither
+    ///   falls to [`Class::Mutate`] (strict lane; dispatch reports
+    ///   `unsupported` without executing, so the gate is held only momentarily).
     /// - Missing action → [`Class::Mutate`] (protocol error; dispatch returns
     ///   FAILURE without executing, releasing the gate immediately).
-    pub fn classify(task: &TaskRequest) -> Class {
+    pub fn classify(task: &TaskRequest, templates: &TemplateSet) -> Class {
         match &task.action {
             Some(task_request::Action::RawExec(_)) => Class::Mutate,
-            Some(task_request::Action::Operation(op)) => match operations::risk_class(&op.name) {
-                Some(RiskClass::Read) => Class::Read,
-                // Mutate, Unspecified, or unknown name → strict (mutate) lane.
-                // Policy denies unknown names before execution; the gate is held
-                // only momentarily.
-                Some(RiskClass::Mutate) | Some(RiskClass::Unspecified) | None => Class::Mutate,
-            },
+            Some(task_request::Action::Operation(op)) => {
+                let risk = operations::risk_class(&op.name)
+                    .or_else(|| templates.lookup(&op.name).map(|t| t.risk()));
+                match risk {
+                    Some(RiskClass::Read) => Class::Read,
+                    // Mutate, Unspecified, or a name outside this Node's
+                    // vocabulary → strict (mutate) lane. An unsupported name
+                    // never executes; the gate is held only momentarily.
+                    Some(RiskClass::Mutate) | Some(RiskClass::Unspecified) | None => Class::Mutate,
+                }
+            }
             None => Class::Mutate,
         }
     }
@@ -234,13 +242,19 @@ mod tests {
 
     #[test]
     fn classify_raw_exec_is_mutate() {
-        assert_eq!(Scheduler::classify(&make_raw_exec_task()), Class::Mutate);
+        assert_eq!(
+            Scheduler::classify(&make_raw_exec_task(), TemplateSet::empty_static()),
+            Class::Mutate
+        );
     }
 
     #[test]
     fn classify_file_read_is_read() {
         assert_eq!(
-            Scheduler::classify(&make_operation_task(operations::FILE_READ)),
+            Scheduler::classify(
+                &make_operation_task(operations::FILE_READ),
+                TemplateSet::empty_static()
+            ),
             Class::Read
         );
     }
@@ -248,7 +262,10 @@ mod tests {
     #[test]
     fn classify_system_facts_is_read() {
         assert_eq!(
-            Scheduler::classify(&make_operation_task(operations::SYSTEM_FACTS)),
+            Scheduler::classify(
+                &make_operation_task(operations::SYSTEM_FACTS),
+                TemplateSet::empty_static()
+            ),
             Class::Read
         );
     }
@@ -256,7 +273,10 @@ mod tests {
     #[test]
     fn classify_service_restart_is_mutate() {
         assert_eq!(
-            Scheduler::classify(&make_operation_task(operations::SERVICE_RESTART)),
+            Scheduler::classify(
+                &make_operation_task(operations::SERVICE_RESTART),
+                TemplateSet::empty_static()
+            ),
             Class::Mutate
         );
     }
@@ -264,14 +284,58 @@ mod tests {
     #[test]
     fn classify_unknown_operation_is_mutate() {
         assert_eq!(
-            Scheduler::classify(&make_operation_task("completely.unknown")),
+            Scheduler::classify(
+                &make_operation_task("completely.unknown"),
+                TemplateSet::empty_static()
+            ),
             Class::Mutate
+        );
+    }
+
+    /// A Template Operation is classified from its authored `risk_class`
+    /// (ADR-0012/0021): a `mutate` template takes the strictly-serial lane like
+    /// any native mutate, a `read` template joins the bounded-parallel lane.
+    #[test]
+    fn classify_reads_the_template_vocabulary() {
+        use crate::operations::template::{RiskClassDef, TemplateDef};
+
+        let templates = TemplateSet::for_test(&[
+            TemplateDef {
+                name: "disk.usage".to_string(),
+                risk_class: RiskClassDef::Read,
+                body: "df -PT".to_string(),
+                slots: vec![],
+            },
+            TemplateDef {
+                name: "cache.flush".to_string(),
+                risk_class: RiskClassDef::Mutate,
+                body: "sync".to_string(),
+                slots: vec![],
+            },
+        ]);
+
+        assert_eq!(
+            Scheduler::classify(&make_operation_task("disk.usage"), &templates),
+            Class::Read,
+        );
+        assert_eq!(
+            Scheduler::classify(&make_operation_task("cache.flush"), &templates),
+            Class::Mutate,
+        );
+        // The same names on a Node without the pack: strict lane (they report
+        // `unsupported` without executing, so the gate is held momentarily).
+        assert_eq!(
+            Scheduler::classify(&make_operation_task("disk.usage"), &TemplateSet::empty()),
+            Class::Mutate,
         );
     }
 
     #[test]
     fn classify_none_action_is_mutate() {
-        assert_eq!(Scheduler::classify(&make_no_action_task()), Class::Mutate);
+        assert_eq!(
+            Scheduler::classify(&make_no_action_task(), TemplateSet::empty_static()),
+            Class::Mutate
+        );
     }
 
     // -----------------------------------------------------------------------

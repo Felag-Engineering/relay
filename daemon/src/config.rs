@@ -29,6 +29,15 @@ pub struct Config {
     /// The daemon loads the Policy at startup via `policy::load_policy`. Absent or
     /// unreadable file → warn and fall back to deny-all (fail-closed for dispatch).
     pub policy_path: PathBuf,
+    /// `RELAY_TEMPLATE_DIR` — the root of this Node's Template Operation files
+    /// (ADR-0021, issue #291).
+    ///
+    /// Defaults to `/etc/relay-daemon/templates.d` — beside `policy.toml`, the
+    /// same root-owned local trust root (ADR-0002); the Relay can read the
+    /// resulting vocabulary but never write it. An absent directory simply
+    /// means "no templates installed"; anything else that goes wrong leaves the
+    /// Node with NO Template Operations (fail closed, `templates::TemplateSet`).
+    pub template_dir: PathBuf,
     /// `RELAY_NODE_LABELS` as bare `(key, value)` pairs; `node:` prefix is
     /// added at send time by `enroll::node_labels_to_proto` (ADR-0006 §7).
     pub node_labels: Vec<(String, String)>,
@@ -71,10 +80,23 @@ impl Config {
             relay_domain,
             state_dir,
             policy_path,
+            template_dir: template_dir_from_env(),
             node_labels,
             facts,
         }
     }
+}
+
+/// Reads `RELAY_TEMPLATE_DIR`, defaulting to `/etc/relay-daemon/templates.d`.
+///
+/// Standalone (not only a [`Config`] field) because `relay-daemon policy check`
+/// resolves the same root without building a full [`Config`]: its
+/// `--would-allow` answers come from the live evaluator, which resolves names
+/// against the same per-Node vocabulary a real dispatch would (ADR-0011).
+pub fn template_dir_from_env() -> PathBuf {
+    std::env::var("RELAY_TEMPLATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/etc/relay-daemon/templates.d"))
 }
 
 /// Per-stream output byte cap for stdout and stderr independently. Daemon-local

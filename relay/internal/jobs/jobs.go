@@ -48,6 +48,12 @@ const (
 	OutcomeCancelled
 	OutcomeUnreachable
 	OutcomeVersionRefused
+	// OutcomeUnsupported is daemon-reported: the Operation name is not in
+	// that Node's vocabulary — an unloaded Template Operation or an unknown
+	// name (ADR-0021). Nothing executed and Policy was never consulted, so it
+	// is neither a failure nor a denial. Once templates exist the vocabulary
+	// is per-Node; describe_node/list_operations report what a given Node has.
+	OutcomeUnsupported
 )
 
 // VersionRefusedMessage is the legible, per-Node reason recorded as a
@@ -170,6 +176,13 @@ type Result struct {
 type Verdict struct {
 	Allowed      bool
 	DecidingRule string
+	// Unsupported reports that the queried Operation is not in that Node's
+	// vocabulary, so its Policy was never asked (ADR-0021): the plan-mode
+	// mirror of OutcomeUnsupported, which is what a real dispatch of the same
+	// action to that Node would report. Always accompanied by Allowed=false;
+	// DecidingRule then explains the vocabulary miss rather than naming a
+	// Policy rule.
+	Unsupported bool
 }
 
 // JobRepository persists Jobs and their Stages.

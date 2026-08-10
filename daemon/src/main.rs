@@ -20,6 +20,7 @@ mod raw_exec;
 mod renew;
 mod scheduler;
 mod shutdown;
+mod templates;
 mod tunnel;
 mod version;
 
@@ -214,6 +215,7 @@ async fn run_tunnel(
     node_labels: Vec<(String, String)>,
     interval: Duration,
     policy: Arc<policy::Policy>,
+    templates: Arc<templates::TemplateSet>,
     dedup: Arc<dedup::DedupStore>,
     scheduler: Arc<Scheduler>,
     ctx: &ShutdownContext,
@@ -237,6 +239,11 @@ async fn run_tunnel(
                 facts: Some(facts),
                 labels: enroll::node_labels_to_proto(&node_labels),
                 policy_fingerprint: policy.fingerprint().to_string(),
+                // Beside the Policy fingerprint, from the same live set the
+                // dispatch path resolves against (ADR-0021): the Relay's
+                // fleet-wide template-drift signal. Report-only — templates are
+                // locally rooted and never settable over the wire (ADR-0002).
+                template_set_fingerprint: templates.fingerprint().to_string(),
             })),
         })
         .await
@@ -256,6 +263,20 @@ async fn run_tunnel(
         .is_err()
     {
         return TunnelExit::NotEstablished("failed to buffer Hello/PolicySnapshot".into());
+    }
+
+    // ...and the TemplateSnapshot right after it: this Node's Template
+    // Operation vocabulary, for the Relay's per-Node discovery view (ADR-0021,
+    // issue #291). Report-only, from the same live set dispatch resolves
+    // against, refreshed on every (re)connect exactly like the Policy view.
+    if tx
+        .send(DaemonMessage {
+            body: Some(daemon_message::Body::Templates(templates.snapshot())),
+        })
+        .await
+        .is_err()
+    {
+        return TunnelExit::NotEstablished("failed to buffer Hello/TemplateSnapshot".into());
     }
 
     // Background task: emit a Heartbeat at a configurable, jittered interval.
@@ -345,6 +366,7 @@ async fn run_tunnel(
                         // (issue #177).
                         let guard = ctx.inflight.enter();
                         let policy = Arc::clone(&policy);
+                        let templates = Arc::clone(&templates);
                         let dedup = Arc::clone(&dedup);
                         let scheduler = Arc::clone(&scheduler);
                         let registry = registry.clone();
@@ -358,6 +380,7 @@ async fn run_tunnel(
                             let result = dispatch::dispatch(
                                 &task_req,
                                 &policy,
+                                &templates,
                                 &dedup,
                                 &scheduler,
                                 received_at,
@@ -391,7 +414,7 @@ async fn run_tunnel(
                     Some(relay_message::Body::PolicyQuery(query)) => {
                         // Read-only Policy evaluation (ADR-0011): no dedup, no executor.
                         // `policy` is an Arc<Policy> here; &policy deref-coerces to &Policy.
-                        let verdict = dispatch::evaluate_policy_query(&query, &policy);
+                        let verdict = dispatch::evaluate_policy_query(&query, &policy, &templates);
                         if tx
                             .send(DaemonMessage {
                                 body: Some(daemon_message::Body::PolicyVerdict(verdict)),
@@ -457,9 +480,10 @@ async fn run_tunnel(
 /// connect"), falling back to `startup_identity` if the reload finds nothing
 /// or errors; this NEVER re-enrolls.
 ///
-/// `policy`, `dedup`, and `scheduler` are constructed once by the caller and
-/// shared by `Arc` across every reconnect within this process's lifetime, so
-/// the at-most-once dedup state survives reconnects (ADR-0004).
+/// `policy`, `templates`, `dedup`, and `scheduler` are constructed once by the
+/// caller and shared by `Arc` across every reconnect within this process's
+/// lifetime, so the at-most-once dedup state survives reconnects (ADR-0004) and
+/// the reported Policy/template fingerprints are stable across a reconnect.
 ///
 /// The cert-renewal background task is rebound to the fresh channel and
 /// freshly-reloaded identity on every successful connect: tonic's `Channel`
@@ -485,10 +509,12 @@ async fn run_tunnel(
 /// so the daemon never blocks past the grace period waiting on an unreachable
 /// Relay. Neither path can violate at-most-once (ADR-0004): both fire only
 /// before any Task could have been accepted.
+#[allow(clippy::too_many_arguments)]
 async fn reconnect_loop(
     config: &Config,
     startup_identity: identity::Identity,
     policy: Arc<policy::Policy>,
+    templates: Arc<templates::TemplateSet>,
     dedup: Arc<dedup::DedupStore>,
     scheduler: Arc<Scheduler>,
     interval: Duration,
@@ -548,6 +574,7 @@ async fn reconnect_loop(
                     config.node_labels.clone(),
                     interval,
                     Arc::clone(&policy),
+                    Arc::clone(&templates),
                     Arc::clone(&dedup),
                     Arc::clone(&scheduler),
                     &ctx,
@@ -689,6 +716,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // Load this Node's Template Operations from the local root-owned template
+    // root (ADR-0021, issue #291) — the same trust root as Policy, never the
+    // wire. A missing root simply means "no templates installed"; any other
+    // failure leaves the Node with NO Template Operations and an `unloadable`
+    // fingerprint, so a broken set is visible fleet-wide instead of silently
+    // serving a partial vocabulary (fail closed).
+    let templates = Arc::new(templates::TemplateSet::load_or_fail_closed(
+        &config.template_dir,
+    ));
+
     // Per-Node concurrency scheduler (issue #91, ADR-0012):
     // mutate Tasks are strictly serial (Semaphore(1));
     // read Tasks are bounded-parallel (Semaphore(READ_CONCURRENCY = 4)).
@@ -714,7 +751,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         grace: shutdown::grace_period(),
     };
 
-    reconnect_loop(&config, identity, policy, dedup, scheduler, interval, ctx).await?;
+    reconnect_loop(
+        &config, identity, policy, templates, dedup, scheduler, interval, ctx,
+    )
+    .await?;
 
     Ok(())
 }

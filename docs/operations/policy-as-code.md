@@ -5,7 +5,8 @@ code, in the customer's IaC repo, never over the wire (ADR-0002). Companion
 documents: [relay-daemon-install.md](relay-daemon-install.md),
 [enrollment.md](enrollment.md) (the distribution role),
 [`daemon/policy.example.toml`](../../daemon/policy.example.toml) (the annotated
-example Policy file).
+example Policy file), [template-packs.md](template-packs.md) (the same workflow
+for Template Operations, whose names Policy governs identically).
 
 ## The invariant this workflow exists to honor
 

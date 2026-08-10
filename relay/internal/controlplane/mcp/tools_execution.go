@@ -133,6 +133,8 @@ func verdictString(v capability.VerdictStatus) string {
 		return "allow"
 	case capability.VerdictDeny:
 		return "deny"
+	case capability.VerdictUnsupported:
+		return "unsupported"
 	default:
 		return "unknown"
 	}
@@ -204,6 +206,8 @@ func outcomeString(o jobs.Outcome) string {
 		return "unreachable"
 	case jobs.OutcomeVersionRefused:
 		return "version_refused"
+	case jobs.OutcomeUnsupported:
+		return "unsupported"
 	default:
 		return "unspecified"
 	}

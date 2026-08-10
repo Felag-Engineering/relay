@@ -69,7 +69,7 @@ func NewInMemory(opts ...Option) *InMemory {
 // and RelayLabels is initialized to an empty map.
 //
 // On update: overwrites CertFingerprint, Facts, NodeLabels, PolicyFingerprint,
-// DaemonVersion, and LastSeen.
+// DaemonVersion, TemplateSetFingerprint, and LastSeen.
 // RelayLabels is never touched (the node side cannot reach it). EnrollingTokenID
 // is preserved from the first enrollment — a reconnecting Hello cannot rewrite
 // provenance.
@@ -95,15 +95,16 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 			nl = map[string]string{}
 		}
 		n := &Node{
-			NodeID:            rep.NodeID,
-			CertFingerprint:   rep.CertFingerprint,
-			Facts:             cloneFacts(rep.Facts),
-			NodeLabels:        nl,
-			RelayLabels:       map[string]string{},
-			LastSeen:          r.now(),
-			EnrollingTokenID:  rep.EnrollingTokenID,
-			PolicyFingerprint: rep.PolicyFingerprint,
-			DaemonVersion:     rep.DaemonVersion,
+			NodeID:                 rep.NodeID,
+			CertFingerprint:        rep.CertFingerprint,
+			Facts:                  cloneFacts(rep.Facts),
+			NodeLabels:             nl,
+			RelayLabels:            map[string]string{},
+			LastSeen:               r.now(),
+			EnrollingTokenID:       rep.EnrollingTokenID,
+			PolicyFingerprint:      rep.PolicyFingerprint,
+			DaemonVersion:          rep.DaemonVersion,
+			TemplateSetFingerprint: rep.TemplateSetFingerprint,
 		}
 		r.nodes[rep.NodeID] = n
 		return r.copyNode(n), nil
@@ -120,6 +121,7 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	existing.LastSeen = r.now()
 	existing.PolicyFingerprint = rep.PolicyFingerprint
 	existing.DaemonVersion = rep.DaemonVersion
+	existing.TemplateSetFingerprint = rep.TemplateSetFingerprint
 	// existing.RelayLabels: unchanged — node report cannot overwrite relay space.
 	// existing.EnrollingTokenID: unchanged — provenance is set once at first enrollment.
 	return r.copyNode(existing), nil
@@ -244,17 +246,18 @@ func (r *InMemory) copyNode(n *Node) Node {
 		rl = map[string]string{}
 	}
 	return Node{
-		NodeID:            n.NodeID,
-		CertFingerprint:   n.CertFingerprint,
-		Facts:             cloneFacts(n.Facts),
-		NodeLabels:        nl,
-		RelayLabels:       rl,
-		LastSeen:          n.LastSeen,
-		EnrollingTokenID:  n.EnrollingTokenID,
-		PolicyFingerprint: n.PolicyFingerprint,
-		DaemonVersion:     n.DaemonVersion,
-		RevokedAt:         n.RevokedAt,
-		Outdated:          Outdated(n.DaemonVersion, r.minDaemonVersion),
+		NodeID:                 n.NodeID,
+		CertFingerprint:        n.CertFingerprint,
+		Facts:                  cloneFacts(n.Facts),
+		NodeLabels:             nl,
+		RelayLabels:            rl,
+		LastSeen:               n.LastSeen,
+		EnrollingTokenID:       n.EnrollingTokenID,
+		PolicyFingerprint:      n.PolicyFingerprint,
+		DaemonVersion:          n.DaemonVersion,
+		RevokedAt:              n.RevokedAt,
+		Outdated:               Outdated(n.DaemonVersion, r.minDaemonVersion),
+		TemplateSetFingerprint: n.TemplateSetFingerprint,
 	}
 }
 

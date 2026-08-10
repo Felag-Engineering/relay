@@ -36,10 +36,14 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// nOutcomes is the number of jobs.Outcome values (Unspecified..Unreachable).
-// dispatches is sized to it; an out-of-range Outcome falls back to the
-// OutcomeUnspecified bucket rather than panicking or growing unbounded.
-const nOutcomes = 7
+// nOutcomes is the number of jobs.Outcome values
+// (Unspecified..Unsupported). dispatches is sized to it; an out-of-range
+// Outcome falls back to the OutcomeUnspecified bucket rather than panicking or
+// growing unbounded. Every value in range has a series in outcomeOrder below —
+// a counted outcome that nothing renders would be silently dropped at scrape
+// time, which is how OutcomeVersionRefused was previously invisible here
+// (added to the order alongside OutcomeUnsupported, #291).
+const nOutcomes = 9
 
 // nRefusalKinds is the number of capability.RefusalKind values (Frozen..Internal).
 const nRefusalKinds = 4
@@ -92,6 +96,10 @@ func outcomeLabel(o jobs.Outcome) string {
 		return "cancelled"
 	case jobs.OutcomeUnreachable:
 		return "unreachable"
+	case jobs.OutcomeVersionRefused:
+		return "version_refused"
+	case jobs.OutcomeUnsupported:
+		return "unsupported"
 	default:
 		return "unspecified"
 	}
@@ -107,6 +115,8 @@ var outcomeOrder = []jobs.Outcome{
 	jobs.OutcomeDeniedByPolicy,
 	jobs.OutcomeCancelled,
 	jobs.OutcomeUnreachable,
+	jobs.OutcomeVersionRefused,
+	jobs.OutcomeUnsupported,
 	jobs.OutcomeUnspecified,
 }
 

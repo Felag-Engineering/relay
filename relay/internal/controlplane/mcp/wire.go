@@ -34,15 +34,24 @@ type FactsOutput struct {
 // JSON keys — never merged into one map (ADR-0006, invariant 7): a caller
 // must always be able to tell which namespace a label came from.
 type NodeItem struct {
-	NodeID            string            `json:"node_id"`
-	NodeLabels        map[string]string `json:"node_labels"`
-	RelayLabels       map[string]string `json:"relay_labels"`
-	Facts             FactsOutput       `json:"facts"`
-	LastSeen          string            `json:"last_seen"`
-	PolicyFingerprint string            `json:"policy_fingerprint"`
-	Revoked           bool              `json:"revoked"`
-	RevokedAt         string            `json:"revoked_at,omitempty"`
-	Outdated          bool              `json:"outdated"`
+	NodeID      string            `json:"node_id"`
+	NodeLabels  map[string]string `json:"node_labels"`
+	RelayLabels map[string]string `json:"relay_labels"`
+	Facts       FactsOutput       `json:"facts"`
+	LastSeen    string            `json:"last_seen"`
+
+	PolicyFingerprint string `json:"policy_fingerprint"`
+	// TemplateSetFingerprint is the Node's reported Template Operation set
+	// fingerprint (ADR-0021), beside policy_fingerprint: the drift signal that
+	// confirms a template rollout the same way policy_fingerprint confirms a
+	// Policy rollout. Empty means no templates are installed on that Node; the
+	// literal "unloadable" means its local template set failed to load, so its
+	// template vocabulary is empty (fail closed, daemon-side).
+	TemplateSetFingerprint string `json:"template_set_fingerprint" jsonschema:"SHA-256 hex of the Node's loaded Template Operation set. Empty means no templates installed; 'unloadable' means the Node's template set failed to load and it has no Template Operations."`
+
+	Revoked   bool   `json:"revoked"`
+	RevokedAt string `json:"revoked_at,omitempty"`
+	Outdated  bool   `json:"outdated"`
 }
 
 // ListNodesOutput is list_nodes' result shape.
@@ -102,12 +111,48 @@ type EffectivePolicyOutput struct {
 	DenyRules      []DenyRuleOutput      `json:"deny_rules" jsonschema:"Always an array, never null: empty when the reported Policy has no [[deny]] blocks, or when reported is false. reported is the only no-data-yet signal."`
 }
 
+// TemplateSlotOutput is one typed parameter slot of a Template Operation, as
+// reported by the Node (nodevocab.Slot; ADR-0021). Type is the daemon's slot
+// type — "identifier", "integer", "path", or "enum" — and EnumValues is the
+// author's finite allow-list, populated only for "enum". Display-only: the
+// daemon validates every parameter at execution time; this is what lets a
+// caller build valid args without trial-and-error (ADR-0001 legibility).
+type TemplateSlotOutput struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type" jsonschema:"Slot type validated daemon-side: identifier, integer, path, or enum."`
+	EnumValues []string `json:"enum_values" jsonschema:"Always an array, never null: the finite allow-list for an enum slot, empty for every other slot type."`
+}
+
+// TemplateOperationOutput is one Template Operation in a Node's vocabulary
+// (nodevocab.Template; ADR-0021): the name it registers in that Node's Policy
+// vocabulary, its mandatory risk class (ADR-0012), and its typed parameter
+// slots in declaration order — which is the positional order Policy evaluates
+// its args in. The template's shell body is deliberately absent: it never
+// crosses the wire (see /proto), because only the daemon ever renders it.
+type TemplateOperationOutput struct {
+	Name      string               `json:"name"`
+	RiskClass string               `json:"risk_class"`
+	Slots     []TemplateSlotOutput `json:"slots" jsonschema:"Always an array, never null: the template's parameter slots in declaration order; empty for a template with no parameters."`
+}
+
+// TemplateVocabularyOutput is one Node's reported Template Operation
+// vocabulary. Reported is false when the Node has not reported a template
+// snapshot yet (it has not reconnected since the Relay restarted, or it runs a
+// daemon predating the template tier) — never read absence as "this Node has
+// no templates": a reported snapshot with an empty templates array says that.
+type TemplateVocabularyOutput struct {
+	Fingerprint string                    `json:"template_set_fingerprint"`
+	Reported    bool                      `json:"reported" jsonschema:"false means no template snapshot has been captured for this Node yet — never that the Node has no templates."`
+	Templates   []TemplateOperationOutput `json:"templates" jsonschema:"Always an array, never null: this Node's loaded Template Operations, empty when it has none or when reported is false."`
+}
+
 // DescribeNodeOutput is NodeItem's fields (flattened via Go's anonymous
 // embedding, both in JSON and in the inferred tool output schema) plus the
-// effective Policy view.
+// effective Policy view and the Node's Template Operation vocabulary.
 type DescribeNodeOutput struct {
 	NodeItem
-	EffectivePolicy EffectivePolicyOutput `json:"effective_policy"`
+	EffectivePolicy    EffectivePolicyOutput    `json:"effective_policy"`
+	TemplateVocabulary TemplateVocabularyOutput `json:"template_vocabulary"`
 }
 
 // OperationItem is one Operation's vocabulary entry, rendered by
@@ -126,11 +171,25 @@ type OperationItem struct {
 	Purpose        string            `json:"purpose"`
 	ArgConstraints map[string]string `json:"arg_constraints"`
 	Example        string            `json:"example"`
+	// Source is "native" for the frozen Native Operation vocabulary (present
+	// on every Node) and "template" for a Template Operation loaded from local
+	// root-owned files on ONE Node (ADR-0021). A template entry appears only
+	// when list_operations was called with a node_id, and dispatching it to a
+	// Node that lacks it reports the `unsupported` outcome — nothing runs and
+	// Policy is never consulted.
+	Source string `json:"source" jsonschema:"'native' (frozen vocabulary, present on every Node) or 'template' (loaded on the queried Node only)."`
 }
 
-// ListOperationsOutput is list_operations' result shape.
+// ListOperationsOutput is list_operations' result shape. NodeID and
+// TemplateSetFingerprint are populated only when the caller asked about a
+// specific Node; TemplatesReported then says whether that Node's template
+// vocabulary was actually captured (false = not reported yet, NOT "no
+// templates").
 type ListOperationsOutput struct {
-	Operations []OperationItem `json:"operations"`
+	Operations             []OperationItem `json:"operations"`
+	NodeID                 string          `json:"node_id,omitempty" jsonschema:"Echoed only when the request named a Node; its Template Operations are then included alongside the native vocabulary."`
+	TemplatesReported      bool            `json:"templates_reported" jsonschema:"Only meaningful when node_id was given: false means no template snapshot has been captured for that Node yet, never that it has no templates."`
+	TemplateSetFingerprint string          `json:"template_set_fingerprint,omitempty"`
 }
 
 // PerNodeResult is one Node's rendered Task outcome — exit code, size-capped

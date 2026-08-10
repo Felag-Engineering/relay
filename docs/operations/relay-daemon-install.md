@@ -50,6 +50,7 @@ The daemon is configured entirely by environment variables (read once at startup
 | `RELAY_DOMAIN` | *(unset)* | Optional TLS SNI / server-name override when the Relay cert's SAN differs from the dialed host. |
 | `RELAY_STATE_DIR` | `/var/lib/relay-daemon` | Where the enrolled identity (`key.pem`, `cert.pem`, `ca_bundle.pem`, `node_id`) and the at-most-once dedup marker store (`seen-tasks/`) persist. |
 | `RELAY_POLICY_PATH` | `/etc/relay-daemon/policy.toml` | Path to this Node's Policy file (ADR-0002). See [policy-as-code.md](policy-as-code.md). |
+| `RELAY_TEMPLATE_DIR` | `/etc/relay-daemon/templates.d` | Root of this Node's Template Operation files, beside `policy.toml` and under the same root-owned trust root (ADR-0021). Absent = no templates installed. See [template-packs.md](template-packs.md). |
 | `RELAY_NODE_LABELS` | *(unset)* | Comma-separated bare `key=value` pairs reported as node-space Labels (the daemon adds the `node:` prefix; it can never emit `relay:` labels — ADR-0006). Example: `env=prod,role=web`. |
 | `RELAY_ENROLLMENT_TOKEN` | *(unset)* | The Enrollment Token, used only when no persisted identity exists. Secret: never commit, never log. See [enrollment.md](enrollment.md). |
 | `RELAY_CA_BUNDLE_PATH` | *(unset)* | Path to the pinned bootstrap CA bundle (the Relay's `ca-cert.pem`) used to authenticate the Relay during first enrollment. Required together with the token for enrollment. |

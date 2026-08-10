@@ -55,6 +55,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -78,8 +79,18 @@ type PolicyReader interface {
 	Get(nodeID string) (policyview.Snapshot, bool)
 }
 
-// OperationLister is the read-only view over the Operation vocabulary
-// (opvocab, invariant 8).
+// VocabReader is the read-only view over the display-only per-Node Template
+// Operation vocabulary cache (nodevocab.Cache; ADR-0021). Display-only, like
+// PolicyReader: the Relay reports which Operations a Node has, and never sets
+// them (ADR-0002) or decides whether one may run (invariant 12).
+type VocabReader interface {
+	Get(nodeID string) (nodevocab.Snapshot, bool)
+}
+
+// OperationLister is the read-only view over the FLEET-WIDE Native Operation
+// vocabulary (opvocab, invariant 8). Since ADR-0021 the full vocabulary is
+// per-Node — natives are frozen and uniform, Template Operations are local to
+// each Node — so a per-Node view needs this plus VocabReader.
 type OperationLister interface {
 	Operations() []opvocab.Descriptor
 }
@@ -117,6 +128,14 @@ type policyReaderAdapter struct {
 }
 
 func (a policyReaderAdapter) Get(nodeID string) (policyview.Snapshot, bool) { return a.r.Get(nodeID) }
+
+// vocabReaderAdapter is policyReaderAdapter's sibling for VocabReader: it
+// strips a *nodevocab.Cache (which also exposes Set) down to Get only.
+type vocabReaderAdapter struct {
+	r VocabReader
+}
+
+func (a vocabReaderAdapter) Get(nodeID string) (nodevocab.Snapshot, bool) { return a.r.Get(nodeID) }
 
 // operationListerAdapter is nodeReaderAdapter's sibling for OperationLister.
 // Today's only caller (opvocabLister) is already this narrow, but New
@@ -163,21 +182,22 @@ const serverVersion = "0.1.0"
 // turn on production dispatch — that depends on whether exec's own
 // dispatcher was configured with capability.WithExecution, which is the
 // composition root's call, isolated to #154.
-func New(nodes NodeReader, policy PolicyReader, ops OperationLister, exec Executor, results JobResultReader) http.Handler {
+func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader) http.Handler {
 	// Re-wrap every input immediately: from this point on, nothing in this
 	// package ever holds a value whose dynamic type is wider than what
 	// NodeReader/PolicyReader/OperationLister/Executor/JobResultReader
 	// expose (see the package doc comment and the adapter types above).
 	nodes = nodeReaderAdapter{r: nodes}
 	policy = policyReaderAdapter{r: policy}
+	vocab = vocabReaderAdapter{r: vocab}
 	ops = operationListerAdapter{r: ops}
 	exec = execAdapter{r: exec}
 	results = jobResultReaderAdapter{r: results}
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
-	registerNodeTools(srv, nodes, policy)
-	registerOperationTools(srv, ops)
+	registerNodeTools(srv, nodes, policy, vocab)
+	registerOperationTools(srv, ops, vocab)
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results)
 

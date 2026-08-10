@@ -159,15 +159,13 @@ pub struct OpRegistration {
 /// `tokio::spawn` (the tunnel loop).
 pub trait ResolvedOp: Send + Sync {
     /// The wire/Policy name. Part of the resolved contract; consumed by the
-    /// per-Node vocabulary discovery / classification that issue #291 wires
-    /// (and asserted by the template structural test). No production caller in
-    /// the dispatch path yet, so `dead_code`-allowed with that rationale.
+    /// per-Node vocabulary discovery and classification (issue #291).
     #[allow(dead_code)]
     fn name(&self) -> &str;
     /// ADR-0012 risk class — the third element of `name → (handler, arg-shape,
-    /// risk class)`. Consumed by #291's per-Node classify/discovery (native
-    /// dispatch reads the concrete `OpRegistration::risk` field today); allowed
-    /// dead until then.
+    /// risk class)`. Consumed by the per-Node scheduler classification
+    /// (`scheduler::Scheduler::classify`) and by discovery; native dispatch
+    /// reads the concrete `OpRegistration::risk` field directly.
     #[allow(dead_code)]
     fn risk(&self) -> RiskClass;
     /// Named-args → positional vector, in the entry's declared order. MUST be

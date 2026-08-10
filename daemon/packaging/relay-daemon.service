@@ -26,7 +26,7 @@ User=root
 Group=root
 ExecStart=/usr/local/bin/relay-daemon
 # Optional: carries RELAY_ADDR/RELAY_DOMAIN/RELAY_CA_BUNDLE_PATH/RELAY_POLICY_PATH/
-# RELAY_NODE_LABELS/RELAY_ENROLLMENT_TOKEN. See relay-daemon.env.example. The
+# RELAY_TEMPLATE_DIR/RELAY_NODE_LABELS/RELAY_ENROLLMENT_TOKEN. See relay-daemon.env.example. The
 # leading '-' means a missing file is not a startup failure.
 EnvironmentFile=-/etc/relay-daemon/relay-daemon.env
 Restart=on-failure
@@ -41,8 +41,9 @@ StateDirectoryMode=0700
 # --- hardening (issue-required) ---
 NoNewPrivileges=yes
 # /usr,/etc,/boot,/var read-only; StateDirectory stays writable. Read-only
-# /etc reinforces that Policy is remotely-immutable (ADR-0002): even a
-# compromised daemon process cannot rewrite its own Policy file.
+# /etc reinforces that Policy — and, since ADR-0021, the Template Operation
+# files beside it — are remotely-immutable (ADR-0002): even a compromised
+# daemon process cannot rewrite its own Policy or templates.
 ProtectSystem=strict
 # read-only (not "yes") so file.read can still reach /home,/root for its
 # read-only Operation; "yes" would mask those paths and silently break reads.

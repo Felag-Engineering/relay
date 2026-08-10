@@ -23,6 +23,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ratelimit"
@@ -386,7 +387,13 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// the control-plane listener is on.
 	policyCache := policyview.New()
 
-	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache}
+	// vocabCache is policyCache's sibling for the per-Node Template Operation
+	// vocabulary (#291, ADR-0021): the tunnel handler records what a daemon
+	// reports in DaemonMessage.templates, and describe_node/list_operations
+	// read it. Display-only, and likewise independent of ControlEnabled.
+	vocabCache := nodevocab.New()
+
+	ts := &tunnelServer{conns: conns, reg: reg, policy: policyCache, vocab: vocabCache}
 	// ts.sink is set below, ONLY inside the cfg.ControlEnabled branch — this
 	// is the "#154 flip": execution is on if and only if the control plane
 	// (its only consumer surface, MCP + /api/v1) is on. Disabled: ts.sink
@@ -475,6 +482,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		sd := surfaceDeps{
 			registry:   reg,
 			policy:     policyCache,
+			vocab:      vocabCache,
 			ops:        opvocabLister{},
 			capability: capSvc,
 			jobs:       st.Jobs(),

@@ -1,0 +1,104 @@
+# Example Template Operation file (ADR-0021).
+#
+# A Template Operation is an operator-authored shell template with named,
+# typed-validated parameter slots. YOU fix the command structure; the caller
+# (an AI-agent, the API, the Console) supplies only parameter VALUES. A value
+# can never add a word, an operator, a redirection, or an expansion: the daemon
+# validates each value against its slot's declared type and then POSIX
+# single-quotes it before substitution.
+#
+# Where this file goes: any *.toml file directly under the template root
+# (default /etc/relay-daemon/templates.d, RELAY_TEMPLATE_DIR to override), or
+# inside one immediate subdirectory of it — a "template pack", installed and
+# versioned as a unit. Same trust root as policy.toml (ADR-0002): root-owned,
+# not group/world-writable, never a symlink, and never settable over the wire.
+#
+# Full workflow: docs/operations/template-packs.md.
+
+# ---------------------------------------------------------------------------
+# A template with no parameters. The simplest and safest shape: nothing varies.
+# ---------------------------------------------------------------------------
+[[template]]
+# The Operation name. It enters this Node's Policy vocabulary exactly like a
+# Native Operation name, so a Policy rule for it is written no differently.
+# Must match ^[a-z][a-z0-9_.]*$ and must not shadow a Native Operation
+# (system.facts, file.read, service.restart, pkg.install) or "raw_exec".
+name = "disk.usage"
+
+# MANDATORY (ADR-0012): "read" (cannot change Node state) or "mutate" (can).
+# It selects the Relay's blast cap and the daemon's concurrency lane. A
+# template without a valid risk_class fails to load — the whole set fails,
+# fail-closed, and the Node reports the "unloadable" template-set fingerprint.
+risk_class = "read"
+
+# The shell body. Author-fixed structure; run as /bin/sh -c <body>.
+body = "df -P -T"
+
+# ---------------------------------------------------------------------------
+# A template with typed parameter slots.
+# ---------------------------------------------------------------------------
+[[template]]
+name = "log.tail"
+risk_class = "read"
+# Every {{slot}} must be a STANDALONE, whitespace-delimited token in an
+# UNQUOTED context — the daemon refuses to compile anything else, because that
+# rule is what makes "one slot fills exactly one word" true by construction.
+# Do NOT write "--file={{path}}" or "'{{path}}'"; both fail to load.
+body = "tail -n {{lines}} -- {{path}}"
+
+[[template.slots]]
+name = "lines"
+# integer: ^[0-9]+$, max 19 digits. UNSIGNED — no sign, so a value can never
+# be read as an option (no "-1" / "--" injection).
+type = "integer"
+
+[[template.slots]]
+name = "path"
+# path: absolute and canonical (starts "/", no "." / ".." / empty / trailing
+# segment), max 4096 bytes, no control characters. Deliberately permissive
+# otherwise — real filenames contain spaces, "$", and quotes — and neutralized
+# by quoting. WHICH paths are readable is decided by this Node's Policy, not by
+# this slot: constrain it there (allowed_args / [[deny]]).
+type = "path"
+
+# ---------------------------------------------------------------------------
+# The safest slot type: a finite, author-controlled value set.
+# ---------------------------------------------------------------------------
+[[template]]
+name = "svc.status"
+risk_class = "read"
+body = "systemctl is-active -- {{unit}}"
+
+[[template.slots]]
+name = "unit"
+# enum: the value must be exactly one of `values`. Prefer this whenever the
+# value space really is finite — it is the one slot type whose accept-set you
+# control completely.
+type = "enum"
+values = ["nginx", "sshd", "postgresql"]
+
+# ---------------------------------------------------------------------------
+# identifier: ^[A-Za-z0-9][A-Za-z0-9_.@+-]*$, max 256 bytes. First character is
+# alphanumeric, so a leading "-" (option injection) is impossible. Good for
+# unit / package / interface names when an enum would be too rigid.
+# ---------------------------------------------------------------------------
+[[template]]
+name = "svc.show"
+risk_class = "read"
+body = "systemctl show --no-pager -- {{unit}}"
+
+[[template.slots]]
+name = "unit"
+type = "identifier"
+
+# ---------------------------------------------------------------------------
+# Reminders
+#
+# - Loading a template does NOT allow it. Policy still decides, deny-by-default
+#   and argument-level, exactly as for a Native Operation.
+# - `read` means "cannot change Node state", NOT "safe for the AI to see": a
+#   read result leaves the fleet (ADR-0021's data-egress section). Scope what a
+#   read template can reach in Policy.
+# - A template that can rewrite the daemon's own config, binary, unit, or these
+#   template files is self-modifying Policy. Do not write one.
+# ---------------------------------------------------------------------------
