@@ -35,27 +35,35 @@ allowed_args = []
 name = "service.restart"
 allowed_args = [["nginx"]]
 
-[[operation]]
-name = "e2e.template"
-allowed_args = []
-
 [raw_exec]
 allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$", "^/bin/sleep [0-9]+$"]
 deny  = ["--force", "\\brm\\b"]
 `
 
 // FixtureTemplatePack is the Template Operation pack a daemon subprocess loads
-// across the cmd/relay integration e2e suites (ADR-0021, #291). One
+// in the e2e suites that exercise the template tier (ADR-0021, #291). One
 // zero-parameter read template, so the e2e can prove the whole local-loading
 // path — file on disk -> compiled -> fingerprinted -> reported -> dispatchable
 // -> Policy-governed — without depending on any host binary beyond `echo`.
-// FixturePolicy allows it by name (deny-by-default means loading is never
-// enough on its own).
 const FixtureTemplatePack = `
 [[template]]
 name = "e2e.template"
 risk_class = "read"
 body = "echo template-ran"
+`
+
+// FixtureTemplatePolicyRule is the [[operation]] allow rule that makes
+// FixtureTemplatePack's template runnable — loading a template never allows it
+// (deny-by-default, ADR-0002). It is a SEPARATE fragment, appended by the one
+// suite that installs the pack, rather than part of FixturePolicy: the shared
+// fixture is asserted verbatim by other suites (describe_node's exact
+// allowed_operations set, and `policy check`'s unknown-name lint over a Policy
+// whose template root they do not install), so an extra rule there would fail
+// tests that are correctly checking something else.
+const FixtureTemplatePolicyRule = `
+[[operation]]
+name = "e2e.template"
+allowed_args = []
 `
 
 // WriteTemplatePack writes content as a single *.toml file inside a fresh

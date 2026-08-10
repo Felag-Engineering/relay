@@ -324,7 +324,11 @@ func TestCrossBinary_RelayDaemonLoopback(t *testing.T) {
 		t.Fatal("CA bundle is empty")
 	}
 
-	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
+	// The shared fixture plus the one allow rule the template pack needs: the
+	// rule lives with this suite (relaytest.FixtureTemplatePolicyRule) because
+	// other suites assert FixturePolicy's rule set exactly.
+	policyPath := relaytest.WriteTempFile(t, "policy-*.toml",
+		relaytest.FixturePolicy+relaytest.FixtureTemplatePolicyRule)
 	templateRoot := relaytest.WriteTemplatePack(t, relaytest.FixtureTemplatePack)
 	stateDir := t.TempDir()
 
