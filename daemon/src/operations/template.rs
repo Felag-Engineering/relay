@@ -294,6 +294,21 @@ impl TemplateOp {
         self.risk
     }
 
+    /// The positions of `path`-typed slots, in positional (Policy) order.
+    ///
+    /// Consumed by the self-reference lint (#287/#292), which probes only
+    /// path-slotted templates with a path — a unit-name or enum slot rejects a
+    /// path at the template's own typed gate, so probing those would report a
+    /// reach that cannot exist.
+    pub fn path_slot_positions(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s.ty, SlotType::Path))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
     /// The declared parameter slots as `(name, type)`, in declaration order —
     /// which is also the positional order Policy evaluates args in. The
     /// discovery surface (#291) renders these into `TemplateDescriptor.slots`

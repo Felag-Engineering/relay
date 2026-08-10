@@ -54,11 +54,18 @@ use crate::enroll::state_dir_from_env;
 use crate::operations::{self, FILE_READ};
 use crate::policy::{Decision, LintFinding, LintSeverity, Policy};
 
-/// One protected target: a path inside the daemon's own trust root, and why it
-/// matters if Policy's reach includes it.
+/// One protected target: a path inside the daemon's own trust root, and what it
+/// means for Policy's reach to include it — separately for a *read* (the
+/// structured-Operation probes, which only disclose) and for a *write* (the Raw
+/// Exec probes, which can modify). Conflating the two would tell an operator
+/// that a `file.read` rule "rewrites the gate", which is false and trains them
+/// to ignore the lint.
 struct Target {
     path: PathBuf,
-    what: &'static str,
+    /// Why reading this path matters.
+    read: &'static str,
+    /// Why writing this path matters.
+    write: &'static str,
 }
 
 /// The daemon's own trust root, as this machine is configured.
@@ -79,32 +86,39 @@ fn targets(template_names: &[String]) -> Vec<Target> {
     let mut targets = vec![
         Target {
             path: policy_path,
-            what: "this daemon's own Policy file — a rule that can write it lets the wire \
-                   rewrite the wire's own gate (ADR-0002)",
+            read: "this daemon's own Policy file — discloses exactly which actions are \
+                   permitted here, which is reconnaissance for what to attempt",
+            write: "this daemon's own Policy file — a rule that can write it lets the wire \
+                    rewrite the wire's own gate (ADR-0002)",
         },
         Target {
             path: template_dir.join("pack.toml"),
-            what: "this daemon's Template Operation files — writing one adds vocabulary \
-                   without an operator (ADR-0021)",
+            read: "this daemon's Template Operation files — discloses the Node's vocabulary",
+            write: "this daemon's Template Operation files — writing one adds vocabulary \
+                    without an operator (ADR-0021)",
         },
         Target {
             path: state_dir.join("key.pem"),
-            what: "this Node's private key — reading it is identity theft, writing it is \
-                   impersonation (ADR-0006)",
+            read: "this Node's private key — reading it is identity theft (ADR-0006)",
+            write: "this Node's private key — writing it is impersonation (ADR-0006)",
         },
         Target {
             path: state_dir.join("cert.pem"),
-            what: "this Node's identity certificate (ADR-0006)",
+            read: "this Node's identity certificate (ADR-0006)",
+            write: "this Node's identity certificate — replacing it breaks or redirects the \
+                    Node's identity (ADR-0006)",
         },
         Target {
             path: PathBuf::from("/usr/local/bin/relay-daemon"),
-            what: "the daemon binary itself — writing it replaces the enforcement engine \
-                   (ADR-0014: upgrades come from config management, never from the wire)",
+            read: "the daemon binary itself",
+            write: "the daemon binary itself — writing it replaces the enforcement engine \
+                    (ADR-0014: upgrades come from config management, never from the wire)",
         },
         Target {
             path: PathBuf::from("/etc/systemd/system/relay-daemon.service"),
-            what: "the daemon's systemd unit — writing it removes the hardening the \
-                   privilege posture depends on",
+            read: "the daemon's systemd unit — discloses the privilege posture in force",
+            write: "the daemon's systemd unit — writing it removes the hardening the \
+                    privilege posture depends on",
         },
     ];
 
@@ -114,7 +128,9 @@ fn targets(template_names: &[String]) -> Vec<Target> {
         if !targets.iter().any(|t| t.path == exe) {
             targets.push(Target {
                 path: exe,
-                what: "the daemon binary itself, at the path this check is running from",
+                read: "the daemon binary itself, at the path this check is running from",
+                write: "the daemon binary itself, at the path this check is running from — \
+                        writing it replaces the enforcement engine (ADR-0014)",
             });
         }
     }
@@ -142,22 +158,23 @@ fn raw_exec_probes(path: &str) -> Vec<Vec<String>> {
 
 /// Lints `policy` for reach into the daemon's own trust root.
 ///
-/// `template_names` are the Template Operations in scope (from `--templates`);
-/// each is probed with its name and the target path as a single argument, which
-/// is the shape a path-slotted template's Policy rule takes. Native `file.read`
-/// is always probed.
+/// `path_slot_ops` are the Template Operations that declare a `path` slot
+/// (`TemplateLintReport::path_slot_names`) — the only templates a path can
+/// legitimately be passed to. A unit-name or enum slot rejects a path at the
+/// template's own typed gate, so probing those would report a reach that cannot
+/// exist. Native `file.read` is always probed.
 ///
 /// Every finding is a `Warning` (`--strict` turns it into a pipeline failure),
 /// matching #287's proposal: this is an authoring smell, not an invalid file.
-pub fn lint(policy: &Policy, template_names: &[String]) -> Vec<LintFinding> {
+pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
     let mut findings = Vec::new();
 
-    for target in targets(template_names) {
+    for target in targets(path_slot_ops) {
         let path = target.path.to_string_lossy().to_string();
 
         // --- structured Operations: file.read, plus any supplied template ---
         let mut op_names: Vec<&str> = vec![FILE_READ];
-        op_names.extend(template_names.iter().map(String::as_str));
+        op_names.extend(path_slot_ops.iter().map(String::as_str));
         for name in op_names {
             // A single-argument probe: the arg-shape a path-taking Operation
             // (and a path-slotted template) presents to the Policy engine.
@@ -169,7 +186,7 @@ pub fn lint(policy: &Policy, template_names: &[String]) -> Vec<LintFinding> {
                         "self-reference: Policy allows {name} of {path} — {}. \
                          Deny it explicitly ([[deny]] beats allow) or narrow the allowed args. \
                          (Matched rule: {rule:?}.)",
-                        target.what
+                        target.read
                     ),
                 });
                 // One finding per (target, operation): the point is made.
@@ -187,7 +204,7 @@ pub fn lint(policy: &Policy, template_names: &[String]) -> Vec<LintFinding> {
                         "self-reference: Policy allows the Raw Exec {argv:?} — {}. \
                          Narrow the allow regex, or add a [raw_exec] deny for this path \
                          (deny beats allow). (Matched pattern: {rule:?}.)",
-                        target.what
+                        target.write
                     ),
                 });
                 // One finding per target: further shapes would only repeat it.
@@ -331,7 +348,28 @@ allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$"]
     /// A path-slotted template is probed like file.read: a template Policy rule
     /// wide enough to reach the daemon's own files is the same foot-gun.
     #[test]
-    fn flags_a_template_rule_reaching_the_config_dir() {
+    fn flags_a_path_slotted_template_rule_reaching_the_config_dir() {
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("policy parses");
+
+        let findings = lint(&policy, &["file.checksum".to_string()]);
+        assert!(
+            findings.iter().any(|f| f.location.contains("file.checksum")),
+            "expected a finding for the path-slotted template rule; got {findings:#?}"
+        );
+    }
+
+    /// ...but a template whose slots are unit names, not paths, is NOT probed
+    /// with a path: its own typed gate would reject one, so a finding would be
+    /// a reach that cannot exist. A lint that cries wolf gets ignored.
+    #[test]
+    fn does_not_flag_a_template_with_no_path_slot() {
         let policy = from_toml_str(
             r#"
 [[operation]]
@@ -341,10 +379,43 @@ allowed_args = [["*"]]
         )
         .expect("policy parses");
 
-        let findings = lint(&policy, &["log.tail".to_string()]);
+        let findings = lint(&policy, &[]); // log.tail declares no path slot
         assert!(
-            findings.iter().any(|f| f.location.contains("log.tail")),
-            "expected a finding for the template rule; got {findings:#?}"
+            findings.iter().all(|f| !f.location.contains("log.tail")),
+            "a unit-slotted template must not be probed with a path; got {findings:#?}"
+        );
+    }
+
+    /// A read probe and a write probe explain themselves differently: a
+    /// `file.read` rule discloses, it does not rewrite the gate. Telling an
+    /// operator otherwise trains them to ignore the lint.
+    #[test]
+    fn read_and_write_findings_are_worded_for_what_they_actually_do() {
+        let read_only = from_toml_str(
+            r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("policy parses");
+        let findings = lint(&read_only, &[]);
+        assert!(
+            findings.iter().all(|f| !f.message.contains("rewrite the wire")),
+            "a read rule must not be described as rewriting the gate; got {findings:#?}"
+        );
+
+        let writable = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/usr/bin/sed .*$"]
+"#,
+        )
+        .expect("policy parses");
+        let findings = lint(&writable, &[]);
+        assert!(
+            findings.iter().any(|f| f.message.contains("rewrite the wire")),
+            "a write-capable Raw Exec rule must say so; got {findings:#?}"
         );
     }
 

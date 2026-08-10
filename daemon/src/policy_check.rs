@@ -157,7 +157,13 @@ pub fn run(argv: &[String]) -> i32 {
     };
     let self_reference = compiled
         .as_ref()
-        .map(|p| selfref::lint(p, &template_names))
+        .map(|p| {
+            let path_ops = template_report
+                .as_ref()
+                .map(|r| r.path_slot_names.clone())
+                .unwrap_or_default();
+            selfref::lint(p, &path_ops)
+        })
         .unwrap_or_default();
     print_findings(&self_reference);
 

@@ -371,6 +371,12 @@ pub struct TemplateLintReport {
     pub findings: Vec<LintFinding>,
     /// Names of the templates that compiled cleanly, in canonical order.
     pub names: Vec<String>,
+    /// The subset of [`Self::names`] whose templates declare at least one
+    /// `path`-typed slot — the only ones a *path* can legitimately be passed
+    /// to, and therefore the only ones the self-reference lint probes with one
+    /// (probing a unit-name slot with a path would report a reach that the
+    /// template's own typed validation makes impossible).
+    pub path_slot_names: Vec<String>,
 }
 
 /// Lints every template file under `root`, collecting **all** findings rather
@@ -485,6 +491,9 @@ pub fn lint_dir(root: &Path) -> TemplateLintReport {
                     ),
                 });
                 continue;
+            }
+            if !op.path_slot_positions().is_empty() {
+                report.path_slot_names.push(op.name().to_string());
             }
             seen.insert(op.name().to_string(), rel.clone());
         }
