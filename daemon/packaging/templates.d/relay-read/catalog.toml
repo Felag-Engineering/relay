@@ -1,0 +1,115 @@
+# Relay — shipped first-party read catalog (ADR-0021, issue #293)
+#
+# A template pack installed with the daemon package, trusted the way the binary
+# is: you installed it. Seven `read`-class Template Operations that make a fresh
+# Node interrogable with zero local authoring, alongside the shipped default
+# Policy (ADR-0022), which allows exactly these names.
+#
+# POSTURE (read every line of this before widening it):
+#   - Every template here is `read`: it cannot change Node state. That is NOT
+#     the same as "safe for the AI to see" — a read result leaves the fleet for
+#     the model provider (ADR-0021's data-egress governance). What these make
+#     REACHABLE is the security question, not just what they can change.
+#   - Every caller-fillable value is a typed slot, and the two that take a path
+#     or a unit name are the ones to scope in Policy. The bounded log tail's
+#     line cap is TEMPLATE-FIXED, never wire-fillable, so no caller can turn it
+#     into an unbounded journal dump.
+#   - Output is size-capped by the daemon (MAX_OUTPUT_BYTES) regardless.
+#
+# FILE PLACEMENT:
+#   /etc/relay-daemon/templates.d/relay-read/catalog.toml
+#   (root-owned, not group/world-writable — the loader refuses it otherwise,
+#   and one bad file fails the WHOLE set, fail closed.)
+#
+# Authoring your own: docs/operations/template-packs.md and
+# daemon/templates.example.toml.
+
+# ---------------------------------------------------------------------------
+# proc.list — what is running
+# ---------------------------------------------------------------------------
+# No parameters: the whole process table, one line per process. Reveals command
+# lines, which routinely carry secrets passed as arguments — scope in Policy if
+# that matters on your fleet.
+[[template]]
+name = "proc.list"
+risk_class = "read"
+body = "ps -e -o pid,ppid,user,pcpu,pmem,etime,args --no-headers"
+
+# ---------------------------------------------------------------------------
+# service.status — one systemd unit's state, as structured key=value
+# ---------------------------------------------------------------------------
+# `show` rather than `status`: a fixed property list is parseable and, unlike
+# `status`, does not splice recent log lines into the result.
+[[template]]
+name = "service.status"
+risk_class = "read"
+body = "systemctl show --no-pager --property=Id,LoadState,ActiveState,SubState,UnitFileState,MainPID,NRestarts,ExecMainStartTimestamp -- {{unit}}"
+
+[[template.slots]]
+name = "unit"
+# identifier: [A-Za-z0-9_.@+-], first char alphanumeric — a unit name can never
+# be read as an option, and never contains a shell metacharacter.
+type = "identifier"
+
+# ---------------------------------------------------------------------------
+# disk.usage — filesystem capacity, portable output
+# ---------------------------------------------------------------------------
+[[template]]
+name = "disk.usage"
+risk_class = "read"
+body = "df -P -T"
+
+# ---------------------------------------------------------------------------
+# net.listening — listening TCP/UDP sockets and their processes
+# ---------------------------------------------------------------------------
+# The process column needs privilege; without it the sockets still list.
+[[template]]
+name = "net.listening"
+risk_class = "read"
+body = "ss -H --listening --numeric --tcp --udp --processes"
+
+# ---------------------------------------------------------------------------
+# pkg.inventory — installed packages, name and version
+# ---------------------------------------------------------------------------
+# dpkg first, then rpm; a Node with neither reports the error on stderr rather
+# than silently returning an empty inventory (an empty list would read as "no
+# packages", which is never true).
+[[template]]
+name = "pkg.inventory"
+risk_class = "read"
+body = "if command -v dpkg-query > /dev/null 2>&1; then dpkg-query -W -f '${Package}\\t${Version}\\n'; elif command -v rpm > /dev/null 2>&1; then rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\n'; else echo 'no supported package manager (dpkg/rpm)' 1>&2; exit 1; fi"
+
+# ---------------------------------------------------------------------------
+# log.tail — BOUNDED journal tail for one unit
+# ---------------------------------------------------------------------------
+# The 200-line cap is fixed HERE, by the author, and is not a slot: a caller
+# can choose the unit, never the volume. Journals carry whatever secrets the
+# service logs — this is the catalog's widest egress surface, so scope the
+# allowed units in Policy rather than leaving it wildcard.
+[[template]]
+name = "log.tail"
+risk_class = "read"
+body = "journalctl --no-pager --quiet --lines=200 --unit {{unit}}"
+
+[[template.slots]]
+name = "unit"
+type = "identifier"
+
+# ---------------------------------------------------------------------------
+# file.checksum — content oracle over one file
+# ---------------------------------------------------------------------------
+# Returns a digest, not contents — but a digest IS a content oracle: it
+# confirms a guessed file byte-for-byte. Policy governs which paths it may
+# touch exactly as it governs file.read, and the shipped default Policy applies
+# the same confidentiality deny-list to both.
+[[template]]
+name = "file.checksum"
+risk_class = "read"
+body = "sha256sum -- {{path}}"
+
+[[template.slots]]
+name = "path"
+# path: absolute and canonical, ≤4096 bytes, no control characters. The
+# dispatch gate additionally refuses a non-canonical spelling BEFORE Policy
+# runs, so an exact-path deny cannot be evaded by /etc/../etc/shadow (ADR-0018).
+type = "path"

@@ -218,7 +218,27 @@ tight.
 - **Signed, centrally distributed bundles** — v0.8.0 (ADR-0002's rewrite to
   "operator-rooted"). Until then, local files are the only path, and this
   workflow is the whole story.
-- **The shipped first-party read catalog** — issue #293.
+
+## The shipped read catalog
+
+The daemon package installs a first-party pack at
+`/etc/relay-daemon/templates.d/relay-read/` — seven `read`-class templates,
+trusted the way the binary is (you installed it):
+
+| Operation | Parameters | Notes |
+|---|---|---|
+| `proc.list` | — | Full process table incl. command lines (which routinely carry secrets). |
+| `disk.usage` | — | `df -P -T`. |
+| `net.listening` | — | Listening TCP/UDP sockets and their processes. |
+| `pkg.inventory` | — | dpkg, then rpm; a Node with neither errors rather than returning an empty list. |
+| `service.status` | `unit` (identifier) | Fixed property list via `systemctl show` — parseable, and no spliced log lines. |
+| `log.tail` | `unit` (identifier) | **Bounded at 200 lines by the template**, never by the caller. The catalog's widest egress surface. |
+| `file.checksum` | `path` (path) | A digest is a content oracle; the shipped Policy denies it the same paths as `file.read`. |
+
+The shipped default Policy (ADR-0022) allows exactly these names, so a freshly
+enrolled Node answers the whole catalog with zero local authoring. Narrowing
+`service.status`/`log.tail` from `"*"` to your real unit list is the highest-value
+edit you can make to it.
 
 ## Security notes worth re-reading before you author
 

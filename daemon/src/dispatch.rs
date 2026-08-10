@@ -482,6 +482,35 @@ where
 
     let positional = entry.positional_args(op);
 
+    // ADR-0018 canonical-form precondition for path arguments, applied here to
+    // the resolved entry's `path`-typed slots (issue #293). The engine already
+    // applies it to `file.read` by name — its one native path argument; a
+    // Template Operation's path slots need the same guard on the SAME predicate
+    // (`policy::path_is_canonical`, one definition) so an exact-path `[[deny]]`
+    // — the shipped default Policy's confidentiality list, for one — cannot be
+    // evaded by a non-canonical spelling such as `/etc/../etc/shadow`.
+    // Deliberately BEFORE the allow pass, and reported as DENIED_BY_POLICY with
+    // the engine's own reason text: this is the same decision the engine makes
+    // for file.read, not a second evaluator with its own vocabulary.
+    for i in entry.path_arg_positions() {
+        if let Some(path) = positional.get(i) {
+            if !crate::policy::path_is_canonical(path) {
+                let Decision::Deny { reason, .. } = crate::policy::non_canonical_path_denial(path)
+                else {
+                    unreachable!("non_canonical_path_denial always denies")
+                };
+                tracing::warn!(
+                    task_id = %task_id,
+                    operation = %op.name,
+                    reason = %reason,
+                    "template path argument is not in canonical form; denied before Policy"
+                );
+                let _ = cancel;
+                return denied_by_policy_result(task_id, &reason);
+            }
+        }
+    }
+
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
     match policy.evaluate(&op.name, &positional) {
         Decision::Deny { reason, rule } => {
@@ -2521,6 +2550,130 @@ allowed_args = [["/var"]]
         .await;
         assert_eq!(elsewhere.outcome, Outcome::Unsupported as i32);
         assert_eq!(elsewhere.exit_code, -1, "nothing ran, so no exit status");
+    }
+
+    /// ADR-0018 applied to the template tier (issue #293): a `path`-slotted
+    /// template's argument is held to the canonical-form precondition BEFORE
+    /// Policy runs, so an exact-path `[[deny]]` — the shipped default Policy's
+    /// confidentiality list — cannot be evaded by a non-canonical spelling.
+    /// Without this gate the deny would miss on the string compare and the
+    /// value would only fail later, inside the template's own slot validation.
+    #[tokio::test]
+    async fn a_non_canonical_template_path_is_denied_before_policy() {
+        let templates = crate::templates::TemplateSet::for_test(&[TemplateDef {
+            name: "file.checksum".to_string(),
+            risk_class: crate::operations::template::RiskClassDef::Read,
+            body: "sha256sum -- {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }]);
+
+        // Wildcard allow + an exact-path deny: precisely the shipped shape.
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.checksum"
+args = [["/etc/shadow"]]
+"#,
+        )
+        .expect("policy parses");
+
+        let ran = Arc::new(Mutex::new(false));
+        let flag = ran.clone();
+        let fake_run = move |req: ExecRequest| {
+            *flag.lock().unwrap() = true;
+            let task_id = req.task_id.clone();
+            async move {
+                TaskResult {
+                    task_id,
+                    outcome: Outcome::Success as i32,
+                    exit_code: 0,
+                    stdout: vec![],
+                    stderr: vec![],
+                    truncated: false,
+                    duration_millis: 0,
+                }
+            }
+        };
+
+        let checksum_of = |path: &str| {
+            let mut args = std::collections::HashMap::new();
+            args.insert("path".to_string(), path.to_string());
+            crate::gen::Operation {
+                name: "file.checksum".to_string(),
+                args,
+            }
+        };
+
+        // The direct spelling is denied by the rule itself.
+        let direct = handle_operation_in(
+            &REGISTRY,
+            &templates,
+            "t-checksum-direct".to_string(),
+            &checksum_of("/etc/shadow"),
+            Duration::from_secs(5),
+            &policy,
+            fake_run.clone(),
+            None,
+        )
+        .await;
+        assert_eq!(direct.outcome, Outcome::DeniedByPolicy as i32);
+
+        // ...and so is every non-canonical alias, by the precondition.
+        for spelling in [
+            "/etc/../etc/shadow",
+            "//etc/shadow",
+            "/etc/./shadow",
+            "/etc/shadow/",
+        ] {
+            let result = handle_operation_in(
+                &REGISTRY,
+                &templates,
+                format!("t-checksum-{spelling}"),
+                &checksum_of(spelling),
+                Duration::from_secs(5),
+                &policy,
+                fake_run.clone(),
+                None,
+            )
+            .await;
+            assert_eq!(
+                result.outcome,
+                Outcome::DeniedByPolicy as i32,
+                "{spelling} must be DENIED_BY_POLICY, not merely fail later"
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("canonical form"),
+                "the denial must cite the canonical-form precondition; got {:?}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+        }
+
+        assert!(
+            !*ran.lock().unwrap(),
+            "no denied spelling may ever reach the runner"
+        );
+
+        // A canonical, non-denied path still runs — the gate is a precondition,
+        // not a blanket refusal.
+        let ok = handle_operation_in(
+            &REGISTRY,
+            &templates,
+            "t-checksum-ok".to_string(),
+            &checksum_of("/etc/os-release"),
+            Duration::from_secs(5),
+            &policy,
+            fake_run,
+            None,
+        )
+        .await;
+        assert_eq!(ok.outcome, Outcome::Success as i32);
     }
 
     /// ADR-0011 parity for the `unsupported` answer: a Plan on a Node without

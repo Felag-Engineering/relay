@@ -172,6 +172,17 @@ pub trait ResolvedOp: Send + Sync {
     /// the exact vector Policy evaluates (ADR-0011: no drift between "would
     /// allow" and "actually allows").
     fn positional_args(&self, op: &Operation) -> Vec<String>;
+    /// Positions of `path`-typed arguments, which the dispatch gate holds to
+    /// ADR-0018's canonical-form precondition before Policy evaluates them
+    /// (issue #293).
+    ///
+    /// Empty by default. Native Operations return empty because the engine
+    /// already applies the precondition to `file.read` by name — the one
+    /// native path argument; Template Operations report their `path` slots, so
+    /// an exact-path deny holds against non-canonical spellings there too.
+    fn path_arg_positions(&self) -> Vec<usize> {
+        Vec::new()
+    }
     /// Execute, AFTER the Policy gate has allowed the action. For a Native
     /// Operation this is its `fn`-pointer handler; for a Template Operation it
     /// validates + quotes the parameters and runs the rendered `/bin/sh -c`.
