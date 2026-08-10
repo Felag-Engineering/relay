@@ -153,7 +153,17 @@ jobs:
       # third-party release action to pin or audit. --verify-tag refuses to
       # invent a release for a tag the remote doesn't have. Pre-1.0 tags (0.x)
       # and any tag with a prerelease component publish as pre-releases.
-      - name: Create GitHub Release
+      #
+      # Idempotent by design: a Release for the tag may already exist because it
+      # was drafted/published by hand in the GitHub UI (creating a release there
+      # also creates the tag, and that tag push is what triggers this run), or
+      # because an earlier attempt published and then failed. Uploading into the
+      # existing Release is the safe resolution — the artifacts still come from
+      # THIS verified build, and --clobber replaces any same-named asset rather
+      # than silently keeping a stale one. Re-running the job must converge, not
+      # fail; the guards above are what protect the artifacts' integrity, not the
+      # accident of who created the Release row.
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -163,8 +173,18 @@ jobs:
           case "${tag}" in
             v0.*|*-*) prerelease="--prerelease" ;;
           esac
-          gh release create "${tag}" dist/* \
-            --title "${tag}" \
-            --generate-notes \
-            --verify-tag \
-            ${prerelease}
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "::notice::release ${tag} already exists — uploading this build's artifacts into it"
+            gh release upload "${tag}" dist/* --clobber
+            # Keep the documented convention even for a hand-created Release:
+            # every v0.* / prerelease tag is published as a pre-release.
+            if [ -n "${prerelease}" ]; then
+              gh release edit "${tag}" --prerelease
+            fi
+          else
+            gh release create "${tag}" dist/* \
+              --title "${tag}" \
+              --generate-notes \
+              --verify-tag \
+              ${prerelease}
+          fi
