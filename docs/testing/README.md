@@ -45,7 +45,19 @@ ROADMAP promised — the same skepticism the product asks of its operators.
 6. **Writing or updating the milestone's script is part of the milestone's definition
    of done.** ROADMAP.md carries a `Manual validation:` line in each future milestone's
    Acceptance section; the milestone is not complete until its script exists, runs, and
-   has a recorded sign-off.
+   has a recorded sign-off — **or the run is explicitly waived** (below).
+
+7. **A waived run is recorded, never omitted.** The owner may close a milestone with the
+   script written but unrun, accepting the automated suites as sufficient for that
+   milestone. When that happens, both the ROADMAP milestone entry and the script's own
+   header say so: who waived it, when, and **what the run would have covered that CI
+   cannot** — real service managers and system tooling, real file ownership and
+   permissions, multi-machine behavior, and anything an operator can only judge by
+   reading output with their own eyes. The script is not deleted or downgraded; it stays
+   ready for the next fleet that exists. A waiver is a dated decision with a stated cost,
+   which is the opposite of quietly skipping a step.
+
+   First use: v0.2.0 (2026-08-10).
 
 ## Language and safety
 

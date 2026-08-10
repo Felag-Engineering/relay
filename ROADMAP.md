@@ -390,7 +390,7 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 
 ---
 
-## `v0.2.0` — Template Engine & Shipped Catalog (post-beta) 🚧
+## `v0.2.0` — Template Engine & Shipped Catalog (post-beta) ✅
 
 The typed path grows without waiting for signing (issue #266; re-sequenced 2026-08-03).
 Template **execution** is separable from template **distribution**: a template loaded from
@@ -439,19 +439,29 @@ is. v0.8.0 shrinks to signing + courier distribution of the same objects.
 - `policy check` lints templates and flags a self-referential allow rule.
 - Manual validation: `docs/testing/validate-v0.2.0.md` written and signed off.
 
-**Status (2026-08-10):** every implementation issue is merged — #266 (ADR-0021), #289
+**Closed 2026-08-10.** Every implementation issue merged: #266 (ADR-0021), #289
 (vocabulary lookup), #290 (template engine), #291 (local loading, template-set
 fingerprint, `unsupported`, per-Node discovery), #292 + #287 (`policy check` template
 linting + self-reference lint), #293 (shipped read catalog), #294 (ADR-0022 default read
-Policy). Two acceptance items remain, and both need a human:
+Policy).
 
-1. **`docs/testing/validate-v0.2.0.md` is written but not yet run** — the script exists;
-   its sign-off table is empty. Per the convention
-   ([docs/testing/README.md](docs/testing/README.md) rule 6) the milestone is not
-   complete until it has been executed with a recorded sign-off.
-2. **#288 (audit reads? / output-retention posture) is undecided** — human-owned, and
-   ADR-0021 requires it to be settled *before* the catalog makes reads ubiquitous, which
-   it now does. The shipped catalog is live with the question open.
+**Manual validation deferred — owner decision, 2026-08-10.** `docs/testing/validate-v0.2.0.md`
+is written but has not been executed; the automated suites (`make test`,
+`make test-integration`, `make test-crossbinary`, CI) were accepted as sufficient to close
+this milestone. This is the convention's first recorded waiver — see
+[docs/testing/README.md](docs/testing/README.md) rule 6, amended in the same change to
+make a waiver an explicit, recorded act rather than an omission. The script stands ready
+for the next fleet run; **what it would have caught that CI cannot is listed in its own
+step 9 preamble** — real systemd/journalctl/ss/dpkg behavior behind the shipped catalog,
+the loader's refusals against real file ownership, and per-Node vocabulary across two
+genuinely different machines.
+
+**Carried forward, still open: #288** (audit reads? / output-retention posture),
+human-owned. ADR-0021 asked for it to be settled *before* the catalog made reads
+ubiquitous; the catalog is now live with the question open. It is not a code deliverable
+of this milestone, so it does not block the close, but it is the one debt this milestone
+leaves behind — v0.9.0 re-checks output retention against read-lane volume and is its
+natural home if it is not decided sooner.
 
 **ADRs:** ADR-0021 (template tier, amended 2026-08-10 with the self-reference lint and
 the rejected daemon-side deny floor), ADR-0022 (default read Policy, amended with the

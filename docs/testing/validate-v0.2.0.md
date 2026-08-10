@@ -1,5 +1,17 @@
 # Manual validation — `v0.2.0` (Template Engine & Shipped Catalog)
 
+> **Run waived for the v0.2.0 close — owner decision, 2026-08-10.** The milestone was
+> closed on the automated suites alone (`make test`, `make test-integration`,
+> `make test-crossbinary`, CI); this script was written but not executed, and its
+> sign-off table below is empty by that decision, not by oversight
+> ([README.md](README.md) rule 7). It remains the script to run when a fleet is
+> available — nothing here is superseded. **What CI cannot reach, and this can:** the
+> shipped catalog against real `systemctl`/`journalctl`/`ss`/`dpkg` output rather than a
+> hermetic runner; the loader's refusals against real root ownership and permission bits;
+> per-Node vocabulary across two genuinely different machines; and the human judgment of
+> whether `list_operations`/`describe_node` output is legible enough to act on, which is
+> an ADR-0001 acceptance property no assertion captures.
+
 Delta script on top of [validate-v0.1.0-beta.md](validate-v0.1.0-beta.md) (the
 convention: [README.md](README.md)). **Prerequisite: the beta script has passed** — a
 Relay and ≥2 enrolled Nodes are running, and config management already distributes
@@ -271,8 +283,10 @@ rule" (#292, #287).
 **#288 (decide read auditing / output-retention) is unresolved.** ADR-0021 states it
 must be decided *before* the catalog makes reads ubiquitous — which, as of this
 milestone, it does. This script deliberately does **not** validate read auditing,
-because the posture has not been chosen. Record the decision's status in the sign-off;
-if it is still open, the milestone's sign-off is conditional on it.
+because the posture has not been chosen. Record the decision's status in the sign-off.
+
+The v0.2.0 close (2026-08-10) did not wait on it: #288 is a product decision, not a code
+deliverable of this milestone. It stays open and carried forward — see the ROADMAP entry.
 
 ---
 
