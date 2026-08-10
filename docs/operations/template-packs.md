@@ -87,12 +87,60 @@ Two authoring rules the loader enforces, both refusals at load time:
 
 ## 2. Validate
 
-The whole set is validated at daemon start. `relay-daemon policy check` answers
-`--would-allow` against the same live evaluator, resolving names through the
-same per-Node vocabulary a real dispatch would (so on a Node with the pack
-installed, a template name answers `ALLOW`/`DENY`; elsewhere it answers
-`UNSUPPORTED`). Dedicated template *linting* — structure, slot hygiene, and the
-self-reference lint — lands with issue #292.
+`relay-daemon policy check <policy.toml> --templates <dir>` lints the Policy and
+the template root together, in one pass, before anything is deployed:
+
+```console
+$ relay-daemon policy check policy.toml --templates templates.d/ --strict
+error: relay-read/catalog.toml: [[template]] #2 (name="log.tail") — a placeholder near byte 12 \
+       is not a standalone whitespace-delimited token …
+```
+
+What it reports:
+
+- **Per template**: a malformed body (a placeholder that is not a standalone
+  token, unbalanced quoting), an invalid or missing `risk_class`, bad slot
+  names/types, an empty `enum`, a name that shadows a Native Operation, and a
+  duplicate name across the set — every one of them an error, because every one
+  of them makes the whole set fail to load on the Node.
+- **Across Policy and templates**: an Operation name in a Policy rule that is
+  neither native nor in the supplied template root is an **error**. Without
+  `--templates` the linter cannot know the target Node's vocabulary, so the same
+  name is only a **warning** that names the fix — `--strict` still fails the
+  pipeline on it.
+- **`--would-allow`** resolves names through that same vocabulary, so a template
+  name answers `ALLOW`/`DENY` on a Node that has it and `UNSUPPORTED` where it
+  is absent — the identical answer a real dispatch gives (ADR-0011).
+
+Unlike the daemon's runtime loader, the linter does not apply the
+ownership/mode gate: it runs on a non-root IaC checkout, and those checks are
+re-applied on the Node where they belong. Symlinks are still refused.
+
+### The self-reference lint
+
+`policy check` always asks one more question, with or without `--templates`:
+**does this Policy's reach include the daemon's own trust root?** A rule that
+lets a Task rewrite `policy.toml`, drop a file into `templates.d/`, read the
+Node's private key, or replace the daemon binary or its unit is a rule that lets
+the wire rewrite the wire's own gate.
+
+It answers by **probing the real Policy engine** — concrete actions against
+those paths, evaluated exactly as a dispatch would evaluate them — so a finding
+is proof, not a guess, and an explicit `[[deny]]` silences it because
+deny-beats-allow is applied by the engine itself:
+
+```console
+$ relay-daemon policy check policy.toml
+warning: [raw_exec].allow — self-reference: Policy allows the Raw Exec \
+  ["/usr/bin/sed", "-i", "s/a/b/", "/etc/relay-daemon/policy.toml"] — this daemon's own \
+  Policy file … Narrow the allow regex, or add a [raw_exec] deny for this path.
+```
+
+Findings are warnings; `--strict` turns them into pipeline failures. The absence
+of findings is **not** proof of unreachability — the probes cover the plausible
+shapes, not every possible command. This is defense-in-depth under the real
+boundary (root-owned files + `ProtectSystem=strict`); see the ADR-0021
+amendment for why there is deliberately no hardcoded daemon-side deny floor.
 
 ## 3. Distribute
 
@@ -170,9 +218,6 @@ tight.
 - **Signed, centrally distributed bundles** — v0.8.0 (ADR-0002's rewrite to
   "operator-rooted"). Until then, local files are the only path, and this
   workflow is the whole story.
-- **Template linting in `policy check`**, including the self-reference lint that
-  warns when a rule's reach includes the daemon's own config, binary, unit, or
-  these template files — issue #292.
 - **The shipped first-party read catalog** — issue #293.
 
 ## Security notes worth re-reading before you author

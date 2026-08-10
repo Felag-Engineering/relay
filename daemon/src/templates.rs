@@ -59,6 +59,7 @@ use serde::Deserialize;
 use crate::gen::{TemplateDescriptor, TemplateSlot, TemplateSnapshot};
 use crate::operations::registry::REGISTRY;
 use crate::operations::template::{compile, TemplateDef, TemplateError, TemplateOp};
+use crate::policy::{LintFinding, LintSeverity};
 
 // ---------------------------------------------------------------------------
 // Bounds — a template root is operator-controlled, but a bounded loader is
@@ -356,6 +357,161 @@ impl TemplateSet {
                 .collect(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lint API — collect-all diagnostics for `relay-daemon policy check
+// --templates <dir>` (issue #292), mirroring `policy::lint`'s contract
+// ---------------------------------------------------------------------------
+
+/// The result of linting a template root: every finding, plus the names that
+/// did compile (so the Policy linter can resolve rules naming them).
+#[derive(Debug, Default)]
+pub struct TemplateLintReport {
+    pub findings: Vec<LintFinding>,
+    /// Names of the templates that compiled cleanly, in canonical order.
+    pub names: Vec<String>,
+    /// The subset of [`Self::names`] whose templates declare at least one
+    /// `path`-typed slot — the only ones a *path* can legitimately be passed
+    /// to, and therefore the only ones the self-reference lint probes with one
+    /// (probing a unit-name slot with a path would report a reach that the
+    /// template's own typed validation makes impossible).
+    pub path_slot_names: Vec<String>,
+}
+
+/// Lints every template file under `root`, collecting **all** findings rather
+/// than failing closed on the first bad file.
+///
+/// Contrast [`TemplateSet::load`], which is fail-closed for runtime loading
+/// (one bad file ⇒ no vocabulary at all): a pipeline linter needs to report
+/// every problem in one pass. This mirrors exactly the `lint` vs
+/// `from_toml_str` split on the Policy side.
+///
+/// Like `policy check`'s Policy read, the linter **does not apply the runtime
+/// ownership/mode gate**: it runs pre-deployment on a non-root IaC checkout,
+/// where those checks (a runtime-load concern, re-applied by the daemon on the
+/// Node) would spuriously reject a perfectly good file. Symlinks are still
+/// refused — a symlinked template in the repo is a finding wherever it is read.
+///
+/// A missing root is not a finding: "no templates" is a valid configuration.
+pub fn lint_dir(root: &Path) -> TemplateLintReport {
+    let mut report = TemplateLintReport::default();
+
+    let files = match collect_files(root) {
+        Ok(Some(files)) => files,
+        Ok(None) => return report,
+        Err(e) => {
+            report.findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                location: root.display().to_string(),
+                message: e.to_string(),
+            });
+            return report;
+        }
+    };
+
+    // Where each accepted name came from, so a duplicate names both files.
+    let mut seen: BTreeMap<String, String> = BTreeMap::new();
+
+    for (rel, path) in files {
+        let bytes = match fs::read(&path) {
+            Ok(b) => b,
+            Err(e) => {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Error,
+                    location: rel.clone(),
+                    message: format!("failed to read: {e}"),
+                });
+                continue;
+            }
+        };
+        if bytes.len() as u64 > MAX_FILE_BYTES {
+            report.findings.push(LintFinding {
+                severity: LintSeverity::Error,
+                location: rel.clone(),
+                message: format!("exceeds the {MAX_FILE_BYTES}-byte per-file limit"),
+            });
+            continue;
+        }
+
+        let file: TemplateFile = match toml::from_str(&String::from_utf8_lossy(&bytes)) {
+            Ok(f) => f,
+            Err(e) => {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Error,
+                    location: rel.clone(),
+                    message: format!("failed to parse: {e}"),
+                });
+                continue;
+            }
+        };
+
+        if file.template.is_empty() {
+            report.findings.push(LintFinding {
+                severity: LintSeverity::Warning,
+                location: rel.clone(),
+                message: "declares no [[template]] blocks; the file loads but adds nothing"
+                    .to_string(),
+            });
+        }
+
+        for (i, def) in file.template.iter().enumerate() {
+            let location = format!("{rel}: [[template]] #{i} (name={:?})", def.name);
+            let op = match compile(def) {
+                Ok(op) => op,
+                Err(e) => {
+                    report.findings.push(LintFinding {
+                        severity: LintSeverity::Error,
+                        location,
+                        message: e.to_string(),
+                    });
+                    continue;
+                }
+            };
+            if REGISTRY.iter().any(|entry| entry.name == op.name()) {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Error,
+                    location,
+                    message: format!(
+                        "shadows the Native Operation {:?}; the native vocabulary is frozen \
+                         and always resolves first (ADR-0021)",
+                        op.name()
+                    ),
+                });
+                continue;
+            }
+            if let Some(other) = seen.get(op.name()) {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Error,
+                    location,
+                    message: format!(
+                        "duplicate template name {:?} (already declared in {other}); \
+                         the whole set would fail to load",
+                        op.name()
+                    ),
+                });
+                continue;
+            }
+            if !op.path_slot_positions().is_empty() {
+                report.path_slot_names.push(op.name().to_string());
+            }
+            seen.insert(op.name().to_string(), rel.clone());
+        }
+    }
+
+    if seen.len() > MAX_TEMPLATES {
+        report.findings.push(LintFinding {
+            severity: LintSeverity::Error,
+            location: root.display().to_string(),
+            message: format!(
+                "declares {} Template Operations; the maximum is {MAX_TEMPLATES}",
+                seen.len()
+            ),
+        });
+    }
+
+    report.names = seen.into_keys().collect();
+    report
 }
 
 // ---------------------------------------------------------------------------

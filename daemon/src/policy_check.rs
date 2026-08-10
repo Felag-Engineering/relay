@@ -28,6 +28,7 @@ use crate::config;
 use crate::dispatch::evaluate_policy_query;
 use crate::gen::{policy_query, Operation, PolicyQuery, RawExec};
 use crate::policy;
+use crate::selfref;
 use crate::templates;
 
 // ---------------------------------------------------------------------------
@@ -50,17 +51,29 @@ const EXIT_INVALID: i32 = 1;
 const EXIT_WOULD_DENY: i32 = 2;
 
 const HELP: &str = "\
-Usage: relay-daemon policy check <file> [--strict] [--would-allow <spec>]
+Usage: relay-daemon policy check <file> [--strict] [--templates <dir>]
+                                  [--would-allow <spec>]
 
-Parses and lints a Policy file: invalid regex, unknown Operation names
-(checked against the proto Operation vocabulary), and allow rules that are
-fully shadowed by a deny rule and can therefore never fire. Optionally
-answers a --would-allow hypothetical through the exact same evaluation code
-the live wire path uses (ADR-0011) — no second evaluator.
+Parses and lints a Policy file: invalid regex, unknown Operation names, and
+allow rules that are fully shadowed by a deny rule and can therefore never
+fire. Always runs the self-reference lint (#287): a warning when the Policy's
+own reach includes this daemon's config, templates, state dir, binary, or
+unit — decided by probing the real Policy engine, not a second matcher.
+
+With --templates, also lints the Template Operation files under <dir>
+(ADR-0021) and resolves Operation names against natives + those templates.
+Without it, a name that is not native is only a WARNING: vocabulary is
+per-Node, so the linter cannot tell a Template Operation from a typo.
+
+Optionally answers a --would-allow hypothetical through the exact same
+evaluation code the live wire path uses (ADR-0011) — no second evaluator.
 
 Options:
-  --strict               Treat lint warnings (e.g. a shadowed allow rule) as
-                         failures.
+  --strict               Treat lint warnings (a shadowed allow rule, an
+                         unresolvable Operation name, a self-reference
+                         finding) as failures.
+  --templates <dir>      Lint the template root at <dir> alongside the Policy
+                         and resolve Operation names against it.
   --would-allow <spec>   Ask whether the given action would be allowed.
                          <spec> is one of:
                            operation <name> [key=value ...]
@@ -70,9 +83,11 @@ Options:
 Exit codes:
   0   valid       no fatal findings (and, under --strict, no warnings);
                   if --would-allow was given, its verdict was ALLOW.
-  1   invalid     parse error, invalid regex, unknown Operation name, file
-                  I/O error, or (under --strict) any lint warning.
-  2   would-deny  the file is valid but the --would-allow verdict is DENY.
+  1   invalid     parse error, invalid regex, a bad template file, an
+                  Operation name in neither half of a supplied vocabulary,
+                  file I/O error, or (under --strict) any lint warning.
+  2   would-deny  the file is valid but the --would-allow verdict is DENY
+                  or UNSUPPORTED (the Operation is not in the vocabulary).
 
 Precedence: 1 (invalid) > 2 (would-deny) > 0 (valid).
 ";
@@ -110,13 +125,62 @@ pub fn run(argv: &[String]) -> i32 {
         }
     };
 
-    let report = policy::lint(&contents);
-    print_report(&report);
+    // Template linting (issue #292): only when the caller named a template
+    // root. Its findings are printed with the Policy's and share the same
+    // exit-code contract; its accepted names complete the vocabulary the
+    // unknown-name check resolves against (ADR-0021: vocabulary is per-Node,
+    // so without a root the linter genuinely cannot tell a Template Operation
+    // from a typo).
+    let template_report = parsed
+        .templates
+        .as_ref()
+        .map(|dir| templates::lint_dir(std::path::Path::new(dir)));
+    let template_names: Vec<String> = template_report
+        .as_ref()
+        .map(|r| r.names.clone())
+        .unwrap_or_default();
 
-    if report.has_errors() {
+    let report =
+        policy::lint_with_vocabulary(&contents, &template_names, template_report.is_some());
+    print_report(&report);
+    if let Some(tr) = &template_report {
+        print_findings(&tr.findings);
+    }
+
+    // Self-reference lint (#287): does this Policy's reach include the
+    // daemon's own trust root? Answered by probing the LIVE engine, never by a
+    // second matcher (ADR-0011) — so it can only run once the file compiles.
+    let compiled = if report.parse_error.is_none() {
+        policy::from_toml_str(&contents).ok()
+    } else {
+        None
+    };
+    let self_reference = compiled
+        .as_ref()
+        .map(|p| {
+            let path_ops = template_report
+                .as_ref()
+                .map(|r| r.path_slot_names.clone())
+                .unwrap_or_default();
+            selfref::lint(p, &path_ops)
+        })
+        .unwrap_or_default();
+    print_findings(&self_reference);
+
+    let template_errors = template_report.as_ref().is_some_and(|r| {
+        r.findings
+            .iter()
+            .any(|f| f.severity == policy::LintSeverity::Error)
+    });
+    if report.has_errors() || template_errors {
         return EXIT_INVALID;
     }
-    if parsed.strict && report.has_warnings() {
+    let template_warnings = template_report.as_ref().is_some_and(|r| {
+        r.findings
+            .iter()
+            .any(|f| f.severity == policy::LintSeverity::Warning)
+    });
+    if parsed.strict && (report.has_warnings() || template_warnings || !self_reference.is_empty()) {
         eprintln!("error: lint warnings present and --strict was given");
         return EXIT_INVALID;
     }
@@ -124,18 +188,23 @@ pub fn run(argv: &[String]) -> i32 {
     if let Some(would_allow) = &parsed.would_allow {
         // The file is regex/parse-valid at this point (checked above), so
         // from_toml_str cannot fail on anything lint didn't already catch.
-        let compiled = policy::from_toml_str(&contents)
-            .expect("policy::lint reported no errors; from_toml_str must succeed");
+        let compiled =
+            compiled.expect("policy::lint reported no errors; from_toml_str must succeed");
         let query = build_query(would_allow);
         // Resolve names against the same per-Node vocabulary the live engine
-        // uses (ADR-0011): Native Operations plus whatever Template Operations
-        // are installed on THIS machine (issue #291). Loaded silently — this
-        // subcommand runs before tracing is initialized and its stdout/stderr
-        // are a machine-readable contract — and fail-closed, so a broken or
-        // absent template root simply yields no template vocabulary and a
-        // template name then answers `unsupported`, exactly as a dispatch here
-        // would. Linting the templates themselves is #292.
-        let templates = templates::TemplateSet::load(&config::template_dir_from_env())
+        // uses (ADR-0011): Native Operations plus the Template Operations of
+        // the root the caller named — or, absent `--templates`, whatever is
+        // installed on THIS machine. Loaded silently (this subcommand runs
+        // before tracing is initialized and its output is a machine-readable
+        // contract) and fail-closed, so a broken or absent root simply yields
+        // no template vocabulary and a template name then answers
+        // `unsupported`, exactly as a dispatch here would.
+        let template_dir = parsed
+            .templates
+            .clone()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(config::template_dir_from_env);
+        let templates = templates::TemplateSet::load(&template_dir)
             .unwrap_or_else(|_| templates::TemplateSet::unloadable());
         let verdict = evaluate_policy_query(&query, &compiled, &templates);
         if verdict.allowed {
@@ -161,7 +230,15 @@ fn print_report(report: &policy::LintReport) {
         eprintln!("error: {err}");
         return;
     }
-    for finding in &report.findings {
+    print_findings(&report.findings);
+}
+
+/// Prints a bare finding list (template lint, self-reference lint) in the same
+/// `error:`/`warning: <location> — <message>` format as the Policy report, so
+/// a pipeline parses one stderr grammar regardless of which lint produced the
+/// line.
+fn print_findings(findings: &[policy::LintFinding]) {
+    for finding in findings {
         let prefix = match finding.severity {
             policy::LintSeverity::Error => "error",
             policy::LintSeverity::Warning => "warning",
@@ -177,6 +254,9 @@ fn print_report(report: &policy::LintReport) {
 struct ParsedArgs {
     file: String,
     strict: bool,
+    /// `--templates <dir>`: the template root to lint alongside the Policy and
+    /// to resolve Operation names against (issue #292).
+    templates: Option<String>,
     would_allow: Option<WouldAllow>,
 }
 
@@ -199,11 +279,19 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
         .clone();
 
     let mut strict = false;
+    let mut templates = None;
     let mut would_allow = None;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--strict" => strict = true,
+            "--templates" => {
+                templates = Some(
+                    iter.next()
+                        .ok_or_else(|| "--templates requires a directory".to_string())?
+                        .clone(),
+                );
+            }
             "--would-allow" => {
                 let kind = iter.next().ok_or_else(|| {
                     "--would-allow requires a spec: 'operation' or 'raw-exec'".to_string()
@@ -260,6 +348,7 @@ fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     Ok(ParsedArgs {
         file,
         strict,
+        templates,
         would_allow,
     })
 }
@@ -399,8 +488,189 @@ name = "pkg.remove"
 allowed_args = []
 "#,
         );
-        let code = run(&argv(&tmp.path_str(), &[]));
+        // Without --templates the name is only a WARNING (it could be a
+        // Template Operation on the target Node, ADR-0021), so the plain run
+        // is valid and --strict is what fails the pipeline.
+        assert_eq!(run(&argv(&tmp.path_str(), &[])), EXIT_VALID);
+        assert_eq!(run(&argv(&tmp.path_str(), &["--strict"])), EXIT_INVALID);
+
+        // With a template root supplied, the vocabulary is knowable and a name
+        // in neither half is an error again — the pre-template behavior, now
+        // earned rather than assumed.
+        let empty_root = TempDir::new("unknown-op-templates");
+        let code = run(&argv(
+            &tmp.path_str(),
+            &["--templates", &empty_root.path_str()],
+        ));
         assert_eq!(code, EXIT_INVALID);
+    }
+
+    // -----------------------------------------------------------------------
+    // Template linting via --templates (issue #292)
+    // -----------------------------------------------------------------------
+
+    const GOOD_TEMPLATE: &str = r#"
+[[template]]
+name = "disk.usage"
+risk_class = "read"
+body = "df -PT"
+"#;
+
+    /// A malformed template file fails the check with a useful, located error —
+    /// the IaC pipeline's lint-before-deploy gate now covers templates.
+    #[test]
+    fn templates_a_malformed_file_is_invalid() {
+        let policy = TempFile::new("tmpl-bad-policy", "");
+        let root = TempDir::new("tmpl-bad");
+        // A placeholder glued to adjacent text can change command structure, so
+        // the engine refuses to compile it (ADR-0021).
+        root.write(
+            "bad.toml",
+            r#"
+[[template]]
+name = "bad.tmpl"
+risk_class = "read"
+body = "tail --file={{path}}"
+
+[[template.slots]]
+name = "path"
+type = "path"
+"#,
+        );
+        let code = run(&argv(
+            &policy.path_str(),
+            &["--templates", &root.path_str()],
+        ));
+        assert_eq!(
+            code, EXIT_INVALID,
+            "a malformed template must fail the check"
+        );
+    }
+
+    /// A template missing its mandatory risk class (ADR-0012) fails too.
+    #[test]
+    fn templates_missing_risk_class_is_invalid() {
+        let policy = TempFile::new("tmpl-norisk-policy", "");
+        let root = TempDir::new("tmpl-norisk");
+        root.write(
+            "x.toml",
+            r#"
+[[template]]
+name = "no.class"
+body = "df -PT"
+"#,
+        );
+        assert_eq!(
+            run(&argv(
+                &policy.path_str(),
+                &["--templates", &root.path_str()]
+            )),
+            EXIT_INVALID
+        );
+    }
+
+    /// A template shadowing a Native Operation is refused by the linter for the
+    /// same reason the loader refuses it: natives are frozen and resolve first.
+    #[test]
+    fn templates_shadowing_a_native_is_invalid() {
+        let policy = TempFile::new("tmpl-shadow-policy", "");
+        let root = TempDir::new("tmpl-shadow");
+        root.write(
+            "x.toml",
+            r#"
+[[template]]
+name = "file.read"
+risk_class = "read"
+body = "cat /etc/hostname"
+"#,
+        );
+        assert_eq!(
+            run(&argv(
+                &policy.path_str(),
+                &["--templates", &root.path_str()]
+            )),
+            EXIT_INVALID
+        );
+    }
+
+    /// A good pack plus a Policy that allows it lints clean, and --would-allow
+    /// over the template answers from the live engine (ADR-0011) rather than
+    /// reporting `unsupported` as it would with no template root.
+    #[test]
+    fn templates_would_allow_resolves_a_template_name() {
+        let policy = TempFile::new(
+            "tmpl-good-policy",
+            r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = []
+"#,
+        );
+        let root = TempDir::new("tmpl-good");
+        root.write("pack.toml", GOOD_TEMPLATE);
+
+        let code = run(&argv(
+            &policy.path_str(),
+            &[
+                "--templates",
+                &root.path_str(),
+                "--strict",
+                "--would-allow",
+                "operation",
+                "disk.usage",
+            ],
+        ));
+        assert_eq!(
+            code, EXIT_VALID,
+            "a template allowed by Policy must answer ALLOW under --strict"
+        );
+
+        // The same Policy without the template root: the name cannot be
+        // resolved, so the verdict is UNSUPPORTED, not a fabricated ALLOW.
+        let code = run(&argv(
+            &policy.path_str(),
+            &["--would-allow", "operation", "disk.usage"],
+        ));
+        assert_eq!(code, EXIT_WOULD_DENY);
+    }
+
+    // -----------------------------------------------------------------------
+    // Self-reference lint (#287)
+    // -----------------------------------------------------------------------
+
+    /// The #287 acceptance line: a Policy allowing Raw Exec over the daemon's
+    /// own config dir triggers the lint, and --strict fails the pipeline.
+    #[test]
+    fn self_reference_over_the_config_dir_fails_under_strict() {
+        let policy = TempFile::new(
+            "selfref-policy",
+            r#"
+[raw_exec]
+allow = ["^/usr/bin/sed .*$"]
+"#,
+        );
+        // Warning only: the file is valid, so a plain run still passes...
+        assert_eq!(run(&argv(&policy.path_str(), &[])), EXIT_VALID);
+        // ...and --strict is the pipeline gate.
+        assert_eq!(run(&argv(&policy.path_str(), &["--strict"])), EXIT_INVALID);
+    }
+
+    /// A narrow Policy is not flagged — the lint must not cry wolf on the
+    /// shape operators are told to write.
+    #[test]
+    fn self_reference_does_not_flag_a_narrow_policy() {
+        let policy = TempFile::new(
+            "selfref-narrow",
+            r#"
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx"]]
+
+[raw_exec]
+allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$"]
+"#,
+        );
+        assert_eq!(run(&argv(&policy.path_str(), &["--strict"])), EXIT_VALID);
     }
 
     #[test]
@@ -747,6 +1017,15 @@ deny = ["secret"]
         }
         fn path(&self) -> &Path {
             &self.0
+        }
+        fn path_str(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+        /// Writes a template file into this directory (used as a template root).
+        fn write(&self, name: &str, content: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, content).expect("write template file");
+            path
         }
     }
 

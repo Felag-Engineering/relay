@@ -115,3 +115,52 @@ short ADR), referenced but not specified here.
 - #288 (read auditing / output-retention) must be decided before the catalog makes reads
   ubiquitous; the data-egress section above is its motivation.
 - CONTEXT.md gains **Template Operation** and **template pack** in the same change.
+
+## Amendment (2026-08-10, issue #292 / #287): the self-reference lint, and no daemon-side floor
+
+#287 proposed two defenses against an operator authoring an allow rule whose reach includes
+the daemon's own trust root ("letting the wire rewrite the wire's own gate"). Both were to be
+decided in the `policy check` tooling pass; this records the outcome.
+
+**Adopted — the lint.** `relay-daemon policy check` now always runs a self-reference lint. It
+does **not** parse allow patterns or reason about what a regex "means": it builds concrete
+probe actions against this daemon's own paths — Policy file, template root, state dir
+(identity key and cert), binary, systemd unit — and evaluates each through the **real** Policy
+engine (`Policy::evaluate` / `evaluate_raw_exec`). A finding is therefore proof that the exact
+probed action would be allowed on that Node, deny-beats-allow is honored for free, and there
+is no second matcher to drift (ADR-0011). Findings are `Warning`s; `--strict` makes them fail
+the pipeline. Absence of findings is explicitly **not** a proof of unreachability — the probe
+set covers the plausible shapes (edit-in-place, overwrite, copy/move over, delete, redirect,
+chmod, symlink, read), not every possible command.
+
+**Rejected — the hardcoded daemon-side deny floor.** #287's second half proposed that the
+daemon always deny operations targeting its own config directory, regardless of Policy. Not
+implemented, because:
+
+1. **It is the mechanism we already know is bypassable.** A path-string floor is exactly what
+   ADR-0018 and ADR-0019 each had to harden after a bypass; adding a third path-matching
+   surface in the privileged exec path buys confidence disproportionate to its strength.
+2. **It cannot distinguish read from rewrite.** The dangerous act is *writing* the gate, but
+   the daemon sees an argv, not an intent. A floor wide enough to stop `sed -i` also blocks a
+   legitimate `file.read` of `policy.toml` for audit — which the shipped read catalog and the
+   dev fleet both do.
+3. **It would silently override an explicit operator allow.** Policy is the operator's
+   deliberate statement about their own Node. A hidden rule that beats an explicit allow is a
+   surprise in the one place surprises are least acceptable, and it has no expression in the
+   Policy file an operator reads.
+4. **The real boundary is the filesystem, and it already holds.** Root-owned files plus
+   `ProtectSystem=strict` make `/etc` read-only inside the daemon's mount namespace
+   (`docs/operations/daemon-privilege-posture.md`). The floor would add nothing on a hardened
+   Node, and on an unhardened one it would be a bypassable veneer over a deployment problem
+   the lint now names at authoring time.
+
+The lint is therefore defense-in-depth **under** the mount-namespace protection, positioned
+where the foot-gun is created (the IaC pipeline) rather than where it is hardest to enforce
+(the privileged exec path). If a future deployment mode weakens the filesystem boundary, the
+floor should be revisited in its own ADR — with a mechanism that is not path-string matching.
+
+**Also decided here:** with a per-Node vocabulary, `policy check` can no longer tell a
+Template Operation from a typo without being told. An unrecognized Operation name is an
+`Error` only when the caller supplied a template root (`--templates`, so the whole vocabulary
+is knowable); otherwise it is a `Warning` that names the fix. `--strict` fails on it either
+way, so the IaC gate loses nothing.

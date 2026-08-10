@@ -88,9 +88,21 @@ root, safe to run in any pipeline:
 $ relay-daemon policy check policies/web-prod.toml --strict
 ```
 
-- Catches parse errors, invalid regexes, unknown Operation names (checked
-  against the proto Operation vocabulary), and allow rules fully shadowed by a
-  deny (a warning; `--strict` promotes warnings to failures).
+- Catches parse errors, invalid regexes, unresolvable Operation names, and
+  allow rules fully shadowed by a deny (a warning; `--strict` promotes warnings
+  to failures).
+- **Always runs the self-reference lint**: a warning when the Policy's own reach
+  includes this daemon's config, template files, state dir (identity key/cert),
+  binary, or systemd unit — "this rule lets the wire rewrite the wire's own
+  gate." Decided by probing the real Policy engine, so a finding is proof and an
+  explicit `[[deny]]` silences it. Details and the deliberate absence of a
+  daemon-side deny floor: [template-packs.md](template-packs.md) and the
+  ADR-0021 amendment.
+- **Pass `--templates <dir>`** when the cohort installs Template Operations
+  (ADR-0021): it lints the template files too, and resolves Operation names
+  against natives + those templates. Without it, a name that is not native is
+  only a warning — vocabulary is per-Node, so the linter cannot tell a Template
+  Operation from a typo. `--strict` fails the pipeline either way.
 - `--would-allow` answers a hypothetical **through the exact same evaluation
   code the live wire path uses** (ADR-0011 — there is no second evaluator, so a
   CI verdict can never diverge from a real dispatch):
