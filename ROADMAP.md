@@ -390,7 +390,7 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 
 ---
 
-## `v0.2.0` — Template Engine & Shipped Catalog (post-beta)
+## `v0.2.0` — Template Engine & Shipped Catalog (post-beta) 🚧
 
 The typed path grows without waiting for signing (issue #266; re-sequenced 2026-08-03).
 Template **execution** is separable from template **distribution**: a template loaded from
@@ -439,8 +439,23 @@ is. v0.8.0 shrinks to signing + courier distribution of the same objects.
 - `policy check` lints templates and flags a self-referential allow rule.
 - Manual validation: `docs/testing/validate-v0.2.0.md` written and signed off.
 
-**ADRs:** new template-tier ADR (realizes ADR-0001 tier 2), new short default-Policy ADR,
-0012; ADR-0002 unchanged.
+**Status (2026-08-10):** every implementation issue is merged — #266 (ADR-0021), #289
+(vocabulary lookup), #290 (template engine), #291 (local loading, template-set
+fingerprint, `unsupported`, per-Node discovery), #292 + #287 (`policy check` template
+linting + self-reference lint), #293 (shipped read catalog), #294 (ADR-0022 default read
+Policy). Two acceptance items remain, and both need a human:
+
+1. **`docs/testing/validate-v0.2.0.md` is written but not yet run** — the script exists;
+   its sign-off table is empty. Per the convention
+   ([docs/testing/README.md](docs/testing/README.md) rule 6) the milestone is not
+   complete until it has been executed with a recorded sign-off.
+2. **#288 (audit reads? / output-retention posture) is undecided** — human-owned, and
+   ADR-0021 requires it to be settled *before* the catalog makes reads ubiquitous, which
+   it now does. The shipped catalog is live with the question open.
+
+**ADRs:** ADR-0021 (template tier, amended 2026-08-10 with the self-reference lint and
+the rejected daemon-side deny floor), ADR-0022 (default read Policy, amended with the
+catalog's allow rules and three further denied paths), 0012; ADR-0002 unchanged.
 
 ---
 

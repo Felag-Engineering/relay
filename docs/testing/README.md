@@ -12,7 +12,9 @@ ROADMAP promised — the same skepticism the product asks of its operators.
 1. **One script per milestone, named `validate-vX.Y.Z.md`.** The baseline is
    [`validate-v0.0.9-current.md`](validate-v0.0.9-current.md), which covers the entire
    surface shipped up to and including v0.0.9 (no scripts existed before it, so it is
-   cumulative from v0.0.1). Every later milestone gets its own script.
+   cumulative from v0.0.1). Every later milestone gets its own script:
+   [`validate-v0.1.0-beta.md`](validate-v0.1.0-beta.md),
+   [`validate-v0.2.0.md`](validate-v0.2.0.md).
 
 2. **Steps map 1:1 to ROADMAP acceptance criteria.** Each step states the exact
    command(s), the expected observation, and which milestone/ADR acceptance item it
