@@ -468,13 +468,10 @@ impl LintReport {
 /// 2. Invalid `[raw_exec]` regex patterns (`Error`) — compiled with the same
 ///    `regex::Regex` engine `from_toml_str` uses, so the lint verdict matches
 ///    load-time behavior.
-/// 3. Unknown Operation names in `[[operation]]` and `[[deny]]` (`Error`),
-///    checked against the proto Operation vocabulary
-///    (`crate::operations::risk_class`). An unknown name in `[[deny]]` is
-///    flagged as an `Error` (not a `Warning`) for typo-safety: a defensive
-///    deny for an operation this daemon doesn't implement is indistinguishable
-///    from a typo, and the more-restrictive choice is to fail the pipeline
-///    visibly rather than silently accept a no-op deny rule.
+/// 3. Unknown Operation names in `[[operation]]` and `[[deny]]`, checked
+///    against the vocabulary — see [`lint_with_vocabulary`] for the
+///    Error-vs-Warning rule, which depends on whether the caller supplied the
+///    Node's Template Operation names.
 /// 4. Allow rules fully shadowed by a `[[deny]]` rule of the same name
 ///    (`Warning`) — see [`allow_is_shadowed_by_deny`].
 ///
@@ -484,7 +481,42 @@ impl LintReport {
 ///   may miss a shadowed allow, but never flags one that isn't actually dead.
 /// - `[raw_exec]` allow-vs-deny regex shadowing is not attempted: regex
 ///   language subset containment is undecidable in general.
+///
+/// Production callers go through [`lint_with_vocabulary`] (the CLI always knows
+/// whether a template root was supplied); this no-vocabulary shorthand is kept
+/// for the lint suite, which exercises the Policy-only checks directly.
+#[cfg(test)]
 pub fn lint(toml: &str) -> LintReport {
+    lint_with_vocabulary(toml, &[], false)
+}
+
+/// [`lint`], plus the Template Operation names that complete this Node's
+/// vocabulary (ADR-0021, issue #292).
+///
+/// `template_names` are the names a template set supplies; `vocabulary_complete`
+/// says whether the caller actually knows the whole vocabulary (i.e. a template
+/// root was supplied — even an empty one), which decides how an unrecognized
+/// name is reported:
+///
+/// - **`vocabulary_complete == true`** — the caller enumerated the Node's
+///   natives *and* templates, so a name in neither is provably unrunnable
+///   there: `Error`, exactly as before templates existed.
+/// - **`vocabulary_complete == false`** — the linter was given only a Policy
+///   file. Since ADR-0021 the vocabulary is **per-Node**, so an unrecognized
+///   name may be a perfectly good Template Operation on the target Node, or a
+///   typo, and this linter cannot tell them apart. Reporting it as an `Error`
+///   would fail pipelines for correct Policy; reporting nothing would lose the
+///   typo check. It is therefore a `Warning` that names the fix (`--templates`),
+///   and `--strict` still fails the pipeline on it.
+///
+/// The rule for `[[deny]]` names is the same. A deny for a name this vocabulary
+/// lacks is still flagged rather than silently accepted: a no-op deny rule an
+/// operator believes is protecting them is the dangerous reading.
+pub fn lint_with_vocabulary(
+    toml: &str,
+    template_names: &[String],
+    vocabulary_complete: bool,
+) -> LintReport {
     let file: PolicyFile = match toml::from_str(toml) {
         Ok(f) => f,
         Err(e) => {
@@ -500,22 +532,39 @@ pub fn lint(toml: &str) -> LintReport {
     lint_raw_exec_regexes(&file.raw_exec.allow, "allow", &mut findings);
     lint_raw_exec_regexes(&file.raw_exec.deny, "deny", &mut findings);
 
+    let known = |name: &str| {
+        operations::risk_class(name).is_some() || template_names.iter().any(|t| t == name)
+    };
+    let (severity, hint) = if vocabulary_complete {
+        (
+            LintSeverity::Error,
+            "not a Native Operation and not in the supplied template set",
+        )
+    } else {
+        (
+            LintSeverity::Warning,
+            "not a Native Operation; if this names a Template Operation, pass \
+             --templates <dir> so the linter can confirm it exists on the target Node \
+             (vocabulary is per-Node, ADR-0021)",
+        )
+    };
+
     for (i, op) in file.operation.iter().enumerate() {
-        if operations::risk_class(&op.name).is_none() {
+        if !known(&op.name) {
             findings.push(LintFinding {
-                severity: LintSeverity::Error,
+                severity,
                 location: format!("[[operation]] #{i} (name={:?})", op.name),
-                message: format!("unknown Operation name {:?}", op.name),
+                message: format!("unknown Operation name {:?}: {hint}", op.name),
             });
         }
     }
 
     for (i, deny) in file.deny.iter().enumerate() {
-        if operations::risk_class(&deny.name).is_none() {
+        if !known(&deny.name) {
             findings.push(LintFinding {
-                severity: LintSeverity::Error,
+                severity,
                 location: format!("[[deny]] #{i} (name={:?})", deny.name),
-                message: format!("unknown Operation name {:?}", deny.name),
+                message: format!("unknown Operation name {:?}: {hint}", deny.name),
             });
         }
     }
@@ -1760,9 +1809,47 @@ allowed_args = []
             report.findings
         );
         let finding = &report.findings[0];
-        assert_eq!(finding.severity, LintSeverity::Error);
+        // Warning, not Error, when the caller supplied no template set: since
+        // ADR-0021 an unrecognized name may be a Template Operation on the
+        // target Node, and this linter cannot tell that from a typo. It names
+        // the fix, and --strict still fails the pipeline on it.
+        assert_eq!(finding.severity, LintSeverity::Warning);
         assert!(finding.location.contains("[[operation]] #0"));
         assert!(finding.message.contains("pkg.remove"));
+        assert!(
+            finding.message.contains("--templates"),
+            "the warning must name the fix; got {:?}",
+            finding.message
+        );
+    }
+
+    /// With a template set supplied, the vocabulary IS knowable — so a name in
+    /// neither half is provably unrunnable there and returns to an Error.
+    #[test]
+    fn lint_with_vocabulary_errors_on_a_name_in_neither_half() {
+        let policy = r#"
+[[operation]]
+name = "pkg.remove"
+allowed_args = []
+"#;
+        let names = vec!["disk.usage".to_string()];
+        let report = lint_with_vocabulary(policy, &names, true);
+        assert_eq!(report.findings.len(), 1);
+        assert_eq!(report.findings[0].severity, LintSeverity::Error);
+        assert!(report.has_errors());
+
+        // ...and a rule naming a supplied template is clean.
+        let ok = r#"
+[[operation]]
+name = "disk.usage"
+allowed_args = []
+"#;
+        let report = lint_with_vocabulary(ok, &names, true);
+        assert!(
+            report.findings.is_empty(),
+            "a rule naming a loaded template must lint clean; got {:?}",
+            report.findings
+        );
     }
 
     #[test]
@@ -1775,7 +1862,10 @@ args = []
         let report = lint(policy);
         assert_eq!(report.findings.len(), 1);
         let finding = &report.findings[0];
-        assert_eq!(finding.severity, LintSeverity::Error);
+        // Warning without a template set, for the same reason as the allow-side
+        // check above; still flagged, because a no-op deny an operator believes
+        // is protecting them is the dangerous reading.
+        assert_eq!(finding.severity, LintSeverity::Warning);
         assert!(finding.location.contains("[[deny]] #0"));
         assert!(finding.message.contains("pkg.remove"));
     }

@@ -19,6 +19,7 @@ mod policy_check;
 mod raw_exec;
 mod renew;
 mod scheduler;
+mod selfref;
 mod shutdown;
 mod templates;
 mod tunnel;
