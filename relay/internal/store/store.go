@@ -20,6 +20,7 @@ import (
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
@@ -138,6 +139,15 @@ func (s *Store) Audit() audit.Repository {
 // Relay-wide emergency stop (ADR-0013).
 func (s *Store) Freeze() freeze.Repository {
 	return &sqliteFreeze{db: s.db}
+}
+
+// Accounts returns the SQLite-backed accounts.Repository — the control
+// plane's identity substrate (ADR-0010). Persisted rather than in-memory
+// because an Account is a durable identity: a disabled Account must stay
+// disabled across a Relay restart, and audit attribution must stay resolvable
+// long after the process that wrote it exited.
+func (s *Store) Accounts() accounts.Repository {
+	return &sqliteAccounts{db: s.db}
 }
 
 // Tokens returns the SQLite-backed enroll.Repository — the persisted

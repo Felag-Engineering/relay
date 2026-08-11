@@ -213,7 +213,13 @@ _Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
 A named identity — human or machine — with a role (`viewer`, `operator`, `admin`), to
 which every credential binds: a human's password or OIDC identity, a machine's API
 Tokens. The AI-agent authenticates as a machine Account. The unit of Relay-side
-authorization and of audit attribution across all three surfaces (ADR-0010).
+authorization and of audit attribution across all three surfaces (ADR-0010). An Account
+is a *durable identity*; a token is a *revocable credential for one* — disabling the
+Account and revoking one of its tokens are different acts with different blast radii.
+The **founding admin** is the Account the config-seeded control-plane credential
+resolves to: a real, stored, listable Account, not a special case. In code, the
+capability layer's `Principal` **is** the acting Account (its ID, name, and role at the
+time it authenticated); the identifier lags the glossary, the meaning does not.
 _Avoid_: user, principal, service account (say "machine Account")
 
 **API Token**:
