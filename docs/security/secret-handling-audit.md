@@ -19,9 +19,12 @@ threat model's contents; see `docs/security/threat-model.md` for the broader STR
 2. **CA private key** — the Relay's root signing key, used to issue Node certificates.
 3. **Node private key** — the per-Node PKCS#8 key generated at enrollment and held only on
    that Node.
-4. **Control-plane credential digest (API Token)** — the bearer credential authenticating
-   Control API/Admin Console callers to the Relay.
-5. **CSR / certificate material** — the certificate signing request and issued certificate
+4. **Config-seeded control-plane credential** — the bootstrap bearer credential from the
+   Relay's root-owned config file, stored as a SHA-256 digest and compared constant-time.
+5. **Minted API Token secret** — the per-Account bearer credential (`glp_<id>.<secret>`,
+   `internal/accounts`), which exists in plaintext for exactly the length of one mint
+   response and is stored only as a SHA-256 hash.
+6. **CSR / certificate material** — the certificate signing request and issued certificate
    exchanged during enrollment and renewal.
 
 ## Surface × secret matrix
@@ -35,7 +38,8 @@ call sites), the audit trail (`internal/audit`/`internal/store`), and error/RPC 
 | Enrollment Token | Daemon: held only in `EnrollConfig.token` (`enroll.rs:53`); no `Debug`, and no `tracing` call site references it. Relay: only `Token.SecretHash` (a SHA-256 digest) is stored, and `Token.LogValue` (`enroll/token.go:77`) deliberately omits it from any `slog` output. | Never a field on `capability.AuditEntry`; the enroll handler stores only the public token-ID half for provenance (`enroll/handler.go:199-204`), never the secret. | The enroll handler collapses every rejection reason (invalid, expired, revoked, exhausted) into the single constant `PermissionDenied "enrollment token rejected"` (`enroll/handler.go:210-214`) — it never echoes the presented value. |
 | CA private key | Never logged anywhere on the Relay. | The CA package never touches the audit path. | `ca.go` wraps stdlib errors with `%w` and only ever surfaces a PEM block type, a file base name, or a key-parse/serial-generation failure reason (`ca.go:245,282,290,295`) — never key bytes. |
 | Node private key | Daemon: held only in `Identity.key_pem` (`identity.rs:50`); no `Debug`, and no `tracing` call site references it. | Never leaves the Node; the Relay never receives or stores it. | `IdentityError`/`EnrollError` derive `Debug` (for `{:?}` diagnostics) but no variant embeds `key_pem` — variants carry only scheme strings, node IDs, timestamps, or wrapped library errors. |
-| Control-plane credential digest (API Token) | `controlplane/auth.go` compares only SHA-256 digests (`validToken`, `auth.go:82`); `Middleware` never logs or echoes the presented token. | Not a field the middleware ever passes to the audit path. | Every authentication failure — missing header, malformed header, wrong credential — returns the same constant `genericAuthError = "unauthorized"` (`auth.go:20,107`), so no error path can act as an oracle for the credential's value. |
+| Config-seeded control-plane credential | `controlplane/auth.go` compares only SHA-256 digests (`validToken`, `auth.go:82`); `Middleware` never logs or echoes the presented token. | Not a field the middleware ever passes to the audit path. | Every authentication failure — missing header, malformed header, wrong credential — returns the same constant `genericAuthError = "unauthorized"` (`auth.go:20,107`), so no error path can act as an oracle for the credential's value. |
+| Minted API Token secret | The plaintext exists only as an `accounts.Plaintext`, whose `String`/`GoString`/`LogValue`/`MarshalJSON` all redact (see the pinned guarantee below); the stored `accounts.APIToken` has a `LogValue` that omits `SecretHash` entirely, on the `enroll.Token` precedent. | Never a field on `capability.AuditEntry`; attribution records the Account, not the credential that authenticated it. | Every verification failure — malformed, unknown ID, wrong secret, revoked, expired, disabled Account — returns the single `accounts.ErrTokenInvalid` (`accounts/tokens.go`), and the constant-time compare runs even for a token already known to be revoked or expired, so neither the error nor the timing distinguishes the cases. |
 | CSR / certificate material | CSR (public key + signature) and issued cert are not secret; the concern is that nearby CA/enroll errors never embed the *private* key — covered by the CA-key row above. | Not persisted to the audit trail; enrollment provenance stores the node ID, not CSR contents. | The enroll handler explicitly ignores the CSR's stated subject and sets `CN = node_id` authoritatively (`enroll/handler.go:217,223`), so no client-supplied CSR field is echoed back as trust-bearing. |
 
 ## Accepted decision: verbatim audit output
@@ -74,7 +78,25 @@ a blanket impl the moment the struct gains a `Debug` impl, turning that regressi
 build failure under `cargo test` rather than a silent log leak. The guard modules are
 `#[cfg(test)]`-only, so nothing changes in the shipped musl binary.
 
+## Pinned fragile guarantee: the Go `accounts.Plaintext` wrapper
+
+A minted API Token's plaintext is the one secret in the inventory that a surface is *supposed*
+to emit — once, in the mint response — which makes "and nowhere else" the whole guarantee. A
+bare `string` would rest that guarantee on reviewer discipline: any `%v`, any `slog.Any`, any
+`json.Marshal` of an enclosing struct would print it.
+
+`accounts.Plaintext` (`internal/accounts/tokens.go`) is the Go counterpart of the Rust
+no-`Debug` guard above. It wraps an unexported field and implements `fmt.Stringer`,
+`fmt.GoStringer`, `slog.LogValuer`, and `json.Marshaler`, each returning a fixed redaction —
+so `%s`, `%v`, `%#v`, `%+v`, `slog.Any`, and `json.Marshal` all emit `[REDACTED api token]`
+whether the value is passed directly, embedded in a struct, or carried in a slice. Reading
+the real value requires `Plaintext.Reveal()`, which is greppable: it should appear once, at
+the mint response, and a reviewer can check that in one search.
+`TestAPIToken_PlaintextIsUnloggable` asserts every one of those paths, including through a
+real `slog.NewJSONHandler`, and also asserts that the stored record never holds the plaintext.
+
 ## Findings
 
-None found; no secret reaches any surface. Two previously comment-only guarantees — the
-Rust no-`Debug` invariant and the `logDecision` exclusion — are now pinned with tests.
+None found; no secret reaches any surface. Three previously comment-only guarantees — the
+Rust no-`Debug` invariant, the `logDecision` exclusion, and the API Token plaintext's
+confinement to the mint response — are now pinned with tests.
