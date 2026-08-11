@@ -95,12 +95,13 @@ func stringSlicesEqual(a, b []string) bool {
 // subprocesses need a real socket, mirroring mcp_execution_e2e_test.go — not
 // startControlAPIServer's bufconn, which only wraps gRPC's dialer) and a real
 // TCP control-plane HTTPS listener. Returns deps, the node-plane address, the
-// control-plane base URL, an authenticated *http.Client (bearer
-// relaytest.ControlCredential baked in via relaytest.BearerRoundTripper — usable for both
-// MCP and /api/v1 calls), and a plain TLS-trusting *http.Client carrying no
-// credential (for the auth-negative subtest). Skips the test if
-// RELAY_DAEMON_BIN is unset.
-func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase string, authed, plain *http.Client) {
+// control-plane base URL, an authenticated *http.Client (the founding admin's
+// bootstrap credential baked in via relaytest.BearerRoundTripper — usable for
+// both MCP and /api/v1 calls), a plain TLS-trusting *http.Client carrying no
+// credential (for the auth-negative subtest), and that credential's plaintext
+// for the calls that pass it explicitly. Skips the test if RELAY_DAEMON_BIN is
+// unset.
+func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase string, authed, plain *http.Client, credential string) {
 	t.Helper()
 	if os.Getenv("RELAY_DAEMON_BIN") == "" {
 		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
@@ -122,7 +123,6 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 	cfg.EnrollGlobalBurst = 500
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, d, err := newServer(cfg)
 	if err != nil {
@@ -144,10 +144,11 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 
 	controlBase, pool := serveControlPlane(t, d)
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
-	authed = &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
+	credential = bootstrapCredential(t, d)
+	authed = &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: credential}}
 	plain = &http.Client{Transport: transport}
 
-	return d, nodeAddr, controlBase, authed, plain
+	return d, nodeAddr, controlBase, authed, plain, credential
 }
 
 // launchDaemon starts a real relay-daemon subprocess against nodeAddr,
@@ -265,7 +266,7 @@ func nodeIDForLabel(t *testing.T, deps *appDeps, key, value string) string {
 // share state (session, connected Node set, the facts_fanout Job id) — see
 // each subtest's own comment for why its position in the sequence matters.
 func TestSurfaceE2E_v006Acceptance(t *testing.T) {
-	deps, nodeAddr, controlBase, authed, plain := startSurfaceHarness(t)
+	deps, nodeAddr, controlBase, authed, plain, credential := startSurfaceHarness(t)
 	ctx := context.Background()
 
 	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
@@ -528,7 +529,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// dispatch. Must run before api_token_lifecycle so a later dispatch on
 	// the fresh Node is never mistaken for a residual freeze effect.
 	t.Run("freeze_over_api", func(t *testing.T) {
-		engageResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/engage", relaytest.ControlCredential, nil)
+		engageResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/engage", credential, nil)
 		defer engageResp.Body.Close() //nolint:errcheck
 		if engageResp.StatusCode != http.StatusOK {
 			t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
@@ -560,14 +561,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		noReasonResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
-			relaytest.ControlCredential, map[string]string{"reason": ""})
+			credential, map[string]string{"reason": ""})
 		defer noReasonResp.Body.Close() //nolint:errcheck
 		if noReasonResp.StatusCode != http.StatusBadRequest {
 			t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
 		}
 
 		releaseResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/freeze/release",
-			relaytest.ControlCredential, map[string]string{"reason": "e2e resolved"})
+			credential, map[string]string{"reason": "e2e resolved"})
 		defer releaseResp.Body.Close() //nolint:errcheck
 		if releaseResp.StatusCode != http.StatusOK {
 			t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
@@ -599,7 +600,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// an MCP/HTTP surface).
 	t.Run("api_token_lifecycle", func(t *testing.T) {
 		mintResp := controlAPIRequest(t, authed, http.MethodPost, controlBase+"/api/v1/enrollment-tokens",
-			relaytest.ControlCredential, map[string]any{
+			credential, map[string]any{
 				"scope":       []string{"relay:env=test", "relay:node=fresh"},
 				"ttl_seconds": 3600,
 			})
@@ -636,7 +637,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 
 		revokeResp := controlAPIRequest(t, authed, http.MethodDelete,
-			controlBase+"/api/v1/enrollment-tokens/"+minted.ID, relaytest.ControlCredential, nil)
+			controlBase+"/api/v1/enrollment-tokens/"+minted.ID, credential, nil)
 		defer revokeResp.Body.Close() //nolint:errcheck
 		if revokeResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -688,7 +689,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 				t.Errorf("no credential: status = %d, want %d", noCredResp.StatusCode, http.StatusUnauthorized)
 			}
 
-			wrongCredResp := post("wrong-" + relaytest.ControlCredential)
+			wrongCredResp := post("wrong-" + credential)
 			defer wrongCredResp.Body.Close() //nolint:errcheck
 			if wrongCredResp.StatusCode != http.StatusUnauthorized {
 				t.Errorf("wrong credential: status = %d, want %d", wrongCredResp.StatusCode, http.StatusUnauthorized)
@@ -729,7 +730,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// successful freeze_release carries the reason this run supplied.
 	t.Run("audit_attribution", func(t *testing.T) {
 		revokeResp := controlAPIRequest(t, authed, http.MethodPost,
-			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", relaytest.ControlCredential, nil)
+			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", credential, nil)
 		defer revokeResp.Body.Close() //nolint:errcheck
 		if revokeResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)

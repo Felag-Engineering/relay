@@ -8,7 +8,6 @@ import (
 	"time"
 
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // ---------------------------------------------------------------------------
@@ -274,7 +273,6 @@ func TestTunnelSink_GatedByControlEnabled(t *testing.T) {
 		cfg := baseTestConfig(t)
 		cfg.ControlEnabled = true
 		cfg.ControlAddr = "127.0.0.1:0"
-		cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 		srv, deps, err := newServer(cfg)
 		if err != nil {

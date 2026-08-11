@@ -72,15 +72,17 @@ type Config struct {
 	// newServer.
 	MinDaemonVersion string
 
-	// ControlEnabled, ControlAddr, and ControlCredentialHashFile configure the
-	// control-plane HTTP listener (MCP + /api/v1, ADR-0009/0010) — separate
-	// from the node-plane gRPC listener (Addr above). Default disabled
-	// (ControlEnabled=false) for backward compatibility; when enabled, a
-	// missing or malformed ControlCredentialHashFile refuses startup rather
-	// than serving an unauthenticated or misconfigured control plane.
-	ControlEnabled            bool
-	ControlAddr               string
-	ControlCredentialHashFile string
+	// ControlEnabled and ControlAddr configure the control-plane HTTP listener
+	// (MCP + /api/v1, ADR-0009/0010) — separate from the node-plane gRPC
+	// listener (Addr above). Default disabled (ControlEnabled=false) for
+	// backward compatibility.
+	//
+	// There is deliberately no credential field: since #298 the control plane
+	// authenticates per-Account API Tokens held in the store, not a shared
+	// secret configured here (ADR-0023). Bootstrap the first one with
+	// `relay bootstrap-token`.
+	ControlEnabled bool
+	ControlAddr    string
 }
 
 // appDeps holds the constructed collaborators that tests and lifecycle hooks need
@@ -190,8 +192,6 @@ func parseConfig() Config {
 		"enable the control-plane listener (MCP + /api/v1); disabled by default")
 	controlAddr := flag.String("control-addr", ":9443",
 		"control-plane HTTPS listen address (distinct from -addr, the node-plane gRPC listener)")
-	controlCredentialHashFile := flag.String("control-credential-hash-file", "",
-		"path to a root-owned file containing the control-plane credential hash (sha256:<hex>); required if -control-enabled")
 
 	flag.Parse()
 
@@ -277,7 +277,6 @@ func parseConfig() Config {
 		}
 	}
 	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
-	cfg.ControlCredentialHashFile = envOr("RELAY_CONTROL_CREDENTIAL_HASH_FILE", *controlCredentialHashFile)
 
 	return cfg
 }
@@ -421,11 +420,6 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	var controlSrv *controlplane.Server
 	var dispatchRouter *dispatch.Router
 	if cfg.ControlEnabled {
-		digest, err := controlplane.LoadCredentialHashFile(cfg.ControlCredentialHashFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("load control credential hash: %w", err)
-		}
-
 		// A dedicated server cert for the control-plane listener, independent
 		// of the node-plane gRPC serverCert above: separate listeners get
 		// separate certificates, even though both chain to the same Relay CA.
@@ -494,14 +488,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
-			// The seeded credential now resolves to that stored Account on
-			// every request, so audit attributes it by ID and current role,
-			// and disabling the Account cuts the credential off immediately.
-			controlplane.NewAuthenticator(digest,
-				controlplane.WithAccounts(st.Accounts()),
-				// Per-Account API Tokens authenticate here too (#297); the
-				// seeded credential retires entirely in #298.
-				controlplane.WithAPITokens(apiTokenSvc)),
+			// The only credential the control plane accepts: a per-Account API
+			// Token, verified against the store on every request. There is no
+			// shared secret and no digest held in memory (ADR-0023).
+			controlplane.NewAuthenticator(apiTokenSvc),
 		)
 
 		// sd bundles every collaborator a control surface's Mount may need,
@@ -566,17 +556,16 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 }
 
 func main() {
-	// `relay hash-credential` is a standalone utility subcommand (see
-	// hash_credential.go), checked before flag.Parse/parseConfig so it never
-	// touches Relay startup config. It reads the plaintext credential from
-	// STDIN only and exits; it never starts a server.
-	if len(os.Args) > 1 && os.Args[1] == "hash-credential" {
-		runHashCredentialCommand()
-		return
+	// `relay bootstrap-token` is a standalone utility subcommand (see
+	// bootstrap_token.go), checked before flag.Parse/parseConfig so it never
+	// touches Relay startup config. It mints the founding admin's first API
+	// Token against the local store and exits; it never starts a server.
+	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
+		os.Exit(runBootstrapTokenCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
 
 	// `relay --version` prints the build stamp and exits (#249). Checked here,
-	// alongside hash-credential and before flag.Parse/parseConfig, because the
+	// alongside bootstrap-token and before flag.Parse/parseConfig, because the
 	// flag package would otherwise reject it as an unknown flag: an operator
 	// must be able to identify a binary without a valid startup config.
 	//

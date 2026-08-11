@@ -8,12 +8,11 @@
 // live deployment does, unlike tunnel_dispatch_e2e_test.go's startDaemonNode
 // harness (ControlEnabled=false, a test taskSink injected directly).
 //
-// RB3 (plan review): fixturePolicy, writeCredentialHashFile, and
-// controlAPITestCredential are reused directly (now via relaytest, same
-// package import already compiled alongside this integration-tagged file);
-// only the startTCPServer/startDaemonNode-shaped SETUP SEQUENCE is
-// duplicated inline here, because those hardcode ControlEnabled=false and
-// inject a test sink — exactly what this test must not do.
+// RB3 (plan review): relaytest.FixturePolicy and bootstrapCredential are
+// reused directly; only the startTCPServer/startDaemonNode-shaped SETUP
+// SEQUENCE is duplicated inline here, because those hardcode
+// ControlEnabled=false and inject a test sink — exactly what this test must
+// not do.
 //
 // Skip condition: RELAY_DAEMON_BIN env var not set (mirrors
 // tunnel_dispatch_e2e_test.go). Run via: make test-integration.
@@ -53,7 +52,6 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	cfg.Addr = "127.0.0.1:0"
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -107,7 +105,7 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"},
 	}
-	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: relaytest.ControlCredential}}
+	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: bootstrapCredential(t, deps)}}
 
 	session := relaytest.Connect(t, controlBase, authed)
 

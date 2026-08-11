@@ -50,12 +50,25 @@ Security-relevant choices, made explicit:
   never call the API or run Operations. Enrollment stamps `relay:env=dev` and
   `relay:fleet=dev` onto each Node — these `relay:` labels are what your Selectors
   target.
-- **The control-plane credential is a DEV fixture.** The plaintext
-  `dev-fleet-control-credential` grants full control-plane access. Its SHA-256
-  hash is committed at `docker/fixtures/control-credential.hash`; the Relay only
-  ever stores the hash (see
+- **The control-plane credential is minted at runtime, not committed.** Since
+  ADR-0023 the control plane accepts only per-Account API Tokens, so the
+  one-shot `credential` service runs `relay bootstrap-token` against the Relay's
+  own store and writes the result to the shared volume
+  (`docker/mint-credential.sh`). Read it with:
+
+  ```console
+  $ docker compose run --rm --no-deps --entrypoint sh credential \
+      -c 'cat /credential/control-credential'
+  ```
+
+  It lives on its own volume, which the daemons deliberately do not mount — an
+  admin credential readable by every Node is exactly what a compromised Node
+  would use to drive the whole fleet. It is a live 24h admin credential for the
+  founding admin Account; keeping it on a volume at all is a dev-fleet
+  convenience only — in a real deployment the
+  credential goes from the operator's terminal straight into a secret store (see
   [docs/operations/control-plane-credential.md](operations/control-plane-credential.md)).
-  Treat it as public. Never reuse it.
+  Never copy this one out of the fleet.
 
 ## Bring the fleet up
 
@@ -122,7 +135,8 @@ the TLS server name to `relay` or, for a quick look, skip verification.
 
 Point an MCP client at `https://localhost:9443/mcp` with:
 
-- **Bearer credential:** `dev-fleet-control-credential`.
+- **Bearer credential:** the token printed by the command in the security notes
+  above.
 - **TLS trust:** the exported `dev-fleet-ca.pem`, with the server name overridden
   to `relay` (or verification disabled for a quick look).
 

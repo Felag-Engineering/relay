@@ -27,7 +27,7 @@ ROADMAP promised — the same skepticism the product asks of its operators.
    AI-agent actually has: the MCP tools (`list_nodes`, `describe_node`,
    `list_operations`, `run_operation`, `raw_exec`, `cancel_job`, `get_job`), the Control
    API (`/api/v1`), the binaries' CLI flags and subcommands (`--version`,
-   `hash-credential`, `policy check`, `dump-operation-schema`), signals, and the logs.
+   `bootstrap-token`, `policy check`, `dump-operation-schema`), signals, and the logs.
    Never inspect internal stores directly — **except** where an acceptance criterion is
    explicitly about stored state (e.g. "every dispatch produces a queryable audit
    record", which today has no read surface other than the store itself); such steps say

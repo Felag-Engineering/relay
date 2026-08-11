@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
 // baseTestConfig returns a Config with the same non-control-plane fields as
@@ -119,61 +119,39 @@ func TestEnvOr(t *testing.T) {
 	})
 }
 
-// TestNewServer_ControlEnabled_RequiresHash verifies that enabling the
-// control plane without a valid credential hash refuses startup (newServer
-// returns an error, no listener is ever bound), and that a valid hash
-// succeeds and produces a non-nil deps.control.
-func TestNewServer_ControlEnabled_RequiresHash(t *testing.T) {
-	t.Run("missing hash file", func(t *testing.T) {
-		cfg := baseTestConfig(t)
-		cfg.ControlEnabled = true
-		cfg.ControlAddr = ":0"
-		cfg.ControlCredentialHashFile = filepath.Join(t.TempDir(), "does-not-exist")
+// TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates verifies that
+// enabling the control plane brings up a listener whose only credential is a
+// per-Account API Token (#298, ADR-0023).
+//
+// This replaces the previous "requires a credential hash file" test: there is
+// no longer a credential in Relay configuration to be missing or malformed.
+// What must hold instead is that the identity substrate is established at
+// startup — the founding admin Account is seeded, so `relay bootstrap-token`
+// has something to mint against and the control plane is never up with no way
+// to authenticate to it.
+func TestNewServer_ControlEnabled_SeedsIdentityAndAuthenticates(t *testing.T) {
+	cfg := baseTestConfig(t)
+	cfg.ControlEnabled = true
+	cfg.ControlAddr = ":0"
 
-		srv, deps, err := newServer(cfg)
-		if err == nil {
-			t.Fatal("expected newServer to error on a missing control credential hash file")
-		}
-		if srv != nil || deps != nil {
-			t.Fatal("newServer should return nil srv/deps on error")
-		}
-	})
+	srv, deps, err := newServer(cfg)
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
+	t.Cleanup(srv.Stop)
 
-	t.Run("malformed hash file", func(t *testing.T) {
-		cfg := baseTestConfig(t)
-		cfg.ControlEnabled = true
-		cfg.ControlAddr = ":0"
-		path := filepath.Join(t.TempDir(), "control-credential-hash")
-		if err := os.WriteFile(path, []byte("not-a-valid-hash"), 0o400); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-		cfg.ControlCredentialHashFile = path
+	if deps.control == nil {
+		t.Fatal("deps.control should be non-nil when ControlEnabled")
+	}
 
-		srv, deps, err := newServer(cfg)
-		if err == nil {
-			t.Fatal("expected newServer to error on a malformed control credential hash file")
-		}
-		if srv != nil || deps != nil {
-			t.Fatal("newServer should return nil srv/deps on error")
-		}
-	})
-
-	t.Run("valid hash file", func(t *testing.T) {
-		cfg := baseTestConfig(t)
-		cfg.ControlEnabled = true
-		cfg.ControlAddr = ":0"
-		cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
-
-		srv, deps, err := newServer(cfg)
-		if err != nil {
-			t.Fatalf("newServer: %v", err)
-		}
-		if deps.control == nil {
-			t.Fatal("deps.control should be non-nil when ControlEnabled with a valid hash")
-		}
-		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
-		t.Cleanup(srv.Stop)
-	})
+	admin, err := deps.store.Accounts().GetByName(context.Background(), accounts.FoundingAdminName)
+	if err != nil {
+		t.Fatalf("founding admin account not seeded at startup: %v", err)
+	}
+	if !admin.Enabled || admin.Role != accounts.RoleAdmin {
+		t.Errorf("founding admin = %+v, want an enabled admin", admin)
+	}
 }
 
 // TestNewServer_MinDaemonVersion verifies the ADR-0014 startup validation: a
@@ -226,7 +204,6 @@ func TestListeners_Independent(t *testing.T) {
 	cfg := baseTestConfig(t)
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = ":0"
-	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {

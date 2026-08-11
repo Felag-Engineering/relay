@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -64,8 +63,7 @@ func newTestServer(t *testing.T) (*Server, string, *http.Client) {
 	t.Helper()
 
 	cert := selfSignedCert(t)
-	sum := sha256.Sum256([]byte(testToken))
-	srv := New(Config{Addr: "127.0.0.1:0", TLSCert: cert}, NewAuthenticator(sum[:]))
+	srv := New(Config{Addr: "127.0.0.1:0", TLSCert: cert}, testAuthenticator())
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

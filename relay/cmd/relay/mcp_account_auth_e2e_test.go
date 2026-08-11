@@ -52,7 +52,6 @@ func startAccountFleet(t *testing.T, daemonBin string) *accountFleet {
 	cfg.Addr = "127.0.0.1:0"
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {

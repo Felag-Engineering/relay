@@ -22,10 +22,10 @@ FROM busybox:stable-musl
 
 COPY --from=build /out/relay /usr/local/bin/relay
 
-# The control-plane credential HASH (never the plaintext). DEV-ONLY fixture; it
-# is the sha256 of the documented dev plaintext and grants full control-plane
-# access. See docs/dev-fleet.md's security note — never reuse it anywhere real.
-COPY docker/fixtures/control-credential.hash /fixtures/control-credential.hash
+# No credential fixture is baked into the image: since #298 (ADR-0023) the
+# control plane accepts only per-Account API Tokens, and the dev fleet's first
+# one is minted at runtime by the `credential` service (docker/mint-credential.sh)
+# using this image's own `relay bootstrap-token` subcommand.
 
 # 7654 = node-plane gRPC (relay-daemon dial-home); 9443 = control-plane HTTPS
 # (MCP + /api/v1). Distinct listeners, published to distinct host ports by

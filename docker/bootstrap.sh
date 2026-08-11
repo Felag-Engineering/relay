@@ -13,11 +13,15 @@
 #     (ca-key.pem) lives on the relay-data volume, which this short-lived helper
 #     mounts read-only but the long-lived daemon containers never mount at all —
 #     so no daemon ever sees the CA private key.
-#   - The dev control credential is passed in via RELAY_CONTROL_CREDENTIAL. It is
-#     a DEV-ONLY fixture that grants full control-plane access; never reuse it.
+#   - The control credential is read from the shared volume, where the one-shot
+#     `credential` service put it (docker/mint-credential.sh). It is a live
+#     DEV-ONLY admin credential minted by `relay bootstrap-token`; never reuse
+#     it or copy it out of the fleet.
 set -eu
 
-CRED="${RELAY_CONTROL_CREDENTIAL:?RELAY_CONTROL_CREDENTIAL must be set}"
+CRED_FILE="/credential/control-credential"
+test -s "${CRED_FILE}" || { echo "bootstrap: ${CRED_FILE} missing or empty; did the credential service run?" >&2; exit 1; }
+CRED="$(cat "${CRED_FILE}")"
 CA_CERT="/relay-data/ca/ca-cert.pem"
 
 # 1. Wait for the control API to answer. A 200 here proves the Relay is up AND

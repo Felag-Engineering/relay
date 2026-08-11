@@ -7,8 +7,9 @@
 # `docker compose`, not `make build/test/lint`.
 #
 # Startup order:
-#   relay (healthy) -> bootstrap (mints a relay: Enrollment Token + exports the
-#   public CA cert) -> daemon-1..3 (enroll, then go healthy on their node_id).
+#   relay (healthy) -> credential (mints the control-plane credential with
+#   `relay bootstrap-token`) -> bootstrap (mints a relay: Enrollment Token +
+#   exports the public CA cert) -> daemon-1..3 (enroll, then go healthy).
 
 # The three daemon services are byte-identical except for their per-Node
 # environment and their private state volume. This anchor factors out ONLY the
@@ -47,7 +48,6 @@ services:
       # plane: listener separation.
       RELAY_CONTROL_ENABLED: "true"
       RELAY_CONTROL_ADDR: ":9443"
-      RELAY_CONTROL_CREDENTIAL_HASH_FILE: "/fixtures/control-credential.hash"
       # Server cert SAN = the in-fleet DNS name daemons and bootstrap dial, so
       # mTLS verification succeeds without any insecure flag inside the fleet.
       RELAY_HOSTNAME: "relay"
@@ -55,9 +55,9 @@ services:
       RELAY_STORE_PATH: "/var/lib/relay/store/relay.db"
     ports:
       # Distinct published host ports: node plane vs control plane. Bound to
-      # 127.0.0.1 (loopback) ONLY: the control plane accepts a committed dev
-      # credential, so publishing on 0.0.0.0 would make it LAN-reachable RCE —
-      # anyone on the network could drive the control plane. Nothing inside the
+      # 127.0.0.1 (loopback) ONLY: the control plane is an execution surface,
+      # so publishing on 0.0.0.0 would make it LAN-reachable RCE — anyone who
+      # obtained the dev credential could drive it. Nothing inside the
       # fleet uses these host ports; daemons and bootstrap dial the compose DNS
       # name `relay` over the private network.
       - "127.0.0.1:7654:7654"
@@ -79,6 +79,34 @@ services:
       retries: 20
       start_period: 3s
 
+  # One-shot: mints the founding admin's control-plane credential with
+  # `relay bootstrap-token` (ADR-0023) and writes it to the shared volume.
+  #
+  # There is no committed credential fixture any more: since #298 the control
+  # plane accepts only per-Account API Tokens, and the first one is minted
+  # locally against the Relay's own store. This service uses the relay image
+  # because it needs that binary, and mounts relay-data READ-WRITE because
+  # minting is a store write — the only service other than the Relay itself
+  # that does.
+  credential:
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      relay:
+        condition: service_healthy
+    entrypoint: ["sh", "/mint-credential.sh"]
+    volumes:
+      - ./docker/mint-credential.sh:/mint-credential.sh:ro
+      - relay-data:/var/lib/relay
+      # Its OWN volume, deliberately NOT bootstrap-shared: that one is mounted
+      # by every daemon, and a control-plane admin credential readable by every
+      # Node is exactly the shape a compromised Node would exploit. Only the
+      # minting service and the bootstrap service see this one.
+      - control-credential:/credential
+
   # One-shot: mints the Enrollment Token and exports the public CA cert, then
   # exits. Runs as root (0:0) so it can read the root-owned CA volume and write
   # the shared bootstrap volume. See docker/bootstrap.sh for the security notes
@@ -90,14 +118,13 @@ services:
     depends_on:
       relay:
         condition: service_healthy
+      credential:
+        condition: service_completed_successfully
     entrypoint: ["sh", "/bootstrap.sh"]
-    environment:
-      # DEV-ONLY control-plane credential (plaintext). Grants full control-plane
-      # access; matches docker/fixtures/control-credential.hash. Never reuse it.
-      RELAY_CONTROL_CREDENTIAL: "dev-fleet-control-credential"
     volumes:
       - ./docker/bootstrap.sh:/bootstrap.sh:ro
       - relay-data:/relay-data:ro
+      - control-credential:/credential:ro
       - bootstrap-shared:/bootstrap
 
   daemon-1:
@@ -154,6 +181,9 @@ services:
 volumes:
   relay-data:
   bootstrap-shared:
+  # Holds ONLY the control-plane admin credential. Separate from
+  # bootstrap-shared so daemons never mount it (see the credential service).
+  control-credential:
   daemon1-state:
   daemon2-state:
   daemon3-state:

@@ -8,15 +8,21 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 )
 
 const testToken = "s3cr3t-control-plane-credential" //nolint:gosec // test fixture, not a real credential
 
+// testAuthenticator accepts testToken as the founding admin's credential.
+// Since #298 there is only one credential kind, so every test in this file
+// now drives the API Token path.
 func testAuthenticator() *Authenticator {
-	sum := sha256.Sum256([]byte(testToken))
-	return NewAuthenticator(sum[:])
+	return NewAuthenticator(&fakeVerifier{
+		acct:  storedFoundingAdmin(),
+		valid: testToken,
+	})
 }
 
 func okHandler() http.Handler {
@@ -175,7 +181,7 @@ func TestMiddleware_TokenNeverLogged(t *testing.T) {
 	}
 
 	// Also assert the digest never appears in hex form anywhere reachable
-	// from logging — Authenticator only ever compares digests, never logs them.
+	// from logging — only hashes are ever compared, and they are never logged.
 	sum := sha256.Sum256([]byte(testToken))
 	hashHex := fmt.Sprintf("%x", sum)
 	if strings.Contains(logOutput, hashHex) {
@@ -183,24 +189,35 @@ func TestMiddleware_TokenNeverLogged(t *testing.T) {
 	}
 }
 
-// TestAuthenticator_HoldsOnlyDigest is a structural (by-construction) guarantee
-// that Authenticator never stores plaintext: NewAuthenticator's only parameter
-// is a digest, and the struct has no other exported or unexported field a
-// caller could populate with plaintext. This is asserted indirectly: a digest
-// built from a token authenticates that token, and an Authenticator built
-// directly from a hand-computed digest (never having seen "the" plaintext
-// string in this test) behaves identically — there is no separate plaintext
-// path into the type.
-func TestAuthenticator_HoldsOnlyDigest(t *testing.T) {
-	sum := sha256.Sum256([]byte(testToken))
-	authn := NewAuthenticator(sum[:])
+// TestAuthenticator_HoldsNoSecretMaterial is a structural (by-construction)
+// guarantee: since #298 the Authenticator holds neither a plaintext credential
+// nor a digest — only a TokenVerifier. Its single field is that verifier, so
+// there is no field a caller could populate with secret material at all, and
+// nothing for a future audit sink or debugger to recover from the type.
+//
+// Asserted by reflection over the struct rather than by behaviour, because the
+// claim is about the type's shape: a field added later that could carry a
+// secret fails this test at once.
+func TestAuthenticator_HoldsNoSecretMaterial(t *testing.T) {
+	typ := reflect.TypeOf(Authenticator{})
+	if typ.NumField() != 1 {
+		t.Fatalf("Authenticator has %d fields, want exactly 1 (the verifier); a new field must not be able to hold secret material", typ.NumField())
+	}
+	f := typ.Field(0)
+	if f.Type != reflect.TypeOf((*TokenVerifier)(nil)).Elem() {
+		t.Errorf("Authenticator's only field is %s %s, want the TokenVerifier interface", f.Name, f.Type)
+	}
+}
 
-	if !authn.validToken(testToken) {
-		t.Fatal("Authenticator built from digest should accept the matching token")
-	}
-	if authn.validToken("anything-else") {
-		t.Fatal("Authenticator should reject a non-matching token")
-	}
+// A nil verifier is a wiring mistake, caught at construction in the
+// composition root rather than by a listener that silently refuses everyone.
+func TestNewAuthenticator_PanicsOnNilVerifier(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("NewAuthenticator(nil) did not panic")
+		}
+	}()
+	NewAuthenticator(nil)
 }
 
 func TestFoundingAdmin(t *testing.T) {
