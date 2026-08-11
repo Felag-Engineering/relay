@@ -2,19 +2,37 @@ package capability
 
 import "fmt"
 
-// Principal identifies who is asking the capability layer to act, threaded
-// through the pipeline to the Authorizer and recorded on every audit entry.
+// Principal is the **acting Account**, in the capability layer's proto-free
+// form: who is asking the layer to act, threaded through the pipeline to the
+// Authorizer and recorded on every audit entry.
 //
-// Naming note: CONTEXT.md's Account glossary entry lists "principal" under
-// _Avoid_ ("say machine Account"). v0.0.5 has no Account yet — the seeded
-// credential arrives in v0.0.6 and full Accounts in v0.3.0 (ADR-0010) — so
-// Principal is a deliberately thin, pre-Account placeholder rather than a
-// second name for the same concept. It is expected to be replaced by (or
-// rewritten in terms of) Account once that lands; flagged here rather than
-// silently drifting from the glossary.
+// Since v0.3.0 (#295) this is no longer a pre-Account placeholder — it is a
+// projection of a stored Account (internal/accounts). The projection is built
+// at the authentication boundary (internal/controlplane), NOT here: the
+// capability package's import allowlist is deliberately narrow (jobs +
+// registry; see TestCapabilityImportsOnlyRegistryAndJobs), and #295 is not the
+// change that should widen it. Holding a narrow value rather than the full
+// Account also means an audit record captures who acted with what authority
+// **at that moment**, not a pointer to a mutable row whose role may since have
+// changed.
+//
+// AccountID is carried alongside Account (the name) so attribution survives a
+// rename: the name is what a human reads, the ID is what joins.
+//
+// Naming: CONTEXT.md's glossary prefers "Account" over "principal" in prose,
+// and this type's *meaning* is now exactly an Account. The identifier keeps its
+// name for the moment because renaming it touches every surface at once; the
+// glossary entry records that the capability layer's `Principal` **is** the
+// acting Account, so the two cannot drift in meaning even while the spelling
+// lags.
 type Principal struct {
+	// AccountID is the stored Account's stable identifier; empty only for
+	// pre-Account test fixtures.
+	AccountID string
+	// Account is the Account's unique name, as it appears in audit.
 	Account string
-	Role    string
+	// Role is the Account's role at the time it authenticated.
+	Role string
 }
 
 // Attribution returns the string form of p recorded in audit.Record.Principal.

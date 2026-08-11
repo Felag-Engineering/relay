@@ -468,9 +468,29 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			capability.WithAuthorizer(authz.NewStaged()))
 		capSvc = capability.New(reg, enabledOpts...)
 
+		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
+		// deterministic: it creates the row on first start and returns the
+		// existing one every time after, never repairing an operator's
+		// deliberate disable or demotion. Fail closed — if the identity
+		// substrate cannot be established, the control plane does not come up
+		// with a hardcoded identity instead.
+		foundingAdmin, err := st.Accounts().EnsureFoundingAdmin(context.Background())
+		if err != nil {
+			return nil, nil, fmt.Errorf("seed founding admin account: %w", err)
+		}
+		slog.Info("founding admin account ready",
+			"account_id", foundingAdmin.ID,
+			"account", foundingAdmin.Name,
+			"role", string(foundingAdmin.Role),
+			"enabled", foundingAdmin.Enabled,
+		)
+
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
-			controlplane.NewAuthenticator(digest),
+			// The seeded credential now resolves to that stored Account on
+			// every request, so audit attributes it by ID and current role,
+			// and disabling the Account cuts the credential off immediately.
+			controlplane.NewAuthenticator(digest, controlplane.WithAccounts(st.Accounts())),
 		)
 
 		// sd bundles every collaborator a control surface's Mount may need,
