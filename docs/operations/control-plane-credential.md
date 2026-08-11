@@ -79,6 +79,26 @@ The plaintext credential itself is presented per-request as a bearer token:
 $ curl -H "Authorization: Bearer $CONTROL_PLANE_CREDENTIAL" https://relay.example:9443/api/v1/ping
 ```
 
+## Alongside it: Account API Tokens
+
+Since v0.3.0 the same listener also accepts **API Tokens** — per-Account bearer credentials
+minted through `POST /api/v1/accounts/{id}/tokens` and revocable individually, without a
+restart. The two kinds share one header and are told apart by prefix: a credential beginning
+with **`glp_`** is checked *only* against the API Token store, and anything else is checked
+*only* against the seeded hash below. They are never tried in turn.
+
+That routing has one operator-visible consequence:
+
+> **A seeded credential whose plaintext begins with `glp_` will never authenticate.**
+
+Choose anything else. This constraint disappears when the seeded credential retires
+entirely and every caller authenticates as an Account.
+
+The seeded credential remains the bootstrap path: it resolves to the **founding admin
+Account**, which is what you use to create the first real Accounts and mint their tokens.
+Prefer per-Account tokens for everything after that — a shared credential cannot tell you
+who acted, and cannot be revoked for one caller without breaking every other.
+
 ## Rotation and recovery
 
 Rotation is: mint a new plaintext credential, hash it, overwrite the hash file, restart the

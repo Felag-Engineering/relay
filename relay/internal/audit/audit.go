@@ -33,6 +33,24 @@ const (
 	KindTokenRevoke   = "token_revoke"
 	KindNodeRevoke    = "node_revoke"
 	KindPlan          = "plan"
+
+	// Identity-management kinds (#297, ADR-0010). Administering the control
+	// plane's own identities is itself an audited, attributed act: "who
+	// created this Account", "who made it an admin", and "who minted it a
+	// credential" are the first questions asked after a compromise, and they
+	// are unanswerable if identity changes are the one thing that happens
+	// silently.
+	//
+	// KindAPITokenMint/Revoke are deliberately distinct from
+	// KindTokenMint/Revoke above, which are *Enrollment* Tokens: the two join
+	// Nodes and authenticate callers respectively, and conflating them in a
+	// query would mix fleet growth with credential issuance.
+	KindAccountCreate  = "account_create"
+	KindAccountRole    = "account_role"
+	KindAccountEnable  = "account_enable"
+	KindAccountDisable = "account_disable"
+	KindAPITokenMint   = "api_token_mint"
+	KindAPITokenRevoke = "api_token_revoke"
 )
 
 // Record is one append-only audit entry: a single Task's dispatch, a

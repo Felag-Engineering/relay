@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
@@ -485,12 +486,22 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			"enabled", foundingAdmin.Enabled,
 		)
 
+		// The one TokenService in the process: the authenticator VERIFIES
+		// through it and the Control API MINTS through it, but each is handed
+		// a narrow interface exposing only its half (controlplane.TokenVerifier
+		// / api.APITokenService), so neither surface holds the other's power.
+		apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
 			// The seeded credential now resolves to that stored Account on
 			// every request, so audit attributes it by ID and current role,
 			// and disabling the Account cuts the credential off immediately.
-			controlplane.NewAuthenticator(digest, controlplane.WithAccounts(st.Accounts())),
+			controlplane.NewAuthenticator(digest,
+				controlplane.WithAccounts(st.Accounts()),
+				// Per-Account API Tokens authenticate here too (#297); the
+				// seeded credential retires entirely in #298.
+				controlplane.WithAPITokens(apiTokenSvc)),
 		)
 
 		// sd bundles every collaborator a control surface's Mount may need,
@@ -500,18 +511,20 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// for the ControlSurface seam (#162) this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
-			registry:   reg,
-			policy:     policyCache,
-			vocab:      vocabCache,
-			ops:        opvocabLister{},
-			capability: capSvc,
-			jobs:       st.Jobs(),
-			tasks:      st.Tasks(),
-			tokens:     tokenSvc,
-			revocation: revocationSvc,
-			audit:      st.Audit(),
-			now:        func() time.Time { return time.Now().UTC() },
-			metrics:    appMetrics,
+			registry:     reg,
+			policy:       policyCache,
+			vocab:        vocabCache,
+			ops:          opvocabLister{},
+			capability:   capSvc,
+			jobs:         st.Jobs(),
+			tasks:        st.Tasks(),
+			tokens:       tokenSvc,
+			accountsRepo: st.Accounts(),
+			apiTokens:    apiTokenSvc,
+			revocation:   revocationSvc,
+			audit:        st.Audit(),
+			now:          func() time.Time { return time.Now().UTC() },
+			metrics:      appMetrics,
 		}
 		for _, s := range defaultControlSurfaces() {
 			s.Mount(controlSrv.Mux(), sd)

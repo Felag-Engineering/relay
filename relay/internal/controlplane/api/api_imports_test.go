@@ -33,6 +33,12 @@ func TestAPIImportsAreAllowlisted(t *testing.T) {
 		"net/http":      true,
 		"strings":       true,
 		"time":          true,
+		// accounts is the proto-free identity domain (#297): the Account/Role
+		// types the identity routes render, and the fail-closed Role.AtLeast
+		// the admin gate reuses rather than re-deriving. It carries no SQL, no
+		// HTTP, and no Relay configuration, so it does not widen what this
+		// package can reach — it is the domain vocabulary of the routes.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit":        true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability":   true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane": true,
