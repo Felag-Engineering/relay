@@ -270,13 +270,16 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	}
 
 	sel := capability.Selector{}
-	act := jobs.Action{RiskClass: jobs.RiskClassRead}
+	// A real Action kind, not a bare RiskClass: since #298 the Authorizer
+	// denies an unrecognized ActionKind for every role including admin, so a
+	// kind-less probe would be refused by authz and stop testing the Freeze.
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
 	// controlplane.FoundingAdmin() — not an unattributed/non-admin probe
 	// Principal — so these three calls keep verifying the Freeze gate itself
 	// (frozen -> FrozenError; released -> a genuine success), not an authz
 	// denial that would satisfy "err != nil" for the wrong reason (RB1, plan
 	// review): since #154, ControlEnabled wires the real deny-by-default
-	// authz.NewStaged Authorizer, and a non-admin Principal here would be
+	// authz.NewRoleGate Authorizer, and a non-admin Principal here would be
 	// denied with authz.ErrUnauthorized before ever reaching the Freeze
 	// check's dispatch outcome.
 	admin := controlplane.FoundingAdmin()

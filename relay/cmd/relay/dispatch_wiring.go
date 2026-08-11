@@ -17,7 +17,7 @@ import (
 // requires alongside a real dispatcher (service.go). The dev harness
 // (devharness.go, installDevHarness) uses this SAME assembly — the only
 // difference is its own allow-all devHarnessAuthorizer, never
-// authz.NewStaged — see TestTunnelSink_GatedByControlEnabled for the
+// authz.NewRoleGate — see TestTunnelSink_GatedByControlEnabled for the
 // disabled-vs-enabled assertion this file's callers must keep true.
 
 // routerSink adapts *dispatch.Router to the unexported taskSink interface
