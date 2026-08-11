@@ -150,6 +150,14 @@ func (s *Store) Accounts() accounts.Repository {
 	return &sqliteAccounts{db: s.db}
 }
 
+// APITokens returns the SQLite-backed accounts.TokenRepository — the control
+// plane's credentials (ADR-0010). Distinct from Tokens() below, which is the
+// Enrollment Token store: an Enrollment Token joins a Node to the fleet and
+// can never call the control plane, and an API Token is the exact reverse.
+func (s *Store) APITokens() accounts.TokenRepository {
+	return &sqliteAPITokens{db: s.db}
+}
+
 // Tokens returns the SQLite-backed enroll.Repository — the persisted
 // Enrollment Token store (ADR-0006), authoritative across a Relay restart so a
 // revoked token can never mint a new identity after the process restarts

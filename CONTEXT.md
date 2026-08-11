@@ -225,8 +225,11 @@ _Avoid_: user, principal, service account (say "machine Account")
 **API Token**:
 A bearer credential bound to an Account, used by machines (and the AI-agent via MCP) to
 call the Control API. Named, revocable, optionally expiring, stored only as a hash, and
-inheriting its Account's role. Distinct from an **Enrollment Token**, which joins Nodes
-to the fleet and can never call the API.
+inheriting its Account's role. It carries the fixed prefix **`glp_`** — a security
+feature, not branding: it is what makes a leaked token greppable in a repository, a
+paste, or a CI log, and what secret scanners key on. The plaintext is shown exactly
+once, at mint; there is no recovery, only re-mint plus revoke. Distinct from an
+**Enrollment Token**, which joins Nodes to the fleet and can never call the API.
 _Avoid_: API key, PAT, bearer token (unqualified)
 
 **Control API**:
