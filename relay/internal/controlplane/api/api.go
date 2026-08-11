@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -60,6 +61,29 @@ type Auditor interface {
 	Append(ctx context.Context, r audit.Record) error
 }
 
+// AccountManager is the Account-store view the identity routes need
+// (accounts.Repository satisfies it). Deliberately not accounts.Repository
+// itself: EnsureFoundingAdmin is seeding, a startup act, and no request
+// handler has any business reaching it.
+type AccountManager interface {
+	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
+	Get(ctx context.Context, id string) (accounts.Account, error)
+	List(ctx context.Context) ([]accounts.Account, error)
+	SetRole(ctx context.Context, id string, role accounts.Role) error
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+}
+
+// APITokenService mints, revokes, and lists an Account's API Tokens.
+// *accounts.TokenService satisfies it.
+//
+// Verify is deliberately absent: this surface *issues* credentials, the
+// authenticator *checks* them, and neither needs the other's power.
+type APITokenService interface {
+	Mint(ctx context.Context, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	Revoke(ctx context.Context, id string) error
+	List(ctx context.Context, accountID string) ([]accounts.APIToken, error)
+}
+
 // Deps are the collaborators Register wires into the /api/v1 route table.
 // Deliberately narrow (invariant 11): no Relay Config, CA, blast cap, or
 // listener field — every dependency here is a purpose-built interface over
@@ -70,6 +94,10 @@ type Deps struct {
 	Nodes        NodeRevoker
 	Freeze       Freezer
 	Audit        Auditor
+	// Accounts and APITokens back the identity-management routes (#297).
+	// Both are admin-only at every entry point (see requireAdmin).
+	Accounts  AccountManager
+	APITokens APITokenService
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
@@ -89,6 +117,20 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("POST /api/v1/nodes/{node_id}/revoke", handleRevokeNode(d))
 	mux.HandleFunc("POST /api/v1/freeze/engage", handleFreezeEngage(d))
 	mux.HandleFunc("POST /api/v1/freeze/release", handleFreezeRelease(d))
+
+	// Identity management (#297). Every route below is admin-only; the gate
+	// lives in each handler (requireAdmin) rather than in a wrapper here, so a
+	// route added later cannot silently miss it by being registered on the
+	// wrong mux.
+	mux.HandleFunc("POST /api/v1/accounts", handleCreateAccount(d))
+	mux.HandleFunc("GET /api/v1/accounts", handleListAccounts(d))
+	mux.HandleFunc("GET /api/v1/accounts/{id}", handleGetAccount(d))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/role", handleSetAccountRole(d))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/enable", handleSetAccountEnabled(d, true))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/disable", handleSetAccountEnabled(d, false))
+	mux.HandleFunc("POST /api/v1/accounts/{id}/tokens", handleMintAPIToken(d))
+	mux.HandleFunc("GET /api/v1/accounts/{id}/tokens", handleListAPITokens(d))
+	mux.HandleFunc("DELETE /api/v1/api-tokens/{token_id}", handleRevokeAPIToken(d))
 }
 
 // principal reads the Principal that Authenticator.Middleware injected into

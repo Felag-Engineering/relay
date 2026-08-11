@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
@@ -40,18 +41,20 @@ import (
 // single surface (e.g. apiSurface never touches ops), which is expected: the
 // struct is a shared dependency bag, not a per-surface signature.
 type surfaceDeps struct {
-	registry   registry.Repository
-	policy     *policyview.Cache
-	vocab      *nodevocab.Cache
-	ops        mcp.OperationLister
-	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
-	jobs       jobs.JobRepository
-	tasks      jobs.TaskRepository
-	tokens     *enroll.Service
-	revocation *revocation.Service
-	audit      audit.Repository
-	now        func() time.Time
-	metrics    *metrics.Metrics
+	registry     registry.Repository
+	policy       *policyview.Cache
+	vocab        *nodevocab.Cache
+	ops          mcp.OperationLister
+	capability   *capability.Service // one instance: mcp.Executor AND api.Freezer
+	jobs         jobs.JobRepository
+	tasks        jobs.TaskRepository
+	tokens       *enroll.Service
+	accountsRepo accounts.Repository
+	apiTokens    *accounts.TokenService
+	revocation   *revocation.Service
+	audit        audit.Repository
+	now          func() time.Time
+	metrics      *metrics.Metrics
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -82,6 +85,8 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Nodes:        d.revocation,
 		Freeze:       d.capability,
 		Audit:        d.audit,
+		Accounts:     d.accountsRepo,
+		APITokens:    d.apiTokens,
 		Now:          d.now,
 	})
 }
