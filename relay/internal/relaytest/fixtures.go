@@ -1,16 +1,10 @@
 package relaytest
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"os"
 	"path/filepath"
 	"testing"
 )
-
-// ControlCredential is the plaintext control-plane bearer credential that
-// WriteCredentialHashFile hashes into the credential-hash file it writes.
-const ControlCredential = "test-control-plane-credential" //nolint:gosec // test fixture
 
 // FixturePolicy is the TOML policy a daemon subprocess loads across the
 // cmd/relay integration e2e suites. It allows file.read (wildcard, except
@@ -99,17 +93,4 @@ func WriteTempFile(t *testing.T, pattern, content string) string {
 		t.Fatalf("chmod temp file: %v", err)
 	}
 	return f.Name()
-}
-
-// WriteCredentialHashFile writes a well-formed "sha256:<hex>" credential
-// hash file (hashing ControlCredential) under t.TempDir() and returns its
-// path.
-func WriteCredentialHashFile(t *testing.T) string {
-	t.Helper()
-	sum := sha256.Sum256([]byte(ControlCredential))
-	path := filepath.Join(t.TempDir(), "control-credential-hash")
-	if err := os.WriteFile(path, []byte("sha256:"+hex.EncodeToString(sum[:])), 0o400); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	return path
 }

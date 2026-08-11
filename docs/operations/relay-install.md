@@ -36,7 +36,7 @@ prints the build stamp — see [version-stamping.md](version-stamping.md).
 The Relay is configured by CLI flags with `RELAY_`-prefixed environment-variable
 overrides (env wins when set). There is **no config file yet**: ADR-0010/0012 call
 for a root-owned config file for the security-sensitive values (blast caps,
-minimum daemon version, credential-hash path); the current flags+env mechanism is a
+minimum daemon version, listener addresses); the current flags+env mechanism is a
 documented interim — the security property that matters (set only at startup, never
 settable via any API, invariant #11) holds either way. All flags from
 `relay/cmd/relay/main.go`:
@@ -58,14 +58,14 @@ settable via any API, invariant #11) holds either way. All flags from
 | `-min-daemon-version` | `RELAY_MIN_DAEMON_VERSION` | *(empty)* | Minimum relay-daemon semver (ADR-0014). Empty disables the `outdated` gate; a malformed value refuses startup. See [iac-upgrades.md](iac-upgrades.md), and the prerelease caveat in [release-artifacts.md](release-artifacts.md) (#261). |
 | `-control-enabled` | `RELAY_CONTROL_ENABLED` | `false` | Enable the control-plane listener (MCP + `/api/v1` + `/metrics`). |
 | `-control-addr` | `RELAY_CONTROL_ADDR` | `:9443` | Control-plane HTTPS listen address (distinct from `-addr`). |
-| `-control-credential-hash-file` | `RELAY_CONTROL_CREDENTIAL_HASH_FILE` | *(empty)* | Path to the root-owned control-plane credential hash file; **required** when the control plane is enabled — missing or malformed refuses startup. See [control-plane-credential.md](control-plane-credential.md). |
 
 Subcommands (checked before flag parsing):
 
 - `relay --version` / `-version` / `-V` — print the build stamp and exit.
-- `relay hash-credential` — read a plaintext control-plane credential from stdin,
-  print its canonical `sha256:<hex>` form
-  ([control-plane-credential.md](control-plane-credential.md)).
+- `relay bootstrap-token -store-path <path>` — mint the founding admin Account's first
+  API Token and print it to stdout. This is how you obtain a control-plane credential;
+  there is none in Relay configuration
+  ([control-plane-credential.md](control-plane-credential.md), ADR-0023).
 
 ## 3. First start
 
@@ -91,8 +91,7 @@ relay \
   -ca-dir /var/lib/relay/ca \
   -store-path /var/lib/relay/relay.db \
   -control-enabled \
-  -control-addr :9443 \
-  -control-credential-hash-file /etc/relay/control-credential-hash
+  -control-addr :9443
 ```
 
 Verify it is up:
@@ -131,7 +130,6 @@ Environment=RELAY_CA_DIR=/var/lib/relay/ca
 Environment=RELAY_STORE_PATH=/var/lib/relay/relay.db
 Environment=RELAY_CONTROL_ENABLED=true
 Environment=RELAY_CONTROL_ADDR=:9443
-Environment=RELAY_CONTROL_CREDENTIAL_HASH_FILE=/etc/relay/control-credential-hash
 ExecStart=/usr/local/sbin/relay
 Restart=on-failure
 RestartSec=5s
@@ -155,8 +153,9 @@ $ sudo systemctl enable --now relay
 $ systemctl status relay
 ```
 
-The control-plane credential hash file setup is covered in
-[control-plane-credential.md](control-plane-credential.md).
+The control plane comes up with no usable credential until you mint one. Run
+`relay bootstrap-token` on this host and switch your callers to the printed token —
+see [control-plane-credential.md](control-plane-credential.md).
 
 ## 5. Operational levers on the Relay host
 

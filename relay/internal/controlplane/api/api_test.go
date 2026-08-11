@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -112,13 +112,31 @@ func (f *fakeAuditor) all() []audit.Record {
 // what production wiring produces (invariant 10 — one auth path).
 // -----------------------------------------------------------------------
 
-const testCredential = "test-control-api-credential" //nolint:gosec // test fixture, not a real credential
+const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
+
+// staticVerifier is a controlplane.TokenVerifier that accepts exactly one
+// credential, as the founding admin Account. The identity-management tests in
+// accounts_test.go use the REAL TokenService over a real store; this fake
+// exists only so the pre-existing lifecycle-route tests keep their focus on
+// the routes rather than on minting a credential first.
+type staticVerifier struct{ credential string }
+
+func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
+	if credential != v.credential {
+		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
+	}
+	return accounts.Account{
+		Name:    accounts.FoundingAdminName,
+		Kind:    accounts.KindHuman,
+		Role:    accounts.RoleAdmin,
+		Enabled: true,
+	}, accounts.APIToken{ID: "tok-test"}, nil
+}
 
 // newTestHandler builds an http.Handler that mounts Register(mux, d) behind
 // a real controlplane.Authenticator accepting testCredential.
 func newTestHandler(d Deps) http.Handler {
-	sum := sha256.Sum256([]byte(testCredential))
-	authn := controlplane.NewAuthenticator(sum[:])
+	authn := controlplane.NewAuthenticator(staticVerifier{credential: testCredential})
 	mux := http.NewServeMux()
 	Register(mux, d)
 	return authn.Middleware(mux)

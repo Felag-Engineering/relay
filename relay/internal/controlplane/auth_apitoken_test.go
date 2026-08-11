@@ -2,27 +2,79 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
-// fakeVerifier is the narrow TokenVerifier the authenticator needs. It records
-// every credential it was asked about, so a test can assert which credentials
-// reach the token path at all — the routing property, not just the outcome.
+// -----------------------------------------------------------------------
+// Harness
+// -----------------------------------------------------------------------
+
+const testCredential = accounts.TokenPrefix + "0123456789abcdef.a-secret" //nolint:gosec // test fixture, not a real credential
+
+// fakeVerifier stands in for *accounts.TokenService. It records every
+// credential it was asked about, so a test can assert not just the outcome but
+// *what reached the verifier at all*.
+//
+// It models the real service's contract: one indistinguishable error for every
+// failure, and the Account read fresh on each call (acct is read at call time,
+// so a test can mutate it between requests and see the change take effect).
 type fakeVerifier struct {
 	acct  accounts.Account
 	valid string
+	err   error
 	seen  []string
 }
 
 func (f *fakeVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
 	f.seen = append(f.seen, credential)
+	if f.err != nil {
+		return accounts.Account{}, accounts.APIToken{}, f.err
+	}
 	if credential != f.valid {
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
+	if !f.acct.Enabled {
+		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
+	}
 	return f.acct, accounts.APIToken{ID: "tok-1", AccountID: f.acct.ID}, nil
+}
+
+// capabilityPrincipal is the flattened Principal a handler saw.
+type capabilityPrincipal struct{ ID, Name, Role string }
+
+// authRequest drives one request through the middleware and returns the status
+// plus the Principal the handler saw (zero value if it was never reached).
+func authRequest(t *testing.T, a *Authenticator, credential string) (int, capabilityPrincipal) {
+	t.Helper()
+	var seen capabilityPrincipal
+	h := a.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		p, ok := PrincipalFromContext(r.Context())
+		if ok {
+			seen = capabilityPrincipal{ID: p.AccountID, Name: p.Account, Role: p.Role}
+		}
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	if credential != "" {
+		req.Header.Set("Authorization", "Bearer "+credential)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code, seen
+}
+
+func storedFoundingAdmin() accounts.Account {
+	return accounts.Account{
+		ID:      "acct-founding",
+		Name:    accounts.FoundingAdminName,
+		Kind:    accounts.KindHuman,
+		Role:    accounts.RoleAdmin,
+		Enabled: true,
+	}
 }
 
 func operatorAccount() accounts.Account {
@@ -35,16 +87,18 @@ func operatorAccount() accounts.Account {
 	}
 }
 
-const testAPIToken = accounts.TokenPrefix + "0123456789abcdef.a-secret" //nolint:gosec // test fixture, not a real credential
+// -----------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------
 
-// A valid API Token authenticates as its Account, with that Account's ID and
-// current role — the same Principal shape the seeded credential produces, so
-// every surface downstream is unaware of which credential kind was presented.
+// A valid API Token authenticates as its Account, carrying the stored ID and
+// the role that Account holds right now — not a hardcoded identity, and not a
+// role captured when the token was minted.
 func TestAuthenticator_APITokenResolvesToItsAccount(t *testing.T) {
-	v := &fakeVerifier{acct: operatorAccount(), valid: testAPIToken}
-	a := NewAuthenticator(digestOf(t, testCredential), WithAPITokens(v))
+	v := &fakeVerifier{acct: operatorAccount(), valid: testCredential}
+	a := NewAuthenticator(v)
 
-	code, seen := authRequest(t, a, testAPIToken)
+	code, seen := authRequest(t, a, testCredential)
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
@@ -53,94 +107,112 @@ func TestAuthenticator_APITokenResolvesToItsAccount(t *testing.T) {
 	}
 }
 
-// A rejected token gets the same generic 401 as everything else, and the
-// handler is never reached.
-func TestAuthenticator_InvalidAPITokenIsRefused(t *testing.T) {
-	v := &fakeVerifier{acct: operatorAccount(), valid: testAPIToken}
-	a := NewAuthenticator(digestOf(t, testCredential), WithAPITokens(v))
+// The founding admin is an Account like any other on this path: its bootstrap
+// token resolves to the stored row, so audit attributes it by ID and current
+// role rather than as a special case.
+func TestAuthenticator_BootstrapTokenResolvesToStoredFoundingAdmin(t *testing.T) {
+	a := NewAuthenticator(&fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential})
 
-	code, seen := authRequest(t, a, accounts.TokenPrefix+"deadbeef.wrong")
-	if code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", code)
+	code, seen := authRequest(t, a, testCredential)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", code)
 	}
-	if seen != (capabilityPrincipal{}) {
-		t.Errorf("handler saw principal %+v for a refused credential", seen)
-	}
-}
-
-// Fail closed: without a verifier wired, a token-shaped credential is refused
-// outright rather than falling through to the seeded comparison. A deployment
-// that cannot check tokens must not accept things shaped like them.
-func TestAuthenticator_TokenShapedCredentialWithoutVerifierIsRefused(t *testing.T) {
-	a := NewAuthenticator(digestOf(t, testCredential))
-
-	if code, _ := authRequest(t, a, testAPIToken); code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", code)
-	}
-	// The seeded path is untouched by the token routing.
-	if code, _ := authRequest(t, a, testCredential); code != http.StatusOK {
-		t.Errorf("seeded credential status = %d, want 200", code)
+	if seen.ID != "acct-founding" || seen.Name != accounts.FoundingAdminName || seen.Role != string(accounts.RoleAdmin) {
+		t.Errorf("principal = %+v, want the stored founding admin as admin", seen)
 	}
 }
 
-// The two credential kinds are routed by prefix, never tried in turn: a
-// non-token credential must never reach the verifier, and a token-shaped one
-// must never be compared against the seeded digest.
-//
-// This is what keeps a failure's cost from depending on which check rejected
-// it, and stops a near-miss on one kind being scored against the other. The
-// documented consequence — a seeded credential beginning with `glp_` never
-// authenticates — is asserted here so the constraint is visible rather than
-// discovered in production.
-func TestAuthenticator_CredentialKindsAreRoutedNotTried(t *testing.T) {
-	v := &fakeVerifier{acct: operatorAccount(), valid: testAPIToken}
-	a := NewAuthenticator(digestOf(t, testCredential), WithAPITokens(v))
+// A role change takes effect on the next request: the role is read through the
+// verifier at authentication time, never cached in the Authenticator.
+func TestAuthenticator_RoleChangeTakesEffectImmediately(t *testing.T) {
+	v := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	a := NewAuthenticator(v)
 
-	if code, _ := authRequest(t, a, testCredential); code != http.StatusOK {
-		t.Fatalf("seeded credential status = %d, want 200", code)
+	if _, seen := authRequest(t, a, testCredential); seen.Role != string(accounts.RoleAdmin) {
+		t.Fatalf("initial role = %q, want admin", seen.Role)
+	}
+
+	v.acct.Role = accounts.RoleViewer // demoted out from under the process
+	_, seen := authRequest(t, a, testCredential)
+	if seen.Role != string(accounts.RoleViewer) {
+		t.Errorf("role after demotion = %q, want viewer without a restart", seen.Role)
+	}
+}
+
+// Every failure mode produces the same generic 401 and never reaches the
+// handler, so the boundary is not an oracle telling a caller which part of
+// their credential was wrong — or that it was ever real.
+func TestAuthenticator_EveryFailureIsTheSameGeneric401(t *testing.T) {
+	valid := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	disabledAcct := storedFoundingAdmin()
+	disabledAcct.Enabled = false
+
+	cases := []struct {
+		label      string
+		verifier   *fakeVerifier
+		credential string
+	}{
+		{"no credential", valid, ""},
+		{"wrong credential", valid, accounts.TokenPrefix + "deadbeef.wrong"},
+		{"not token-shaped", valid, "not-a-token"},
+		{"disabled account", &fakeVerifier{acct: disabledAcct, valid: testCredential}, testCredential},
+		{"store unreadable", &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential, err: errors.New("db down")}, testCredential},
+	}
+
+	bodies := make(map[string]bool)
+	for _, c := range cases {
+		a := NewAuthenticator(c.verifier)
+		var seen capabilityPrincipal
+		h := a.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+			p, _ := PrincipalFromContext(r.Context())
+			seen = capabilityPrincipal{ID: p.AccountID, Name: p.Account, Role: p.Role}
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+		if c.credential != "" {
+			req.Header.Set("Authorization", "Bearer "+c.credential)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("[%s] status = %d, want 401", c.label, rec.Code)
+		}
+		if seen != (capabilityPrincipal{}) {
+			t.Errorf("[%s] handler was reached with %+v", c.label, seen)
+		}
+		if rec.Header().Get("WWW-Authenticate") != "Bearer" {
+			t.Errorf("[%s] missing WWW-Authenticate: Bearer", c.label)
+		}
+		bodies[rec.Body.String()] = true
+	}
+
+	if len(bodies) != 1 {
+		t.Errorf("failure bodies differ across cases (%v); every rejection must be byte-identical", bodies)
+	}
+}
+
+// A malformed Authorization header never reaches the verifier at all — there
+// is nothing to check, and consulting the store for it would let an
+// unauthenticated caller drive store reads.
+func TestAuthenticator_MalformedHeaderNeverReachesTheVerifier(t *testing.T) {
+	v := &fakeVerifier{acct: storedFoundingAdmin(), valid: testCredential}
+	a := NewAuthenticator(v)
+
+	for _, header := range []string{"", "Basic dXNlcjpwYXNz", "Bearer", "Bearer ", "bearer " + testCredential} {
+		req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+		if header != "" {
+			req.Header.Set("Authorization", header)
+		}
+		rec := httptest.NewRecorder()
+		a.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Errorf("handler reached for header %q", header)
+		})).ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("header %q: status = %d, want 401", header, rec.Code)
+		}
 	}
 	if len(v.seen) != 0 {
-		t.Errorf("the verifier was consulted for a non-token credential: %v", v.seen)
+		t.Errorf("the verifier was consulted for malformed headers: %v", v.seen)
 	}
-
-	if code, _ := authRequest(t, a, testAPIToken); code != http.StatusOK {
-		t.Fatalf("api token status = %d, want 200", code)
-	}
-	if len(v.seen) != 1 || v.seen[0] != testAPIToken {
-		t.Errorf("verifier saw %v, want exactly the presented token", v.seen)
-	}
-
-	// A seeded credential that happens to be token-shaped is refused, because
-	// it is only ever routed to the verifier.
-	tokenShapedSeed := accounts.TokenPrefix + "seeded-credential" //nolint:gosec // test fixture
-	b := NewAuthenticator(digestOf(t, tokenShapedSeed), WithAPITokens(v))
-	if code, _ := authRequest(t, b, tokenShapedSeed); code != http.StatusUnauthorized {
-		t.Errorf("token-shaped seeded credential status = %d, want 401 (documented constraint)", code)
-	}
-}
-
-// An API Token for a disabled Account is refused. The authenticator does not
-// re-check Enabled itself — TokenService.Verify already does, and duplicating
-// the check would create two places for the rule to drift. This pins that the
-// composed behaviour is correct.
-func TestAuthenticator_APITokenForDisabledAccountIsRefused(t *testing.T) {
-	disabled := operatorAccount()
-	disabled.Enabled = false
-	v := &disablingVerifier{acct: disabled}
-	a := NewAuthenticator(digestOf(t, testCredential), WithAPITokens(v))
-
-	if code, _ := authRequest(t, a, testAPIToken); code != http.StatusUnauthorized {
-		t.Errorf("status = %d, want 401", code)
-	}
-}
-
-// disablingVerifier models a real TokenService: it refuses a disabled
-// Account's token with the same generic error as any other failure.
-type disablingVerifier struct{ acct accounts.Account }
-
-func (d *disablingVerifier) Verify(context.Context, string) (accounts.Account, accounts.APIToken, error) {
-	if !d.acct.Enabled {
-		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
-	}
-	return d.acct, accounts.APIToken{}, nil
 }

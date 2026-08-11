@@ -6,9 +6,9 @@
 // succeeding/failing, a Tunnel tearing down, dispatch refusing) is observed,
 // not just the HTTP response code.
 //
-// relaytest.ControlCredential must match the plaintext
-// relaytest.WriteCredentialHashFile hashes into the credential file used
-// here.
+// Authentication is the founding admin's bootstrap credential, minted from the
+// running Relay's own store by bootstrapCredential (harness_test.go) — the
+// in-process equivalent of `relay bootstrap-token` (#298, ADR-0023).
 package main
 
 import (
@@ -38,13 +38,16 @@ import (
 // listener (the Control API needs a real net.Listener; bufconn only wraps
 // gRPC's dialer). Returns the bufconn listener, deps, the control-plane base
 // URL, and an *http.Client trusting the Relay's own CA.
-func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *http.Client) {
+//
+// The returned credential is the founding admin's bootstrap token — the same
+// thing `relay bootstrap-token` prints — since #298 left no shared credential
+// to configure.
+func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *http.Client, string) {
 	t.Helper()
 
 	cfg := baseTestConfig(t)
 	cfg.ControlEnabled = true
 	cfg.ControlAddr = "127.0.0.1:0"
-	cfg.ControlCredentialHashFile = relaytest.WriteCredentialHashFile(t)
 
 	srv, deps, err := newServer(cfg)
 	if err != nil {
@@ -64,7 +67,7 @@ func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}},
 	}
 
-	return nodeLis, deps, base, client
+	return nodeLis, deps, base, client, bootstrapCredential(t, deps)
 }
 
 // controlAPIRequest issues a request against the control-plane API with the
@@ -110,16 +113,16 @@ type mintTokenAPIResponse struct {
 }
 
 // TestControlAPI_EnrollmentTokenLifecycle drives ROADMAP acceptance
-// criterion 1/4: the seeded credential mints a scoped Enrollment Token over
+// criterion 1/4: the bootstrap credential mints a scoped Enrollment Token over
 // /api/v1; a daemon enrolls with it; a revoked token can no longer enroll.
 func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	nodeLis, deps, base, client := startControlAPIServer(t)
+	nodeLis, deps, base, client, credential := startControlAPIServer(t)
 
 	mintResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/enrollment-tokens",
-		relaytest.ControlCredential, map[string]any{
+		credential, map[string]any{
 			"scope":       []string{"relay:env=prod"},
 			"ttl_seconds": 3600,
 		})
@@ -152,7 +155,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	}
 
 	revokeResp := controlAPIRequest(t, client, http.MethodDelete,
-		base+"/api/v1/enrollment-tokens/"+minted.ID, relaytest.ControlCredential, nil)
+		base+"/api/v1/enrollment-tokens/"+minted.ID, credential, nil)
 	defer revokeResp.Body.Close() //nolint:errcheck
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -180,7 +183,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	nodeLis, deps, base, client := startControlAPIServer(t)
+	nodeLis, deps, base, client, credential := startControlAPIServer(t)
 
 	// Seed an Enrollment Token via the test-only deps.tokens path (mirrors
 	// lifecycle_e2e_test.go) — this test's focus is node revoke, not mint.
@@ -218,7 +221,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	}
 
 	revokeResp := controlAPIRequest(t, client, http.MethodPost,
-		base+"/api/v1/nodes/"+nodeID+"/revoke", relaytest.ControlCredential, nil)
+		base+"/api/v1/nodes/"+nodeID+"/revoke", credential, nil)
 	defer revokeResp.Body.Close() //nolint:errcheck
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -261,9 +264,9 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	_, deps, base, client := startControlAPIServer(t)
+	_, deps, base, client, credential := startControlAPIServer(t)
 
-	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", relaytest.ControlCredential, nil)
+	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", credential, nil)
 	defer engageResp.Body.Close() //nolint:errcheck
 	if engageResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze engage status = %d, want %d", engageResp.StatusCode, http.StatusOK)
@@ -292,7 +295,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	// Release without a reason must be refused (ADR-0013 asymmetric
 	// activation) and the Freeze must remain engaged.
 	noReasonResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
-		relaytest.ControlCredential, map[string]string{"reason": ""})
+		credential, map[string]string{"reason": ""})
 	defer noReasonResp.Body.Close() //nolint:errcheck
 	if noReasonResp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("freeze release without reason status = %d, want %d", noReasonResp.StatusCode, http.StatusBadRequest)
@@ -302,7 +305,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	}
 
 	releaseResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/release",
-		relaytest.ControlCredential, map[string]string{"reason": "incident resolved"})
+		credential, map[string]string{"reason": "incident resolved"})
 	defer releaseResp.Body.Close() //nolint:errcheck
 	if releaseResp.StatusCode != http.StatusOK {
 		t.Fatalf("freeze release status = %d, want %d", releaseResp.StatusCode, http.StatusOK)
@@ -343,7 +346,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 // requests without the credential are refused on every /api/v1 route added
 // by this issue.
 func TestControlAPI_RequiresCredential(t *testing.T) {
-	_, _, base, client := startControlAPIServer(t)
+	_, _, base, client, _ := startControlAPIServer(t)
 
 	cases := []struct {
 		method string

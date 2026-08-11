@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,8 +16,7 @@ import (
 // 10, DoD: "unauthenticated /metrics request is refused (401)").
 func TestMetricsSurface_RequiresCredential(t *testing.T) {
 	const token = "s3cr3t-metrics-test-credential" //nolint:gosec // test fixture, not a real credential
-	sum := sha256.Sum256([]byte(token))
-	authn := controlplane.NewAuthenticator(sum[:])
+	authn := controlplane.NewAuthenticator(staticVerifier{credential: token})
 
 	mux := http.NewServeMux()
 	sd := surfaceDeps{metrics: metrics.New(metrics.GaugeSources{

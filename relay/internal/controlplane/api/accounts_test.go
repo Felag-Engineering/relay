@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -24,8 +23,8 @@ import (
 //
 // No fakes here on purpose. These tests are about who may do what across the
 // authentication boundary, and a fake authenticator or a fake token verifier
-// would be testing the fake. The seeded credential and Account API Tokens both
-// go through exactly the wiring cmd/relay builds.
+// would be testing the fake: the bootstrap credential and every other Account
+// token go through exactly the wiring cmd/relay builds.
 // -----------------------------------------------------------------------
 
 type identityFixture struct {
@@ -34,6 +33,10 @@ type identityFixture struct {
 	tokens  *accounts.TokenService
 	auditor *fakeAuditor
 	founder accounts.Account
+	// bootstrap is the founding admin's credential — the equivalent of
+	// `relay bootstrap-token` output, and the only way in before any other
+	// Account exists.
+	bootstrap string
 }
 
 func newIdentityFixture(t *testing.T) *identityFixture {
@@ -54,10 +57,15 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 	auditor := &fakeAuditor{}
 
-	sum := sha256.Sum256([]byte(testCredential))
-	authn := controlplane.NewAuthenticator(sum[:],
-		controlplane.WithAccounts(st.Accounts()),
-		controlplane.WithAPITokens(tokenSvc))
+	// The founding admin's bootstrap credential, minted exactly as
+	// `relay bootstrap-token` does — so these tests drive the real credential
+	// path end to end rather than a fixture that stands in for one.
+	_, bootstrap, err := tokenSvc.Mint(ctx, founder.ID, "bootstrap", time.Hour)
+	if err != nil {
+		t.Fatalf("mint bootstrap token: %v", err)
+	}
+
+	authn := controlplane.NewAuthenticator(tokenSvc)
 
 	mux := http.NewServeMux()
 	Register(mux, Deps{
@@ -68,16 +76,17 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	})
 
 	return &identityFixture{
-		handler: authn.Middleware(mux),
-		store:   st,
-		tokens:  tokenSvc,
-		auditor: auditor,
-		founder: founder,
+		handler:   authn.Middleware(mux),
+		store:     st,
+		tokens:    tokenSvc,
+		auditor:   auditor,
+		founder:   founder,
+		bootstrap: bootstrap.Reveal(),
 	}
 }
 
 // call issues a request with an explicit credential, so a test can present the
-// seeded credential, an Account token, or a bad one.
+// bootstrap credential, another Account's token, or a bad one.
 func (f *identityFixture) call(t *testing.T, credential, method, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
 	var reader io.Reader
@@ -140,7 +149,7 @@ func TestIdentityAPI_AdminCreatesAccountAndMintsTokenEndToEnd(t *testing.T) {
 	f := newIdentityFixture(t)
 
 	// 1. Create the Account with the seeded (founding admin) credential.
-	rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts", createAccountRequest{
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts", createAccountRequest{
 		Name: "gleipnir", Kind: "machine", Role: "operator",
 	})
 	if rec.Code != http.StatusCreated {
@@ -154,7 +163,7 @@ func TestIdentityAPI_AdminCreatesAccountAndMintsTokenEndToEnd(t *testing.T) {
 
 	// 2. Mint it a credential.
 	ttl := int64(3600)
-	rec = f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+created.ID+"/tokens",
+	rec = f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+created.ID+"/tokens",
 		mintAPITokenRequest{Name: "ci-deploy", TTLSeconds: &ttl})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("mint token: status %d, body %s", rec.Code, rec.Body.String())
@@ -198,7 +207,7 @@ func TestIdentityAPI_PlaintextAppearsOnlyInTheMintResponse(t *testing.T) {
 	acct, _ := f.mintFor(t, "ci", accounts.RoleViewer)
 
 	ttl := int64(0)
-	rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
 		mintAPITokenRequest{Name: "second", TTLSeconds: &ttl})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("mint: status %d, body %s", rec.Code, rec.Body.String())
@@ -207,7 +216,7 @@ func TestIdentityAPI_PlaintextAppearsOnlyInTheMintResponse(t *testing.T) {
 	decodeInto(t, rec, &minted)
 	secret := minted.Token
 
-	rec = f.call(t, testCredential, http.MethodGet, "/api/v1/accounts/"+acct.ID+"/tokens", nil)
+	rec = f.call(t, f.bootstrap, http.MethodGet, "/api/v1/accounts/"+acct.ID+"/tokens", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list tokens: status %d", rec.Code)
 	}
@@ -316,7 +325,7 @@ func TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess(t *testing
 	f := newIdentityFixture(t)
 
 	// An admin Account's token drives the identity endpoints exactly as the
-	// seeded credential does.
+	// bootstrap credential does.
 	_, credential := f.mintFor(t, "ops", accounts.RoleAdmin)
 	if rec := f.call(t, credential, http.MethodGet, "/api/v1/accounts", nil); rec.Code != http.StatusOK {
 		t.Fatalf("admin token list: status %d, body %s", rec.Code, rec.Body.String())
@@ -337,7 +346,7 @@ func TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess(t *testing
 	}
 
 	// The seeded founding-admin path is unaffected by any of it.
-	if rec := f.call(t, testCredential, http.MethodGet, "/api/v1/accounts", nil); rec.Code != http.StatusOK {
+	if rec := f.call(t, f.bootstrap, http.MethodGet, "/api/v1/accounts", nil); rec.Code != http.StatusOK {
 		t.Fatalf("founding admin after revoke: status %d, body %s", rec.Code, rec.Body.String())
 	}
 }
@@ -352,7 +361,7 @@ func TestIdentityAPI_DisablingAnAccountCutsItsTokensOff(t *testing.T) {
 		t.Fatalf("before disable: status %d", rec.Code)
 	}
 
-	rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/disable", nil)
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/disable", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable: status %d, body %s", rec.Code, rec.Body.String())
 	}
@@ -368,7 +377,7 @@ func TestIdentityAPI_DisablingAnAccountCutsItsTokensOff(t *testing.T) {
 
 	// Re-enabling restores it: disablement is an off-switch on the identity,
 	// not a destruction of its credentials.
-	if rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/enable", nil); rec.Code != http.StatusOK {
+	if rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/enable", nil); rec.Code != http.StatusOK {
 		t.Fatalf("enable: status %d", rec.Code)
 	}
 	if rec := f.call(t, credential, http.MethodGet, "/api/v1/accounts", nil); rec.Code != http.StatusOK {
@@ -382,7 +391,7 @@ func TestIdentityAPI_BadCredentialsAreIndistinguishable(t *testing.T) {
 	f := newIdentityFixture(t)
 
 	for _, c := range []struct{ label, credential string }{
-		{"wrong seeded credential", "not-the-credential"},
+		{"not a credential at all", "not-the-credential"},
 		{"token-shaped but unknown", accounts.TokenPrefix + "0123456789abcdef.nonsense"},
 		{"token prefix only", accounts.TokenPrefix},
 		{"empty-ish", " "},
@@ -424,7 +433,7 @@ func TestIdentityAPI_SelfDisableAndSelfRoleAreRefused(t *testing.T) {
 
 	// Another admin can still do it — this is a lockout guard, not a rule that
 	// admins are undemotable.
-	if rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+self+"/disable", nil); rec.Code != http.StatusOK {
+	if rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+self+"/disable", nil); rec.Code != http.StatusOK {
 		t.Errorf("another admin disabling it: status %d, want 200", rec.Code)
 	}
 }
@@ -460,7 +469,7 @@ func TestIdentityAPI_ErrorMapping(t *testing.T) {
 		{"revoke unknown token", http.MethodDelete, "/api/v1/api-tokens/nope", nil, http.StatusNotFound},
 	}
 	for _, c := range cases {
-		rec := f.call(t, testCredential, c.method, c.path, c.body)
+		rec := f.call(t, f.bootstrap, c.method, c.path, c.body)
 		if rec.Code != c.want {
 			t.Errorf("[%s] status %d, want %d; body %s", c.label, rec.Code, c.want, rec.Body.String())
 		}
@@ -475,27 +484,27 @@ func TestIdentityAPI_MintRequiresExplicitTTL(t *testing.T) {
 	acct, _ := f.mintFor(t, "ci", accounts.RoleViewer)
 	path := "/api/v1/accounts/" + acct.ID + "/tokens"
 
-	rec := f.call(t, testCredential, http.MethodPost, path, map[string]any{"name": "no-ttl"})
+	rec := f.call(t, f.bootstrap, http.MethodPost, path, map[string]any{"name": "no-ttl"})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("absent ttl_seconds: status %d, want 400; body %s", rec.Code, rec.Body.String())
 	}
 
 	negative := int64(-1)
-	rec = f.call(t, testCredential, http.MethodPost, path,
+	rec = f.call(t, f.bootstrap, http.MethodPost, path,
 		mintAPITokenRequest{Name: "negative", TTLSeconds: &negative})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("negative ttl_seconds: status %d, want 400", rec.Code)
 	}
 
 	huge := int64(maxTTLSeconds + 1)
-	rec = f.call(t, testCredential, http.MethodPost, path,
+	rec = f.call(t, f.bootstrap, http.MethodPost, path,
 		mintAPITokenRequest{Name: "huge", TTLSeconds: &huge})
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("oversized ttl_seconds: status %d, want 400", rec.Code)
 	}
 
 	zero := int64(0)
-	rec = f.call(t, testCredential, http.MethodPost, path,
+	rec = f.call(t, f.bootstrap, http.MethodPost, path,
 		mintAPITokenRequest{Name: "forever", TTLSeconds: &zero})
 	if rec.Code != http.StatusCreated {
 		t.Errorf("explicit zero ttl_seconds: status %d, want 201; body %s", rec.Code, rec.Body.String())
@@ -512,7 +521,7 @@ func TestIdentityAPI_MintForDisabledAccountIsRefused(t *testing.T) {
 	}
 
 	ttl := int64(60)
-	rec := f.call(t, testCredential, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
+	rec := f.call(t, f.bootstrap, http.MethodPost, "/api/v1/accounts/"+acct.ID+"/tokens",
 		mintAPITokenRequest{Name: "x", TTLSeconds: &ttl})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("mint for disabled account: status %d, want 409; body %s", rec.Code, rec.Body.String())
@@ -531,7 +540,7 @@ func TestIdentityAPI_RevokeIsIdempotent(t *testing.T) {
 	}
 	path := "/api/v1/api-tokens/" + list[0].ID
 	for i := 0; i < 2; i++ {
-		if rec := f.call(t, testCredential, http.MethodDelete, path, nil); rec.Code != http.StatusNoContent {
+		if rec := f.call(t, f.bootstrap, http.MethodDelete, path, nil); rec.Code != http.StatusNoContent {
 			t.Fatalf("revoke #%d: status %d", i+1, rec.Code)
 		}
 	}

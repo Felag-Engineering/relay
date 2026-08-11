@@ -1,12 +1,18 @@
+// Package controlplane is the Relay's control-plane HTTP surface: MCP (#117)
+// and the Control API (#116) mount onto the one *Server this package exposes,
+// behind a single shared bearer-auth Middleware. This is the only control path
+// — never build a parallel one (ADR-0009/0010, CLAUDE.md invariant 10).
+//
+// Every request on this listener authenticates as an **Account**, presenting a
+// per-Account API Token (#296). The Relay stores only each token's SHA-256
+// hash; a presented credential is never logged, echoed in an error, or
+// otherwise persisted (ADR-0023).
 package controlplane
 
 import (
 	"context"
-	"crypto/sha256"
-	"crypto/subtle"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -16,35 +22,26 @@ import (
 const bearerPrefix = "Bearer "
 
 // genericAuthError is the body returned on every authentication failure. It is
-// identical for a missing header, a malformed header, and a wrong credential so
-// a caller cannot distinguish "no token" from "wrong token" (no oracle), and it
-// never contains the presented value.
+// identical for a missing header, a malformed header, an unknown token, a
+// revoked or expired one, and a disabled Account, so a caller cannot
+// distinguish any of them (no oracle), and it never contains the presented
+// value.
 const genericAuthError = "unauthorized"
 
 // principalContextKey is an unexported type so no other package can collide
 // with or forge this context key (standard Go context-key idiom).
 type principalContextKey struct{}
 
-// FoundingAdmin returns the acting identity the seeded control-plane
-// credential authenticates as when no Account store is wired (tests, and any
-// deployment predating the accounts table).
+// FoundingAdmin returns the founding admin's Principal shape: the identity the
+// bootstrap credential authenticates as.
 //
-// With a store wired (WithAccounts), the credential resolves to the **stored**
-// founding admin Account instead — same name, but a real row with a real ID,
-// a mutable role, and an off-switch. This fallback keeps the constructor's
-// existing call sites working; it is not the production path.
+// In production the acting Principal is always projected from the **stored**
+// Account, so it carries a real ID, the current role, and the Account's
+// off-switch. This function is the name/role shape that projection produces
+// for the founding admin, and exists so tests can state the expected audit
+// attribution without reaching into a store.
 func FoundingAdmin() capability.Principal {
 	return capability.Principal{Account: accounts.FoundingAdminName, Role: string(accounts.RoleAdmin)}
-}
-
-// AccountReader is the narrow view of the Account store the authenticator
-// needs: resolve a name, and record that it authenticated. Deliberately not
-// accounts.Repository — an authenticator that could create or re-role an
-// Account is a privilege-escalation surface sitting on the unauthenticated
-// edge of the process.
-type AccountReader interface {
-	GetByName(ctx context.Context, name string) (accounts.Account, error)
-	TouchLastSeen(ctx context.Context, id string, at time.Time) error
 }
 
 // TokenVerifier authenticates a presented API Token credential and returns the
@@ -57,38 +54,9 @@ type TokenVerifier interface {
 	Verify(ctx context.Context, credential string) (accounts.Account, accounts.APIToken, error)
 }
 
-// AuthOption configures an Authenticator.
-type AuthOption func(*Authenticator)
-
-// WithAccounts resolves the seeded credential to its stored Account (#295).
-//
-// Two consequences, both acceptance criteria of v0.3.0 [1/6]:
-//   - audit attributes the credential to the founding admin **Account**, with
-//     its ID and its current role, rather than to a hardcoded string;
-//   - a **disabled** Account authenticates nowhere: the credential is refused
-//     with the same generic 401 as a wrong credential, so disabling the
-//     identity is immediate and does not wait for a credential rotation.
-//
-// A role change likewise takes effect on the next request, because the role is
-// read from the store at authentication time rather than baked in at startup.
-func WithAccounts(r AccountReader) AuthOption {
-	return func(a *Authenticator) { a.accounts = r }
-}
-
-// WithAPITokens lets the control plane authenticate per-Account API Tokens
-// (#296) alongside the config-seeded credential (#297).
-//
-// Without it, a `glp_`-prefixed credential is refused outright rather than
-// falling through to the seeded comparison — fail closed: a deployment that
-// has not wired a verifier has no business accepting something shaped like a
-// token it cannot check.
-func WithAPITokens(v TokenVerifier) AuthOption {
-	return func(a *Authenticator) { a.tokens = v }
-}
-
 // PrincipalFromContext returns the Principal that Middleware injected into ctx
-// after successful authentication. It is the seam #116 (Control API) and #117
-// (MCP) read to pass a Principal into capability.Service.Run for audit
+// after successful authentication. It is the seam the Control API and the MCP
+// surface read to pass a Principal into capability.Service.Run for audit
 // attribution. ok is false if ctx was never authenticated by Middleware.
 func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 	p, ok := ctx.Value(principalContextKey{}).(capability.Principal)
@@ -96,33 +64,33 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 }
 
 // Authenticator validates the bearer credential presented on the control
-// plane. It holds only the credential's SHA-256 digest — never plaintext — so
-// nothing that reaches into an Authenticator (including a future audit sink)
-// can recover or leak the credential itself.
+// plane.
+//
+// Since #298 there is exactly one kind of credential: a per-Account API Token
+// (#296). The config-seeded shared credential it replaced is gone — not
+// deprecated, removed — so there is no second comparison path, no digest held
+// in memory, and no identity that several callers share. Every authenticated
+// request now attributes to exactly one Account, and every credential can be
+// revoked without affecting any other caller (ADR-0023).
+//
+// The Authenticator holds no secret material of any kind. It delegates to a
+// TokenVerifier, which itself compares only hashes.
 type Authenticator struct {
-	want []byte // sha256 digest of the valid credential; never plaintext
-
-	// accounts resolves the credential to its stored Account. Nil falls back
-	// to the static FoundingAdmin identity (see WithAccounts).
-	accounts AccountReader
-
-	// tokens verifies per-Account API Tokens. Nil refuses every credential
-	// that looks like one (see WithAPITokens).
 	tokens TokenVerifier
-
-	// now is the clock for last-seen stamping; overridable in tests.
-	now func() time.Time
 }
 
-// NewAuthenticator constructs an Authenticator that accepts only credentials
-// whose SHA-256 digest equals digest (typically loaded via
-// LoadCredentialHashFile / ParseCredentialHash).
-func NewAuthenticator(digest []byte, opts ...AuthOption) *Authenticator {
-	a := &Authenticator{want: digest, now: time.Now}
-	for _, o := range opts {
-		o(a)
+// NewAuthenticator constructs an Authenticator over the given verifier.
+//
+// The verifier is required, not optional: an Authenticator without one would
+// authenticate nobody, which is fail-closed but useless, and would more likely
+// mean a wiring mistake than an intent. NewAuthenticator panics on a nil
+// verifier — at construction, in the composition root, rather than serving a
+// listener that refuses every request for a reason nobody can see.
+func NewAuthenticator(tokens TokenVerifier) *Authenticator {
+	if tokens == nil {
+		panic("controlplane: NewAuthenticator requires a TokenVerifier")
 	}
-	return a
+	return &Authenticator{tokens: tokens}
 }
 
 // Middleware wraps next so every request must present a valid bearer
@@ -132,7 +100,7 @@ func NewAuthenticator(digest []byte, opts ...AuthOption) *Authenticator {
 // with a WWW-Authenticate: Bearer header and does not call next.
 //
 // The presented credential is never logged or echoed in any response, on
-// either the success or failure path — only digests are ever compared.
+// either the success or failure path — only hashes are ever compared.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := bearerToken(r)
@@ -143,11 +111,11 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 
 		principal, ok := a.authenticate(r.Context(), credential)
 		if !ok {
-			// EVERY failure lands here with the same generic 401: wrong
-			// credential, unknown token, revoked token, expired token,
-			// disabled Account, unreadable store. Distinguishing them would
-			// tell an attacker that a credential is real and only its Account
-			// is switched off.
+			// EVERY failure lands here with the same generic 401: malformed
+			// header, unknown token, wrong secret, revoked token, expired
+			// token, disabled Account, unreadable store. Distinguishing them
+			// would tell an attacker that a credential is real and only its
+			// Account is switched off.
 			unauthorized(w)
 			return
 		}
@@ -159,63 +127,18 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 
 // authenticate turns a presented credential into the acting identity.
 //
-// Two credential kinds share this one boundary (#297): per-Account API Tokens
-// and the config-seeded bootstrap credential. They are routed by prefix, not
-// by trial-and-error — a `glp_`-shaped credential is *only* ever checked
-// against the token verifier, and anything else is *only* ever compared to the
-// seeded digest. Trying both in turn would make every failure's cost depend on
-// which check rejected it, and would let a near-miss on one kind be scored
-// against the other.
-//
-// The consequence to know: a seeded credential whose plaintext begins with
-// `glp_` will never authenticate. That is a deliberate, documented constraint
-// on an operator-chosen bootstrap value with a trivial workaround (choose
-// anything else), and it disappears entirely when the seeded credential
-// retires in #298.
+// The Account is read fresh by the verifier on every call rather than cached
+// here, which is what makes a role change or a disablement take effect on the
+// very next request instead of at the next restart.
 func (a *Authenticator) authenticate(ctx context.Context, credential string) (capability.Principal, bool) {
-	if accounts.LooksLikeAPIToken(credential) {
-		if a.tokens == nil {
-			return capability.Principal{}, false
-		}
-		// TokenService.Verify already refuses a revoked or expired token and a
-		// missing or disabled Account, and collapses every one of those into a
-		// single indistinguishable error. Nothing to re-check here.
-		acct, _, err := a.tokens.Verify(ctx, credential)
-		if err != nil {
-			return capability.Principal{}, false
-		}
-		return principalFromAccount(acct), true
-	}
-
-	if !a.validToken(credential) {
-		return capability.Principal{}, false
-	}
-	return a.resolve(ctx)
-}
-
-// resolve turns a validated credential into the acting identity, reading the
-// Account fresh on every request so a disablement or a role change takes
-// effect immediately rather than at the next restart.
-//
-// ok is false when the Account exists but is disabled, or cannot be read at
-// all — fail closed: an identity the Relay cannot confirm authorizes nothing.
-func (a *Authenticator) resolve(ctx context.Context) (capability.Principal, bool) {
-	if a.accounts == nil {
-		return FoundingAdmin(), true
-	}
-
-	acct, err := a.accounts.GetByName(ctx, accounts.FoundingAdminName)
+	// TokenService.Verify refuses a revoked or expired token and a missing or
+	// disabled Account, and collapses every one of those into a single
+	// indistinguishable error. Nothing to re-check here — a second copy of the
+	// rule is a second place for it to drift.
+	acct, _, err := a.tokens.Verify(ctx, credential)
 	if err != nil {
 		return capability.Principal{}, false
 	}
-	if !acct.Enabled {
-		return capability.Principal{}, false
-	}
-
-	// Best-effort: last-seen is advisory, and the caller has already
-	// authenticated — a write failure here must never fail their request.
-	_ = a.accounts.TouchLastSeen(ctx, acct.ID, a.now())
-
 	return principalFromAccount(acct), true
 }
 
@@ -224,23 +147,14 @@ func (a *Authenticator) resolve(ctx context.Context) (capability.Principal, bool
 //
 // It lives here, at the authentication boundary, rather than in package
 // capability: that package's import allowlist is deliberately narrow (jobs +
-// registry) and #295 is not the change that should widen it. It does not
-// consult Enabled — resolve has already refused a disabled Account before
-// calling this.
+// registry). It does not consult Enabled — the verifier has already refused a
+// disabled Account before this is reached.
 func principalFromAccount(a accounts.Account) capability.Principal {
 	return capability.Principal{
 		AccountID: a.ID,
 		Account:   a.Name,
 		Role:      string(a.Role),
 	}
-}
-
-// validToken reports whether token's SHA-256 digest constant-time-equals the
-// Authenticator's stored digest (mirrors enroll.Service.Validate's secret
-// comparison — see relay/internal/enroll/token.go).
-func (a *Authenticator) validToken(token string) bool {
-	sum := sha256.Sum256([]byte(token))
-	return subtle.ConstantTimeCompare(sum[:], a.want) == 1
 }
 
 // bearerToken extracts the token from a well-formed "Authorization: Bearer

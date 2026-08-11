@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -21,6 +20,8 @@ import (
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -235,10 +236,9 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 	handler := mcp.New(reg, policyCache, vocabCache, opsLister{}, capSvc, results)
 
 	cert := selfSignedCert(t)
-	sum := sha256.Sum256([]byte(testToken))
 	controlSrv := controlplane.New(
 		controlplane.Config{Addr: "127.0.0.1:0", TLSCert: cert},
-		controlplane.NewAuthenticator(sum[:]),
+		controlplane.NewAuthenticator(staticVerifier{credential: testToken}),
 	)
 	controlSrv.Mux().Handle("/mcp", handler)
 
@@ -834,4 +834,22 @@ func TestMCP_RequiresCredential(t *testing.T) {
 	if respOK.StatusCode != http.StatusOK {
 		t.Errorf("valid credential: status = %d, want %d", respOK.StatusCode, http.StatusOK)
 	}
+}
+
+// staticVerifier is a controlplane.TokenVerifier accepting exactly one
+// credential, as the founding admin Account — enough for the MCP surface
+// tests, whose subject is the tool surface rather than the credential path
+// (that is internal/controlplane's and the cmd/relay e2e's job).
+type staticVerifier struct{ credential string }
+
+func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
+	if credential != v.credential {
+		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
+	}
+	return accounts.Account{
+		Name:    accounts.FoundingAdminName,
+		Kind:    accounts.KindHuman,
+		Role:    accounts.RoleAdmin,
+		Enabled: true,
+	}, accounts.APIToken{ID: "tok-test"}, nil
 }
