@@ -16,6 +16,18 @@ import (
 // BearerRoundTripper). session.Close is registered as a t.Cleanup.
 func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSession {
 	t.Helper()
+	session, err := TryConnect(t, base, client)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	return session
+}
+
+// TryConnect is Connect without the fatal: it returns the connection error
+// instead, for tests asserting that a credential is *refused* at the MCP
+// endpoint (a revoked token, a disabled Account, a non-credential).
+func TryConnect(t *testing.T, base string, client *http.Client) (*sdkmcp.ClientSession, error) {
+	t.Helper()
 
 	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "relaytest-client", Version: "0.0.1"}, nil)
 	transport := &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: client}
@@ -24,10 +36,10 @@ func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSessi
 	defer cancel()
 	session, err := c.Connect(ctx, transport, nil)
 	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
+		return nil, err
 	}
 	t.Cleanup(func() { _ = session.Close() })
-	return session
+	return session, nil
 }
 
 // CallTool calls name with args, failing the test on a protocol-level error

@@ -210,9 +210,15 @@ word.
 _Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
 
 **Account**:
-A named identity — human or machine — with a role (`viewer`, `operator`, `admin`), to
-which every credential binds: a human's password or OIDC identity, a machine's API
-Tokens. The AI-agent authenticates as a machine Account. The unit of Relay-side
+A named identity — human or machine — with a role, to which every credential binds: a
+human's password or OIDC identity, a machine's API Tokens. The AI-agent authenticates as
+a machine Account. The three roles are an ordered ladder, each adding to the one below:
+**`viewer`** may read but dispatch nothing; **`operator`** may additionally run
+structured Operations; **`admin`** may additionally use Raw Exec and administer the
+control plane. Raw Exec being admin-only is enforced centrally, in the capability
+layer's Authorizer, so every surface inherits it — it decides who may *ask* for the
+arbitrary-command path, while Node Policy still governs every command that arrives.
+The unit of Relay-side
 authorization and of audit attribution across all three surfaces (ADR-0010). An Account
 is a *durable identity*; a token is a *revocable credential for one* — disabling the
 Account and revoking one of its tokens are different acts with different blast radii.

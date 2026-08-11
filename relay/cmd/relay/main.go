@@ -100,7 +100,7 @@ type appDeps struct {
 	// capability is the Relay's single capability layer (ADR-0009/0010). When
 	// Config.ControlEnabled, newServer wires it with the real Job engine
 	// (capability.WithExecution) over the real mTLS tunnel and the real
-	// staged Authorizer (authz.NewStaged) — this is the "#154 flip": MCP/
+	// role-gated Authorizer (authz.NewRoleGate) — this is the "#154 flip": MCP/
 	// Control API dispatch actually runs on the fleet. When disabled, capSvc
 	// keeps the v0.0.5 default no-op dispatcher/allow-all-by-construction-
 	// unreachable seams (no consumer surface is mounted either), exactly as
@@ -445,7 +445,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// engine remains the sole, last-word verdict on every Task
 		// (ADR-0002/0011) — nothing added here evaluates or mutates Policy;
 		// the blast-radius cap (ADR-0004/0012) and the real, deny-by-default
-		// authz.NewStaged Authorizer (ADR-0010) both run before any
+		// authz.NewRoleGate Authorizer (ADR-0010) both run before any
 		// dispatch; Freeze (ADR-0013) can stop all of it instantly; every
 		// dispatch and refusal is audited (#102). This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
@@ -466,7 +466,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enabledOpts := append([]capability.Option{}, base...)
 		enabledOpts = append(enabledOpts,
 			capability.WithExecution(st.Jobs(), st.Tasks(), router),
-			capability.WithAuthorizer(authz.NewStaged()))
+			capability.WithAuthorizer(authz.NewRoleGate()))
 		capSvc = capability.New(reg, enabledOpts...)
 
 		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
