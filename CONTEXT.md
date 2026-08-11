@@ -238,6 +238,20 @@ once, at mint; there is no recovery, only re-mint plus revoke. Distinct from an
 **Enrollment Token**, which joins Nodes to the fleet and can never call the API.
 _Avoid_: API key, PAT, bearer token (unqualified)
 
+**Attribution**:
+Who an audited action is recorded as coming from, in **two structurally distinct lanes**
+(ADR-0010, `docs/design/approval-and-attribution.md`). The **verified lane** is what the
+Relay authenticated itself — the acting Account, its role at that moment, and the API
+Token presented. The **asserted lane** is what the caller *claimed*: `on_behalf_of` (a
+free-form user or team), a session reference, a change reference, and the W3C
+`traceparent`. Asserted values are bounded, stored verbatim, and **never an authorization
+input** — a jailbroken AI-agent can assert anything and forge nothing. They are still
+worth recording: for an honest orchestrator the asserted lane is the join key back to the
+harness's own session logs, where the literal instruction lives. Keeping the lanes apart
+is load-bearing — blurring them is how an audit trail becomes fiction.
+_Avoid_: "the principal" (for the pair), user id, requester (unqualified — say verified or
+asserted)
+
 **Control API**:
 The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooling and
 machines drive the control plane — both administration and execution. One of the three

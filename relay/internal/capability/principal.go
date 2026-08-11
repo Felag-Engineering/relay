@@ -33,6 +33,16 @@ type Principal struct {
 	Account string
 	// Role is the Account's role at the time it authenticated.
 	Role string
+
+	// TokenID is the public identifier of the API Token presented, empty when
+	// the action did not arrive through a token boundary (a local signal on
+	// the Relay host, or a test fixture).
+	//
+	// It is part of the *verified* lane: which of an Account's credentials
+	// acted is a fact the Relay established, and it is what turns "revoke the
+	// compromised one" into a targeted act rather than revoking all of them
+	// and hoping. Never the secret and never its hash — the ID is safe to log.
+	TokenID string
 }
 
 // Attribution returns the string form of p recorded in audit.Record.Principal.

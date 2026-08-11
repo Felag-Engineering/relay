@@ -181,13 +181,28 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 		slog.Error("control api: generate lifecycle audit record id", "kind", kind, "error", err)
 		return
 	}
+	asserted := capability.AssertionsFromContext(ctx)
 	rec := audit.Record{
 		ID:        id,
 		Timestamp: d.Now(),
 		Kind:      kind,
 		Principal: p.Attribution(),
-		NodeID:    nodeID,
-		Reason:    reason,
+		Attribution: audit.Attribution{
+			Verified: audit.Verified{
+				AccountID:   p.AccountID,
+				AccountName: p.Account,
+				Role:        p.Role,
+				TokenID:     p.TokenID,
+			},
+			Asserted: audit.Asserted{
+				OnBehalfOf:  asserted.OnBehalfOf,
+				Traceparent: asserted.Traceparent,
+				SessionRef:  asserted.SessionRef,
+				ChangeRef:   asserted.ChangeRef,
+			},
+		},
+		NodeID: nodeID,
+		Reason: reason,
 	}
 	if err := d.Audit.Append(ctx, rec); err != nil {
 		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)

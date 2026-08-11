@@ -58,10 +58,22 @@ const (
 // self-contained primitives (no pointers into Job/Task state) so a Record
 // remains meaningful even after the Job or Task it describes is gone.
 type Record struct {
-	ID            string
-	Timestamp     time.Time
-	Kind          string
-	Principal     string
+	ID        string
+	Timestamp time.Time
+	Kind      string
+
+	// Principal is the human-readable "name:role" rendering of the acting
+	// Account, kept because it is what an operator reads at a glance.
+	// Attribution below is the structured form, and is authoritative: query
+	// against it, not against this string.
+	Principal string
+
+	// Attribution carries the verified and asserted identity lanes (#300).
+	// The lanes are structurally distinct here and in the schema — see
+	// attribution.go for why that separation is load-bearing rather than
+	// cosmetic.
+	Attribution Attribution
+
 	Selector      string
 	JobID         string
 	NodeID        string
@@ -106,4 +118,20 @@ type Repository interface {
 	// "which Node" accountability query (CLAUDE.md). Time-range querying is
 	// deferred to the first query surface; no acceptance need yet.
 	ByNode(ctx context.Context, nodeID string) ([]Record, error)
+
+	// ByAccount returns all Records for an Account ID, ordered by Timestamp —
+	// the verified-lane query. It takes the ID rather than the name so the
+	// trail stays queryable across a rename, which is the reason the ID is
+	// recorded at all.
+	ByAccount(ctx context.Context, accountID string) ([]Record, error)
+
+	// ByOnBehalfOf returns all Records carrying an exact asserted OnBehalfOf
+	// value, ordered by Timestamp — the asserted-lane query.
+	//
+	// Deliberately a separate method from ByAccount rather than a shared
+	// "principal" filter: a caller reading this trail must not be able to
+	// confuse "the Relay authenticated this Account" with "someone typed this
+	// string", and two differently-named methods make the lane you are
+	// querying impossible to miss at the call site.
+	ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]Record, error)
 }

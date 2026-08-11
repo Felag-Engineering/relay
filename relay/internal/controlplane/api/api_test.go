@@ -119,6 +119,8 @@ const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //n
 // accounts_test.go use the REAL TokenService over a real store; this fake
 // exists only so the pre-existing lifecycle-route tests keep their focus on
 // the routes rather than on minting a credential first.
+const testTokenID = "tok-test"
+
 type staticVerifier struct{ credential string }
 
 func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
@@ -130,7 +132,16 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
 		Enabled: true,
-	}, accounts.APIToken{ID: "tok-test"}, nil
+	}, accounts.APIToken{ID: testTokenID}, nil
+}
+
+// testPrincipal is the acting identity staticVerifier produces, including the
+// TokenID the verified audit lane records (#300): which credential acted is
+// part of the identity, not decoration on it.
+func testPrincipal() capability.Principal {
+	p := controlplane.FoundingAdmin()
+	p.TokenID = testTokenID
+	return p
 }
 
 // newTestHandler builds an http.Handler that mounts Register(mux, d) behind
@@ -392,8 +403,8 @@ func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 	if !engageResp.Engaged {
 		t.Error("engage response Engaged = false, want true")
 	}
-	if len(fz.engageCalls) != 1 || fz.engageCalls[0] != controlplane.FoundingAdmin() {
-		t.Errorf("EngageFreeze calls = %v, want exactly [%v]", fz.engageCalls, controlplane.FoundingAdmin())
+	if len(fz.engageCalls) != 1 || fz.engageCalls[0] != testPrincipal() {
+		t.Errorf("EngageFreeze calls = %v, want exactly [%v]", fz.engageCalls, testPrincipal())
 	}
 
 	noReasonRec := do(t, h, http.MethodPost, "/api/v1/freeze/release", freezeReleaseRequest{Reason: ""})
@@ -423,8 +434,8 @@ func TestHandleFreeze_EngageAndRelease(t *testing.T) {
 	if len(fz.releaseCalls) != 1 {
 		t.Fatalf("ReleaseFreeze calls = %d, want 1", len(fz.releaseCalls))
 	}
-	if fz.releaseCalls[0].Principal != controlplane.FoundingAdmin() {
-		t.Errorf("ReleaseFreeze principal = %v, want %v", fz.releaseCalls[0].Principal, controlplane.FoundingAdmin())
+	if fz.releaseCalls[0].Principal != testPrincipal() {
+		t.Errorf("ReleaseFreeze principal = %v, want %v", fz.releaseCalls[0].Principal, testPrincipal())
 	}
 	if fz.releaseCalls[0].Reason != "incident resolved" {
 		t.Errorf("ReleaseFreeze reason = %q, want %q", fz.releaseCalls[0].Reason, "incident resolved")
