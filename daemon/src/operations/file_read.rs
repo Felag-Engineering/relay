@@ -19,6 +19,7 @@
 //! `OUTCOME_DENIED_BY_POLICY`), which is a separate Policy-engine concern.
 
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
 use crate::gen::{Outcome, TaskResult};
@@ -75,10 +76,39 @@ pub fn file_read(
     cap: usize,
     recheck: impl FnOnce(&str) -> PathCheck,
 ) -> TaskResult {
-    let f = match std::fs::File::open(path) {
+    // Open non-blocking so a FIFO with no writer (or any other file whose
+    // `open(2)` would block) returns a descriptor immediately instead of
+    // hanging this thread forever — `file.read` has no timeout, so a blocking
+    // open is an unbounded stall reachable through any Policy-allowed path
+    // directory that an attacker can drop a FIFO into. `O_NONBLOCK` has no
+    // effect on reads from a regular file, so the capped-read path below is
+    // unchanged for the only case we ultimately serve. `O_NOCTTY` prevents a
+    // TTY path from becoming this process's controlling terminal.
+    //
+    // Deliberately NOT `O_NOFOLLOW`: the ADR-0018 design opens the path
+    // (following symlinks), reads the resolved target back off the descriptor,
+    // and re-checks *that* target — adding `O_NOFOLLOW` here would defeat the
+    // resolved-target recheck entirely.
+    let f = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+    {
         Ok(f) => f,
         Err(e) => return read_failure(task_id, path, &e),
     };
+
+    // Refuse anything that is not a regular file. A FIFO/socket would make the
+    // subsequent read block (or return partial, writer-controlled data); a
+    // character/block device could return unbounded bytes or have read side
+    // effects. `file.read` serves regular files only; everything else fails
+    // closed. `metadata()` here `fstat`s the already-open descriptor, so there
+    // is no second path lookup and no TOCTOU with the open above.
+    match f.metadata() {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return not_regular_file_failure(task_id, path),
+        Err(e) => return read_failure(task_id, path, &e),
+    }
 
     // Resolve the path the descriptor actually points at, then re-check it.
     let resolved = match std::fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
@@ -120,6 +150,20 @@ fn denied_by_policy(task_id: &str, reason: &str) -> TaskResult {
         exit_code: -1,
         stdout: vec![],
         stderr: reason.as_bytes().to_vec(),
+        truncated: false,
+        duration_millis: 0,
+    }
+}
+
+/// `OUTCOME_FAILURE` result for a path that opened but is not a regular file
+/// (FIFO, socket, device, directory). `file.read` serves regular files only.
+fn not_regular_file_failure(task_id: &str, path: &str) -> TaskResult {
+    TaskResult {
+        task_id: task_id.to_string(),
+        outcome: Outcome::Failure as i32,
+        exit_code: -1,
+        stdout: vec![],
+        stderr: format!("read {path}: not a regular file").into_bytes(),
         truncated: false,
         duration_millis: 0,
     }
@@ -256,6 +300,64 @@ mod tests {
         assert!(!stderr.contains("(os error"), "got {stderr:?}");
         assert!(result.stdout.is_empty());
         assert!(!result.truncated);
+    }
+
+    // -----------------------------------------------------------------------
+    // A FIFO must be refused promptly, never hang the caller. Without the
+    // non-blocking open + regular-file guard, `open(2)` on a reader-only FIFO
+    // with no writer blocks forever — an unbounded stall reachable via any
+    // Policy-allowed directory an attacker can drop a FIFO into.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn file_read_fifo_is_refused_without_hanging() {
+        use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "relay-file-read-fifo-{}-{}",
+            std::process::id(),
+            nanos
+        ));
+        let c_path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // Safety: `mkfifo` takes a NUL-terminated path and a mode; no memory is
+        // shared. Returns 0 on success.
+        let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo failed: {}", std::io::Error::last_os_error());
+
+        struct FifoGuard(std::path::PathBuf);
+        impl Drop for FifoGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _guard = FifoGuard(path.clone());
+
+        // Run on a worker thread so a regression (a blocking open) surfaces as a
+        // test timeout rather than a silent hang of the whole suite.
+        let p = path.to_str().unwrap().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = file_read("t-fifo", &p, 1024, |_| PathCheck::Allowed);
+            let _ = tx.send(result);
+        });
+
+        let result = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("file_read on a FIFO must return promptly, not block");
+        assert_eq!(
+            result.outcome,
+            Outcome::Failure as i32,
+            "a FIFO must be refused as a non-regular file"
+        );
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains("not a regular file"),
+            "stderr must explain the refusal; got {:?}",
+            String::from_utf8_lossy(&result.stderr)
+        );
     }
 
     // -----------------------------------------------------------------------

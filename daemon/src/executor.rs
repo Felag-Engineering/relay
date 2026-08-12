@@ -22,6 +22,14 @@ use crate::gen::{Outcome, TaskResult};
 /// Fixed for v1 (privileged side, deterministic); a Policy-configurable value is future work.
 const TERM_GRACE: Duration = Duration::from_secs(5);
 
+/// Fixed `PATH` handed to every spawned child. The daemon's own `PATH` is
+/// deliberately *not* inherited (see `env_clear()` in [`execute`]): a bare-name
+/// `argv[0]` must resolve against this trusted, standard search path — never one
+/// an attacker could influence through the daemon's start-up environment. The
+/// standard superuser + user bin directories cover the fleet's admin tooling
+/// (`apt-get`, `systemctl`, `dnf`, …).
+const SAFE_CHILD_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// A dispatch-agnostic request to execute one Task.
 ///
 /// Adding `cancel: Option<oneshot::Receiver<()>>` makes this type non-Clone.
@@ -74,6 +82,18 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
+    // Isolate the child's environment. The daemon's own environment carries
+    // secrets — notably `RELAY_ENROLLMENT_TOKEN` (see enroll.rs), which is a
+    // fleet-bootstrap credential the enroll path promises is "never logged".
+    // Without this, every executed Operation and Raw Exec inherits that
+    // environment and could read the token straight out of `/proc/self/environ`
+    // (e.g. a Policy-allowed `env`/`printenv`). `env_clear()` also pins `PATH`
+    // so a bare-name `argv[0]` (e.g. `apt-get`, service_restart's `systemctl`)
+    // resolves against a fixed, trusted search path rather than one the daemon
+    // happened to be started with. Deny-closed by construction: the child sees
+    // only the variables set explicitly below.
+    cmd.env_clear();
+    cmd.env("PATH", SAFE_CHILD_PATH);
     // process_group(0): child becomes its own process-group leader (pgid == child pid).
     // This lets us kill the whole process tree with kill(-pgid, SIG) — required for
     // timeouts and cancellation (ADR-0013).
@@ -353,7 +373,7 @@ fn failure_result(task_id: &str, stderr: &[u8], started: Instant) -> TaskResult 
 
 #[cfg(test)]
 mod tests {
-    use super::{execute, ExecRequest};
+    use super::{execute, ExecRequest, SAFE_CHILD_PATH};
     use crate::config::ResourceLimits;
     use crate::gen::Outcome;
     use std::time::{Duration, Instant};
@@ -979,5 +999,47 @@ mod tests {
 
         assert_eq!(result.outcome, Outcome::Success as i32);
         assert_eq!(result.stdout, b"hi\n");
+    }
+
+    // The child must NOT inherit the daemon's environment. A secret set in the
+    // daemon's own process (here standing in for RELAY_ENROLLMENT_TOKEN) must be
+    // absent from the child's environment, and PATH must be the fixed safe path
+    // — proving `env_clear()` closed the `/proc/self/environ` leak while still
+    // letting a bare-name argv[0] resolve.
+    #[tokio::test]
+    async fn child_does_not_inherit_daemon_environment() {
+        // Distinctive name so no other (concurrent) test reads or asserts on it.
+        const SECRET_KEY: &str = "RELAY_TEST_INHERIT_SECRET_9f3a";
+        std::env::set_var(SECRET_KEY, "super-secret-enrollment-token");
+
+        // `env` is a bare name: it can only run if PATH was injected.
+        let result = execute(ExecRequest {
+            task_id: "t-env-isolation".to_string(),
+            argv: vec!["env".to_string()],
+            timeout: Duration::from_secs(5),
+            max_output_bytes: big_cap(),
+            cancel: None,
+            limits: no_limits(),
+        })
+        .await;
+
+        std::env::remove_var(SECRET_KEY);
+
+        assert_eq!(
+            result.outcome,
+            Outcome::Success as i32,
+            "bare-name `env` must resolve against the injected PATH"
+        );
+        let env_dump = String::from_utf8_lossy(&result.stdout);
+        assert!(
+            !env_dump.contains(SECRET_KEY),
+            "child inherited a daemon secret from the environment:\n{env_dump}"
+        );
+        assert!(
+            env_dump
+                .lines()
+                .any(|l| l == format!("PATH={SAFE_CHILD_PATH}")),
+            "child PATH must be exactly the fixed safe path; got:\n{env_dump}"
+        );
     }
 }

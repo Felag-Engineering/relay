@@ -93,6 +93,26 @@ pub(crate) fn compute_renew_delay(
     renew_at.duration_since(now).unwrap_or(Duration::ZERO)
 }
 
+/// Reconciles the `node_id` echoed in a `RenewResponse` against the identity the
+/// Node presented.
+///
+/// - Empty `received` → the Relay declined to echo the id; keep the `presented`
+///   one. (Propagating `""` would trip the `node_id != current.node_id` guard in
+///   [`perform_renewal_with`] and turn every renewal into a permanent failure
+///   loop until the cert expires — a fleet-wide outage from an omitted field.)
+/// - Non-empty and equal → accept it.
+/// - Non-empty and different → a genuine mismatch; refuse (fail closed).
+fn confirm_node_id(presented: String, received: String) -> Result<String, EnrollError> {
+    if received.is_empty() || received == presented {
+        Ok(presented)
+    } else {
+        Err(EnrollError::NodeIdMismatch {
+            expected: presented,
+            received,
+        })
+    }
+}
+
 /// Performs a single renewal using the provided `renewer` closure (dependency-injection
 /// seam for testing). Mirrors the shape of `ensure_enrolled_with` in enroll.rs.
 ///
@@ -218,15 +238,12 @@ pub async fn run(channel: Channel, state_dir: PathBuf, mut identity: Identity) {
                 let cert_pem = String::from_utf8(resp.certificate)?;
                 let ca_bundle_pem = String::from_utf8(resp.ca_bundle)?;
 
-                // Sanity-check: resp.node_id should match the identity we presented.
-                if !resp.node_id.is_empty() && resp.node_id != node_id {
-                    return Err(EnrollError::NodeIdMismatch {
-                        expected: node_id,
-                        received: resp.node_id,
-                    });
-                }
+                // Reconcile the echoed node_id against the one we presented: an
+                // omitted (empty) id keeps the presented identity; a conflicting
+                // id fails closed. See `confirm_node_id`.
+                let confirmed_node_id = confirm_node_id(node_id, resp.node_id)?;
 
-                Ok((resp.node_id, cert_pem, ca_bundle_pem))
+                Ok((confirmed_node_id, cert_pem, ca_bundle_pem))
             }
         })
         .await;
@@ -610,5 +627,37 @@ mod tests {
             "on-disk cert must not change after a mismatch rejection"
         );
         assert_eq!(loaded.node_id, "node-abc-001");
+    }
+
+    // -----------------------------------------------------------------------
+    // confirm_node_id — the reconciliation rule between presented and echoed id
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn confirm_node_id_empty_response_keeps_presented() {
+        // A Relay that omits node_id in RenewResponse must not deadlock renewal.
+        let got = confirm_node_id("node-abc-001".to_string(), String::new())
+            .expect("empty received must be accepted");
+        assert_eq!(got, "node-abc-001");
+    }
+
+    #[test]
+    fn confirm_node_id_matching_response_is_accepted() {
+        let got = confirm_node_id("node-abc-001".to_string(), "node-abc-001".to_string())
+            .expect("matching received must be accepted");
+        assert_eq!(got, "node-abc-001");
+    }
+
+    #[test]
+    fn confirm_node_id_conflicting_response_is_rejected() {
+        let result = confirm_node_id("node-abc-001".to_string(), "node-DIFFERENT".to_string());
+        let e = match result {
+            Err(e) => e,
+            Ok(_) => unreachable!("a conflicting node_id must be rejected"),
+        };
+        assert!(
+            matches!(e, EnrollError::NodeIdMismatch { .. }),
+            "expected NodeIdMismatch variant"
+        );
     }
 }
