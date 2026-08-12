@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 )
@@ -15,7 +16,7 @@ import (
 // through the same bearer auth as every other control-plane route (invariant
 // 10, DoD: "unauthenticated /metrics request is refused (401)").
 func TestMetricsSurface_RequiresCredential(t *testing.T) {
-	const token = "s3cr3t-metrics-test-credential" //nolint:gosec // test fixture, not a real credential
+	const token = accounts.TokenPrefix + "0f1e2d3c4b5a6978.metrics-test" //nolint:gosec // test fixture, not a real credential
 	authn := controlplane.NewAuthenticator(staticVerifier{credential: token})
 
 	mux := http.NewServeMux()

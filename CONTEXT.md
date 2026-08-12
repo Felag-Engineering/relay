@@ -235,8 +235,19 @@ inheriting its Account's role. It carries the fixed prefix **`glp_`** — a secu
 feature, not branding: it is what makes a leaked token greppable in a repository, a
 paste, or a CI log, and what secret scanners key on. The plaintext is shown exactly
 once, at mint; there is no recovery, only re-mint plus revoke. Distinct from an
-**Enrollment Token**, which joins Nodes to the fleet and can never call the API.
+**Enrollment Token**, which joins Nodes to the fleet and can never call the API, and from
+an **OAuth session**, which is how a *human* authenticates.
 _Avoid_: API key, PAT, bearer token (unqualified)
+
+**OAuth session**:
+A control-plane session a human establishes through the organization's own IdP, using
+MCP's standard OAuth 2.1 layer, resolving to their Account (ADR-0024). Relay is a
+**protected resource only** — it validates tokens, and is never an authorization server.
+A session's authority is its Account's role, exactly like an API Token's. Crucially, an
+OAuth session buys **attribution and revocation, not trust**: it proves a human authorized
+the *session*, not that a human intended each *call*, so MCP-originated calls stay
+agent-grade for approval gating whoever authorized them.
+_Avoid_: login, SSO session, user session (say OAuth session), "authenticated human"
 
 **Attribution**:
 Who an audited action is recorded as coming from, in **two structurally distinct lanes**

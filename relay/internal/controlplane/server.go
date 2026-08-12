@@ -42,6 +42,24 @@ func New(cfg Config, authn *Authenticator) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/ping", handlePing)
 
+	// The ONE unauthenticated route on this listener: RFC 9728
+	// protected-resource metadata (#299, ADR-0024).
+	//
+	// It has to be reachable without a credential, because it is what tells a
+	// harness *how to get one* — a metadata document behind the auth it
+	// describes is a locked door with the key inside. This is the same shape
+	// as the daemon plane's single `certless` exemption for Enroll
+	// (internal/transport), and it is deliberately expressed the same way:
+	// one exact path, registered in one place, wrapped around the
+	// authenticated mux rather than punched through it.
+	//
+	// It discloses an issuer URL and a resource identifier, both public by
+	// definition, and 404s when no IdP is configured. Everything else on this
+	// listener — every "/" — goes through Middleware.
+	public := http.NewServeMux()
+	public.Handle(ProtectedResourceMetadataPath, authn.MetadataHandler())
+	public.Handle("/", authn.Middleware(mux))
+
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cfg.TLSCert},
 		MinVersion:   tls.VersionTLS13,
@@ -54,7 +72,7 @@ func New(cfg Config, authn *Authenticator) *Server {
 		mux: mux,
 		http: &http.Server{
 			Addr:      cfg.Addr,
-			Handler:   authn.Middleware(mux),
+			Handler:   public,
 			TLSConfig: tlsCfg,
 		},
 	}

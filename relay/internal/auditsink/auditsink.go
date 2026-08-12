@@ -345,6 +345,7 @@ func attribution(p capability.Principal, a capability.Assertions) audit.Attribut
 			AccountName: p.Account,
 			Role:        p.Role,
 			TokenID:     p.TokenID,
+			Method:      string(p.AuthMethod),
 		},
 		Asserted: audit.Asserted{
 			OnBehalfOf:  a.OnBehalfOf,
