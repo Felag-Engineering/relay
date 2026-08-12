@@ -26,7 +26,6 @@ package main
 
 import (
 	"context"
-	"net"
 	"os"
 	"testing"
 	"time"
@@ -40,29 +39,16 @@ import (
 // srv.GracefulStop is registered as t.Cleanup.
 func startTCPServer(t *testing.T) (string, *appDeps) {
 	t.Helper()
-	cfg := Config{
-		Addr:                "127.0.0.1:0",
-		CADir:               t.TempDir(),
-		Hostname:            "localhost",
-		EnrollIPRate:        100,
-		EnrollIPBurst:       50,
-		EnrollGlobalRate:    1000,
-		EnrollGlobalBurst:   500,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
-	}
-	srv, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen: %v", err)
-	}
-	addr := lis.Addr().String()
-	go srv.Serve(lis) //nolint:errcheck
-	t.Cleanup(srv.GracefulStop)
-	return addr, deps
+	// Generous enrollment limits: this suite enrolls several daemon
+	// subprocesses from the same loopback IP, and a rate-limit rejection here
+	// would masquerade as the failure under test.
+	f := startRelay(t, WithTCPNodePlane(), WithConfig(func(c *Config) {
+		c.EnrollIPRate = 100
+		c.EnrollIPBurst = 50
+		c.EnrollGlobalRate = 1000
+		c.EnrollGlobalBurst = 500
+	}))
+	return f.NodeAddr, f.Deps
 }
 
 // e2eNode is the handle returned by startDaemonNode: everything a v0.0.4

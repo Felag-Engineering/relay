@@ -34,7 +34,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -107,48 +106,24 @@ func startSurfaceHarness(t *testing.T) (deps *appDeps, nodeAddr, controlBase str
 		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
 	}
 
-	cfg := baseTestConfig(t)
-	cfg.Addr = "127.0.0.1:0"
-	// baseTestConfig's enrollment rate limits (IPBurst: 3) are tight enough
-	// for control_api_e2e_test.go's 1-2-Enroll-call tests, but this harness
-	// enrolls 3 real daemon subprocesses plus a deliberately-failing 4th
-	// attempt (api_token_lifecycle's revoked-token negative), all from the
-	// same loopback IP — generous limits here (mirrors
-	// tunnel_dispatch_e2e_test.go's startTCPServer) so that negative assert
-	// sees the real PermissionDenied decision, never a rate-limit false
-	// positive from this test's own enrollment volume.
-	cfg.EnrollIPRate = 100
-	cfg.EnrollIPBurst = 50
-	cfg.EnrollGlobalRate = 1000
-	cfg.EnrollGlobalBurst = 500
-	cfg.ControlEnabled = true
-	cfg.ControlAddr = "127.0.0.1:0"
+	// baseTestConfig's enrollment limits (IPBurst: 3) suit the 1-2-Enroll
+	// tests; this harness enrolls three real daemon subprocesses plus a
+	// deliberately-failing fourth attempt, all from the same loopback IP.
+	// Generous limits here so that negative assertion sees the real
+	// PermissionDenied decision, never a rate-limit false positive from this
+	// test's own enrollment volume.
+	f := startRelay(t, WithControlPlane(), WithTCPNodePlane(), WithConfig(func(c *Config) {
+		c.EnrollIPRate = 100
+		c.EnrollIPBurst = 50
+		c.EnrollGlobalRate = 1000
+		c.EnrollGlobalBurst = 500
+	}))
 
-	srv, d, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	t.Cleanup(func() { d.store.Close() }) //nolint:errcheck
-	// deliberately NOT injecting a test taskSink: newServer itself wires
-	// deps.tunnel.sink + deps.dispatch because cfg.ControlEnabled is true —
+	// Deliberately NOT injecting a test taskSink: newServer itself wires
+	// deps.tunnel.sink + deps.dispatch because the control plane is enabled —
 	// the same production path mcp_execution_e2e_test.go proves, exercised
 	// here through the full v0.0.6 acceptance matrix.
-
-	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (node-plane): %v", err)
-	}
-	nodeAddr = nodeLis.Addr().String()
-	go srv.Serve(nodeLis) //nolint:errcheck
-	t.Cleanup(srv.GracefulStop)
-
-	controlBase, pool := serveControlPlane(t, d)
-	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}}
-	credential = bootstrapCredential(t, d)
-	authed = &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: credential}}
-	plain = &http.Client{Transport: transport}
-
-	return d, nodeAddr, controlBase, authed, plain, credential
+	return f.Deps, f.NodeAddr, f.ControlBase, f.Client(), f.ClientFor(""), f.Credential
 }
 
 // launchDaemon starts a real relay-daemon subprocess against nodeAddr,

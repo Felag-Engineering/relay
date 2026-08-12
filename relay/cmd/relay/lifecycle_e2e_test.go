@@ -60,25 +60,8 @@ func dialTLS(t *testing.T, lis *bufconn.Listener, clientTLS *tls.Config) *grpc.C
 // srv.Stop is registered as a t.Cleanup.
 func startRealServer(t *testing.T) (*bufconn.Listener, *appDeps) {
 	t.Helper()
-	cfg := Config{
-		Addr:                ":0",
-		CADir:               t.TempDir(),
-		Hostname:            "localhost",
-		EnrollIPRate:        5,
-		EnrollIPBurst:       3,
-		EnrollGlobalRate:    50,
-		EnrollGlobalBurst:   10,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
-	}
-	srv, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	lis := bufconn.Listen(1 << 20)
-	go srv.Serve(lis) //nolint:errcheck
-	t.Cleanup(srv.Stop)
-	return lis, deps
+	f := startRelay(t)
+	return f.Bufconn, f.Deps
 }
 
 // TestLifecycle_SeedEnrollMTLSRenewRevoke drives the complete Node lifecycle via

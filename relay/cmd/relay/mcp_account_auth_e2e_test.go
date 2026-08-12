@@ -18,8 +18,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -36,11 +34,10 @@ import (
 
 // accountFleet is the running Relay plus the collaborators this test drives.
 type accountFleet struct {
-	deps        *appDeps
-	controlBase string
-	tlsConfig   *tls.Config
-	tokens      *accounts.TokenService
-	nodeID      string
+	relay  *relayFixture
+	deps   *appDeps
+	tokens *accounts.TokenService
+	nodeID string
 }
 
 // startAccountFleet brings up a Relay with the control plane enabled and one
@@ -49,51 +46,32 @@ func startAccountFleet(t *testing.T, daemonBin string) *accountFleet {
 	t.Helper()
 	ctx := context.Background()
 
-	cfg := baseTestConfig(t)
-	cfg.Addr = "127.0.0.1:0"
-	cfg.ControlEnabled = true
-	cfg.ControlAddr = "127.0.0.1:0"
+	f := startRelay(t, WithControlPlane(), WithTCPNodePlane())
 
-	srv, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
-
-	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (node-plane): %v", err)
-	}
-	go srv.Serve(nodeLis) //nolint:errcheck
-	t.Cleanup(srv.GracefulStop)
-
-	controlBase, pool := serveControlPlane(t, deps)
-
-	_, plaintext, err := deps.tokens.Create(ctx, []string{"relay:env=test"}, time.Hour)
+	_, plaintext, err := f.Deps.tokens.Create(ctx, []string{"relay:env=test"}, time.Hour)
 	if err != nil {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   nodeLis.Addr().String(),
-		CAPath:     relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle())),
+		NodeAddr:   f.NodeAddr,
+		CAPath:     relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(f.Deps.ca.Bundle())),
 		Token:      plaintext,
 		StateDir:   t.TempDir(),
 		PolicyPath: relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy),
 		Hostname:   "mcp-account-auth-e2e-node",
 	})
 
-	nodeID, err := deps.dispatch.WaitForAny(30 * time.Second)
+	nodeID, err := f.Deps.dispatch.WaitForAny(30 * time.Second)
 	if err != nil {
 		t.Fatalf("WaitForAny: daemon did not complete Hello->Ping handshake within 30s: %v", err)
 	}
 
 	return &accountFleet{
-		deps:        deps,
-		controlBase: controlBase,
-		tlsConfig:   &tls.Config{RootCAs: pool, ServerName: "localhost"},
-		tokens:      accounts.NewTokenService(deps.store.APITokens(), deps.store.Accounts(), nil),
-		nodeID:      nodeID,
+		relay:  f,
+		deps:   f.Deps,
+		tokens: accounts.NewTokenService(f.Deps.store.APITokens(), f.Deps.store.Accounts(), nil),
+		nodeID: nodeID,
 	}
 }
 
@@ -117,10 +95,7 @@ func (f *accountFleet) mintAccount(t *testing.T, name string, role accounts.Role
 
 // clientFor returns an HTTP client presenting credential as its bearer token.
 func (f *accountFleet) clientFor(credential string) *http.Client {
-	return &http.Client{Transport: relaytest.BearerRoundTripper{
-		Base:  &http.Transport{TLSClientConfig: f.tlsConfig},
-		Token: credential,
-	}}
+	return f.relay.ClientFor(credential)
 }
 
 // Acceptance: "An operator machine Account's token drives run_operation via
@@ -152,7 +127,7 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	}
 
 	t.Run("operator runs an Operation", func(t *testing.T) {
-		session := relaytest.Connect(t, f.controlBase, f.clientFor(operatorToken))
+		session := relaytest.Connect(t, f.relay.ControlBase, f.clientFor(operatorToken))
 		res := relaytest.CallTool(t, session, "run_operation", operationArgs)
 		if res.IsError {
 			t.Fatalf("run_operation as operator returned IsError=true: %+v", res.Content)
@@ -160,7 +135,7 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	})
 
 	t.Run("operator is refused Raw Exec", func(t *testing.T) {
-		session := relaytest.Connect(t, f.controlBase, f.clientFor(operatorToken))
+		session := relaytest.Connect(t, f.relay.ControlBase, f.clientFor(operatorToken))
 		res := relaytest.CallTool(t, session, "raw_exec", rawExecArgs)
 		if !res.IsError {
 			t.Fatal("raw_exec as operator SUCCEEDED — the arbitrary-command path must require admin")
@@ -177,7 +152,7 @@ func TestMCPAccountAuth_RoleLadder_E2E(t *testing.T) {
 	})
 
 	t.Run("admin runs Raw Exec", func(t *testing.T) {
-		session := relaytest.Connect(t, f.controlBase, f.clientFor(adminToken))
+		session := relaytest.Connect(t, f.relay.ControlBase, f.clientFor(adminToken))
 		res := relaytest.CallTool(t, session, "raw_exec", rawExecArgs)
 		if res.IsError {
 			t.Fatalf("raw_exec as admin returned IsError=true: %+v", res.Content)
@@ -227,7 +202,7 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 	acct, credential := f.mintAccount(t, "gleipnir", accounts.RoleAdmin)
 	client := f.clientFor(credential)
 
-	if _, err := relaytest.TryConnect(t, f.controlBase, client); err != nil {
+	if _, err := relaytest.TryConnect(t, f.relay.ControlBase, client); err != nil {
 		t.Fatalf("connect with a valid token: %v", err)
 	}
 
@@ -241,7 +216,7 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 
 	// Immediately — no restart, no cache expiry, no new session needed on the
 	// Relay's side.
-	if _, err := relaytest.TryConnect(t, f.controlBase, client); err == nil {
+	if _, err := relaytest.TryConnect(t, f.relay.ControlBase, client); err == nil {
 		t.Fatal("MCP accepted a revoked token")
 	}
 
@@ -249,13 +224,13 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 	// revoked, and it is refused all the same.
 	other, otherCredential := f.mintAccount(t, "retired", accounts.RoleAdmin)
 	otherClient := f.clientFor(otherCredential)
-	if _, err := relaytest.TryConnect(t, f.controlBase, otherClient); err != nil {
+	if _, err := relaytest.TryConnect(t, f.relay.ControlBase, otherClient); err != nil {
 		t.Fatalf("connect before disablement: %v", err)
 	}
 	if err := f.deps.store.Accounts().SetEnabled(ctx, other.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}
-	if _, err := relaytest.TryConnect(t, f.controlBase, otherClient); err == nil {
+	if _, err := relaytest.TryConnect(t, f.relay.ControlBase, otherClient); err == nil {
 		t.Fatal("MCP accepted a token whose Account is disabled")
 	}
 	stored, err := f.tokens.List(ctx, other.ID)
@@ -265,7 +240,7 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 
 	// A viewer cannot dispatch anything at all, by either path.
 	_, viewerCredential := f.mintAccount(t, "watcher", accounts.RoleViewer)
-	session := relaytest.Connect(t, f.controlBase, f.clientFor(viewerCredential))
+	session := relaytest.Connect(t, f.relay.ControlBase, f.clientFor(viewerCredential))
 	for _, tc := range []struct {
 		tool string
 		args map[string]any
@@ -349,7 +324,7 @@ func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 	)
 	client := &http.Client{Transport: headerRoundTripper{
 		base: relaytest.BearerRoundTripper{
-			Base:  &http.Transport{TLSClientConfig: f.tlsConfig},
+			Base:  &http.Transport{TLSClientConfig: f.relay.TLSConfig()},
 			Token: credential,
 		},
 		headers: map[string]string{
@@ -360,7 +335,7 @@ func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 		},
 	}}
 
-	session := relaytest.Connect(t, f.controlBase, client)
+	session := relaytest.Connect(t, f.relay.ControlBase, client)
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation": "system.facts",
 		"selector":  "relay:env=test",
@@ -419,14 +394,14 @@ func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
 	// size an audit record.
 	oversized := &http.Client{Transport: headerRoundTripper{
 		base: relaytest.BearerRoundTripper{
-			Base:  &http.Transport{TLSClientConfig: f.tlsConfig},
+			Base:  &http.Transport{TLSClientConfig: f.relay.TLSConfig()},
 			Token: credential,
 		},
 		headers: map[string]string{
 			controlplane.HeaderOnBehalfOf: strings.Repeat("x", audit.MaxAssertedFieldBytes+1),
 		},
 	}}
-	if _, err := relaytest.TryConnect(t, f.controlBase, oversized); err == nil {
+	if _, err := relaytest.TryConnect(t, f.relay.ControlBase, oversized); err == nil {
 		t.Error("an oversized asserted header was accepted")
 	}
 }

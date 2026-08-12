@@ -10,7 +10,45 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon
+        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon \
+        verify opschema-check
+
+## --- verify: the local mirror of CI ---
+# `make build test lint` is the fast inner loop. It is NOT what CI runs, and
+# the gap has bitten: CI additionally runs the race detector, the proto-drift
+# and proto-breaking gates, the operation-schema drift check, the devharness
+# absence check, and both cross-binary suites. Work can pass the inner loop and
+# fail CI on a class of problem the author never looked at.
+#
+# `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
+# job for job, so "it passes locally" means the same thing it means in CI.
+#
+# It is deliberately slower than `make test` — race builds and two e2e suites —
+# and deliberately not what you run on every save. Run it before opening a PR.
+#
+# The proto gates need `buf`, which is not part of a normal dev setup. When it
+# is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
+# hard-failed: a check you did not run must not look like a check that passed.
+verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
+        test-relay-race test-daemon opschema-check verify-proto \
+        test-integration test-crossbinary
+	@echo
+	@echo "verify: all local CI-equivalent gates passed."
+
+# Operation-schema drift (ci.yml: opschema-drift). Regenerates the committed
+# schema from the daemon binary and fails if it moved.
+opschema-check: gen-opschema
+	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
+
+# The two proto gates (ci.yml: proto-drift, proto-breaking), skipped with a
+# notice when buf is unavailable.
+verify-proto:
+	@if command -v buf >/dev/null 2>&1; then \
+		$(MAKE) proto-check proto-breaking; \
+	else \
+		echo "verify: SKIPPING proto-check and proto-breaking — buf not installed."; \
+		echo "verify:   these run in CI regardless. Install with: make proto-tools"; \
+	fi
 
 ## --- build stamping (issue #249, ADR-0014) ---
 # scripts/build-version.sh derives "<version> <commit> <build-date>" once per
