@@ -59,6 +59,11 @@ var readFiles = map[string]bool{
 	"tools_nodes.go":      true,
 	"tools_operations.go": true,
 	"attribution.go":      true,
+	// readaudit.go (#288) is the read-access audit seam: a data struct, a
+	// write-only interface, and a helper. It names no capability identifier
+	// at all — RecordRead takes a context and an event, never a Principal —
+	// so it classifies strict alongside the read tools it serves.
+	"readaudit.go": true,
 	// wire.go (#161) is pure data — the 13 exported MCP tool output structs,
 	// no methods, no capability.*/newDispatch references — so it classifies
 	// as a strict readFile like mcp.go/tools_nodes.go/tools_operations.go.

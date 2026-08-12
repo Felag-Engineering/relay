@@ -125,7 +125,7 @@ type describeNodeInput struct {
 }
 
 // registerNodeTools registers list_nodes and describe_node on srv.
-func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader) {
+func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader, reads ReadAuditor) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
@@ -133,7 +133,9 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"maps, never merged. `outdated` flags Nodes below the Relay's configured " +
 			"minimum daemon version (ADR-0014); always false when no minimum is set.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listNodesInput) (*sdkmcp.CallToolResult, ListNodesOutput, error) {
-		logPrincipal(ctx, "list_nodes")
+		if err := auditRead(ctx, reads, "list_nodes", ReadEvent{Selector: in.Selector}); err != nil {
+			return nil, ListNodesOutput{}, err
+		}
 
 		sel, err := capability.ParseSelector(in.Selector)
 		if err != nil {
@@ -173,7 +175,9 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"Node has not loaded reports the `unsupported` outcome, which is neither a failure nor a " +
 			"Policy denial.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
-		logPrincipal(ctx, "describe_node")
+		if err := auditRead(ctx, reads, "describe_node", ReadEvent{NodeID: in.NodeID}); err != nil {
+			return nil, DescribeNodeOutput{}, err
+		}
 
 		n, ok := nodes.Get(in.NodeID)
 		if !ok {

@@ -34,6 +34,14 @@ const (
 	KindNodeRevoke    = "node_revoke"
 	KindPlan          = "plan"
 
+	// KindRead is a non-dispatching read-tool call — list_nodes,
+	// describe_node, list_operations, get_job (#288, ADR-0025). These never
+	// reach a Node, so they produce no Job and no Task, but they do disclose
+	// the fleet's shape (and, via get_job, previously-captured command
+	// output). Recorded as metadata only: who, which tool, what it was aimed
+	// at, when. Never the result.
+	KindRead = "read"
+
 	// Identity-management kinds (#297, ADR-0010). Administering the control
 	// plane's own identities is itself an audited, attributed act: "who
 	// created this Account", "who made it an admin", and "who minted it a

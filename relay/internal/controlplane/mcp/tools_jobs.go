@@ -36,7 +36,7 @@ type getJobInput struct {
 // from a second call) — the simplest result-retrieval shape that covers both
 // "I already have my results" and "let me check again", without requiring a
 // second, separate polling protocol.
-func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader) {
+func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, reads ReadAuditor) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "cancel_job",
 		Description: "Cancel a Job's Tasks (ADR-0013): undispatched Tasks are marked cancelled without " +
@@ -65,7 +65,12 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 			"exited with a status; a Task that never executed or was killed without one has no exit_code " +
 			"key — outcome is the authoritative state.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, ExecutionOutput, error) {
-		logPrincipal(ctx, "get_job")
+		// get_job returns a Job's captured per-Node stdout, so it is the
+		// sharpest case for read auditing: a caller can read back command
+		// output somebody else produced.
+		if err := auditRead(ctx, reads, "get_job", ReadEvent{JobID: in.JobID}); err != nil {
+			return nil, ExecutionOutput{}, err
+		}
 
 		out, err := renderJob(ctx, results, in.JobID)
 		if err != nil {
