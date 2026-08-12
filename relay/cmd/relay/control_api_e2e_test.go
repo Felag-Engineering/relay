@@ -44,30 +44,8 @@ import (
 // to configure.
 func startControlAPIServer(t *testing.T) (*bufconn.Listener, *appDeps, string, *http.Client, string) {
 	t.Helper()
-
-	cfg := baseTestConfig(t)
-	cfg.ControlEnabled = true
-	cfg.ControlAddr = "127.0.0.1:0"
-
-	srv, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
-	t.Cleanup(srv.Stop)
-
-	nodeLis := bufconn.Listen(1 << 20)
-	go srv.Serve(nodeLis) //nolint:errcheck
-
-	base, pool := serveControlPlane(t, deps)
-	client := &http.Client{
-		// ServerName forced to "localhost" to match the control-plane server
-		// certificate's SAN (relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
-		// in newServer) even though the test dials 127.0.0.1.
-		Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"}},
-	}
-
-	return nodeLis, deps, base, client, bootstrapCredential(t, deps)
+	f := startRelay(t, WithControlPlane())
+	return f.Bufconn, f.Deps, f.ControlBase, f.ClientFor(""), f.Credential
 }
 
 // controlAPIRequest issues a request against the control-plane API with the

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -816,5 +817,55 @@ func TestRecordRead(t *testing.T) {
 	// tool returns previously-captured command output.
 	if got[1].JobID != "job-7" {
 		t.Errorf("get_job record JobID = %q, want job-7", got[1].JobID)
+	}
+}
+
+// The capability layer mirrors internal/audit's asserted-attribution type
+// rather than importing it, because capability's import allowlist is
+// deliberately narrow. That mirroring is correct, but it leaves a hand-written
+// mapping (attribution) as the single point where the two must agree — and a
+// field added to one side would simply stop being recorded, silently, with
+// every existing test still green.
+//
+// This pins the two shapes together. It is not a style check: an unrecorded
+// asserted field is an audit record that quietly says less than the caller
+// said, which is the exact failure the verified/asserted split exists to
+// prevent.
+func TestAssertedLaneShapesAgree(t *testing.T) {
+	capType := reflect.TypeOf(capability.Assertions{})
+	auditType := reflect.TypeOf(audit.Asserted{})
+
+	if capType.NumField() != auditType.NumField() {
+		t.Fatalf("capability.Assertions has %d fields, audit.Asserted has %d — the mapping in attribution() cannot be total",
+			capType.NumField(), auditType.NumField())
+	}
+	for i := 0; i < capType.NumField(); i++ {
+		c, a := capType.Field(i), auditType.Field(i)
+		if c.Name != a.Name || c.Type != a.Type {
+			t.Errorf("field %d differs: capability.%s %s vs audit.%s %s", i, c.Name, c.Type, a.Name, a.Type)
+		}
+	}
+}
+
+// The same guard for the verified lane: every field the Principal carries that
+// belongs in audit must actually reach it. Asserted by round-tripping a fully
+// populated Principal and checking nothing arrived empty, so a new Principal
+// field that attribution() forgets shows up as a zero value here.
+func TestVerifiedLaneMappingIsTotal(t *testing.T) {
+	p := capability.Principal{
+		AccountID:  "acct-1",
+		Account:    "gleipnir",
+		Role:       "operator",
+		TokenID:    "tok-1",
+		AuthMethod: capability.AuthMethodAPIToken,
+	}
+	got := attribution(p, capability.Assertions{})
+
+	v := reflect.ValueOf(got.Verified)
+	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).IsZero() {
+			t.Errorf("audit.Verified.%s is empty after mapping a fully-populated Principal — attribution() does not carry it",
+				v.Type().Field(i).Name)
+		}
 	}
 }

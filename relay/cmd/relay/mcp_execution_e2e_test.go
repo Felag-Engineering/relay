@@ -20,10 +20,7 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
-	"net"
-	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -48,29 +45,11 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 
 	ctx := context.Background()
 
-	cfg := baseTestConfig(t)
-	cfg.Addr = "127.0.0.1:0"
-	cfg.ControlEnabled = true
-	cfg.ControlAddr = "127.0.0.1:0"
-
-	srv, deps, err := newServer(cfg)
-	if err != nil {
-		t.Fatalf("newServer: %v", err)
-	}
-	t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
-	// deliberately NOT injecting a test taskSink: newServer itself must have
-	// wired deps.tunnel.sink + deps.dispatch because cfg.ControlEnabled is
-	// true (the #154 flip) — that is exactly what this test proves.
-
-	nodeLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen (node-plane): %v", err)
-	}
-	nodeAddr := nodeLis.Addr().String()
-	go srv.Serve(nodeLis) //nolint:errcheck
-	t.Cleanup(srv.GracefulStop)
-
-	controlBase, pool := serveControlPlane(t, deps)
+	// The whole point of this test is that newServer's OWN wiring dispatches:
+	// no injected test taskSink, so deps.tunnel.sink and deps.dispatch must
+	// have been wired by the control plane being enabled (the #154 flip).
+	f := startRelay(t, WithControlPlane(), WithTCPNodePlane())
+	deps := f.Deps
 
 	// Seed an Enrollment Token scoped relay:env=test — the daemon's
 	// relay: label after enrollment, which the run_operation selector below
@@ -80,34 +59,24 @@ func TestMCPExecution_RealDaemon_E2E(t *testing.T) {
 		t.Fatalf("seed Enrollment Token: %v", err)
 	}
 
-	caFile := relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle()))
-	policyPath := relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy)
-
 	relaytest.StartDaemon(t, relaytest.DaemonConfig{
 		Bin:        daemonBin,
-		NodeAddr:   nodeAddr,
-		CAPath:     caFile,
+		NodeAddr:   f.NodeAddr,
+		CAPath:     relaytest.WriteTempFile(t, "ca-bundle-*.pem", string(deps.ca.Bundle())),
 		Token:      plaintext,
 		StateDir:   t.TempDir(),
-		PolicyPath: policyPath,
+		PolicyPath: relaytest.WriteTempFile(t, "policy-*.toml", relaytest.FixturePolicy),
 		Hostname:   "mcp-execution-e2e-node",
 	})
 
-	// Block on the live Tunnel via deps.dispatch (appDeps.dispatch's whole
-	// reason for existing, per the plan): this is the sync point, replacing
-	// startDaemonNode's poll-the-test-dispatcher loop, since no test sink is
-	// injected here.
+	// Block on the live Tunnel via deps.dispatch: this is the sync point,
+	// since no test sink is injected here.
 	nodeID, err := deps.dispatch.WaitForAny(30 * time.Second)
 	if err != nil {
 		t.Fatalf("WaitForAny: daemon did not complete Hello->Ping handshake within 30s: %v", err)
 	}
 
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: "localhost"},
-	}
-	authed := &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: bootstrapCredential(t, deps)}}
-
-	session := relaytest.Connect(t, controlBase, authed)
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
 
 	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
 		"operation": "system.facts",
