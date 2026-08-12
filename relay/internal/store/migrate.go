@@ -132,11 +132,21 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 }
 
 // splitStatements splits a migration file's SQL text into individual
-// statements on ";" so each can be executed separately. Migration files must
-// not use ";" inside string literals or comments in a way that would defeat
-// this — a reasonable constraint for hand-written schema migrations.
+// statements on ";" so each can be executed separately.
+//
+// Whole-line "--" comments are stripped BEFORE the split. Without that, a
+// semicolon inside a comment splits the file mid-sentence and the remaining
+// prose is handed to SQLite as a statement — which fails the migration with a
+// syntax error pointing at an English word, and takes a while to recognise for
+// what it is. Migration comments are where the reasoning for a schema change
+// lives, so they are exactly the place ordinary punctuation appears.
+//
+// Remaining constraint, unchanged: a ";" inside a string literal, or inside a
+// trailing comment on the same line as SQL, still splits. Stripping those would
+// need a real tokenizer to tell a literal from a comment, and hand-written
+// schema migrations have no need of either.
 func splitStatements(sqlText string) []string {
-	parts := strings.Split(sqlText, ";")
+	parts := strings.Split(stripLineComments(sqlText), ";")
 	stmts := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
@@ -146,4 +156,23 @@ func splitStatements(sqlText string) []string {
 		stmts = append(stmts, p)
 	}
 	return stmts
+}
+
+// stripLineComments removes lines whose first non-whitespace characters are
+// "--", leaving every other line byte-for-byte intact.
+//
+// Deliberately only whole-line comments: a trailing "-- note" after SQL on the
+// same line is left alone, because distinguishing it from a "--" inside a
+// string literal needs a tokenizer, and guessing wrong would silently corrupt a
+// statement. Dropping a line that is unambiguously a comment cannot.
+func stripLineComments(sqlText string) string {
+	lines := strings.Split(sqlText, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "--") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
 }

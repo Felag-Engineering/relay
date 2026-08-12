@@ -14,10 +14,9 @@
 -- assertion. The existing `principal` TEXT column is untouched — it stays as
 -- the human-readable rendering.
 --
--- NOTE: keep semicolons out of these comments entirely. splitStatements
--- (store/migrate.go) splits the file on that character without stripping
--- comments first, so one inside a comment is executed as SQL and fails the
--- whole migration.
+-- NOTE: whole-line comments like these are stripped before the statement split
+-- (store/migrate.go), so ordinary punctuation is safe here. A trailing comment
+-- on the same line as SQL still is not -- see splitStatements.
 
 -- Verified lane: established by the Relay, unforgeable by a caller.
 ALTER TABLE audit ADD COLUMN account_id TEXT;
