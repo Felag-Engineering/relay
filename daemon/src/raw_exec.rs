@@ -45,12 +45,22 @@ pub async fn run_raw_exec(
 ) -> TaskResult {
     let decision = policy.evaluate_raw_exec(&raw.argv);
 
+    // Never log the full argv: Raw Exec arguments are caller-supplied and may
+    // embed credentials (e.g. `curl -H "Authorization: ..."`, a `--password`
+    // flag). Log only the program name (`argv[0]`) and the argument count. The
+    // Policy `reason` is already bounded to a short, char-boundary-safe fragment
+    // (policy.rs `reason_fragment`), so attribution survives without dumping the
+    // whole command line into the log.
+    let program = raw.argv.first().map_or("", String::as_str);
+    let argc = raw.argv.len();
+
     match decision {
         Decision::Deny { reason, rule } => {
             // cancel drops naturally here — denied before any process spawned.
             tracing::warn!(
                 task_id = %task_id,
-                command = %raw.argv.join(" "),
+                program = %program,
+                argc,
                 rule = ?rule,
                 reason = %reason,
                 "raw exec denied by policy"
@@ -60,7 +70,8 @@ pub async fn run_raw_exec(
         Decision::Allow(rule) => {
             tracing::info!(
                 task_id = %task_id,
-                command = %raw.argv.join(" "),
+                program = %program,
+                argc,
                 rule = ?rule,
                 "raw exec allowed by policy"
             );
