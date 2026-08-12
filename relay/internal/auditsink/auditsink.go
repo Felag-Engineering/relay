@@ -156,21 +156,57 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// read-class Operations record WHAT was read, never what came back
+	// (#288, ADR-0025). The Task row still carries the output for the caller
+	// to fetch; the audit trail — which outlives the Job — keeps only the
+	// access record.
+	//
+	// Keyed on risk class rather than on a name list, so a Template Operation
+	// added later inherits the posture from its declared class instead of
+	// needing to be remembered here.
+	retainOutput := e.Action.RiskClass != jobs.RiskClassRead
+
 	var errs []error
 	for _, r := range e.Results {
 		rec := base
 		rec.Kind = audit.KindDispatch
 		rec.NodeID = r.NodeID
 		rec.Outcome = r.Outcome
-		rec.Stdout = r.Stdout
-		rec.Stderr = r.Stderr
-		rec.Truncated = r.Truncated
+		if retainOutput {
+			rec.Stdout = r.Stdout
+			rec.Stderr = r.Stderr
+			rec.Truncated = r.Truncated
+		}
 		if err := s.append(ctx, rec); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	s.logDecision(audit.KindDispatch, e, len(e.Results), outcomeCounts(e.Results))
 	return errors.Join(errs...)
+}
+
+// RecordRead appends one metadata-only read-access record (#288, ADR-0025):
+// who read, which tool, what they aimed it at, and when.
+//
+// It takes the Principal explicitly rather than reading a context, because the
+// caller (the MCP read surface's adapter) is the boundary that resolved it —
+// and because a value this sink invented itself would not be a verified
+// attribution.
+//
+// There is deliberately no result parameter. A read record that carried its
+// result would copy the material this decision exists to limit into a trail
+// that outlives the Job.
+func (s *Sink) RecordRead(ctx context.Context, p capability.Principal, tool, selector, nodeID, jobID string) error {
+	return s.append(ctx, audit.Record{
+		Timestamp:     s.now(),
+		Kind:          audit.KindRead,
+		Principal:     p.Attribution(),
+		Attribution:   attribution(p, capability.AssertionsFromContext(ctx)),
+		OperationName: tool,
+		Selector:      selector,
+		NodeID:        nodeID,
+		JobID:         jobID,
+	})
 }
 
 // RecordFreeze implements capability.AuditSink. It records exactly one

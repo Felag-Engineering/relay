@@ -18,12 +18,16 @@ package main
 // config, or the Authenticator that wraps the mux.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
@@ -53,6 +57,7 @@ type surfaceDeps struct {
 	apiTokens    *accounts.TokenService
 	revocation   *revocation.Service
 	audit        audit.Repository
+	auditSink    *auditsink.Sink
 	now          func() time.Time
 	metrics      *metrics.Metrics
 }
@@ -70,7 +75,8 @@ type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.vocab, d.ops, d.capability,
-		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks}))
+		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
+		readAuditor{sink: d.auditSink}))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
@@ -108,4 +114,28 @@ func (metricsSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 // mutable registration state.
 func defaultControlSurfaces() []controlSurface {
 	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
+}
+
+// readAuditor adapts the audit sink to mcp.ReadAuditor (#288, ADR-0025).
+//
+// It lives here, in the composition root, for the same reason every other
+// surface adapter does: the mcp package must not name a capability type on its
+// read path (no_dispatch_test.go), so resolving the acting Account from the
+// request context happens on this side of the seam.
+//
+// Fail closed on a missing Principal. Every /mcp request passes through
+// Authenticator.Middleware, so an absent Principal is unreachable in
+// production — but "record an unattributed read" is not an acceptable
+// fallback for an access trail, and a silent one would be worse.
+type readAuditor struct{ sink *auditsink.Sink }
+
+func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
+	if a.sink == nil {
+		return nil
+	}
+	p, ok := controlplane.PrincipalFromContext(ctx)
+	if !ok {
+		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
+	}
+	return a.sink.RecordRead(ctx, p, e.Tool, e.Selector, e.NodeID, e.JobID)
 }

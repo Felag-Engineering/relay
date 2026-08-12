@@ -1,10 +1,34 @@
-# Audit output retention: full-output-always
+# Audit output retention: full-output-always for `mutate`, metadata-only for `read`
 
 Decision #122, decided in review 2026-07-12 and implemented in #185: the Relay's audit trail
 (ADR-0004) retains the **complete** per-Task stdout/stderr, alongside the daemon-side
 `truncated` flag, for every dispatched Task — not just its Outcome. This applies to every
 `KindDispatch` audit Record that reached execution (or carries a Relay-synthesized refusal
 message, e.g. a version-refused Task's `jobs.VersionRefusedMessage`).
+
+> **Amended 2026-08-12 by ADR-0025 (#288), for the `read` risk class only.**
+>
+> A `read`-class dispatch's audit Record retains **no** stdout/stderr and no `truncated`
+> flag — only the access itself: who, which Operation, which Node, which Selector, the
+> Outcome, and when. Everything below still describes `mutate`-class dispatches (and Raw
+> Exec, which is always `mutate`) in full.
+>
+> Two things made that the right posture. The shipped read catalog (#293) multiplied both
+> the volume and the sensitivity of read output — `proc.list` returns argv, `log.tail`
+> returns journald content — and at the default read blast cap of 10,000 Nodes a single
+> fan-out would write that content to 10,000 permanent rows. And nothing consumes
+> audit-stored read output: the caller already had the result, and `get_job` re-reads it
+> from the Task row. The audit trail is the copy that never expires, which makes it the
+> worst place to hold it.
+>
+> Non-dispatching read tools (`list_nodes`, `describe_node`, `list_operations`, `get_job`)
+> are now audited too, as `KindRead` records — also metadata-only. They previously left no
+> record at all.
+>
+> **Read output therefore survives only as long as its Task row.** After Job/Task garbage
+> collection the trail can say a read happened, by whom, of what, and when, but not what it
+> returned. That is deliberate, and it is the first thing to revisit if a real consumer
+> appears.
 
 ## What is retained, and where
 
@@ -33,7 +57,7 @@ unbounded output (log dumps, `find`, verbose builds) will grow its audit databas
 proportionally. There is no Relay-side output cap, rotation, or expiry today; that is a
 future storage-management concern, not part of this decision.
 
-## Secrets in output are retained by design
+## Secrets in `mutate` output are retained by design
 
 The Relay stores captured stdout/stderr **raw** — it never scrubs, redacts, or otherwise
 inspects output for secret material. If a command emits a secret (an API key printed by a

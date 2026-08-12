@@ -409,9 +409,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// watchFreezeSignals in freeze_signal.go for the local engage/release
 	// lever). A fresh slice is built per branch below (not appended to) so
 	// neither branch aliases or mutates the other's backing array.
+	// One audit sink, shared by the capability layer and the MCP read surface
+	// (#288): read-access records land in the same trail as dispatches, via
+	// the same writer.
+	auditSink := auditsink.New(st.Audit())
+
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		capability.WithAuditSink(auditsink.New(st.Audit())),
+		capability.WithAuditSink(auditSink),
 		capability.WithFreeze(st.Freeze()),
 		capability.WithMetrics(appMetrics),
 	}

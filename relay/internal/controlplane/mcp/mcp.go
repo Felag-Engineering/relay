@@ -182,7 +182,7 @@ const serverVersion = "0.1.0"
 // turn on production dispatch — that depends on whether exec's own
 // dispatcher was configured with capability.WithExecution, which is the
 // composition root's call, isolated to #154.
-func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader) http.Handler {
+func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor) http.Handler {
 	// Re-wrap every input immediately: from this point on, nothing in this
 	// package ever holds a value whose dynamic type is wider than what
 	// NodeReader/PolicyReader/OperationLister/Executor/JobResultReader
@@ -196,10 +196,10 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
-	registerNodeTools(srv, nodes, policy, vocab)
-	registerOperationTools(srv, ops, vocab)
+	registerNodeTools(srv, nodes, policy, vocab, reads)
+	registerOperationTools(srv, ops, vocab, reads)
 	registerExecutionTools(srv, exec, results, ops)
-	registerJobTools(srv, exec, results)
+	registerJobTools(srv, exec, results, reads)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is

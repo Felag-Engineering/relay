@@ -128,7 +128,7 @@ func slotConstraintProse(sl nodevocab.Slot) string {
 }
 
 // registerOperationTools registers list_operations on srv.
-func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab VocabReader) {
+func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab VocabReader, reads ReadAuditor) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_operations",
 		Description: "List the Operation vocabulary: for each Operation, its purpose, risk class, argument " +
@@ -142,7 +142,9 @@ func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab Vocab
 			"outcome — nothing runs and Policy is never consulted, so it is neither a failure nor a denial. " +
 			"Raw Exec is a separate tool (#118), not an Operation, and is always mutate.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listOperationsInput) (*sdkmcp.CallToolResult, ListOperationsOutput, error) {
-		logPrincipal(ctx, "list_operations")
+		if err := auditRead(ctx, reads, "list_operations", ReadEvent{}); err != nil {
+			return nil, ListOperationsOutput{}, err
+		}
 
 		descs := ops.Operations()
 		items := make([]OperationItem, 0, len(descs))

@@ -705,3 +705,116 @@ func TestRecordDispatchDecisionLineExcludesOperationArgs(t *testing.T) {
 		t.Errorf("stored Stderr = %q, want STDERR-SENTINEL", got)
 	}
 }
+
+// #288 / ADR-0025: a read-class dispatch records WHAT was read, never what
+// came back. The mutate case in the same test is the control — without it,
+// this would pass just as well against a sink that stored nothing at all.
+func TestRecordDispatchReadClassRetainsNoOutput(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))))
+
+	principal := capability.Principal{Account: "gleipnir", Role: "operator"}
+	secret := []byte("PGPASSWORD=hunter2 /usr/bin/psql -h db.internal")
+
+	entry := func(jobID string, class jobs.RiskClass, op string) capability.AuditEntry {
+		return capability.AuditEntry{
+			Kind:      capability.AuditKindDispatch,
+			Principal: principal,
+			Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: op, RiskClass: class},
+			JobID:     jobID,
+			Results: []capability.NodeResult{
+				{NodeID: "node-1", Outcome: jobs.OutcomeSuccess, Stdout: secret, Stderr: []byte("stderr too"), Truncated: true},
+			},
+		}
+	}
+
+	ctx := context.Background()
+	if err := sink.Record(ctx, entry("job-read", jobs.RiskClassRead, "proc.list")); err != nil {
+		t.Fatalf("Record(read): %v", err)
+	}
+	if err := sink.Record(ctx, entry("job-mutate", jobs.RiskClassMutate, "service.restart")); err != nil {
+		t.Fatalf("Record(mutate): %v", err)
+	}
+
+	read, err := repo.ByJob(ctx, "job-read")
+	if err != nil || len(read) != 1 {
+		t.Fatalf("ByJob(job-read): %v (%d records)", err, len(read))
+	}
+	r := read[0]
+	if len(r.Stdout) != 0 || len(r.Stderr) != 0 {
+		t.Errorf("a read-class audit record retained output: stdout=%q stderr=%q", r.Stdout, r.Stderr)
+	}
+	if r.Truncated {
+		t.Error("a read-class audit record retained the truncated flag, which describes output it no longer holds")
+	}
+
+	// The access record itself is intact: who, what, where, when, and how it
+	// turned out. That is the whole point — less content, not less accounting.
+	if r.OperationName != "proc.list" || r.NodeID != "node-1" || r.Outcome != jobs.OutcomeSuccess {
+		t.Errorf("read record = %+v, want the access still fully recorded", r)
+	}
+	if r.Principal != "gleipnir:operator" {
+		t.Errorf("read record principal = %q, want the acting Account", r.Principal)
+	}
+
+	// Control: mutate-class output is unchanged (#122 still stands there).
+	mutate, err := repo.ByJob(ctx, "job-mutate")
+	if err != nil || len(mutate) != 1 {
+		t.Fatalf("ByJob(job-mutate): %v (%d records)", err, len(mutate))
+	}
+	if string(mutate[0].Stdout) != string(secret) {
+		t.Errorf("mutate-class stdout = %q, want it retained verbatim", mutate[0].Stdout)
+	}
+	if !mutate[0].Truncated {
+		t.Error("mutate-class truncated flag was dropped")
+	}
+}
+
+// A read-access record for a non-dispatching tool: metadata only, attributed,
+// and carrying no result field at all (the method signature has none).
+func TestRecordRead(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))))
+
+	p := capability.Principal{
+		AccountID: "acct-1", Account: "gleipnir", Role: "viewer", TokenID: "tok-9",
+	}
+	ctx := capability.WithAssertions(context.Background(), capability.Assertions{OnBehalfOf: "ops-team"})
+
+	if err := sink.RecordRead(ctx, p, "describe_node", "", "node-42", ""); err != nil {
+		t.Fatalf("RecordRead: %v", err)
+	}
+	if err := sink.RecordRead(ctx, p, "get_job", "", "", "job-7"); err != nil {
+		t.Fatalf("RecordRead(get_job): %v", err)
+	}
+
+	got, err := repo.ByAccount(ctx, "acct-1")
+	if err != nil || len(got) != 2 {
+		t.Fatalf("ByAccount: %v (%d records)", err, len(got))
+	}
+
+	first := got[0]
+	if first.Kind != audit.KindRead {
+		t.Errorf("Kind = %q, want %q", first.Kind, audit.KindRead)
+	}
+	if first.OperationName != "describe_node" || first.NodeID != "node-42" {
+		t.Errorf("record = %+v, want the tool and its target", first)
+	}
+	if len(first.Stdout) != 0 || len(first.Stderr) != 0 {
+		t.Error("a read-access record carries output; it must be metadata only")
+	}
+	// Both attribution lanes apply to read records exactly as to dispatches
+	// (#288 question 3, now that #300's lanes exist).
+	if first.Attribution.Verified.AccountID != "acct-1" || first.Attribution.Verified.TokenID != "tok-9" {
+		t.Errorf("verified lane = %+v, want the acting Account and its token", first.Attribution.Verified)
+	}
+	if first.Attribution.Asserted.OnBehalfOf != "ops-team" {
+		t.Errorf("asserted lane = %+v, want the caller's claim carried through", first.Attribution.Asserted)
+	}
+
+	// get_job records the Job it read back — the sharpest case, since that
+	// tool returns previously-captured command output.
+	if got[1].JobID != "job-7" {
+		t.Errorf("get_job record JobID = %q, want job-7", got[1].JobID)
+	}
+}
