@@ -91,19 +91,66 @@ fn seed_identity(dir: &Path) {
 /// `env_clear()` isolates the child from the test runner's environment (in
 /// particular, a stray `RELAY_ENROLLMENT_TOKEN` would divert `acquire_identity`
 /// down the enrollment path instead of `load_identity`).
+/// Its stdout is captured to `<state_dir>/daemon.log` rather than discarded,
+/// so `wait_for_signal_handlers` can observe readiness instead of guessing at
+/// a startup delay. Stdout, not stderr: `tracing_subscriber::fmt()` writes
+/// there by default.
 fn spawn_idle_daemon(state_dir: &Path) -> std::process::Child {
     let bin = env!("CARGO_BIN_EXE_relay-daemon");
+    let log = std::fs::File::create(daemon_log_path(state_dir)).expect("create daemon log");
     Command::new(bin)
         .env_clear()
         .env("PATH", std::env::var("PATH").unwrap_or_default())
         .env("RELAY_STATE_DIR", state_dir)
         .env("RELAY_ADDR", "https://127.0.0.1:1")
         .env("RELAY_POLICY_PATH", state_dir.join("no-such-policy.toml"))
-        .env("RUST_LOG", "error")
-        .stdout(Stdio::null())
+        // info, not error: the readiness line below is emitted at info level.
+        .env("RUST_LOG", "info")
+        .stdout(Stdio::from(log))
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn relay-daemon")
+}
+
+fn daemon_log_path(state_dir: &Path) -> PathBuf {
+    state_dir.join("daemon.log")
+}
+
+/// The line `shutdown::spawn_signal_listener` emits once SIGTERM and SIGINT
+/// are installed.
+///
+/// Duplicated as a literal because the daemon is a bin-only crate with no lib
+/// target for an integration test to import from (see the module header, and
+/// `seed_identity` above for the same constraint). `daemon/src/shutdown.rs`
+/// owns the real constant, `HANDLERS_INSTALLED_MSG`, and a test asserting
+/// through it would fail loudly here if the two ever drift.
+const HANDLERS_INSTALLED_MSG: &str = "signal handlers installed; graceful shutdown armed";
+
+/// Blocks until the daemon reports its signal handlers are installed.
+///
+/// This replaces a fixed `sleep(300ms)`, which was a race rather than a wait:
+/// on a cold, freshly-linked debug binary the process could still be starting
+/// when the signal landed, and a SIGTERM arriving before the handler is
+/// installed *kills* the process — so the test failed with "exited by signal
+/// 15", reporting a regression that was not there. Waiting on the daemon's own
+/// statement of readiness makes the test deterministic on any machine, however
+/// slow or loaded.
+fn wait_for_signal_handlers(state_dir: &Path, bound: Duration) {
+    let path = daemon_log_path(state_dir);
+    let start = Instant::now();
+    loop {
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            if contents.contains(HANDLERS_INSTALLED_MSG) {
+                return;
+            }
+        }
+        assert!(
+            start.elapsed() < bound,
+            "daemon did not report installed signal handlers within {bound:?}; log so far:\n{}",
+            std::fs::read_to_string(&path).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Polls `child` until it exits or `bound` elapses; panics on timeout.
@@ -133,10 +180,15 @@ fn sigterm_while_idle_reconnecting_exits_zero_immediately() {
 
     let mut child = spawn_idle_daemon(state_dir.path());
 
-    // Give the daemon time to load its identity, attempt (and have refused)
-    // at least one connect, and settle into the connect/backoff-sleep cycle —
-    // i.e. to be demonstrably idle/reconnecting when the signal lands.
-    std::thread::sleep(Duration::from_millis(300));
+    // Wait for the daemon to state that its signal handlers are installed,
+    // rather than sleeping and hoping. Everything this test is about happens
+    // after that point.
+    wait_for_signal_handlers(state_dir.path(), Duration::from_secs(30));
+
+    // The daemon is idle/reconnecting by construction: RELAY_ADDR points at a
+    // port nothing listens on, so it can only ever be in the
+    // connect/backoff-sleep cycle. No further wait is needed to establish
+    // that.
 
     let pid = child.id() as libc::pid_t;
     // SAFETY: `pid` is this test's own freshly-spawned child (never the

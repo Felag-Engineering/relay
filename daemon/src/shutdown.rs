@@ -57,24 +57,45 @@ pub fn grace_period() -> Duration {
     parse_grace_secs(std::env::var("RELAY_SHUTDOWN_GRACE_SECS").ok().as_deref())
 }
 
-/// Awaits SIGTERM or SIGINT and returns the reason string (`"SIGTERM"` /
-/// `"SIGINT"`).
-pub async fn wait_for_signal() -> &'static str {
+/// The line emitted once SIGTERM/SIGINT are installed. Load-bearing for
+/// operators (it marks the instant the daemon became signal-responsive) and
+/// for `tests/shutdown_signal.rs`, which waits for it rather than guessing at
+/// a startup delay.
+pub const HANDLERS_INSTALLED_MSG: &str = "signal handlers installed; graceful shutdown armed";
+
+/// Installs the SIGTERM/SIGINT handlers and spawns a background task that
+/// triggers `shutdown` when one arrives.
+///
+/// **Registration happens synchronously, before the task is spawned.** This is
+/// not a stylistic choice: `tokio::signal::unix::signal` is what replaces a
+/// signal's default disposition, and until it has been called SIGTERM *kills*
+/// the process rather than draining it. Registering inside the spawned task —
+/// as this did originally — left a window between process start and the
+/// scheduler first polling that task in which a SIGTERM aborted the daemon
+/// outright, skipping the ADR-0004 drain entirely.
+///
+/// The window is small and needs an early signal to hit — a fast
+/// `systemctl restart`, or an orchestrator stopping a pod that has only just
+/// started. It is also exactly the kind of thing that shows up as an
+/// unreproducible "the daemon sometimes dies hard on restart", so it is closed
+/// here rather than documented.
+///
+/// Must be called from within a Tokio runtime (`signal` requires one).
+pub fn spawn_signal_listener(shutdown: Shutdown) {
     use tokio::signal::unix::{signal, SignalKind};
 
     let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
     let mut int = signal(SignalKind::interrupt()).expect("install SIGINT handler");
-    tokio::select! {
-        _ = term.recv() => "SIGTERM",
-        _ = int.recv() => "SIGINT",
-    }
-}
 
-/// Spawns a background task that awaits a shutdown signal and triggers
-/// `shutdown` when one arrives, logging a single legible line.
-pub fn spawn_signal_listener(shutdown: Shutdown) {
+    // Emitted only after both handlers are in place, so anything waiting on
+    // this line knows the daemon will drain rather than die.
+    tracing::info!("{HANDLERS_INSTALLED_MSG}");
+
     tokio::spawn(async move {
-        let reason = wait_for_signal().await;
+        let reason = tokio::select! {
+            _ = term.recv() => "SIGTERM",
+            _ = int.recv() => "SIGINT",
+        };
         tracing::warn!(reason, "shutdown signal received; beginning graceful drain");
         shutdown.trigger(reason);
     });
