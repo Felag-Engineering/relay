@@ -142,6 +142,9 @@ pub enum TemplateLoadError {
         source: toml::de::Error,
     },
 
+    #[error("template file {path} is not valid UTF-8; refusing to load (fail closed)")]
+    NotUtf8 { path: PathBuf },
+
     #[error("template path {path}: {source}")]
     Io {
         path: PathBuf,
@@ -220,9 +223,16 @@ impl TemplateSet {
 
         let mut templates: BTreeMap<String, TemplateOp> = BTreeMap::new();
         for (_, path, bytes) in &contents {
-            let text = String::from_utf8_lossy(bytes);
+            // Parse the exact bytes that were fingerprinted. `from_utf8_lossy`
+            // would substitute U+FFFD for invalid sequences, so the compiled
+            // template would silently differ from the bytes the fingerprint
+            // attests — breaking the "bytes validated are the bytes loaded"
+            // guarantee. TOML is required to be UTF-8, so reject non-UTF-8 and
+            // fail the whole set closed.
+            let text = std::str::from_utf8(bytes)
+                .map_err(|_| TemplateLoadError::NotUtf8 { path: path.clone() })?;
             let file: TemplateFile =
-                toml::from_str(&text).map_err(|source| TemplateLoadError::Parse {
+                toml::from_str(text).map_err(|source| TemplateLoadError::Parse {
                     path: path.clone(),
                     source,
                 })?;
@@ -434,7 +444,21 @@ pub fn lint_dir(root: &Path) -> TemplateLintReport {
             continue;
         }
 
-        let file: TemplateFile = match toml::from_str(&String::from_utf8_lossy(&bytes)) {
+        // Reject non-UTF-8 here too so `policy check --templates` catches it
+        // before deployment — mirroring the runtime loader, which fails closed
+        // rather than lossily substituting U+FFFD (see `load`).
+        let text = match std::str::from_utf8(&bytes) {
+            Ok(t) => t,
+            Err(_) => {
+                report.findings.push(LintFinding {
+                    severity: LintSeverity::Error,
+                    location: rel.clone(),
+                    message: "is not valid UTF-8".to_string(),
+                });
+                continue;
+            }
+        };
+        let file: TemplateFile = match toml::from_str(text) {
             Ok(f) => f,
             Err(e) => {
                 report.findings.push(LintFinding {
@@ -832,6 +856,29 @@ type = "path"
         dir.write("relay-read/README.md", "not a template");
         let set = TemplateSet::load(&dir.path).expect("load");
         assert_eq!(set.len(), 1);
+    }
+
+    #[test]
+    fn invalid_utf8_fails_the_whole_set_closed() {
+        let dir = TempDir::new("nonutf8");
+        dir.write("good.toml", DISK);
+        // A .toml file with an invalid UTF-8 byte (0xFF) inside a string value.
+        // `from_utf8_lossy` would substitute U+FFFD and load it; the loader must
+        // instead fail the whole set closed so the fingerprinted bytes always
+        // equal the parsed bytes.
+        let bad = dir.path.join("bad.toml");
+        let mut bytes =
+            b"[[template]]\nname = \"x\"\nrisk_class = \"read\"\nbody = \"echo ".to_vec();
+        bytes.push(0xFF);
+        bytes.extend_from_slice(b"\"\n");
+        fs::write(&bad, &bytes).expect("write bad file");
+        fs::set_permissions(&bad, fs::Permissions::from_mode(0o600)).expect("mode");
+
+        let err = TemplateSet::load(&dir.path).expect_err("invalid UTF-8 must fail the set");
+        assert!(
+            matches!(err, TemplateLoadError::NotUtf8 { .. }),
+            "expected NotUtf8, got {err:?}"
+        );
     }
 
     #[test]
