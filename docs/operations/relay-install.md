@@ -58,6 +58,11 @@ settable via any API, invariant #11) holds either way. All flags from
 | `-min-daemon-version` | `RELAY_MIN_DAEMON_VERSION` | *(empty)* | Minimum relay-daemon semver (ADR-0014). Empty disables the `outdated` gate; a malformed value refuses startup. See [iac-upgrades.md](iac-upgrades.md), and the prerelease caveat in [release-artifacts.md](release-artifacts.md) (#261). |
 | `-control-enabled` | `RELAY_CONTROL_ENABLED` | `false` | Enable the control-plane listener (MCP + `/api/v1` + `/metrics`). |
 | `-control-addr` | `RELAY_CONTROL_ADDR` | `:9443` | Control-plane HTTPS listen address (distinct from `-addr`). |
+| `-oauth-issuer` | `RELAY_OAUTH_ISSUER` | *(empty)* | OIDC issuer for human MCP sessions (ADR-0024). Empty disables OAuth; set, it makes `-oauth-audience` and `-oauth-public-url` required and discovery run at startup. See [control-plane-credential.md](control-plane-credential.md). |
+| `-oauth-audience` | `RELAY_OAUTH_AUDIENCE` | *(empty)* | This Relay's OAuth resource identifier, checked against each token's `aud`. |
+| `-oauth-public-url` | `RELAY_OAUTH_PUBLIC_URL` | *(empty)* | Externally-reachable control-plane base URL, used to advertise protected-resource metadata. |
+| `-oauth-account-claim` | `RELAY_OAUTH_ACCOUNT_CLAIM` | `email` | Token claim naming the Account a session resolves to. |
+| `-oauth-required-scope` | `RELAY_OAUTH_REQUIRED_SCOPE` | *(empty)* | Scope every OAuth token must carry. |
 
 Subcommands (checked before flag parsing):
 

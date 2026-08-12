@@ -34,6 +34,17 @@ type Principal struct {
 	// Role is the Account's role at the time it authenticated.
 	Role string
 
+	// AuthMethod is HOW this identity was established: a static API Token or
+	// an OAuth session (#299). It is a verified fact — the Relay knows which
+	// of its own paths accepted the credential — and it is what makes the two
+	// session kinds distinguishable in audit, which #299 requires.
+	//
+	// Not an authorization input: authority is the Account's role, whichever
+	// way the caller authenticated. In particular an OAuth session does NOT
+	// make a call human-grade for approval gating — a human authorized the
+	// session, not each model-generated call (ADR-0024).
+	AuthMethod AuthMethod
+
 	// TokenID is the public identifier of the API Token presented, empty when
 	// the action did not arrive through a token boundary (a local signal on
 	// the Relay host, or a test fixture).
@@ -44,6 +55,21 @@ type Principal struct {
 	// and hoping. Never the secret and never its hash — the ID is safe to log.
 	TokenID string
 }
+
+// AuthMethod names how an identity was established.
+type AuthMethod string
+
+const (
+	// AuthMethodUnspecified is the zero value: a Principal built outside an
+	// authentication boundary (a local signal on the Relay host, a fixture).
+	AuthMethodUnspecified AuthMethod = ""
+
+	// AuthMethodAPIToken is a static per-Account API Token (#296).
+	AuthMethodAPIToken AuthMethod = "api_token"
+
+	// AuthMethodOAuth is a session authorized through the external IdP (#299).
+	AuthMethodOAuth AuthMethod = "oauth"
+)
 
 // Attribution returns the string form of p recorded in audit.Record.Principal.
 func (p Principal) Attribution() string {

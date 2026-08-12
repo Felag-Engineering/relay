@@ -193,6 +193,7 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 				AccountName: p.Account,
 				Role:        p.Role,
 				TokenID:     p.TokenID,
+				Method:      string(p.AuthMethod),
 			},
 			Asserted: audit.Asserted{
 				OnBehalfOf:  asserted.OnBehalfOf,

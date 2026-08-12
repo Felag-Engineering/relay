@@ -54,8 +54,18 @@ type Verified struct {
 	// targeted act rather than a guess.
 	//
 	// Empty when the action did not come through a token boundary (a local
-	// signal on the Relay host, e.g. the Freeze lever).
+	// signal on the Relay host, e.g. the Freeze lever), and for an OAuth
+	// session, which presents no API Token at all.
 	TokenID string
+
+	// Method is HOW the identity was established: "api_token" or "oauth"
+	// (#299). Empty for a record written outside an authentication boundary.
+	//
+	// Recorded because the two call for different incident responses: a
+	// compromised static credential is revoked here, while a compromised IdP
+	// account is dealt with at the IdP and only then reflected here. A trail
+	// that cannot tell them apart cannot tell you which lever to pull.
+	Method string
 }
 
 // Asserted is the lane the caller supplied. Every field is caller-claimed,

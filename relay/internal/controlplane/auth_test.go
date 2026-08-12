@@ -11,9 +11,11 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
-const testToken = "s3cr3t-control-plane-credential" //nolint:gosec // test fixture, not a real credential
+const testToken = accounts.TokenPrefix + "fedcba9876543210.control-plane-test" //nolint:gosec // test fixture, not a real credential
 
 // testAuthenticator accepts testToken as the founding admin's credential.
 // Since #298 there is only one credential kind, so every test in this file
@@ -190,22 +192,30 @@ func TestMiddleware_TokenNeverLogged(t *testing.T) {
 }
 
 // TestAuthenticator_HoldsNoSecretMaterial is a structural (by-construction)
-// guarantee: since #298 the Authenticator holds neither a plaintext credential
-// nor a digest — only a TokenVerifier. Its single field is that verifier, so
-// there is no field a caller could populate with secret material at all, and
-// nothing for a future audit sink or debugger to recover from the type.
+// guarantee: the Authenticator holds no credential material of any kind —
+// neither a plaintext nor a digest. It holds collaborators that verify
+// credentials (a TokenVerifier, and since #299 an OAuth resolver) and nothing
+// a secret could be assigned to.
 //
-// Asserted by reflection over the struct rather than by behaviour, because the
-// claim is about the type's shape: a field added later that could carry a
-// secret fails this test at once.
+// Asserted by reflection over the struct's own fields rather than by
+// behaviour, because the claim is about the type's shape. A `string` or
+// `[]byte` field is exactly where a credential or a digest would land, so the
+// test fails the moment one appears — which is the regression worth catching.
+// The OAuth resolver's own strings are configuration (issuer, audience, claim
+// name, metadata URL): public values that appear in the RFC 9728 document the
+// Relay serves to anyone who asks.
 func TestAuthenticator_HoldsNoSecretMaterial(t *testing.T) {
 	typ := reflect.TypeOf(Authenticator{})
-	if typ.NumField() != 1 {
-		t.Fatalf("Authenticator has %d fields, want exactly 1 (the verifier); a new field must not be able to hold secret material", typ.NumField())
-	}
-	f := typ.Field(0)
-	if f.Type != reflect.TypeOf((*TokenVerifier)(nil)).Elem() {
-		t.Errorf("Authenticator's only field is %s %s, want the TokenVerifier interface", f.Name, f.Type)
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		switch f.Type.Kind() {
+		case reflect.String:
+			t.Errorf("Authenticator field %q is a string — a credential or digest could be stored there", f.Name)
+		case reflect.Slice:
+			if f.Type.Elem().Kind() == reflect.Uint8 {
+				t.Errorf("Authenticator field %q is a []byte — a digest could be stored there", f.Name)
+			}
+		}
 	}
 }
 

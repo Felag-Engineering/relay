@@ -141,6 +141,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 func testPrincipal() capability.Principal {
 	p := controlplane.FoundingAdmin()
 	p.TokenID = testTokenID
+	p.AuthMethod = capability.AuthMethodAPIToken
 	return p
 }
 

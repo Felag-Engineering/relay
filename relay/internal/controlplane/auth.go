@@ -77,6 +77,39 @@ func PrincipalFromContext(ctx context.Context) (capability.Principal, bool) {
 // TokenVerifier, which itself compares only hashes.
 type Authenticator struct {
 	tokens TokenVerifier
+
+	// oauth is the OAuth 2.1 resource-server half (#299, ADR-0024). Nil when
+	// no IdP is configured, in which case a non-token credential is simply
+	// refused — the Relay advertises no flow it cannot complete.
+	oauth *oauthResolver
+}
+
+// AuthOption configures an Authenticator.
+type AuthOption func(*Authenticator)
+
+// WithOAuth makes the control plane accept OAuth sessions from the configured
+// IdP alongside per-Account API Tokens.
+//
+// verifier is built once at startup (NewOIDCVerifier), so a misconfigured
+// issuer fails the Relay's boot rather than every request. metadataURL is the
+// absolute URL of this Relay's protected-resource document, advertised in
+// WWW-Authenticate so a harness can discover the flow unaided.
+func WithOAuth(cfg OAuthConfig, verifier OIDCVerifier, lookup AccountLookup, metadataURL string) AuthOption {
+	claim := cfg.AccountClaim
+	if claim == "" {
+		claim = "email"
+	}
+	return func(a *Authenticator) {
+		a.oauth = &oauthResolver{
+			verifier:     verifier,
+			accounts:     lookup,
+			accountClaim: claim,
+			scope:        cfg.RequiredScope,
+			issuer:       cfg.Issuer,
+			audience:     cfg.Audience,
+			metadataURL:  metadataURL,
+		}
+	}
 }
 
 // NewAuthenticator constructs an Authenticator over the given verifier.
@@ -86,11 +119,15 @@ type Authenticator struct {
 // mean a wiring mistake than an intent. NewAuthenticator panics on a nil
 // verifier — at construction, in the composition root, rather than serving a
 // listener that refuses every request for a reason nobody can see.
-func NewAuthenticator(tokens TokenVerifier) *Authenticator {
+func NewAuthenticator(tokens TokenVerifier, opts ...AuthOption) *Authenticator {
 	if tokens == nil {
 		panic("controlplane: NewAuthenticator requires a TokenVerifier")
 	}
-	return &Authenticator{tokens: tokens}
+	a := &Authenticator{tokens: tokens}
+	for _, o := range opts {
+		o(a)
+	}
+	return a
 }
 
 // Middleware wraps next so every request must present a valid bearer
@@ -105,22 +142,20 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		credential, ok := bearerToken(r)
 		if !ok {
-			unauthorized(w)
+			a.unauthorized(w)
 			return
 		}
 
-		principal, tokenID, ok := a.authenticate(r.Context(), credential)
+		principal, ok := a.authenticate(r.Context(), credential)
 		if !ok {
 			// EVERY failure lands here with the same generic 401: malformed
 			// header, unknown token, wrong secret, revoked token, expired
 			// token, disabled Account, unreadable store. Distinguishing them
 			// would tell an attacker that a credential is real and only its
 			// Account is switched off.
-			unauthorized(w)
+			a.unauthorized(w)
 			return
 		}
-
-		principal.TokenID = tokenID
 
 		// Asserted attribution is read AFTER authentication, never before: an
 		// unauthenticated caller must not be able to reach validation logic,
@@ -144,19 +179,42 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // The Account is read fresh by the verifier on every call rather than cached
 // here, which is what makes a role change or a disablement take effect on the
 // very next request instead of at the next restart.
-func (a *Authenticator) authenticate(ctx context.Context, credential string) (capability.Principal, string, bool) {
-	// TokenService.Verify refuses a revoked or expired token and a missing or
-	// disabled Account, and collapses every one of those into a single
-	// indistinguishable error. Nothing to re-check here — a second copy of the
-	// rule is a second place for it to drift.
-	acct, tok, err := a.tokens.Verify(ctx, credential)
-	if err != nil {
-		return capability.Principal{}, "", false
+// Two credential kinds share this boundary since #299: per-Account API Tokens
+// and OAuth sessions. They are routed by PREFIX, never tried in turn — the
+// rule ADR-0023 set for the retired seeded credential, for the same reasons. A
+// `glp_`-shaped credential is only ever checked against the token verifier, and
+// anything else only against the OAuth resolver. Trying both would make a
+// failure's cost depend on which check rejected it, and would let a near-miss
+// on one kind be scored against the other.
+func (a *Authenticator) authenticate(ctx context.Context, credential string) (capability.Principal, bool) {
+	if accounts.LooksLikeAPIToken(credential) {
+		// TokenService.Verify refuses a revoked or expired token and a missing
+		// or disabled Account, and collapses every one of those into a single
+		// indistinguishable error. Nothing to re-check here — a second copy of
+		// the rule is a second place for it to drift.
+		acct, tok, err := a.tokens.Verify(ctx, credential)
+		if err != nil {
+			return capability.Principal{}, false
+		}
+		p := principalFromAccount(acct)
+		p.AuthMethod = capability.AuthMethodAPIToken
+		// The token ID travels with the identity into the verified audit lane:
+		// "which of this Account's credentials acted" is what makes revoking
+		// the compromised one a targeted act (#300).
+		p.TokenID = tok.ID
+		return p, true
 	}
-	// The token ID travels with the identity into the verified audit lane:
-	// "which of this Account's credentials acted" is what makes revoking the
-	// compromised one a targeted act (#300).
-	return principalFromAccount(acct), tok.ID, true
+
+	// Fail closed: with no IdP configured there is nothing a non-token
+	// credential could be checked against.
+	if a.oauth == nil {
+		return capability.Principal{}, false
+	}
+	p, err := a.oauth.resolve(ctx, credential)
+	if err != nil {
+		return capability.Principal{}, false
+	}
+	return p, true
 }
 
 // principalFromAccount projects a stored Account into the capability layer's
@@ -190,8 +248,13 @@ func bearerToken(r *http.Request) (string, bool) {
 }
 
 // unauthorized writes the generic 401 response common to every auth failure.
-func unauthorized(w http.ResponseWriter) {
-	w.Header().Set("WWW-Authenticate", "Bearer")
+//
+// The challenge carries the RFC 9728 resource_metadata pointer when OAuth is
+// configured, which is how an off-the-shelf harness discovers the flow: it
+// reads this header, fetches the metadata, and starts the authorization it
+// needs — without anyone configuring the client for this Relay specifically.
+func (a *Authenticator) unauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", a.wwwAuthenticate())
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusUnauthorized)
 	_, _ = w.Write([]byte(genericAuthError))

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -83,6 +84,24 @@ type Config struct {
 	// `relay bootstrap-token`.
 	ControlEnabled bool
 	ControlAddr    string
+
+	// OAuth* configure the OAuth 2.1 protected-resource half of the control
+	// plane (#299, ADR-0024): humans authenticate through an external IdP and
+	// resolve to Accounts. Empty OAuthIssuer disables it entirely, and the
+	// Relay then advertises no flow rather than one it cannot complete.
+	//
+	// Relay is never an authorization server. Like every other field here this
+	// is startup configuration, unreachable through the Control API
+	// (invariant 11) — an API that could repoint its own issuer could
+	// authenticate anyone.
+	OAuthIssuer        string
+	OAuthAudience      string
+	OAuthAccountClaim  string
+	OAuthRequiredScope string
+	// OAuthMetadataURL is this Relay's externally-reachable base URL, used to
+	// build the RFC 9728 resource_metadata pointer a harness follows. It must
+	// be the URL clients actually dial, not the listen address.
+	OAuthPublicURL string
 }
 
 // appDeps holds the constructed collaborators that tests and lifecycle hooks need
@@ -192,6 +211,16 @@ func parseConfig() Config {
 		"enable the control-plane listener (MCP + /api/v1); disabled by default")
 	controlAddr := flag.String("control-addr", ":9443",
 		"control-plane HTTPS listen address (distinct from -addr, the node-plane gRPC listener)")
+	oauthIssuer := flag.String("oauth-issuer", "",
+		"OIDC issuer URL for human MCP sessions (ADR-0024); empty disables OAuth")
+	oauthAudience := flag.String("oauth-audience", "",
+		"this Relay's OAuth resource identifier, checked against each token's aud; required with -oauth-issuer")
+	oauthAccountClaim := flag.String("oauth-account-claim", "email",
+		"token claim whose value names the Account a session resolves to")
+	oauthRequiredScope := flag.String("oauth-required-scope", "",
+		"scope every OAuth token must carry; empty requires none")
+	oauthPublicURL := flag.String("oauth-public-url", "",
+		"externally-reachable base URL of the control plane, used to advertise protected-resource metadata")
 
 	flag.Parse()
 
@@ -277,6 +306,11 @@ func parseConfig() Config {
 		}
 	}
 	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
+	cfg.OAuthIssuer = envOr("RELAY_OAUTH_ISSUER", *oauthIssuer)
+	cfg.OAuthAudience = envOr("RELAY_OAUTH_AUDIENCE", *oauthAudience)
+	cfg.OAuthAccountClaim = envOr("RELAY_OAUTH_ACCOUNT_CLAIM", *oauthAccountClaim)
+	cfg.OAuthRequiredScope = envOr("RELAY_OAUTH_REQUIRED_SCOPE", *oauthRequiredScope)
+	cfg.OAuthPublicURL = envOr("RELAY_OAUTH_PUBLIC_URL", *oauthPublicURL)
 
 	return cfg
 }
@@ -486,12 +520,47 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// / api.APITokenService), so neither surface holds the other's power.
 		apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
 
+		// OAuth 2.1 protected-resource support (#299, ADR-0024). Discovery
+		// happens ONCE, here at startup, so a misconfigured issuer fails the
+		// Relay's boot loudly rather than every request quietly.
+		var authOpts []controlplane.AuthOption
+		if cfg.OAuthIssuer != "" {
+			oauthCfg := controlplane.OAuthConfig{
+				Issuer:        cfg.OAuthIssuer,
+				Audience:      cfg.OAuthAudience,
+				AccountClaim:  cfg.OAuthAccountClaim,
+				RequiredScope: cfg.OAuthRequiredScope,
+			}
+			if oauthCfg.Audience == "" {
+				return nil, nil, fmt.Errorf("-oauth-audience is required with -oauth-issuer: without the audience check, a token minted for any other service sharing the IdP would authenticate here")
+			}
+			if cfg.OAuthPublicURL == "" {
+				return nil, nil, fmt.Errorf("-oauth-public-url is required with -oauth-issuer: it is how a harness is told where to find this Relay's protected-resource metadata")
+			}
+			verifier, err := controlplane.NewOIDCVerifier(context.Background(), oauthCfg)
+			if err != nil {
+				return nil, nil, fmt.Errorf("oauth resource server: %w", err)
+			}
+			metadataURL := strings.TrimSuffix(cfg.OAuthPublicURL, "/") + controlplane.ProtectedResourceMetadataPath
+			// A read-only Account view: resolving a session must never be able
+			// to create one (ADR-0024, no auto-provisioning).
+			authOpts = append(authOpts, controlplane.WithOAuth(oauthCfg, verifier, st.Accounts(), metadataURL))
+			slog.Info("oauth resource server enabled",
+				"issuer", cfg.OAuthIssuer,
+				"audience", cfg.OAuthAudience,
+				"account_claim", oauthCfg.AccountClaim,
+				"metadata_url", metadataURL,
+			)
+		}
+
+		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
-			// The only credential the control plane accepts: a per-Account API
-			// Token, verified against the store on every request. There is no
-			// shared secret and no digest held in memory (ADR-0023).
-			controlplane.NewAuthenticator(apiTokenSvc),
+			// Two credential kinds, routed by prefix: per-Account API Tokens
+			// verified against the store, and OAuth sessions verified against
+			// the IdP. No shared secret and no digest held in memory
+			// (ADR-0023, ADR-0024).
+			authn,
 		)
 
 		// sd bundles every collaborator a control surface's Mount may need,

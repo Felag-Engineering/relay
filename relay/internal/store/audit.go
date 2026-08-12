@@ -34,12 +34,12 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 	v, as := r.Attribution.Verified, r.Attribution.Asserted
 	_, err = a.db.ExecContext(ctx, `
 		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
-		                   account_id, account_name, account_role, token_id,
+		                   account_id, account_name, account_role, token_id, auth_method,
 		                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
-		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID),
+		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
 	)
 	if err != nil {
@@ -80,7 +80,7 @@ func (a *sqliteAudit) ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]au
 func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any) ([]audit.Record, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
-		       account_id, account_name, account_role, token_id,
+		       account_id, account_name, account_role, token_id, auth_method,
 		       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref
 		FROM audit `+whereClause, args...)
 	if err != nil {
@@ -100,11 +100,12 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			stdout, stderr                                       []byte
 			truncated                                            int
 			accountID, accountName, accountRole, tokenID         sql.NullString
+			authMethod                                           sql.NullString
 			onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
 		)
 		if err := rows.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 			&operationName, &argsJSON, &argvJSON, &outcome, &reason, &stdout, &stderr, &truncated,
-			&accountID, &accountName, &accountRole, &tokenID,
+			&accountID, &accountName, &accountRole, &tokenID, &authMethod,
 			&onBehalfOf, &traceparent, &sessionRef, &changeRef); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
@@ -131,6 +132,7 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 					AccountName: accountName.String,
 					Role:        accountRole.String,
 					TokenID:     tokenID.String,
+					Method:      authMethod.String,
 				},
 				Asserted: audit.Asserted{
 					OnBehalfOf:  onBehalfOf.String,

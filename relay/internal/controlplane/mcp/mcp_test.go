@@ -36,7 +36,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
-const testToken = "mcp-integration-test-token"
+const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test" //nolint:gosec // test fixture, not a real credential
 
 // opsLister adapts opvocab.Operations (a package-level func) to
 // mcp.OperationLister, exactly like relay/cmd/relay/main.go's opvocabLister.
