@@ -30,6 +30,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -300,4 +301,132 @@ func toolText(t *testing.T, res *sdkmcp.CallToolResult) string {
 		t.Fatalf("Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
 	}
 	return tc.Text
+}
+
+// headerRoundTripper adds arbitrary headers to every request, so an e2e can
+// present asserted attribution the way a real harness would.
+type headerRoundTripper struct {
+	base    http.RoundTripper
+	headers map[string]string
+}
+
+func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	for k, v := range rt.headers {
+		req.Header.Set(k, v)
+	}
+	return rt.base.RoundTrip(req)
+}
+
+// Acceptance (#300): "A dispatch with on_behalf_of + traceparent shows both in
+// its audit record, marked asserted; the same record's Account/token fields
+// are marked verified."
+//
+// End to end through MCP against a real daemon, because the two lanes are
+// assembled from opposite ends of the request — the verified half from the
+// token the Relay checked, the asserted half from headers the caller set — and
+// only a real request exercises both at once.
+func TestMCPAccountAuth_AttributionLanes_E2E(t *testing.T) {
+	daemonBin := os.Getenv("RELAY_DAEMON_BIN")
+	if daemonBin == "" {
+		t.Skip("RELAY_DAEMON_BIN not set; skipping real-daemon e2e (run via make test-integration)")
+	}
+	f := startAccountFleet(t, daemonBin)
+	ctx := context.Background()
+
+	acct, credential := f.mintAccount(t, "gleipnir", accounts.RoleOperator)
+	stored, err := f.tokens.List(ctx, acct.ID)
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("list tokens: %v (%d)", err, len(stored))
+	}
+	tokenID := stored[0].ID
+
+	const (
+		onBehalfOf  = "ops-team"
+		traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+		sessionRef  = "conv_01JQ8Z9K2X"
+		changeRef   = "CHG-4821"
+	)
+	client := &http.Client{Transport: headerRoundTripper{
+		base: relaytest.BearerRoundTripper{
+			Base:  &http.Transport{TLSClientConfig: f.tlsConfig},
+			Token: credential,
+		},
+		headers: map[string]string{
+			controlplane.HeaderOnBehalfOf:  onBehalfOf,
+			controlplane.HeaderTraceparent: traceparent,
+			controlplane.HeaderSessionRef:  sessionRef,
+			controlplane.HeaderChangeRef:   changeRef,
+		},
+	}}
+
+	session := relaytest.Connect(t, f.controlBase, client)
+	res := relaytest.CallTool(t, session, "run_operation", map[string]any{
+		"operation": "system.facts",
+		"selector":  "relay:env=test",
+	})
+	if res.IsError {
+		t.Fatalf("run_operation returned IsError=true: %+v", res.Content)
+	}
+
+	// The verified lane: queryable by Account ID, which is what makes the
+	// trail survive a rename.
+	records, err := f.deps.audit.ByAccount(ctx, acct.ID)
+	if err != nil {
+		t.Fatalf("ByAccount: %v", err)
+	}
+	var dispatch *audit.Record
+	for i := range records {
+		if records[i].Kind == audit.KindDispatch {
+			dispatch = &records[i]
+			break
+		}
+	}
+	if dispatch == nil {
+		t.Fatalf("no dispatch record for account %q; got %v", acct.ID, principals(records))
+	}
+
+	v := dispatch.Attribution.Verified
+	if v.AccountID != acct.ID || v.AccountName != "gleipnir" || v.Role != string(accounts.RoleOperator) {
+		t.Errorf("verified lane = %+v, want the acting Account with its role at the time", v)
+	}
+	if v.TokenID != tokenID {
+		t.Errorf("verified TokenID = %q, want %q — which credential acted must be recorded", v.TokenID, tokenID)
+	}
+
+	a := dispatch.Attribution.Asserted
+	if a.OnBehalfOf != onBehalfOf || a.Traceparent != traceparent || a.SessionRef != sessionRef || a.ChangeRef != changeRef {
+		t.Errorf("asserted lane = %+v, want the four values the caller sent", a)
+	}
+
+	// The asserted-lane query finds the same dispatch — the join key back to
+	// the orchestrator's own session logs.
+	byTeam, err := f.deps.audit.ByOnBehalfOf(ctx, onBehalfOf)
+	if err != nil {
+		t.Fatalf("ByOnBehalfOf: %v", err)
+	}
+	var found bool
+	for _, r := range byTeam {
+		if r.ID == dispatch.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ByOnBehalfOf(%q) did not return the dispatch record", onBehalfOf)
+	}
+
+	// A malformed assertion is refused at the boundary — the caller cannot
+	// size an audit record.
+	oversized := &http.Client{Transport: headerRoundTripper{
+		base: relaytest.BearerRoundTripper{
+			Base:  &http.Transport{TLSClientConfig: f.tlsConfig},
+			Token: credential,
+		},
+		headers: map[string]string{
+			controlplane.HeaderOnBehalfOf: strings.Repeat("x", audit.MaxAssertedFieldBytes+1),
+		},
+	}}
+	if _, err := relaytest.TryConnect(t, f.controlBase, oversized); err == nil {
+		t.Error("an oversized asserted header was accepted")
+	}
 }

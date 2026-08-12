@@ -131,7 +131,7 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // store Append below succeeds — the decision remains visible in logs even
 // if the SQLite write fails.
 func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
-	base := s.baseRecord(e.Principal, e.Selector, e.Action)
+	base := s.baseRecord(e.Principal, e.Asserted, e.Selector, e.Action)
 
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
@@ -179,9 +179,10 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 // no Selector/NodeID/JobID/Action — Freeze is Relay-wide.
 func (s *Sink) RecordFreeze(ctx context.Context, e capability.FreezeEvent) error {
 	rec := audit.Record{
-		Timestamp: s.now(),
-		Principal: e.Principal.Attribution(),
-		Reason:    e.Reason,
+		Timestamp:   s.now(),
+		Principal:   e.Principal.Attribution(),
+		Attribution: attribution(e.Principal, e.Asserted),
+		Reason:      e.Reason,
 	}
 	if e.Engage {
 		rec.Kind = audit.KindFreezeEngage
@@ -198,10 +199,11 @@ func (s *Sink) RecordFreeze(ctx context.Context, e capability.FreezeEvent) error
 // dispatch (mirrors RecordFreeze's Relay-wide shape, minus the Reason field).
 func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID string) error {
 	rec := audit.Record{
-		Timestamp: s.now(),
-		Kind:      audit.KindJobCancel,
-		Principal: p.Attribution(),
-		JobID:     jobID,
+		Timestamp:   s.now(),
+		Kind:        audit.KindJobCancel,
+		Principal:   p.Attribution(),
+		Attribution: attribution(p, capability.AssertionsFromContext(ctx)),
+		JobID:       jobID,
 	}
 	return s.append(ctx, rec)
 }
@@ -209,10 +211,11 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 // baseRecord builds the audit.Record fields common to every Kind: attributed
 // Principal, the Selector as written, and the Action's shape. Kind, JobID,
 // NodeID, Outcome, and Reason are filled in by the caller per Kind.
-func (s *Sink) baseRecord(p capability.Principal, sel capability.Selector, act jobs.Action) audit.Record {
+func (s *Sink) baseRecord(p capability.Principal, a capability.Assertions, sel capability.Selector, act jobs.Action) audit.Record {
 	return audit.Record{
 		Timestamp:     s.now(),
 		Principal:     p.Attribution(),
+		Attribution:   attribution(p, a),
 		Selector:      sel.String(),
 		ActionKind:    actionKindString(act.Kind),
 		OperationName: act.OperationName,
@@ -325,6 +328,31 @@ func outcomeCounts(results []capability.NodeResult) string {
 		fmt.Fprintf(&b, "%s=%d", outcomeLabel(o), n)
 	}
 	return b.String()
+}
+
+// attribution maps the capability layer's verified Principal and
+// caller-asserted metadata onto the audit record's two lanes (#300).
+//
+// This mapping is the only place the two representations meet, and it is
+// deliberately total: the verified fields come exclusively from the Principal
+// the authentication boundary produced, and the asserted fields exclusively
+// from what the caller supplied. There is no path by which a value can cross
+// from one lane to the other.
+func attribution(p capability.Principal, a capability.Assertions) audit.Attribution {
+	return audit.Attribution{
+		Verified: audit.Verified{
+			AccountID:   p.AccountID,
+			AccountName: p.Account,
+			Role:        p.Role,
+			TokenID:     p.TokenID,
+		},
+		Asserted: audit.Asserted{
+			OnBehalfOf:  a.OnBehalfOf,
+			Traceparent: a.Traceparent,
+			SessionRef:  a.SessionRef,
+			ChangeRef:   a.ChangeRef,
+		},
+	}
 }
 
 func (s *Sink) append(ctx context.Context, rec audit.Record) error {

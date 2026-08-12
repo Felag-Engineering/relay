@@ -146,7 +146,7 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
 	nodes := sel.Resolve(s.reg)
 
-	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
+	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
@@ -155,7 +155,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	if capErr := s.cap.Check(act.RiskClass, len(nodes)); capErr != nil {
 		var ce *CapExceededError
 		errors.As(capErr, &ce)
-		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act}); err != nil {
+		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)}); err != nil {
 			return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce},
 				fmt.Errorf("capability: record audit entry: %w", err)
 		}
@@ -168,7 +168,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	// mirroring Run's own "a partially-executed dispatch must never go
 	// unaudited" discipline (service.go) — and a failed write is joined
 	// into the returned error rather than silently swallowed.
-	auditErr := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act})
+	auditErr := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)})
 	if auditErr != nil {
 		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
 	}

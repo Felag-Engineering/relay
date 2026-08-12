@@ -183,7 +183,9 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 
 	nodes := sel.Resolve(s.reg)
 
-	if err := s.authz.Authorize(ctx, p, act, sel); err != nil {
+	// withoutAssertions: an authorization decision must not be able to read
+	// anything the caller asserted (see assertions.go).
+	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
@@ -209,7 +211,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// an Operation's arguments would land in the audit trail as-is. #102
 	// does not close this — it is flagged here so it is not mistaken for a
 	// gap in #102's redaction guarantee.
-	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results}
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, Asserted: AssertionsFromContext(ctx)}
 	auditErr := s.audit.Record(ctx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must
@@ -232,7 +234,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 // swallowed.
 func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
 	s.metrics.IncRefusal(kind)
-	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error()}
+	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}
 	var auditErr error
 	if err := s.audit.Record(ctx, entry); err != nil {
 		auditErr = fmt.Errorf("capability: record audit entry: %w", err)
@@ -249,7 +251,7 @@ func (s *Service) EngageFreeze(ctx context.Context, p Principal) error {
 	if err := s.freeze.Engage(ctx, p.Attribution()); err != nil {
 		return fmt.Errorf("capability: engage freeze: %w", err)
 	}
-	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: true})
+	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: true, Asserted: AssertionsFromContext(ctx)})
 }
 
 // ReleaseFreeze clears the Relay-wide Freeze (ADR-0013), attributed to p
@@ -259,7 +261,7 @@ func (s *Service) ReleaseFreeze(ctx context.Context, p Principal, reason string)
 	if err := s.freeze.Release(ctx, p.Attribution(), reason); err != nil {
 		return fmt.Errorf("capability: release freeze: %w", err)
 	}
-	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: false, Reason: reason})
+	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: false, Reason: reason, Asserted: AssertionsFromContext(ctx)})
 }
 
 // CancelJob stops jobID's Tasks (#101, ADR-0013): undispatched Tasks are

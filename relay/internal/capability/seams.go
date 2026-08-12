@@ -95,6 +95,11 @@ type AuditEntry struct {
 	JobID     string
 	Results   []NodeResult
 	Reason    string
+
+	// Asserted is the caller-claimed attribution lane (#300), read off the
+	// request context by Service.Run/Plan. Recorded, never consulted — see
+	// assertions.go.
+	Asserted Assertions
 }
 
 // FreezeEvent is a Freeze engage/release, passed to AuditSink.RecordFreeze
@@ -104,6 +109,7 @@ type FreezeEvent struct {
 	Principal Principal
 	Engage    bool
 	Reason    string
+	Asserted  Assertions
 }
 
 // noopAuditSink is the v0.0.5 default: nothing is recorded.

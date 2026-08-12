@@ -109,7 +109,7 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		principal, ok := a.authenticate(r.Context(), credential)
+		principal, tokenID, ok := a.authenticate(r.Context(), credential)
 		if !ok {
 			// EVERY failure lands here with the same generic 401: malformed
 			// header, unknown token, wrong secret, revoked token, expired
@@ -120,7 +120,21 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		principal.TokenID = tokenID
+
+		// Asserted attribution is read AFTER authentication, never before: an
+		// unauthenticated caller must not be able to reach validation logic,
+		// and a malformed header on an unauthenticated request should still
+		// answer 401 rather than 400 (which would reveal that the credential
+		// was fine).
+		asserted, err := assertionsFromRequest(r)
+		if err != nil {
+			badAssertedAttribution(w, err)
+			return
+		}
+
 		ctx := context.WithValue(r.Context(), principalContextKey{}, principal)
+		ctx = capability.WithAssertions(ctx, asserted)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -130,16 +144,19 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // The Account is read fresh by the verifier on every call rather than cached
 // here, which is what makes a role change or a disablement take effect on the
 // very next request instead of at the next restart.
-func (a *Authenticator) authenticate(ctx context.Context, credential string) (capability.Principal, bool) {
+func (a *Authenticator) authenticate(ctx context.Context, credential string) (capability.Principal, string, bool) {
 	// TokenService.Verify refuses a revoked or expired token and a missing or
 	// disabled Account, and collapses every one of those into a single
 	// indistinguishable error. Nothing to re-check here — a second copy of the
 	// rule is a second place for it to drift.
-	acct, _, err := a.tokens.Verify(ctx, credential)
+	acct, tok, err := a.tokens.Verify(ctx, credential)
 	if err != nil {
-		return capability.Principal{}, false
+		return capability.Principal{}, "", false
 	}
-	return principalFromAccount(acct), true
+	// The token ID travels with the identity into the verified audit lane:
+	// "which of this Account's credentials acted" is what makes revoking the
+	// compromised one a targeted act (#300).
+	return principalFromAccount(acct), tok.ID, true
 }
 
 // principalFromAccount projects a stored Account into the capability layer's
