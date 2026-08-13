@@ -356,7 +356,13 @@ async fn run_tunnel(
     // Cancel registry: maps in-flight task_ids to their cancel senders.
     // Registration happens BEFORE spawn so no TaskCancel can arrive in a window
     // where the task is in flight but not yet registered.
-    let registry = CancelRegistry::new();
+    //
+    // Shared by Arc across every reconnect (issue #337): it is owned by `ctx`
+    // for the process's lifetime, so a TaskCancel — or the drain's grace-expiry
+    // kill — for a Task that outlives its originating connection still reaches
+    // that Task's executor. Recreating it per-connection made such a cancel a
+    // silent no-op against a fresh empty registry.
+    let registry = ctx.registry.clone();
 
     // Drive the inbound stream. Spawning a detached task per Task keeps the loop
     // readable so TaskCancel and PolicyQuery messages can arrive while a Task is
@@ -413,7 +419,16 @@ async fn run_tunnel(
                         let task_id = task_req.task_id.clone();
                         // Register BEFORE spawn: eliminates the window where
                         // a TaskCancel could arrive before the registry entry exists.
+                        //
+                        // First-writer-wins (issue #337): if the id is already
+                        // registered — the Relay redelivered a still-in-flight
+                        // task_id across a reconnect — `register` returns None and
+                        // leaves the live owner's cancel handle intact. We still
+                        // spawn (the dedup store makes the duplicate a benign
+                        // no-op) but, owning no registration, must NOT deregister
+                        // it: doing so would strip the live Task's cancel handle.
                         let cancel_rx = registry.register(&task_id);
+                        let owns_registration = cancel_rx.is_some();
                         // Counts this Task from acceptance until its result is
                         // enqueued on `tx` (below) — spans strictly more than the
                         // cancel registry entry, which deregisters BEFORE the
@@ -440,12 +455,17 @@ async fn run_tunnel(
                                 &dedup,
                                 &scheduler,
                                 received_at,
-                                Some(cancel_rx),
+                                cancel_rx,
                             )
                             .await;
                             // Deregister before sending the result so a subsequent
-                            // TaskCancel for this id is a clean no-op.
-                            registry.deregister(&task_id);
+                            // TaskCancel for this id is a clean no-op — but ONLY if
+                            // this lifecycle owns the registration. A redelivered
+                            // duplicate (owns_registration == false) must leave the
+                            // live owner's entry alone (issue #337).
+                            if owns_registration {
+                                registry.deregister(&task_id);
+                            }
                             if tx
                                 .send(DaemonMessage {
                                     body: Some(daemon_message::Body::TaskResult(result)),
@@ -805,6 +825,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown,
         inflight: Inflight::default(),
         grace: shutdown::grace_period(),
+        // One registry for the whole process, shared across every reconnect so
+        // cancellation survives a reconnect (issue #337).
+        registry: CancelRegistry::new(),
     };
 
     reconnect_loop(
