@@ -645,6 +645,30 @@ fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
     }
 }
 
+/// The stderr reason on an admission-rejected Task (issue #338).
+///
+/// A fixed string, like [`UNSUPPORTED_REASON`]: it carries no attacker- or
+/// operator-controlled bytes. It says plainly that nothing ran and the Task is
+/// safe to retry once the daemon has capacity — the daemon's local in-flight
+/// backstop tripped, not Policy.
+pub(crate) const OVERLOADED_REASON: &str =
+    "daemon at its concurrent-Task backstop; nothing executed, Policy was not consulted, \
+     and this Task was neither deduplicated nor cancel-registered — safe to retry";
+
+/// Synthesizes the `OUTCOME_FAILURE` result for a Task refused at admission
+/// because the daemon is already at its in-flight backstop (issue #338).
+///
+/// Reuses `OUTCOME_FAILURE` (there is no "overloaded" wire outcome and adding
+/// one is a `/proto` change out of scope here) with the never-executed exit
+/// code `-1`, mirroring `failure_result`/`unsupported_result`. The Task is
+/// deliberately *not* recorded in the DedupStore or the CancelRegistry: it
+/// never ran, so a later re-send must be free to execute (ADR-0004 at-most-once
+/// is about not running twice, not about refusing a retry of something that
+/// never ran once).
+pub(crate) fn overloaded_result(task_id: String) -> TaskResult {
+    failure_result(task_id, OVERLOADED_REASON.as_bytes())
+}
+
 // format_facts_as_kv (the `system.facts` stdout encoding) moved to
 // `operations::system_facts` with the issue #289 registry refactor — it is
 // consumed by the `system.facts` handler in `operations::registry`.
@@ -2459,6 +2483,38 @@ allowed_args = []
              Policy would have allowed it — the Node was never asked to decide"
         );
         assert_eq!(unregistered.stderr, UNSUPPORTED_REASON.as_bytes());
+    }
+
+    // -----------------------------------------------------------------------
+    // Admission backstop synthesizer (issue #338).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn overloaded_result_is_a_never_executed_failure_that_echoes_no_input() {
+        // A caller-controlled, adversarial task_id: the result must carry it
+        // back verbatim in the id field (so the Relay can correlate) but must
+        // NOT leak any of it into stderr, which is the fixed reason only.
+        let hostile = "'; rm -rf / #\n\u{1b}[2J".to_string();
+        let r = overloaded_result(hostile.clone());
+
+        assert_eq!(r.task_id, hostile, "id echoes back for correlation");
+        assert_eq!(
+            r.outcome,
+            Outcome::Failure as i32,
+            "refused-at-admission reuses OUTCOME_FAILURE (no 'overloaded' wire outcome)"
+        );
+        assert_eq!(
+            r.exit_code, -1,
+            "nothing ran, so the never-executed sentinel"
+        );
+        assert!(r.stdout.is_empty());
+        assert_eq!(r.stderr, OVERLOADED_REASON.as_bytes());
+        assert!(
+            !r.stderr.windows(3).any(|w| w == b"rm "),
+            "stderr must be the fixed reason, never an echo of the requested id"
+        );
+        assert!(!r.truncated);
+        assert_eq!(r.duration_millis, 0);
     }
 
     // -----------------------------------------------------------------------
