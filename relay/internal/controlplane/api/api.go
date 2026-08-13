@@ -112,6 +112,10 @@ type Deps struct {
 	// this surface's reach (invariant 11).
 	Exec Executor
 	Jobs JobResultReader
+	// Reads records read-access events for the Job read route (#357,
+	// ADR-0025). Nil skips recording — the pre-#288 behaviour, kept so tests
+	// and any unwired surface work; the composition root always supplies it.
+	Reads ReadAuditor
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
@@ -153,6 +157,12 @@ func Register(mux *http.ServeMux, d Deps) {
 	// authz.RoleGate rather than being repeated here.
 	mux.HandleFunc("POST /api/v1/operations", handleRunOperation(d))
 	mux.HandleFunc("POST /api/v1/raw-exec", handleRawExec(d))
+
+	// Job read + cancel (#357). The read route is audited (ADR-0025): it
+	// returns captured Task output, so it discloses material somebody else
+	// produced. Cancel goes through the same capability layer as dispatch.
+	mux.HandleFunc("GET /api/v1/jobs/{id}", handleGetJob(d))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", handleCancelJob(d))
 }
 
 // principal reads the Principal that Authenticator.Middleware injected into

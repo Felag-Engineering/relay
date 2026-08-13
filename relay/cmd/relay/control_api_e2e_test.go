@@ -22,11 +22,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
+	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -427,4 +430,216 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 			t.Fatalf("status = %d, want 401 — the execution routes sit behind the same Authenticator as every other /api/v1 route", resp.StatusCode)
 		}
 	})
+}
+
+// -----------------------------------------------------------------------
+// Job read + cancel routes (#357)
+// -----------------------------------------------------------------------
+
+// seedJob writes a Job with two resolved Tasks straight through the repos, so
+// the Job-read routes can be exercised without a real daemon (the real-daemon
+// path is covered by TestMCPExecution_RealDaemon_E2E, which needs
+// RELAY_DAEMON_BIN and is skipped in a normal run). Returns the Job id.
+func seedJob(t *testing.T, deps *appDeps) string {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	jobID := "job-e2e-1"
+	if err := deps.jobs.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	stageID := "stage-e2e-1"
+	if err := deps.jobs.AddStage(ctx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+
+	// One Task that ran and exited 0, one that never ran (unreachable) — the
+	// pair that makes the exit_code presence rule observable.
+	act := jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "system.facts",
+		RiskClass:     jobs.RiskClassRead,
+	}
+	ran := jobs.Task{ID: "task-e2e-ran", JobID: jobID, StageID: stageID, NodeID: "node-ran", Action: act, CreatedAt: now}
+	if err := deps.tasks.CreateTask(ctx, ran); err != nil {
+		t.Fatalf("CreateTask(ran): %v", err)
+	}
+	if err := deps.tasks.MarkDispatched(ctx, ran.ID, now); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	if err := deps.tasks.Resolve(ctx, ran.ID, jobs.Result{
+		Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte("hello"),
+	}); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	offline := jobs.Task{ID: "task-e2e-offline", JobID: jobID, StageID: stageID, NodeID: "node-offline", Action: act, CreatedAt: now}
+	if err := deps.tasks.CreateTask(ctx, offline); err != nil {
+		t.Fatalf("CreateTask(offline): %v", err)
+	}
+	if err := deps.tasks.MarkUnreachable(ctx, offline.ID, now); err != nil {
+		t.Fatalf("MarkUnreachable: %v", err)
+	}
+	return jobID
+}
+
+// TestControlAPI_JobRoutes drives #357's acceptance through the real
+// composition root: a dispatched Job is re-readable by id with truthful
+// per-Node outcomes, an unknown id is a legible 404, and cancel reaches the
+// capability layer.
+func TestControlAPI_JobRoutes(t *testing.T) {
+	_, deps, base, client, credential := startControlAPIServer(t)
+	jobID := seedJob(t, deps)
+
+	t.Run("a dispatched Job is re-readable by id", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodGet, base+"/api/v1/jobs/"+jobID, credential, nil)
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var body struct {
+			JobID   string            `json:"job_id"`
+			Results []json.RawMessage `json:"results"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if body.JobID != jobID || len(body.Results) != 2 {
+			t.Fatalf("job_id=%q with %d results, want %q with 2", body.JobID, len(body.Results), jobID)
+		}
+		// The did-it-run distinction survives the round trip: the Task that
+		// ran carries exit_code, the one that never ran does not.
+		wantExit := map[string]bool{"node-ran": true, "node-offline": false}
+		for _, raw := range body.Results {
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &m); err != nil {
+				t.Fatalf("decode result: %v", err)
+			}
+			var nodeID string
+			_ = json.Unmarshal(m["node_id"], &nodeID)
+			if _, present := m["exit_code"]; present != wantExit[nodeID] {
+				t.Errorf("%s: exit_code present = %v, want %v", nodeID, present, wantExit[nodeID])
+			}
+		}
+	})
+
+	t.Run("an unknown Job id is a 404", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodGet, base+"/api/v1/jobs/job-does-not-exist", credential, nil)
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+
+	t.Run("the read is audited", func(t *testing.T) {
+		// ADR-0025: reading a Job returns captured Task output, so the access
+		// must leave a trail. This also proves apiSurface.Mount wired Reads.
+		records, err := deps.audit.ByJob(context.Background(), jobID)
+		if err != nil {
+			t.Fatalf("audit.ByJob: %v", err)
+		}
+		var reads int
+		for _, rec := range records {
+			if rec.Kind == audit.KindRead {
+				reads++
+			}
+		}
+		if reads == 0 {
+			t.Error("no KindRead audit record for the Job read; the API read route must be audited like MCP's get_job")
+		}
+	})
+
+	t.Run("cancelling a finished Job is a clean no-op", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/jobs/"+jobID+"/cancel", credential, nil)
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (every Task is terminal; none is touched)", resp.StatusCode)
+		}
+	})
+
+	t.Run("cancelling an unknown Job is a 404", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/jobs/nope/cancel", credential, nil)
+		defer resp.Body.Close() //nolint:errcheck
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404", resp.StatusCode)
+		}
+	})
+}
+
+// TestControlAPI_JobResultsMatchMCP is #357's third acceptance criterion:
+// "results are consistent with what MCP returns for the same Job". Both
+// surfaces are driven over their real transports against the SAME seeded Job,
+// and their per-Node result sets are compared field by field.
+//
+// This is the assertion that would catch the two surfaces drifting — a
+// renderer changed on one side, an exit_code rule applied differently, a
+// different sort order — which is exactly the failure invariant 10 exists to
+// prevent and which no single-surface test can see.
+func TestControlAPI_JobResultsMatchMCP(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	jobID := seedJob(t, f.Deps)
+
+	// API side.
+	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
+		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("API status = %d, want 200", resp.StatusCode)
+	}
+	var apiBody struct {
+		Results []mcp.PerNodeResult `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
+		t.Fatalf("decode API body: %v", err)
+	}
+
+	// MCP side, same Job, same server.
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "get_job", map[string]any{"job_id": jobID})
+	if res.IsError {
+		t.Fatalf("get_job returned IsError; content = %+v", res.Content)
+	}
+	var mcpOut mcp.ExecutionOutput
+	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &mcpOut); err != nil {
+		t.Fatalf("decode MCP output: %v", err)
+	}
+
+	if len(apiBody.Results) != len(mcpOut.Results) {
+		t.Fatalf("API returned %d per-Node results, MCP returned %d — the same Job must read the same through either door",
+			len(apiBody.Results), len(mcpOut.Results))
+	}
+	for i := range apiBody.Results {
+		a, m := apiBody.Results[i], mcpOut.Results[i]
+		if a.NodeID != m.NodeID || a.Outcome != m.Outcome {
+			t.Errorf("result[%d]: API {%s %s} != MCP {%s %s}", i, a.NodeID, a.Outcome, m.NodeID, m.Outcome)
+		}
+		// exit_code is a pointer on both sides: presence must agree, not just
+		// the value — that IS the #207/#253 did-it-run distinction.
+		switch {
+		case (a.ExitCode == nil) != (m.ExitCode == nil):
+			t.Errorf("result[%d] (%s): exit_code presence differs — API nil=%v, MCP nil=%v",
+				i, a.NodeID, a.ExitCode == nil, m.ExitCode == nil)
+		case a.ExitCode != nil && *a.ExitCode != *m.ExitCode:
+			t.Errorf("result[%d] (%s): exit_code %d != %d", i, a.NodeID, *a.ExitCode, *m.ExitCode)
+		}
+		if a.Stdout != m.Stdout || a.Stderr != m.Stderr {
+			t.Errorf("result[%d] (%s): captured output differs between surfaces", i, a.NodeID)
+		}
+	}
+}
+
+// mcpToolText extracts a tool result's single text payload. (The
+// integration-tagged e2e files have their own copy; this package's default
+// build cannot see it.)
+func mcpToolText(t *testing.T, res *sdkmcp.CallToolResult) string {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatal("CallToolResult.Content is empty")
+	}
+	tc, ok := res.Content[0].(*sdkmcp.TextContent)
+	if !ok {
+		t.Fatalf("Content[0] = %T, want *sdkmcp.TextContent", res.Content[0])
+	}
+	return tc.Text
 }

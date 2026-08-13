@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 )
 
 // TestDefaultControlSurfaces_MountWithoutCollision mounts every surface
@@ -61,4 +64,38 @@ func TestDefaultControlSurfaces_Order(t *testing.T) {
 	if _, ok := surfaces[2].(metricsSurface); !ok {
 		t.Errorf("surfaces[2] = %T, want metricsSurface", surfaces[2])
 	}
+}
+
+// TestSurfaceDeps_AuditSinkIsWired is a regression guard for a defect found
+// while building #357: newServer assembled surfaceDeps WITHOUT setting
+// auditSink, so it was nil, and mcp's readAuditor answered its defensive
+// `sink == nil` check by skipping silently. Read-access auditing (#288,
+// ADR-0025) was therefore dead in production from the day it shipped — the
+// trail was empty and nothing anywhere said so.
+//
+// A nil sink fails silently by design (that skip is deliberate, so an unwired
+// surface still works), which is exactly why it needs a test rather than a
+// runtime check: the only way to notice is to assert the wiring.
+func TestSurfaceDeps_AuditSinkIsWired(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+
+	// Drive a read through the surface and assert the trail actually grew.
+	jobID := seedJob(t, f.Deps)
+	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
+		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("read status = %d, want 200", resp.StatusCode)
+	}
+
+	records, err := f.Deps.audit.ByJob(context.Background(), jobID)
+	if err != nil {
+		t.Fatalf("audit.ByJob: %v", err)
+	}
+	for _, rec := range records {
+		if rec.Kind == audit.KindRead {
+			return // the sink is wired and writing
+		}
+	}
+	t.Fatal("no KindRead record after a Job read — surfaceDeps.auditSink is not wired, so read auditing is silently disabled (ADR-0025)")
 }

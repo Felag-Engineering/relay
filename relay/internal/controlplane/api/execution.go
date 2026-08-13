@@ -40,12 +40,15 @@ import (
 // mcp.Executor, and TokenMinter/Freezer's style here). *capability.Service
 // satisfies it structurally; the composition root passes it in.
 //
-// CancelJob is deliberately absent: Job cancel and the Job read routes are
-// [2/7]'s scope, and this interface should grant exactly what these routes
-// need and nothing more.
+// CancelJob arrived with the Job routes (#357, jobs.go) and completes the
+// mirror of capability.Service's execution methods. It stays on this one
+// interface rather than a separate JobCanceller because the composition root
+// passes a single *capability.Service for all three — one capability layer,
+// one seam (invariant 10).
 type Executor interface {
 	Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
 	Plan(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) (capability.PlanResult, error)
+	CancelJob(ctx context.Context, p capability.Principal, jobID string) error
 }
 
 // JobResultReader is the read-only view over a Job's persisted Tasks the

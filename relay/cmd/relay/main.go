@@ -587,8 +587,17 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			apiTokens:    apiTokenSvc,
 			revocation:   revocationSvc,
 			audit:        st.Audit(),
-			now:          func() time.Time { return time.Now().UTC() },
-			metrics:      appMetrics,
+			// The read-access sink (#288, ADR-0025). This assignment was
+			// MISSING until #357: surfaceDeps.auditSink stayed nil, so
+			// readAuditor's defensive `sink == nil` skip silently disabled every
+			// read-access record in production — the trail ADR-0025 exists to
+			// keep was empty, and nothing failed to say so. Wiring it here
+			// revives it for the MCP read tools and supplies the Control API's
+			// Job-read route. TestSurfaceDeps_AuditSinkIsWired is the regression
+			// guard, because a nil here fails silently by design.
+			auditSink: auditSink,
+			now:       func() time.Time { return time.Now().UTC() },
+			metrics:   appMetrics,
 		}
 		for _, s := range defaultControlSurfaces() {
 			s.Mount(controlSrv.Mux(), sd)
