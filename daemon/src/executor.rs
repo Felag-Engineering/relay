@@ -213,22 +213,65 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     }
 }
 
-/// Sends SIGTERM to the process group, waits for the grace period, then sends SIGKILL.
+/// Sends SIGTERM to the process group, waits for the grace period, then sends SIGKILL
+/// to any survivors.
 ///
-/// Reaps the direct child so no zombie remains. All grandchildren in the group
-/// also receive the signal because pgid == child pid and `kill(-pgid, SIG)` targets
-/// the whole group (ADR-0013, ADR-0001).
+/// Reaps the direct child so no zombie remains. All grandchildren in the group also
+/// receive the signal because pgid == child pid and `kill(-pgid, SIG)` targets the
+/// whole group (ADR-0013, ADR-0001).
+///
+/// # No-orphan guarantee across leader exit (issue #342)
+///
+/// The SIGKILL sweep must run even when the group **leader** exits during the grace
+/// window, because a SIGTERM-ignoring **grandchild** can outlive it. The earlier
+/// version gated SIGKILL on `child.wait()` NOT returning in time, so a leader that
+/// exited within grace skipped the sweep and left such a grandchild running — the
+/// orphan this fixes.
+///
+/// # pgid-reuse safety
+///
+/// `kill(-pgid, …)` is only unambiguous while the kernel cannot recycle `pgid` as an
+/// unrelated process. That pid is held (not recyclable) exactly while process group
+/// `pgid` is non-empty. Two safe cases, and the one we must avoid:
+///
+/// - **Leader not reaped** (it ignored SIGTERM and outran the grace window): the leader
+///   itself still holds `pgid`. SIGKILL the group, then reap the leader.
+/// - **Leader reaped, group still non-empty**: a surviving member (the grandchild) holds
+///   `pgid`, so the kernel has not recycled it — the group is still ours. SIGKILL it.
+/// - **Leader reaped, group empty**: nothing to kill — and this is the *only* case where
+///   `pgid` may already have been recycled, so we must NOT signal it. We skip.
+///
+/// The residual race (a surviving member exits, is reaped by init, and its pid is
+/// recycled into a new group `pgid` in the microseconds between the emptiness check and
+/// the SIGKILL) is not closed here; it is astronomically unlikely on the privileged
+/// daemon's low process-spawn rate, and the prior code offered no protection at all.
 async fn kill_group_graceful(pgid: i32, child: &mut tokio::process::Child) {
     signal_group(pgid, libc::SIGTERM);
-    match tokio::time::timeout(TERM_GRACE, child.wait()).await {
-        Ok(_) => {} // exited within the grace period
-        Err(_) => {
-            signal_group(pgid, libc::SIGKILL);
-            // Reap the direct child so we don't leave a zombie. The group
-            // SIGKILL also takes all grandchildren.
-            let _ = child.wait().await;
-        }
+    let leader_reaped = tokio::time::timeout(TERM_GRACE, child.wait()).await.is_ok();
+
+    if !leader_reaped {
+        // Leader still holds pgid — unambiguous. SIGKILL the group, then reap.
+        signal_group(pgid, libc::SIGKILL);
+        let _ = child.wait().await;
+    } else if group_is_nonempty(pgid) {
+        // Leader gone but a survivor keeps the group (and thus pgid) alive: it is
+        // still ours, and it needs killing (issue #342). An empty group is skipped —
+        // nothing to kill, and the one case where pgid could have been recycled.
+        signal_group(pgid, libc::SIGKILL);
     }
+}
+
+/// Returns whether process group `pgid` still has any member (including a zombie).
+///
+/// `kill(-pgid, 0)` sends no signal but performs the same target lookup and permission
+/// check as a real signal: `Ok` (returns 0) means the group exists and has at least one
+/// member; `ESRCH` means it is empty/gone. The daemon runs privileged, so `EPERM` is not
+/// a concern here; any non-zero return is treated as "not clearly non-empty" and the
+/// caller conservatively skips the SIGKILL.
+fn group_is_nonempty(pgid: i32) -> bool {
+    // Safety: libc::kill with signal 0 accesses no memory; it is the standard
+    // existence probe. Return value only — no UB.
+    unsafe { libc::kill(-pgid, 0) == 0 }
 }
 
 /// Resolves only on an explicit `send(())` from the paired sender.
@@ -704,6 +747,68 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "grandchild (pid={grandchild_pid}) still alive after 2 s — orphan not reaped"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    // 9b. ACCEPTANCE-CRITICAL (issue #342): the SIGKILL sweep must fire even when the
+    //     group LEADER exits during the SIGTERM grace window, as long as a
+    //     SIGTERM-ignoring grandchild survives — otherwise that grandchild is orphaned.
+    //
+    //     The leader `sleep 30` dies on SIGTERM (default disposition) within the grace
+    //     window, so `child.wait()` returns and the leader is reaped — the exact
+    //     condition the pre-#342 code treated as "done, no SIGKILL". The backgrounded
+    //     subshell installs `trap "" TERM` and loops, so it IGNORES SIGTERM and outlives
+    //     the leader; only the group SIGKILL can reap it. Its pid is tracked via `echo $!`.
+    //
+    //     Non-vacuous: with the old `Ok(_) => {}` arm (no sweep on leader exit), the
+    //     subshell loops forever and the ESRCH poll below times out and fails.
+    #[tokio::test]
+    async fn sigkill_sweep_kills_a_grandchild_that_outlives_the_leader() {
+        let result = execute(ExecRequest {
+            task_id: "t-sweep-survivor".to_string(),
+            argv: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                // Background a subshell that IGNORES SIGTERM and loops (survives the
+                // grace window); print its pid; then the leader sleeps and is itself
+                // SIGTERM'd to death within grace.
+                "( trap '' TERM; while true; do sleep 1; done ) & echo $!; sleep 30".to_string(),
+            ],
+            timeout: Duration::from_secs(1), // times out → kill_group_graceful runs
+            max_output_bytes: 4096,
+            cancel: None,
+            limits: no_limits(),
+        })
+        .await;
+        assert_eq!(result.outcome, Outcome::Timeout as i32);
+
+        let stdout_str = String::from_utf8_lossy(&result.stdout);
+        let survivor_pid: libc::pid_t = stdout_str
+            .trim()
+            .parse()
+            .expect("stdout must contain the SIGTERM-ignoring subshell PID");
+
+        // The survivor must be gone (ESRCH) — SIGKILL swept the group even though the
+        // leader had already exited. Deadline exceeds TERM_GRACE (5 s) so a correct
+        // sweep, which happens right after the leader is reaped, has ample margin.
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            let ret = unsafe { libc::kill(survivor_pid, 0) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                assert_eq!(
+                    err.raw_os_error(),
+                    Some(libc::ESRCH),
+                    "survivor (pid={survivor_pid}) must be gone (ESRCH), not another error"
+                );
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "SIGTERM-ignoring survivor (pid={survivor_pid}) still alive — the SIGKILL \
+                 sweep was skipped when the leader exited first (issue #342)"
             );
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
