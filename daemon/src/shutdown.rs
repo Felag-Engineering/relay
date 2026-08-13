@@ -257,6 +257,12 @@ pub struct ShutdownContext {
     pub shutdown: Shutdown,
     pub inflight: Inflight,
     pub grace: Duration,
+    /// The in-flight Task cancel registry, shared by `Arc` across every
+    /// reconnect for the process's lifetime (issue #337). Living here — rather
+    /// than being recreated inside each `run_tunnel` — is what lets a
+    /// `TaskCancel`, or the shutdown drain's grace-expiry kill, reach a Task
+    /// that outlived the connection which started it.
+    pub registry: CancelRegistry,
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +486,9 @@ mod tests {
         let inflight = Inflight::default();
         let registry = CancelRegistry::new();
 
-        let cancel_rx = registry.register("stuck-task");
+        let cancel_rx = registry
+            .register("stuck-task")
+            .expect("register stuck-task");
         let guard = inflight.enter();
         // The "stuck" task only releases its guard once it receives the
         // cancel signal — deterministic, like the executor cancel tests.

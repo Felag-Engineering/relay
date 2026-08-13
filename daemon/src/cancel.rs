@@ -14,6 +14,22 @@
 //! `CancelRegistry` is dedup-agnostic. Cancellation fires inside the dedup `run_once`
 //! closure, after the task_id marker is durably recorded. A cancelled id stays in the
 //! dedup store; a re-send is deduplicated (at-most-once).
+//!
+//! # Lifetime across reconnects (issue #337)
+//!
+//! A single registry is shared by `Arc` across every reconnect for the process's
+//! lifetime (it lives in [`ShutdownContext`](crate::shutdown::ShutdownContext)), so a
+//! `TaskCancel` — or a shutdown-kill — for a Task that outlives the connection that
+//! started it still reaches that Task's executor. When it was recreated per-connection,
+//! such a cancel hit a fresh empty registry and was a silent no-op.
+//!
+//! Sharing the registry means the Relay's at-most-once **redelivery** of a still-in-flight
+//! `task_id` (a resend after a reconnect, before it has seen the result) now collides with
+//! the live entry. [`register`](CancelRegistry::register) is therefore **first-writer-wins**:
+//! it inserts only if the id is absent and returns `None` when a still-live prior lifecycle
+//! already owns the entry. The duplicate is left to the dedup store to make benign, and —
+//! because it does not own the entry — it must NOT deregister it (that would remove the live
+//! Task's cancel handle). Only the owning lifecycle deregisters.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,22 +51,29 @@ impl CancelRegistry {
         Self::default()
     }
 
-    /// Registers `task_id` as in-flight and returns the cancel receiver.
+    /// Registers `task_id` as in-flight and returns the cancel receiver, or
+    /// `None` if the id is already registered by a still-live lifecycle.
     ///
-    /// The receiver is passed into the spawned Task's `ExecRequest.cancel`.
-    /// The corresponding sender stays in the registry until `cancel` or `deregister`.
+    /// **First-writer-wins (issue #337).** With a process-lifetime registry shared
+    /// across reconnects, the Relay's at-most-once redelivery of a still-in-flight
+    /// `task_id` reaches `register` while the original entry is still present. The
+    /// original owns the live cancel handle, so it must not be clobbered: on a
+    /// collision this inserts nothing and returns `None`. The caller spawns the
+    /// duplicate anyway (the dedup store makes it a benign no-op) but, holding no
+    /// registration, must NOT deregister — see `run_tunnel`.
     ///
-    /// If a sender for the same `task_id` already exists (a bug — re-registration
-    /// without deregistration), the old sender is overwritten and dropped. Dropping a
-    /// sender resolves the old receiver to `Err`, which `recv_cancel` maps to
-    /// `pending()` — the old in-flight task cannot be accidentally cancelled.
-    pub fn register(&self, task_id: &str) -> oneshot::Receiver<()> {
+    /// On success the receiver is passed into the spawned Task's `ExecRequest.cancel`,
+    /// and the sender stays in the registry until `cancel` or `deregister`.
+    pub fn register(&self, task_id: &str) -> Option<oneshot::Receiver<()>> {
+        let mut map = self.0.lock().expect("CancelRegistry Mutex not poisoned");
+        if map.contains_key(task_id) {
+            // A still-live prior lifecycle owns this id (cross-reconnect redelivery
+            // or an in-connection duplicate). Leave its cancel handle intact.
+            return None;
+        }
         let (tx, rx) = oneshot::channel();
-        self.0
-            .lock()
-            .expect("CancelRegistry Mutex not poisoned")
-            .insert(task_id.to_string(), tx);
-        rx
+        map.insert(task_id.to_string(), tx);
+        Some(rx)
     }
 
     /// Removes the sender for `task_id` (idempotent).
@@ -114,11 +137,36 @@ mod tests {
     #[tokio::test]
     async fn register_then_cancel_delivers() {
         let registry = CancelRegistry::new();
-        let rx = registry.register("t1");
+        let rx = registry.register("t1").expect("first register owns the id");
         registry.cancel("t1");
         assert!(
             rx.await.is_ok(),
             "cancel must deliver Ok(()) to the registered receiver"
+        );
+    }
+
+    /// First-writer-wins (issue #337): a second register of a still-live id
+    /// returns None and leaves the original's cancel handle intact.
+    #[tokio::test]
+    async fn second_register_of_live_id_returns_none_and_preserves_the_owner() {
+        let registry = CancelRegistry::new();
+        let rx_owner = registry
+            .register("dup")
+            .expect("first register owns the id");
+        assert!(
+            registry.register("dup").is_none(),
+            "a second register of a live id must not clobber the owner"
+        );
+        // The owner's handle still works: cancel reaches it, not a dropped Err.
+        registry.cancel("dup");
+        assert!(
+            rx_owner.await.is_ok(),
+            "the original receiver must still receive the explicit cancel"
+        );
+        // Once the owner releases the id, it can be registered afresh.
+        assert!(
+            registry.register("dup").is_some(),
+            "after cancel cleared the entry, the id is registrable again"
         );
     }
 
@@ -136,7 +184,7 @@ mod tests {
     #[tokio::test]
     async fn deregister_then_cancel_is_noop() {
         let registry = CancelRegistry::new();
-        let rx = registry.register("t2");
+        let rx = registry.register("t2").expect("first register owns the id");
         registry.deregister("t2");
         registry.cancel("t2"); // must be a no-op; sender already removed
 
@@ -153,9 +201,9 @@ mod tests {
     #[tokio::test]
     async fn cancel_all_delivers_to_all_and_empties_registry() {
         let registry = CancelRegistry::new();
-        let rx_a = registry.register("a");
-        let rx_b = registry.register("b");
-        let rx_c = registry.register("c");
+        let rx_a = registry.register("a").expect("register a");
+        let rx_b = registry.register("b").expect("register b");
+        let rx_c = registry.register("c").expect("register c");
 
         let n = registry.cancel_all();
         assert_eq!(n, 3, "cancel_all must return the number of entries held");
@@ -173,5 +221,31 @@ mod tests {
     fn cancel_all_on_empty_registry_returns_zero() {
         let registry = CancelRegistry::new();
         assert_eq!(registry.cancel_all(), 0);
+    }
+
+    /// Cross-reconnect (issue #337): each `run_tunnel` uses its own *clone* of
+    /// the one shared registry. A Task registered on connection A's clone must
+    /// still be cancellable through connection B's clone — the property that
+    /// was broken when the registry was recreated per-connection.
+    #[tokio::test]
+    async fn a_task_registered_on_one_clone_is_cancellable_through_another() {
+        let shared = CancelRegistry::new();
+
+        // Connection A registers a long-running Task, then its stream drops.
+        let conn_a = shared.clone();
+        let rx = conn_a
+            .register("long-task")
+            .expect("first register owns the id");
+
+        // Connection B is a fresh clone of the SAME shared registry (what
+        // reconnect_loop hands the next run_tunnel). The operator's TaskCancel
+        // arrives here.
+        let conn_b = shared.clone();
+        conn_b.cancel("long-task");
+
+        assert!(
+            rx.await.is_ok(),
+            "cancel on the reconnected clone must reach the Task from the prior connection"
+        );
     }
 }
