@@ -10,6 +10,8 @@ use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
 
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity as TlsIdentity};
 
 type Result<T, E = IdentityError> = std::result::Result<T, E>;
@@ -30,6 +32,8 @@ pub enum IdentityError {
     Crypto(#[from] rcgen::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error("PEM parse error: {0}")]
+    Pem(#[from] rustls_pki_types::pem::Error),
     #[error("cert_pem contains no certificate")]
     NoCertificate,
     #[error("cert parse error: {0}")]
@@ -100,7 +104,7 @@ pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<(
     let key_spki_der = kp.public_key_der();
 
     // x509-parser parses the cert and exposes the raw SPKI DER via .raw (RFC 5280 §4.1).
-    let ders: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+    let ders: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let der = ders.first().ok_or(IdentityError::NoCertificate)?;
     let (_, cert) = x509_parser::parse_x509_certificate(der)
@@ -117,7 +121,7 @@ pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<(
 ///
 /// Returns `Some(Identity)` only if all four files (`key.pem`, `cert.pem`,
 /// `ca_bundle.pem`, `node_id`) exist and both the cert and key parse
-/// successfully via `rustls_pemfile`. "Valid" means present-and-well-formed;
+/// successfully via `rustls_pki_types`. "Valid" means present-and-well-formed;
 /// expiry checking is a separate ROADMAP item (v0.0.2 cert rotation).
 ///
 /// Returns `Err` if the cert's public key does not correspond to the private key,
@@ -140,17 +144,21 @@ pub fn load_identity(dir: &Path) -> Result<Option<Identity>> {
     let ca_bundle_pem = fs::read_to_string(&ca_bundle_path)?;
     let node_id = fs::read_to_string(&node_id_path)?.trim().to_string();
 
-    // cert.pem must contain at least one parseable DER certificate block.
-    let mut cert_reader = cert_pem.as_bytes();
-    let certs: Vec<_> =
-        rustls_pemfile::certs(&mut cert_reader).collect::<std::result::Result<Vec<_>, _>>()?;
+    // cert.pem must contain at least one parseable DER certificate block. A
+    // malformed block surfaces as an Err from the iterator and is treated as
+    // "no valid identity here" (re-enroll), matching the prior rustls_pemfile
+    // behaviour where an unreadable cert yielded nothing.
+    let certs = CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap_or_default();
     if certs.is_empty() {
         return Ok(None);
     }
 
-    // key.pem must contain a parseable private key.
-    let mut key_reader = key_pem.as_bytes();
-    if rustls_pemfile::private_key(&mut key_reader)?.is_none() {
+    // key.pem must contain a parseable private key. Absent or unreadable is,
+    // likewise, "no valid identity" rather than a hard error — the caller then
+    // enrolls fresh (the same outcome rustls_pemfile's `None` produced).
+    if PrivateKeyDer::from_pem_slice(key_pem.as_bytes()).is_err() {
         return Ok(None);
     }
 
@@ -315,7 +323,7 @@ mod tests {
     }
 
     /// Build a well-formed self-signed Identity using rcgen, so that
-    /// `load_identity`'s `rustls_pemfile` validation passes.
+    /// `load_identity`'s PEM validation passes.
     fn make_test_identity() -> Result<Identity> {
         let kp = rcgen::KeyPair::generate()?;
         let cert_pem = rcgen::CertificateParams::new(vec![])?

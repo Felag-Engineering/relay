@@ -1131,7 +1131,7 @@ dependencies = [
  "ring",
  "rustix",
  "rustls",
- "rustls-pemfile",
+ "rustls-pki-types",
  "serde",
  "thiserror 2.0.18",
  "time",
