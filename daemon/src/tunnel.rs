@@ -238,6 +238,7 @@ mod tests {
     /// client-side CA-pinning check — the test proves the client rejects the
     /// server's cert, not the other way around.
     async fn dial_with_mismatched_ca() -> IdentityError {
+        use rustls::pki_types::pem::PemObject;
         use rustls::pki_types::{CertificateDer, PrivateKeyDer};
         use rustls::ServerConfig;
         use tokio_rustls::TlsAcceptor;
@@ -252,13 +253,11 @@ mod tests {
         let (ca_a_key_pem, ca_a_cert_pem) = make_self_signed("localhost");
 
         let ca_a_certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_a_cert_pem.as_bytes())
+            CertificateDer::pem_slice_iter(ca_a_cert_pem.as_bytes())
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .expect("parse server cert");
         let ca_a_key: PrivateKeyDer<'static> =
-            rustls_pemfile::private_key(&mut ca_a_key_pem.as_bytes())
-                .expect("parse server key")
-                .expect("server key present");
+            PrivateKeyDer::from_pem_slice(ca_a_key_pem.as_bytes()).expect("parse server key");
 
         // Server config: no client auth so the failure is on the client side.
         let server_config = ServerConfig::builder()

@@ -11,6 +11,8 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::CertificateDer;
 use tonic::transport::Channel;
 use tracing::{error, info};
 
@@ -47,8 +49,9 @@ pub(crate) fn cert_validity(
     cert_pem: &str,
 ) -> std::result::Result<(SystemTime, SystemTime), IdentityError> {
     // Collect the first DER-encoded certificate block from the PEM.
-    let der_certs: Vec<_> = rustls_pemfile::certs(&mut cert_pem.as_bytes())
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let der_certs: Vec<CertificateDer<'static>> =
+        CertificateDer::pem_slice_iter(cert_pem.as_bytes())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
     let der = der_certs.first().ok_or(IdentityError::NoCertificate)?;
 
     let (_, cert) = x509_parser::parse_x509_certificate(der)

@@ -181,6 +181,26 @@ enum TunnelExit {
     ShutdownComplete,
 }
 
+/// Hard upper bound on Tasks the daemon will hold in flight at once, across all
+/// risk classes (issue #338).
+///
+/// This is a **local DoS backstop, not a throughput knob** — the sibling of
+/// `scheduler::READ_CONCURRENCY`. The scheduler bounds how many Tasks *execute*
+/// concurrently (mutate serial, read bounded-parallel); it does not bound how
+/// many the daemon will *accept and park* waiting for a slot. Without this cap,
+/// a Relay that ignores its own blast-radius limit — or a compromised one —
+/// could stream unbounded Tasks and grow the daemon's parked-task set (each an
+/// allocated future, a cancel-registry entry, and an inflight guard) until the
+/// privileged daemon is starved of memory. ADR-0004's blast cap lives on the
+/// Relay; this is the daemon-side floor that does not trust the Relay to have
+/// enforced it.
+///
+/// Fixed and deliberately generous: far above any legitimate concurrent fan-out
+/// to a single Node, low enough to bound worst-case memory. Not configurable
+/// this milestone — a constant backstop cannot be raised over the wire, which
+/// is the point (cf. invariant #11, config never rises from the control plane).
+const MAX_INFLIGHT_TASKS: usize = 1024;
+
 /// Sends the initial Hello, followed by a `PolicySnapshot` of the live Policy
 /// (report-only, ADR-0002/0011), drives the heartbeat loop, and processes
 /// inbound messages from the Relay until the stream closes or errors.
@@ -199,6 +219,10 @@ enum TunnelExit {
 ///   `READ_CONCURRENCY`). Queue-wait time counts against the Task's timeout clock
 ///   (started at receipt). Exactly one `TaskResult` is emitted per Task in every
 ///   path: executed, queued-timeout, queued-cancel, in-flight-cancel, dedup-benign.
+///   Admission is capped at [`MAX_INFLIGHT_TASKS`]: a Task arriving while the
+///   daemon is already at that many in flight is refused inline with an
+///   `OUTCOME_FAILURE` result and never registered, spawned, or deduplicated
+///   (safe to retry) — the daemon-side backstop to the Relay's blast cap.
 /// - `TaskCancel`: delivers the cancel signal to the in-flight Task's executor via
 ///   the cancel registry (ADR-0013). If the task_id is unknown or already finished,
 ///   this is a safe no-op. The inbound loop NEVER touches the scheduler, so
@@ -352,6 +376,36 @@ async fn run_tunnel(
             Ok(Some(msg)) => {
                 match msg.body {
                     Some(relay_message::Body::Task(task_req)) => {
+                        // Admission backstop (issue #338): refuse the Task if the
+                        // daemon is already at MAX_INFLIGHT_TASKS. The check is
+                        // race-free from the admit side because this inbound loop
+                        // is single-threaded — nothing else enters the inflight
+                        // gauge, and `enter()` below happens on this same task
+                        // after the check. A refused Task is NOT registered in the
+                        // cancel registry and NOT recorded in the DedupStore: it
+                        // never ran, so a later re-send must remain free to execute
+                        // (ADR-0004). We keep reading the stream (send the result
+                        // inline and `continue`) rather than applying backpressure,
+                        // so TaskCancel/PolicyQuery keep flowing while at capacity.
+                        if ctx.inflight.count() >= MAX_INFLIGHT_TASKS {
+                            warn!(
+                                task_id = %task_req.task_id,
+                                cap = MAX_INFLIGHT_TASKS,
+                                "refusing Task: daemon at in-flight backstop",
+                            );
+                            if tx
+                                .send(DaemonMessage {
+                                    body: Some(daemon_message::Body::TaskResult(
+                                        dispatch::overloaded_result(task_req.task_id),
+                                    )),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                return TunnelExit::DroppedMidSession("outbound closed".into());
+                            }
+                            continue;
+                        }
                         // Capture the true receipt time before spawning. The scheduler
                         // uses this as the single clock origin for the Task's timeout
                         // budget, covering both queue-wait time and execution time.

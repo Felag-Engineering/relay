@@ -343,7 +343,7 @@ mod tests {
     }
 
     /// Build a well-formed self-signed Identity using rcgen, so that
-    /// `load_identity`'s `rustls_pemfile` validation passes.
+    /// `load_identity`'s PEM validation passes.
     ///
     /// Returns `Identity` directly (panics on failure) because the module
     /// `Result` alias is `EnrollError` and rcgen errors don't belong there.

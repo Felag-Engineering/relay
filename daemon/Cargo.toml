@@ -38,8 +38,12 @@ ring = "0.17"
 # CSR / keypair generation for enrollment bootstrap (ADR-0006).
 # `ring` backend keeps crypto internally consistent with the rustls ring path above.
 rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
-# PEM parsing for idempotency check and future mTLS identity loading (#28).
-rustls-pemfile = "2"
+# PEM parsing for the identity idempotency check and mTLS identity loading
+# (#28). rustls-pemfile was retired here (#344): RUSTSEC flagged it unmaintained,
+# and its PEM decoders now live in rustls-pki-types — the same crate whose
+# CertificateDer/PrivateKeyDer types rustls already speaks, so this drops a
+# dependency rather than adding one. `std` enables the pem module.
+rustls-pki-types = { version = "1", features = ["std"] }
 # Parse cert NotBefore/NotAfter for renewal scheduling (issue #31).
 x509-parser = "0.18"
 # logging
