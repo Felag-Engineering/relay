@@ -11,7 +11,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon \
-        verify opschema-check
+        verify opschema-check openapi-check
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -30,7 +30,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
 # hard-failed: a check you did not run must not look like a check that passed.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
-        test-relay-race test-daemon opschema-check verify-proto \
+        test-relay-race test-daemon opschema-check openapi-check verify-proto \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -39,6 +39,15 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
 # schema from the daemon binary and fails if it moved.
 opschema-check: gen-opschema
 	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
+
+# OpenAPI contract gate (ci.yml: openapi). Validates docs/api/openapi.yaml as a
+# real OpenAPI 3.1 document and checks it against the route table the server
+# actually mounts (api.Routes()), in BOTH directions — an undocumented route and
+# a documented-but-unserved one each fail. It runs in the Go toolchain rather
+# than through a Node linter on purpose: a gate that needs an uninstalled tool
+# is a gate that never runs.
+openapi-check:
+	cd relay && go test ./internal/controlplane/api/ -run 'TestOpenAPISpec|TestServedRoutes' -count=1
 
 # The two proto gates (ci.yml: proto-drift, proto-breaking), skipped with a
 # notice when buf is unavailable.

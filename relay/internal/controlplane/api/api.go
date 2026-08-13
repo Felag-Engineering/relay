@@ -121,6 +121,77 @@ type Deps struct {
 	Now func() time.Time
 }
 
+// Route is one /api/v1 route: its HTTP method, its path (in net/http
+// ServeMux's `{name}` wildcard syntax), and the handler factory that binds it
+// to a Deps.
+//
+// The route table is exported as DATA (see [Routes]) rather than being a list
+// of mux.HandleFunc calls buried in Register, because the published OpenAPI
+// spec has to be checkable against what the server actually serves. With the
+// table as data, openapi_test.go compares the two mechanically and a route
+// added, renamed, or removed without a matching spec edit fails CI — instead of
+// the spec quietly becoming fiction, which is the normal fate of a hand-kept
+// API document.
+type Route struct {
+	Method string
+	Path   string
+	// Handler builds the http.HandlerFunc for this route from d.
+	Handler func(d Deps) http.HandlerFunc
+}
+
+// Pattern renders the route as a net/http ServeMux pattern ("GET /api/v1/...").
+func (r Route) Pattern() string { return r.Method + " " + r.Path }
+
+// Routes returns the complete /api/v1 route table, in registration order.
+//
+// This is the single source of truth for "what does the Control API serve".
+// Register mounts exactly these; the OpenAPI drift gate reads exactly these.
+func Routes() []Route {
+	return []Route{
+		// Enrollment Tokens, Node revocation, Freeze (#116).
+		{"POST", "/api/v1/enrollment-tokens", handleMintToken},
+		{"DELETE", "/api/v1/enrollment-tokens/{id}", handleRevokeToken},
+		{"POST", "/api/v1/nodes/{node_id}/revoke", handleRevokeNode},
+		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
+		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
+
+		// Identity management (#297). Every route here is admin-only; the gate
+		// lives in each handler (requireAdmin) rather than in a wrapper, so a
+		// route added later cannot silently miss it by being registered in the
+		// wrong group.
+		{"POST", "/api/v1/accounts", handleCreateAccount},
+		{"GET", "/api/v1/accounts", handleListAccounts},
+		{"GET", "/api/v1/accounts/{id}", handleGetAccount},
+		{"POST", "/api/v1/accounts/{id}/role", handleSetAccountRole},
+		{"POST", "/api/v1/accounts/{id}/enable", enableAccount(true)},
+		{"POST", "/api/v1/accounts/{id}/disable", enableAccount(false)},
+		{"POST", "/api/v1/accounts/{id}/tokens", handleMintAPIToken},
+		{"GET", "/api/v1/accounts/{id}/tokens", handleListAPITokens},
+		{"DELETE", "/api/v1/api-tokens/{token_id}", handleRevokeAPIToken},
+
+		// Execution (#356). Both routes dispatch through the shared capability
+		// layer (Selector -> authz -> blast-cap -> dispatch -> audit); neither
+		// re-implements a role check, a Policy decision, or a cap — see
+		// execution.go's header for why Raw Exec's admin gate deliberately stays
+		// in authz.RoleGate rather than being repeated here.
+		{"POST", "/api/v1/operations", handleRunOperation},
+		{"POST", "/api/v1/raw-exec", handleRawExec},
+
+		// Job read + cancel (#357). The read route is audited (ADR-0025): it
+		// returns captured Task output, so it discloses material somebody else
+		// produced. Cancel goes through the same capability layer as dispatch.
+		{"GET", "/api/v1/jobs/{id}", handleGetJob},
+		{"POST", "/api/v1/jobs/{id}/cancel", handleCancelJob},
+	}
+}
+
+// enableAccount adapts handleSetAccountEnabled's two-argument shape to the
+// Route.Handler signature, so the enable/disable pair stays in the table
+// alongside every other route rather than being a special case in Register.
+func enableAccount(enabled bool) func(Deps) http.HandlerFunc {
+	return func(d Deps) http.HandlerFunc { return handleSetAccountEnabled(d, enabled) }
+}
+
 // Register mounts the /api/v1 route table onto mux. mux is expected to be
 // controlplane.Server.Mux() (or an equivalent already wrapped by
 // Authenticator.Middleware in tests) — Register never constructs a listener
@@ -129,40 +200,9 @@ func Register(mux *http.ServeMux, d Deps) {
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }
 	}
-
-	mux.HandleFunc("POST /api/v1/enrollment-tokens", handleMintToken(d))
-	mux.HandleFunc("DELETE /api/v1/enrollment-tokens/{id}", handleRevokeToken(d))
-	mux.HandleFunc("POST /api/v1/nodes/{node_id}/revoke", handleRevokeNode(d))
-	mux.HandleFunc("POST /api/v1/freeze/engage", handleFreezeEngage(d))
-	mux.HandleFunc("POST /api/v1/freeze/release", handleFreezeRelease(d))
-
-	// Identity management (#297). Every route below is admin-only; the gate
-	// lives in each handler (requireAdmin) rather than in a wrapper here, so a
-	// route added later cannot silently miss it by being registered on the
-	// wrong mux.
-	mux.HandleFunc("POST /api/v1/accounts", handleCreateAccount(d))
-	mux.HandleFunc("GET /api/v1/accounts", handleListAccounts(d))
-	mux.HandleFunc("GET /api/v1/accounts/{id}", handleGetAccount(d))
-	mux.HandleFunc("POST /api/v1/accounts/{id}/role", handleSetAccountRole(d))
-	mux.HandleFunc("POST /api/v1/accounts/{id}/enable", handleSetAccountEnabled(d, true))
-	mux.HandleFunc("POST /api/v1/accounts/{id}/disable", handleSetAccountEnabled(d, false))
-	mux.HandleFunc("POST /api/v1/accounts/{id}/tokens", handleMintAPIToken(d))
-	mux.HandleFunc("GET /api/v1/accounts/{id}/tokens", handleListAPITokens(d))
-	mux.HandleFunc("DELETE /api/v1/api-tokens/{token_id}", handleRevokeAPIToken(d))
-
-	// Execution (#356). Both routes dispatch through the shared capability
-	// layer (Selector -> authz -> blast-cap -> dispatch -> audit); neither
-	// re-implements a role check, a Policy decision, or a cap — see
-	// execution.go's header for why Raw Exec's admin gate deliberately stays in
-	// authz.RoleGate rather than being repeated here.
-	mux.HandleFunc("POST /api/v1/operations", handleRunOperation(d))
-	mux.HandleFunc("POST /api/v1/raw-exec", handleRawExec(d))
-
-	// Job read + cancel (#357). The read route is audited (ADR-0025): it
-	// returns captured Task output, so it discloses material somebody else
-	// produced. Cancel goes through the same capability layer as dispatch.
-	mux.HandleFunc("GET /api/v1/jobs/{id}", handleGetJob(d))
-	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", handleCancelJob(d))
+	for _, r := range Routes() {
+		mux.HandleFunc(r.Pattern(), r.Handler(d))
+	}
 }
 
 // principal reads the Principal that Authenticator.Middleware injected into
