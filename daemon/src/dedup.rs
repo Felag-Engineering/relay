@@ -43,6 +43,13 @@
 //! Secondary capacity cap: 100,000 entries, oldest-first eviction, to bound memory and
 //! disk growth in a long-lived daemon. Eviction runs at `open` and after each `record`.
 //!
+//! **Age floor on capacity eviction (issue #340):** the capacity pass never evicts a
+//! marker younger than a 1-hour floor (`MIN_RETENTION`), even when the store is over the
+//! cap. Without it, a flood of >100k fresh Task IDs inside the retry window could evict a
+//! still-live marker oldest-first, and the retried Task would then execute twice — an
+//! at-most-once violation (ADR-0004). Under such a flood the store grows past the cap
+//! rather than drop a live marker; bounding memory yields to the invariant.
+//!
 //! # Design notes
 //!
 //! - **id-only markers (no result retention)**: security posture — do not persist
@@ -88,7 +95,26 @@ const SEEN_SUBDIR: &str = "seen-tasks";
 /// margin that prevents spurious eviction of entries still within a live retry window.
 const RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Capacity-eviction age floor (issue #340): capacity pressure may NEVER evict a
+/// marker younger than this, even when the store is over [`MAX_ENTRIES`]. It is the
+/// guaranteed-live window — below it, a marker might still be needed to dedup a
+/// redelivered Task, and evicting it would let that retry execute twice, violating
+/// at-most-once (ADR-0004, invariant #4).
+///
+/// One hour is a deliberately generous floor: a Task executes for at most `MAX_TIMEOUT`
+/// (5 min) and the Relay's reconnect backoff caps at 30 s, so the real redelivery
+/// window is minutes; 1 h is ~12× the execution cap. It is also 1/24 of [`RETENTION`],
+/// so the capacity cap still has the entire 1 h–24 h band of genuinely-old entries to
+/// evict in a long-lived daemon. Must be < the retention window.
+const MIN_RETENTION: Duration = Duration::from_secs(60 * 60);
+
 /// Secondary capacity cap: bounds memory and disk growth in a long-lived daemon.
+///
+/// Best-effort, NOT a hard bound: when honoring it would require evicting a marker
+/// younger than [`MIN_RETENTION`], the store instead grows past the cap. Bounding
+/// memory yields to at-most-once (ADR-0004 most-restrictive-wins). A sustained flood
+/// thus bounds the store at roughly (accept-rate × MIN_RETENTION), not unbounded — the
+/// oldest markers cross the floor and become evictable as the flood continues.
 const MAX_ENTRIES: usize = 100_000;
 
 /// Directory mode for the seen-tasks directory: owner-only (root-owned daemon state).
@@ -117,6 +143,10 @@ pub struct DedupStore {
     /// Retention window in milliseconds. Defaults to [`RETENTION`]; overridable via
     /// [`DedupStore::open_with`] in tests.
     retention_millis: i64,
+    /// Capacity-eviction age floor in milliseconds (issue #340). Defaults to
+    /// [`MIN_RETENTION`]; overridable via `open_with` in tests. Capacity eviction never
+    /// removes a marker younger than this.
+    min_retention_millis: i64,
     /// Capacity cap. Defaults to [`MAX_ENTRIES`]; overridable via `open_with` in tests.
     max_entries: usize,
 }
@@ -138,7 +168,12 @@ impl DedupStore {
     /// fails under pathological umasks (e.g. 0o100 strips the user-execute bit from a
     /// 0o700 dir). The explicit `set_permissions` call is umask-proof.
     pub fn open(state_dir: &Path) -> io::Result<Self> {
-        Self::open_with(state_dir, RETENTION.as_millis() as i64, MAX_ENTRIES)
+        Self::open_with(
+            state_dir,
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            MAX_ENTRIES,
+        )
     }
 
     /// Runs `exec` for `task_id` at most once, honoring ADR-0004.
@@ -178,6 +213,7 @@ impl DedupStore {
                 &self.dir,
                 task_id,
                 self.retention_millis,
+                self.min_retention_millis,
                 self.max_entries,
             )
             // `guard` drops here — before the `.await` below.
@@ -215,7 +251,15 @@ impl DedupStore {
     /// Not `pub`: the single-instance-per-directory constraint means callers outside
     /// this module should use [`DedupStore::open`] with the production defaults.
     /// Tests access this via `super::` from the descendant `tests` module.
-    fn open_with(state_dir: &Path, retention_millis: i64, max_entries: usize) -> io::Result<Self> {
+    ///
+    /// `min_retention_millis`: capacity-eviction age floor (issue #340); capacity
+    /// eviction never removes a marker younger than this.
+    fn open_with(
+        state_dir: &Path,
+        retention_millis: i64,
+        min_retention_millis: i64,
+        max_entries: usize,
+    ) -> io::Result<Self> {
         let dir = state_dir.join(SEEN_SUBDIR);
 
         // Create the seen-tasks directory (and any missing parents) at mode 0700.
@@ -261,12 +305,20 @@ impl DedupStore {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-        evict_locked(&mut map, &dir, now_millis, retention_millis, max_entries);
+        evict_locked(
+            &mut map,
+            &dir,
+            now_millis,
+            retention_millis,
+            min_retention_millis,
+            max_entries,
+        );
 
         Ok(DedupStore {
             dir,
             inner: Mutex::new(map),
             retention_millis,
+            min_retention_millis,
             max_entries,
         })
     }
@@ -321,6 +373,7 @@ fn record_marker(
     dir: &Path,
     task_id: &str,
     retention_millis: i64,
+    min_retention_millis: i64,
     max_entries: usize,
 ) -> io::Result<()> {
     let hex = hex_encode(task_id.as_bytes());
@@ -369,18 +422,30 @@ fn record_marker(
     map.insert(task_id.to_string(), now_millis);
 
     // Capacity eviction: keep the store within bounds after every new record.
-    evict_locked(map, dir, now_millis, retention_millis, max_entries);
+    evict_locked(
+        map,
+        dir,
+        now_millis,
+        retention_millis,
+        min_retention_millis,
+        max_entries,
+    );
 
     Ok(())
 }
 
-/// Evicts expired (age > `retention_millis`) and excess (count > `max_entries`) entries.
+/// Evicts expired (age > `retention_millis`) and excess (count > `max_entries`) entries,
+/// subject to the capacity-eviction age floor (`min_retention_millis`, issue #340).
 ///
 /// Age eviction runs first (removes all entries older than the retention window).
 /// Capacity eviction runs second (removes the oldest remaining entries until within the
-/// cap). For each evicted entry, the on-disk marker file is removed before the in-memory
-/// entry is dropped. Marker file removal errors are silently ignored — the file may have
-/// already been cleaned up by a previous eviction pass.
+/// cap) but **never evicts a marker younger than the age floor** — a still-live marker
+/// dropped under capacity pressure would let a redelivered Task execute twice, an
+/// at-most-once violation (ADR-0004). When only floor-protected entries remain and the
+/// store is still over the cap, it stays over the cap: bounding memory yields to the
+/// invariant (most-restrictive-wins). For each evicted entry, the on-disk marker file is
+/// removed before the in-memory entry is dropped; removal errors are ignored (the file
+/// may already have been cleaned up by a previous pass).
 ///
 /// Called with the Mutex guard held (from `record_marker` and `open_with`).
 fn evict_locked(
@@ -388,6 +453,7 @@ fn evict_locked(
     dir: &Path,
     now_millis: i64,
     retention_millis: i64,
+    min_retention_millis: i64,
     max_entries: usize,
 ) {
     // Age-based eviction: entries older than the retention window are stale.
@@ -401,15 +467,23 @@ fn evict_locked(
         map.remove(&id);
     }
 
-    // Capacity-based eviction: oldest-first until within the cap.
+    // Capacity-based eviction: oldest-first until within the cap, but only among
+    // entries at or beyond the age floor. Entries younger than the floor are
+    // guaranteed-live and must not be evicted, even if that leaves the store over the
+    // cap (issue #340).
     if map.len() <= max_entries {
         return;
     }
-    let mut entries: Vec<(String, i64)> = map.iter().map(|(id, &ts)| (id.clone(), ts)).collect();
-    entries.sort_by_key(|(_, ts)| *ts); // ascending = oldest first
+    let floor = now_millis.saturating_sub(min_retention_millis);
+    let mut evictable: Vec<(String, i64)> = map
+        .iter()
+        .filter(|(_, &ts)| ts <= floor) // only markers older than the floor
+        .map(|(id, &ts)| (id.clone(), ts))
+        .collect();
+    evictable.sort_by_key(|(_, ts)| *ts); // ascending = oldest first
 
     let excess = map.len() - max_entries;
-    for (id, _) in entries.into_iter().take(excess) {
+    for (id, _) in evictable.into_iter().take(excess) {
         let _ = fs::remove_file(marker_path(dir, &id));
         map.remove(&id);
     }
@@ -765,9 +839,13 @@ mod tests {
     #[test]
     fn marker_permissions_are_restrictive() {
         let state_dir = TempDir::new("perms");
-        let store =
-            DedupStore::open_with(state_dir.path(), RETENTION.as_millis() as i64, MAX_ENTRIES)
-                .expect("open_with");
+        let store = DedupStore::open_with(
+            state_dir.path(),
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            MAX_ENTRIES,
+        )
+        .expect("open_with");
 
         {
             let mut map = store.inner.lock().unwrap();
@@ -776,6 +854,7 @@ mod tests {
                 &store.dir,
                 "perm-test-task",
                 RETENTION.as_millis() as i64,
+                MIN_RETENTION.as_millis() as i64,
                 MAX_ENTRIES,
             )
             .expect("record_marker");
@@ -808,8 +887,10 @@ mod tests {
     #[tokio::test]
     async fn capacity_cap_evicts_oldest() {
         let state_dir = TempDir::new("cap-evict");
-        // max_entries=2: adding a third entry must evict the oldest.
-        let store = DedupStore::open_with(state_dir.path(), RETENTION.as_millis() as i64, 2)
+        // max_entries=2: adding a third entry must evict the oldest. A zero age
+        // floor isolates the capacity mechanics here — the dedicated floor test
+        // (`age_floor_protects_a_young_marker_from_capacity_eviction`) covers #340.
+        let store = DedupStore::open_with(state_dir.path(), RETENTION.as_millis() as i64, 0, 2)
             .expect("open_with");
 
         // Reference time: well within the 24h retention window for both a and b.
@@ -886,6 +967,85 @@ mod tests {
         );
     }
 
+    /// Age floor (issue #340): capacity eviction must NOT drop a marker younger than
+    /// the floor, even when the store is over the cap — dropping a still-live marker
+    /// would let a redelivered Task execute twice (ADR-0004). Here the cap is 1 and the
+    /// floor is 1 h, and every entry is recent, so the over-cap store must keep them all
+    /// and a re-send of any id must still be deduplicated.
+    ///
+    /// Non-vacuous: the pre-#340 code (oldest-first with no floor) would evict "old" to
+    /// satisfy cap=1, and the re-send of "old" below would then re-execute — exactly the
+    /// at-most-once violation this guards.
+    #[tokio::test]
+    async fn age_floor_protects_a_young_marker_from_capacity_eviction() {
+        let state_dir = TempDir::new("age-floor");
+        // cap=1, floor=1h. A flood of fresh ids all sit inside the floor.
+        let store = DedupStore::open_with(
+            state_dir.path(),
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            1,
+        )
+        .expect("open_with");
+
+        let now_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+
+        // Seed "old": recent (5 min ago) but the OLDEST — the entry oldest-first
+        // eviction would target first. It is still well within the 1 h floor.
+        {
+            let mut map = store.inner.lock().unwrap();
+            let path = marker_path(&store.dir, "old");
+            fs::File::create(&path).expect("create marker old");
+            fs::set_permissions(&path, fs::Permissions::from_mode(FILE_MODE)).expect("chmod");
+            map.insert("old".to_string(), now_ts - 5 * 60 * 1_000);
+        }
+
+        // Record two more fresh ids via the real path. Each record runs capacity
+        // eviction with the store at 2 then 3 entries, all over the cap of 1 — but
+        // every entry is inside the floor, so NONE may be evicted.
+        for id in ["mid", "new"] {
+            store.run_once(id, || async { make_task_result("x") }).await;
+        }
+
+        // All three markers survive despite being 3× over the cap.
+        for id in ["old", "mid", "new"] {
+            assert!(
+                store.inner.lock().unwrap().contains_key(id),
+                "'{id}' is within the age floor and must not be capacity-evicted"
+            );
+            assert!(
+                marker_path(&store.dir, id).exists(),
+                "'{id}' marker file must remain on disk"
+            );
+        }
+
+        // The load-bearing consequence: the oldest marker still dedups a re-send,
+        // so a redelivered Task does not execute twice.
+        let counter = Arc::new(AtomicUsize::new(0));
+        let c = counter.clone();
+        let result = store
+            .run_once("old", move || async move {
+                c.fetch_add(1, Ordering::SeqCst);
+                make_task_result("old")
+            })
+            .await;
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            0,
+            "the protected 'old' marker must still deduplicate its retry (no re-execution)"
+        );
+        assert!(
+            result
+                .stderr
+                .windows(b"already processed".len())
+                .any(|w| w == b"already processed"),
+            "re-sent 'old' must return the benign already-processed result"
+        );
+    }
+
     /// Age-based eviction removes expired entries and retains recent ones.
     ///
     /// Uses direct timestamp control for determinism (not relying on actual file mtimes
@@ -893,9 +1053,13 @@ mod tests {
     #[test]
     fn evict_removes_expired_by_age() {
         let state_dir = TempDir::new("evict-age");
-        let store =
-            DedupStore::open_with(state_dir.path(), RETENTION.as_millis() as i64, MAX_ENTRIES)
-                .expect("open_with");
+        let store = DedupStore::open_with(
+            state_dir.path(),
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            MAX_ENTRIES,
+        )
+        .expect("open_with");
 
         let now_ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -923,6 +1087,7 @@ mod tests {
                 &store.dir,
                 now_ts,
                 RETENTION.as_millis() as i64,
+                MIN_RETENTION.as_millis() as i64,
                 MAX_ENTRIES,
             );
 
