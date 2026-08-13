@@ -186,15 +186,42 @@ pub(crate) fn persist_identity(dir: &Path, id: &Identity) -> Result<()> {
     write_atomic(dir, "ca_bundle.pem", id.ca_bundle_pem.as_bytes(), 0o644)?;
     write_atomic(dir, "node_id", id.node_id.as_bytes(), 0o644)?;
 
+    // fsync the directory so the four renames above are themselves durable.
+    // Each write_atomic fsync'd its file's *contents* before renaming; this
+    // fsyncs the *directory entry* changes. Without it, a power loss after
+    // persist_identity returns could still lose a rename — leaving an
+    // incomplete identity that load_identity treats as "no identity" and
+    // re-enrolls, or (across two files) a torn pair. See write_atomic.
+    fsync_dir(dir)?;
+
     Ok(())
 }
 
-/// Writes `content` to `dir/name` atomically with the given Unix permission mode.
+/// fsyncs a directory so that name changes within it (creations, renames) are
+/// durable. Opening a directory read-only and calling `sync_all` on the handle
+/// is the portable POSIX way to flush directory metadata.
+fn fsync_dir(dir: &Path) -> Result<()> {
+    // O_RDONLY is the correct and only portable mode for a directory fd.
+    let d = OpenOptions::new().read(true).open(dir)?;
+    d.sync_all()?;
+    Ok(())
+}
+
+/// Writes `content` to `dir/name` atomically **and durably** with the given
+/// Unix permission mode.
 ///
 /// Creates a `.tmp` sibling (removing any stale leftover from a previous crashed
-/// run first) with `O_CREAT|O_EXCL`, writes content, then renames into place.
-/// The mode is applied at creation so the file is never briefly visible with
-/// wrong permissions.
+/// run first) with `O_CREAT|O_EXCL`, writes content, **fsyncs the file**, then
+/// renames into place. The mode is applied at creation so the file is never
+/// briefly visible with wrong permissions.
+///
+/// The fsync before the rename is the load-bearing part for durability: without
+/// it, on a crash the filesystem may make the rename durable while the file's
+/// *contents* are still only in the page cache — the classic "zero-length file
+/// after power loss" trap. fsyncing first guarantees that if the renamed name
+/// is visible after a crash, its bytes are on disk too. The caller
+/// (persist_identity) then fsyncs the directory to make the rename itself
+/// durable.
 fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()> {
     let tmp_path = dir.join(format!("{}.tmp", name));
     let final_path = dir.join(name);
@@ -209,6 +236,9 @@ fn write_atomic(dir: &Path, name: &str, content: &[u8], mode: u32) -> Result<()>
             .mode(mode)
             .open(&tmp_path)?;
         f.write_all(content)?;
+        // Flush contents to disk BEFORE the rename, not after — see the doc
+        // comment. sync_all is fsync(2): data + inode metadata.
+        f.sync_all()?;
     }
 
     fs::rename(&tmp_path, &final_path)?;
@@ -408,6 +438,18 @@ mod tests {
             );
         }
 
+        // No .tmp siblings survive a clean persist: every temp file was
+        // renamed into place, so a torn write is only ever possible mid-crash,
+        // never as steady state.
+        for name in ["key.pem", "cert.pem", "ca_bundle.pem", "node_id"] {
+            let tmp = dir.path().join(format!("{}.tmp", name));
+            assert!(
+                !tmp.exists(),
+                "{}.tmp must not survive a clean persist",
+                name
+            );
+        }
+
         // load_identity must return the same Identity byte-for-byte.
         let loaded = load_identity(dir.path())
             .expect("load_identity should not error")
@@ -416,6 +458,35 @@ mod tests {
         assert_eq!(loaded.key_pem, id.key_pem);
         assert_eq!(loaded.cert_pem, id.cert_pem);
         assert_eq!(loaded.ca_bundle_pem, id.ca_bundle_pem);
+    }
+
+    // Durability path (FIND #341): persist_identity fsyncs each file before
+    // renaming and fsyncs the directory afterward. A unit test cannot observe
+    // fsync (it needs a power-loss fault injector), so this exercises the two
+    // properties that ARE observable: fsync_dir succeeds against a real
+    // directory, and a persist immediately followed by an independent reopen
+    // reads the exact bytes back. It is a guard against the durability path
+    // regressing into an error rather than a proof of crash-safety.
+    #[test]
+    fn persist_fsyncs_without_error_and_reloads() {
+        let dir = TempDir::new("persist-durable");
+        let id = make_test_identity().expect("make_test_identity");
+
+        // persist_identity creates the directory, so it must run before
+        // fsync_dir can be exercised on it (TempDir::new only computes a path).
+        persist_identity(dir.path(), &id).expect("persist_identity");
+
+        // fsync_dir against the now-existing directory must succeed — the same
+        // call persist_identity makes internally.
+        fsync_dir(dir.path()).expect("fsync_dir on a real directory");
+
+        // Re-read through the public API rather than the in-memory Identity,
+        // so we exercise the on-disk bytes the fsync path just committed.
+        let reloaded = load_identity(dir.path())
+            .expect("load after durable persist")
+            .expect("identity present");
+        assert_eq!(reloaded.cert_pem, id.cert_pem);
+        assert_eq!(reloaded.key_pem, id.key_pem);
     }
 
     // -----------------------------------------------------------------------
