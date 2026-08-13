@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
 // TestRequirePrincipal_NoPrincipalInContextIsALegibleError is RB4's
@@ -182,5 +184,119 @@ func TestRenderPlan_CarriesOutdatedIntoPerNodeVerdict(t *testing.T) {
 	}
 	if byNode["node-current"].Outdated {
 		t.Error(`renderPlan: node-current PerNodeVerdict.Outdated = true, want false`)
+	}
+}
+
+// stubOpsLister adapts the real opvocab vocabulary to OperationLister for the
+// internal (package mcp) tests below, which reach unexported buildOperationAction
+// directly. mcp_test.go's opsLister lives in package mcp_test and is not visible
+// here.
+type stubOpsLister struct{}
+
+func (stubOpsLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
+
+// --- #345: argument-name validation in buildOperationAction --------------
+//
+// The defect these guard: an unknown or misspelled arg name was passed
+// straight through as an opaque map. A misspelled REQUIRED arg then defaulted
+// to empty and the daemon's rejection surfaced as outcome=denied_by_policy —
+// which the tool description tells the agent to answer with describe_node +
+// narrow + retry, a loop a malformed call can never exit. These prove the
+// malformed call now fails fast, before dispatch, with a legible error.
+
+// TestBuildOperationAction_MisspelledRequiredArgIsRejected is the exact trap
+// from #345: `service.restart {"unitt":"nginx"}`. The misspelled name must be
+// rejected here — NOT dropped, dispatched, and returned as denied_by_policy.
+func TestBuildOperationAction_MisspelledRequiredArgIsRejected(t *testing.T) {
+	_, err := buildOperationAction(stubOpsLister{}, "service.restart", map[string]string{"unitt": "nginx"}, 0)
+	if err == nil {
+		t.Fatal("buildOperationAction(service.restart, {unitt}) = nil error, want an unknown-argument rejection")
+	}
+	msg := err.Error()
+	for _, want := range []string{"unitt", "unit", "list_operations"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q must mention %q so the agent can correct the misspelling", msg, want)
+		}
+	}
+}
+
+// TestBuildOperationAction_UnknownArgOnAValidCallIsRejected covers the
+// silent-drop half: an otherwise-valid call carrying an extra unknown name
+// used to succeed with the extra arg dropped. It must now be rejected.
+func TestBuildOperationAction_UnknownArgOnAValidCallIsRejected(t *testing.T) {
+	_, err := buildOperationAction(stubOpsLister{}, "file.read", map[string]string{"path": "/etc/os-release", "bogus": "x"}, 0)
+	if err == nil {
+		t.Fatal("buildOperationAction(file.read, {path, bogus}) = nil error, want the unknown 'bogus' rejected, not silently dropped")
+	}
+	if !strings.Contains(err.Error(), "bogus") {
+		t.Errorf("error %q must name the unknown argument 'bogus'", err.Error())
+	}
+}
+
+// TestBuildOperationAction_ZeroArgOperationRejectsAnyArg: system.facts takes
+// no arguments, so any provided name is unknown.
+func TestBuildOperationAction_ZeroArgOperationRejectsAnyArg(t *testing.T) {
+	if _, err := buildOperationAction(stubOpsLister{}, "system.facts", map[string]string{"x": "y"}, 0); err == nil {
+		t.Fatal("buildOperationAction(system.facts, {x}) = nil error, want any argument rejected for a zero-arg Operation")
+	}
+}
+
+// TestBuildOperationAction_MissingRequiredArgIsRejected: an omitted required
+// arg (as opposed to a misspelled one) must also fail fast with the required
+// name, rather than defaulting empty into a denied_by_policy.
+func TestBuildOperationAction_MissingRequiredArgIsRejected(t *testing.T) {
+	_, err := buildOperationAction(stubOpsLister{}, "service.restart", map[string]string{}, 0)
+	if err == nil {
+		t.Fatal("buildOperationAction(service.restart, {}) = nil error, want a missing-required-argument rejection")
+	}
+	if !strings.Contains(err.Error(), "unit") {
+		t.Errorf("error %q must name the missing required argument 'unit'", err.Error())
+	}
+}
+
+// TestBuildOperationAction_ValidArgsSucceed proves the pre-check is a narrow
+// name gate, not a blanket refusal: correct names (including an omitted
+// OPTIONAL arg) still build the Action, with args and risk class preserved.
+func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]string
+		risk jobs.RiskClass
+	}{
+		{"system.facts", map[string]string{}, jobs.RiskClassRead},
+		{"file.read", map[string]string{"path": "/etc/os-release"}, jobs.RiskClassRead},
+		{"service.restart", map[string]string{"unit": "nginx"}, jobs.RiskClassMutate},
+		// version is optional — omitting it must NOT trip the required check.
+		{"pkg.install", map[string]string{"name": "nginx"}, jobs.RiskClassMutate},
+		{"pkg.install", map[string]string{"name": "nginx", "version": "1.24.0"}, jobs.RiskClassMutate},
+	}
+	for _, c := range cases {
+		act, err := buildOperationAction(stubOpsLister{}, c.name, c.args, 0)
+		if err != nil {
+			t.Errorf("buildOperationAction(%s, %v) = error %v, want success", c.name, c.args, err)
+			continue
+		}
+		if act.OperationName != c.name || act.RiskClass != c.risk {
+			t.Errorf("buildOperationAction(%s) = {name:%q risk:%v}, want {name:%q risk:%v}", c.name, act.OperationName, act.RiskClass, c.name, c.risk)
+		}
+		if len(act.OperationArgs) != len(c.args) {
+			t.Errorf("buildOperationAction(%s) args = %v, want %v (passed through unchanged)", c.name, act.OperationArgs, c.args)
+		}
+	}
+}
+
+// TestArgConstraintsAreClassifiable guards the marker convention
+// argConstraintIsRequired depends on: every published arg_constraints value
+// must contain exactly one of ", required" or ", optional" so a reword can
+// never silently flip a required arg to "not required" and reopen #345.
+func TestArgConstraintsAreClassifiable(t *testing.T) {
+	for _, d := range opvocab.Operations() {
+		for arg, constraint := range d.ArgConstraints {
+			req := strings.Contains(constraint, ", required")
+			opt := strings.Contains(constraint, ", optional")
+			if req == opt { // both false, or (impossibly) both true
+				t.Errorf("%s arg %q constraint %q must contain exactly one of \", required\" / \", optional\" (argConstraintIsRequired depends on it)", d.Name, arg, constraint)
+			}
+		}
 	}
 }
