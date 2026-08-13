@@ -17,7 +17,13 @@
 // unclassifiable) and surfaces through its own tool (#118), never this one.
 package opvocab
 
-import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
 
 // Descriptor mirrors relayv1.OperationDescriptor's Name and Risk (the wire
 // contract, invariant 8/ADR-0012), plus model-facing legibility PROSE that
@@ -111,4 +117,97 @@ func Operations() []Descriptor {
 			Example: `run_operation operation=pkg.install args={"name":"nginx","version":"1.24.0"}`,
 		},
 	}
+}
+
+// Lookup returns the Descriptor for name, or ok=false when name is not in the
+// native vocabulary. It is the shared name resolution both control surfaces
+// use before building an Action, so "unknown operation" reads identically on
+// MCP and the Control API.
+//
+// Native vocabulary only (frozen at four, ADR-0021): a Template Operation is
+// per-Node and is NOT resolvable here — a surface that supports templates must
+// treat !ok as "not native", not as "does not exist".
+func Lookup(name string) (Descriptor, bool) {
+	for _, d := range Operations() {
+		if d.Name == name {
+			return d, true
+		}
+	}
+	return Descriptor{}, false
+}
+
+// ValidateArgNames checks a caller's argument NAMES against d's published
+// ArgConstraints: every provided name must be one d declares, and every
+// declared required name must be provided.
+//
+// It exists here — beside the ArgConstraints convention it reads — because
+// **every** control surface needs it and a per-surface copy would drift. That
+// drift is not hypothetical: issue #345 was exactly this gap on MCP, where an
+// unknown arg name was silently dropped and a misspelled REQUIRED name then
+// defaulted to empty, so the daemon's refusal surfaced as `denied_by_policy`
+// rather than a validation error — sending the AI-agent into a
+// describe_node/narrow/retry loop it could never exit, because the request was
+// malformed rather than forbidden. A second surface re-implementing this would
+// reopen the same trap on its own schedule.
+//
+// **Names only — never values.** This is a fail-fast legibility pre-check, not
+// a second Policy decision (ADR-0002/0011, invariant 12): argument *values* are
+// the daemon's live engine's call, and forwarding an unrecognized value stays
+// its refusal to make. Errors name the offending argument and list the valid
+// ones, because the single most useful correction hint is the exact set of
+// names to choose from.
+func ValidateArgNames(d Descriptor, args map[string]string) error {
+	valid := make([]string, 0, len(d.ArgConstraints))
+	for k := range d.ArgConstraints {
+		valid = append(valid, k)
+	}
+	sort.Strings(valid)
+
+	// Unknown names first: a misspelled required arg lands here, and it is the
+	// more actionable message ("you wrote X; valid names are ...").
+	var unknown []string
+	for k := range args {
+		if _, ok := d.ArgConstraints[k]; !ok {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf(
+			"operation %q got unknown argument(s) %v; valid arguments: %v "+
+				"(see list_operations for each argument's type and constraints)",
+			d.Name, unknown, valid,
+		)
+	}
+
+	// Then missing required names (an omitted required arg, as opposed to a
+	// misspelled one, which the unknown-name check above already caught).
+	var missing []string
+	for name, constraint := range d.ArgConstraints {
+		if !argIsRequired(constraint) {
+			continue
+		}
+		if _, ok := args[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf(
+			"operation %q is missing required argument(s) %v; valid arguments: %v "+
+				"(see list_operations)",
+			d.Name, missing, valid,
+		)
+	}
+	return nil
+}
+
+// argIsRequired reports whether an ArgConstraints value marks the argument as
+// required. Every constraint follows this package's own convention
+// "<type>, required. ..." or "<type>, optional. ..." (see Descriptor), so the
+// ", required" marker is the signal. TestArgConstraintsAreClassifiable guards
+// the convention mechanically, so this string match cannot silently rot if the
+// prose is reworded.
+func argIsRequired(constraint string) bool {
+	return strings.Contains(constraint, ", required")
 }

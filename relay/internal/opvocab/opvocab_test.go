@@ -265,3 +265,103 @@ func TestOperations_MatchesGoldenSchema(t *testing.T) {
 		}
 	}
 }
+
+// --- Lookup / ValidateArgNames (shared by every control surface) ----------
+
+// TestArgConstraintsAreClassifiable guards the marker convention argIsRequired
+// depends on: every published ArgConstraints value must contain exactly one of
+// ", required" or ", optional", so a reword can never silently flip a required
+// argument to "not required" and reopen #345 on every surface at once.
+func TestArgConstraintsAreClassifiable(t *testing.T) {
+	for _, d := range Operations() {
+		for arg, constraint := range d.ArgConstraints {
+			req := strings.Contains(constraint, ", required")
+			opt := strings.Contains(constraint, ", optional")
+			if req == opt { // both false, or (impossibly) both true
+				t.Errorf("%s arg %q constraint %q must contain exactly one of \", required\" / \", optional\" (argIsRequired depends on it)",
+					d.Name, arg, constraint)
+			}
+		}
+	}
+}
+
+func TestLookup(t *testing.T) {
+	d, ok := Lookup("service.restart")
+	if !ok {
+		t.Fatal(`Lookup("service.restart") ok = false, want true`)
+	}
+	if d.Name != "service.restart" || d.Risk != jobs.RiskClassMutate {
+		t.Errorf("Lookup(service.restart) = {%q %v}, want {service.restart mutate}", d.Name, d.Risk)
+	}
+	if _, ok := Lookup("nope.notreal"); ok {
+		t.Error(`Lookup("nope.notreal") ok = true, want false`)
+	}
+	// A Template Operation is per-Node, never native: Lookup must not claim it.
+	if _, ok := Lookup("disk.usage"); ok {
+		t.Error(`Lookup("disk.usage") ok = true — a template name must not resolve as native`)
+	}
+}
+
+// TestValidateArgNames is the shared half of #345's guarantee: the same
+// misspelled/unknown/missing cases must be refused for every surface that
+// calls it, so a malformed call never reaches dispatch and comes back as
+// denied_by_policy.
+func TestValidateArgNames(t *testing.T) {
+	mustLookup := func(name string) Descriptor {
+		d, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("Lookup(%q): not found", name)
+		}
+		return d
+	}
+
+	t.Run("misspelled required name is unknown", func(t *testing.T) {
+		err := ValidateArgNames(mustLookup("service.restart"), map[string]string{"unitt": "nginx"})
+		if err == nil {
+			t.Fatal("ValidateArgNames({unitt}) = nil, want an unknown-argument error")
+		}
+		for _, want := range []string{"unitt", "unit"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q must mention %q", err, want)
+			}
+		}
+	})
+
+	t.Run("unknown extra name on an otherwise valid call", func(t *testing.T) {
+		err := ValidateArgNames(mustLookup("file.read"), map[string]string{"path": "/etc/os-release", "bogus": "x"})
+		if err == nil || !strings.Contains(err.Error(), "bogus") {
+			t.Fatalf("ValidateArgNames({path,bogus}) = %v, want an error naming 'bogus' (never silently dropped)", err)
+		}
+	})
+
+	t.Run("zero-arg operation refuses any argument", func(t *testing.T) {
+		if err := ValidateArgNames(mustLookup("system.facts"), map[string]string{"x": "y"}); err == nil {
+			t.Fatal("ValidateArgNames(system.facts, {x}) = nil, want an error")
+		}
+	})
+
+	t.Run("missing required name", func(t *testing.T) {
+		err := ValidateArgNames(mustLookup("service.restart"), map[string]string{})
+		if err == nil || !strings.Contains(err.Error(), "unit") {
+			t.Fatalf("ValidateArgNames(service.restart, {}) = %v, want an error naming the missing 'unit'", err)
+		}
+	})
+
+	t.Run("valid names pass, including an omitted optional", func(t *testing.T) {
+		cases := []struct {
+			op   string
+			args map[string]string
+		}{
+			{"system.facts", map[string]string{}},
+			{"file.read", map[string]string{"path": "/etc/os-release"}},
+			{"service.restart", map[string]string{"unit": "nginx"}},
+			{"pkg.install", map[string]string{"name": "nginx"}}, // version is optional
+			{"pkg.install", map[string]string{"name": "nginx", "version": "1.24.0"}},
+		}
+		for _, c := range cases {
+			if err := ValidateArgNames(mustLookup(c.op), c.args); err != nil {
+				t.Errorf("ValidateArgNames(%s, %v) = %v, want nil", c.op, c.args, err)
+			}
+		}
+	})
+}

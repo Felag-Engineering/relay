@@ -94,6 +94,12 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Accounts:     d.accountsRepo,
 		APITokens:    d.apiTokens,
 		Now:          d.now,
+		// Execution (#356): the SAME *capability.Service instance the MCP
+		// surface dispatches through — one capability layer, two thin surfaces
+		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry
+		// over identically rather than being re-proven per surface.
+		Exec: d.capability,
+		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 	})
 }
 

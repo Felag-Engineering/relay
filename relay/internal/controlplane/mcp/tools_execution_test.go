@@ -285,18 +285,6 @@ func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 	}
 }
 
-// TestArgConstraintsAreClassifiable guards the marker convention
-// argConstraintIsRequired depends on: every published arg_constraints value
-// must contain exactly one of ", required" or ", optional" so a reword can
-// never silently flip a required arg to "not required" and reopen #345.
-func TestArgConstraintsAreClassifiable(t *testing.T) {
-	for _, d := range opvocab.Operations() {
-		for arg, constraint := range d.ArgConstraints {
-			req := strings.Contains(constraint, ", required")
-			opt := strings.Contains(constraint, ", optional")
-			if req == opt { // both false, or (impossibly) both true
-				t.Errorf("%s arg %q constraint %q must contain exactly one of \", required\" / \", optional\" (argConstraintIsRequired depends on it)", d.Name, arg, constraint)
-			}
-		}
-	}
-}
+// The ", required"/", optional" marker convention these depend on is guarded
+// mechanically in opvocab (TestArgConstraintsAreClassifiable), beside the
+// ArgConstraints prose it reads.
