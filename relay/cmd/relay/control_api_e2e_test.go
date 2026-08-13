@@ -347,3 +347,84 @@ func TestControlAPI_RequiresCredential(t *testing.T) {
 		})
 	}
 }
+
+// -----------------------------------------------------------------------
+// Execution routes (#356) — composition-root wiring
+// -----------------------------------------------------------------------
+
+// TestControlAPI_ExecutionRoutesAreWired proves the execution slice is
+// reachable through the REAL composition root, not just through a hand-built
+// mux in package api's own tests. That distinction matters: every assertion in
+// api/execution_test.go would still pass if apiSurface.Mount forgot to pass
+// Exec/Jobs, because those tests construct Deps themselves. This one fails if
+// the wiring is missing.
+//
+// It drives plan mode, which is the safe probe by construction (ADR-0011):
+// it resolves, authorizes, and checks exactly as a real run would but executes
+// nothing, so the test needs no daemon and can never dispatch. With no Node
+// enrolled the Selector matches zero, and the meaningful assertions are that
+// the route exists (not 404), is authenticated, and returns a well-formed plan
+// carrying ADR-0011's advisory.
+func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
+	_, _, base, client, credential := startControlAPIServer(t)
+
+	t.Run("run_operation plan is served", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
+			credential, map[string]any{"operation": "system.facts", "plan": true})
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200 (route must be wired through apiSurface.Mount)", resp.StatusCode)
+		}
+		var plan struct {
+			Matched  int    `json:"matched"`
+			Advisory string `json:"advisory"`
+			JobID    string `json:"job_id"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
+			t.Fatalf("decode plan: %v", err)
+		}
+		if plan.Advisory == "" {
+			t.Error("plan response carries no advisory; ADR-0011 requires the point-in-time disclaimer")
+		}
+		if plan.JobID != "" {
+			t.Errorf("plan response carries job_id %q; a Plan creates no Job", plan.JobID)
+		}
+	})
+
+	t.Run("raw_exec plan is served", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/raw-exec",
+			credential, map[string]any{"argv": []string{"/bin/echo", "hi"}, "plan": true})
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200; the founding admin may plan a Raw Exec", resp.StatusCode)
+		}
+	})
+
+	t.Run("a malformed operation is a 400, never a Policy verdict", func(t *testing.T) {
+		// #345's trap, asserted end-to-end on this surface: a misspelled
+		// argument name must be refused as malformed input before it can reach
+		// a Node and come back as denied_by_policy.
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
+			credential, map[string]any{
+				"operation": "service.restart",
+				"args":      map[string]string{"unitt": "nginx"},
+			})
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 for a misspelled argument name", resp.StatusCode)
+		}
+	})
+
+	t.Run("unauthenticated is refused", func(t *testing.T) {
+		resp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/operations",
+			"", map[string]any{"operation": "system.facts", "plan": true})
+		defer resp.Body.Close() //nolint:errcheck
+
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401 — the execution routes sit behind the same Authenticator as every other /api/v1 route", resp.StatusCode)
+		}
+	})
+}

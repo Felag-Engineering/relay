@@ -1,6 +1,7 @@
-// Package api is the first REST/JSON slice of the Control API (ADR-0010):
-// Enrollment Token mint/revoke, Node revoke, and Freeze engage/release,
-// mounted under /api/v1 on the control-plane's existing *http.ServeMux
+// Package api is the REST/JSON Control API (ADR-0010): Enrollment Token
+// mint/revoke, Node revoke, Freeze engage/release, Account and API-Token
+// management, and — since #356 — execution (run an Operation, Raw Exec, and
+// plan mode), all mounted under /api/v1 on the control-plane's existing *http.ServeMux
 // (relay/internal/controlplane.Server.Mux()) behind the single
 // Authenticator.Middleware already wired there — no new listener, no new
 // auth path (invariant 10, ADR-0009).
@@ -11,6 +12,11 @@
 // CA key, or a listener (invariant 11) — Deps below intentionally carries
 // none of those, and this package's import list is structurally capped by
 // TestAPIImportsAreAllowlisted (api_imports_test.go).
+//
+// The execution routes hold to the same rule structurally, not just by
+// convention: no_dispatch_test.go fails any file here that names
+// capability.Service, capability.New, or newDispatch, so the only path to a
+// dispatch is the injected Executor interface (execution.go).
 package api
 
 import (
@@ -98,6 +104,14 @@ type Deps struct {
 	// Both are admin-only at every entry point (see requireAdmin).
 	Accounts  AccountManager
 	APITokens APITokenService
+	// Exec and Jobs back the execution routes (#356). Exec is the SAME
+	// capability layer the MCP surface dispatches through — never a second
+	// control path (invariant 10) — and Jobs is a read-only view used to render
+	// per-Node results after a dispatch returns. Neither carries a blast cap or
+	// any Relay configuration: the caps live inside the capability layer, above
+	// this surface's reach (invariant 11).
+	Exec Executor
+	Jobs JobResultReader
 	// Now returns the current time, used to timestamp lifecycle audit
 	// Records. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
@@ -131,6 +145,14 @@ func Register(mux *http.ServeMux, d Deps) {
 	mux.HandleFunc("POST /api/v1/accounts/{id}/tokens", handleMintAPIToken(d))
 	mux.HandleFunc("GET /api/v1/accounts/{id}/tokens", handleListAPITokens(d))
 	mux.HandleFunc("DELETE /api/v1/api-tokens/{token_id}", handleRevokeAPIToken(d))
+
+	// Execution (#356). Both routes dispatch through the shared capability
+	// layer (Selector -> authz -> blast-cap -> dispatch -> audit); neither
+	// re-implements a role check, a Policy decision, or a cap — see
+	// execution.go's header for why Raw Exec's admin gate deliberately stays in
+	// authz.RoleGate rather than being repeated here.
+	mux.HandleFunc("POST /api/v1/operations", handleRunOperation(d))
+	mux.HandleFunc("POST /api/v1/raw-exec", handleRawExec(d))
 }
 
 // principal reads the Principal that Authenticator.Middleware injected into
