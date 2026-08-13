@@ -474,6 +474,8 @@ impl LintReport {
 ///    Node's Template Operation names.
 /// 4. Allow rules fully shadowed by a `[[deny]]` rule of the same name
 ///    (`Warning`) — see [`allow_is_shadowed_by_deny`].
+/// 5. `[[deny]]` rules whose `args` contain a `"*"` or an empty inner list and
+///    can therefore never fire (`Warning`) — see [`lint_deny_arg_noops`].
 ///
 /// **Known limitations** (documented, not attempted):
 /// - Shadowing by the *union* of multiple deny rules (set-cover) is not
@@ -570,6 +572,7 @@ pub fn lint_with_vocabulary(
     }
 
     lint_shadowed_allows(&file.operation, &file.deny, &mut findings);
+    lint_deny_arg_noops(&file.deny, &mut findings);
 
     LintReport {
         parse_error: None,
@@ -618,6 +621,62 @@ fn lint_raw_exec_regexes(patterns: &[String], section: &str, findings: &mut Vec<
                 location: format!("[raw_exec].{section}[{i}]"),
                 message: format!("invalid regex {pattern:?}: {e}"),
             });
+        }
+    }
+}
+
+/// Flags `[[deny]]` rules that can never fire — a silent no-op the operator
+/// likely believes is protecting them (issue #343). On the last line of
+/// defense (Policy, ADR-0002), a deny that looks active but matches nothing is
+/// a false sense of security, and catching exactly that is the lint's job.
+///
+/// `Policy::evaluate`'s deny pass matches each argument position by EXACT VALUE
+/// (`denied_vals.contains(arg)`); unlike the allow pass, it gives deny args no
+/// wildcard semantics. So two constructs are dead:
+///
+/// - **`"*"` in a position** matches only the literal argument string `"*"`,
+///   never "any value" as it would in an allow rule. An operator who writes
+///   `args = [["*"]]` to mean "deny every value here" gets a rule that denies
+///   almost nothing.
+/// - **an empty inner list `[]`** at a position is satisfiable by no value at
+///   all, so the whole `all-positions-match` test can never succeed and the
+///   deny never fires.
+///
+/// Both are `Warning`s (promoted to failure by `--strict`), matching the
+/// shadowed-allow lint. The legitimate unconditional deny — an empty OUTER
+/// args list (`args = []`, "block every invocation", handled at
+/// `evaluate`'s deny pass) — is explicitly NOT flagged; only a non-empty rule
+/// with a dead inner position is. Real exact-match denies
+/// (`args = [["nginx"]]`) contain neither construct and are never flagged.
+fn lint_deny_arg_noops(denies: &[DenyRuleRaw], findings: &mut Vec<LintFinding>) {
+    for (di, deny) in denies.iter().enumerate() {
+        // `args = []` is the legitimate unconditional deny-all, not a no-op.
+        if deny.args.is_empty() {
+            continue;
+        }
+        for (pos, vals) in deny.args.iter().enumerate() {
+            if vals.is_empty() {
+                findings.push(LintFinding {
+                    severity: LintSeverity::Warning,
+                    location: format!("[[deny]] #{di} (name={:?}) args[{pos}]", deny.name),
+                    message: format!(
+                        "empty value list at argument position {pos}: no value can satisfy it, so \
+                         this deny rule can never fire (a silent no-op). To block every invocation \
+                         of the operation, use an empty top-level args list (args = []) instead."
+                    ),
+                });
+            } else if vals.iter().any(|v| v == "*") {
+                findings.push(LintFinding {
+                    severity: LintSeverity::Warning,
+                    location: format!("[[deny]] #{di} (name={:?}) args[{pos}]", deny.name),
+                    message: format!(
+                        "\"*\" at argument position {pos} is matched literally in a deny rule, NOT \
+                         as a wildcard (deny args are exact-match): it does not broaden this \
+                         position to every value. To deny regardless of this argument, omit the \
+                         position; to block the whole operation, use an empty args list (args = [])."
+                    ),
+                });
+            }
         }
     }
 }
@@ -1954,6 +2013,112 @@ args = [["/etc/shadow"]]
         assert!(
             report.findings.is_empty(),
             "partial shadow (wildcard allow position) must not be flagged; got {:?}",
+            report.findings
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // No-op deny args lint (issue #343). A native `name` and no `[[operation]]`
+    // rule keeps the unknown-name and shadowed-allow lints silent, so any
+    // finding is unambiguously from `lint_deny_arg_noops`.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn lint_flags_wildcard_in_deny_args() {
+        // `args = [["*"]]` reads like "deny any value" but deny args are
+        // exact-match: it denies only the literal "*", so the rule is dead.
+        let policy = r#"
+[[deny]]
+name = "file.read"
+args = [["*"]]
+"#;
+        let report = lint(policy);
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "a '*' in deny args must be flagged; got {:?}",
+            report.findings
+        );
+        let f = &report.findings[0];
+        assert_eq!(f.severity, LintSeverity::Warning);
+        assert!(f.location.contains("[[deny]] #0"));
+        assert!(f.location.contains("args[0]"));
+        assert!(
+            f.message.contains("literally") && f.message.contains("wildcard"),
+            "message must explain '*' is literal, not a wildcard; got {:?}",
+            f.message
+        );
+    }
+
+    #[test]
+    fn lint_flags_wildcard_even_alongside_real_values() {
+        // The '*' is dead weight even when the position also lists real values:
+        // the operator likely believes the position is a catch-all deny.
+        let policy = r#"
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow", "*"]]
+"#;
+        let report = lint(policy);
+        assert_eq!(report.findings.len(), 1, "got {:?}", report.findings);
+        assert_eq!(report.findings[0].severity, LintSeverity::Warning);
+        assert!(report.findings[0].message.contains("wildcard"));
+    }
+
+    #[test]
+    fn lint_flags_empty_inner_args_list_in_deny() {
+        // `args = [[]]` — one position with no values — can be satisfied by no
+        // argument, so the whole deny never fires. Distinct from `args = []`.
+        let policy = r#"
+[[deny]]
+name = "file.read"
+args = [[]]
+"#;
+        let report = lint(policy);
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "an empty inner args position must be flagged; got {:?}",
+            report.findings
+        );
+        let f = &report.findings[0];
+        assert_eq!(f.severity, LintSeverity::Warning);
+        assert!(f.location.contains("args[0]"));
+        assert!(
+            f.message.contains("never fire"),
+            "message must say the rule can never fire; got {:?}",
+            f.message
+        );
+    }
+
+    #[test]
+    fn lint_does_not_flag_outer_empty_deny_all() {
+        // `args = []` is the legitimate unconditional deny-all — NOT a no-op.
+        let policy = r#"
+[[deny]]
+name = "file.read"
+args = []
+"#;
+        let report = lint(policy);
+        assert!(
+            report.findings.is_empty(),
+            "the deny-all rule (empty outer args) must not be flagged; got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn lint_does_not_flag_exact_value_deny() {
+        // A real exact-match deny has neither a '*' nor an empty position.
+        let policy = r#"
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+"#;
+        let report = lint(policy);
+        assert!(
+            report.findings.is_empty(),
+            "an exact-value deny must lint clean; got {:?}",
             report.findings
         );
     }

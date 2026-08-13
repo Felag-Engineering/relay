@@ -54,9 +54,11 @@ const HELP: &str = "\
 Usage: relay-daemon policy check <file> [--strict] [--templates <dir>]
                                   [--would-allow <spec>]
 
-Parses and lints a Policy file: invalid regex, unknown Operation names, and
-allow rules that are fully shadowed by a deny rule and can therefore never
-fire. Always runs the self-reference lint (#287): a warning when the Policy's
+Parses and lints a Policy file: invalid regex, unknown Operation names, allow
+rules that are fully shadowed by a deny rule and can therefore never fire, and
+deny rules with a \"*\" or empty argument clause that (deny args being
+exact-match) can never fire either. Always runs the self-reference lint (#287):
+a warning when the Policy's
 own reach includes this daemon's config, templates, state dir, binary, or
 unit — decided by probing the real Policy engine, not a second matcher.
 
@@ -69,9 +71,9 @@ Optionally answers a --would-allow hypothetical through the exact same
 evaluation code the live wire path uses (ADR-0011) — no second evaluator.
 
 Options:
-  --strict               Treat lint warnings (a shadowed allow rule, an
-                         unresolvable Operation name, a self-reference
-                         finding) as failures.
+  --strict               Treat lint warnings (a shadowed allow rule, a deny
+                         rule that can never fire, an unresolvable Operation
+                         name, a self-reference finding) as failures.
   --templates <dir>      Lint the template root at <dir> alongside the Policy
                          and resolve Operation names against it.
   --would-allow <spec>   Ask whether the given action would be allowed.
@@ -693,6 +695,29 @@ args = [["nginx"]]
         // With --strict: the same warning fails the pipeline.
         let code_strict = run(&argv(&tmp.path_str(), &["--strict"]));
         assert_eq!(code_strict, EXIT_INVALID);
+    }
+
+    #[test]
+    fn exit_code_strict_promotes_deny_noop_warning_to_failure() {
+        // A `[[deny]]` with a "*" position reads like a catch-all deny but,
+        // deny args being exact-match, can never fire (issue #343). The lint
+        // warns; --strict turns that warning into a pipeline failure so an
+        // operator cannot ship a Policy whose deny silently protects nothing.
+        let policy = r#"
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+[[deny]]
+name = "file.read"
+args = [["*"]]
+"#;
+        let tmp = TempFile::new("deny-noop", policy);
+
+        // Without --strict the file is valid (the no-op deny is only a warning).
+        assert_eq!(run(&argv(&tmp.path_str(), &[])), EXIT_VALID);
+        // With --strict the warning fails the pipeline.
+        assert_eq!(run(&argv(&tmp.path_str(), &["--strict"])), EXIT_INVALID);
     }
 
     #[test]
