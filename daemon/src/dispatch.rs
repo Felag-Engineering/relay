@@ -249,6 +249,14 @@ pub fn evaluate_policy_query(
                 };
             };
             let positional = entry.positional_args(op);
+            // ADR-0018 canonical-path precondition FIRST, exactly as
+            // `gate_and_invoke` applies it on the execution path — otherwise a
+            // Plan reports `allow` for a template path slot in a non-canonical
+            // spelling that a real dispatch would deny (issue #339). One shared
+            // predicate, so the two cannot drift.
+            if let Some(decision) = non_canonical_path_precondition(entry, &positional) {
+                return decision_to_verdict(query_id, decision);
+            }
             let decision = policy.evaluate(&op.name, &positional);
             decision_to_verdict(query_id, decision)
         }
@@ -291,6 +299,36 @@ fn decision_to_verdict(query_id: String, decision: Decision) -> PolicyVerdict {
             unsupported: false,
         },
     }
+}
+
+/// ADR-0018 canonical-form precondition for a resolved Operation's `path`-typed
+/// slots, shared by the dispatch path and the plan path (issue #339).
+///
+/// Returns the engine's own non-canonical `Decision::Deny` for the first path
+/// slot that is not in canonical form, or `None` when every path slot is
+/// canonical (or the entry has none). The engine already applies this rule to
+/// `file.read` *by name* inside `policy.evaluate`; a Template Operation's path
+/// slots are gated here, outside the engine, so this is the one place that
+/// covers them.
+///
+/// It is a **precondition**, applied before the allow pass on BOTH paths, on the
+/// SAME predicate (`policy::path_is_canonical`, one definition) — so a Plan can
+/// never report `allow` where a real dispatch denies a non-canonical spelling
+/// such as `/etc/../etc/shadow` (ADR-0011 plan/apply parity). Previously only
+/// `gate_and_invoke` ran it, and `evaluate_policy_query` diverged on exactly
+/// these template path slots.
+fn non_canonical_path_precondition(
+    entry: &dyn ResolvedOp,
+    positional: &[String],
+) -> Option<Decision> {
+    for i in entry.path_arg_positions() {
+        if let Some(path) = positional.get(i) {
+            if !crate::policy::path_is_canonical(path) {
+                return Some(crate::policy::non_canonical_path_denial(path));
+            }
+        }
+    }
+    None
 }
 
 // The named-args → positional mapping lives on the resolved entry itself
@@ -482,33 +520,27 @@ where
 
     let positional = entry.positional_args(op);
 
-    // ADR-0018 canonical-form precondition for path arguments, applied here to
-    // the resolved entry's `path`-typed slots (issue #293). The engine already
-    // applies it to `file.read` by name — its one native path argument; a
-    // Template Operation's path slots need the same guard on the SAME predicate
-    // (`policy::path_is_canonical`, one definition) so an exact-path `[[deny]]`
-    // — the shipped default Policy's confidentiality list, for one — cannot be
-    // evaded by a non-canonical spelling such as `/etc/../etc/shadow`.
-    // Deliberately BEFORE the allow pass, and reported as DENIED_BY_POLICY with
-    // the engine's own reason text: this is the same decision the engine makes
-    // for file.read, not a second evaluator with its own vocabulary.
-    for i in entry.path_arg_positions() {
-        if let Some(path) = positional.get(i) {
-            if !crate::policy::path_is_canonical(path) {
-                let Decision::Deny { reason, .. } = crate::policy::non_canonical_path_denial(path)
-                else {
-                    unreachable!("non_canonical_path_denial always denies")
-                };
-                tracing::warn!(
-                    task_id = %task_id,
-                    operation = %op.name,
-                    reason = %reason,
-                    "template path argument is not in canonical form; denied before Policy"
-                );
-                let _ = cancel;
-                return denied_by_policy_result(task_id, &reason);
-            }
-        }
+    // ADR-0018 canonical-form precondition for path arguments (issue #293),
+    // via the one predicate the plan path also runs (issue #339) so a Plan and
+    // a real dispatch can never diverge on it. The engine already applies the
+    // rule to `file.read` by name; this covers a Template Operation's path
+    // slots, outside the engine. Deliberately BEFORE the allow pass, reported as
+    // DENIED_BY_POLICY with the engine's own reason text — the same decision the
+    // engine makes for file.read, not a second evaluator: an exact-path
+    // `[[deny]]` (the shipped default Policy's confidentiality list, for one)
+    // cannot be evaded by a spelling such as `/etc/../etc/shadow`.
+    if let Some(decision) = non_canonical_path_precondition(entry, &positional) {
+        let Decision::Deny { reason, .. } = decision else {
+            unreachable!("non_canonical_path_precondition only ever returns Deny")
+        };
+        tracing::warn!(
+            task_id = %task_id,
+            operation = %op.name,
+            reason = %reason,
+            "template path argument is not in canonical form; denied before Policy"
+        );
+        let _ = cancel;
+        return denied_by_policy_result(task_id, &reason);
     }
 
     // Policy gate: deny-before-execute, deny-by-default (ADR-0002, invariant #3).
@@ -2730,6 +2762,83 @@ args = [["/etc/shadow"]]
         )
         .await;
         assert_eq!(ok.outcome, Outcome::Success as i32);
+    }
+
+    /// ADR-0011 parity for the ADR-0018 canonical-path precondition on a
+    /// TEMPLATE path slot (issue #339). Plan mode used to skip the precondition
+    /// — `evaluate_policy_query` went straight to `policy.evaluate` — so a Plan
+    /// reported `allow` for a non-canonical spelling that a real dispatch
+    /// denies. Both paths now run the one shared predicate, so they must agree:
+    /// same deny, same reason bytes.
+    #[tokio::test]
+    async fn plan_and_apply_agree_on_a_non_canonical_template_path() {
+        let templates = crate::templates::TemplateSet::for_test(&[TemplateDef {
+            name: "file.checksum".to_string(),
+            risk_class: crate::operations::template::RiskClassDef::Read,
+            body: "sha256sum -- {{path}}".to_string(),
+            slots: vec![SlotDef {
+                name: "path".to_string(),
+                ty: SlotType::Path,
+            }],
+        }]);
+        // A wildcard allow: Policy itself would ALLOW the value. Only the
+        // canonical-path precondition stands between the request and execution,
+        // so this isolates exactly the divergence #339 was about.
+        let policy = from_toml_str(
+            r#"
+[[operation]]
+name = "file.checksum"
+allowed_args = [["*"]]
+"#,
+        )
+        .expect("policy parses");
+
+        let noncanonical = "/etc/../etc/shadow";
+
+        // Plan path.
+        let query =
+            make_policy_query_operation("q-noncanon", "file.checksum", "path", noncanonical);
+        let verdict = evaluate_policy_query(&query, &policy, &templates);
+        assert!(
+            !verdict.allowed,
+            "plan mode must DENY a non-canonical template path, not allow it"
+        );
+        assert!(
+            verdict.deciding_rule.contains("canonical form"),
+            "the plan verdict must cite the canonical-form precondition; got {:?}",
+            verdict.deciding_rule
+        );
+
+        // Apply path.
+        let result =
+            handle_operation_in(
+                &REGISTRY,
+                &templates,
+                "t-noncanon".to_string(),
+                &{
+                    let mut args = std::collections::HashMap::new();
+                    args.insert("path".to_string(), noncanonical.to_string());
+                    crate::gen::Operation {
+                        name: "file.checksum".to_string(),
+                        args,
+                    }
+                },
+                Duration::from_secs(5),
+                &policy,
+                |_req: ExecRequest| async move {
+                    unreachable!("a denied path must never reach the runner")
+                },
+                None,
+            )
+            .await;
+        assert_eq!(result.outcome, Outcome::DeniedByPolicy as i32);
+
+        // The point of the fix: identical conclusion AND identical bytes.
+        assert_eq!(
+            verdict.deciding_rule,
+            String::from_utf8_lossy(&result.stderr),
+            "plan and apply must explain the non-canonical denial with the same bytes",
+        );
     }
 
     /// ADR-0011 parity for the `unsupported` answer: a Plan on a Node without
