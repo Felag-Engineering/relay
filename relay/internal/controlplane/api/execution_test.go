@@ -52,6 +52,23 @@ type fakeExecutor struct {
 	runErr     error
 	planResult capability.PlanResult
 	planErr    error
+
+	// cancels records every CancelJob call; cancelErr is what it returns.
+	cancels   []string
+	cancelErr error
+}
+
+func (f *fakeExecutor) CancelJob(_ context.Context, _ capability.Principal, jobID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancels = append(f.cancels, jobID)
+	return f.cancelErr
+}
+
+func (f *fakeExecutor) cancelCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.cancels...)
 }
 
 func (f *fakeExecutor) Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {

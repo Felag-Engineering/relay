@@ -100,6 +100,16 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// over identically rather than being re-proven per surface.
 		Exec: d.capability,
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
+		// Read auditing for the Job read route (#357, ADR-0025). *auditsink.Sink
+		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
+		// mcp's readAuditor below, because package api may name capability
+		// types on its own routes.
+		//
+		// Assigned only when non-nil: putting a nil *Sink into the interface
+		// would make api's `Reads == nil` check false (a typed nil is a non-nil
+		// interface) and turn every audited read into a nil-receiver panic
+		// instead of the documented skip.
+		Reads: readAuditorOrNil(d.auditSink),
 	})
 }
 
@@ -144,4 +154,18 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
 	}
 	return a.sink.RecordRead(ctx, p, e.Tool, e.Selector, e.NodeID, e.JobID)
+}
+
+// readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s
+// is nil.
+//
+// Go's typed-nil trap in one place: assigning a nil *auditsink.Sink straight
+// into an interface field yields a NON-nil interface holding a nil pointer, so
+// the consumer's `== nil` guard passes it through and the first method call
+// panics on the nil receiver. Returning an untyped nil keeps the guard honest.
+func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
+	if s == nil {
+		return nil
+	}
+	return s
 }
