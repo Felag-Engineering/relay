@@ -11,7 +11,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon \
-        verify opschema-check openapi-check
+        verify opschema-check openapi-check gen-apiclient apiclient-check build-relayctl
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -30,7 +30,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
 # hard-failed: a check you did not run must not look like a check that passed.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
-        test-relay-race test-daemon opschema-check openapi-check verify-proto \
+        test-relay-race test-daemon opschema-check openapi-check apiclient-check verify-proto \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -39,6 +39,26 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
 # schema from the daemon binary and fails if it moved.
 opschema-check: gen-opschema
 	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
+
+# Control API client codegen (#359). relayctl's transport is GENERATED from the
+# published spec, never hand-written, which is what makes the CLI a conformance
+# test of the contract: if the spec and the client disagree, relayctl stops
+# compiling. Pinned version — an unpinned generator would make the committed
+# output depend on whatever was installed that day.
+OAPI_CODEGEN_VERSION := v2.8.0
+
+gen-apiclient:
+	cd relay && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) \
+		-config internal/apiclient/config.yaml ../docs/api/openapi.yaml
+
+# Drift gate (ci.yml: openapi), mirroring opschema-check: regenerate from the
+# committed spec and fail if the result moved. Catches a spec edit that was not
+# regenerated AND a hand-edit of generated code.
+apiclient-check: gen-apiclient
+	git diff --exit-code -- relay/internal/apiclient/client.gen.go
+
+build-relayctl:
+	cd relay && go build -o bin/relayctl ./cmd/relayctl
 
 # OpenAPI contract gate (ci.yml: openapi). Validates docs/api/openapi.yaml as a
 # real OpenAPI 3.1 document and checks it against the route table the server

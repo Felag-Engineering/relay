@@ -215,7 +215,7 @@ paths:
           description: The cancel was applied (or was a no-op on a finished Job).
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CancelJobResponse' }
+              schema: { $ref: '#/components/schemas/CancelledJob' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "404": { $ref: '#/components/responses/JobNotFound' }
         "500": { $ref: '#/components/responses/InternalError' }
@@ -247,7 +247,7 @@ paths:
           description: The token was minted. This is the only response carrying the plaintext.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MintEnrollmentTokenResponse' }
+              schema: { $ref: '#/components/schemas/MintedEnrollmentToken' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "500": { $ref: '#/components/responses/InternalError' }
@@ -386,7 +386,7 @@ paths:
           description: Every Account.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ListAccountsResponse' }
+              schema: { $ref: '#/components/schemas/AccountList' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/AdminRequired' }
         "500": { $ref: '#/components/responses/InternalError' }
@@ -506,7 +506,7 @@ paths:
           description: Minted. The only response carrying the plaintext.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/MintAPITokenResponse' }
+              schema: { $ref: '#/components/schemas/MintedAPIToken' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/AdminRequired' }
@@ -525,7 +525,7 @@ paths:
           description: The Account's tokens, redacted.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ListAPITokensResponse' }
+              schema: { $ref: '#/components/schemas/APITokenList' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/AdminRequired' }
         "404": { $ref: '#/components/responses/AccountNotFound' }
@@ -850,7 +850,7 @@ components:
           type: array
           items: { $ref: '#/components/schemas/PerNodeResult' }
 
-    CancelJobResponse:
+    CancelledJob:
       type: object
       required: [job_id]
       properties:
@@ -872,7 +872,7 @@ components:
           type: integer
           description: 0 means unlimited within the TTL.
 
-    MintEnrollmentTokenResponse:
+    MintedEnrollmentToken:
       type: object
       required: [id, token, scope, expires_at, max_uses]
       properties:
@@ -939,7 +939,7 @@ components:
           type: string
           enum: [viewer, operator, admin]
 
-    ListAccountsResponse:
+    AccountList:
       type: object
       required: [accounts]
       properties:
@@ -974,7 +974,7 @@ components:
           format: int64
           description: Omitted or null means no expiry.
 
-    MintAPITokenResponse:
+    MintedAPIToken:
       type: object
       required: [api_token, token]
       properties:
@@ -983,7 +983,7 @@ components:
           type: string
           description: The plaintext credential — returned once, here, and never again.
 
-    ListAPITokensResponse:
+    APITokenList:
       type: object
       required: [tokens]
       properties:

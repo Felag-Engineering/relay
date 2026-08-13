@@ -1,0 +1,12 @@
+# oapi-codegen configuration for the Control API client (#359).
+#
+# The CLI's transport is GENERATED from docs/api/openapi.yaml rather than
+# hand-written, which makes relayctl a conformance test of the published
+# contract: if the spec and the client disagree, the CLI stops compiling.
+package: apiclient
+output: internal/apiclient/client.gen.go
+generate:
+  models: true
+  client: true
+output-options:
+  skip-prune: true

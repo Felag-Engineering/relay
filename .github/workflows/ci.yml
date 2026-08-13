@@ -201,6 +201,15 @@ jobs:
       # contract cannot drift from the server that honours it.
       - run: make openapi-check
 
+      # The generated Control API client must match the committed spec: a spec
+      # edit that was not regenerated, or a hand-edit of generated code, fails
+      # here rather than surfacing as a CLI that disagrees with the server.
+      - run: make apiclient-check
+
+      # relayctl must build from the generated client — the CLI is the spec's
+      # conformance test, so a spec/client mismatch is a compile error.
+      - run: make build-relayctl
+
   # ---- integration: smoke test against both built binaries ----
   integration:
     name: Integration
