@@ -1,0 +1,992 @@
+# Relay Control API — OpenAPI 3.1 specification (ADR-0010).
+#
+# This file is the PUBLISHED CONTRACT for /api/v1. It is not documentation
+# generated after the fact and hoped to be current: relay's openapi_test.go
+# loads this file, validates it, and compares its paths and methods against
+# api.Routes() — the route table the server actually mounts. Adding, renaming,
+# or removing a route without editing this file fails CI, and vice versa.
+#
+# Versioning (ADR-0010, ADR-0014): the surface is /api/v1. Once v1.0.0 freezes
+# it, changes here are additive-only; a breaking change requires /api/v2 served
+# in parallel.
+#
+# Scope boundary (invariant 11): every operation below manages a RUNTIME
+# OBJECT — Enrollment Tokens, Nodes, Accounts, API Tokens, the Freeze, Jobs.
+# None reads or writes Relay configuration. Blast-radius caps, CA/TLS material,
+# listeners, and the auth bootstrap live in a root-owned local file and have no
+# endpoint here by design: the Control API can never raise its own limits.
+openapi: 3.1.0
+
+info:
+  title: Relay Control API
+  version: "1.0.0"
+  summary: Fleet-administration control plane for Relay.
+  description: |
+    The REST half of Relay's control plane. It is one of three thin surfaces
+    (MCP, this API, the Admin Console) over a single capability layer
+    (ADR-0009/0010): every execution request here runs the same
+    Selector → authz → blast-cap → dispatch → audit pipeline the MCP surface
+    uses, so both inherit identical Freeze, authorization, cap, and audit
+    behaviour rather than re-deriving it.
+
+    **Authorization** is a role ladder enforced centrally, never per surface:
+
+    | Role | May |
+    |---|---|
+    | `viewer` | read |
+    | `operator` | + run structured Operations (the typed path) |
+    | `admin` | + Raw Exec, and all identity management |
+
+    Raw Exec being admin-only is the centrally-enforced half of ADR-0001's
+    safety model. Node Policy still gates every command that arrives and
+    remains the last line of defense (ADR-0002); this ladder decides who may
+    even *ask* for the arbitrary-command path.
+
+    **Errors** are `application/problem+json` (RFC 7807) on every non-2xx.
+
+servers:
+  - url: https://{host}:{port}
+    description: A Relay's control-plane listener (separate from the node-plane gRPC listener).
+    variables:
+      host:
+        default: localhost
+      port:
+        default: "9443"
+
+security:
+  - apiToken: []
+
+tags:
+  - name: Execution
+    description: |
+      Run Operations and Raw Exec against a Selector's matched Nodes, or preview
+      the outcome with plan mode. Every route here goes through the shared
+      capability layer.
+  - name: Jobs
+    description: Re-read a Job's per-Node results, or cancel one in flight (ADR-0013).
+  - name: Enrollment
+    description: Mint and revoke scoped Enrollment Tokens; revoke Nodes.
+  - name: Freeze
+    description: The Relay-wide emergency stop (ADR-0013).
+  - name: Identity
+    description: Accounts and API Tokens (ADR-0010). Admin-only.
+
+paths:
+  # ---------------------------------------------------------------------------
+  # Execution
+  # ---------------------------------------------------------------------------
+  /api/v1/operations:
+    post:
+      tags: [Execution]
+      operationId: runOperation
+      summary: Run a structured Operation (or plan it)
+      description: |
+        Runs a typed, native-argv Operation (ADR-0001 — never a shell) against
+        every Node the Selector matches. Requires the `operator` role.
+
+        With `plan: true` this resolves, authorizes, and checks exactly as a
+        real run would but **executes nothing**, returning per-Node Policy
+        verdicts instead (ADR-0011). A plan creates no Job, so its response
+        carries no `job_id`.
+
+        Argument NAMES are validated against the Operation's published
+        constraints before dispatch, so a misspelled argument is a `400` rather
+        than a Policy denial. See `GET /api/v1/operations`… (vocabulary
+        discovery is an MCP surface today; the argument names and constraints
+        are the same on both).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunOperationRequest'
+      responses:
+        "200":
+          description: |
+            The dispatch completed (every matched Node's Task reached a terminal
+            outcome), or — with `plan: true` — the plan was computed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ExecutionResponse'
+                  - $ref: '#/components/schemas/PlanResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "409": { $ref: '#/components/responses/Frozen' }
+        "422": { $ref: '#/components/responses/CapExceeded' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/raw-exec:
+    post:
+      tags: [Execution]
+      operationId: rawExec
+      summary: Run an arbitrary argv (or plan it) — admin only
+      description: |
+        ADR-0001's regex-gated escape hatch. `argv` runs verbatim — no shell, no
+        client-side splitting — and the daemon's Policy regex decides per Node
+        whether it is allowed.
+
+        **Requires the `admin` role**, enforced centrally in the capability
+        layer. Always risk class `mutate` regardless of what the command does,
+        so it always takes the strict mutate blast cap (ADR-0012): a
+        read-only-looking command is still unclassifiable, and "this command
+        only reads" is exactly the claim an arbitrary-command path cannot make
+        on its own behalf.
+
+        Prefer `POST /api/v1/operations` whenever a structured Operation
+        expresses the task.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RawExecRequest'
+      responses:
+        "200":
+          description: The dispatch completed, or the plan was computed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ExecutionResponse'
+                  - $ref: '#/components/schemas/PlanResponse'
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403":
+          description: |
+            The caller's role is below `admin`. This is the ladder refusing the
+            arbitrary-command path, and it is audited as a refusal.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "409": { $ref: '#/components/responses/Frozen' }
+        "422": { $ref: '#/components/responses/CapExceeded' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  # ---------------------------------------------------------------------------
+  # Jobs
+  # ---------------------------------------------------------------------------
+  /api/v1/jobs/{id}:
+    parameters:
+      - $ref: '#/components/parameters/JobID'
+    get:
+      tags: [Jobs]
+      operationId: getJob
+      summary: Re-read a Job's per-Node results
+      description: |
+        Returns the Job and every Task's outcome. Use it to poll a Job started
+        earlier, or to re-read one after cancelling it.
+
+        **This read is audited** (ADR-0025). It returns captured Task output, so
+        a caller can read back command output somebody else produced; the access
+        trail records who read which Job and when — never the content. If the
+        audit record cannot be written the read is refused rather than served
+        invisibly.
+      responses:
+        "200":
+          description: The Job and its per-Node results.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404": { $ref: '#/components/responses/JobNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/jobs/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/JobID'
+    post:
+      tags: [Jobs]
+      operationId: cancelJob
+      summary: Cancel a Job's Tasks
+      description: |
+        ADR-0013 cancellation: undispatched Tasks are marked cancelled without
+        ever being sent, in-flight Tasks are asked to cancel over their Tunnels,
+        and already-resolved Tasks keep their truthful outcome.
+
+        Best-effort for in-flight Tasks by design — a Task that completes before
+        the cancel reaches it reports its real outcome, never a fabricated
+        `cancelled`. Cancelling an already-finished Job is therefore a clean
+        `200` no-op.
+      responses:
+        "200":
+          description: The cancel was applied (or was a no-op on a finished Job).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CancelJobResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404": { $ref: '#/components/responses/JobNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  # ---------------------------------------------------------------------------
+  # Enrollment
+  # ---------------------------------------------------------------------------
+  /api/v1/enrollment-tokens:
+    post:
+      tags: [Enrollment]
+      operationId: mintEnrollmentToken
+      summary: Mint a scoped Enrollment Token
+      description: |
+        Mints a reusable, scoped, expiring Enrollment Token (ADR-0006). The
+        token's scope stamps the enrolling Node's `relay:` labels, which are
+        Node-immutable and are the only namespace valid for security-lane
+        targeting (ADR-0020).
+
+        The plaintext credential is returned **once, here** — it is never
+        persisted, logged, or audited. Store it in a vault at this moment or
+        mint a new one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MintEnrollmentTokenRequest' }
+      responses:
+        "201":
+          description: The token was minted. This is the only response carrying the plaintext.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MintEnrollmentTokenResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/enrollment-tokens/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: The Enrollment Token's non-secret id (never the plaintext).
+        schema: { type: string }
+    delete:
+      tags: [Enrollment]
+      operationId: revokeEnrollmentToken
+      summary: Revoke an Enrollment Token
+      description: |
+        Revokes the token and cascade-revokes the Nodes already enrolled with
+        it, tearing down their live Tunnels.
+      responses:
+        "204":
+          description: Revoked.
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404":
+          description: No such token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/nodes/{node_id}/revoke:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        description: The Node's id (its client-certificate CN).
+        schema: { type: string }
+    post:
+      tags: [Enrollment]
+      operationId: revokeNode
+      summary: Revoke a Node
+      description: |
+        Revokes a single Node's identity and tears down its live Tunnel
+        immediately. The Node cannot reconnect until it re-enrolls.
+      responses:
+        "204":
+          description: Revoked.
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  # ---------------------------------------------------------------------------
+  # Freeze
+  # ---------------------------------------------------------------------------
+  /api/v1/freeze/engage:
+    post:
+      tags: [Freeze]
+      operationId: engageFreeze
+      summary: Engage the Relay-wide Freeze
+      description: |
+        Halts **all** new dispatch, every risk class, regardless of who asks
+        (ADR-0013). Plan mode still answers while frozen, so an operator can
+        keep investigating. Deliberately cheap and reason-free: engaging the
+        emergency stop must never be the slower path.
+
+        Persisted across Relay restarts.
+      responses:
+        "200":
+          description: The Freeze is engaged.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FreezeResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/freeze/release:
+    post:
+      tags: [Freeze]
+      operationId: releaseFreeze
+      summary: Release the Relay-wide Freeze
+      description: |
+        Requires a non-empty `reason`. The asymmetry with engage is deliberate
+        (ADR-0013): stopping the fleet is cheap, restarting it is a deliberate
+        act that must say why, and the reason lands in the audit trail.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReleaseFreezeRequest' }
+      responses:
+        "200":
+          description: The Freeze is released.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FreezeResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  # ---------------------------------------------------------------------------
+  # Identity — every route below requires the admin role.
+  # ---------------------------------------------------------------------------
+  /api/v1/accounts:
+    post:
+      tags: [Identity]
+      operationId: createAccount
+      summary: Create an Account (admin)
+      description: |
+        Creates a human or machine Account with a role. Machine Accounts are how
+        orchestrators (an AI-agent such as Gleipnir) get an identity whose role
+        gates what they may dispatch.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAccountRequest' }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "409":
+          description: The name is already taken, or is reserved.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+    get:
+      tags: [Identity]
+      operationId: listAccounts
+      summary: List Accounts (admin)
+      responses:
+        "200":
+          description: Every Account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAccountsResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AccountID'
+    get:
+      tags: [Identity]
+      operationId: getAccount
+      summary: Get one Account (admin)
+      responses:
+        "200":
+          description: The Account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/accounts/{id}/role:
+    parameters:
+      - $ref: '#/components/parameters/AccountID'
+    post:
+      tags: [Identity]
+      operationId: setAccountRole
+      summary: Change an Account's role (admin)
+      description: |
+        A token inherits its Account's role at verification time, so a role
+        change takes effect immediately for every existing token — no
+        re-issuance, no synchronization step.
+
+        An admin cannot change their **own** role: a guard against locking the
+        last admin out of their own control plane, not a security boundary (any
+        other admin still can).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetRoleRequest' }
+      responses:
+        "200":
+          description: The updated Account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "409": { $ref: '#/components/responses/SelfTarget' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/accounts/{id}/enable:
+    parameters:
+      - $ref: '#/components/parameters/AccountID'
+    post:
+      tags: [Identity]
+      operationId: enableAccount
+      summary: Enable an Account (admin)
+      responses:
+        "200":
+          description: The updated Account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/accounts/{id}/disable:
+    parameters:
+      - $ref: '#/components/parameters/AccountID'
+    post:
+      tags: [Identity]
+      operationId: disableAccount
+      summary: Disable an Account (admin)
+      description: |
+        A disabled Account's live tokens stop working immediately without being
+        revoked; re-enabling restores them. Disablement and revocation are
+        distinct levers on purpose.
+
+        An admin cannot disable their own Account (see `setAccountRole`).
+      responses:
+        "200":
+          description: The updated Account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Account' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "409": { $ref: '#/components/responses/SelfTarget' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/accounts/{id}/tokens:
+    parameters:
+      - $ref: '#/components/parameters/AccountID'
+    post:
+      tags: [Identity]
+      operationId: mintAPIToken
+      summary: Mint an API Token for an Account (admin)
+      description: |
+        The plaintext credential (`glp_<id>.<secret>`) is returned **once,
+        here** — only its SHA-256 is stored. It is never persisted in the clear,
+        logged, or audited; the audit record keeps the token's non-secret id.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MintAPITokenRequest' }
+      responses:
+        "201":
+          description: Minted. The only response carrying the plaintext.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MintAPITokenResponse' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+    get:
+      tags: [Identity]
+      operationId: listAPITokens
+      summary: List an Account's API Tokens (admin)
+      description: |
+        The redacted view: no field here can carry a secret or its hash, so
+        listing tokens never hands back anything a caller could authenticate
+        with or crack offline.
+      responses:
+        "200":
+          description: The Account's tokens, redacted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListAPITokensResponse' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404": { $ref: '#/components/responses/AccountNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/api-tokens/{token_id}:
+    parameters:
+      - name: token_id
+        in: path
+        required: true
+        description: The API Token's non-secret id.
+        schema: { type: string }
+    delete:
+      tags: [Identity]
+      operationId: revokeAPIToken
+      summary: Revoke an API Token (admin)
+      description: |
+        Immediate: the next request presenting it is refused. Revoking your own
+        token is permitted — it is a normal, sometimes urgent act.
+      responses:
+        "204":
+          description: Revoked.
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/AdminRequired' }
+        "404":
+          description: No such token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+components:
+  securitySchemes:
+    apiToken:
+      type: http
+      scheme: bearer
+      description: |
+        An Account API Token (`glp_<id>.<secret>`), presented as
+        `Authorization: Bearer <token>`. The token inherits its Account's role
+        at verification time.
+
+        Interactive humans may instead authenticate through the OAuth 2.1
+        protected-resource flow on the MCP endpoint (ADR-0024); the Relay is a
+        resource server and never an authorization server.
+
+  parameters:
+    JobID:
+      name: id
+      in: path
+      required: true
+      description: The Job id, as returned in `job_id` by a dispatch.
+      schema: { type: string }
+    AccountID:
+      name: id
+      in: path
+      required: true
+      description: The Account id.
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Malformed request — bad JSON, an unknown field, an invalid Selector, or an invalid Operation argument name.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Unauthorized:
+      description: Missing or invalid credential.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: The caller's role is below what this action requires.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AdminRequired:
+      description: Identity management requires the `admin` role.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Frozen:
+      description: |
+        The Relay-wide Freeze is engaged, so all new dispatch is refused
+        (ADR-0013). Plan mode still answers while frozen.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    CapExceeded:
+      description: |
+        The Selector matched more Nodes than the applicable blast-radius cap
+        allows (ADR-0004/0012). The request was well-formed and authorized; a
+        guardrail refused it before anything ran. Narrow the Selector or split
+        the work into batches. The cap is Relay configuration and cannot be
+        raised through this API (invariant 11).
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    JobNotFound:
+      description: No Job with that id. A plan creates no Job, so a plan's action has no id to read.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    AccountNotFound:
+      description: No Account with that id.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    SelfTarget:
+      description: |
+        An admin may not change their own role or disable their own Account —
+        a lockout guard, not a security boundary. Any other admin can.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    InternalError:
+      description: An unexpected server-side failure.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 7807 problem detail. Never carries a credential or captured command output.
+      required: [status, title]
+      properties:
+        status:
+          type: integer
+          description: The HTTP status code, repeated in the body.
+        title:
+          type: string
+          description: A short, stable summary of the problem class.
+        detail:
+          type: string
+          description: Human-readable specifics, safe to disclose to the caller.
+
+    RiskClass:
+      type: string
+      enum: [read, mutate]
+      description: |
+        Chooses the blast-radius cap (ADR-0012). It is NEVER an authorization
+        input — the role floor is chosen by action kind, or a `read`-class Raw
+        Exec would authorize as though it were a structured read.
+
+    Outcome:
+      type: string
+      enum:
+        - success
+        - failure
+        - timeout
+        - denied_by_policy
+        - cancelled
+        - unreachable
+        - version_refused
+        - unsupported
+        - unspecified
+      description: |
+        A Task's terminal state, and the authoritative answer to "did this run".
+        `denied_by_policy` is the Node's live Policy engine refusing;
+        `unreachable` is an offline Node (never dispatched, ADR-0004);
+        `version_refused` is the Relay's minimum-daemon-version gate (ADR-0014);
+        `unsupported` is a name outside that Node's vocabulary (ADR-0021).
+
+    Verdict:
+      type: string
+      enum: [allow, deny, unsupported, unknown]
+      description: |
+        A plan-mode per-Node verdict from that Node's live Policy engine
+        (ADR-0011). `unknown` means the Node is offline and was not asked — the
+        Relay never guesses a verdict from a cached snapshot.
+
+    RunOperationRequest:
+      type: object
+      required: [operation]
+      properties:
+        selector:
+          type: string
+          description: |
+            Selector filter, e.g. `node:role=web` or `relay:env=prod`. Every term
+            must carry a `node:`, `relay:`, or `tag:` prefix. Empty or omitted
+            matches every Node — subject to the blast cap.
+          examples: ["node:role=web"]
+        operation:
+          type: string
+          description: The Operation name.
+          examples: ["service.restart"]
+        args:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            Named Operation arguments. Names are validated against the
+            Operation's published constraints before dispatch; an unknown or
+            missing-required name is a `400`, never a Policy denial. Values are
+            the daemon's to accept or refuse.
+          examples: [{ unit: "nginx" }]
+        timeout_seconds:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 86400
+          description: Per-Task timeout. 0 or omitted uses the daemon/engine default.
+        plan:
+          type: boolean
+          description: Preview per-Node verdicts without executing (ADR-0011).
+
+    RawExecRequest:
+      type: object
+      required: [argv]
+      properties:
+        selector:
+          type: string
+          description: See `RunOperationRequest.selector`.
+        argv:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: |
+            Executed verbatim on each matched Node — no shell, no client-side
+            splitting (ADR-0001).
+          examples: [["/usr/bin/systemctl", "status", "nginx"]]
+        timeout_seconds:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 86400
+        plan:
+          type: boolean
+
+    PerNodeResult:
+      type: object
+      required: [node_id, outcome, duration_ms]
+      properties:
+        node_id: { type: string }
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        exit_code:
+          type: integer
+          format: int32
+          description: |
+            **Present only when a process really ran and exited with a status.**
+            A Task that never executed (`denied_by_policy`, `unreachable`,
+            `version_refused`) or was killed without one (`timeout`,
+            `cancelled`, spawn failure) has no `exit_code` key at all — reading
+            an absent code as `0` would turn "did not run" into "succeeded".
+            `outcome` is the authoritative state.
+        stdout: { type: string }
+        stderr: { type: string }
+        stdout_truncated:
+          type: boolean
+          description: Output exceeded the render cap and was truncated.
+        stderr_truncated: { type: boolean }
+        duration_ms:
+          type: integer
+          format: int64
+          description: 0 when the Task was never dispatched, never a fabricated value.
+
+    ExecutionResponse:
+      type: object
+      required: [results]
+      properties:
+        job_id:
+          type: string
+          description: |
+            **Present only when a Job was created.** Absent on a plan (which
+            executes nothing) and on a zero-match dispatch, so an absent
+            `job_id` always means nothing was dispatched.
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/PerNodeResult' }
+          description: One entry per matched Node, sorted by `node_id`. Always an array, never null.
+
+    PerNodeVerdict:
+      type: object
+      required: [node_id, verdict]
+      properties:
+        node_id: { type: string }
+        verdict: { $ref: '#/components/schemas/Verdict' }
+        deciding_rule:
+          type: string
+          description: The Policy rule text behind a deny, verbatim from the daemon's engine.
+        reason: { type: string }
+        outdated:
+          type: boolean
+          description: The Node's relay-daemon is below the Relay's minimum version (ADR-0014).
+
+    WouldBeRejected:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          enum: [exceeds_cap, frozen]
+        matched: { type: integer }
+        cap: { type: integer }
+        class: { $ref: '#/components/schemas/RiskClass' }
+
+    PlanResponse:
+      type: object
+      required: [matched, verdicts, advisory]
+      properties:
+        matched:
+          type: integer
+          description: How many Nodes the Selector resolved to.
+        verdicts:
+          type: array
+          items: { $ref: '#/components/schemas/PerNodeVerdict' }
+          description: Sorted by `node_id`. Empty when the plan would be rejected before any Node was asked.
+        would_be_rejected:
+          $ref: '#/components/schemas/WouldBeRejected'
+        advisory:
+          type: string
+          description: |
+            A fixed point-in-time disclaimer. A plan's verdicts are a snapshot,
+            not a guarantee: Policy may change between the plan and a real run.
+
+    JobResponse:
+      type: object
+      required: [job_id, results]
+      properties:
+        job_id: { type: string }
+        created_at: { type: string, format: date-time }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/PerNodeResult' }
+
+    CancelJobResponse:
+      type: object
+      required: [job_id]
+      properties:
+        job_id: { type: string }
+
+    MintEnrollmentTokenRequest:
+      type: object
+      properties:
+        scope:
+          type: array
+          items: { type: string }
+          description: |
+            `relay:` labels stamped on Nodes enrolling with this token. These are
+            Node-immutable and are the only namespace valid for security-lane
+            targeting (ADR-0020).
+          examples: [["relay:env=prod"]]
+        ttl_seconds: { type: integer, format: int64 }
+        max_uses:
+          type: integer
+          description: 0 means unlimited within the TTL.
+
+    MintEnrollmentTokenResponse:
+      type: object
+      required: [id, token, scope, expires_at, max_uses]
+      properties:
+        id:
+          type: string
+          description: The token's non-secret id, used to revoke it.
+        token:
+          type: string
+          description: The plaintext credential — returned once, here, and never again.
+        scope:
+          type: array
+          items: { type: string }
+        expires_at: { type: string, format: date-time }
+        max_uses: { type: integer }
+
+    ReleaseFreezeRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Why the fleet is being un-frozen. Recorded in the audit trail.
+
+    FreezeResponse:
+      type: object
+      required: [engaged]
+      properties:
+        engaged: { type: boolean }
+
+    Account:
+      type: object
+      required: [id, name, kind, role, enabled, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        kind:
+          type: string
+          enum: [human, machine]
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+        enabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+
+    CreateAccountRequest:
+      type: object
+      required: [name, kind, role]
+      properties:
+        name: { type: string }
+        kind:
+          type: string
+          enum: [human, machine]
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+
+    SetRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [viewer, operator, admin]
+
+    ListAccountsResponse:
+      type: object
+      required: [accounts]
+      properties:
+        accounts:
+          type: array
+          items: { $ref: '#/components/schemas/Account' }
+
+    APIToken:
+      type: object
+      description: The redacted view of a stored API Token — no secret, no hash.
+      required: [id, account_id, name, created_at, revoked]
+      properties:
+        id: { type: string }
+        account_id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time }
+        revoked: { type: boolean }
+
+    MintAPITokenRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 128
+          description: An operator-facing label, echoed into audit reasons.
+        ttl_seconds:
+          type: integer
+          format: int64
+          description: Omitted or null means no expiry.
+
+    MintAPITokenResponse:
+      type: object
+      required: [api_token, token]
+      properties:
+        api_token: { $ref: '#/components/schemas/APIToken' }
+        token:
+          type: string
+          description: The plaintext credential — returned once, here, and never again.
+
+    ListAPITokensResponse:
+      type: object
+      required: [tokens]
+      properties:
+        tokens:
+          type: array
+          items: { $ref: '#/components/schemas/APIToken' }
