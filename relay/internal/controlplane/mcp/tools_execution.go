@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	schema "github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -12,6 +13,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
 // This is an EXEC file (no_dispatch_test.go's relaxed partition, RB1 in the
@@ -310,11 +312,24 @@ func renderRunError(err error) error {
 }
 
 // buildOperationAction looks up name in ops' vocabulary for its declared
-// RiskClass (ADR-0012) and builds the resulting jobs.Action. This is a thin
-// pre-check for a legible "unknown operation" error before ever reaching
-// Run — the daemon's live Policy engine remains the real gate (ADR-0002/
-// 0011); an operation name this package doesn't recognize is refused here
-// only to fail fast with a clear message, not as a second Policy decision.
+// RiskClass (ADR-0012), validates the argument NAMES against that Operation's
+// published arg_constraints, and builds the resulting jobs.Action.
+//
+// The name checks are a thin **legibility pre-check** before ever reaching Run,
+// never a second Policy decision (ADR-0002/0011, invariant 12): the daemon's
+// live Policy engine and its validate_* functions remain the real gate on
+// argument VALUES. What this catches is the failure mode where a malformed call
+// is indistinguishable from a forbidden one (#345):
+//
+//   - an unknown Operation name → "unknown operation";
+//   - an unknown ARGUMENT name (e.g. a misspelled "unitt") — otherwise silently
+//     dropped, leaving the required arg empty so the daemon reports
+//     denied_by_policy, which sends the agent into describe_node/narrow/retry
+//     loops it can never exit because the request was malformed, not forbidden;
+//   - a missing REQUIRED argument — otherwise the same empty-value denial.
+//
+// Only names are checked (presence/absence), never values — value legality is
+// the daemon's, and forwarding an unrecognized value stays its call to refuse.
 func buildOperationAction(ops OperationLister, name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
 	timeoutSeconds, err := resolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
@@ -322,6 +337,9 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 	}
 	for _, d := range ops.Operations() {
 		if d.Name == name {
+			if err := validateOperationArgNames(d, args); err != nil {
+				return jobs.Action{}, err
+			}
 			return jobs.Action{
 				Kind:           jobs.ActionOperation,
 				OperationName:  name,
@@ -332,6 +350,74 @@ func buildOperationAction(ops OperationLister, name string, args map[string]stri
 		}
 	}
 	return jobs.Action{}, fmt.Errorf("unknown operation %q (see list_operations)", name)
+}
+
+// validateOperationArgNames checks the caller's argument names against the
+// Operation's published arg_constraints (#345): every provided name must be
+// one the Operation declares, and every declared REQUIRED name must be
+// provided. It reports the first failing class with a message legible enough
+// for the AI-agent to correct without probing — naming the offending arg and
+// listing the valid ones — so a malformed call never masquerades as
+// denied_by_policy.
+//
+// Names only: it never inspects values, so it can never become a second Policy
+// decision. `valid` (a sorted list of the Operation's argument names) is folded
+// into every message because the single most useful thing for correcting a
+// misspelling is the exact set of names to choose from.
+func validateOperationArgNames(d opvocab.Descriptor, args map[string]string) error {
+	valid := make([]string, 0, len(d.ArgConstraints))
+	for k := range d.ArgConstraints {
+		valid = append(valid, k)
+	}
+	sort.Strings(valid)
+
+	// Unknown names first: a misspelled required arg shows up here, and it is
+	// the more actionable message ("you wrote X; valid names are …").
+	var unknown []string
+	for k := range args {
+		if _, ok := d.ArgConstraints[k]; !ok {
+			unknown = append(unknown, k)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		return fmt.Errorf(
+			"operation %q got unknown argument(s) %v; valid arguments: %v "+
+				"(see list_operations for each argument's type and constraints)",
+			d.Name, unknown, valid,
+		)
+	}
+
+	// Then missing required names (an omitted required arg, as opposed to a
+	// misspelled one, which the unknown-name check above already caught).
+	var missing []string
+	for name, constraint := range d.ArgConstraints {
+		if !argConstraintIsRequired(constraint) {
+			continue
+		}
+		if _, ok := args[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf(
+			"operation %q is missing required argument(s) %v; valid arguments: %v "+
+				"(see list_operations)",
+			d.Name, missing, valid,
+		)
+	}
+	return nil
+}
+
+// argConstraintIsRequired reports whether an arg_constraints value marks the
+// argument as required. Every constraint follows the opvocab convention
+// "<type>, required. …" or "<type>, optional. …" (see opvocab.Descriptor), so
+// the ", required" marker is the signal. TestArgConstraintsAreClassifiable
+// guards the convention mechanically, so this string match cannot silently rot
+// if the prose is reworded.
+func argConstraintIsRequired(constraint string) bool {
+	return strings.Contains(constraint, ", required")
 }
 
 // runOperationInput is run_operation's argument. Plan is additive (#119):
