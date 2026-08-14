@@ -201,9 +201,10 @@ jobs:
       # contract cannot drift from the server that honours it.
       - run: make openapi-check
 
-      # The generated Control API client must match the committed spec: a spec
-      # edit that was not regenerated, or a hand-edit of generated code, fails
-      # here rather than surfacing as a CLI that disagrees with the server.
+      # Generates a typed client from the committed spec, compiles it, and
+      # asserts every operationId got a client method. The generated code is
+      # not committed — this proves the published contract is consumable by a
+      # real generator, which spec validation alone cannot.
       - run: make apiclient-check
 
   # ---- integration: smoke test against both built binaries ----

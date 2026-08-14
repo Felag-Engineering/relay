@@ -11,6 +11,12 @@
 /relay/internal/proto/
 /daemon/src/gen/
 
+# Generated Control API client (regenerate with `make gen-apiclient`).
+# Deliberately not committed: nothing in the product imports it — it exists to
+# prove docs/api/openapi.yaml is consumable by a real generator, which `make
+# apiclient-check` does by generating, compiling, and asserting against it.
+/relay/internal/apiclient/client.gen.go
+
 # Build artifacts
 /dist/
 /build/

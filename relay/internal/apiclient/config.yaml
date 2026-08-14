@@ -1,8 +1,11 @@
 # oapi-codegen configuration for the Control API client (#359).
 #
-# The CLI's transport is GENERATED from docs/api/openapi.yaml rather than
-# hand-written, which makes relayctl a conformance test of the published
-# contract: if the spec and the client disagree, the CLI stops compiling.
+# The output is GENERATED ON DEMAND and gitignored — it exists so CI can prove
+# docs/api/openapi.yaml is consumable by a real client generator, not because
+# anything in the product imports it. See doc.go.
+#
+# `output` is resolved relative to the working directory of the oapi-codegen
+# process, not to this file; `make gen-apiclient` runs it from ./relay.
 package: apiclient
 output: internal/apiclient/client.gen.go
 generate:

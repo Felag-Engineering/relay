@@ -1,3 +1,5 @@
+//go:build apiclient
+
 package apiclient
 
 import (
@@ -22,8 +24,12 @@ import (
 // a spec change that silently generated nothing (an operation the generator
 // skipped, a name collision resolved by dropping one side) would still compile.
 // This asserts the mapping is total: every operationId in the published spec
-// has a corresponding client method, and every client method traces back to an
-// operationId.
+// has a corresponding client method.
+//
+// It sits behind the `apiclient` build tag because the code it tests is
+// generated on demand and not committed (see doc.go). `make apiclient-check`
+// generates the client and runs this with the tag set; the ordinary
+// `go test ./...` skips it rather than failing on absent generated code.
 
 func specPath(t *testing.T) string {
 	t.Helper()

@@ -41,27 +41,36 @@ opschema-check: gen-opschema
 	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
 
 # Control API client codegen (#359). A typed Go client GENERATED from the
-# published spec — the contract's conformance test: the client is compiled and
-# checked against every operationId the spec declares, so a spec the server
-# cannot honour, or generated code someone hand-edited, fails the build.
+# published spec — the contract's conformance test: a spec the server cannot
+# honour, or one a real generator cannot consume, fails here.
 #
-# There is deliberately no CLI consuming it (see internal/apiclient's package
-# doc): the Console owns the human surface, and the client stands on its own as
-# the conformance gate plus the starting point for any future Go integration.
+# The output is NOT COMMITTED. There is deliberately no CLI consuming it (see
+# internal/apiclient's package doc): the Console owns the human surface, so
+# thousands of lines of generated code with no consumer would be pure
+# repository weight. What has value is the act of generating and compiling it,
+# and that is what CI does. The file is gitignored, so a stray `git add` cannot
+# put it back.
 #
-# Pinned version — an unpinned generator would make the committed output depend
-# on whatever was installed that day.
+# Pinned version — an unpinned generator would make the check depend on
+# whatever was installed that day.
 OAPI_CODEGEN_VERSION := v2.8.0
 
 gen-apiclient:
+	rm -f relay/internal/apiclient/client.gen.go
 	cd relay && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) \
 		-config internal/apiclient/config.yaml ../docs/api/openapi.yaml
 
-# Drift gate (ci.yml: openapi), mirroring opschema-check: regenerate from the
-# committed spec and fail if the result moved. Catches a spec edit that was not
-# regenerated AND a hand-edit of generated code.
+# Contract gate (ci.yml: openapi): generate a client from the committed spec,
+# COMPILE it, and assert the mapping is total — every operationId the spec
+# declares has a client method. Generation alone would not catch a schema name
+# that collides with a generated wrapper type; compilation would not catch an
+# operation the generator silently skipped. Both halves are needed.
+#
+# `gen-apiclient` removes any previous output first, so a stale file cannot
+# stand in for a generation that failed.
 apiclient-check: gen-apiclient
-	git diff --exit-code -- relay/internal/apiclient/client.gen.go
+	cd relay && go build -tags apiclient ./internal/apiclient/ \
+		&& go test -tags apiclient ./internal/apiclient/ -count=1
 
 # OpenAPI contract gate (ci.yml: openapi). Validates docs/api/openapi.yaml as a
 # real OpenAPI 3.1 document and checks it against the route table the server
