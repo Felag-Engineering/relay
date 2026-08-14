@@ -211,6 +211,27 @@ one already-Policy-legal Plan to run. It is never authorization and can never wi
 Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
 
+**Decision**:
+One recorded answer to a parked Job — who decided, when, over which **channel**, against
+which Plan hash, and whether a human decided. An Approval is *satisfied* by a set of
+Decisions from **distinct** Accounts (quorum means distinct deciders); one denying Decision
+is terminal, mirroring Policy's deny-beats-allow. Every Decision is its own audit record,
+including a denial and including the first of two, so partial quorum is never an absence in
+the trail.
+_Avoid_: vote, approval (for the individual answer — the Approval is the whole requirement
+being met), response
+
+**Channel** (of a Decision):
+How strongly a Decision's delivery path is trusted. **`in-band`** means the answer came
+back over the same MCP session that requested the action, so it is only as trustworthy as
+the harness; **`out-of-band`** means it landed on an authenticated Relay endpoint carrying a
+credential the requesting session does not hold. In-band is an *assumption about the
+client*; out-of-band is *evidence*. Set by the surface that receives the Decision, never by
+the caller, and checked as a floor: a stronger channel satisfies a weaker requirement,
+never the reverse (ADR-0027).
+_Avoid_: transport (reserved for the gRPC/mTLS node plane), delivery envelope (that is
+*how* an approver is reached, not how strongly their answer is trusted)
+
 **Gate rule**:
 One rule in the Relay's root-owned approval-gate configuration, matching on risk class,
 blast size, Selector namespace, principal, and Operation, and requiring a `count`,

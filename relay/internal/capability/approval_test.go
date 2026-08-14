@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -46,6 +47,58 @@ func (m *memApprovals) BindJob(_ context.Context, id, jobID string) error {
 	return nil
 }
 
+func (m *memApprovals) Get(_ context.Context, id string) (approval.Request, error) {
+	r, ok := m.byID[id]
+	if !ok {
+		return approval.Request{}, approval.ErrNotFound
+	}
+	return r, nil
+}
+
+func (m *memApprovals) Pending(_ context.Context) ([]approval.Request, error) {
+	ids := make([]string, 0, len(m.byID))
+	for id := range m.byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]approval.Request, 0, len(ids))
+	for _, id := range ids {
+		if r := m.byID[id]; r.State == approval.StatePending {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// RecordDecision mirrors the SQLite store: the domain type owns every
+// eligibility rule and this only persists the result, so a test that passes
+// here is exercising the same decision logic production runs.
+func (m *memApprovals) RecordDecision(_ context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error) {
+	r, ok := m.byID[id]
+	if !ok {
+		return approval.Request{}, approval.ErrNotFound
+	}
+	updated, err := r.Decide(d, now)
+	if err != nil {
+		return approval.Request{}, err
+	}
+	m.byID[id] = updated
+	return updated, nil
+}
+
+// spyApprovalAuthorizer is the permissive default for the #269 park tests,
+// which are about the gate rather than the decision floor. The floor's own
+// behaviour is exercised in approval_decide_test.go and authz_test.go.
+type spyApprovalAuthorizer struct {
+	err  error
+	kind jobs.ActionKind
+}
+
+func (s *spyApprovalAuthorizer) AuthorizeApprovalDecision(_ context.Context, _ Principal, kind jobs.ActionKind) error {
+	s.kind = kind
+	return s.err
+}
+
 // approve drives a stored Request to approved, as the decision endpoint will.
 func (m *memApprovals) approve(t *testing.T, id, accountID, account string, at time.Time) {
 	t.Helper()
@@ -55,7 +108,7 @@ func (m *memApprovals) approve(t *testing.T, id, accountID, account string, at t
 	}
 	updated, err := r.Decide(approval.Decision{
 		AccountID: accountID, Account: account, Approve: true,
-		Channel: approval.ChannelOutOfBand, PlanHash: r.PlanHash, At: at,
+		Channel: approval.ChannelOutOfBand, PlanHash: r.PlanHash, DeciderHuman: true, At: at,
 	}, at)
 	if err != nil {
 		t.Fatalf("approve %s: %v", id, err)
@@ -90,7 +143,7 @@ func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store Appr
 		WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}),
 		WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gate, store),
+		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
 		WithClock(now),
 	)
 	s.disp = disp
@@ -200,7 +253,7 @@ func TestRegistryDriftReParksAnApprovedPlan(t *testing.T) {
 	s := New(reg,
 		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
-		WithApprovals(gateEverything(t, 1), store), WithClock(func() time.Time { return apNow }),
+		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}), WithClock(func() time.Time { return apNow }),
 	)
 	s.disp = disp
 	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
@@ -273,7 +326,7 @@ func TestFrozenRelayNeverEvenParks(t *testing.T) {
 	s := New(reg,
 		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
 		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{frozen: true}),
-		WithApprovals(gateEverything(t, 1), store), WithClock(func() time.Time { return apNow }),
+		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}), WithClock(func() time.Time { return apNow }),
 	)
 
 	_, err := s.Run(context.Background(), Principal{Account: "gleipnir-prod"}, Selector{}, mutateAct())

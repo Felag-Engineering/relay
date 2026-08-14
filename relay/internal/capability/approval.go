@@ -32,15 +32,76 @@ func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []str
 	return approval.Requirement{}, nil, false
 }
 
-// ApprovalStore is the subset of approval.Repository the dispatch path needs.
-// Kept narrow deliberately: the capability layer creates parked Requests and
-// reads back satisfied ones, but it is not where decisions are recorded — that
-// is the decision endpoint's job ([3/6]).
+// ApprovalStore is the subset of approval.Repository the capability layer
+// needs: the dispatch path's create/lookup/bind, plus the queue reads and the
+// decision write the surfaces adapt ([3/6], #270).
+//
+// Decisions land HERE rather than in the Control API handler for the same
+// reason dispatch does (invariant 10): the decision endpoint, the MCP
+// elicitation envelope ([5/6]), and the Console's approval queue (v0.7.0) are
+// three doors onto one act, and a door that recorded its own decisions would be
+// a second control path — the first one to be forgotten when a rule changes.
 type ApprovalStore interface {
 	Create(ctx context.Context, r approval.Request) error
 	ByPlanHash(ctx context.Context, planHash string) (approval.Request, error)
 	BindJob(ctx context.Context, id, jobID string) error
+	Get(ctx context.Context, id string) (approval.Request, error)
+	Pending(ctx context.Context) ([]approval.Request, error)
+	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
+
+// ApprovalAuthorizer answers "may this Principal decide a Request for an Action
+// of this kind?".
+//
+// It is a seam for the same reason Authorizer is: the role ladder lives in
+// package authz, which is the single place "who may run what" is answered, and
+// capability must not grow a second copy of it. *authz.RoleGate implements both.
+//
+// The floor it enforces is the one that makes approval non-escalating: deciding
+// a Request requires the role that Action would have needed to be REQUESTED. An
+// operator who cannot ask for Raw Exec cannot release someone else's, so no
+// approval path hands out authority the requester's own ladder withheld.
+type ApprovalAuthorizer interface {
+	AuthorizeApprovalDecision(ctx context.Context, p Principal, kind jobs.ActionKind) error
+}
+
+// ApprovalNotice is what an ApprovalNotifier is told about a freshly parked
+// dispatch. Every field is Relay-authored (ADR-0027): the requesting agent
+// supplies the Action, never the words describing it.
+//
+// It carries no credential, no token, and no captured output. Summary DOES
+// carry the Operation's arguments, because arguments are what the approver is
+// deciding about — see the notifier's own documentation for what that means for
+// the endpoint an operator points it at.
+type ApprovalNotice struct {
+	RequestID   string
+	PlanHash    string
+	Summary     string
+	RequestedBy string
+	Rules       []string
+	Progress    string
+	Count       int
+	Channel     string
+	ExpiresAt   time.Time
+}
+
+// ApprovalNotifier is told when a dispatch parks, so an operator's own
+// notification plumbing can reach the approver (ADR-0027's out-of-band
+// envelope). It is best-effort observability of a security event, NOT part of
+// the guarantee: the decision endpoint stands alone, and a deployment whose
+// webhook is down loses a notification, never safety.
+//
+// It returns nothing, and Service.Run ignores its timing entirely, because a
+// park must not be able to fail — or stall — on someone else's HTTP server.
+type ApprovalNotifier interface {
+	NotifyParked(ctx context.Context, n ApprovalNotice)
+}
+
+// noopApprovalNotifier is the default: parks are recorded and returned to the
+// caller, and nothing is pushed anywhere.
+type noopApprovalNotifier struct{}
+
+func (noopApprovalNotifier) NotifyParked(context.Context, ApprovalNotice) {}
 
 // ParkedError is returned by Service.Run when a dispatch is gated and now waits
 // for a human. It is exported and typed so a surface can recognize a park via
@@ -91,6 +152,11 @@ type approvalDecision struct {
 	requestID string
 	// parked is set when the dispatch was parked instead.
 	parked *ParkedError
+	// created is set only when THIS call created the Request, so a notification
+	// fires once per park rather than once per retry. A caller re-driving a
+	// dispatch that is already waiting must not re-page the approver: an
+	// approval mechanism that pages on every poll is one operators mute.
+	created *approval.Request
 }
 
 // checkApproval consults the gate for a resolved dispatch and either lets it
@@ -155,12 +221,27 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	if err != nil {
 		return approvalDecision{}, err
 	}
-	summary := approval.Summarize(act, nodes)
-	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, summary, rules, req, now)
+	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, rules, req, now)
 	if err := s.approvals.Create(ctx, r); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}
-	return approvalDecision{parked: parkedErrorFor(r)}, nil
+	return approvalDecision{parked: parkedErrorFor(r), created: &r}, nil
+}
+
+// noticeFor projects a parked Request into the value an ApprovalNotifier is
+// given. It carries the Relay-authored summary and nothing the requester wrote.
+func noticeFor(r approval.Request) ApprovalNotice {
+	return ApprovalNotice{
+		RequestID:   r.ID,
+		PlanHash:    r.PlanHash,
+		Summary:     r.Summary,
+		RequestedBy: r.RequestedBy,
+		Rules:       r.MatchedRules,
+		Progress:    r.Progress(),
+		Count:       r.Require.Count,
+		Channel:     r.Require.Channel.String(),
+		ExpiresAt:   r.ExpiresAt,
+	}
 }
 
 func parkedErrorFor(r approval.Request) *ParkedError {

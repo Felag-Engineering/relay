@@ -39,7 +39,16 @@ func TestAPIImportsAreAllowlisted(t *testing.T) {
 		// the admin gate reuses rather than re-deriving. It carries no SQL, no
 		// HTTP, and no Relay configuration, so it does not widen what this
 		// package can reach — it is the domain vocabulary of the routes.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts":     true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts": true,
+		// approval is the proto-free, SQL-free approval domain (#270): the
+		// Request/Decision/Channel types the decision routes render, its error
+		// sentinels for status mapping, and the ChannelOutOfBand constant this
+		// surface stamps on every decision it accepts. Like accounts and jobs it
+		// is domain vocabulary, not a second engine — no eligibility rule is
+		// evaluated in this package, and the gate CONFIGURATION (which is Relay
+		// configuration, invariant 11) is reachable only through approval.Load,
+		// which nothing here calls.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit":        true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability":   true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane": true,

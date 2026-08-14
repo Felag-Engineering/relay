@@ -24,12 +24,13 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 	_, err := a.db.ExecContext(ctx, `
 		INSERT INTO approval_requests (
 			request_id, job_id, plan_hash, requested_by_id, requested_by,
-			plan_summary, matched_rules,
+			plan_summary, matched_rules, action_kind, risk_class,
 			require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 			state, created_at, expires_at, resolved_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, nullString(r.JobID), r.PlanHash, r.RequestedByID, r.RequestedBy,
 		r.Summary, strings.Join(r.MatchedRules, ","),
+		approval.ActionKindName(r.ActionKind), approval.RiskClassName(r.RiskClass),
 		r.Require.Count, strings.Join(r.Require.Audience, ","), boolToInt(r.Require.RequesterAllowed),
 		int(r.Require.Channel), int64(r.Require.TTL),
 		int(r.State), formatTime(roundTripTime(r.CreatedAt)), formatTime(roundTripTime(r.ExpiresAt)),
@@ -43,7 +44,7 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 
 const approvalSelect = `
 	SELECT request_id, job_id, plan_hash, requested_by_id, requested_by,
-	       plan_summary, matched_rules,
+	       plan_summary, matched_rules, action_kind, risk_class,
 	       require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 	       state, created_at, expires_at, resolved_at
 	  FROM approval_requests`
@@ -102,6 +103,8 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 		jobID      sql.NullString
 		audience   string
 		matched    string
+		actionKind string
+		riskClass  string
 		reqAllowed int
 		channel    int
 		ttlNS      int64
@@ -112,7 +115,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	)
 	if err := scan(
 		&r.ID, &jobID, &r.PlanHash, &r.RequestedByID, &r.RequestedBy,
-		&r.Summary, &matched,
+		&r.Summary, &matched, &actionKind, &riskClass,
 		&r.Require.Count, &audience, &reqAllowed, &channel, &ttlNS,
 		&state, &created, &expires, &resolved,
 	); err != nil {
@@ -121,6 +124,12 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 
 	r.JobID = jobID.String
 	r.MatchedRules = splitList(matched)
+	// An unrecognized stored name reads back as the UNSPECIFIED value rather
+	// than erroring, and that is the fail-closed direction here: authz denies
+	// an unspecified Action kind for every role, so a row this build cannot
+	// interpret becomes undecidable instead of decidable by the weakest floor.
+	r.ActionKind = approval.ParseActionKind(actionKind)
+	r.RiskClass = approval.ParseRiskClassName(riskClass)
 	r.Require.Audience = splitList(audience)
 	r.Require.RequesterAllowed = reqAllowed != 0
 	r.Require.Channel = approval.Channel(channel)
@@ -142,7 +151,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 
 func (a *sqliteApprovals) decisionsFor(ctx context.Context, q querier, requestID string) ([]approval.Decision, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT account_id, account, approve, reason, channel, plan_hash, decided_at
+		SELECT account_id, account, approve, reason, channel, plan_hash, decider_human, decided_at
 		  FROM approval_decisions WHERE request_id = ? ORDER BY decision_id`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("select approval decisions: %w", err)
@@ -155,13 +164,15 @@ func (a *sqliteApprovals) decisionsFor(ctx context.Context, q querier, requestID
 			d       approval.Decision
 			approve int
 			channel int
+			human   int
 			at      sql.NullString
 		)
-		if err := rows.Scan(&d.AccountID, &d.Account, &approve, &d.Reason, &channel, &d.PlanHash, &at); err != nil {
+		if err := rows.Scan(&d.AccountID, &d.Account, &approve, &d.Reason, &channel, &d.PlanHash, &human, &at); err != nil {
 			return nil, fmt.Errorf("scan approval decision: %w", err)
 		}
 		d.Approve = approve != 0
 		d.Channel = approval.Channel(channel)
+		d.DeciderHuman = human != 0
 		var err error
 		if d.At, err = parseTime(at); err != nil {
 			return nil, fmt.Errorf("parse approval decided_at: %w", err)
@@ -237,10 +248,10 @@ func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d appro
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO approval_decisions (request_id, account_id, account, approve, reason, channel, plan_hash, decided_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO approval_decisions (request_id, account_id, account, approve, reason, channel, plan_hash, decider_human, decided_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, d.AccountID, d.Account, boolToInt(d.Approve), d.Reason, int(d.Channel), d.PlanHash,
-		formatTime(roundTripTime(d.At)),
+		boolToInt(d.DeciderHuman), formatTime(roundTripTime(d.At)),
 	); err != nil {
 		return approval.Request{}, fmt.Errorf("insert approval decision: %w", err)
 	}

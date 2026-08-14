@@ -100,6 +100,11 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// over identically rather than being re-proven per surface.
 		Exec: d.capability,
 		Jobs: jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
+		// The out-of-band approval decision channel (#270, ADR-0027) — the same
+		// *capability.Service again. The decision is the same act however it
+		// arrives, so the API endpoint, the MCP elicitation envelope, and the
+		// Console's approval queue all reach it through this one object.
+		Approvals: d.capability,
 		// Read auditing for the Job read route (#357, ADR-0025). *auditsink.Sink
 		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
 		// mcp's readAuditor below, because package api may name capability

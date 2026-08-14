@@ -47,6 +47,17 @@ const (
 	// and "what happened to that request?" has no answer.
 	KindApprovalExpired = "approval_expired"
 
+	// KindApprovalDecided is one human's answer to a parked dispatch (#270,
+	// ADR-0027). Distinct from KindDispatch because a decision runs nothing,
+	// and distinct from KindApprovalRequested because it is the other half of
+	// the exchange: together with the request and the eventual dispatch, these
+	// three kinds are what make "who asked / for whom / who approved / what
+	// happened" one query rather than four correlated by timestamp.
+	//
+	// Recorded for denials and for partial approvals too, not only for the
+	// decision that releases a Job.
+	KindApprovalDecided = "approval_decided"
+
 	// KindRead is a non-dispatching read-tool call — list_nodes,
 	// describe_node, list_operations, get_job (#288, ADR-0025). These never
 	// reach a Node, so they produce no Job and no Task, but they do disclose

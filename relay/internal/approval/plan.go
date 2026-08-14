@@ -44,8 +44,8 @@ func HashPlan(act jobs.Action, nodeIDs []string) string {
 		fmt.Fprintf(h, "%s=%d:%s\n", field, len(value), value)
 	}
 
-	write("kind", actionKindName(act.Kind))
-	write("risk", riskClassName(act.RiskClass))
+	write("kind", ActionKindName(act.Kind))
+	write("risk", RiskClassName(act.RiskClass))
 
 	switch act.Kind {
 	case jobs.ActionOperation:
@@ -77,7 +77,7 @@ func HashPlan(act jobs.Action, nodeIDs []string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-func actionKindName(k jobs.ActionKind) string {
+func ActionKindName(k jobs.ActionKind) string {
 	switch k {
 	case jobs.ActionOperation:
 		return "operation"
@@ -85,6 +85,40 @@ func actionKindName(k jobs.ActionKind) string {
 		return "raw_exec"
 	default:
 		return "unspecified"
+	}
+}
+
+// ParseActionKind is ActionKindName's inverse, used by the store to read back a
+// persisted Request.
+//
+// An unrecognized name maps to jobs.ActionUnspecified rather than to an error,
+// and that is deliberately the SAFE direction rather than a lenient one:
+// authz.RoleGate denies an unspecified Action kind for every role including
+// admin, so a stored row this build cannot interpret becomes undecidable, not
+// decidable by whichever floor happened to be weakest.
+func ParseActionKind(s string) jobs.ActionKind {
+	switch s {
+	case "operation":
+		return jobs.ActionOperation
+	case "raw_exec":
+		return jobs.ActionRawExec
+	default:
+		return jobs.ActionUnspecified
+	}
+}
+
+// ParseRiskClassName is RiskClassName's inverse. Unlike ParseActionKind it is
+// not a security boundary — risk class picks the blast cap at dispatch, and
+// that decision is made from the live Action, never from this stored copy,
+// which exists for rendering and filtering the queue.
+func ParseRiskClassName(s string) jobs.RiskClass {
+	switch s {
+	case "read":
+		return jobs.RiskClassRead
+	case "mutate":
+		return jobs.RiskClassMutate
+	default:
+		return jobs.RiskClassUnspecified
 	}
 }
 
@@ -135,7 +169,7 @@ func Summarize(act jobs.Action, nodeIDs []string) PlanSummary {
 
 	return PlanSummary{
 		Action:      describeAction(act),
-		RiskClass:   riskClassName(act.RiskClass),
+		RiskClass:   RiskClassName(act.RiskClass),
 		NodeCount:   len(nodeIDs),
 		SampleNodes: sample,
 		PlanHash:    HashPlan(act, nodeIDs),

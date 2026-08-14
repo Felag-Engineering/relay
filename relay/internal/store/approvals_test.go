@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 func approvalStore(t *testing.T) approval.Repository {
@@ -22,9 +23,16 @@ func approvalStore(t *testing.T) approval.Repository {
 
 var storeNow = time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC)
 
+var storeAction = jobs.Action{
+	Kind:          jobs.ActionOperation,
+	OperationName: "service.restart",
+	OperationArgs: map[string]string{"service": "nginx"},
+	RiskClass:     jobs.RiskClassMutate,
+}
+
 func pendingRequest(id, planHash string, count int, ttl time.Duration) approval.Request {
 	return approval.NewRequest(id, planHash, "acct-g", "gleipnir-prod",
-		approval.PlanSummary{}, []string{"rule-a"},
+		storeAction, []string{"node-a"}, []string{"rule-a"},
 		approval.Requirement{Count: count, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: ttl},
 		storeNow)
 }
@@ -240,5 +248,68 @@ func TestBindJobJoinsApprovalToExecution(t *testing.T) {
 	}
 	if err := repo.BindJob(ctx, "absent", "job-42"); !errors.Is(err, approval.ErrNotFound) {
 		t.Errorf("BindJob(absent) = %v, want ErrNotFound", err)
+	}
+}
+
+// TestApprovalRoundTripPreservesTheDecisionFacts is #270's schema half
+// (migration 0013).
+//
+// The three columns it adds are not decoration: action_kind is what the
+// decision's role floor is computed from, and decider_human is the verified
+// fact behind ADR-0027's human-only self-confirmation rung. A round trip that
+// dropped either would move a security decision onto whatever the zero value
+// happened to be.
+func TestApprovalRoundTripPreservesTheDecisionFacts(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+
+	rawExec := jobs.Action{
+		Kind:        jobs.ActionRawExec,
+		RawExecArgv: []string{"/usr/bin/systemctl", "restart", "nginx"},
+		RiskClass:   jobs.RiskClassMutate,
+	}
+	want := approval.NewRequest("req-raw", "hash-raw", "acct-g", "gleipnir-prod",
+		rawExec, []string{"node-a"}, []string{"raw-exec-always-asks"},
+		approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		storeNow)
+	if err := repo.Create(ctx, want); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, "req-raw")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ActionKind != jobs.ActionRawExec {
+		t.Errorf("ActionKind = %v, want raw exec — the decision's role floor is computed from it", got.ActionKind)
+	}
+	if got.RiskClass != jobs.RiskClassMutate {
+		t.Errorf("RiskClass = %v, want mutate", got.RiskClass)
+	}
+
+	updated, err := repo.RecordDecision(ctx, "req-raw", approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-raw",
+		DeciderHuman: true, At: storeNow.Add(time.Minute),
+	}, storeNow.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+	if updated.State != approval.StateApproved {
+		t.Fatalf("State = %v, want approved", updated.State)
+	}
+
+	reread, err := repo.Get(ctx, "req-raw")
+	if err != nil {
+		t.Fatalf("Get after decision: %v", err)
+	}
+	if len(reread.Decisions) != 1 {
+		t.Fatalf("decisions = %d, want 1", len(reread.Decisions))
+	}
+	if !reread.Decisions[0].DeciderHuman {
+		t.Error("DeciderHuman was lost in the round trip; it is the verified fact behind the human-only ladder rung")
+	}
+	if reread.Decisions[0].Channel != approval.ChannelOutOfBand {
+		t.Errorf("Channel = %v, want out-of-band preserved", reread.Decisions[0].Channel)
 	}
 }

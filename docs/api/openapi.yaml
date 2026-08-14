@@ -70,6 +70,20 @@ tags:
     description: The Relay-wide emergency stop (ADR-0013).
   - name: Identity
     description: Accounts and API Tokens (ADR-0010). Admin-only.
+  - name: Approvals
+    description: |
+      The out-of-band decision channel for gated dispatches (ADR-0027).
+
+      A dispatch that a root-owned gate rule covers **parks** instead of
+      running: no Job and no Tasks are created, and the caller gets a
+      `409 pending approval` carrying the request id and plan hash. A human then
+      answers here — on an authenticated endpoint, carrying a credential the
+      requesting session does not hold — and the same dispatch proceeds the next
+      time it is driven.
+
+      That separation is the guarantee. The agent proposing an action is
+      structurally outside the trust path, and the Relay (never the agent)
+      authors every word the approver reads.
 
 paths:
   # ---------------------------------------------------------------------------
@@ -111,6 +125,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/ExecutionResponse'
                   - $ref: '#/components/schemas/PlanResponse'
+        "202": { $ref: '#/components/responses/PendingApproval' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
@@ -152,6 +167,7 @@ paths:
                 oneOf:
                   - $ref: '#/components/schemas/ExecutionResponse'
                   - $ref: '#/components/schemas/PlanResponse'
+        "202": { $ref: '#/components/responses/PendingApproval' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403":
@@ -218,6 +234,105 @@ paths:
               schema: { $ref: '#/components/schemas/CancelledJob' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "404": { $ref: '#/components/responses/JobNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  # ---------------------------------------------------------------------------
+  # Approvals (ADR-0027)
+  # ---------------------------------------------------------------------------
+  /api/v1/approvals:
+    get:
+      tags: [Approvals]
+      operationId: listApprovals
+      summary: List dispatches parked for approval
+      description: |
+        The approval queue: every request still awaiting a decision, oldest
+        deadline first. Requests already past their deadline are omitted even if
+        the expiry sweeper has not retired them yet, so the queue never
+        advertises something undecidable.
+
+        Any authenticated caller may read it. A rule's `audience` restricts who
+        may **decide**, not who may see that a decision is owed.
+      responses:
+        "200":
+          description: The pending approval queue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApprovalList' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/approvals/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ApprovalID'
+    get:
+      tags: [Approvals]
+      operationId: getApproval
+      summary: Read one approval request
+      description: |
+        Returns the request in whatever state it is in, including terminal ones
+        — "what became of that request?" is exactly the question asked after an
+        answer arrives too late.
+      responses:
+        "200":
+          description: The approval request, with every decision recorded so far.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404": { $ref: '#/components/responses/ApprovalNotFound' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/approvals/{id}/decision:
+    parameters:
+      - $ref: '#/components/parameters/ApprovalID'
+    post:
+      tags: [Approvals]
+      operationId: decideApproval
+      summary: Approve or deny a parked dispatch
+      description: |
+        The authenticated out-of-band decision. `plan_hash` is **required**: an
+        approval binds to the content-addressed Plan (Operation, arguments, and
+        resolved fan-out) the decider was shown, so a client working from a
+        stale queue entry is told its view moved rather than silently approving
+        today's version.
+
+        **Deciding does not dispatch.** A satisfied requirement lets the *same*
+        Plan proceed the next time it is driven. If the fleet drifted in the
+        meantime the resolved fan-out differs, the hash differs, and the
+        dispatch parks again for re-approval.
+
+        Rules enforced below this route, all of them returning `409` except the
+        two genuine authorization failures:
+
+        | Rule | Result |
+        |---|---|
+        | Role below what the Action needed to be **requested** | `403` |
+        | Decider outside the rule's `audience` | `403` |
+        | Request already decided, or expired | `409` |
+        | Requester deciding their own request under `requester_allowed: false` | `409` |
+        | A **machine** Account deciding its own request, under any configuration | `409` |
+        | The same Account filling a second quorum slot | `409` |
+        | `plan_hash` no longer matches | `409` |
+
+        One denial is terminal: deny beats approve, mirroring Policy's
+        deny-beats-allow, so a second approver cannot override a colleague's
+        refusal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ApprovalDecisionRequest' }
+      responses:
+        "200":
+          description: The decision was recorded. The body is the request's resulting state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        "400": { $ref: '#/components/responses/BadRequest' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
+        "404": { $ref: '#/components/responses/ApprovalNotFound' }
+        "409": { $ref: '#/components/responses/ApprovalNotDecidable' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   # ---------------------------------------------------------------------------
@@ -584,6 +699,12 @@ components:
       required: true
       description: The Account id.
       schema: { type: string }
+    ApprovalID:
+      name: id
+      in: path
+      required: true
+      description: The approval request id, as returned in `request_id` when a dispatch parks.
+      schema: { type: string }
 
   responses:
     BadRequest:
@@ -637,6 +758,37 @@ components:
       description: |
         An admin may not change their own role or disable their own Account —
         a lockout guard, not a security boundary. Any other admin can.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    PendingApproval:
+      description: |
+        The dispatch is **parked for approval** (ADR-0027). Nothing was denied
+        and nothing ran: a root-owned gate rule requires a human to answer
+        first, and no Job or Task was created.
+
+        This is a `2xx` because it is not a failure — the request was accepted
+        and is suspended awaiting a decision it may well receive. It is not a
+        `200` because nothing executed. A caller re-drives the same request once
+        the requirement is satisfied; if the fleet drifted in between, the
+        resolved fan-out differs, the plan hash differs, and it parks again.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/PendingApproval' }
+    ApprovalNotFound:
+      description: No approval request with that id.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ApprovalNotDecidable:
+      description: |
+        The credential is fine and the route is the caller's to call — the
+        **request's state** refuses the decision: already decided, expired,
+        already signed by this Account, self-decided when the rule (or the
+        Account being a machine) forbids it, or bound to a different plan hash.
+
+        A `403` would tell an approver to go find a bigger token, which is the
+        wrong lesson; `detail` states which rule refused.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -990,3 +1142,169 @@ components:
         tokens:
           type: array
           items: { $ref: '#/components/schemas/APIToken' }
+
+    ApprovalDecision:
+      type: object
+      description: One recorded answer to a parked dispatch (ADR-0027).
+      required: [account, approve, channel, human, at]
+      properties:
+        account:
+          type: string
+          description: The deciding Account's name — the verified lane.
+        account_id: { type: string }
+        approve:
+          type: boolean
+          description: false is a denial, and one denial is terminal.
+        reason: { type: string }
+        channel:
+          type: string
+          enum: [in-band, out-of-band, unspecified]
+          description: |
+            How the answer arrived. `in-band` means it came back over the same
+            session that requested the action, so it is only as trustworthy as
+            the harness; `out-of-band` means it landed on an authenticated Relay
+            endpoint. In-band is an assumption about the client; out-of-band is
+            evidence. Every decision made through this API is `out-of-band`.
+        human:
+          type: boolean
+          description: |
+            Whether a human Account answered. The second approver of a `count: 2`
+            request is entitled to know what kind of signature is already on it.
+        at: { type: string, format: date-time }
+
+    Approval:
+      type: object
+      description: |
+        A parked dispatch and everything decided about it so far.
+
+        `summary` is **Relay-authored**: the requesting agent chose the Action,
+        but not one word a human reads about it. Render this text — a client
+        that re-derives its own description from the fields around it
+        reintroduces the approval-view fidelity gap this design closes.
+      required:
+        [request_id, state, plan_hash, summary, action_kind, risk_class,
+         requested_by, matched_rules, required_count, requester_allowed,
+         channel, progress, decisions, created_at, expires_at]
+      properties:
+        request_id: { type: string }
+        state:
+          type: string
+          enum: [pending, approved, denied, expired]
+          description: Every terminal state is final; there is no path back to pending.
+        plan_hash:
+          type: string
+          description: |
+            Content-addresses the Operation, its arguments, and the RESOLVED
+            fan-out. A decision must cite it, and a dispatch is released only
+            against an exact match — which is what makes registry drift re-park
+            automatically rather than run against a fleet the approver never saw.
+        summary: { type: string }
+        action_kind:
+          type: string
+          enum: [operation, raw_exec, unspecified]
+          description: |
+            What is being released. It is what the decision's role floor is
+            computed from — approving a `raw_exec` needs `admin`, the same role
+            it needed to be requested.
+        risk_class:
+          type: string
+          enum: [read, mutate, unspecified]
+        requested_by:
+          type: string
+          description: The verified requester. `requester_allowed` is evaluated against it.
+        requested_by_id: { type: string }
+        matched_rules:
+          type: array
+          items: { type: string }
+          description: |
+            Which gate rules parked this dispatch — the answer to "why am I being
+            asked?". A gate that cannot explain itself trains operators to
+            disable it.
+        required_count:
+          type: integer
+          description: Distinct approvals needed. Quorum means distinct Accounts.
+        audience:
+          type: array
+          items: { type: string }
+          description: Account names that may decide. Absent means unrestricted.
+        requester_allowed: { type: boolean }
+        channel:
+          type: string
+          enum: [in-band, out-of-band, unspecified]
+          description: The minimum channel strength a decision must arrive over.
+        progress:
+          type: string
+          description: Partial quorum, rendered for a human ("1 of 2").
+        decisions:
+          type: array
+          items: { $ref: '#/components/schemas/ApprovalDecision' }
+        job_id:
+          type: string
+          description: |
+            The Job this approval released, bound after the dispatch actually
+            ran. Absent while pending — a parked dispatch creates no Job.
+        created_at: { type: string, format: date-time }
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            Parked requests and granted approvals both stop being redeemable
+            here. Enforced by the clock at read time, so it holds even if the
+            expiry sweeper is not running.
+        resolved_at: { type: string, format: date-time }
+
+    ApprovalList:
+      type: object
+      required: [approvals]
+      properties:
+        approvals:
+          type: array
+          items: { $ref: '#/components/schemas/Approval' }
+
+    ApprovalDecisionRequest:
+      type: object
+      required: [approve, plan_hash]
+      properties:
+        approve:
+          type: boolean
+          description: true approves, false denies. A denial is terminal.
+        plan_hash:
+          type: string
+          description: |
+            The plan hash from the approval request. Required — a decision binds
+            to the Plan it was shown, never to "the request" in the abstract.
+        reason:
+          type: string
+          maxLength: 1024
+          description: The decider's note, recorded in the audit trail.
+
+    PendingApproval:
+      type: object
+      description: |
+        A dispatch that parked instead of running. It carries no `job_id` and no
+        `results` field at all — a parked dispatch creates no Job, so there is
+        nothing to poll and nothing to read back.
+      required: [status, request_id, plan_hash, summary, matched_rules, progress, expires_at, decision_path]
+      properties:
+        status:
+          type: string
+          const: pending_approval
+          description: A stable constant to branch on, rather than the absence of other fields.
+        request_id: { type: string }
+        plan_hash: { type: string }
+        summary:
+          type: string
+          description: The Relay-authored description of what is waiting.
+        matched_rules:
+          type: array
+          items: { type: string }
+        progress:
+          type: string
+          description: Partial quorum ("0 of 2").
+        expires_at: { type: string, format: date-time }
+        decision_path:
+          type: string
+          description: |
+            Where an approver answers. A convenience for building a link, never
+            a capability — following it still requires an Account credential the
+            requesting session does not hold.

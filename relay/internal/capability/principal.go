@@ -34,6 +34,22 @@ type Principal struct {
 	// Role is the Account's role at the time it authenticated.
 	Role string
 
+	// Kind is whether this Account is a human operator or a machine driver —
+	// accounts.Kind's values, carried as a plain string so this package keeps
+	// its narrow import allowlist (jobs + registry + approval).
+	//
+	// It is NOT an authorization input: authority is the Role, and a machine
+	// Account with the admin role has admin's powers. It exists for the one
+	// question authority cannot answer — ADR-0027's confirmation ladder, whose
+	// rung 2 (self-confirmation) is human-requesters-only, because an agent
+	// confirming its own proposal is the same actor answering twice.
+	//
+	// The empty value means "unknown", and every check written against this
+	// field must treat unknown as MACHINE. That is why there is no
+	// PrincipalKind type with a friendly zero value: the restrictive answer has
+	// to be the one you get by forgetting to set it.
+	Kind string
+
 	// AuthMethod is HOW this identity was established: a static API Token or
 	// an OAuth session (#299). It is a verified fact — the Relay knows which
 	// of its own paths accepted the credential — and it is what makes the two
@@ -70,6 +86,20 @@ const (
 	// AuthMethodOAuth is a session authorized through the external IdP (#299).
 	AuthMethodOAuth AuthMethod = "oauth"
 )
+
+// PrincipalKindHuman is the one Kind value that means "a person is behind this
+// Account". It mirrors accounts.KindHuman's wire value; the mirror is asserted
+// by a test in package accounts' consumer rather than by an import, for the
+// import-allowlist reason on Principal.Kind.
+//
+// There is deliberately no PrincipalKindMachine constant to compare against.
+// Every check must be written as `== PrincipalKindHuman`, so an unset, unknown,
+// or future kind falls on the restrictive side by construction instead of by
+// remembering to enumerate it.
+const PrincipalKindHuman = "human"
+
+// Human reports whether p is a human Account. Unknown kinds are not human.
+func (p Principal) Human() bool { return p.Kind == PrincipalKindHuman }
 
 // Attribution returns the string form of p recorded in audit.Record.Principal.
 func (p Principal) Attribution() string {

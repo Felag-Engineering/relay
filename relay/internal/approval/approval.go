@@ -58,6 +58,30 @@ var (
 	// the one the Request is bound to (ADR-0027: approvals bind to a
 	// content-addressed Plan, never to a Job in the abstract).
 	ErrPlanChanged = errors.New("approval: decision does not match the request's plan hash")
+
+	// ErrMachineSelfDecision is returned when a machine Account tries to decide
+	// a Request it made itself.
+	//
+	// This is ADR-0027's confirmation ladder made structural: rung 2
+	// (self-confirmation) is HUMAN REQUESTERS ONLY, because an agent confirming
+	// its own proposal is not a confirmation — it is the same actor answering
+	// twice. So a machine requester's minimum rung is 3, and it is enforced
+	// here rather than left to `requester_allowed`: that knob is operator
+	// configuration, and a misconfigured `requester_allowed: true` must not be
+	// able to hand an AI-agent its own approval.
+	ErrMachineSelfDecision = errors.New("approval: a machine Account may never decide its own request")
+
+	// ErrWeakChannel is returned when a decision arrives over a channel weaker
+	// than the Requirement demands — an in-band answer against an out-of-band
+	// rule (ADR-0027 decision 4).
+	//
+	// In-band is an assumption about the client; out-of-band is evidence. A
+	// rule that asked for evidence must not be satisfiable by an assumption, or
+	// the channel setting is decoration. The check is applied to DENIALS too,
+	// not just approvals: a denial is terminal, so accepting a weak-channel
+	// deny would let a compromised harness terminate work it could not
+	// authorize.
+	ErrWeakChannel = errors.New("approval: decision channel is weaker than the requirement demands")
 )
 
 // Channel is how strongly a decision's delivery path is trusted (ADR-0027).
@@ -247,12 +271,24 @@ type Decision struct {
 
 	// Channel is how this decision arrived, recorded rather than assumed so an
 	// auditor can see whether the answer was evidence or an assumption.
+	//
+	// It is set by the SURFACE that received the decision, never by the caller:
+	// the Control API's decision endpoint is out-of-band because of what it is,
+	// not because a request body said so. A channel a client could name is a
+	// channel a client could upgrade.
 	Channel Channel
 
 	// PlanHash is the Plan this decision was made against. It is checked
 	// against the Request's hash on record, so an answer cannot be replayed
 	// onto a different Plan.
 	PlanHash string
+
+	// DeciderHuman reports whether the deciding Account is a human one. It
+	// gates self-decision (see ErrMachineSelfDecision) and is deliberately
+	// FALSE-BY-DEFAULT: an unset or unknown Account kind is treated as a
+	// machine, so the restrictive answer is the one you get by forgetting to
+	// set it.
+	DeciderHuman bool
 
 	At time.Time
 }
@@ -284,6 +320,18 @@ type Request struct {
 	// asked?". A gate that cannot explain itself trains operators to disable it.
 	MatchedRules []string
 
+	// ActionKind and RiskClass are the structured facts about what was parked,
+	// stored alongside the rendered Summary rather than left to be read out of
+	// it.
+	//
+	// ActionKind is security-relevant, not decorative: the role floor for
+	// DECIDING a Request is the same floor that Action would have needed to be
+	// REQUESTED (authz.RoleGate), so an operator can never release a Raw Exec
+	// they could not have asked for themselves. Deriving that from prose would
+	// make the ladder depend on string formatting.
+	ActionKind jobs.ActionKind
+	RiskClass  jobs.RiskClass
+
 	Require   Requirement
 	Decisions []Decision
 
@@ -295,22 +343,30 @@ type Request struct {
 	ResolvedAt time.Time
 }
 
-// NewRequest builds a pending Request.
+// NewRequest builds a pending Request for act over nodeIDs.
+//
+// It renders the approver-facing Summary itself (via Summarize) rather than
+// taking one, so the stored prose and the stored ActionKind/RiskClass can never
+// describe different things — the summary is what a human reads and the kind is
+// what the role floor is computed from, and those two disagreeing is precisely
+// the approval-view fidelity gap.
 //
 // There is deliberately no Job ID: a gated dispatch parks BEFORE the Job engine
 // runs, so no Job exists yet. Creating one at park time would leave Pending
 // Tasks in the store for work that may never be approved — rows a restart
 // reconciler could mistake for interrupted work. The Job ID is bound later, on
 // approval, via Repository.BindJob.
-func NewRequest(id, planHash, requestedByID, requestedBy string, sum PlanSummary, rules []string, req Requirement, now time.Time) Request {
+func NewRequest(id, planHash, requestedByID, requestedBy string, act jobs.Action, nodeIDs []string, rules []string, req Requirement, now time.Time) Request {
 	req = req.normalized()
 	return Request{
 		ID:            id,
 		PlanHash:      planHash,
 		RequestedByID: requestedByID,
 		RequestedBy:   requestedBy,
-		Summary:       sum.String(),
+		Summary:       Summarize(act, nodeIDs).String(),
 		MatchedRules:  rules,
+		ActionKind:    act.Kind,
+		RiskClass:     act.RiskClass,
 		Require:       req,
 		State:         StatePending,
 		CreatedAt:     now,
@@ -385,11 +441,26 @@ func (r Request) Decide(d Decision, now time.Time) (Request, error) {
 		// than silently recording a decision that can never be redeemed.
 		return r, fmt.Errorf("%w: expired at %s", ErrNotPending, r.ExpiresAt.UTC().Format(time.RFC3339))
 	}
-	if !r.Require.RequesterAllowed && d.AccountID != "" && d.AccountID == r.RequestedByID {
-		return r, ErrRequesterExcluded
+	if d.AccountID != "" && d.AccountID == r.RequestedByID {
+		if !r.Require.RequesterAllowed {
+			return r, ErrRequesterExcluded
+		}
+		// The rule permits self-confirmation (ladder rung 2), but only a HUMAN
+		// may take it. A machine confirming its own proposal is the same actor
+		// answering twice, so its minimum rung is 3 regardless of configuration
+		// — see ErrMachineSelfDecision.
+		if !d.DeciderHuman {
+			return r, ErrMachineSelfDecision
+		}
 	}
 	if !r.inAudience(d.Account) {
 		return r, ErrNotInAudience
+	}
+	// An answer must arrive over a channel at least as strong as the rule
+	// demanded. ChannelUnspecified is weaker than both real channels, so a
+	// decision whose channel was never set is refused rather than defaulted.
+	if d.Channel < r.Require.Channel {
+		return r, fmt.Errorf("%w: got %s, requires %s", ErrWeakChannel, d.Channel, r.Require.Channel)
 	}
 	for _, prev := range r.Decisions {
 		if prev.AccountID != "" && prev.AccountID == d.AccountID {
@@ -448,9 +519,9 @@ func (r Request) Progress() string {
 	return fmt.Sprintf("%d of %d", len(r.Approvals()), r.Require.Count)
 }
 
-// riskClassName renders a jobs.RiskClass for hashing and rule matching without
+// RiskClassName renders a jobs.RiskClass for hashing and rule matching without
 // importing the proto enum's String().
-func riskClassName(c jobs.RiskClass) string {
+func RiskClassName(c jobs.RiskClass) string {
 	switch c {
 	case jobs.RiskClassRead:
 		return "read"

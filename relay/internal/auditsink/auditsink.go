@@ -161,6 +161,18 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// A decision on a parked dispatch (#270, ADR-0027). Like a park it must be
+	// handled before the dispatch fall-through, and for the same reason: it
+	// carries no Results, so the fall-through would record it as a zero-Node
+	// dispatch — an answer to a question rendered as something that ran.
+	if e.Kind == capability.AuditKindApprovalDecided {
+		base.Kind = audit.KindApprovalDecided
+		base.Reason = e.Reason
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindApprovalDecided, e, 0, "")
+		return err
+	}
+
 	base.JobID = e.JobID
 	if len(e.Results) == 0 {
 		base.Kind = audit.KindDispatch

@@ -156,6 +156,38 @@ type planResponse struct {
 	Advisory        string           `json:"advisory"`
 }
 
+// pendingApprovalResponse is what a PARKED dispatch returns (#270, ADR-0027).
+//
+// It is a 202, not an error, and the distinction is deliberate. Nothing was
+// denied and nothing ran: the dispatch is suspended awaiting a decision it may
+// well receive. Rendering a park as a failure teaches operators that the
+// approval mechanism is something breaking — which is how a safety feature gets
+// switched off — and rendering it as a 200 would let a caller read "waiting for
+// a human" as "done".
+//
+// There is no job_id and no results field at all, rather than empty ones: a
+// parked dispatch creates no Job, so there is nothing to poll and nothing to
+// read back. What the caller gets instead is everything needed to move it
+// along — who to point at what, and by when.
+type pendingApprovalResponse struct {
+	// Status is the constant "pending_approval", so a client branches on a
+	// stable value rather than on the absence of other fields.
+	Status       string   `json:"status"`
+	RequestID    string   `json:"request_id"`
+	PlanHash     string   `json:"plan_hash"`
+	Summary      string   `json:"summary"`
+	MatchedRules []string `json:"matched_rules"`
+	Progress     string   `json:"progress"`
+	ExpiresAt    string   `json:"expires_at"`
+	// DecisionPath is where an approver answers. A convenience for building a
+	// link, never a capability: following it still requires an Account
+	// credential the requesting session does not hold.
+	DecisionPath string `json:"decision_path"`
+}
+
+// statusPendingApproval is pendingApprovalResponse.Status's only value.
+const statusPendingApproval = "pending_approval"
+
 // executionResponse is a real (plan=false) dispatch response.
 //
 // JobID carries omitempty deliberately (#207/#253): it is present only when a
@@ -291,6 +323,23 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 
 	nodeResults, err := d.Exec.Run(ctx, p, sel, act)
 	if err != nil {
+		// A park is checked BEFORE writeExecError, because it is the one
+		// non-nil error here that is not a refusal — see
+		// pendingApprovalResponse.
+		var parked *capability.ParkedError
+		if errors.As(err, &parked) {
+			writeJSON(w, http.StatusAccepted, pendingApprovalResponse{
+				Status:       statusPendingApproval,
+				RequestID:    parked.RequestID,
+				PlanHash:     parked.PlanHash,
+				Summary:      parked.Summary,
+				MatchedRules: nonNil(parked.Rules),
+				Progress:     parked.Progress,
+				ExpiresAt:    rfc3339(parked.ExpiresAt),
+				DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
+			})
+			return
+		}
 		writeExecError(w, err)
 		return
 	}
@@ -534,6 +583,15 @@ func verdictString(v capability.VerdictStatus) string {
 	default:
 		return "unknown"
 	}
+}
+
+// nonNil renders a nil slice as an empty JSON array rather than null, so a
+// client never has to distinguish "no rules" from "the field was absent".
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // riskClassString renders a jobs.RiskClass for the would_be_rejected report.
