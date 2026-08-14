@@ -294,10 +294,11 @@ provenance. Descriptive context only, never used for targeting.
 _Avoid_: comment, note, tag
 
 **Admin Console**:
-The human-facing web UI for operators to observe the fleet and administer the control
-plane (enrollment lifecycle, revocation, registry/audit views). Admin + observability
-only: it has **no execution surface** — Operations and Raw Exec never run from the
-Console (ADR-0009). A thin adapter over the same operator capability layer as the MCP
-surface (ADR-0003, ADR-0009). Distinct from the **AI-agent**, which drives the Relay
-over MCP.
+The human-facing web UI for operators to observe the fleet, administer the control plane
+(enrollment lifecycle, revocation, registry/audit views), and — from v0.7.0 — execute:
+Operations and Raw Exec run from the Console, plan-by-default and with step-up re-auth
+on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026, superseding
+ADR-0009's no-execution scope). A thin adapter over the same operator capability layer as
+the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. Distinct
+from the **AI-agent**, which drives the Relay over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"

@@ -77,6 +77,26 @@ blast cap or reach Relay configuration, and every request still passes Selector 
 blast cap regardless of the credential's role
 ([ADR-0010](../adr/0010-control-api-and-account-model.md), invariant #11).
 
+### Hijacked Console session (from v0.7.0)
+
+**Assumed capabilities:** An authenticated browser session belonging to a human Account —
+obtained by session theft, stored XSS in the Console, or a CSRF-forged request from another
+origin.
+
+**Goal:** Execute Operations or Raw Exec on the fleet as that human, or elevate by
+administering Accounts.
+
+**Primary defense:** No single one — this adversary is defended in depth, deliberately, and
+is the reason [ADR-0026](../adr/0026-admin-console-execution-surface.md) supersedes
+ADR-0009's stronger "execution is absent from the browser" property. In order: the Console is
+internal-only, never internet-facing (ADR-0009); execution is absent entirely when
+`console_execution = off`; the capability layer's role gate decides `operator`/`admin`, not
+the Console; a `mutate` apply requires **step-up re-authentication**, so a hijacked session
+alone is not an applying session; the approval gate can require a second person for
+Console-originated mutates (`requester_allowed: false`); and every dispatch still passes
+Selector → Policy → blast cap, so the ceiling is what the fleet's own Policy already permits.
+CSP and CSRF discipline are load-bearing controls here rather than hygiene — see **R11**.
+
 ### Jailbroken AI-agent
 
 **Assumed capabilities:** Full, adversarial control of the orchestrator driving the Relay.
@@ -132,7 +152,7 @@ primarily counters, and its residual risk.
 | #7 — Two label namespaces (node:/relay:), each immutable from the other side | [ADR-0006](../adr/0006-node-enrollment-identity-and-label-authority.md), [ADR-0017](../adr/0017-node-origin-label-trust.md) | Enrollment (certless) ↔ CA; Relay ↔ relay-daemon | Compromised Node | A Compromised Node freely forges its own node: labels, so routine node:-targeting trusts the Node only as much as the Node; the security-sensitive lane must target relay:. Node-origin label trust is accepted for launch (ADR-0017); #243 tracks making the security lane's relay:-targeting structural. |
 | #8 — `/proto` is the single source of truth (wire protocol + Operation vocabulary) | [ADR-0007](../adr/0007-polyglot-rust-daemon-go-relay.md) | None as a runtime control — it defines what crosses Relay ↔ relay-daemon | None at runtime | Enforced at build time by CI (proto-check, proto-breaking), not by any runtime boundary; see Findings. |
 | #9 — System Model advisory; AI-immutable grounding facts; never desired-state, no auto-reconcile | [ADR-0008](../adr/0008-system-model-git-backed-semantic-graph.md) | AI-agent ↔ Relay | Jailbroken AI-agent | The AI-agent may still create/update Services/Dependencies/Annotations (audited via git provenance); a wrong-but-authorized model can mislead the AI-agent's own reasoning but never bypasses Selectors → Policy → blast cap. |
-| #10 — One capability layer, three thin surfaces; Console has no execution surface | [ADR-0009](../adr/0009-admin-console-web-ui.md), [ADR-0010](../adr/0010-control-api-and-account-model.md) | AI-agent ↔ Relay | Stolen API credential (also Jailbroken AI-agent) | Largely an internal-architecture invariant; its runtime teeth are the single AI-agent ↔ Relay gate and the Console's no-execution property. |
+| #10 — One capability layer, three thin surfaces | [ADR-0009](../adr/0009-admin-console-web-ui.md), [ADR-0010](../adr/0010-control-api-and-account-model.md), [ADR-0026](../adr/0026-admin-console-execution-surface.md) | AI-agent ↔ Relay | Stolen API credential, Hijacked Console session (also Jailbroken AI-agent) | Largely an internal-architecture invariant; its runtime tooth is the single caller ↔ Relay gate — every surface reaches Nodes only through the one capability layer, enforced structurally by the `no_dispatch` guard on each surface package. **Changed by ADR-0026:** the Console's no-execution property was a second runtime tooth and is gone from v0.7.0 (retained only under `console_execution = off`); step-up on mutate apply is what replaces it. See R11. |
 | #11 — Control API manages runtime objects, never Relay configuration; can't raise its own limits | [ADR-0010](../adr/0010-control-api-and-account-model.md) | AI-agent ↔ Relay | Stolen API credential | Relay configuration is a root-owned local file out of the API's reach; a root compromise on the Relay host is above this line (and above the whole control plane). |
 | #12 — Policy evaluated only by the daemon's live engine, incl. hypotheticals (PolicyQuery, plan mode) | [ADR-0011](../adr/0011-plan-mode-daemon-evaluated-policy-queries.md) | relay-daemon ↔ Node OS (enforcement); Relay ↔ relay-daemon (plan/PolicyQuery answers) | Malicious Relay | Plan / PolicyQuery answers are point-in-time and advisory — never a reservation; Policy can change before execution. |
 | #13 — Every Operation declares a risk class (read/mutate); blast caps by class; Raw Exec takes the mutate-cap; class is `/proto` contract | [ADR-0012](../adr/0012-operation-risk-classes-and-split-blast-cap.md) | AI-agent ↔ Relay | Jailbroken AI-agent (also Stolen API credential) | The class lives in `/proto` (shares invariant #8's build-time contract-integrity property); a misclassified Operation would mis-cap — guarded by `/proto` review, not a runtime boundary. |
@@ -155,8 +175,12 @@ file: #2; Enrollment (certless) ↔ CA: #7.
 
 **Observation (not a finding):** the Trust boundaries table names AI-agent ↔ Relay by the
 AI-agent surface; the Control API and Admin Console are additional crossings of the same
-caller ↔ Relay boundary, all gated by the one capability layer (invariant #10), and the
-Console adds no execution surface.
+caller ↔ Relay boundary, all gated by the one capability layer (invariant #10). *(Written
+when the Console added no execution surface. From v0.7.0 it does —
+[ADR-0026](../adr/0026-admin-console-execution-surface.md) — so all three crossings now
+carry execution and the boundary's defense rests entirely on the capability layer and the
+per-surface intent binding, not on one surface being incapable. The "Hijacked Console
+session" adversary and R11 carry the delta.)*
 
 **Framing (not a finding):** ADR-0003, ADR-0013, ADR-0015, and ADR-0016 back no numbered
 invariant — expected, since they are design decisions rather than load-bearing distrust
@@ -187,6 +211,8 @@ control, residual bounded), **accepted** (documented, not eliminated — with a 
 | **R8** | Verbatim audit-output retention (captured Operation output stored in full) can carry secrets the operator put in output. | AI-agent ↔ Relay (audit) | **Accepted — decision** | A conscious posture: no secret was found leaking through relay/daemon logs (5×3 audit matrix); secrets in *captured output* are the operator's responsibility. | #222; `docs/security/secret-handling-audit.md` |
 | **R9** | Invariant #8 (`/proto`) and invariant #13's class-contract half map to no runtime boundary. | (build-time) | **Accepted — disclosed** | Enforced by CI gates (`proto-check`, `proto-breaking`), not a runtime control. Finding 1 above. | §Findings |
 | **R10** | The Raw Exec gate matches a **whitespace-joined projection of argv**, which is inherently approximate: a caller can still shift element boundaries in ways that keep the joined string constant (`["systemctl","restart nginx"]`), so the gate cannot see the real argument boundaries below `argv[0]`. | relay-daemon ↔ Node OS | **Accepted — narrowed remainder of R1** | Scope: a **token-form** deny (`^--force$`) now holds against every merge/padding/separator spelling (ADR-0019 canonical elements), and the `argv[0]` guard removes the *which program runs* ambiguity — the part of the projection that touches invariant #1 (defense-in-depth: `argv[0]` goes straight to `Command::new`, so a merged `argv[0]` was already `ENOENT` absent a planted file). What remains is argument-boundary legibility **and** one authoring-dependent case: a deny written as a multi-token whole-command string (`^systemctl restart nginx --force$`) matches only the joined form and stays whitespace-fragile, so a tab-separated argv can miss it while a loose `\s`-based allow still matches — pre-existing, unchanged by ADR-0019, and the same family as the unanchored-allow footgun (R4-class authoring mismatch), not a new evasion class. Mitigation is the shipped guidance: deny **tokens**, anchor whole commands in the **allow**. Fully closing it means rejecting ambiguous argv outright or joining on a separator that cannot appear in an element — both breaking changes to Policy authoring, both declined. v0.8.0's Template Operations are the structural answer. | [ADR-0019](../adr/0019-canonical-argv-matching-for-raw-exec-deny.md) §Residual; #248 |
+
+| **R11** | Browser-borne fleet execution: from v0.7.0 the Admin Console can dispatch Operations and Raw Exec, so session hijack, XSS, or CSRF reaches command execution on every Node the session's role can target. ADR-0009 had **eliminated** this consequence class by making execution absent from the browser; ADR-0026 reverts that to **mitigation**. | AI-agent ↔ Relay (Console crossing) | **Accepted — decision, with a deployment opt-out** | A deliberate trade recorded in [ADR-0026](../adr/0026-admin-console-execution-surface.md), not an oversight. Compensating controls, in depth: internal-only exposure; `console_execution = off` restores ADR-0009's property verbatim (routes unmounted — absent, not forbidden); plan-by-default; **step-up re-authentication on every mutate apply**, so a stolen session is not an applying session; role gates decided by the capability layer (`operator`+ run, `admin` Raw Exec), never by the Console; the approval gate's `requester_allowed: false` for a second person; Node Policy underneath everything, so the ceiling is what the fleet already permits. **CSP and CSRF discipline are load-bearing security controls on this path, not hygiene** — that is the honest cost of the reversal. Counter-argument for the trade: the Console's step-up apply is the strongest per-action human-intent binding in the system, and the alternative after the CLI cut was pushing humans onto `curl`, which has none. | [ADR-0026](../adr/0026-admin-console-execution-surface.md); #264; `docs/design/approval-and-attribution.md` |
 
 **Resolved during the pass (no residual):** the Policy loader symlink/TOCTOU-on-file gap (#216, now `O_NOFOLLOW` + fstat-on-fd), unbounded child resources (#220, `setrlimit` at the spawn chokepoint), and the comment-only Rust "never logged" guarantee (#222, now a compile-time `E0119` guard on `EnrollConfig`/`Identity`). Wire fuzzing (#217 Go, #218 Rust) found **no engine bypass and zero crashes**; #218 also strengthened the deny-branch regression net.
 
@@ -246,3 +272,11 @@ entries are resolved — R1/#227 and R2/#236 have since been fixed (v0.0.9), lea
 narrowed remainder. Keep it current the same way: when an entry is resolved, or when the live
 least-privilege verification (#224) is run, update the entry and the Acceptance status rather
 than letting the doc drift from reality.
+
+**R11 is the one anticipatory entry.** It records a consequence class that v0.7.0 will
+introduce, not one that exists in shipped code — the Console does not exist yet, let alone
+execute. It is written down now because the decision was taken now
+([ADR-0026](../adr/0026-admin-console-execution-surface.md)), and a security posture that
+is only documented after it ships is documented too late. Revisit it when the Console
+execution composer lands: the compensating controls it names are commitments to verify,
+not controls already in place.

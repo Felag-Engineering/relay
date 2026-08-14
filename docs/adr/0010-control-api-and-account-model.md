@@ -2,8 +2,9 @@
 
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's
-hands), the **Admin Console** (ADR-0009 — the human's eyes and lifecycle keys, no
-execution), and the **Control API** — a general REST/JSON API for everything else: IaC
+hands), the **Admin Console** (ADR-0009 — the human's eyes and lifecycle keys; execution
+added by [ADR-0026](0026-admin-console-execution-surface.md), which superseded this
+clause), and the **Control API** — a general REST/JSON API for everything else: IaC
 tooling (Ansible), CLIs, and extensions built on Relay. The Control API is the
 programmable superset: admin *and* execution. No surface is a parallel control path;
 capability parity is a review rule, not a runtime dependency between surfaces.
