@@ -21,6 +21,7 @@ import (
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
@@ -139,6 +140,14 @@ func (s *Store) Audit() audit.Repository {
 // Relay-wide emergency stop (ADR-0013).
 func (s *Store) Freeze() freeze.Repository {
 	return &sqliteFreeze{db: s.db}
+}
+
+// Approvals returns the SQLite-backed approval.Repository — parked dispatches
+// awaiting a human (ADR-0027). Persisted for the same reason the Freeze is: an
+// approval queue a restart forgets would silently drop every pending request,
+// and an auditor could no longer answer what was asked or what became of it.
+func (s *Store) Approvals() approval.Repository {
+	return &sqliteApprovals{db: s.db}
 }
 
 // Accounts returns the SQLite-backed accounts.Repository — the control

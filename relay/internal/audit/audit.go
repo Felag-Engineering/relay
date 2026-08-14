@@ -34,6 +34,19 @@ const (
 	KindNodeRevoke    = "node_revoke"
 	KindPlan          = "plan"
 
+	// KindApprovalRequested is a dispatch parked for a human (#269, ADR-0027).
+	// Distinct from KindDispatch because nothing ran, and distinct from
+	// KindRefusal because nothing was denied — a park is a suspension, and
+	// filing it under either neighbour would make the audit trail assert
+	// something untrue about it.
+	KindApprovalRequested = "approval_requested"
+
+	// KindApprovalExpired is a parked dispatch that ran out of time (#269,
+	// ADR-0027). Recorded because an approval that lapsed is a fact the trail
+	// must carry: without it a parked dispatch just vanishes from the record
+	// and "what happened to that request?" has no answer.
+	KindApprovalExpired = "approval_expired"
+
 	// KindRead is a non-dispatching read-tool call — list_nodes,
 	// describe_node, list_operations, get_job (#288, ADR-0025). These never
 	// reach a Node, so they produce no Job and no Task, but they do disclose

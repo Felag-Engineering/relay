@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
@@ -72,6 +73,20 @@ type Config struct {
 	// (invariant #11, ADR-0010). A malformed value refuses startup — see
 	// newServer.
 	MinDaemonVersion string
+
+	// ApprovalGatePath is the root-owned approval-gate config (#269,
+	// ADR-0027): which dispatches must park for a human. Same interim
+	// root-owned-file mechanism as the blast caps and the control-plane
+	// credential — a path via flag/env, never settable through any API, since
+	// a stolen credential that could edit its own approval requirements would
+	// make the mechanism decorative.
+	//
+	// EMPTY means no approval gates, which is the pre-#269 behaviour and is
+	// safe because a gate can only add a reason to stop. A NON-EMPTY path that
+	// cannot be loaded refuses startup — a Relay that silently decided nothing
+	// needs approval because it could not read its own config is the exact
+	// failure this mechanism exists to prevent (approval.Load).
+	ApprovalGatePath string
 
 	// ControlEnabled and ControlAddr configure the control-plane HTTP listener
 	// (MCP + /api/v1, ADR-0009/0010) — separate from the node-plane gRPC
@@ -204,6 +219,9 @@ func parseConfig() Config {
 		"blast-radius cap for read Operations (max Nodes per Job)")
 	mutateBlastCap := flag.Int("mutate-blast-cap", capability.DefaultMutateCap,
 		"blast-radius cap for mutate Operations and Raw Exec (max Nodes per Job)")
+	approvalGatePath := flag.String("approval-gate-config", "",
+		"path to the root-owned approval-gate config (ADR-0027); empty disables approval gating. "+
+			"A configured path that cannot be loaded refuses startup.")
 	minDaemonVersion := flag.String("min-daemon-version", "",
 		"minimum relay-daemon semver version (ADR-0014); empty disables the outdated gate")
 
@@ -296,6 +314,7 @@ func parseConfig() Config {
 	}
 
 	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
+	cfg.ApprovalGatePath = envOr("RELAY_APPROVAL_GATE_CONFIG", *approvalGatePath)
 
 	cfg.ControlEnabled = *controlEnabled
 	if env := os.Getenv("RELAY_CONTROL_ENABLED"); env != "" {
@@ -448,11 +467,25 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// the same writer.
 	auditSink := auditsink.New(st.Audit())
 
+	// The approval gate (#269, ADR-0027). Loaded BEFORE the capability layer is
+	// built, and a load failure aborts startup rather than degrading: an empty
+	// Gate must only ever mean "no rules configured", never "the rules could
+	// not be read". approval.Load draws that distinction — an empty path is the
+	// former, everything else is an error.
+	approvalGate, err := approval.Load(cfg.ApprovalGatePath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load approval gate config: %w", err)
+	}
+	if n := len(approvalGate.Rules()); n > 0 {
+		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
+	}
+
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(auditSink),
 		capability.WithFreeze(st.Freeze()),
 		capability.WithMetrics(appMetrics),
+		capability.WithApprovals(approvalGate, st.Approvals()),
 	}
 
 	var capSvc *capability.Service
@@ -727,8 +760,49 @@ func main() {
 		}()
 	}
 
+	// The approval expiry sweeper (#269, ADR-0027): retire parked Requests
+	// whose TTL has passed, so the queue does not fill with zombies.
+	//
+	// The sweeper is HOUSEKEEPING, not the expiry guarantee. A lapsed Request
+	// is already undecidable and unredeemable by the clock alone
+	// (approval.Request.PastDeadline), so a sweeper that stalls cannot make a
+	// stale approval usable — it only leaves the stored state looking live for
+	// longer than it is. That is why a sweep error logs and continues rather
+	// than taking the process down.
+	if deps.store != nil {
+		sweeper := approval.NewSweeper(deps.store.Approvals(), approval.DefaultSweepInterval, nil,
+			func(ctx context.Context, r approval.Request) {
+				slog.Info("approval request expired",
+					"request_id", r.ID, "requested_by", r.RequestedBy,
+					"plan_hash", r.PlanHash, "expires_at", r.ExpiresAt)
+				if err := auditExpiry(ctx, deps, r); err != nil {
+					slog.Error("record approval expiry in audit", "request_id", r.ID, "err", err)
+				}
+			})
+		go sweeper.Run(context.Background(), func(err error) {
+			slog.Error("approval sweep failed", "err", err)
+		})
+	}
+
 	if err := srv.Serve(lis); err != nil {
 		slog.Error("serve failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// auditExpiry records a lapsed approval Request in the audit trail. An approval
+// that ran out of time is a fact the trail must carry: without it, a parked
+// dispatch simply vanishes from the record, and "what happened to that request"
+// has no answer.
+func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
+	return deps.audit.Append(ctx, audit.Record{
+		Timestamp: r.ResolvedAt,
+		Kind:      audit.KindApprovalExpired,
+		Principal: r.RequestedBy,
+		Attribution: audit.Attribution{
+			Verified: audit.Verified{AccountID: r.RequestedByID, AccountName: r.RequestedBy},
+		},
+		Reason: fmt.Sprintf("approval request %s expired at %s without reaching %s (plan %s): %s",
+			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.Progress(), r.PlanHash, r.Summary),
+	})
 }

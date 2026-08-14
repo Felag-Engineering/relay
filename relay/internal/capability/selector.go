@@ -132,6 +132,34 @@ func (sel Selector) String() string {
 // Resolve itself never bounds the number of Nodes returned; guarding
 // fan-out size against the blast-radius cap is the pipeline's job
 // (Service.Run), not the resolver's.
+// NamespaceNames returns the distinct label namespaces this Selector targets,
+// as the lower-case names the approval-gate config uses ("node", "relay").
+// It is how a gate rule expresses "anything targeting the security lane needs
+// two people" (ADR-0027) without package approval knowing about Predicate.
+//
+// An empty Selector targets no namespace and matches every Node, so it returns
+// nothing — a namespace-scoped rule must not fire on a match-everything
+// Selector merely because that Selector also happens to reach `relay:`-labelled
+// Nodes. Rules that should catch a match-everything dispatch are the fan-out
+// ones (MinFanOut), which is the honest axis for that case.
+func (sel Selector) NamespaceNames() []string {
+	var out []string
+	seen := make(map[Namespace]struct{}, len(sel.Predicates))
+	for _, p := range sel.Predicates {
+		if _, dup := seen[p.Namespace]; dup {
+			continue
+		}
+		seen[p.Namespace] = struct{}{}
+		switch p.Namespace {
+		case NamespaceNode:
+			out = append(out, "node")
+		case NamespaceRelay:
+			out = append(out, "relay")
+		}
+	}
+	return out
+}
+
 func (sel Selector) Resolve(reg registry.Repository) []registry.Node {
 	var matched []registry.Node
 	for _, n := range reg.List() {

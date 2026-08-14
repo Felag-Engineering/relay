@@ -1,0 +1,172 @@
+package approval
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const validConfig = `{
+  "rules": [
+    {
+      "name": "prod-mutates-need-two",
+      "match": {"risk_class": "mutate", "min_fan_out": 10, "selector_namespace": "relay"},
+      "require": {"count": 2, "channel": "out-of-band", "ttl": "2h"}
+    }
+  ]
+}`
+
+func writeConfig(t *testing.T, body string, mode os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "approval-gates.json")
+	if err := os.WriteFile(path, []byte(body), mode); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	// WriteFile's mode is masked by the process umask (commonly 022), which
+	// would quietly turn the 0666 case into 0644 and make the world-writable
+	// test vacuous. Chmod is not masked.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("chmod config: %v", err)
+	}
+	return path
+}
+
+func TestLoadValidConfig(t *testing.T) {
+	g, err := Load(writeConfig(t, validConfig, 0o600))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rules := g.Rules()
+	if len(rules) != 1 {
+		t.Fatalf("got %d rules, want 1", len(rules))
+	}
+	r := rules[0]
+	if r.Name != "prod-mutates-need-two" || r.Require.Count != 2 || r.Require.TTL != 2*time.Hour {
+		t.Errorf("rule did not round-trip: %+v", r)
+	}
+	if r.Require.RequesterAllowed {
+		t.Error("requester_allowed must default to false — an omitted field must not silently relax the rule")
+	}
+}
+
+// TestEmptyPathMeansNoGates: the ONLY way to get a gate-less Relay is to
+// configure no path at all. Everything else is an error.
+func TestEmptyPathMeansNoGates(t *testing.T) {
+	g, err := Load("")
+	if err != nil {
+		t.Fatalf("Load(\"\"): %v", err)
+	}
+	if len(g.Rules()) != 0 {
+		t.Error("no configured path must mean no rules")
+	}
+}
+
+// TestLoadFailsClosed is the security property of this loader. Every one of
+// these cases must be an ERROR, never an empty Gate: a Relay that silently
+// decides nothing needs approval because it could not read its own config is
+// exactly the failure this mechanism exists to prevent.
+func TestLoadFailsClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		path func(t *testing.T) string
+		want string
+	}{
+		{
+			name: "missing file",
+			path: func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent.json") },
+			want: "does not exist",
+		},
+		{
+			name: "malformed json",
+			path: func(t *testing.T) string { return writeConfig(t, `{"rules": [`, 0o600) },
+			want: "parse gate config",
+		},
+		{
+			name: "unknown field",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"r","require":{"count":1,"requester_allowd":true}}]}`, 0o600)
+			},
+			want: "parse gate config",
+		},
+		{
+			name: "unknown risk class",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"r","match":{"risk_class":"destroy"},"require":{"count":1}}]}`, 0o600)
+			},
+			want: "unknown risk_class",
+		},
+		{
+			name: "unknown channel",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"r","require":{"count":1,"channel":"telepathy"}}]}`, 0o600)
+			},
+			want: "unknown channel",
+		},
+		{
+			name: "unnamed rule",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"require":{"count":1}}]}`, 0o600)
+			},
+			want: "no name",
+		},
+		{
+			name: "count above the v1 maximum",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"r","require":{"count":9}}]}`, 0o600)
+			},
+			want: "exceeds the v1 maximum",
+		},
+		{
+			name: "world-writable file",
+			path: func(t *testing.T) string { return writeConfig(t, validConfig, 0o666) },
+			want: "world-writable",
+		},
+		{
+			name: "unknown selector namespace",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"r","match":{"selector_namespace":"tenant"},"require":{"count":1}}]}`, 0o600)
+			},
+			want: "unknown selector namespace",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			g, err := Load(tc.path(t))
+			if err == nil {
+				t.Fatalf("Load succeeded with %d rules; a config the Relay cannot trust must be an error, never an empty Gate", len(g.Rules()))
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestLoadRefusesSymlink: the gate file decides what needs human approval, so
+// it must be a real root-owned file rather than a link someone else controls.
+func TestLoadRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.json")
+	if err := os.WriteFile(real, []byte(validConfig), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := Load(link); err == nil {
+		t.Fatal("Load followed a symlink; the gate file must not be reachable through one")
+	}
+}
+
+// TestLoadRefusesDirectory covers the non-regular-file case on the open
+// descriptor rather than on the path.
+func TestLoadRefusesDirectory(t *testing.T) {
+	if _, err := Load(t.TempDir()); err == nil {
+		t.Fatal("Load accepted a directory as a gate config")
+	}
+}

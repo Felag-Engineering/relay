@@ -148,6 +148,19 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// A parked dispatch (#269, ADR-0027). It must be handled BEFORE the
+	// dispatch fall-through below: an entry with no Results looks exactly like
+	// a zero-Node dispatch, so without this branch a park would be recorded as
+	// something that ran. Reason carries the Relay-authored summary and the
+	// request ID, which is what makes the park answerable later.
+	if e.Kind == capability.AuditKindApprovalRequested {
+		base.Kind = audit.KindApprovalRequested
+		base.Reason = e.Reason
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindApprovalRequested, e, 0, "")
+		return err
+	}
+
 	base.JobID = e.JobID
 	if len(e.Results) == 0 {
 		base.Kind = audit.KindDispatch
