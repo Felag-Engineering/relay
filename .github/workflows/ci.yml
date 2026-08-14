@@ -206,10 +206,6 @@ jobs:
       # here rather than surfacing as a CLI that disagrees with the server.
       - run: make apiclient-check
 
-      # relayctl must build from the generated client — the CLI is the spec's
-      # conformance test, so a spec/client mismatch is a compile error.
-      - run: make build-relayctl
-
   # ---- integration: smoke test against both built binaries ----
   integration:
     name: Integration

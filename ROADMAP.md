@@ -19,8 +19,8 @@ covering everything shipped through v0.0.9 is `docs/testing/validate-v0.0.9-curr
 
 > **Re-sequenced 2026-07-08** (vision review; decision issues #135–#140). New pre-1.0
 > milestones: **v0.7.0** (read lane, #138) and **v0.8.0** (operator-signed distribution +
-> Template Operations, #135/#136 — absorbs old v1.1.0). The official **CLI** joins v0.4.0
-> (#137). An **HA/routing design spike** (#139) must complete before the v1.0.0 freeze
+> Template Operations, #135/#136 — absorbs old v1.1.0). The official **CLI** joined v0.4.0 (#137) and was
+> **cut on 2026-08-13** — see the v0.4.0 entry. An **HA/routing design spike** (#139) must complete before the v1.0.0 freeze
 > (build stays deferred). Scope rule recorded for all planning: **Relay is response and
 > fleet management, never configuration management** — if Ansible could check it in
 > check-mode, it is out of realm.
@@ -510,7 +510,7 @@ login, audit needs the verified/asserted split.
 
 ---
 
-## `v0.4.0` — Control API: Execution, OpenAPI & CLI (post-beta)
+## `v0.4.0` — Control API: Execution & OpenAPI (post-beta)
 
 Complete the REST control plane (ADR-0010): the programmable superset — administration
 *and* execution — for IaC tooling, CLIs, and extensions built on Relay. Plumbing before
@@ -521,12 +521,20 @@ porcelain: the Console renders what this API manages.
   (requires `admin` role), plan mode, Job/Task status and result queries.
 - Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
   vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
-- **Official CLI** (issue #137): a thin adapter over `/api/v1` for the human operator's
-  workstation — never a parallel control path. Transport generated from the OpenAPI spec
-  (the CLI doubles as the spec's conformance test); UX hand-written. **Plan-by-default
-  for `mutate`**: `run` prints the Plan (fan-out, per-Node verdicts, cap check) and stops
-  unless `--apply`; `read`-class runs directly. Execution, Job status/cancel, and Freeze
-  verbs land here; the **signing subcommands** land with v0.8.0.
+- **Generated Go client** for `/api/v1`, committed with a drift gate — the spec's
+  conformance test: a document that is valid and route-complete can still be unusable by
+  a real generator, and compiling a client on every build is what catches that.
+- ~~**Official CLI** (issue #137)~~ — **cut 2026-08-13 (owner decision).** The CLI was
+  built (admin verbs, generated transport, config/auth resolution) and then deliberately
+  removed. Two reasons: the Admin Console (v0.6.0/v0.7.0) covers the same admin and
+  execution surface with better safety ergonomics (step-up re-auth rather than
+  `--apply`), and the one workflow that appeared to *require* a CLI — v0.8.0 signing —
+  does not. Signing belongs to standard tooling the operator already has key custody for
+  (cosign, `ssh-keygen -Y`); `policy check` already ships in `relay-daemon`; push is an
+  API call; verification lives in the daemon. **Uploading a signature is not signing**,
+  so the Relay never holds the key either way and nothing bespoke is needed. What
+  survives is the generated client above. Reopen #137 if operators ask for a terminal
+  surface once the Console is real.
 - (System Model endpoints move with the System Model itself — see v1.1.0; ADR-0010's
   capability-parity rule applies when it lands.)
 
@@ -536,8 +544,9 @@ porcelain: the Console renders what this API manages.
 - `run_operation` via `/api/v1` returns per-Node results consistent with MCP's;
   `raw_exec` requires `admin` and is refused for an `operator` Account.
 - A client generated from the OpenAPI spec can drive the fleet.
-- The CLI runs a `mutate` Operation only after showing its Plan and receiving `--apply`;
-  its actions appear in audit attributed to the operator's Account like any API caller.
+- A Go client generated from the spec compiles and covers every operation the spec
+  declares (the conformance gate) — the CLI acceptance this replaced was cut with the
+  CLI itself; see the deliverables above.
 - Manual validation: `docs/testing/validate-v0.4.0.md` written and signed off.
 
 **ADRs:** 0010 (Control API); builds on 0003 (capability surface), 0004 (Jobs).
@@ -680,9 +689,16 @@ semantics landed in v0.2.0; this milestone signs and couriers the same objects.
   author**. Today's local-file mode is retained as the hardened tier (air-gapped fleets).
 - **New signing ADR**: bundle format, key custody (workstation/CI — never the Relay
   host), anti-rollback via signed monotonic versions, key rotation & compromise runbook.
-- **CLI signing workflow**: `relay policy lint | sign | push | status`, with
-  fingerprint-verified rollout. The AI-agent may *draft* templates; nothing loads until a
-  human signs.
+- **Signing workflow on STANDARD TOOLING** (revised 2026-08-13, with the v0.4.0 CLI
+  cut): the operator signs a bundle on their workstation with a tool they already have
+  key custody for — cosign, `ssh-keygen -Y sign`, or minisign — rather than a bespoke
+  Relay signer. Linting already ships as `relay-daemon policy check`; pushing the signed
+  bundle is an ordinary `/api/v1` call (curl, config management, or the Console);
+  verification lives in the daemon against the enrollment-pinned public key. The Relay
+  never holds the signing key, and uploading a *signature* is not signing — so no custom
+  keygen, no bespoke key format, and one less crypto surface of our own. The signing ADR
+  records the chosen tool and bundle format. The AI-agent may *draft* templates; nothing
+  loads until a human signs.
 - Artifact signing for release binaries revisits here alongside the key-custody work
   (deferred from #250).
 

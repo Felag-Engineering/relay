@@ -11,7 +11,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon \
-        verify opschema-check openapi-check gen-apiclient apiclient-check build-relayctl
+        verify opschema-check openapi-check gen-apiclient apiclient-check
 
 ## --- verify: the local mirror of CI ---
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
@@ -40,11 +40,17 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
 opschema-check: gen-opschema
 	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
 
-# Control API client codegen (#359). relayctl's transport is GENERATED from the
-# published spec, never hand-written, which is what makes the CLI a conformance
-# test of the contract: if the spec and the client disagree, relayctl stops
-# compiling. Pinned version — an unpinned generator would make the committed
-# output depend on whatever was installed that day.
+# Control API client codegen (#359). A typed Go client GENERATED from the
+# published spec — the contract's conformance test: the client is compiled and
+# checked against every operationId the spec declares, so a spec the server
+# cannot honour, or generated code someone hand-edited, fails the build.
+#
+# There is deliberately no CLI consuming it (see internal/apiclient's package
+# doc): the Console owns the human surface, and the client stands on its own as
+# the conformance gate plus the starting point for any future Go integration.
+#
+# Pinned version — an unpinned generator would make the committed output depend
+# on whatever was installed that day.
 OAPI_CODEGEN_VERSION := v2.8.0
 
 gen-apiclient:
@@ -56,9 +62,6 @@ gen-apiclient:
 # regenerated AND a hand-edit of generated code.
 apiclient-check: gen-apiclient
 	git diff --exit-code -- relay/internal/apiclient/client.gen.go
-
-build-relayctl:
-	cd relay && go build -o bin/relayctl ./cmd/relayctl
 
 # OpenAPI contract gate (ci.yml: openapi). Validates docs/api/openapi.yaml as a
 # real OpenAPI 3.1 document and checks it against the route table the server
