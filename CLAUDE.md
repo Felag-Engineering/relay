@@ -60,8 +60,11 @@ it needs an ADR, not a quiet workaround.
    Relay does not auto-reconcile, ever. (ADR-0008)
 10. **One capability layer, three thin surfaces.** MCP, the Control API, and the Admin
     Console all adapt the same control-plane capability layer; never build a parallel
-    control path. The Console has **no execution surface** (admin + observability only).
-    (ADR-0009, ADR-0010)
+    control path. The Console **does** execute (v0.7.0): plan-by-default, step-up re-auth
+    on mutate apply, role-gated by the capability layer, behind the root-owned
+    `console_execution` flag — but it decides nothing itself, and the `no_dispatch`
+    structural guard covers it like every other surface.
+    (ADR-0009, ADR-0010, ADR-0026)
 11. **The Control API manages runtime objects, never Relay configuration.** Relay config
     (listeners, CA/TLS, auth bootstrap, blast caps) is a root-owned local file; the API
     can never raise its own limits. (ADR-0010)

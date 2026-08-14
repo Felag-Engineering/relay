@@ -197,6 +197,7 @@ disabled — the strict tier is a smaller Console, not a greyed-out one.
 1. This brief (owner ratifies / edits).
 2. HTML wireframes of the four key screens — fleet view, Job detail, approval object,
    composer-with-Plan — iterated before any HTMX is written.
-3. The #264 ADR (separate PR — supersedes ADR-0009's execution clause, amends
+3. The #264 ADR — **written: [ADR-0026](../adr/0026-admin-console-execution-surface.md)**
+   (supersedes ADR-0009's execution clause, amends
    invariant #10).
 4. v0.6.0 build per `console-backend-coverage.md` sequencing.

@@ -521,9 +521,11 @@ porcelain: the Console renders what this API manages.
   (requires `admin` role), plan mode, Job/Task status and result queries.
 - Published, versioned **OpenAPI** spec for `/api/v1`; a documented Ansible example:
   vault-managed bootstrap credential → token mint → fleet enrollment, end to end.
-- **Generated Go client** for `/api/v1`, committed with a drift gate — the spec's
-  conformance test: a document that is valid and route-complete can still be unusable by
-  a real generator, and compiling a client on every build is what catches that.
+- **Generated Go client** for `/api/v1` — the spec's conformance test: a document that is
+  valid and route-complete can still be unusable by a real generator, and generating and
+  compiling a client on every build is what catches that. The output is deliberately
+  **not committed** (nothing imports it); `make apiclient-check` regenerates, compiles,
+  and asserts every `operationId` got a client method.
 - ~~**Official CLI** (issue #137)~~ — **cut 2026-08-13 (owner decision).** The CLI was
   built (admin verbs, generated transport, config/auth resolution) and then deliberately
   removed. Two reasons: the Admin Console (v0.6.0/v0.7.0) covers the same admin and
@@ -631,8 +633,9 @@ The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
 
 ## `v0.7.0` — Admin Console: Administration & Execution (post-beta)
 
-Phase two: the keys — and, per #264's ADR (supersedes ADR-0009's no-execution clause;
-invariant #10 amended in the same change), the execution surface. Manual experimentation
+Phase two: the keys — and, per [ADR-0026](docs/adr/0026-admin-console-execution-surface.md)
+(#264; supersedes ADR-0009's no-execution clause, invariant #10 amended in the same
+change), the execution surface. Manual experimentation
 is the trust-building wedge: a skeptical operator probes the boundary themselves, then
 hands the keys to the AI. The wall is the same wall.
 
@@ -669,9 +672,10 @@ hands the keys to the AI. The wall is the same wall.
   write a `node:` label.
 - Manual validation: `docs/testing/validate-v0.7.0.md` written and signed off.
 
-**ADRs:** #264's superseding ADR (Console execution), 0009 (remainder stands), 0010,
-0020 (label management). Amends CLAUDE.md invariant #10 in the same change →
-human-merge lane.
+**ADRs:** 0026 (Console execution, supersedes 0009's no-execution clause), 0009
+(remainder stands), 0010, 0020 (label management). CLAUDE.md invariant #10 was amended
+with ADR-0026; the threat model carries the delta as the "Hijacked Console session"
+adversary and residual **R11**.
 
 ---
 

@@ -7,6 +7,14 @@ that the MCP surface (ADR-0003) and the general API use — not a second control
 Every action it takes flows through the capability layer and its audit chain; the Console
 renders and requests, it does not re-implement control logic.
 
+> **Superseded in part (2026-08-14).** The no-execution clause below — the scope sentence
+> and the "No execution surface" decision — is superseded by
+> [ADR-0026](0026-admin-console-execution-surface.md): the Console gains an execution
+> surface in v0.7.0, plan-by-default, step-up on mutate apply, behind a root-owned
+> `console_execution` flag. **Everything else in this ADR stands**: thin adapter over the
+> one capability layer, internal-only exposure, the Account model, and Policy read-only.
+> Read ADR-0026 for what replaced it and what was given up.
+
 Scope (v1): **admin + observability only — the Console has no execution surface.**
 Monitoring (registry, labels, liveness, facts, Enrollment Tokens, cert lifecycle,
 Jobs/Tasks, audit) and lifecycle control (mint/revoke tokens, revoke Nodes). It cannot
@@ -30,13 +38,18 @@ v0.1.0-beta vertical slice.
   identity (mTLS client certs). *(Revised 2026-07-02: originally OIDC-only with no
   stored passwords; local auth was added so small fleets without an IdP can use the
   Console, accepting that the Relay holds password hashes.)*
-- **No execution surface.** The Console cannot dispatch Operations or Raw Exec — not as
+- **No execution surface.** *(Superseded by [ADR-0026](0026-admin-console-execution-surface.md),
+  2026-08-14 — retained here because ADR-0026's reasoning only makes sense against it.)*
+  The Console cannot dispatch Operations or Raw Exec — not as
   an RBAC restriction but as an absent capability. A browser is the most attackable
   client in the system; keeping execution out of it eliminates (rather than mitigates)
   the "session hijack / XSS / CSRF → fleet-wide RCE" consequence class. Humans who need
   to execute use the general API (or a CLI over it); the AI-agent uses MCP. Adding
   execution to the Console later is possible but requires amending this ADR and a
   dedicated threat model for browser-initiated execution.
+  *(That amendment is ADR-0026, and the dedicated threat model this clause demanded is
+  the threat-model delta it carries. `console_execution = off` preserves this property
+  verbatim for deployments that want it.)*
 - **Internal-only exposure.** The Console is not internet-facing by default; it is served
   on an internal/VPN/bastion-reachable interface. Enrolling Nodes never reach it.
 - **Reads are authoritative-registry-grounded; Policy stays read-only.** Monitoring reads
@@ -71,7 +84,9 @@ v0.1.0-beta vertical slice.
   enroll a rogue Node; revoking Nodes as denial of service) rather than command execution
   on existing Nodes. Still serious — the Console keeps a high review bar and a threat
   model before any lifecycle-control action ships — but the consequence ceiling is
-  structurally lower.
+  structurally lower. *(No longer true once ADR-0026 lands with `console_execution = on`:
+  the ceiling returns to command execution, mitigated rather than eliminated. It remains
+  true for any deployment running `console_execution = off`.)*
 - Once the Console manages Accounts and roles, a hijacked admin session can *indirectly*
   reach execution by elevating a machine Account it controls. Mitigation: all
   privilege-granting actions (create Account, change role, mint API Token) require
