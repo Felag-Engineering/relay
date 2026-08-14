@@ -102,7 +102,9 @@ _Avoid_: phase, wave
 **Task**:
 The execution of one Operation or Raw Exec on a single Node, as part of a Job (within a
 Stage). Carries a unique ID for at-most-once execution and reports an independent outcome.
-_Avoid_: command, unit, step
+Not to be confused with an **MCP task handle** (see below), which is a different thing at a
+different layer.
+_Avoid_: command, unit, step; "task" unqualified in any context where MCP is also in play
 
 **Selector**:
 A label-based query that targets a set of Nodes (e.g. `role=web, env=prod`). Operations
@@ -193,7 +195,38 @@ answers whether it *would* allow the action (ADR-0011). Advisory and point-in-ti
 never a reservation, never a substitute for enforcement at execution.
 _Avoid_: dry-run, simulation, preview, check mode
 
-**Relay-side authorization**:
+**Plan hash**:
+The content address of a Plan — a hash over the Operation, its arguments, and the
+*resolved fan-out*. It is what an Approval commits to (ADR-0027): dispatch proceeds only
+if the Plan still hashes the same, and material drift re-parks the Job for re-approval.
+_Avoid_: job hash, checksum, fingerprint (reserved for Policy and template-set fingerprints)
+
+**Approval**:
+A verified human decision that a specific parked Job may proceed, recorded against its
+Plan hash. The Job waits in **`pending-approval`** until the Gate rule's requirement is
+satisfied or its TTL expires. Relay authors what the approver sees, so the requesting
+AI-agent can neither truncate nor spin it; the decision arrives on an authenticated
+channel, never through the MCP session (ADR-0027). An Approval **narrows** — it permits
+one already-Policy-legal Plan to run. It is never authorization and can never widen what a
+Node's Policy allows.
+_Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
+
+**Gate rule**:
+One rule in the Relay's root-owned approval-gate configuration, matching on risk class,
+blast size, Selector namespace, principal, and Operation, and requiring a `count`,
+`audience`, `requester_allowed`, `channel`, and `ttl`. File-only and above the AI's reach,
+like the blast cap (invariant 11). Narrows only: a Gate rule can demand approval where none
+was demanded, never grant what Policy refuses.
+_Avoid_: approval policy (collides with **Policy**), approval rule, gate config (for a
+single rule)
+
+**MCP task handle**:
+MCP's own async primitive: a handle returned in place of a result for one long-running
+`tools/call`, which the client polls, and which can carry a server-to-client elicitation
+while the work is outstanding. Relay maps **one MCP task handle to one Job** — it is a
+*delivery envelope* for an Approval, never an execution unit. Always written in full;
+"task" alone means a Relay **Task**.
+_Avoid_: task (unqualified), MCP task, job handle
 The central rules deciding which Account may send which Operations to which Nodes.
 Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
 will ever do*.

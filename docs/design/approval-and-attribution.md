@@ -165,10 +165,12 @@ Relay-authored Plan, approves. Audit answers both questions in one query:
 
 ## Impact on planned work
 
-- **Approval-callout milestone / #268 (ADR)**: must specify the attribution triple,
-  plan-hash binding + drift re-park, the confirmation ladder, quorum schema
-  (requirement-vs-decisions), channel strength, batch/window approvals, TTL, and the
-  requester-exclusion knob.
+- **Approval-callout milestone / #268 (ADR)**: **written —
+  [ADR-0027](../adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md)**, which
+  settles the attribution triple, plan-hash binding + drift re-park, the confirmation
+  ladder, quorum schema (requirement-vs-decisions), channel strength, batch/window
+  approvals, TTL, and the requester-exclusion knob. This note remains the reasoning behind
+  it; the ADR is what binds.
 - **Accounts milestone (v0.3.0 in the pre-resequence numbering)**: + OAuth 2.1
   resource-server support on the MCP endpoint; + the asserted `on_behalf_of` lane in the
   audit schema; teams-as-asserted-string with IdP federation named as direction.
