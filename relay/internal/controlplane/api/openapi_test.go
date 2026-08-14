@@ -16,9 +16,8 @@ import (
 // A hand-kept API document drifts from the server the moment someone adds a
 // route and forgets the spec — and drifts silently, because nothing checks. The
 // spec then becomes actively worse than none: a generated client compiles
-// against a contract the server does not honour. Since [4/7] generates the
-// official CLI's transport FROM this file, that failure would land as a broken
-// CLI rather than a review comment.
+// against a contract the server does not honour, and the integrator discovers
+// it at runtime rather than in review.
 //
 // So the spec is checked two ways, both mechanical:
 //
@@ -184,8 +183,8 @@ func TestOpenAPISpec_EveryOperationDocumentsUnauthorized(t *testing.T) {
 	}
 }
 
-// TestOpenAPISpec_DeclaresBearerSecurity pins the auth scheme the CLI ([4/7])
-// and any generated client depend on.
+// TestOpenAPISpec_DeclaresBearerSecurity pins the auth scheme every generated
+// client depends on.
 func TestOpenAPISpec_DeclaresBearerSecurity(t *testing.T) {
 	doc := loadSpec(t)
 
