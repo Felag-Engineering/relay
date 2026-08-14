@@ -671,6 +671,12 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		"time":         true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": true,
+		// internal/approval joined the allowlist with #269 (ADR-0027). It is
+		// admitted on exactly the terms jobs and registry are: a domain package
+		// with no proto dependency and no database/sql, guarded by its own
+		// import test (approval.TestApprovalImportsStayNarrow) so widening this
+		// list does not create a transitive back door into the wire types.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,

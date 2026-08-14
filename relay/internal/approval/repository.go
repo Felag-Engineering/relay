@@ -1,0 +1,69 @@
+package approval
+
+import (
+	"context"
+	"time"
+)
+
+// Repository persists approval Requests and their Decisions. Like
+// freeze.Repository and jobs.JobRepository, the interface lives in the domain
+// package and the SQLite implementation lives in internal/store, so a later
+// Postgres swap stays a single-package change.
+//
+// A parked dispatch that a crash forgets is not a park — it is a dispatch that
+// quietly never happened, which is the *safe* direction but not an honest one.
+// Everything here is durable so the approval queue survives a restart and an
+// auditor can still answer "what was asked, and what became of it".
+type Repository interface {
+	// Create persists a new pending Request.
+	Create(ctx context.Context, r Request) error
+
+	// Get returns the Request with the given ID, or ErrNotFound.
+	Get(ctx context.Context, id string) (Request, error)
+
+	// ByJob returns the Request bound to jobID, or ErrNotFound. Used to answer
+	// "why is this Job waiting?".
+	ByJob(ctx context.Context, jobID string) (Request, error)
+
+	// ByPlanHash returns the most recent Request for planHash, or ErrNotFound.
+	//
+	// This is the dispatch path's lookup, and looking up by plan hash is what
+	// makes registry drift re-park automatically: a changed fan-out is a
+	// changed hash, so the approval simply is not found for it. There is no
+	// separate drift detector to get wrong, and no notion of a "close enough"
+	// Plan.
+	//
+	// Most-recent rather than most-favourable: returning the newest means a
+	// Plan that was denied can be re-requested, which is deliberate. A denial
+	// is a decision about a moment, not a standing rule — the thing that
+	// permanently refuses an action is Node Policy, not an approver's mood.
+	// The cost is that a requester can re-ask; the mitigation is that every
+	// re-ask is a fresh audited Request with the requester's name on it.
+	ByPlanHash(ctx context.Context, planHash string) (Request, error)
+
+	// Pending returns every Request still in StatePending, oldest deadline
+	// first. This is both the approval queue's read and the expiry sweeper's
+	// scan.
+	Pending(ctx context.Context) ([]Request, error)
+
+	// RecordDecision appends d to the Request and persists the resulting state
+	// transition atomically. The read-modify-write must happen inside one
+	// transaction: two approvers answering a count:2 Request simultaneously
+	// must not both read "0 approvals so far" and both append, and a decision
+	// must never be recorded without its state change (or vice versa).
+	//
+	// It returns the updated Request, or one of ErrNotFound, ErrNotPending,
+	// ErrRequesterExcluded, ErrNotInAudience, ErrDuplicateDecider, or
+	// ErrPlanChanged.
+	RecordDecision(ctx context.Context, id string, d Decision, now time.Time) (Request, error)
+
+	// BindJob records the Job ID created for an approved Request, so the
+	// approval and the execution it released can be joined in audit.
+	BindJob(ctx context.Context, id, jobID string) error
+
+	// ExpirePending moves every pending Request whose deadline has passed to
+	// StateExpired, returning those it changed. Callers use the returned set to
+	// emit one audit record per expiry — an approval that lapses is a fact the
+	// trail must carry, not an absence.
+	ExpirePending(ctx context.Context, now time.Time) ([]Request, error)
+}

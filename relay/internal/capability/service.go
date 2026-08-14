@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -38,6 +39,18 @@ type Service struct {
 	// metrics is best-effort observability only (MetricsSink, seams.go); it
 	// never affects a dispatch, authz, cap, or Freeze decision.
 	metrics MetricsSink
+
+	// gate and approvals are the approval callout (ADR-0027). The defaults
+	// gate nothing, which is a deployment with no approval rules — safe
+	// because a gate can only add a reason to stop. approvals is only
+	// consulted when gate says a dispatch is gated, so the nil store is
+	// unreachable unless a real gate was wired without one, which New refuses.
+	gate      ApprovalGate
+	approvals ApprovalStore
+
+	// now and newApprovalID are seams so tests get deterministic parks.
+	now           func() time.Time
+	newApprovalID idGen
 
 	// realDispatcher is set by WithExecution (execution.go) once a real Job
 	// engine is wired. New's end-of-construction guard uses it to refuse a
@@ -81,6 +94,37 @@ func WithFreeze(f FreezeStore) Option {
 	return func(s *Service) { s.freeze = f }
 }
 
+// WithApprovals wires the approval callout (ADR-0027): gate decides which
+// dispatches must wait for a human, store persists the parked Requests.
+//
+// Both are required together. A gate with no store could decide a dispatch
+// needs approval and then have nowhere to record it — which would either drop
+// the dispatch silently or, worse, let it through. A store with no gate is
+// inert. Passing one without the other is a composition-root bug, so it panics
+// rather than degrading.
+func WithApprovals(gate ApprovalGate, store ApprovalStore) Option {
+	if gate == nil {
+		panic("capability: WithApprovals: gate must not be nil")
+	}
+	if store == nil {
+		panic("capability: WithApprovals: store must not be nil")
+	}
+	return func(s *Service) {
+		s.gate = gate
+		s.approvals = store
+	}
+}
+
+// WithClock overrides the Service's clock. Test seam only: approval expiry and
+// park timestamps are time-dependent, and a test that sleeps is a test that
+// flakes.
+func WithClock(now func() time.Time) Option {
+	if now == nil {
+		panic("capability: WithClock: now must not be nil")
+	}
+	return func(s *Service) { s.now = now }
+}
+
 // WithMetrics overrides the default noopMetricsSink. Metrics are never
 // security-relevant, so — unlike WithAuthorizer/WithCapChecker/WithAuditSink/
 // WithFreeze — New's real-dispatcher fail-open guard does not require this
@@ -115,13 +159,16 @@ func WithMetrics(m MetricsSink) Option {
 // dispatcher's doc comment in dispatch.go.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
-		reg:     reg,
-		authz:   allowAllAuthorizer{},
-		cap:     noopCapChecker{},
-		disp:    noopDispatcher{},
-		audit:   noopAuditSink{},
-		freeze:  noopFreezeStore{},
-		metrics: noopMetricsSink{},
+		reg:           reg,
+		authz:         allowAllAuthorizer{},
+		cap:           noopCapChecker{},
+		disp:          noopDispatcher{},
+		audit:         noopAuditSink{},
+		freeze:        noopFreezeStore{},
+		metrics:       noopMetricsSink{},
+		gate:          noopApprovalGate{},
+		now:           func() time.Time { return time.Now().UTC() },
+		newApprovalID: defaultID,
 	}
 	for _, o := range opts {
 		o(s)
@@ -193,8 +240,47 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalBlastCap, err)
 	}
 
+	// The approval gate (ADR-0027) sits HERE — after Selector resolution,
+	// authz, and the blast cap, and before any Task exists.
+	//
+	// After, because the approver must be shown the resolved fan-out: an
+	// approval that did not know how many Nodes it covered would be the
+	// approval-view fidelity gap by construction. Before the dispatcher,
+	// because parking must leave no Job and no Pending Tasks behind — rows a
+	// restart reconciler could mistake for interrupted work.
+	//
+	// A park is not a refusal, so it does not go through recordRefusal: nothing
+	// was denied and nothing ran. It is audited as its own kind.
+	ap, err := s.checkApproval(ctx, p, sel, act, nodeIDs(nodes))
+	if err != nil {
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, err)
+	}
+	if ap.parked != nil {
+		s.metrics.IncRefusal(RefusalPendingApproval)
+		entry := AuditEntry{
+			Kind: AuditKindApprovalRequested, Principal: p, Selector: sel, Action: act,
+			Reason: ap.parked.Error(), ApprovalID: ap.parked.RequestID, PlanHash: ap.parked.PlanHash,
+			Asserted: AssertionsFromContext(ctx),
+		}
+		if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
+			// An unaudited park is a dispatch nobody can account for. Surface
+			// the write failure alongside the park rather than swallowing it.
+			return nil, errors.Join(ap.parked, fmt.Errorf("capability: record audit entry: %w", auditErr))
+		}
+		return nil, ap.parked
+	}
+
 	d := newDispatch(p, sel, nodes, act)
 	res, dispatchErr := s.disp.run(ctx, d)
+
+	// Join the approval that released this dispatch to the Job it produced, so
+	// audit can answer "who approved what actually ran" rather than leaving the
+	// two records to be correlated by timestamp.
+	if ap.requestID != "" && res.jobID != "" {
+		if err := s.approvals.BindJob(ctx, ap.requestID, res.jobID); err != nil {
+			dispatchErr = errors.Join(dispatchErr, fmt.Errorf("capability: bind job to approval: %w", err))
+		}
+	}
 
 	for _, r := range res.results {
 		s.metrics.IncDispatch(r.Outcome)
@@ -211,7 +297,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// an Operation's arguments would land in the audit trail as-is. #102
 	// does not close this — it is flagged here so it is not mistaken for a
 	// gap in #102's redaction guarantee.
-	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, Asserted: AssertionsFromContext(ctx)}
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, Asserted: AssertionsFromContext(ctx)}
 	auditErr := s.audit.Record(ctx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must

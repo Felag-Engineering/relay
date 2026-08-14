@@ -74,6 +74,17 @@ const (
 	// only the transient (unaudited) per-Node Verdicts returned to the
 	// caller directly.
 	AuditKindPlan
+
+	// AuditKindApprovalRequested is a dispatch parked for a human (ADR-0027):
+	// Principal, Selector, and Action are set exactly as for a dispatch, plus
+	// ApprovalID and PlanHash, and Reason carries the Relay-authored summary.
+	// JobID and Results are empty — nothing ran and no Job exists yet.
+	//
+	// It is a distinct kind rather than a Refusal because it is not one:
+	// nothing was denied. Filing parks under refusals would make the approval
+	// mechanism look like breakage on every dashboard that counts them, which
+	// is how a safety feature gets switched off.
+	AuditKindApprovalRequested
 )
 
 // AuditEntry is everything the pipeline knows about one Run call, passed to
@@ -95,6 +106,13 @@ type AuditEntry struct {
 	JobID     string
 	Results   []NodeResult
 	Reason    string
+
+	// ApprovalID and PlanHash tie a record to the approval callout (ADR-0027).
+	// Both are set on AuditKindApprovalRequested; ApprovalID is also set on an
+	// AuditKindDispatch that an approval released, so "who approved what
+	// actually ran" is one join rather than a correlation by timestamp.
+	ApprovalID string
+	PlanHash   string
 
 	// Asserted is the caller-claimed attribution lane (#300), read off the
 	// request context by Service.Run/Plan. Recorded, never consulted — see
@@ -179,6 +197,13 @@ const (
 	RefusalUnauthorized
 	RefusalBlastCap
 	RefusalInternal
+
+	// RefusalPendingApproval counts dispatches parked for a human (ADR-0027).
+	// It rides the refusal counter because it is a "did not dispatch" outcome
+	// and belongs on the same dashboard, but it is NOT a refusal: nothing was
+	// denied. Kept a distinct value precisely so an operator can tell "the
+	// gate is working" apart from "the fleet is rejecting work".
+	RefusalPendingApproval
 )
 
 // MetricsSink records best-effort observability counters for the capability
