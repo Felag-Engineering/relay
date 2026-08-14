@@ -563,7 +563,8 @@ Relay authors the request content, so the AI/harness can never truncate or spoof
 approver sees; the guarantee never depends on harness behavior.
 
 **Deliverables**
-- **Approval ADR** (#268): the attribution triple (`requested_by` verified /
+- **Approval ADR** (#268) — written: [ADR-0027](docs/adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md).
+  The attribution triple (`requested_by` verified /
   `on_behalf_of` asserted / `approved_by` verified); the **confirmation ladder**
   (no-gate → self-confirmation "are you sure" → second-person); MCP-originated calls are
   agent-grade regardless of whose OAuth identity authorizes the session; approval
@@ -597,8 +598,8 @@ approver sees; the guarantee never depends on harness behavior.
 - A machine Account can never satisfy its own gate on any channel.
 - Manual validation: `docs/testing/validate-v0.5.0.md` written and signed off.
 
-**ADRs:** new approval ADR (#268); builds on 0011 (Plans), 0010 (Accounts), 0013
-(Job states).
+**ADRs:** 0027 (approval callout, #268); builds on 0011 (Plans), 0010 (Accounts), 0013
+(Job states), 0002 (Policy stays the floor an approval cannot lower).
 
 ---
 

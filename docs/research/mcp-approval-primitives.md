@@ -4,6 +4,11 @@ _High-level research note. Captured 2026-07-15 during long-term planning. Feeds 
 approval-callout epic (#210) and its future ADR. Not a decision record — a grounding
 brief so the ADR author starts from the right conclusion._
 
+> **The ADR is now written:**
+> [ADR-0027](../adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md) (#268).
+> It adopts this note's conclusion — notify via MCP, decide out-of-band — and binds it.
+> This note stays as the evidence behind that choice; where the two differ, the ADR wins.
+
 ## Question
 
 For Relay's **approval callout** (an action requiring approval routes to a human
