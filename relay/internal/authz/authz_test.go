@@ -120,3 +120,66 @@ func TestRoleGate_RiskClassIsNotAnAuthorizationInput(t *testing.T) {
 		t.Fatalf("a mutate-class Operation was refused for an operator: %v", err)
 	}
 }
+
+// --- #270: the approval-decision floor ---
+
+// TestApprovalDecisionFloorMatchesTheRequestFloor is the escalation guard.
+//
+// If approving used a lower floor than requesting, an operator could release an
+// admin's Raw Exec and ADR-0001's admin-only rule would hold for asking but not
+// for granting — which is the same authority, arrived at sideways.
+func TestApprovalDecisionFloorMatchesTheRequestFloor(t *testing.T) {
+	gate := NewRoleGate()
+
+	cases := []struct {
+		role    accounts.Role
+		kind    jobs.ActionKind
+		allowed bool
+	}{
+		{accounts.RoleViewer, jobs.ActionOperation, false},
+		{accounts.RoleOperator, jobs.ActionOperation, true},
+		{accounts.RoleAdmin, jobs.ActionOperation, true},
+
+		{accounts.RoleViewer, jobs.ActionRawExec, false},
+		{accounts.RoleOperator, jobs.ActionRawExec, false},
+		{accounts.RoleAdmin, jobs.ActionRawExec, true},
+	}
+	for _, tc := range cases {
+		p := capability.Principal{Account: "caller", Role: string(tc.role)}
+		err := gate.AuthorizeApprovalDecision(context.Background(), p, tc.kind)
+		if tc.allowed && err != nil {
+			t.Errorf("%s deciding %v: err = %v, want allowed", tc.role, tc.kind, err)
+		}
+		if !tc.allowed && err == nil {
+			t.Errorf("%s deciding %v: allowed, want refused", tc.role, tc.kind)
+		}
+		if !tc.allowed && err != nil && !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("%s deciding %v: err = %v, want it to wrap ErrUnauthorized", tc.role, tc.kind, err)
+		}
+
+		// The floors must be IDENTICAL, not merely similar: a request the role
+		// could have made is a request it may release, and nothing else.
+		act := jobs.Action{Kind: tc.kind}
+		reqErr := gate.Authorize(context.Background(), p, act, capability.Selector{})
+		if (err == nil) != (reqErr == nil) {
+			t.Errorf("%s / %v: decide-allowed=%v but request-allowed=%v — the two floors must be the same ladder",
+				tc.role, tc.kind, err == nil, reqErr == nil)
+		}
+	}
+}
+
+// TestApprovalDecisionDeniesUnknownActionKind: deny-by-default is inherited
+// whole. A Request stored by a build that knew a kind this one does not must be
+// undecidable, not decidable by whichever floor happened to be weakest.
+func TestApprovalDecisionDeniesUnknownActionKind(t *testing.T) {
+	gate := NewRoleGate()
+	admin := capability.Principal{Account: "root", Role: string(accounts.RoleAdmin)}
+
+	err := gate.AuthorizeApprovalDecision(context.Background(), admin, jobs.ActionUnspecified)
+	if err == nil {
+		t.Fatal("an unrecognized action kind must be refused for every role, including admin")
+	}
+	if strings.Contains(err.Error(), "requires role") {
+		t.Errorf("err = %q, want it not to claim a bigger role would help — no role may decide an unknown kind", err)
+	}
+}

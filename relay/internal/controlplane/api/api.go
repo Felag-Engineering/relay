@@ -112,6 +112,11 @@ type Deps struct {
 	// this surface's reach (invariant 11).
 	Exec Executor
 	Jobs JobResultReader
+	// Approvals backs the out-of-band decision channel (#270, ADR-0027). It is
+	// the same capability layer Exec is — the composition root passes one
+	// *capability.Service for both — kept as a separate interface only so this
+	// package's seams stay named after what each route needs.
+	Approvals ApprovalService
 	// Reads records read-access events for the Job read route (#357,
 	// ADR-0025). Nil skips recording — the pre-#288 behaviour, kept so tests
 	// and any unwired surface work; the composition root always supplies it.
@@ -182,6 +187,16 @@ func Routes() []Route {
 		// produced. Cancel goes through the same capability layer as dispatch.
 		{"GET", "/api/v1/jobs/{id}", handleGetJob},
 		{"POST", "/api/v1/jobs/{id}/cancel", handleCancelJob},
+
+		// The out-of-band approval decision channel (#270, ADR-0027). This is
+		// the universal envelope: it works for a harness with zero approval
+		// features and for the API-control drive mode, which has no MCP session
+		// at all — and it is the only channel that is a guarantee rather than a
+		// delivery convenience, because a decision here rides a credential the
+		// requesting session does not hold. See approvals.go.
+		{"GET", "/api/v1/approvals", handleListApprovals},
+		{"GET", "/api/v1/approvals/{id}", handleGetApproval},
+		{"POST", "/api/v1/approvals/{id}/decision", handleDecideApproval},
 	}
 }
 

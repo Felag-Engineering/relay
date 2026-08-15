@@ -41,7 +41,15 @@ type principalContextKey struct{}
 // for the founding admin, and exists so tests can state the expected audit
 // attribution without reaching into a store.
 func FoundingAdmin() capability.Principal {
-	return capability.Principal{Account: accounts.FoundingAdminName, Role: string(accounts.RoleAdmin)}
+	return capability.Principal{
+		Account: accounts.FoundingAdminName,
+		Role:    string(accounts.RoleAdmin),
+		// The seeded founding admin is a HUMAN Account
+		// (store.EnsureFoundingAdmin), and this shape must agree with what that
+		// projection produces or the two would disagree about who may take
+		// ADR-0027's self-confirmation rung.
+		Kind: string(accounts.KindHuman),
+	}
 }
 
 // TokenVerifier authenticates a presented API Token credential and returns the
@@ -224,11 +232,19 @@ func (a *Authenticator) authenticate(ctx context.Context, credential string) (ca
 // capability: that package's import allowlist is deliberately narrow (jobs +
 // registry). It does not consult Enabled — the verifier has already refused a
 // disabled Account before this is reached.
+//
+// Kind is copied through because ADR-0027's confirmation ladder needs to know
+// whether a person is behind the Account (rung 2 is human-only), and this is the
+// only place in the process that holds the stored Account and the acting
+// identity at the same time. It is carried as the Account's own wire value, not
+// re-derived downstream: a fact established at authentication must not be
+// guessed at by whichever surface happens to need it.
 func principalFromAccount(a accounts.Account) capability.Principal {
 	return capability.Principal{
 		AccountID: a.ID,
 		Account:   a.Name,
 		Role:      string(a.Role),
+		Kind:      string(a.Kind),
 	}
 }
 

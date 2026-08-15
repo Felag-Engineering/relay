@@ -11,17 +11,27 @@ import (
 
 var t0 = time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 
+// testAction is the Action every fixture Request is built over: a structured
+// Operation, so the stored ActionKind is a real one and the role floor these
+// tests do not exercise still has something truthful to be computed from.
+var testAction = jobs.Action{
+	Kind:          jobs.ActionOperation,
+	OperationName: "service.restart",
+	OperationArgs: map[string]string{"service": "nginx"},
+	RiskClass:     jobs.RiskClassMutate,
+}
+
 func req(count int, requesterAllowed bool, audience ...string) Requirement {
 	return Requirement{Count: count, RequesterAllowed: requesterAllowed, Audience: audience, Channel: ChannelOutOfBand, TTL: time.Hour}
 }
 
 func newTestRequest(t *testing.T, r Requirement) Request {
 	t.Helper()
-	return NewRequest("req-1", "hash-abc", "acct-mike", "mike", PlanSummary{}, []string{"rule"}, r, t0)
+	return NewRequest("req-1", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, []string{"rule"}, r, t0)
 }
 
 func approveBy(id, name string) Decision {
-	return Decision{AccountID: id, Account: name, Approve: true, Channel: ChannelOutOfBand, PlanHash: "hash-abc", At: t0.Add(time.Minute)}
+	return Decision{AccountID: id, Account: name, Approve: true, Channel: ChannelOutOfBand, PlanHash: "hash-abc", DeciderHuman: true, At: t0.Add(time.Minute)}
 }
 
 // --- the count:1 happy path, and that it is not satisfied before it is met ---
@@ -308,5 +318,147 @@ func TestDuplicateRuleNamesRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("duplicate rule names must be rejected — the name is how a park explains itself")
+	}
+}
+
+// --- #270: the rules that make a decision trustworthy ---
+
+// TestMachineCannotConfirmItself pins ADR-0027's ladder rung 2 as HUMAN-ONLY,
+// and pins it against the strongest configuration an operator could write in
+// the other direction: requester_allowed: true.
+//
+// If this ever passes for a machine, an AI-agent can approve its own dispatch
+// and the entire callout is decoration — which is why the rule lives in the
+// domain rather than in whichever surface happened to remember it.
+func TestMachineCannotConfirmItself(t *testing.T) {
+	r := newTestRequest(t, req(1, true)) // requester_allowed: true
+
+	machine := Decision{
+		AccountID: "acct-mike", Account: "mike", Approve: true,
+		Channel: ChannelOutOfBand, PlanHash: "hash-abc", DeciderHuman: false,
+		At: t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(machine, t0.Add(time.Minute)); !errors.Is(err, ErrMachineSelfDecision) {
+		t.Fatalf("err = %v, want ErrMachineSelfDecision — a machine may never satisfy its own gate", err)
+	}
+
+	// The same Account, same rule, as a human: rung 2 is open.
+	human := machine
+	human.DeciderHuman = true
+	if _, err := r.Decide(human, t0.Add(time.Minute)); err != nil {
+		t.Fatalf("human self-confirmation under requester_allowed: true = %v, want it permitted", err)
+	}
+}
+
+// TestMachineMayDecideSomeoneElsesRequest: the restriction is on deciding your
+// OWN request, not on machine Accounts generally. An approval bridge that holds
+// its own credential is a legitimate deployment; what it can never do is answer
+// for the Account that asked.
+func TestMachineMayDecideSomeoneElsesRequest(t *testing.T) {
+	r := newTestRequest(t, req(1, false))
+
+	other := Decision{
+		AccountID: "acct-bridge", Account: "bridge", Approve: true,
+		Channel: ChannelOutOfBand, PlanHash: "hash-abc", DeciderHuman: false,
+		At: t0.Add(time.Minute),
+	}
+	updated, err := r.Decide(other, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if updated.State != StateApproved {
+		t.Errorf("State = %v, want approved", updated.State)
+	}
+}
+
+// TestWeakChannelIsRefused: an in-band answer cannot satisfy a rule that asked
+// for out-of-band. In-band is an assumption about the client; out-of-band is
+// evidence, and a rule that asked for evidence must not take an assumption.
+func TestWeakChannelIsRefused(t *testing.T) {
+	r := newTestRequest(t, req(1, false)) // req() uses ChannelOutOfBand
+
+	inBand := Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: true,
+		At: t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(inBand, t0.Add(time.Minute)); !errors.Is(err, ErrWeakChannel) {
+		t.Fatalf("err = %v, want ErrWeakChannel", err)
+	}
+}
+
+// TestUnspecifiedChannelIsRefused is the fail-closed corollary: a decision
+// whose channel was never set is weaker than either real channel, so forgetting
+// to stamp one refuses rather than defaults.
+func TestUnspecifiedChannelIsRefused(t *testing.T) {
+	r := newTestRequest(t, req(1, false))
+
+	unstamped := Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		PlanHash: "hash-abc", DeciderHuman: true, At: t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(unstamped, t0.Add(time.Minute)); !errors.Is(err, ErrWeakChannel) {
+		t.Fatalf("err = %v, want ErrWeakChannel for an unstamped channel", err)
+	}
+}
+
+// TestStrongChannelSatisfiesAWeakerRule: strength is a floor, not an equality
+// check. An out-of-band answer to an in-band rule is more evidence than was
+// asked for, and must be accepted.
+func TestStrongChannelSatisfiesAWeakerRule(t *testing.T) {
+	r := NewRequest("req-2", "hash-abc", "acct-mike", "mike", testAction, []string{"node-a"}, []string{"rule"},
+		Requirement{Count: 1, Channel: ChannelInBand, TTL: time.Hour}, t0)
+
+	outOfBand := Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: ChannelOutOfBand, PlanHash: "hash-abc", DeciderHuman: true,
+		At: t0.Add(time.Minute),
+	}
+	updated, err := r.Decide(outOfBand, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if updated.State != StateApproved {
+		t.Errorf("State = %v, want approved", updated.State)
+	}
+}
+
+// TestWeakChannelIsRefusedForDenialsToo: a denial is TERMINAL, so accepting one
+// over a channel the rule did not trust would let a compromised harness kill
+// work it could not authorize.
+func TestWeakChannelIsRefusedForDenialsToo(t *testing.T) {
+	r := newTestRequest(t, req(1, false))
+
+	deny := Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: false,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: true,
+		At: t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(deny, t0.Add(time.Minute)); !errors.Is(err, ErrWeakChannel) {
+		t.Fatalf("err = %v, want ErrWeakChannel — a weak-channel denial is still a decision the rule did not trust", err)
+	}
+}
+
+// TestNewRequestRecordsTheActionKind: the role floor on a decision is computed
+// from this field, so a Request that forgot it would be decidable by the wrong
+// people (or, given authz's deny-by-default on an unknown kind, by nobody).
+func TestNewRequestRecordsTheActionKind(t *testing.T) {
+	rawExec := jobs.Action{
+		Kind:        jobs.ActionRawExec,
+		RawExecArgv: []string{"/usr/bin/systemctl", "restart", "nginx"},
+		RiskClass:   jobs.RiskClassMutate,
+	}
+	r := NewRequest("req-3", "hash-x", "acct-g", "gleipnir", rawExec, []string{"node-a"}, nil, req(1, false), t0)
+
+	if r.ActionKind != jobs.ActionRawExec {
+		t.Errorf("ActionKind = %v, want raw exec", r.ActionKind)
+	}
+	if r.RiskClass != jobs.RiskClassMutate {
+		t.Errorf("RiskClass = %v, want mutate", r.RiskClass)
+	}
+	// The rendered summary and the structured kind must describe the same
+	// thing: a decider reads one and the role floor is computed from the other.
+	if !strings.Contains(r.Summary, "raw exec") {
+		t.Errorf("Summary = %q, want it to describe the raw exec the ActionKind claims", r.Summary)
 	}
 }

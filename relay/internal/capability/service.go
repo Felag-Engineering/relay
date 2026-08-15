@@ -48,6 +48,16 @@ type Service struct {
 	gate      ApprovalGate
 	approvals ApprovalStore
 
+	// approvalAuthz is the role floor on a DECISION (#270): deciding a Request
+	// requires the role that Action would have needed to be requested. Nil only
+	// on a Service built without WithApprovals, where there is nothing to
+	// decide.
+	approvalAuthz ApprovalAuthorizer
+
+	// approvalNotifier pushes a parked dispatch to the operator's own
+	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
+	approvalNotifier ApprovalNotifier
+
 	// now and newApprovalID are seams so tests get deterministic parks.
 	now           func() time.Time
 	newApprovalID idGen
@@ -95,24 +105,46 @@ func WithFreeze(f FreezeStore) Option {
 }
 
 // WithApprovals wires the approval callout (ADR-0027): gate decides which
-// dispatches must wait for a human, store persists the parked Requests.
+// dispatches must wait for a human, store persists the parked Requests, and
+// authorizer is the role floor on answering one (#270).
 //
-// Both are required together. A gate with no store could decide a dispatch
+// All three are required together. A gate with no store could decide a dispatch
 // needs approval and then have nowhere to record it — which would either drop
 // the dispatch silently or, worse, let it through. A store with no gate is
-// inert. Passing one without the other is a composition-root bug, so it panics
-// rather than degrading.
-func WithApprovals(gate ApprovalGate, store ApprovalStore) Option {
+// inert. A store with no authorizer would accept a decision from any
+// authenticated caller, including a viewer releasing a Raw Exec, which is the
+// approval mechanism handing out authority instead of withholding it. Passing
+// an incomplete set is a composition-root bug, so it panics rather than
+// degrading.
+func WithApprovals(gate ApprovalGate, store ApprovalStore, authorizer ApprovalAuthorizer) Option {
 	if gate == nil {
 		panic("capability: WithApprovals: gate must not be nil")
 	}
 	if store == nil {
 		panic("capability: WithApprovals: store must not be nil")
 	}
+	if authorizer == nil {
+		panic("capability: WithApprovals: approval authorizer must not be nil; without it any authenticated caller could release a parked dispatch")
+	}
 	return func(s *Service) {
 		s.gate = gate
 		s.approvals = store
+		s.approvalAuthz = authorizer
 	}
+}
+
+// WithApprovalNotifier wires the out-of-band notification envelope (ADR-0027):
+// where to push a freshly parked dispatch so an approver hears about it.
+//
+// Optional, and deliberately so. The notification is a delivery convenience;
+// the guarantee is the authenticated decision endpoint, which stands alone. A
+// deployment with no notifier configured still parks, still audits, and still
+// waits — approvers just have to poll the queue.
+func WithApprovalNotifier(n ApprovalNotifier) Option {
+	if n == nil {
+		panic("capability: WithApprovalNotifier: notifier must not be nil")
+	}
+	return func(s *Service) { s.approvalNotifier = n }
 }
 
 // WithClock overrides the Service's clock. Test seam only: approval expiry and
@@ -159,14 +191,16 @@ func WithMetrics(m MetricsSink) Option {
 // dispatcher's doc comment in dispatch.go.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
-		reg:           reg,
-		authz:         allowAllAuthorizer{},
-		cap:           noopCapChecker{},
-		disp:          noopDispatcher{},
-		audit:         noopAuditSink{},
-		freeze:        noopFreezeStore{},
-		metrics:       noopMetricsSink{},
-		gate:          noopApprovalGate{},
+		reg:              reg,
+		authz:            allowAllAuthorizer{},
+		cap:              noopCapChecker{},
+		disp:             noopDispatcher{},
+		audit:            noopAuditSink{},
+		freeze:           noopFreezeStore{},
+		metrics:          noopMetricsSink{},
+		gate:             noopApprovalGate{},
+		approvalNotifier: noopApprovalNotifier{},
+
 		now:           func() time.Time { return time.Now().UTC() },
 		newApprovalID: defaultID,
 	}
@@ -266,6 +300,14 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 			// An unaudited park is a dispatch nobody can account for. Surface
 			// the write failure alongside the park rather than swallowing it.
 			return nil, errors.Join(ap.parked, fmt.Errorf("capability: record audit entry: %w", auditErr))
+		}
+		// Notify only on a park this call CREATED, and only after it is durably
+		// recorded and audited: a notification about a request that failed to
+		// persist would page a human towards nothing. Re-driving a dispatch that
+		// is already waiting deliberately does not re-notify — see
+		// approvalDecision.created.
+		if ap.created != nil {
+			s.approvalNotifier.NotifyParked(ctx, noticeFor(*ap.created))
 		}
 		return nil, ap.parked
 	}

@@ -240,3 +240,47 @@ stands alone — but the premium path's security claim is Gleipnir's to keep.
   watch it run. The elicitation envelopes need an elicitation-capable harness, which is a
   dependency on someone else's roadmap — another reason the webhook is the required path
   and not the fallback.
+
+## Amendment, 2026-08-14 — what [3/6] settled (#270)
+
+Building the decision endpoint forced four questions this ADR left open or implicit. All
+four are implemented; they are recorded here because each is a security boundary someone
+will otherwise re-litigate from the code.
+
+1. **The disjoint-approver credential question is answered with "no new credential."**
+   The alternatives section left "per-approval short-lived credentials" deferred to this
+   issue. v1's answer is that a decision is an ordinary Account-authenticated `/api/v1`
+   call. That already satisfies the property that matters — the credential is one the
+   requesting session does not hold — and a bespoke per-approval credential would add a
+   second issuance path to a control plane whose whole identity story is Accounts and
+   their tokens. Revisit if pure-API shops turn out to have approvers who should hold no
+   Relay Account at all; nothing here forecloses it.
+
+2. **The role floor on a decision is the floor the Action needed to be requested.**
+   Decision 6 says approval narrows only, and this is what that means for the ladder:
+   approving an Operation needs `operator`, approving a Raw Exec needs `admin` — the same
+   `authz.RoleGate` table, not a second one. A lower floor would have let an operator
+   release an admin's Raw Exec, so ADR-0001's admin-only rule would hold for asking and
+   not for granting; a *higher* one would have hard-coded a policy that belongs in a
+   rule's `audience`.
+
+3. **Rung 2's human-only clause is enforced structurally, not by configuration.** Decision
+   5 states it; `requester_allowed` cannot be the mechanism, because that knob is the
+   operator's and a misconfigured `true` would hand an AI-agent its own approval. A machine
+   Account is therefore refused a decision on its own request under *any* configuration,
+   in the domain type. The Account's kind travels on the authenticated Principal, so no
+   surface supplies it, and an unknown kind is treated as a machine.
+
+4. **Channel strength is checked, and it is set by the receiving surface.** Decision 4
+   defined the two channels but nothing enforced them. A decision must now arrive over a
+   channel at least as strong as its rule demands; the Control API stamps `out-of-band`
+   because of what it *is*, and its request body has no channel field at all. The check
+   applies to denials as well as approvals — a denial is terminal, so a weak-channel deny
+   would let a compromised harness end work it could not authorize.
+
+Two smaller consequences worth naming: a park renders as **`202 Accepted`** with
+`status: pending_approval` on the Control API — not a `200` (nothing ran) and not an error
+(nothing was denied), per this ADR's "accepted, pending approval"; and the MCP surface's
+inability to accept a decision is a **build failure**, not a convention
+(`mcp/no_decision_test.go`), because "we just won't call it from here" is exactly the kind
+of rule that gets forgotten by whoever later wires an approval tool to close a loop.

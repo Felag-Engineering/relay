@@ -85,6 +85,23 @@ const (
 	// mechanism look like breakage on every dashboard that counts them, which
 	// is how a safety feature gets switched off.
 	AuditKindApprovalRequested
+
+	// AuditKindApprovalDecided is one recorded answer to a parked dispatch
+	// (#270, ADR-0027): Principal is the decider, ApprovalID and PlanHash name
+	// what they answered, and Reason states the answer, the resulting request
+	// state, the quorum progress, and the decider's own note.
+	//
+	// Selector, Action, JobID, and Results are all empty. A decision is not a
+	// dispatch and does not describe one — it is an act on the approval object,
+	// and the Job it eventually releases is joined through ApprovalID rather
+	// than by copying the Action into a second place where the two could
+	// disagree.
+	//
+	// Every decision is recorded, not only the one that completes a quorum, so
+	// "one approver signed and then it expired" is answerable. A partial
+	// approval that leaves no trace is how an audit trail loses the interesting
+	// half of the story.
+	AuditKindApprovalDecided
 )
 
 // AuditEntry is everything the pipeline knows about one Run call, passed to

@@ -131,3 +131,36 @@ func (*RoleGate) Authorize(_ context.Context, p capability.Principal, act jobs.A
 	}
 	return nil
 }
+
+// AuthorizeApprovalDecision implements capability.ApprovalAuthorizer (#270,
+// ADR-0027): may p answer a parked dispatch whose Action is of this kind?
+//
+// The floor is **the same requiredRole table** the request itself passed, and
+// that identity is the point rather than a convenience. Approval must not be a
+// side door around the ladder: if approving used a lower floor, an operator
+// could release an admin's Raw Exec and the "admin-only" half of ADR-0001's
+// safety model would hold for asking and not for granting. Deciding what you
+// could not have asked for is exactly the escalation this closes.
+//
+// It is deliberately not *more* restrictive than the request floor either. An
+// approver drawn from a narrower pool than the requesters is a real policy, but
+// it is the gate rule's `audience` — operator configuration, per rule — not a
+// hard-coded second ladder that no deployment could tune.
+//
+// Deny-by-default is inherited whole: an unrecognized Action kind is refused
+// for every role, so a Request stored by a build that knew a kind this one does
+// not is undecidable rather than decidable by the weakest floor.
+func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Principal, kind jobs.ActionKind) error {
+	required, label, known := requiredRole(kind)
+	if !known {
+		return &unauthorizedError{
+			principal:   p,
+			action:      fmt.Sprintf("deciding an approval for unrecognized action kind %v", kind),
+			unknownKind: true,
+		}
+	}
+	if !accounts.Role(p.Role).AtLeast(required) {
+		return &unauthorizedError{principal: p, action: "approving " + label, required: required}
+	}
+	return nil
+}

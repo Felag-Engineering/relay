@@ -66,8 +66,13 @@ func (s *spyDispatcher) query(context.Context, dispatch) (planResult, error) {
 
 // spyAuditSink records the last AuditEntry/FreezeEvent it received.
 type spyAuditSink struct {
-	called      bool
-	entry       AuditEntry
+	called bool
+	entry  AuditEntry
+	// entries accumulates every recorded AuditEntry. entry (the last one) is
+	// kept for the tests that predate it; the approval decision tests need the
+	// whole sequence, because a park and its decision are two entries from one
+	// exchange and asserting on only the last would hide either.
+	entries     []AuditEntry
 	err         error
 	freezeCalls []FreezeEvent
 	cancelCalls []cancelCall
@@ -82,6 +87,7 @@ type cancelCall struct {
 func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
 	s.called = true
 	s.entry = e
+	s.entries = append(s.entries, e)
 	return s.err
 }
 

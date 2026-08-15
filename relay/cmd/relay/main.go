@@ -16,6 +16,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
@@ -87,6 +88,24 @@ type Config struct {
 	// needs approval because it could not read its own config is the exact
 	// failure this mechanism exists to prevent (approval.Load).
 	ApprovalGatePath string
+
+	// ApprovalWebhook* configure the out-of-band notification envelope (#270,
+	// ADR-0027): where to push a Relay-authored notice that a dispatch has
+	// parked. Empty URL disables it.
+	//
+	// Notification is DELIVERY, never the decision. The webhook is
+	// fire-and-forget and unauthenticated in the inbound direction — a decision
+	// only ever lands on the authenticated /api/v1 endpoint. A deployment whose
+	// webhook is down loses a notification, not the guarantee.
+	//
+	// ApprovalWebhookSecretPath names a root-owned file holding the shared
+	// secret used to sign the outbound body (HMAC-SHA256). It is a path rather
+	// than a value for the same reason the control-plane credential is: a
+	// secret passed as a flag or an environment variable is a secret in every
+	// process listing and every crash dump.
+	ApprovalWebhookURL        string
+	ApprovalWebhookSecretPath string
+	ApprovalWebhookTimeout    time.Duration
 
 	// ControlEnabled and ControlAddr configure the control-plane HTTP listener
 	// (MCP + /api/v1, ADR-0009/0010) — separate from the node-plane gRPC
@@ -222,6 +241,14 @@ func parseConfig() Config {
 	approvalGatePath := flag.String("approval-gate-config", "",
 		"path to the root-owned approval-gate config (ADR-0027); empty disables approval gating. "+
 			"A configured path that cannot be loaded refuses startup.")
+	approvalWebhookURL := flag.String("approval-webhook-url", "",
+		"HTTPS endpoint notified (fire-and-forget) when a dispatch parks for approval (ADR-0027); "+
+			"empty disables notification. Decisions never arrive this way — they land on /api/v1.")
+	approvalWebhookSecret := flag.String("approval-webhook-secret-file", "",
+		"path to a root-owned file holding the shared secret used to sign approval webhook bodies "+
+			"(HMAC-SHA256); empty sends unsigned notifications")
+	approvalWebhookTimeout := flag.Duration("approval-webhook-timeout", approvalnotify.DefaultTimeout,
+		"total time budget for one approval webhook delivery attempt")
 	minDaemonVersion := flag.String("min-daemon-version", "",
 		"minimum relay-daemon semver version (ADR-0014); empty disables the outdated gate")
 
@@ -315,6 +342,16 @@ func parseConfig() Config {
 
 	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
 	cfg.ApprovalGatePath = envOr("RELAY_APPROVAL_GATE_CONFIG", *approvalGatePath)
+	cfg.ApprovalWebhookURL = envOr("RELAY_APPROVAL_WEBHOOK_URL", *approvalWebhookURL)
+	cfg.ApprovalWebhookSecretPath = envOr("RELAY_APPROVAL_WEBHOOK_SECRET_FILE", *approvalWebhookSecret)
+	cfg.ApprovalWebhookTimeout = *approvalWebhookTimeout
+	if env := os.Getenv("RELAY_APPROVAL_WEBHOOK_TIMEOUT"); env != "" {
+		if d, err := time.ParseDuration(env); err == nil && d > 0 {
+			cfg.ApprovalWebhookTimeout = d
+		} else {
+			slog.Warn("ignoring invalid RELAY_APPROVAL_WEBHOOK_TIMEOUT", "value", env)
+		}
+	}
 
 	cfg.ControlEnabled = *controlEnabled
 	if env := os.Getenv("RELAY_CONTROL_ENABLED"); env != "" {
@@ -480,12 +517,38 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		slog.Info("approval gating enabled", "rules", n, "config", cfg.ApprovalGatePath)
 	}
 
+	// ONE RoleGate for the whole process. It answers both "who may dispatch
+	// this Action" and "who may decide an approval for one" (#270), and those
+	// two must be the same ladder read from the same object: an approver who
+	// could release what they could not request would be a side door around
+	// ADR-0001's admin-only Raw Exec.
+	roleGate := authz.NewRoleGate()
+
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(auditSink),
 		capability.WithFreeze(st.Freeze()),
 		capability.WithMetrics(appMetrics),
-		capability.WithApprovals(approvalGate, st.Approvals()),
+		capability.WithApprovals(approvalGate, st.Approvals(), roleGate),
+	}
+
+	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
+	// URL configured nothing is pushed and approvers poll the queue. Configured
+	// but unusable is a startup error, on the gate config's precedent — a
+	// notifier the operator asked for and did not get is a silent gap in how
+	// they learn a fleet action is waiting.
+	if cfg.ApprovalWebhookURL != "" {
+		notifier, err := approvalnotify.New(approvalnotify.Config{
+			URL:        cfg.ApprovalWebhookURL,
+			SecretPath: cfg.ApprovalWebhookSecretPath,
+			Timeout:    cfg.ApprovalWebhookTimeout,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("configure approval webhook: %w", err)
+		}
+		base = append(base, capability.WithApprovalNotifier(notifier))
+		slog.Info("approval webhook enabled",
+			"url", cfg.ApprovalWebhookURL, "signed", cfg.ApprovalWebhookSecretPath != "")
 	}
 
 	var capSvc *capability.Service
@@ -532,7 +595,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enabledOpts := append([]capability.Option{}, base...)
 		enabledOpts = append(enabledOpts,
 			capability.WithExecution(st.Jobs(), st.Tasks(), router),
-			capability.WithAuthorizer(authz.NewRoleGate()))
+			capability.WithAuthorizer(roleGate))
 		capSvc = capability.New(reg, enabledOpts...)
 
 		// Seed the founding admin Account (#295, ADR-0010). Idempotent and
