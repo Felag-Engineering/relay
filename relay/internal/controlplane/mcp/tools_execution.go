@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	schema "github.com/google/jsonschema-go/jsonschema"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -409,16 +410,63 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 // once each has built its own jobs.Action. A zero-match Run (no Node matched
 // the Selector) renders as {results: []} without ever reading a Job back;
 // Run never reached the dispatcher, so there is no Job.
-func dispatchAndRender(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (ExecutionOutput, error) {
+//
+// A PARKED dispatch (ADR-0027) is the one non-nil error from Run that is not a
+// refusal, and it is rendered as a successful result carrying
+// pending_approval — see PendingApprovalOutput for why reporting it as a tool
+// error would actively mislead the agent that receives it.
+//
+// It returns the whole RunOrPlanOutput rather than an ExecutionOutput so both
+// execution tools share one construction of the result shape; having each call
+// site assemble its own is how the park branch would get added to one tool and
+// forgotten in the other.
+func dispatchAndRender(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (RunOrPlanOutput, error) {
 	nodeResults, err := exec.Run(ctx, p, sel, act)
 	if err != nil {
-		return ExecutionOutput{}, renderRunError(err)
+		var parked *capability.ParkedError
+		if errors.As(err, &parked) {
+			return RunOrPlanOutput{
+				Results:         []PerNodeResult{},
+				PendingApproval: renderParked(parked),
+			}, nil
+		}
+		return RunOrPlanOutput{}, renderRunError(err)
 	}
 	if len(nodeResults) == 0 {
-		return ExecutionOutput{Results: []PerNodeResult{}}, nil
+		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil
 	}
-	return renderJob(ctx, results, nodeResults[0].JobID)
+	out, err := renderJob(ctx, results, nodeResults[0].JobID)
+	if err != nil {
+		return RunOrPlanOutput{}, err
+	}
+	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
 }
+
+// renderParked projects a capability.ParkedError into the agent-facing
+// pending_approval result. Every field is Relay-authored: the agent chose the
+// Action, but none of the words describing it (ADR-0027).
+func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
+	rules := parked.Rules
+	if rules == nil {
+		rules = []string{}
+	}
+	return &PendingApprovalOutput{
+		Status:       statusPendingApproval,
+		RequestID:    parked.RequestID,
+		PlanHash:     parked.PlanHash,
+		Summary:      parked.Summary,
+		MatchedRules: rules,
+		Progress:     parked.Progress,
+		ExpiresAt:    parked.ExpiresAt.UTC().Format(time.RFC3339),
+		DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
+		NextStep:     pendingApprovalNextStep,
+	}
+}
+
+// statusPendingApproval is PendingApprovalOutput.Status's only value. It is
+// deliberately the same literal the Control API renders, so an operator
+// watching both surfaces sees one vocabulary for one state.
+const statusPendingApproval = "pending_approval"
 
 // planModeClause is the SINGLE, IDENTICAL sentence cross-referencing plan
 // mode from both run_operation's and raw_exec's Description (#120's plan:
@@ -501,7 +549,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
-		return nil, RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
+		return nil, out, nil
 	})
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
@@ -554,6 +602,6 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}
-		return nil, RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
+		return nil, out, nil
 	})
 }

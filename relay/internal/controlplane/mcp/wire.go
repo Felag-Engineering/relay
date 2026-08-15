@@ -280,4 +280,62 @@ type RunOrPlanOutput struct {
 	JobID   string          `json:"job_id,omitempty" jsonschema:"Present only when a Job was created (a real dispatch that matched at least one Node); use it with get_job/cancel_job. Absent on plan=true responses and zero-match dispatches — an absent job_id always means nothing was dispatched, never a failed id."`
 	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or zero Nodes matched)."`
 	Plan    *PlanOutput     `json:"plan,omitempty"`
+	// PendingApproval is set when the dispatch PARKED for human approval
+	// (ADR-0027) instead of running. When it is present, job_id is absent and
+	// results is empty — nothing was dispatched and no Job exists.
+	PendingApproval *PendingApprovalOutput `json:"pending_approval,omitempty"`
 }
+
+// PendingApprovalOutput is the Relay-authored description of a dispatch that
+// parked for human approval (ADR-0027) — the MCP twin of the Control API's
+// 202 `pending_approval` body.
+//
+// It is rendered as a successful tool RESULT, never as a tool error, and that
+// choice is security-relevant rather than cosmetic (ADR-0001/0003 legibility).
+// A park is neither a failure nor a completion: nothing was denied and nothing
+// ran. An AI-agent told "dispatch failed" learns the wrong lesson twice over —
+// it may retry the call in a loop against a gate that will park it every time,
+// and it may report to its operator that the fleet action errored when in fact
+// a human is being asked to approve it.
+//
+// What it deliberately does NOT carry is any way to answer. The decision lands
+// on the authenticated Control API endpoint, riding a credential this MCP
+// session does not hold (ADR-0027) — that separation is the entire guarantee,
+// and it is enforced structurally by no_decision_test.go. DecisionPath is
+// therefore a POINTER for a human to follow, not a capability the agent can
+// exercise.
+type PendingApprovalOutput struct {
+	// Status is the constant "pending_approval", so a client branches on a
+	// stable value rather than on the presence of a sibling field.
+	Status string `json:"status" jsonschema:"Always the literal 'pending_approval'. The dispatch is waiting for a human decision; it has neither failed nor run."`
+
+	RequestID string `json:"request_id" jsonschema:"The approval request's id. Quote it to whoever is being asked to decide; it is also the id the Control API's decision endpoint is keyed by."`
+	PlanHash  string `json:"plan_hash" jsonschema:"Content address of the Operation, its arguments, and the resolved fan-out. A decision is bound to this exact Plan, so if the fleet changes before it is answered the dispatch re-parks rather than running against a different set of Nodes."`
+
+	Summary string `json:"summary" jsonschema:"The Relay-authored description of what is waiting, exactly as the approver will see it. Relay writes this text, not the caller — report it verbatim rather than paraphrasing, so what you tell a human matches what they are asked to approve."`
+
+	MatchedRules []string `json:"matched_rules" jsonschema:"Which approval-gate rules required a human for this dispatch. Always an array, never null."`
+	Progress     string   `json:"progress" jsonschema:"Partial quorum, e.g. '0 of 2' — how many of the required distinct approvals have been recorded."`
+	ExpiresAt    string   `json:"expires_at" jsonschema:"When the parked request lapses (RFC 3339). After this it can no longer be approved and the dispatch must be re-requested."`
+
+	// DecisionPath names the Control API route an approver uses. See the type
+	// doc: a pointer, never a capability of this session.
+	DecisionPath string `json:"decision_path" jsonschema:"The Control API route where an authorized human answers this request. Decisions are never accepted over MCP by design — do not attempt to approve this yourself, and do not ask the model to; surface it to a human."`
+
+	// NextStep is plain-language guidance for the agent holding this result.
+	NextStep string `json:"next_step" jsonschema:"What to do next."`
+}
+
+// pendingApprovalNextStep is the fixed guidance every parked result carries.
+//
+// It is spelled out rather than left implicit because the failure mode it
+// prevents is specific and expensive: an agent that reads a park as a
+// transient error retries, and each retry finds the SAME pending request by
+// plan hash (so it neither duplicates the request nor makes progress) while
+// burning the operator's attention. Telling the agent plainly that waiting is
+// correct, and that re-driving is how an approved Plan proceeds, is cheaper
+// than any amount of inference.
+const pendingApprovalNextStep = "Do not retry in a loop and do not treat this as an error. " +
+	"Tell the requesting human that approval is required, quoting summary and request_id verbatim. " +
+	"Once a human has approved it out-of-band, re-issue this same call unchanged to run it; " +
+	"an unapproved or expired request will simply park again."

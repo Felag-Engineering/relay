@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -288,3 +289,113 @@ func TestBuildOperationAction_ValidArgsSucceed(t *testing.T) {
 // The ", required"/", optional" marker convention these depend on is guarded
 // mechanically in opvocab (TestArgConstraintsAreClassifiable), beside the
 // ArgConstraints prose it reads.
+
+// --- #270/#271: a parked dispatch on the AI's own channel ---
+
+// parkingExecutor is an Executor whose Run always parks, so the rendering of
+// a park can be tested without standing up a gate, a store, and a fleet.
+type parkingExecutor struct{ parked *capability.ParkedError }
+
+func (e parkingExecutor) Run(context.Context, capability.Principal, capability.Selector, jobs.Action) ([]capability.NodeResult, error) {
+	return nil, e.parked
+}
+
+func (parkingExecutor) CancelJob(context.Context, capability.Principal, string) error { return nil }
+
+func (parkingExecutor) Plan(context.Context, capability.Principal, capability.Selector, jobs.Action) (capability.PlanResult, error) {
+	return capability.PlanResult{}, nil
+}
+
+func testParkedError() *capability.ParkedError {
+	return &capability.ParkedError{
+		RequestID: "apr-123",
+		PlanHash:  "hash-abc",
+		Summary:   `service.restart(unit="nginx") [mutate] on 12 node(s): node-a, node-b`,
+		Progress:  "0 of 2",
+		Rules:     []string{"prod-mutates-need-two-people"},
+		ExpiresAt: time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC),
+	}
+}
+
+// TestDispatchAndRender_ParkIsAResultNotAnError is the behaviour that matters
+// most here, and it is a legibility guarantee rather than a cosmetic one
+// (ADR-0001/0003): a park is neither a failure nor a completion, and an
+// AI-agent told "dispatch failed" learns the wrong lesson twice — it may retry
+// against a gate that will park it every time, and it may report a fleet
+// action as broken when a human is merely being asked.
+func TestDispatchAndRender_ParkIsAResultNotAnError(t *testing.T) {
+	out, err := dispatchAndRender(context.Background(),
+		parkingExecutor{parked: testParkedError()}, nil,
+		capability.Principal{Account: "gleipnir-prod"}, capability.Selector{}, jobs.Action{Kind: jobs.ActionOperation})
+	if err != nil {
+		t.Fatalf("dispatchAndRender returned an error for a park: %v — a park must render as a RESULT", err)
+	}
+
+	if out.PendingApproval == nil {
+		t.Fatal("no pending_approval in the result; the caller cannot tell a park from a zero-match dispatch")
+	}
+	pa := out.PendingApproval
+
+	if pa.Status != statusPendingApproval {
+		t.Errorf("status = %q, want %q", pa.Status, statusPendingApproval)
+	}
+	if pa.RequestID != "apr-123" || pa.PlanHash != "hash-abc" {
+		t.Errorf("pending_approval = %+v, want the request and plan it names", pa)
+	}
+	if pa.Summary != testParkedError().Summary {
+		t.Errorf("summary = %q, want the Relay-authored text verbatim", pa.Summary)
+	}
+	if pa.Progress != "0 of 2" || len(pa.MatchedRules) != 1 {
+		t.Errorf("pending_approval = %+v, want the quorum state and the rule that fired", pa)
+	}
+	if pa.ExpiresAt != "2026-08-15T12:00:00Z" {
+		t.Errorf("expires_at = %q, want RFC 3339 UTC", pa.ExpiresAt)
+	}
+	if pa.NextStep == "" {
+		t.Error("next_step is empty; an agent with no guidance retries in a loop")
+	}
+
+	// Nothing ran, so nothing may look like it did.
+	if out.JobID != "" {
+		t.Errorf("job_id = %q, want absent — a parked dispatch creates no Job", out.JobID)
+	}
+	if len(out.Results) != 0 {
+		t.Errorf("results = %v, want empty", out.Results)
+	}
+}
+
+// TestPendingApproval_IsOmittedOnANormalDispatch: the field must be absent
+// unless it applies, or every caller has to branch on an always-present key.
+func TestPendingApproval_IsOmittedOnANormalDispatch(t *testing.T) {
+	b, err := json.Marshal(RunOrPlanOutput{JobID: "job-1", Results: []PerNodeResult{}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(b), "pending_approval") {
+		t.Errorf("pending_approval present on a normal dispatch: %s", b)
+	}
+}
+
+// TestPendingApproval_CarriesNoWayToApprove is the structural half of
+// ADR-0027 restated at the wire: the parked result points a HUMAN at the
+// authenticated Control API endpoint and gives the agent nothing it could use
+// to answer for itself. The complementary guard is no_decision_test.go, which
+// stops this package from ever gaining a decision path at all.
+func TestPendingApproval_CarriesNoWayToApprove(t *testing.T) {
+	pa := renderParked(testParkedError())
+
+	if pa.DecisionPath != "/api/v1/approvals/apr-123/decision" {
+		t.Errorf("decision_path = %q, want the Control API route", pa.DecisionPath)
+	}
+	b, err := json.Marshal(pa)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// A token, credential, or approve-flag reaching the agent's channel would
+	// hand the requester the answer to its own request.
+	for _, forbidden := range []string{"token", "credential", "secret", "\"approve\""} {
+		if strings.Contains(strings.ToLower(string(b)), forbidden) {
+			t.Errorf("parked result carries %q: %s", forbidden, b)
+		}
+	}
+}
