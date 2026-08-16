@@ -388,3 +388,237 @@ type spyNotifier struct{ notices []ApprovalNotice }
 func (s *spyNotifier) NotifyParked(_ context.Context, n ApprovalNotice) {
 	s.notices = append(s.notices, n)
 }
+
+// --- batch/window grants (ADR-0027 decision 12) ---
+
+// memGrants is an in-memory ApprovalGrantStore. Claim consumes a use, so the
+// exhaustion behaviour under repeated dispatch is exercised for real.
+type memGrants struct {
+	grant  approval.Grant
+	claims int
+}
+
+func (m *memGrants) ClaimGrant(_ context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error) {
+	if !m.grant.Covers(d, now) {
+		return approval.Grant{}, false, nil
+	}
+	m.grant.Uses++
+	m.claims++
+	return m.grant, true, nil
+}
+
+func grantFixture(t *testing.T, store *memGrants) (*Service, *spyDispatcher, *spyAuditSink) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	audit := &spyAuditSink{}
+	disp := &spyDispatcher{jobID: "job-1"}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
+		WithApprovalGrants(store),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	return s, disp, audit
+}
+
+func coveringGrant() approval.Grant {
+	return approval.Grant{
+		ID: "grant-1", RequestID: "req-granted",
+		Scope: approval.Scope{
+			Account: "gleipnir-prod", RiskClass: jobs.RiskClassMutate,
+			MaxFanOut: 10, Operations: []string{"service.restart"},
+		},
+		StartsAt: apNow.Add(-time.Minute), ExpiresAt: apNow.Add(time.Hour),
+		MaxUses: 3, CreatedAt: apNow,
+	}
+}
+
+// TestGrantReleasesAGatedDispatchWithoutParking is decision 12's whole point:
+// the second, third, … dispatch inside a batch does not produce a second,
+// third, … elicitation.
+func TestGrantReleasesAGatedDispatchWithoutParking(t *testing.T) {
+	store := &memGrants{grant: coveringGrant()}
+	s, disp, audit := grantFixture(t, store)
+
+	if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !disp.called {
+		t.Fatal("a covered dispatch did not reach the dispatcher")
+	}
+
+	var dispatched *AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].Kind == AuditKindDispatch {
+			dispatched = &audit.entries[i]
+		}
+	}
+	if dispatched == nil {
+		t.Fatal("no dispatch audit entry")
+	}
+	if dispatched.GrantID != "grant-1" {
+		t.Errorf("GrantID = %q, want the grant that released it — a grant's blast radius must be one query", dispatched.GrantID)
+	}
+	if dispatched.ApprovalID != "req-granted" {
+		t.Errorf("ApprovalID = %q, want the grant's authorizing request", dispatched.ApprovalID)
+	}
+}
+
+// TestGrantIsConsultedOnlyAfterTheGate: a grant can never CREATE a requirement,
+// and an ungated deployment must be unaffected by one entirely.
+func TestGrantIsConsultedOnlyAfterTheGate(t *testing.T) {
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	empty, err := approval.NewGate(nil)
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	store := &memGrants{grant: coveringGrant()}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(empty, newMemApprovals(), &spyApprovalAuthorizer{}),
+		WithApprovalGrants(store),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+
+	if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if store.claims != 0 {
+		t.Errorf("claimed %d grants on an ungated dispatch, want 0 — a grant answers a requirement, it never creates one", store.claims)
+	}
+}
+
+// TestUncoveredDispatchStillParks: the grant is a wall, not a switch. Anything
+// outside it gets the normal callout.
+func TestUncoveredDispatchStillParks(t *testing.T) {
+	g := coveringGrant()
+	g.Scope.MaxFanOut = 1 // the fixture resolves 2 Nodes
+	store := &memGrants{grant: g}
+	s, disp, _ := grantFixture(t, store)
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("err = %v, want a park for a dispatch above the grant's fan-out ceiling", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was reached for an uncovered dispatch")
+	}
+}
+
+// TestExhaustedGrantParksAgain: the use limit is real, and running out is a
+// return to the normal callout rather than a failure.
+func TestExhaustedGrantParksAgain(t *testing.T) {
+	store := &memGrants{grant: coveringGrant()} // MaxUses 3
+	s, _, _ := grantFixture(t, store)
+
+	for i := 0; i < 3; i++ {
+		if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("run 4: err = %v, want a park once the grant is exhausted", err)
+	}
+	if store.claims != 3 {
+		t.Errorf("claims = %d, want exactly the grant's 3 uses", store.claims)
+	}
+}
+
+// TestGrantNeverBypassesTheBlastCap: a grant substitutes for the HUMAN, never
+// for the pipeline. The cap runs before the gate is even consulted, so a
+// covered-but-over-cap dispatch is still refused.
+func TestGrantNeverBypassesTheBlastCap(t *testing.T) {
+	store := &memGrants{grant: coveringGrant()}
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	capErr := &CapExceededError{Matched: 2, Cap: 1}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{err: capErr}),
+		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
+		WithApprovalGrants(store),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("a grant released a dispatch over the blast cap")
+	}
+	var exceeded *CapExceededError
+	if !errors.As(err, &exceeded) {
+		t.Fatalf("err = %v, want the cap refusal", err)
+	}
+	if store.claims != 0 {
+		t.Error("the grant was claimed for a dispatch the cap had already refused")
+	}
+}
+
+// TestGrantDoesNotBindItsRequestToOneJob is the modelling rule the one-to-one
+// binding cannot express.
+//
+// A Request carries a single job_id — correct when one approval releases one
+// Job. A Grant releases many, so binding each in turn would leave the
+// authorizing Request pointing at whichever Job ran last and silently lose the
+// rest. The grant-to-Jobs join is the audit trail's GrantID instead.
+func TestGrantDoesNotBindItsRequestToOneJob(t *testing.T) {
+	store := &memGrants{grant: coveringGrant()}
+	approvals := newMemApprovals()
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), approvals, &spyApprovalAuthorizer{}),
+		WithApprovalGrants(store),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+
+	for i := 0; i < 2; i++ {
+		if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+			t.Fatalf("run %d: %v", i+1, err)
+		}
+	}
+
+	if len(approvals.bound) != 0 {
+		t.Fatalf("grant-released dispatches bound %d Jobs onto the authorizing Request; the join is GrantID, not job_id", len(approvals.bound))
+	}
+
+	var withGrant int
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindDispatch && e.GrantID == "grant-1" {
+			withGrant++
+		}
+	}
+	if withGrant != 2 {
+		t.Errorf("%d dispatch entries carry the GrantID, want 2 — a grant's full blast radius must be one query", withGrant)
+	}
+}

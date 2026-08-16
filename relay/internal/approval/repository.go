@@ -67,3 +67,42 @@ type Repository interface {
 	// trail must carry, not an absence.
 	ExpirePending(ctx context.Context, now time.Time) ([]Request, error)
 }
+
+// GrantRepository persists batch/window Grants (ADR-0027 decision 12).
+//
+// It is separate from Repository rather than folded into it because the two
+// have different lifecycles and different risks: a Request is created, decided
+// once, and finished, while a Grant is created once and then CONSUMED
+// repeatedly under concurrency. Keeping them apart makes the claim path below
+// impossible to confuse with the decision path.
+type GrantRepository interface {
+	// CreateGrant persists a validated Grant. Implementations must reject one
+	// whose Validate fails rather than trusting the caller — an unbounded Grant
+	// must be impossible to store.
+	CreateGrant(ctx context.Context, g Grant) error
+
+	// GetGrant returns a Grant by ID, or ErrGrantNotFound.
+	GetGrant(ctx context.Context, id string) (Grant, error)
+
+	// ActiveGrants returns every Grant that could still cover something at now,
+	// newest first. Used by the queue view; the dispatch path uses ClaimGrant.
+	ActiveGrants(ctx context.Context, now time.Time) ([]Grant, error)
+
+	// ClaimGrant atomically finds a Grant covering d and consumes one use,
+	// returning it. ok is false when nothing covers d.
+	//
+	// Find-and-consume is ONE operation on purpose. Separate "find" and
+	// "increment" calls would let two concurrent dispatches both observe the
+	// last remaining use and both proceed — a grant bounded at 20 releasing 21
+	// dispatches. The bound is the whole security argument for grants, so it
+	// cannot be enforced outside a transaction. This is the same reasoning that
+	// puts quorum arithmetic inside RecordDecision's transaction.
+	ClaimGrant(ctx context.Context, d Dispatch, now time.Time) (g Grant, ok bool, err error)
+
+	// RevokeGrant ends a Grant early, attributed to revokedBy with a reason.
+	// Returns ErrGrantNotFound for an unknown ID and ErrGrantNotActive for one
+	// already revoked or expired — revoking twice is not a silent no-op, since
+	// an operator reaching for this is usually in an incident and needs a
+	// truthful answer.
+	RevokeGrant(ctx context.Context, id, revokedBy, reason string, now time.Time) (Grant, error)
+}

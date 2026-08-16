@@ -50,6 +50,18 @@ type ApprovalStore interface {
 	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
 
+// ApprovalGrantStore is the batch/window Grant view the dispatch path needs
+// (ADR-0027 decision 12). Deliberately just the claim: the dispatch path
+// consumes grants, and creating or revoking one is a decision act that belongs
+// on the surfaces, not here.
+//
+// Nil means grants are not wired, which behaves exactly as "no grant covers
+// anything" — the safe direction, and the behaviour of every deployment that
+// never creates one.
+type ApprovalGrantStore interface {
+	ClaimGrant(ctx context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error)
+}
+
 // ApprovalAuthorizer answers "may this Principal decide a Request for an Action
 // of this kind?".
 //
@@ -152,6 +164,11 @@ type approvalDecision struct {
 	requestID string
 	// parked is set when the dispatch was parked instead.
 	parked *ParkedError
+	// grantID is the batch/window Grant that released this dispatch, empty when
+	// a single-Plan approval or no gate did. Carried into audit so "which grant
+	// authorised this" is a join rather than a reconstruction, and so a grant's
+	// full blast radius — every Job it released — is one query.
+	grantID string
 	// created is set only when THIS call created the Request, so a notification
 	// fires once per park rather than once per retry. A caller re-driving a
 	// dispatch that is already waiting must not re-page the approver: an
@@ -177,14 +194,16 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		return approvalDecision{proceed: true}, nil
 	}
 
-	req, rules, gated := s.gate.Evaluate(approval.Dispatch{
+	d := approval.Dispatch{
 		RiskClass:  act.RiskClass,
 		FanOut:     len(nodes),
 		Namespaces: sel.NamespaceNames(),
 		Account:    p.Account,
 		Operation:  act.OperationName,
 		RawExec:    act.Kind == jobs.ActionRawExec,
-	})
+	}
+
+	req, rules, gated := s.gate.Evaluate(d)
 	if !gated {
 		return approvalDecision{proceed: true}, nil
 	}
@@ -193,6 +212,30 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	if s.now != nil {
 		now = s.now()
 	}
+
+	// A batch/window Grant (ADR-0027 decision 12) is consulted only AFTER the
+	// gate said this dispatch is gated, and that order is the point: a Grant
+	// answers a requirement that already exists. It can never create one, and
+	// it can never reach a dispatch the gate did not gate — so an ungated
+	// deployment is unaffected by grants entirely.
+	//
+	// Everything before this line still ran: Freeze, Selector resolution,
+	// authz, and the blast cap. A Grant substitutes for the HUMAN, not for the
+	// pipeline, so it cannot release something Policy or the cap would refuse.
+	//
+	// The claim is atomic (see GrantRepository.ClaimGrant): find-and-consume in
+	// one transaction, because a bound enforced outside a transaction is not a
+	// bound under concurrency.
+	if s.grants != nil {
+		g, ok, err := s.grants.ClaimGrant(ctx, d, now)
+		if err != nil {
+			return approvalDecision{}, fmt.Errorf("capability: claim approval grant: %w", err)
+		}
+		if ok {
+			return approvalDecision{proceed: true, requestID: g.RequestID, grantID: g.ID}, nil
+		}
+	}
+
 	planHash := approval.HashPlan(act, nodes)
 
 	// An already-satisfied approval for exactly this Plan releases the

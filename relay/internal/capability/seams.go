@@ -131,6 +131,12 @@ type AuditEntry struct {
 	ApprovalID string
 	PlanHash   string
 
+	// GrantID is the batch/window Grant that released this dispatch (ADR-0027
+	// decision 12), empty when a single-Plan approval or no gate did. Recorded
+	// so a grant's full blast radius — every Job it released, across its whole
+	// window — is one query rather than a reconstruction from timestamps.
+	GrantID string
+
 	// Asserted is the caller-claimed attribution lane (#300), read off the
 	// request context by Service.Run/Plan. Recorded, never consulted — see
 	// assertions.go.
