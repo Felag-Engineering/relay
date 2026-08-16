@@ -310,3 +310,16 @@ func TestSummarizeScopeNamesRawExecExplicitly(t *testing.T) {
 		t.Errorf("a scope covering Raw Exec must say so in the text a human reads:\n%s", got)
 	}
 }
+
+// TestOperationNameWithACommaIsRefused: the store encodes Operations
+// comma-separated, so a comma inside a name would split one Operation into two
+// on read-back — and on an ALLOW-LIST that means covering something nobody
+// approved. The encoding must never be the thing that decides coverage.
+func TestOperationNameWithACommaIsRefused(t *testing.T) {
+	s := validScope()
+	s.Operations = []string{"service.restart,pkg.install"}
+
+	if err := s.Validate(); err == nil {
+		t.Fatal("an operation name containing the encoding's separator validated")
+	}
+}

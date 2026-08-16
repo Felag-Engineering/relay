@@ -224,6 +224,14 @@ func (s Scope) Validate() error {
 		if strings.TrimSpace(op) == "" {
 			return fmt.Errorf("%w: scope contains an empty operation name", ErrGrantUnbounded)
 		}
+		// The store encodes this list comma-separated (migration 0014). A comma
+		// inside a name would split one Operation into two on read-back, which
+		// on an allow-list means covering something nobody approved. Refused
+		// here rather than escaped there, so the encoding cannot be the thing
+		// that decides what a grant covers.
+		if strings.Contains(op, ",") {
+			return fmt.Errorf("approval: operation name %q contains a comma, which the grant encoding reserves as a separator", op)
+		}
 	}
 	switch s.SelectorNamespace {
 	case "", "node", "relay", "tag":
