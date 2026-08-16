@@ -12,14 +12,38 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-func grantStore(t *testing.T) approval.GrantRepository {
+// grantStore returns a grant repository plus the approval repository behind
+// the same database, so a test can create the authorizing Request a Grant is
+// only claimable under.
+func grantStore(t *testing.T) (approval.GrantRepository, approval.Repository) {
 	t.Helper()
 	st, err := Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	return st.Grants()
+	return st.Grants(), st.Approvals()
+}
+
+// authorize creates the approval Request for a Grant and drives it to approved,
+// which is what makes the Grant claimable at all.
+func authorize(t *testing.T, repo approval.Repository, requestID string) {
+	t.Helper()
+	ctx := context.Background()
+	r := approval.NewRequest(requestID, "hash-"+requestID, "acct-g", "gleipnir-prod",
+		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		gNow.Add(-time.Minute))
+	if err := repo.Create(ctx, r); err != nil {
+		t.Fatalf("create authorizing request: %v", err)
+	}
+	if _, err := repo.RecordDecision(ctx, requestID, approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-" + requestID,
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("approve authorizing request: %v", err)
+	}
 }
 
 var gNow = time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
@@ -52,7 +76,7 @@ func storeDispatch() approval.Dispatch {
 
 func TestGrantRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, _ := grantStore(t)
 
 	want := storeGrant("grant-1", 5)
 	if err := repo.CreateGrant(ctx, want); err != nil {
@@ -85,7 +109,7 @@ func TestGrantRoundTrip(t *testing.T) {
 // through today's API.
 func TestCreateGrantRefusesAnUnboundedGrant(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, _ := grantStore(t)
 
 	bad := storeGrant("grant-bad", 5)
 	bad.Scope.MaxFanOut = 0
@@ -97,10 +121,11 @@ func TestCreateGrantRefusesAnUnboundedGrant(t *testing.T) {
 
 func TestClaimGrantMatchesAndConsumes(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 2)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	g, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow)
 	if err != nil || !ok {
@@ -124,10 +149,11 @@ func TestClaimGrantMatchesAndConsumes(t *testing.T) {
 // property that keeps a second matcher from existing.
 func TestClaimGrantHonoursTheDomainMatcher(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	cases := map[string]func(*approval.Dispatch){
 		"above the fan-out ceiling": func(d *approval.Dispatch) { d.FanOut = 11 },
@@ -160,10 +186,11 @@ func TestClaimGrantHonoursTheDomainMatcher(t *testing.T) {
 
 func TestClaimGrantRefusesOutsideTheWindow(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow.Add(2*time.Hour)); err != nil || ok {
 		t.Fatalf("claimed after expiry: ok=%v err=%v", ok, err)
@@ -182,13 +209,14 @@ func TestClaimGrantRefusesOutsideTheWindow(t *testing.T) {
 // concurrent claimers both observe the last remaining use.
 func TestClaimGrantNeverExceedsItsBoundUnderConcurrency(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 
 	const limit = 5
 	const claimers = 20
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", limit)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	var (
 		wg       sync.WaitGroup
@@ -231,10 +259,11 @@ func TestClaimGrantNeverExceedsItsBoundUnderConcurrency(t *testing.T) {
 
 func TestRevokeGrantStopsTheNextClaim(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || !ok {
 		t.Fatalf("pre-revocation claim: ok=%v err=%v", ok, err)
@@ -258,10 +287,11 @@ func TestRevokeGrantStopsTheNextClaim(t *testing.T) {
 // window or were looking at a stale queue.
 func TestRevokeGrantTwiceIsNotASilentNoOp(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, approvals := grantStore(t)
 	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
 		t.Fatalf("CreateGrant: %v", err)
 	}
+	authorize(t, approvals, "req-grant-1")
 
 	if _, err := repo.RevokeGrant(ctx, "grant-1", "ana", "incident 41", gNow); err != nil {
 		t.Fatalf("first revoke: %v", err)
@@ -273,7 +303,8 @@ func TestRevokeGrantTwiceIsNotASilentNoOp(t *testing.T) {
 }
 
 func TestRevokeUnknownGrantIsNotFound(t *testing.T) {
-	_, err := grantStore(t).RevokeGrant(context.Background(), "grant-nope", "ana", "", gNow)
+	repo, _ := grantStore(t)
+	_, err := repo.RevokeGrant(context.Background(), "grant-nope", "ana", "", gNow)
 	if !errors.Is(err, approval.ErrGrantNotFound) {
 		t.Fatalf("err = %v, want ErrGrantNotFound", err)
 	}
@@ -281,7 +312,7 @@ func TestRevokeUnknownGrantIsNotFound(t *testing.T) {
 
 func TestActiveGrantsExcludesSpentAndRevoked(t *testing.T) {
 	ctx := context.Background()
-	repo := grantStore(t)
+	repo, _ := grantStore(t)
 
 	live := storeGrant("grant-live", 5)
 	other := storeGrant("grant-other", 5)
@@ -306,5 +337,92 @@ func TestActiveGrantsExcludesSpentAndRevoked(t *testing.T) {
 	}
 	if len(got) != 2 {
 		t.Errorf("active = %d, want the two unrevoked grants", len(got))
+	}
+}
+
+// TestGrantIsNotClaimableBeforeItsRequestIsApproved is the authorization link.
+//
+// A grant row exists from the moment one is REQUESTED, so without the EXISTS
+// clause in ClaimGrant a pending — or outright denied — grant request would be
+// live the instant it was written. That would let a requester grant themselves
+// a window by asking for one.
+func TestGrantIsNotClaimableBeforeItsRequestIsApproved(t *testing.T) {
+	ctx := context.Background()
+	repo, approvals := grantStore(t)
+
+	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
+		t.Fatalf("CreateGrant: %v", err)
+	}
+
+	// No authorizing request at all.
+	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || ok {
+		t.Fatalf("claimed a grant with no authorizing request: ok=%v err=%v", ok, err)
+	}
+
+	// A PENDING request is not authorization either.
+	pending := approval.NewRequest("req-grant-1", "hash-req-grant-1", "acct-g", "gleipnir-prod",
+		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		approval.Requirement{Count: 2, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		gNow.Add(-time.Minute))
+	if err := approvals.Create(ctx, pending); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || ok {
+		t.Fatalf("claimed a grant whose request is still pending: ok=%v err=%v", ok, err)
+	}
+
+	// One approval short of the count:2 quorum is still not authorization —
+	// the gate rule's quorum applies to granting exactly as it does to a
+	// single dispatch.
+	if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-req-grant-1",
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("first approval: %v", err)
+	}
+	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || ok {
+		t.Fatalf("claimed a grant at 1 of 2 approvals: ok=%v err=%v", ok, err)
+	}
+
+	// The second distinct approver completes it.
+	if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+		AccountID: "acct-bo", Account: "bo", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-req-grant-1",
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("second approval: %v", err)
+	}
+	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || !ok {
+		t.Fatalf("a fully approved grant was not claimable: ok=%v err=%v", ok, err)
+	}
+}
+
+// TestDeniedGrantRequestIsNeverClaimable: deny beats approve and is terminal,
+// so a refused grant request must never become live.
+func TestDeniedGrantRequestIsNeverClaimable(t *testing.T) {
+	ctx := context.Background()
+	repo, approvals := grantStore(t)
+
+	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
+		t.Fatalf("CreateGrant: %v", err)
+	}
+	r := approval.NewRequest("req-grant-1", "hash-req-grant-1", "acct-g", "gleipnir-prod",
+		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		gNow.Add(-time.Minute))
+	if err := approvals.Create(ctx, r); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: false, Reason: "too broad",
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-req-grant-1",
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("deny: %v", err)
+	}
+
+	if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || ok {
+		t.Fatalf("claimed a grant whose request was DENIED: ok=%v err=%v", ok, err)
 	}
 }

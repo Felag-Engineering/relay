@@ -137,10 +137,28 @@ func (g *sqliteGrants) ClaimGrant(ctx context.Context, d approval.Dispatch, now 
 	// OPTIMIZATION and nothing more: every candidate it returns is still put to
 	// Grant.Covers below, so a query that over-selects is merely slower, never
 	// more permissive.
+	//
+	// The EXISTS clause is the AUTHORIZATION LINK, and it is the one predicate
+	// here that is not merely a narrowing: a Grant is claimable only while its
+	// authorizing approval Request is in the approved state. A grant row exists
+	// from the moment one is requested, so without this a pending — or denied —
+	// grant request would be live the instant it was written.
+	//
+	// It tests the request's STATE rather than Satisfied(now). Satisfied also
+	// asks the clock, and the two deadlines answer different questions: the
+	// Request's TTL bounds how long an unanswered ask stays redeemable, while
+	// the Grant's own window bounds how long the answer stays good. Requiring
+	// both would silently cap every grant at the request TTL (4h by default),
+	// which is not what the approver was shown.
 	rows, err := tx.QueryContext(ctx,
 		grantSelect+` WHERE scope_account = ? AND scope_risk_class = ? AND revoked_at IS NULL
+		              AND EXISTS (
+		                  SELECT 1 FROM approval_requests r
+		                   WHERE r.request_id = approval_grants.request_id
+		                     AND r.state = ?
+		              )
 		              ORDER BY expires_at ASC, grant_id ASC`,
-		d.Account, approval.RiskClassName(d.RiskClass))
+		d.Account, approval.RiskClassName(d.RiskClass), int(approval.StateApproved))
 	if err != nil {
 		return approval.Grant{}, false, fmt.Errorf("select candidate grants: %w", err)
 	}
