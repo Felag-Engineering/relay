@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -393,9 +394,17 @@ func (s *spyNotifier) NotifyParked(_ context.Context, n ApprovalNotice) {
 
 // memGrants is an in-memory ApprovalGrantStore. Claim consumes a use, so the
 // exhaustion behaviour under repeated dispatch is exercised for real.
+//
+// It deliberately does NOT reproduce the store's authorization link (a Grant is
+// only claimable once its Request is approved) — that rule is the store's, and
+// store/grants_test.go proves it there. Here the fake claims whatever Covers,
+// so these tests exercise the capability layer's own decisions without the
+// store's behaviour standing in for them.
 type memGrants struct {
 	grant  approval.Grant
 	claims int
+
+	byID map[string]approval.Grant
 }
 
 func (m *memGrants) ClaimGrant(_ context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error) {
@@ -405,6 +414,49 @@ func (m *memGrants) ClaimGrant(_ context.Context, d approval.Dispatch, now time.
 	m.grant.Uses++
 	m.claims++
 	return m.grant, true, nil
+}
+
+func (m *memGrants) CreateGrant(_ context.Context, g approval.Grant) error {
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	if m.byID == nil {
+		m.byID = map[string]approval.Grant{}
+	}
+	m.byID[g.ID] = g
+	return nil
+}
+
+func (m *memGrants) GetGrant(_ context.Context, id string) (approval.Grant, error) {
+	g, ok := m.byID[id]
+	if !ok {
+		return approval.Grant{}, approval.ErrGrantNotFound
+	}
+	return g, nil
+}
+
+func (m *memGrants) ActiveGrants(_ context.Context, now time.Time) ([]approval.Grant, error) {
+	var out []approval.Grant
+	for _, g := range m.byID {
+		if g.Active(now) {
+			out = append(out, g)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func (m *memGrants) RevokeGrant(_ context.Context, id, by, reason string, now time.Time) (approval.Grant, error) {
+	g, ok := m.byID[id]
+	if !ok {
+		return approval.Grant{}, approval.ErrGrantNotFound
+	}
+	if !g.Active(now) {
+		return approval.Grant{}, approval.ErrGrantNotActive
+	}
+	g.RevokedAt, g.RevokedBy, g.RevokeReason = now, by, reason
+	m.byID[id] = g
+	return g, nil
 }
 
 func grantFixture(t *testing.T, store *memGrants) (*Service, *spyDispatcher, *spyAuditSink) {
@@ -613,12 +665,22 @@ func TestGrantDoesNotBindItsRequestToOneJob(t *testing.T) {
 	}
 
 	var withGrant int
+	approvalIDs := map[string]struct{}{}
 	for _, e := range audit.entries {
 		if e.Kind == AuditKindDispatch && e.GrantID == "grant-1" {
 			withGrant++
+			approvalIDs[e.ApprovalID] = struct{}{}
 		}
 	}
 	if withGrant != 2 {
 		t.Errorf("%d dispatch entries carry the GrantID, want 2 — a grant's full blast radius must be one query", withGrant)
+	}
+	// ROADMAP v0.5.0: "every covered Job auditing to the same approval ID".
+	// One window, one authorizing decision, one ID to query by.
+	if len(approvalIDs) != 1 {
+		t.Errorf("grant-released dispatches carry %d distinct approval IDs, want 1", len(approvalIDs))
+	}
+	if _, ok := approvalIDs["req-granted"]; !ok {
+		t.Errorf("approval IDs = %v, want the grant's own authorizing request", approvalIDs)
 	}
 }

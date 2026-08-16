@@ -241,6 +241,33 @@ was demanded, never grant what Policy refuses.
 _Avoid_: approval policy (collides with **Policy**), approval rule, gate config (for a
 single rule)
 
+**Approval grant**:
+One human Approval covering a **bounded set of future dispatches** instead of one Plan —
+decision 12's time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified
+**Grant** is the authorization rule above, and the two are unrelated mechanisms.
+
+Where an Approval binds to a **Plan hash**, an Approval grant binds to a **Scope** (the
+requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*, optionally a
+Selector namespace) plus a **window** and a **use limit**. Those walls are its entire
+security argument, so every one of them is mandatory and an unbounded Scope cannot be
+stored. It exists because fatigue is a security property: forty elicitations produce forty
+rubber stamps, and a rubber-stamped Approval is worse than none.
+
+Requesting one is *not* being granted one — it creates an ordinary Approval whose subject
+is a Scope, answered on the same channel with the same quorum, audience, requester
+exclusion, and channel floor. What it costs to approve is derived from the Gate rules at
+the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
+replaces. Every dispatch it releases audits to the same approval ID.
+_Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
+blanket nor unbounded), standing approval, pre-authorization
+
+**Scope** (of an Approval grant):
+The wall around an Approval grant. The **dual** of a Gate rule's match: on a match an
+omitted field gates *more* dispatches (the safe direction) and `min_fan_out` is a floor; on
+a Scope an omitted field would cover *more* (the unsafe direction) and `max_fan_out` is a
+**ceiling**. Never build one from the other.
+_Avoid_: match, filter, selector (reserved for Node targeting)
+
 **MCP task handle**:
 MCP's own async primitive: a handle returned in place of a result for one long-running
 `tools/call`, which the client polls, and which can carry a server-to-client elicitation
@@ -260,7 +287,8 @@ the Control API and Admin Console — unlike **Policy**, which is Node-rooted an
 managed centrally. A Grant can only *narrow* what may run, never widen it: execution
 requires both a Grant (Relay-side, "may this Account ask") and Policy allowance
 (Node-side, "will this Node ever do it"), and the Node's Policy always has the last
-word.
+word. Unqualified, "Grant" always means this one; the approval mechanism's is an
+**Approval grant**, always written in full.
 _Avoid_: policy (reserved for the Node-side document), permission, ACL, rule
 
 **Account**:

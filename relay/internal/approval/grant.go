@@ -1,6 +1,8 @@
 package approval
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -65,6 +67,13 @@ var (
 	// not close. An unbounded grant is a standing authorization, which is the
 	// one thing this mechanism must never become.
 	ErrGrantUnbounded = errors.New("approval: grant is not bounded")
+
+	// ErrGrantInvalid is returned by Validate for a Scope that is malformed
+	// rather than unbounded — an unknown namespace, or a name the storage
+	// encoding cannot represent. Kept distinct from ErrGrantUnbounded so a
+	// surface can tell "you did not close this wall" from "this is not a thing
+	// you can write", which are different mistakes to an operator.
+	ErrGrantInvalid = errors.New("approval: grant is malformed")
 )
 
 // Scope is the wall around a Grant: which dispatches it may cover.
@@ -230,13 +239,13 @@ func (s Scope) Validate() error {
 		// here rather than escaped there, so the encoding cannot be the thing
 		// that decides what a grant covers.
 		if strings.Contains(op, ",") {
-			return fmt.Errorf("approval: operation name %q contains a comma, which the grant encoding reserves as a separator", op)
+			return fmt.Errorf("%w: operation name %q contains a comma, which the grant encoding reserves as a separator", ErrGrantInvalid, op)
 		}
 	}
 	switch s.SelectorNamespace {
 	case "", "node", "relay", "tag":
 	default:
-		return fmt.Errorf("approval: scope has unknown selector namespace %q (want node, relay, or tag)", s.SelectorNamespace)
+		return fmt.Errorf("%w: scope has unknown selector namespace %q (want node, relay, or tag)", ErrGrantInvalid, s.SelectorNamespace)
 	}
 	return nil
 }
@@ -331,4 +340,192 @@ func SummarizeScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string 
 		what, RiskClassName(s.RiskClass), s.Account, where, s.MaxFanOut, maxUses,
 		startsAt.UTC().Format(time.RFC3339), expiresAt.UTC().Format(time.RFC3339),
 	)
+}
+
+// HashScope content-addresses what a Grant's approver is agreeing to: the
+// Scope and its bounds, together.
+//
+// A grant request is an approval Request like any other, so it carries a plan
+// hash and a decision must cite it. Hashing the SCOPE gives that binding real
+// meaning here: an approver's answer cannot be replayed onto a grant whose
+// walls have moved. Widening the fan-out ceiling, adding an Operation, or
+// extending the window all change the hash, so the old approval simply is not
+// an approval of the new thing.
+//
+// The encoding is length-prefixed for the same reason HashPlan's is: a
+// separator-joined encoding is ambiguous when the values are caller-influenced,
+// and Operation names are.
+func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
+	h := sha256.New()
+
+	write := func(field, value string) {
+		fmt.Fprintf(h, "%s=%d:%s\n", field, len(value), value)
+	}
+
+	write("kind", "grant")
+	write("account", s.Account)
+	write("risk", RiskClassName(s.RiskClass))
+	write("namespace", s.SelectorNamespace)
+	fmt.Fprintf(h, "max_fan_out=%d\n", s.MaxFanOut)
+	fmt.Fprintf(h, "raw_exec=%t\n", s.RawExec)
+	fmt.Fprintf(h, "max_uses=%d\n", maxUses)
+
+	ops := append([]string(nil), s.Operations...)
+	sort.Strings(ops)
+	fmt.Fprintf(h, "ops=%d\n", len(ops))
+	for _, op := range ops {
+		write("op", op)
+	}
+
+	write("starts", startsAt.UTC().Format(time.RFC3339Nano))
+	write("expires", expiresAt.UTC().Format(time.RFC3339Nano))
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// knownNamespaces are the label namespaces a Selector may use (ADR-0006,
+// ADR-0020). RequirementForScope walks them when a Scope does not pin one.
+var knownNamespaces = []string{"node", "relay", "tag"}
+
+// RequirementForScope derives what a Grant over s must satisfy: the STRICTEST
+// Requirement any dispatch the Grant could cover would itself have faced.
+//
+// This is the property that stops a grant being a way around the gate. If
+// "mutate on 10+ Nodes needs two people" and a grant would cover exactly that,
+// the grant needs two people. Deriving it — rather than letting the requester
+// or a separate config say what a grant costs — means a grant can never be
+// approved more cheaply than the dispatches it replaces.
+//
+// It evaluates the gate at the Scope's WORST CASE: the fan-out ceiling (the
+// widest dispatch the grant admits), every Operation in the allow-list, Raw
+// Exec if opted in, and — when the Scope does not pin a namespace — every
+// namespace a Selector could use. Merging those to the strictest is the same
+// mergeStricter the Gate itself uses for overlapping rules.
+//
+// gated is false when nothing the Grant could cover would have parked at all.
+// A caller should refuse that rather than create the Grant: a grant covering
+// only ungated work grants nothing, and storing one would put a live
+// authorization in the table for no reason.
+func RequirementForScope(s Scope, evaluate func(Dispatch) (Requirement, []string, bool)) (Requirement, []string, bool) {
+	namespaces := knownNamespaces
+	if s.SelectorNamespace != "" {
+		namespaces = []string{s.SelectorNamespace}
+	}
+
+	// Each probe is the widest dispatch this Scope admits for one
+	// (operation, namespace) pair — the fan-out ceiling, not some typical size.
+	var probes []Dispatch
+	for _, ns := range namespaces {
+		for _, op := range s.Operations {
+			probes = append(probes, Dispatch{
+				RiskClass:  s.RiskClass,
+				FanOut:     s.MaxFanOut,
+				Namespaces: []string{ns},
+				Account:    s.Account,
+				Operation:  op,
+			})
+		}
+		if s.RawExec {
+			probes = append(probes, Dispatch{
+				RiskClass:  s.RiskClass,
+				FanOut:     s.MaxFanOut,
+				Namespaces: []string{ns},
+				Account:    s.Account,
+				RawExec:    true,
+			})
+		}
+	}
+
+	var (
+		merged  Requirement
+		names   []string
+		matched bool
+		seen    = map[string]struct{}{}
+	)
+	for _, d := range probes {
+		req, rules, gated := evaluate(d)
+		if !gated {
+			continue
+		}
+		if !matched {
+			merged, matched = req, true
+		} else {
+			merged = mergeStricter(merged, req)
+		}
+		for _, r := range rules {
+			if _, dup := seen[r]; dup {
+				continue
+			}
+			seen[r] = struct{}{}
+			names = append(names, r)
+		}
+	}
+	if !matched {
+		return Requirement{}, nil, false
+	}
+	sort.Strings(names)
+	return merged.normalized(), names, true
+}
+
+// ActionKind reports the Action kind a Grant's approval should be authorized
+// against: Raw Exec when the Scope covers it, otherwise a structured Operation.
+//
+// The stricter of the two wins, because the role floor on approving a grant
+// must be the floor for the most powerful thing it can release. A grant
+// covering Raw Exec needs an admin to approve it even if it also covers
+// ordinary Operations.
+func (s Scope) ActionKind() jobs.ActionKind {
+	if s.RawExec {
+		return jobs.ActionRawExec
+	}
+	return jobs.ActionOperation
+}
+
+// NewGrantRequest builds the pending approval Request that authorizes g.
+//
+// Creating a Grant is not a separate kind of act with its own rules: it IS an
+// approval Request, whose subject happens to be a Scope rather than a Plan. So
+// everything that makes a single approval trustworthy applies unchanged — the
+// quorum, the audience, the requester exclusion, the machine-cannot-self-decide
+// rule, and the channel floor all come from the same Requirement machinery.
+//
+// It takes the whole Grant rather than the parts because the Request's
+// PlanHash, its Summary, and its deadline must all describe THAT grant. Passing
+// them separately would make "the approver read one thing and authorized
+// another" a call-site mistake; taking the Grant makes it unrepresentable.
+//
+// The Request never carries a JobID, for a stronger reason than the single-Plan
+// case: a Grant releases MANY Jobs, so there is no one Job to bind. The join
+// from an authorization to the executions it released runs the other way, from
+// the audit trail's grant_id.
+func NewGrantRequest(g Grant, requestedByID, requestedBy string, rules []string, req Requirement, now time.Time) Request {
+	req = req.normalized()
+
+	// The human has until the window closes, and no longer. An approval that
+	// lands after the Grant's own expiry authorizes nothing anyway, and a
+	// Request that outlives its subject is a queue entry whose only possible
+	// outcome is a no-op.
+	expires := now.Add(req.TTL)
+	if !g.ExpiresAt.IsZero() && g.ExpiresAt.Before(expires) {
+		expires = g.ExpiresAt
+	}
+
+	return Request{
+		ID:            g.RequestID,
+		PlanHash:      HashScope(g.Scope, g.StartsAt, g.ExpiresAt, g.MaxUses),
+		RequestedByID: requestedByID,
+		RequestedBy:   requestedBy,
+		Summary:       g.Summary,
+		MatchedRules:  rules,
+		// The role floor for deciding this Request is the floor for the most
+		// powerful thing the Grant can release (Scope.ActionKind), not for some
+		// nominal one: releasing a Raw-Exec-covering window is at least as
+		// consequential as releasing one Raw Exec.
+		ActionKind: g.Scope.ActionKind(),
+		RiskClass:  g.Scope.RiskClass,
+		Require:    req,
+		State:      StatePending,
+		CreatedAt:  now,
+		ExpiresAt:  expires,
+	}
 }

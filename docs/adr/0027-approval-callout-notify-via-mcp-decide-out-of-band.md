@@ -284,3 +284,74 @@ Two smaller consequences worth naming: a park renders as **`202 Accepted`** with
 inability to accept a decision is a **build failure**, not a convention
 (`mcp/no_decision_test.go`), because "we just won't call it from here" is exactly the kind
 of rule that gets forgotten by whoever later wires an approval tool to close a loop.
+
+## Amendment, 2026-08-16 — what batch/window grants settled (#378)
+
+Decision 12 committed to batch and window approvals in the schema from the start. Building
+them surfaced five things the decision did not say, each a security boundary somebody will
+otherwise re-derive from the code.
+
+1. **A Scope is not a Match, and reusing one for the other inverts the mechanism.** A gate
+   rule's `match` and a grant's `scope` read like the same grammar. They are duals:
+
+   | | omitted field | fan-out field |
+   |---|---|---|
+   | `match` | matches anything → gates **more** — the *safe* direction | `min_fan_out` is a **floor** |
+   | `scope` | covers anything → pre-approves **more** — the *unsafe* direction | `max_fan_out` is a **ceiling** |
+
+   A `Scope` built by copying a `Match` would silently convert "anything touching 10+ Nodes
+   needs approval" into "anything touching 10+ Nodes is pre-approved". So a Scope is a
+   separate type, every bound is mandatory, and validation refuses anything unbounded — an
+   empty operation list covers **nothing**, never everything.
+
+2. **Requesting a grant is not being granted one, and a grant is not a second approval
+   path.** Creating one produces an ordinary approval Request whose subject is a Scope
+   instead of a Plan, answered through the same decision endpoint. Quorum, audience,
+   requester exclusion, the machine-self-decision rule, and channel strength therefore
+   apply to a window exactly as to a single dispatch, because it is the same code. Had
+   grants been a separate path, they would have been a cheaper one — and the cheaper path
+   is always the one that gets used.
+
+3. **What a grant costs to approve is derived, never declared.** The Requirement is
+   computed by evaluating the live gate at the Scope's *worst case*: the fan-out ceiling,
+   every Operation in the allow-list, Raw Exec if opted in, and every namespace a Selector
+   could use when the Scope does not pin one — merged with the same strictest-wins rule
+   the gate uses for overlapping rules. If "mutate on 10+ Nodes needs two people" and a
+   grant could release exactly that, the grant needs two people. A request body that could
+   name its own requirement could name a cheap one. A Scope over work nothing gates is
+   refused outright: it would authorize nothing while sitting in the table with real reach,
+   which is what later gets widened by somebody assuming it was there for a reason.
+
+4. **The bound is enforced inside the claiming transaction, or it is not a bound.** A grant
+   is found and consumed by one conditional `UPDATE ... WHERE uses < max_uses AND
+   revoked_at IS NULL`. Separate find-and-increment steps would let two concurrent
+   dispatches both observe the last remaining use — a grant bounded at 20 releasing 21.
+   The same query requires the authorizing Request to be `approved`, so the window a grant
+   row describes stays shut until a human opens it. Hard maxima (24h, 1000 uses) sit in
+   code as well as in the request, because the difference between a batch approval and a
+   standing grant is only ever a number somebody typed.
+
+5. **The approval link becomes a column, because "what did that window release" is a query
+   under time pressure.** Decision 11 requires "who asked / who approved / what happened"
+   in one query; until now the callout reached the trail as prose in `reason`, which is
+   enough to read and not enough to query. Audit records now carry `approval_id` (the
+   authorizing Request — shared by every dispatch a grant releases, which is decision 12's
+   "same approval ID" made literal) and `grant_id` (set only when a window released the
+   work, so an auditor can tell "a human approved *this plan*" from "a human approved a
+   window this plan fell inside"). A Grant deliberately has no `job_id`: it releases many
+   Jobs, and the join runs from the trail, not from the grant.
+
+Two smaller consequences worth naming. Revocation exists as a first-class act — a window is
+a period of reduced friction, and reduced friction against a compromised requester is
+exactly when somebody needs to close it without reaching for the fleet-wide Freeze; it
+carries the role floor of approving the grant, is not restricted to the original approver
+(during an incident the person at the keyboard is whoever is there), and revoking twice is
+a truthful conflict rather than a silent success. And a grant's authorizing Request is
+never bound to a Job: `BindJob` models one approval releasing one Job, so binding each
+covered Job in turn would leave the Request pointing at whichever ran last and silently
+lose the rest.
+
+**Still deferred from decision 12:** the *diff against the last approved similar action*
+("same as Tuesday, except fan-out grew 3 → 12"). It is the other half of beating fatigue
+and it is independent of everything above — it changes what an approver is shown, not what
+an approval covers — so it is tracked separately rather than folded in here.

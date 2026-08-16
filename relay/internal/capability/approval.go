@@ -50,16 +50,26 @@ type ApprovalStore interface {
 	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
 
-// ApprovalGrantStore is the batch/window Grant view the dispatch path needs
-// (ADR-0027 decision 12). Deliberately just the claim: the dispatch path
-// consumes grants, and creating or revoking one is a decision act that belongs
-// on the surfaces, not here.
+// ApprovalGrantStore is the batch/window Grant persistence the capability layer
+// needs (ADR-0027 decision 12): consuming a Grant on the dispatch path, and
+// creating, reading, and revoking one on the management path
+// (approval_grant.go).
+//
+// It mirrors approval.GrantRepository exactly rather than narrowing to the
+// claim, because both halves live behind this one Service — the surfaces adapt
+// the capability layer, they do not reach past it to a store (invariant 10).
 //
 // Nil means grants are not wired, which behaves exactly as "no grant covers
-// anything" — the safe direction, and the behaviour of every deployment that
-// never creates one.
+// anything" on dispatch — the safe direction, and the behaviour of every
+// deployment that never creates one — and ErrApprovalUnavailable on the
+// management path, so a surface that offers grants against a Relay that has not
+// enabled them fails loudly rather than silently doing nothing.
 type ApprovalGrantStore interface {
+	CreateGrant(ctx context.Context, g approval.Grant) error
+	GetGrant(ctx context.Context, id string) (approval.Grant, error)
+	ActiveGrants(ctx context.Context, now time.Time) ([]approval.Grant, error)
 	ClaimGrant(ctx context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error)
+	RevokeGrant(ctx context.Context, id, revokedBy, reason string, now time.Time) (approval.Grant, error)
 }
 
 // ApprovalAuthorizer answers "may this Principal decide a Request for an Action

@@ -869,3 +869,70 @@ func TestVerifiedLaneMappingIsTotal(t *testing.T) {
 		}
 	}
 }
+
+// TestRecordCarriesTheApprovalLinkOnEveryKind is the property that makes
+// "what ran under this approval" a truthful query (#378, ADR-0027).
+//
+// The link is copied once, above the Kind branches, precisely so it cannot be
+// per-branch. A query that silently returns a SMALLER set than the truth is the
+// worst way for an audit trail to be wrong, and that is exactly what a branch
+// added later without the copy would produce — so this test walks every Kind
+// that can carry a link rather than sampling one.
+func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+
+	p := capability.Principal{Account: "gleipnir", Role: "operator"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}
+
+	kinds := []capability.AuditKind{
+		capability.AuditKindApprovalRequested,
+		capability.AuditKindApprovalDecided,
+		capability.AuditKindDispatch,
+	}
+	for _, kind := range kinds {
+		entry := capability.AuditEntry{
+			Kind: kind, Principal: p, Action: act,
+			ApprovalID: "appr-1", GrantID: "grant-1",
+		}
+		if kind == capability.AuditKindDispatch {
+			entry.JobID = "job-1"
+			entry.Results = []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeSuccess}}
+		}
+		if err := sink.Record(context.Background(), entry); err != nil {
+			t.Fatalf("Record(%v): %v", kind, err)
+		}
+	}
+
+	got, err := repo.ByApproval(context.Background(), "appr-1")
+	if err != nil {
+		t.Fatalf("ByApproval: %v", err)
+	}
+	if len(got) != len(kinds) {
+		t.Fatalf("ByApproval returned %d records, want %d — one per Kind that can carry a link", len(got), len(kinds))
+	}
+	for _, r := range got {
+		if r.GrantID != "grant-1" {
+			t.Errorf("record %q (kind %s) has grant %q, want grant-1", r.ID, r.Kind, r.GrantID)
+		}
+	}
+
+	// A dispatch with no approval in its history reads back empty, so the
+	// column means "no approval was involved" rather than "unknown".
+	if err := sink.Record(context.Background(), capability.AuditEntry{
+		Kind: capability.AuditKindDispatch, Principal: p, Action: act, JobID: "job-2",
+		Results: []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeSuccess}},
+	}); err != nil {
+		t.Fatalf("Record(unapproved): %v", err)
+	}
+	unlinked, err := repo.ByJob(context.Background(), "job-2")
+	if err != nil || len(unlinked) != 1 {
+		t.Fatalf("ByJob: %v (%d records)", err, len(unlinked))
+	}
+	if unlinked[0].ApprovalID != "" || unlinked[0].GrantID != "" {
+		t.Errorf("unapproved dispatch = approval %q grant %q, want both empty",
+			unlinked[0].ApprovalID, unlinked[0].GrantID)
+	}
+}
