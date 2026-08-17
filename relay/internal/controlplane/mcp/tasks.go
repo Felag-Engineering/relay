@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -133,28 +134,28 @@ type TaskResult struct {
 // that shadow a standard method), so it panics rather than returning: a Relay
 // that silently came up without the methods it advertises would be worse than
 // one that refused to start.
-func registerTaskMethods(srv *sdkmcp.Server, tasks TaskResolver, results JobResultReader, reads ReadAuditor) {
+func registerTaskMethods(srv *sdkmcp.Server, tasks TaskResolver, results JobResultReader, reads ReadAuditor, now func() time.Time) {
 	if tasks == nil {
 		return
 	}
 
 	if err := sdkmcp.AddReceivingCustomMethod(srv, "tasks/get",
 		func(ctx context.Context, _ *sdkmcp.ServerSession, params *taskGetParams) (*TaskResult, error) {
-			return handleTaskGet(ctx, tasks, results, reads, params.TaskID)
+			return handleTaskGet(ctx, tasks, results, reads, params.TaskID, now)
 		}); err != nil {
 		panic(fmt.Sprintf("mcp: register tasks/get: %v", err))
 	}
 
 	if err := sdkmcp.AddReceivingCustomMethod(srv, "tasks/cancel",
 		func(ctx context.Context, _ *sdkmcp.ServerSession, params *taskCancelParams) (*TaskResult, error) {
-			return handleTaskCancel(ctx, tasks, results, reads, params.TaskID)
+			return handleTaskCancel(ctx, tasks, results, reads, params.TaskID, now)
 		}); err != nil {
 		panic(fmt.Sprintf("mcp: register tasks/cancel: %v", err))
 	}
 }
 
 // handleTaskGet resolves a handle and renders it.
-func handleTaskGet(ctx context.Context, tasks TaskResolver, results JobResultReader, reads ReadAuditor, taskID string) (*TaskResult, error) {
+func handleTaskGet(ctx context.Context, tasks TaskResolver, results JobResultReader, reads ReadAuditor, taskID string, now func() time.Time) (*TaskResult, error) {
 	logPrincipal(ctx, "tasks/get")
 	p, err := requirePrincipal(ctx)
 	if err != nil {
@@ -168,11 +169,11 @@ func handleTaskGet(ctx context.Context, tasks TaskResolver, results JobResultRea
 	if err != nil {
 		return nil, renderTaskError("tasks/get", taskID, err)
 	}
-	return renderTask(ctx, view, results, reads)
+	return renderTask(ctx, view, results, reads, now())
 }
 
 // handleTaskCancel ends the client's interest in a handle.
-func handleTaskCancel(ctx context.Context, tasks TaskResolver, results JobResultReader, reads ReadAuditor, taskID string) (*TaskResult, error) {
+func handleTaskCancel(ctx context.Context, tasks TaskResolver, results JobResultReader, reads ReadAuditor, taskID string, now func() time.Time) (*TaskResult, error) {
 	logPrincipal(ctx, "tasks/cancel")
 	p, err := requirePrincipal(ctx)
 	if err != nil {
@@ -186,7 +187,7 @@ func handleTaskCancel(ctx context.Context, tasks TaskResolver, results JobResult
 	if err != nil {
 		return nil, renderTaskError("tasks/cancel", taskID, err)
 	}
-	return renderTask(ctx, view, results, reads)
+	return renderTask(ctx, view, results, reads, now())
 }
 
 // renderTask turns a resolved view into the wire shape, reading the Job's
@@ -197,8 +198,7 @@ func handleTaskCancel(ctx context.Context, tasks TaskResolver, results JobResult
 // Job's stdout without a record would be an unaudited back door to material the
 // audited tool guards, which is the sort of gap a second path to the same data
 // exists to create.
-func renderTask(ctx context.Context, view capability.TaskView, results JobResultReader, reads ReadAuditor) (*TaskResult, error) {
-	now := time.Now().UTC()
+func renderTask(ctx context.Context, view capability.TaskView, results JobResultReader, reads ReadAuditor, now time.Time) (*TaskResult, error) {
 	out := &TaskResult{
 		TaskID:         view.TaskID,
 		Status:         view.Status.String(),
@@ -240,17 +240,52 @@ func renderTask(ctx context.Context, view capability.TaskView, results JobResult
 // broke" will retry the wrong one. Note that unknown and unowned deliberately
 // render identically: the store cannot tell them apart on purpose, so that a
 // guessed id cannot be confirmed (mcptask.ErrNotFound).
+// It returns a *jsonrpc.Error so the reply carries a real JSON-RPC error CODE.
+// Returning a plain error yields code 0, which is not a valid JSON-RPC code —
+// well-formed enough that a lenient client shrugs and a strict one rejects the
+// whole reply, the worst combination for a surface whose conformance we are
+// hand-rolling.
+//
+// # Why every one of these is CodeInternalError
+//
+// CodeInvalidParams is the semantically better fit for an unknown taskId, and
+// it is deliberately NOT used. The SDK's streamable transport maps
+// InvalidParams (and MethodNotFound) onto a non-200 HTTP status
+// (streamable.go's status mapping), and its client treats a non-200 as fatal
+// for the whole session.
+//
+// Polling a handle that has lapsed is NORMAL — handles expire by design, and a
+// client that comes back after its TTL is doing the expected thing. Tearing
+// down its MCP session for that would be a far worse defect than an imprecise
+// error code, so the code is chosen to keep the connection alive. Every other
+// code maps to 200 and leaves the session usable.
+//
+// Flagged for [6/6]: if a real Tasks-capable client wants a specific code here,
+// this is the trade-off to revisit — and the fix would belong upstream, in how
+// the SDK maps codes to statuses, rather than here.
 func renderTaskError(method, taskID string, err error) error {
 	switch {
 	case errors.Is(err, mcptask.ErrNotFound):
-		return fmt.Errorf("mcp: %s: no task handle %q is resolvable by this account (unknown, or not yours)", method, taskID)
+		return &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("mcp: %s: no task handle %q is resolvable by this account (unknown, or not yours)", method, taskID),
+		}
 	case errors.Is(err, mcptask.ErrHandleExpired):
-		return fmt.Errorf("mcp: %s: task handle %q has expired and is no longer pollable", method, taskID)
+		return &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("mcp: %s: task handle %q has expired and is no longer pollable", method, taskID),
+		}
 	case errors.Is(err, capability.ErrTasksUnavailable):
-		return fmt.Errorf("mcp: %s: this Relay does not have MCP task handles enabled; "+
-			"a parked dispatch returns a pending_approval result instead, and re-driving the same call re-attaches to it", method)
+		return &jsonrpc.Error{
+			Code: jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("mcp: %s: this Relay does not have MCP task handles enabled; "+
+				"a parked dispatch returns a pending_approval result instead, and re-driving the same call re-attaches to it", method),
+		}
 	default:
-		return fmt.Errorf("mcp: %s %q: %w", method, taskID, err)
+		return &jsonrpc.Error{
+			Code:    jsonrpc.CodeInternalError,
+			Message: fmt.Sprintf("mcp: %s %q: %v", method, taskID, err),
+		}
 	}
 }
 

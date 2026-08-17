@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -239,8 +240,20 @@ func TestMCPTasks_AnotherAccountCannotPollTheHandle(t *testing.T) {
 	if unknownErr == nil {
 		t.Fatal("an unknown task id resolved successfully")
 	}
-	if err.Error() != strings.Replace(unknownErr.Error(), "task-never-minted", parked.PendingApproval.TaskID, 1) {
-		t.Errorf("a stolen handle and an unknown one give different answers:\n stolen:  %v\n unknown: %v", err, unknownErr)
+
+	// Compare the SERVER's sentence, not the whole error string: the SDK client
+	// wraps a failed call in transport prose ("connection closed", "client is
+	// closing") that varies with teardown timing and says nothing about what the
+	// server disclosed. The property under test is that one sentence covers both
+	// cases with only the id differing.
+	sameAnswer := func(id string) string {
+		return fmt.Sprintf("no task handle %q is resolvable by this account (unknown, or not yours)", id)
+	}
+	if !strings.Contains(err.Error(), sameAnswer(parked.PendingApproval.TaskID)) {
+		t.Errorf("a stolen handle gave a distinguishable answer: %q", err.Error())
+	}
+	if !strings.Contains(unknownErr.Error(), sameAnswer("task-never-minted")) {
+		t.Errorf("an unknown handle gave a distinguishable answer: %q", unknownErr.Error())
 	}
 
 	if _, err := callTaskMethod(t, intruder, "tasks/cancel", parked.PendingApproval.TaskID); err == nil {
@@ -264,6 +277,37 @@ func TestMCPTasks_UnknownHandleIsLegible(t *testing.T) {
 
 	if _, err := callTaskMethod(t, session, "tasks/get", ""); err == nil {
 		t.Error("tasks/get with no taskId succeeded")
+	}
+}
+
+// TestMCPTasks_AnUnresolvableHandleDoesNotKillTheSession pins a constraint that
+// is easy to break while trying to improve things.
+//
+// The obvious error code for an unknown taskId is CodeInvalidParams. The SDK's
+// transport maps that onto a non-200, and its client treats a non-200 as FATAL
+// for the whole MCP session. Polling a lapsed handle is ordinary — handles
+// expire by design — so a client doing the expected thing would lose its
+// session and everything else it was doing.
+//
+// So the code is chosen to keep the connection alive (see renderTaskError), and
+// this test is what says so out loud: a failed poll, then a working call on the
+// SAME session.
+func TestMCPTasks_AnUnresolvableHandleDoesNotKillTheSession(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutates)
+	session := connectTasksClient(t, f, f.Credential)
+
+	if _, err := callTaskMethod(t, session, "tasks/get", "task-does-not-exist"); err == nil {
+		t.Fatal("tasks/get on an unknown handle succeeded")
+	}
+
+	// The session must still be usable. A park is the cheapest proof: it is a
+	// full tools/call round trip on the same connection.
+	parked := parkViaMCP(t, session)
+	if parked.PendingApproval.RequestID == "" {
+		t.Fatal("the session was unusable after a failed tasks/get")
+	}
+	if _, err := callTaskMethod(t, session, "tasks/get", parked.PendingApproval.TaskID); err != nil {
+		t.Errorf("tasks/get on a real handle failed after an earlier miss: %v", err)
 	}
 }
 

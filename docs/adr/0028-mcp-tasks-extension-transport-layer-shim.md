@@ -221,3 +221,57 @@ that a *completed* run whose captured Node output happens to contain the words
 through the issue and through the SDK's flat `input_required` precedent; no genuinely
 Tasks-capable client has yet spoken to this server. [6/6]'s validation script must find one
 or record a waiver, and [5/6]'s golden wire tests pin the shape either way.
+
+## Amendment, 2026-08-17 — conformance, and one finding (#376)
+
+Both preconditions this ADR named are now **asserted rather than argued**, by tests that
+fail loudly if either stops holding: the SDK refuses a JSON-RPC batch on the versions Relay
+speaks, and `JSONResponse: true` yields exactly one JSON object per reply. If either test
+fails after a dependency bump, that is not a test to update — it is the signal to revisit
+this ADR before the shim is trusted again.
+
+Conformance took option (1) from [5/6]: **byte-exact golden wire tests in-repo**, covering
+create (capable and non-capable), poll non-terminal, poll terminal with results, cancel,
+terminal-failed, and the unresolvable handle. They run through the real handler with fake
+collaborators and a fixed clock, so the only thing varying is the wire.
+
+Goldens rather than functional assertions because of how this fails. The shim's own rule is
+"when in doubt, pass through", so an SDK upgrade that changed the response shape would
+degrade it into a silent no-op — every functional test still green, Tasks-capable clients
+quietly back on the universal path. Only an exact-JSON comparison turns that into a failure.
+
+The third structural guard [5/6] asked for turned out to be available in a stronger form
+than "must not originate a result": **the shim does not import the MCP SDK at all.** A file
+that cannot name the SDK cannot register a tool, add a method, or construct a result, so the
+property is one the compiler cannot express a violation of. `no_decision_test.go` now also
+covers `internal/mcptask` and forbids the literal `"tasks/update"` outright — serving it
+requires naming it, so naming it fails the build. Both guards have a companion test that
+plants a violation and asserts it is caught: a structural test nobody has seen fail is
+indistinguishable from one that scans nothing.
+
+### The finding: a JSON-RPC error code cannot be chosen on semantics alone
+
+Writing the goldens surfaced that task errors were going out with **code 0**, which is not a
+valid JSON-RPC code. Fixing it exposed a constraint worth recording, because the obvious
+correction is wrong.
+
+`CodeInvalidParams` is the right semantic fit for an unknown `taskId`. The SDK's streamable
+transport maps it — and `CodeMethodNotFound` — onto a **non-200 HTTP status**, and the SDK's
+own client treats a non-200 as **fatal for the entire session**. Polling a handle that has
+lapsed is ordinary; handles expire by design. So the precise code would cost a
+correctly-behaving client its whole MCP session, and everything else it had in flight.
+
+Task errors therefore use `CodeInternalError`, which maps to 200 and leaves the session
+usable, and an e2e test pins the property directly: a failed poll, then a working call on
+the same connection. This is a deliberate trade of code precision for session survival. If a
+real Tasks-capable client wants a specific code, the fix belongs upstream in the SDK's
+code-to-status mapping, not in a worse choice here.
+
+Shim usage is logged once per rewrite (`msg="mcp task result issued"`, carrying the task id
+and the `go-sdk#626` removal condition, never anything about the Plan). Silence is the
+meaningful reading: no Tasks-capable client has driven a gated dispatch through this Relay,
+and the shim can go.
+
+**Still owed, unchanged:** no genuinely Tasks-capable client has spoken to this server. The
+goldens pin what Relay emits; they cannot confirm it is what SEP-2663 asks for. That remains
+[6/6]'s to settle or waive.
