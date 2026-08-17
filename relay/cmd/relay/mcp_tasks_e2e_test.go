@@ -10,8 +10,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -280,4 +282,214 @@ func TestMCPTasks_UpdateIsNotServed(t *testing.T) {
 	if _, err := callTaskMethod(t, session, "tasks/update", "task-anything"); err == nil {
 		t.Fatal("the Relay served tasks/update — an approval decision must never be answerable over the MCP session (ADR-0028)")
 	}
+}
+
+// -----------------------------------------------------------------------
+// The CreateTaskResult shim (#375, ADR-0028)
+// -----------------------------------------------------------------------
+
+// taskShimResult is SEP-2663's CreateTaskResult as an outside client sees it.
+// Declared here rather than imported so the JSON names are what is under test.
+type taskShimResult struct {
+	ResultType     string `json:"resultType"`
+	TaskID         string `json:"taskId"`
+	Status         string `json:"status"`
+	CreatedAt      string `json:"createdAt"`
+	LastUpdatedAt  string `json:"lastUpdatedAt"`
+	TTLMs          int64  `json:"ttlMs"`
+	PollIntervalMs int64  `json:"pollIntervalMs"`
+}
+
+// tasksCapableClient dials /mcp directly with raw JSON-RPC, advertising the
+// Tasks extension in the per-request `_meta`.
+//
+// It bypasses the SDK client on purpose. The SDK has no Tasks support — that is
+// the whole reason ADR-0028 exists — so its client would reject or mangle a
+// task-shaped result on the way back in. Speaking raw JSON-RPC is also the only
+// way to assert what actually goes over the wire, which is the claim being
+// tested.
+func rawToolCall(t *testing.T, f *relayFixture, credential string, capable bool, args map[string]any) map[string]any {
+	t.Helper()
+
+	meta := map[string]any{
+		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "raw-test-client", "version": "0.0.1"},
+	}
+	caps := map[string]any{}
+	if capable {
+		caps["extensions"] = map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}}
+	}
+	meta["io.modelcontextprotocol/clientCapabilities"] = caps
+
+	body, err := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": 7, "method": "tools/call",
+		"params": map[string]any{"_meta": meta, "name": "run_operation", "arguments": args},
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, f.ControlBase+"/mcp", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	// Required from 2026-07-28 onward: the method is echoed in a header so a
+	// proxy can route without parsing the body. The shim deliberately does NOT
+	// rely on it — it reads the method from the JSON-RPC body, which is
+	// version-independent and is the same read that yields the capabilities.
+	req.Header.Set("Mcp-Method", "tools/call")
+	req.Header.Set("Mcp-Name", "run_operation")
+	req.Header.Set("Authorization", "Bearer "+credential)
+
+	resp, err := f.ClientFor(credential).Do(req)
+	if err != nil {
+		t.Fatalf("POST /mcp: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; body = %s", resp.StatusCode, raw)
+	}
+
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("decode response: %v; body = %s", err, raw)
+	}
+	if _, isErr := out["error"]; isErr {
+		t.Fatalf("JSON-RPC error: %s", raw)
+	}
+	return out
+}
+
+func restartArgs() map[string]any {
+	return map[string]any{"operation": "service.restart", "args": map[string]string{"unit": "nginx"}}
+}
+
+// TestMCPTaskShim_CapableClientGetsATaskResult is #375's headline acceptance,
+// over the real handler and the real wire: a Tasks-capable client's gated
+// run_operation comes back as a CreateTaskResult, and the taskId it carries
+// resolves through tasks/get.
+func TestMCPTaskShim_CapableClientGetsATaskResult(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutates)
+
+	out := rawToolCall(t, f, f.Credential, true, restartArgs())
+
+	resultJSON, err := json.Marshal(out["result"])
+	if err != nil {
+		t.Fatalf("re-marshal result: %v", err)
+	}
+	var task taskShimResult
+	if err := json.Unmarshal(resultJSON, &task); err != nil {
+		t.Fatalf("decode task result: %v; result = %s", err, resultJSON)
+	}
+
+	if task.ResultType != "task" {
+		t.Fatalf(`resultType = %q, want "task" — the shim did not rewrite a parked result for a capable client`, task.ResultType)
+	}
+	if task.TaskID == "" || task.Status != "working" {
+		t.Fatalf("task = %+v, want a working handle", task)
+	}
+	if task.TTLMs <= 0 || task.PollIntervalMs <= 0 {
+		t.Errorf("ttlMs = %d, pollIntervalMs = %d, want both positive", task.TTLMs, task.PollIntervalMs)
+	}
+	if task.CreatedAt == "" || task.LastUpdatedAt == "" {
+		t.Errorf("timestamps = %q / %q, want both set", task.CreatedAt, task.LastUpdatedAt)
+	}
+
+	// A rewritten response is still a well-formed JSON-RPC response answering
+	// the request it belongs to — and carries no error member beside its result.
+	if out["jsonrpc"] != "2.0" {
+		t.Errorf("jsonrpc = %v, want 2.0", out["jsonrpc"])
+	}
+	if _, hasErr := out["error"]; hasErr {
+		t.Error("the rewritten response carries both a result and an error member")
+	}
+
+	// The taskId the shim minted resolves through tasks/get — the two halves of
+	// the extension agree about the same handle.
+	session := connectTasksClient(t, f, f.Credential)
+	got, err := callTaskMethod(t, session, "tasks/get", task.TaskID)
+	if err != nil {
+		t.Fatalf("tasks/get on the shim's taskId: %v", err)
+	}
+	if got.TaskID != task.TaskID || got.Status != "working" {
+		t.Errorf("tasks/get = %+v, want the same handle in the same state", got)
+	}
+}
+
+// TestMCPTaskShim_NonCapableClientIsUntouched is ADR-0027 decision 2 at the
+// protocol level, and SEP-2663's own requirement: a client that did not
+// advertise the extension must get exactly what it got before the shim existed.
+func TestMCPTaskShim_NonCapableClientIsUntouched(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutates)
+
+	out := rawToolCall(t, f, f.Credential, false, restartArgs())
+
+	result, ok := out["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("result = %T, want an object", out["result"])
+	}
+	if rt := result["resultType"]; rt != "complete" {
+		t.Fatalf("resultType = %v, want complete — a non-capable client must never be sent a task result", rt)
+	}
+	structured, ok := result["structuredContent"].(map[string]any)
+	if !ok {
+		t.Fatalf("structuredContent = %T, want an object", result["structuredContent"])
+	}
+	parked, ok := structured["pending_approval"].(map[string]any)
+	if !ok {
+		t.Fatalf("no pending_approval in %v", structured)
+	}
+	if parked["status"] != "pending_approval" {
+		t.Errorf("status = %v, want pending_approval", parked["status"])
+	}
+	// The universal path is intact, decision path and all.
+	if parked["request_id"] == "" || parked["plan_hash"] == "" || parked["decision_path"] == "" {
+		t.Errorf("the pending_approval result lost its decidable content: %v", parked)
+	}
+}
+
+// TestMCPTaskShim_NonParkedCallsAreUntouched: a capable client's ordinary run
+// and its plan must both come back exactly as they do without the shim. This is
+// the acceptance criterion that a non-parked dispatch is passed through
+// unmodified — asserted, not assumed.
+func TestMCPTaskShim_NonParkedCallsAreUntouched(t *testing.T) {
+	// A gate that parks nothing, so the same call runs instead of parking.
+	const gateNothing = `{"rules":[]}`
+	f := startGatedRelay(t, gateNothing)
+
+	t.Run("an ordinary run", func(t *testing.T) {
+		out := rawToolCall(t, f, f.Credential, true, restartArgs())
+		result := out["result"].(map[string]any)
+		if rt := result["resultType"]; rt != "complete" {
+			t.Fatalf("resultType = %v, want complete for a dispatch that ran", rt)
+		}
+		structured := result["structuredContent"].(map[string]any)
+		if _, parked := structured["pending_approval"]; parked {
+			t.Fatal("a dispatch that ran came back as pending_approval")
+		}
+		if structured["job_id"] == nil || structured["job_id"] == "" {
+			t.Errorf("the run lost its job_id: %v", structured)
+		}
+	})
+
+	t.Run("a plan", func(t *testing.T) {
+		args := restartArgs()
+		args["plan"] = true
+		out := rawToolCall(t, f, f.Credential, true, args)
+		result := out["result"].(map[string]any)
+		if rt := result["resultType"]; rt != "complete" {
+			t.Fatalf("resultType = %v, want complete for a plan", rt)
+		}
+		structured := result["structuredContent"].(map[string]any)
+		if _, hasPlan := structured["plan"]; !hasPlan {
+			t.Errorf("the plan lost its verdicts: %v", structured)
+		}
+	})
 }

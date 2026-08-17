@@ -92,9 +92,9 @@ type TaskView struct {
 // to exactly that path rather than turning a working park into a failed
 // dispatch. The caller gets an empty task id and the ordinary
 // `pending_approval` result.
-func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID string) string {
+func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID string) (id string, expiresAt time.Time) {
 	if s.mcpTasks == nil || s.approvals == nil || requestID == "" {
-		return ""
+		return "", time.Time{}
 	}
 
 	// A re-drive of an already-parked dispatch must re-attach to the existing
@@ -102,22 +102,22 @@ func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID str
 	// parked dispatch is the mapping ADR-0028 fixes, and two handles pointing at
 	// one Request would let a client believe it had two things to wait for.
 	if existing, err := s.mcpTasks.ByApprovalRequest(ctx, requestID); err == nil {
-		return existing.ID
+		return existing.ID, existing.ExpiresAt
 	} else if !errors.Is(err, mcptask.ErrNotFound) {
-		return ""
+		return "", time.Time{}
 	}
 
 	req, err := s.approvals.Get(ctx, requestID)
 	if err != nil {
-		return ""
+		return "", time.Time{}
 	}
 	mint := s.newApprovalID
 	if mint == nil {
 		mint = defaultID
 	}
-	id, err := mint()
+	id, err = mint()
 	if err != nil {
-		return ""
+		return "", time.Time{}
 	}
 
 	h := mcptask.NewHandle(id, req, p.AccountID, p.Account, s.clock())
@@ -125,11 +125,11 @@ func (s *Service) mintTaskHandle(ctx context.Context, p Principal, requestID str
 		// Lost a race with a concurrent re-drive: the unique index refused the
 		// second handle, so the first one is the answer.
 		if existing, getErr := s.mcpTasks.ByApprovalRequest(ctx, requestID); getErr == nil {
-			return existing.ID
+			return existing.ID, existing.ExpiresAt
 		}
-		return ""
+		return "", time.Time{}
 	}
-	return h.ID
+	return h.ID, h.ExpiresAt
 }
 
 // bindTaskHandleJob records the Job an approved dispatch produced against the

@@ -211,7 +211,18 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	// already stateless request/response over shared backing stores — a Job ID
 	// is the durable handle, never an Mcp-Session-Id. Also removes the
 	// per-instance session map that would break behind a round-robin LB (#139).
-	return sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
+	var handler http.Handler = sdkmcp.NewStreamableHTTPHandler(func(*http.Request) *sdkmcp.Server {
 		return srv
 	}, &sdkmcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+
+	// The SEP-2663 task-result shim (#375, ADR-0028) wraps the SDK handler,
+	// because the SDK cannot express a CreateTaskResult (its resultType is
+	// unexported and its Result interface is sealed). It is mounted ONLY when
+	// Tasks are wired, so a Relay without the extension has none of this code
+	// on its request path at all — not a disabled branch, an absent one. See
+	// taskshim.go's header for the preconditions this depends on.
+	if tasks != nil {
+		handler = withTaskShim(handler, nil)
+	}
+	return handler
 }

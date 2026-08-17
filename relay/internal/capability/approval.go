@@ -163,6 +163,16 @@ type ParkedError struct {
 	// client is ever told about a handle at all. Nothing below this line may
 	// come to require one.
 	TaskID string
+
+	// TaskExpiresAt is when that handle stops being pollable — at or before
+	// ExpiresAt above, and never more than mcptask.MaxTTL away.
+	//
+	// Carried separately rather than let a surface reuse ExpiresAt, because the
+	// two answer different questions: ExpiresAt is when the APPROVAL lapses,
+	// TaskExpiresAt is when the HANDLE does. A shim rendering SEP-2663's ttlMs
+	// from the wrong one would tell a client to keep polling something that has
+	// already been swept.
+	TaskExpiresAt time.Time
 }
 
 func (e *ParkedError) Error() string {
