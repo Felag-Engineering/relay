@@ -9,6 +9,32 @@ brief so the ADR author starts from the right conclusion._
 > It adopts this note's conclusion — notify via MCP, decide out-of-band — and binds it.
 > This note stays as the evidence behind that choice; where the two differ, the ADR wins.
 
+> **What actually happened, 2026-08-17 (v0.5.1, #372–#377).** This note assumed the Tasks
+> extension would simply be *available* to us. It was not, and the gap is worth recording
+> so nobody re-derives it:
+>
+> - **SEP-2663 reached Final, and `modelcontextprotocol/go-sdk` v1.7.0 did not implement
+>   it.** [go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626) was open,
+>   unassigned, with no timeline. A Final spec our own SDK had not caught up to was not a
+>   case this note anticipated.
+> - **Relay implements Tasks itself, as a bounded shim, not a fork**
+>   ([ADR-0028](../adr/0028-mcp-tasks-extension-transport-layer-shim.md)) — with a written
+>   removal condition, because a temporary shim without one is a permanent shim.
+> - **The premium path did NOT land as this note sketched it.** The plan below has an
+>   approval elicitation arriving under `inputRequests` on a `tasks/get` and the client
+>   answering via `tasks/update`. **Relay emits no `inputRequests` and serves no
+>   `tasks/update`.** That flow is an approval decision travelling over the AI's own MCP
+>   session, and whether an in-band answer can ever count is an open question (#272): the
+>   Relay can only verify the *session's* Account, so an answer a harness routed to a human
+>   would be recorded as the agent's. Until that settles, Tasks carries the **wait** and
+>   never the **answer** — the decision stays on the authenticated out-of-band endpoint.
+> - **Nobody could exercise it end to end.** As of the v0.5.1 close, no available MCP client
+>   implemented Tasks, so a conformant extension shipped that no client could drive. See
+>   [validate-v0.5.1.md](../testing/validate-v0.5.1.md).
+>
+> The note's *conclusion* survived all of this intact; its *assumption about availability*
+> did not. Where this note and ADR-0028 differ, the ADR wins.
+
 ## Question
 
 For Relay's **approval callout** (an action requiring approval routes to a human

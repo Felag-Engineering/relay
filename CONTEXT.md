@@ -269,11 +269,25 @@ a Scope an omitted field would cover *more* (the unsafe direction) and `max_fan_
 _Avoid_: match, filter, selector (reserved for Node targeting)
 
 **MCP task handle**:
-MCP's own async primitive: a handle returned in place of a result for one long-running
-`tools/call`, which the client polls, and which can carry a server-to-client elicitation
-while the work is outstanding. Relay maps **one MCP task handle to one Job** — it is a
-*delivery envelope* for an Approval, never an execution unit. Always written in full;
-"task" alone means a Relay **Task**.
+MCP's own async primitive (SEP-2663): a handle returned in place of a result for one
+outstanding `tools/call`, which the client polls via `tasks/get`. It is a *delivery
+envelope* for an Approval, never an execution unit. Always written in full; "task" alone
+means a Relay **Task**.
+
+Relay mints **one handle per parked dispatch**, not per Job — a parked dispatch creates no
+Job at all, and the Job arrives later if an approval releases it, or never. A handle is
+owner-only and expires; one that is not yours reads exactly like one that never existed.
+
+Two things a handle deliberately is not. It is not a decision channel: no MCP method
+accepts an approval, and `tasks/cancel` ends the *client's* interest while leaving a still-
+parked Approval pending and decidable. And it is not required: a client that knows nothing
+about Tasks drives the same gated dispatch to completion on the universal path, so nothing
+may come to depend on a handle existing.
+
+Relay serves the extension itself, as a shim, because its SDK does not implement it
+(ADR-0028). The shim is temporary by design and has a written removal condition.
+_Avoid_: task (unqualified), MCP task, job handle, task id (when a Relay **Task** is also in
+play)
 _Avoid_: task (unqualified), MCP task, job handle
 The central rules deciding which Account may send which Operations to which Nodes.
 Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
