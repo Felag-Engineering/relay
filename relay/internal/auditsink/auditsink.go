@@ -133,6 +133,18 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	base := s.baseRecord(e.Principal, e.Asserted, e.Selector, e.Action)
 
+	// The approval link (#378, ADR-0027), copied onto every Kind that can carry
+	// one: the park, the decision, and the dispatch the approval released.
+	//
+	// Set here rather than per-branch precisely because it must not be
+	// per-branch. "What ran under this approval" is only a truthful query if
+	// every row an approval touched carries it, and a branch added later that
+	// forgot to copy it would not fail — it would silently answer the question
+	// with a smaller set, which is the worst way for an audit query to be
+	// wrong.
+	base.ApprovalID = e.ApprovalID
+	base.GrantID = e.GrantID
+
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
 		base.Reason = e.Reason
@@ -158,6 +170,19 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		base.Reason = e.Reason
 		err := s.append(ctx, base)
 		s.logDecision(audit.KindApprovalRequested, e, 0, "")
+		return err
+	}
+
+	// A re-drive of an already-parked dispatch (#379): same shape as a park,
+	// but nothing was created — the caller bounced off the existing pending
+	// Request. Recorded under its own kind so approval_requested keeps meaning
+	// "a request was created", and handled before the fall-through for the same
+	// no-Results reason as its neighbours.
+	if e.Kind == capability.AuditKindApprovalPendingObserved {
+		base.Kind = audit.KindApprovalPendingObserved
+		base.Reason = e.Reason
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindApprovalPendingObserved, e, 0, "")
 		return err
 	}
 

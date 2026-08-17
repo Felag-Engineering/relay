@@ -120,6 +120,10 @@ example `count: 2` with a single-member `audience`.
    the caller carrying the request ID, the plan hash, and which rules fired. On
    `/api/v1` that is a **`202 Accepted`** with `"status": "pending_approval"` —
    not a `200` (nothing ran) and not an error (nothing was denied).
+   Re-driving the same dispatch while it waits — which is how a caller polls —
+   returns the same park but audits as `approval_pending_observed`, not a
+   second `approval_requested`: the request count stays truthful, and the
+   polling itself stays on the record.
 3. A human decides through the decision endpoint. The decision arrives on an
    authenticated channel — **never through the MCP session that requested the
    action**.

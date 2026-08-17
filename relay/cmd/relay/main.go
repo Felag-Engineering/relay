@@ -530,6 +530,12 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		capability.WithFreeze(st.Freeze()),
 		capability.WithMetrics(appMetrics),
 		capability.WithApprovals(approvalGate, st.Approvals(), roleGate),
+		// Batch/window grants (#378, ADR-0027 decision 12). Wired
+		// unconditionally alongside the gate: a Grant can only ever be created
+		// through an approval Request the gate itself required, so with no
+		// rules configured nothing is gated, nothing can be granted, and the
+		// store simply holds no rows.
+		capability.WithApprovalGrants(st.Grants()),
 	}
 
 	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no

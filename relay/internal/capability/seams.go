@@ -86,6 +86,21 @@ const (
 	// is how a safety feature gets switched off.
 	AuditKindApprovalRequested
 
+	// AuditKindApprovalPendingObserved is a re-drive of a dispatch that is
+	// ALREADY parked (#379): checkApproval found an existing pending Request
+	// rather than creating one. Fields are set exactly as for
+	// AuditKindApprovalRequested — ApprovalID and PlanHash name the request the
+	// caller bounced off.
+	//
+	// It is a distinct kind because re-driving is how a caller polls while
+	// waiting, and filing every poll as approval_requested would let the trail
+	// inflate until "how many approvals were asked for" needs de-duplication to
+	// answer — and would bury a genuine second request among the polls. Kept as
+	// a record at all (rather than silently dropped, as the notifier correctly
+	// does) because an agent hammering a parked request is something an auditor
+	// plausibly wants to see; it just isn't a repeat ask.
+	AuditKindApprovalPendingObserved
+
 	// AuditKindApprovalDecided is one recorded answer to a parked dispatch
 	// (#270, ADR-0027): Principal is the decider, ApprovalID and PlanHash name
 	// what they answered, and Reason states the answer, the resulting request
@@ -130,6 +145,12 @@ type AuditEntry struct {
 	// actually ran" is one join rather than a correlation by timestamp.
 	ApprovalID string
 	PlanHash   string
+
+	// GrantID is the batch/window Grant that released this dispatch (ADR-0027
+	// decision 12), empty when a single-Plan approval or no gate did. Recorded
+	// so a grant's full blast radius — every Job it released, across its whole
+	// window — is one query rather than a reconstruction from timestamps.
+	GrantID string
 
 	// Asserted is the caller-claimed attribution lane (#300), read off the
 	// request context by Service.Run/Plan. Recorded, never consulted — see

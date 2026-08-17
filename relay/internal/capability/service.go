@@ -48,6 +48,11 @@ type Service struct {
 	gate      ApprovalGate
 	approvals ApprovalStore
 
+	// grants is the batch/window Grant store (ADR-0027 decision 12). Nil means
+	// no grant ever covers anything, which is both the default and the safe
+	// direction.
+	grants ApprovalGrantStore
+
 	// approvalAuthz is the role floor on a DECISION (#270): deciding a Request
 	// requires the role that Action would have needed to be requested. Nil only
 	// on a Service built without WithApprovals, where there is nothing to
@@ -131,6 +136,19 @@ func WithApprovals(gate ApprovalGate, store ApprovalStore, authorizer ApprovalAu
 		s.approvals = store
 		s.approvalAuthz = authorizer
 	}
+}
+
+// WithApprovalGrants wires the batch/window Grant store (ADR-0027 decision 12).
+//
+// Optional and separate from WithApprovals. Omitting it means no grant ever
+// covers anything, which is the safe direction and the behaviour of every
+// deployment that never creates one — a grant can only ever RELEASE a dispatch
+// the gate already gated, so its absence can never let something through.
+func WithApprovalGrants(g ApprovalGrantStore) Option {
+	if g == nil {
+		panic("capability: WithApprovalGrants: grant store must not be nil")
+	}
+	return func(s *Service) { s.grants = g }
 }
 
 // WithApprovalNotifier wires the out-of-band notification envelope (ADR-0027):
@@ -291,8 +309,16 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 	if ap.parked != nil {
 		s.metrics.IncRefusal(RefusalPendingApproval)
+		// approval_requested means A REQUEST WAS CREATED (#379). A re-drive
+		// that bounced off an already-pending Request — which is how a caller
+		// polls while waiting — is recorded under its own kind, so the trail's
+		// count of asks stays truthful while the polling stays visible.
+		kind := AuditKindApprovalRequested
+		if ap.created == nil {
+			kind = AuditKindApprovalPendingObserved
+		}
 		entry := AuditEntry{
-			Kind: AuditKindApprovalRequested, Principal: p, Selector: sel, Action: act,
+			Kind: kind, Principal: p, Selector: sel, Action: act,
 			Reason: ap.parked.Error(), ApprovalID: ap.parked.RequestID, PlanHash: ap.parked.PlanHash,
 			Asserted: AssertionsFromContext(ctx),
 		}
@@ -318,7 +344,15 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// Join the approval that released this dispatch to the Job it produced, so
 	// audit can answer "who approved what actually ran" rather than leaving the
 	// two records to be correlated by timestamp.
-	if ap.requestID != "" && res.jobID != "" {
+	//
+	// ONLY for a single-Plan approval. A Request carries one job_id, which is
+	// right when one approval releases one Job — but a batch/window Grant
+	// (ADR-0027 decision 12) releases MANY, and binding each in turn would
+	// leave the authorizing Request pointing at whichever Job happened to run
+	// last, silently losing the rest. The grant-to-Jobs join is the audit
+	// trail's GrantID, which is why that field exists; a Grant deliberately
+	// does not reuse this one-to-one column.
+	if ap.grantID == "" && ap.requestID != "" && res.jobID != "" {
 		if err := s.approvals.BindJob(ctx, ap.requestID, res.jobID); err != nil {
 			dispatchErr = errors.Join(dispatchErr, fmt.Errorf("capability: bind job to approval: %w", err))
 		}
@@ -339,7 +373,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// an Operation's arguments would land in the audit trail as-is. #102
 	// does not close this — it is flagged here so it is not mistaken for a
 	// gap in #102's redaction guarantee.
-	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, Asserted: AssertionsFromContext(ctx)}
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(ctx)}
 	auditErr := s.audit.Record(ctx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must

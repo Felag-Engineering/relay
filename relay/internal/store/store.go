@@ -150,6 +150,17 @@ func (s *Store) Approvals() approval.Repository {
 	return &sqliteApprovals{db: s.db}
 }
 
+// Grants returns the SQLite-backed approval.GrantRepository — batch/window
+// approvals (ADR-0027 decision 12).
+//
+// Separate from Approvals() because the two have different risks: a Request is
+// decided once, while a Grant is CONSUMED repeatedly under concurrency, and its
+// use counter is a bound a human was shown. Keeping the accessors apart keeps
+// the claim path from being reached by anything looking for a decision path.
+func (s *Store) Grants() approval.GrantRepository {
+	return &sqliteGrants{db: s.db}
+}
+
 // Accounts returns the SQLite-backed accounts.Repository — the control
 // plane's identity substrate (ADR-0010). Persisted rather than in-memory
 // because an Account is a durable identity: a disabled Account must stay

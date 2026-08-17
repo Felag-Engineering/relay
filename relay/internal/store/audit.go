@@ -35,12 +35,14 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 	_, err = a.db.ExecContext(ctx, `
 		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		                   account_id, account_name, account_role, token_id, auth_method,
-		                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
+		                   approval_id, grant_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
+		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID),
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit record: %w", err)
@@ -69,6 +71,18 @@ func (a *sqliteAudit) ByAccount(ctx context.Context, accountID string) ([]audit.
 	return a.query(ctx, `WHERE account_id = ? ORDER BY ts`, accountID)
 }
 
+// ByApproval returns all Records authorized by an approval Request, ordered by
+// Timestamp — the park, the decision, and everything that ran under it.
+func (a *sqliteAudit) ByApproval(ctx context.Context, approvalID string) ([]audit.Record, error) {
+	return a.query(ctx, `WHERE approval_id = ? ORDER BY ts`, approvalID)
+}
+
+// ByGrant returns all Records released by a batch/window Grant, ordered by
+// Timestamp.
+func (a *sqliteAudit) ByGrant(ctx context.Context, grantID string) ([]audit.Record, error) {
+	return a.query(ctx, `WHERE grant_id = ? ORDER BY ts`, grantID)
+}
+
 // ByOnBehalfOf returns all Records with an exact asserted OnBehalfOf value,
 // ordered by Timestamp. Exact match, never a prefix or LIKE: the value is
 // caller-controlled, and a pattern match over untrusted strings invites both
@@ -81,7 +95,8 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		       account_id, account_name, account_role, token_id, auth_method,
-		       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref
+		       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
+		       approval_id, grant_id
 		FROM audit `+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query audit records: %w", err)
@@ -102,11 +117,13 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			accountID, accountName, accountRole, tokenID         sql.NullString
 			authMethod                                           sql.NullString
 			onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
+			approvalID, grantID                                  sql.NullString
 		)
 		if err := rows.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 			&operationName, &argsJSON, &argvJSON, &outcome, &reason, &stdout, &stderr, &truncated,
 			&accountID, &accountName, &accountRole, &tokenID, &authMethod,
-			&onBehalfOf, &traceparent, &sessionRef, &changeRef); err != nil {
+			&onBehalfOf, &traceparent, &sessionRef, &changeRef,
+			&approvalID, &grantID); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
 		tsTime, err := parseTime(sql.NullString{String: ts, Valid: true})
@@ -153,6 +170,8 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			Stdout:        stdout,
 			Stderr:        stderr,
 			Truncated:     truncated != 0,
+			ApprovalID:    approvalID.String,
+			GrantID:       grantID.String,
 		})
 	}
 	return out, rows.Err()

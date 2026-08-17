@@ -105,6 +105,11 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// arrives, so the API endpoint, the MCP elicitation envelope, and the
 		// Console's approval queue all reach it through this one object.
 		Approvals: d.capability,
+		// Batch/window approval grants (#378, ADR-0027 decision 12) — the same
+		// object once more. Requesting a grant creates an ordinary approval
+		// Request answered through the decision route above, so the two share
+		// one quorum implementation rather than each carrying its own.
+		ApprovalGrants: d.capability,
 		// Read auditing for the Job read route (#357, ADR-0025). *auditsink.Sink
 		// satisfies api.ReadAuditor directly — no adapter needed here, unlike
 		// mcp's readAuditor below, because package api may name capability

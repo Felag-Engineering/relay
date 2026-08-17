@@ -41,6 +41,17 @@ const (
 	// something untrue about it.
 	KindApprovalRequested = "approval_requested"
 
+	// KindApprovalPendingObserved is a re-drive of an already-parked dispatch
+	// (#379): the caller attempted the same Plan again and bounced off the
+	// existing pending Request, creating nothing. Distinct from
+	// KindApprovalRequested so that kind keeps meaning "a request was created"
+	// — re-driving is how a caller polls while waiting for a decision, and an
+	// agent polling every few seconds must not inflate the count of asks or
+	// bury a genuine second request among its polls. The polling itself stays
+	// on the record under this kind: an auditor plausibly wants to see an agent
+	// hammering a parked request, just not filed as repeat asks.
+	KindApprovalPendingObserved = "approval_pending_observed"
+
 	// KindApprovalExpired is a parked dispatch that ran out of time (#269,
 	// ADR-0027). Recorded because an approval that lapsed is a fact the trail
 	// must carry: without it a parked dispatch just vanishes from the record
@@ -132,6 +143,27 @@ type Record struct {
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool
+
+	// ApprovalID and GrantID join a record to the approval callout that
+	// authorized it (ADR-0027). Both are empty for the overwhelming majority of
+	// records, and empty means "no approval was involved" — never "unknown".
+	//
+	// They exist as columns rather than as prose in Reason because the
+	// questions they answer are asked under time pressure and must be a WHERE
+	// clause: "what ran under this approval", and — for a batch/window Grant,
+	// which covers many dispatches — "what did that window actually release".
+	//
+	// ApprovalID is set on a park, on a decision, and on every dispatch either
+	// a single approval or a Grant released. For a Grant it is the Grant's own
+	// authorizing Request, which is what makes every covered Job share one
+	// approval ID.
+	//
+	// GrantID is set only when a Grant released the dispatch. Its presence is
+	// the difference between "a human approved THIS plan" and "a human approved
+	// a window this plan fell inside" — a distinction an auditor needs and
+	// cannot recover from ApprovalID alone.
+	ApprovalID string
+	GrantID    string
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no
@@ -156,6 +188,17 @@ type Repository interface {
 	// trail stays queryable across a rename, which is the reason the ID is
 	// recorded at all.
 	ByAccount(ctx context.Context, accountID string) ([]Record, error)
+
+	// ByApproval returns all Records authorized by an approval Request,
+	// ordered by Timestamp — including the park and the decision themselves, so
+	// one query answers "who asked, who approved, and what then ran". For a
+	// batch/window Grant's Request this is every dispatch the window released.
+	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
+
+	// ByGrant returns all Records released by a batch/window Grant, ordered by
+	// Timestamp. Narrower than ByApproval on the same Request: this is the
+	// dispatches only, which is what "what did that window actually do" means.
+	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 
 	// ByOnBehalfOf returns all Records carrying an exact asserted OnBehalfOf
 	// value, ordered by Timestamp — the asserted-lane query.
