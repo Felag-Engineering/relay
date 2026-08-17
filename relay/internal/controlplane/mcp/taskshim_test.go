@@ -290,7 +290,7 @@ func TestShimPassesThroughAnOversizedResponse(t *testing.T) {
 	if !c.overflow {
 		t.Fatal("an oversized response did not mark the capture overflowed")
 	}
-	if _, ok := rewriteParkedResult(c, shimClock()); ok {
+	if _, _, ok := rewriteParkedResult(c, shimClock()); ok {
 		t.Error("an overflowed capture was treated as a rewrite candidate")
 	}
 }

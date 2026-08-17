@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -98,6 +99,7 @@ const (
 // advertise the extension are therefore not merely "passed through" — they are
 // never processed, which is a stronger property and a much smaller blast radius
 // for a bug in this file.
+//
 // now is a seam so the shim's ttlMs arithmetic is testable, mirroring the
 // capability layer's WithClock. Production passes time.Now().UTC().
 func withTaskShim(next http.Handler, now func() time.Time) http.Handler {
@@ -114,11 +116,26 @@ func withTaskShim(next http.Handler, now func() time.Time) http.Handler {
 		capture := &shimCapture{header: http.Header{}}
 		next.ServeHTTP(capture, r)
 
-		rewritten, ok := rewriteParkedResult(capture, now())
+		rewritten, taskID, ok := rewriteParkedResult(capture, now())
 		if !ok {
 			capture.passThrough(w)
 			return
 		}
+
+		// The shim's usage signal (#376). This is the deployment's answer to
+		// "is anyone actually using Tasks?", which is the question that decides
+		// when the shim can be DELETED — a temporary shim nobody can tell is
+		// unused becomes a permanent one. It logs only on a real rewrite, so
+		// silence in the log is the meaningful reading: no Tasks-capable client
+		// has driven a gated dispatch through this Relay.
+		//
+		// One line per park, and a park is a human-gated event, so this cannot
+		// become chatty. It carries the task id and nothing about the Plan: the
+		// approval trail already records what was parked, and this is routing
+		// metadata, not content.
+		slog.Info("mcp task result issued",
+			"task_id", taskID, "shim", "sep-2663", "removal_condition", "go-sdk#626")
+
 		writeShimResponse(w, capture, rewritten)
 	})
 }
@@ -299,23 +316,23 @@ type taskResultBody struct {
 // a parked dispatch, a park with no handle attached — every one of them is a
 // case where the shim cannot be certain, and every one of them keeps the
 // working universal response.
-func rewriteParkedResult(c *shimCapture, now time.Time) ([]byte, bool) {
+func rewriteParkedResult(c *shimCapture, now time.Time) (body []byte, taskID string, ok bool) {
 	if c.overflow {
-		return nil, false
+		return nil, "", false
 	}
 	if status := c.status; status != 0 && status != http.StatusOK {
-		return nil, false
+		return nil, "", false
 	}
 	if ct := c.header.Get("Content-Type"); ct != "" && !isJSONContentType(ct) {
-		return nil, false
+		return nil, "", false
 	}
 
 	var resp shimResponse
 	if err := json.Unmarshal(c.body.Bytes(), &resp); err != nil {
-		return nil, false
+		return nil, "", false
 	}
 	if len(resp.Error) > 0 || len(resp.Result) == 0 {
-		return nil, false
+		return nil, "", false
 	}
 
 	var result struct {
@@ -323,11 +340,11 @@ func rewriteParkedResult(c *shimCapture, now time.Time) ([]byte, bool) {
 		StructuredContent parkedStructuredContent `json:"structuredContent"`
 	}
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, false
+		return nil, "", false
 	}
 	parked := result.StructuredContent.PendingApproval
 	if parked == nil || parked.Status != statusPendingApproval || parked.TaskID == "" {
-		return nil, false
+		return nil, "", false
 	}
 
 	// ttlMs comes from the HANDLE's own expiry, which the Relay computed and
@@ -359,14 +376,14 @@ func rewriteParkedResult(c *shimCapture, now time.Time) ([]byte, bool) {
 		PollIntervalMs: defaultPollIntervalMs,
 	})
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
 
 	out, err := json.Marshal(shimResponse{JSONRPC: resp.JSONRPC, ID: resp.ID, Result: taskResult})
 	if err != nil {
-		return nil, false
+		return nil, "", false
 	}
-	return out, true
+	return out, parked.TaskID, true
 }
 
 // writeShimResponse sends the rewritten body, correcting Content-Length since

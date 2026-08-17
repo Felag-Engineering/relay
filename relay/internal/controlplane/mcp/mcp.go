@@ -51,6 +51,7 @@ package mcp
 import (
 	"context"
 	"net/http"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -182,7 +183,29 @@ const serverVersion = "0.1.0"
 // turn on production dispatch — that depends on whether exec's own
 // dispatcher was configured with capability.WithExecution, which is the
 // composition root's call, isolated to #154.
-func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver) http.Handler {
+// Option configures a server built by New. The only one today is WithClock;
+// it exists because the Tasks surface renders wall-clock values (SEP-2663's
+// ttlMs, createdAt, lastUpdatedAt) and a golden wire test cannot assert exact
+// JSON against time.Now. It mirrors capability.WithClock rather than inventing
+// a second convention.
+type Option func(*serverOptions)
+
+type serverOptions struct {
+	now func() time.Time
+}
+
+// WithClock overrides the clock the Tasks surface renders timestamps from
+// (production default: time.Now().UTC()).
+func WithClock(now func() time.Time) Option {
+	return func(o *serverOptions) { o.now = now }
+}
+
+func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
+	cfg := serverOptions{now: func() time.Time { return time.Now().UTC() }}
+	for _, o := range opts {
+		o(&cfg)
+	}
+
 	// Re-wrap every input immediately: from this point on, nothing in this
 	// package ever holds a value whose dynamic type is wider than what
 	// NodeReader/PolicyReader/OperationLister/Executor/JobResultReader
@@ -204,7 +227,7 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	// nothing, which is a Relay without the Tasks extension: parked dispatches
 	// still return the universal pending_approval result (#371), so the
 	// extension's absence costs a client its poll handle and nothing else.
-	registerTaskMethods(srv, tasks, results, reads)
+	registerTaskMethods(srv, tasks, results, reads, cfg.now)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is
@@ -222,7 +245,7 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	// on its request path at all — not a disabled branch, an absent one. See
 	// taskshim.go's header for the preconditions this depends on.
 	if tasks != nil {
-		handler = withTaskShim(handler, nil)
+		handler = withTaskShim(handler, cfg.now)
 	}
 	return handler
 }
