@@ -324,6 +324,20 @@ type PendingApprovalOutput struct {
 
 	// NextStep is plain-language guidance for the agent holding this result.
 	NextStep string `json:"next_step" jsonschema:"What to do next."`
+
+	// TaskID is the MCP task handle attached to this park (#374, SEP-2663), or
+	// absent when the Relay has no handle store wired.
+	//
+	// It is carried in the ORDINARY result — not only in a Tasks-shaped one —
+	// because it is how a client learns the handle exists at all. Note this is
+	// not the SEP's task envelope: rewriting the response into a
+	// CreateTaskResult is gated on the client advertising the Tasks capability
+	// ([4/6]), and this field is merely a piece of Relay's own JSON. A client
+	// that cannot use it ignores it and re-drives, exactly as before.
+	//
+	// It is a POLL handle, never a decision one. Resolving it reports state; no
+	// MCP method answers an approval (ADR-0028, no_decision_test.go).
+	TaskID string `json:"task_id,omitempty" jsonschema:"An MCP task handle for this parked dispatch, if the Relay has the Tasks extension enabled. A Tasks-capable client may poll tasks/get with it instead of re-driving the call. It cannot be used to approve anything."`
 }
 
 // pendingApprovalNextStep is the fixed guidance every parked result carries.

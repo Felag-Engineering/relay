@@ -154,6 +154,15 @@ type ParkedError struct {
 
 	// ExpiresAt is when the parked request lapses.
 	ExpiresAt time.Time
+
+	// TaskID is the MCP task handle attached to this park (#374, ADR-0028), or
+	// empty when Tasks are not wired or the handle could not be minted.
+	//
+	// Empty is a fully supported answer, not a failure: a surface renders the
+	// universal `pending_approval` result either way, and only a Tasks-capable
+	// client is ever told about a handle at all. Nothing below this line may
+	// come to require one.
+	TaskID string
 }
 
 func (e *ParkedError) Error() string {

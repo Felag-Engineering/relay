@@ -74,9 +74,13 @@ type controlSurface interface {
 type mcpSurface struct{}
 
 func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
+	// The last argument is the MCP Tasks resolver (#374, ADR-0028) — the SAME
+	// *capability.Service once more. Resolving a task handle reads an approval
+	// Request and may cancel a Job, so it goes through the one capability layer
+	// like everything else (invariant 10) rather than reaching a store.
 	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.vocab, d.ops, d.capability,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		readAuditor{sink: d.auditSink}))
+		readAuditor{sink: d.auditSink}, d.capability))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —

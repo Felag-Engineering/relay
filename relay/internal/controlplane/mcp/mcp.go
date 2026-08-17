@@ -182,7 +182,7 @@ const serverVersion = "0.1.0"
 // turn on production dispatch — that depends on whether exec's own
 // dispatcher was configured with capability.WithExecution, which is the
 // composition root's call, isolated to #154.
-func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor) http.Handler {
+func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver) http.Handler {
 	// Re-wrap every input immediately: from this point on, nothing in this
 	// package ever holds a value whose dynamic type is wider than what
 	// NodeReader/PolicyReader/OperationLister/Executor/JobResultReader
@@ -200,6 +200,11 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	registerOperationTools(srv, ops, vocab, reads)
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results, reads)
+	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers
+	// nothing, which is a Relay without the Tasks extension: parked dispatches
+	// still return the universal pending_approval result (#371), so the
+	// extension's absence costs a client its poll handle and nothing else.
+	registerTaskMethods(srv, tasks, results, reads)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is

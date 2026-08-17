@@ -536,6 +536,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// rules configured nothing is gated, nothing can be granted, and the
 		// store simply holds no rows.
 		capability.WithApprovalGrants(st.Grants()),
+		// MCP task handles (#374, ADR-0028). Wired alongside the gate for the
+		// same reason grants are: a handle is only ever minted for a dispatch
+		// the gate parked, so with no rules configured nothing parks and the
+		// table stays empty.
+		capability.WithMCPTasks(st.MCPTasks()),
 	}
 
 	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no

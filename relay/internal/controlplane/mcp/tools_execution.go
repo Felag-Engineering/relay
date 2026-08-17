@@ -460,6 +460,7 @@ func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 		ExpiresAt:    parked.ExpiresAt.UTC().Format(time.RFC3339),
 		DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
 		NextStep:     pendingApprovalNextStep,
+		TaskID:       parked.TaskID,
 	}
 }
 
