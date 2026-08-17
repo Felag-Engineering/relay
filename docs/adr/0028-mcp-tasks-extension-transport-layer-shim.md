@@ -142,3 +142,39 @@ disambiguation; no domain language shifts with this ADR.
 - Relay carries its own SEP-2663 conformance burden until go-sdk#626 lands ([5/6]'s
   golden wire tests), and the manual-validation script must find a genuinely
   Tasks-capable client or record a waiver ([6/6]).
+
+## Amendment, 2026-08-17 — what the handle store settled (#373)
+
+Building [2/6] forced one question this ADR left open, and it is a security boundary rather
+than an implementation detail.
+
+**A task handle is owner-only, and a handle you do not own is indistinguishable from one
+that does not exist.**
+
+The alternative — role-gating, so an admin could resolve anyone's handle — was rejected.
+Resolving a handle is not a read: [4/6] hands the stored call back through the capability
+layer, so a second Account resolving someone's handle would re-drive *their* dispatch under
+*their* authority. That is an escalation wearing a read's clothes. Admins who need to see a
+waiting fleet action already have the approval queue and the audit trail, both of which show
+it without carrying the power to advance it.
+
+Making "not yours" and "no such handle" the same answer follows from the same reasoning. A
+distinct error would confirm that a guessed or scraped ID is real, and existence alone
+discloses that some Account has a fleet action waiting on a human. The check therefore lives
+in the SQL `WHERE` clause rather than in a caller-side comparison, so the two cases produce
+literally the same result — no row — and the property is structural rather than remembered.
+
+Two smaller things the store settled:
+
+- **The handle carries two nullable bindings, not one overloaded ID.** SEP-2663 wants a task
+  id in the `tools/call` response, which is the instant the dispatch parks — but parking
+  deliberately creates no Job (#269), so at mint time there is an approval Request and
+  nothing else. One field meaning "approval now, Job later" would have made every reader
+  guess which era a row was in.
+- **The stored status is a record of what a client was told, never the answer.** Status is
+  recomputed from the approval Request on every read, because the things that change it — a
+  decision landing on the Control API, the expiry sweeper — do not know handles exist. A
+  handle reporting `working` for an approval denied an hour ago would be the approval-view
+  fidelity gap reappearing in a new place. A handle also expires at or before its Request,
+  under a hard 24-hour ceiling, so a lenient gate rule cannot mint week-long poll tokens
+  carrying somebody's plan summary.

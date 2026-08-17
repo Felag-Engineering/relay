@@ -26,6 +26,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/freeze"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -159,6 +160,18 @@ func (s *Store) Approvals() approval.Repository {
 // the claim path from being reached by anything looking for a decision path.
 func (s *Store) Grants() approval.GrantRepository {
 	return &sqliteGrants{db: s.db}
+}
+
+// MCPTasks returns the SQLite-backed mcptask.Repository — MCP task handles
+// (#373, ADR-0028, SEP-2663).
+//
+// Durable rather than an in-process map because the MCP handler runs stateless
+// (#267): a handle minted by one Relay instance must be resolvable by whichever
+// instance the client's next poll happens to reach. An in-memory map would work
+// perfectly on one process and fail silently on two, which is the failure mode
+// HA (#139) would inherit.
+func (s *Store) MCPTasks() mcptask.Repository {
+	return &sqliteMCPTasks{db: s.db}
 }
 
 // Accounts returns the SQLite-backed accounts.Repository — the control
