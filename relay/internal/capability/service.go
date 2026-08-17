@@ -309,8 +309,16 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 	if ap.parked != nil {
 		s.metrics.IncRefusal(RefusalPendingApproval)
+		// approval_requested means A REQUEST WAS CREATED (#379). A re-drive
+		// that bounced off an already-pending Request — which is how a caller
+		// polls while waiting — is recorded under its own kind, so the trail's
+		// count of asks stays truthful while the polling stays visible.
+		kind := AuditKindApprovalRequested
+		if ap.created == nil {
+			kind = AuditKindApprovalPendingObserved
+		}
 		entry := AuditEntry{
-			Kind: AuditKindApprovalRequested, Principal: p, Selector: sel, Action: act,
+			Kind: kind, Principal: p, Selector: sel, Action: act,
 			Reason: ap.parked.Error(), ApprovalID: ap.parked.RequestID, PlanHash: ap.parked.PlanHash,
 			Asserted: AssertionsFromContext(ctx),
 		}

@@ -173,6 +173,19 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// A re-drive of an already-parked dispatch (#379): same shape as a park,
+	// but nothing was created — the caller bounced off the existing pending
+	// Request. Recorded under its own kind so approval_requested keeps meaning
+	// "a request was created", and handled before the fall-through for the same
+	// no-Results reason as its neighbours.
+	if e.Kind == capability.AuditKindApprovalPendingObserved {
+		base.Kind = audit.KindApprovalPendingObserved
+		base.Reason = e.Reason
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindApprovalPendingObserved, e, 0, "")
+		return err
+	}
+
 	// A decision on a parked dispatch (#270, ADR-0027). Like a park it must be
 	// handled before the dispatch fall-through, and for the same reason: it
 	// carries no Results, so the fall-through would record it as a zero-Node

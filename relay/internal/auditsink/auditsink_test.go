@@ -889,6 +889,7 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 
 	kinds := []capability.AuditKind{
 		capability.AuditKindApprovalRequested,
+		capability.AuditKindApprovalPendingObserved,
 		capability.AuditKindApprovalDecided,
 		capability.AuditKindDispatch,
 	}
@@ -917,6 +918,24 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 		if r.GrantID != "grant-1" {
 			t.Errorf("record %q (kind %s) has grant %q, want grant-1", r.ID, r.Kind, r.GrantID)
 		}
+	}
+	// Each capability Kind must land under its own audit kind — in particular a
+	// re-drive (#379) must not fall through to the dispatch branch and be
+	// recorded as something that ran.
+	wantKinds := map[string]bool{
+		audit.KindApprovalRequested:       true,
+		audit.KindApprovalPendingObserved: true,
+		audit.KindApprovalDecided:         true,
+		audit.KindDispatch:                true,
+	}
+	for _, r := range got {
+		if !wantKinds[r.Kind] {
+			t.Errorf("record %q stored under kind %q, not one of the four linked kinds", r.ID, r.Kind)
+		}
+		delete(wantKinds, r.Kind)
+	}
+	if len(wantKinds) != 0 {
+		t.Errorf("missing audit kinds in the linked set: %v", wantKinds)
 	}
 
 	// A dispatch with no approval in its history reads back empty, so the

@@ -341,6 +341,55 @@ func TestNotifierFiresOncePerPark(t *testing.T) {
 	}
 }
 
+// TestRedriveAuditsPendingObservedNotRequested (#379): approval_requested
+// means a Request was CREATED. Re-driving the same Plan is how a caller polls
+// while waiting, so N attempts at one parked Plan must leave exactly one
+// approval_requested record — the polls land under approval_pending_observed,
+// naming the same request, so an agent hammering a parked request stays
+// visible without inflating the count of asks.
+func TestRedriveAuditsPendingObservedNotRequested(t *testing.T) {
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+
+	first := park(t, s, machineRequester)
+	park(t, s, machineRequester)
+	park(t, s, machineRequester)
+
+	var requested, observed []AuditEntry
+	for _, e := range audit.entries {
+		switch e.Kind {
+		case AuditKindApprovalRequested:
+			requested = append(requested, e)
+		case AuditKindApprovalPendingObserved:
+			observed = append(observed, e)
+		}
+	}
+	if len(requested) != 1 {
+		t.Fatalf("%d approval_requested entries for one logical request, want exactly 1", len(requested))
+	}
+	if len(observed) != 2 {
+		t.Fatalf("%d approval_pending_observed entries, want 2 — each re-drive is on the record under its own kind", len(observed))
+	}
+	for _, e := range observed {
+		if e.ApprovalID != first.RequestID || e.PlanHash != first.PlanHash {
+			t.Errorf("observed entry ApprovalID/PlanHash = %q/%q, want %q/%q — a poll must name the request it bounced off",
+				e.ApprovalID, e.PlanHash, first.RequestID, first.PlanHash)
+		}
+	}
+}
+
 // TestNotifierIsNotConsultedWhenNothingParks.
 func TestNotifierSilentWhenNothingParks(t *testing.T) {
 	reg := registry.NewInMemory()

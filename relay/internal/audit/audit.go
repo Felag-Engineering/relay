@@ -41,6 +41,17 @@ const (
 	// something untrue about it.
 	KindApprovalRequested = "approval_requested"
 
+	// KindApprovalPendingObserved is a re-drive of an already-parked dispatch
+	// (#379): the caller attempted the same Plan again and bounced off the
+	// existing pending Request, creating nothing. Distinct from
+	// KindApprovalRequested so that kind keeps meaning "a request was created"
+	// — re-driving is how a caller polls while waiting for a decision, and an
+	// agent polling every few seconds must not inflate the count of asks or
+	// bury a genuine second request among its polls. The polling itself stays
+	// on the record under this kind: an auditor plausibly wants to see an agent
+	// hammering a parked request, just not filed as repeat asks.
+	KindApprovalPendingObserved = "approval_pending_observed"
+
 	// KindApprovalExpired is a parked dispatch that ran out of time (#269,
 	// ADR-0027). Recorded because an approval that lapsed is a fact the trail
 	// must carry: without it a parked dispatch just vanishes from the record
