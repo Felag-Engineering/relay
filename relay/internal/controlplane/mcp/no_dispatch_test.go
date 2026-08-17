@@ -68,6 +68,13 @@ var readFiles = map[string]bool{
 	// no methods, no capability.*/newDispatch references — so it classifies
 	// as a strict readFile like mcp.go/tools_nodes.go/tools_operations.go.
 	"wire.go": true,
+	// taskshim.go (#375) is the SEP-2663 response transformer. It classifies
+	// STRICT — the strongest available guarantee, and deliberately so: it sits
+	// on the /mcp RCE path and sees every request, so the guard makes it
+	// structurally unable to name a capability identifier at all. It parses
+	// JSON and writes JSON; it cannot resolve a Selector, build an Action, or
+	// reach the Job engine even by accident.
+	"taskshim.go": true,
 }
 
 var execFiles = map[string]bool{

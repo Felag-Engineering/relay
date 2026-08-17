@@ -178,3 +178,46 @@ Two smaller things the store settled:
   fidelity gap reappearing in a new place. A handle also expires at or before its Request,
   under a hard 24-hour ceiling, so a lenient gate rule cannot mint week-long poll tokens
   carrying somebody's plan summary.
+
+## Amendment, 2026-08-17 — what the shim settled (#375)
+
+The shim is built. Three things this ADR left implicit turned out to be decisions, and one
+of its premises is now verified rather than argued.
+
+**The premise holds, and here is the evidence.** `AddReceivingCustomMethod` merges
+`tasks/get` and `tasks/cancel` into the SDK's own `receiveMethods` map, proven over the real
+transport with a real client ([3/6]). And the response rewrite is genuinely a
+single-message transform: the SDK emits one JSON object carrying `"resultType": "complete"`
+at the result's top level, so producing a task result is replacing that object — not
+re-implementing a protocol. `input_required`, the SDK's own second result type, is likewise
+flat (`inputRequests` sits beside `resultType`), which is what fixes the task result's shape
+as flat too.
+
+1. **The shim is a no-op object for everything that is not a candidate.** A request that is
+   not a Tasks-capable `tools/call` never enters the buffering path and reaches the SDK
+   handler holding the *original* `ResponseWriter`. Non-`tools/call` methods, error
+   responses, plans, ordinary runs, and every non-advertising client are therefore not
+   "passed through" — they are never processed. On a surface that sees every request to an
+   RCE endpoint, "cannot be affected by a bug in this file" is worth more than "is handled
+   correctly by this file".
+
+2. **The shim is a STRICT read file under the existing `no_dispatch` guard.** It may not
+   name a capability identifier at all, so it cannot resolve a Selector, build an Action, or
+   reach the Job engine — enforced by AST, not by review. This is stronger than [5/6]
+   anticipated and is why the shim needed no new guard of its own.
+
+3. **`ttlMs` is sent by the Relay, never derived by the shim.** The parked result carries
+   `task_expires_at` — the *handle's* expiry, distinct from the approval's `expires_at`,
+   because the handle is capped independently (`mcptask.MaxTTL`). A shim that computed a
+   lifetime would be a second copy of that cap, and the two would drift. This is the same
+   discipline as the status derivation in [2/6]: the shim formats, it does not decide.
+
+Identification is by the structured `pending_approval.status` field. Matching on the
+Relay-authored summary would make the wire contract depend on wording, and a test asserts
+that a *completed* run whose captured Node output happens to contain the words
+"pending_approval" and "task_id" is left alone.
+
+**Conformance is still owed.** The task result's field names follow SEP-2663 as read
+through the issue and through the SDK's flat `input_required` precedent; no genuinely
+Tasks-capable client has yet spoken to this server. [6/6]'s validation script must find one
+or record a waiver, and [5/6]'s golden wire tests pin the shape either way.

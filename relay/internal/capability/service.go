@@ -360,7 +360,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		// ADR-0028 requires the universal result path to stay whole with the
 		// shim deleted — so a handle store that is down costs a client its poll
 		// handle and costs the dispatch nothing.
-		ap.parked.TaskID = s.mintTaskHandle(ctx, p, ap.parked.RequestID)
+		ap.parked.TaskID, ap.parked.TaskExpiresAt = s.mintTaskHandle(ctx, p, ap.parked.RequestID)
 		return nil, ap.parked
 	}
 
