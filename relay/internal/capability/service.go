@@ -53,6 +53,11 @@ type Service struct {
 	// direction.
 	grants ApprovalGrantStore
 
+	// mcpTasks persists MCP task handles (#374, ADR-0028). Nil disables the
+	// Tasks extension entirely, which is the pre-#374 behaviour and loses
+	// nothing: the universal pending_approval result path does not use handles.
+	mcpTasks MCPTaskStore
+
 	// approvalAuthz is the role floor on a DECISION (#270): deciding a Request
 	// requires the role that Action would have needed to be requested. Nil only
 	// on a Service built without WithApprovals, where there is nothing to
@@ -149,6 +154,21 @@ func WithApprovalGrants(g ApprovalGrantStore) Option {
 		panic("capability: WithApprovalGrants: grant store must not be nil")
 	}
 	return func(s *Service) { s.grants = g }
+}
+
+// WithMCPTasks wires the MCP task-handle store (#374, ADR-0028), enabling the
+// Tasks extension's server side.
+//
+// Optional, and its absence is not a degraded mode but the prior one: with no
+// store, dispatches park and return the universal `pending_approval` result
+// (#371) exactly as before. ADR-0028 requires that path to keep working with
+// the shim deleted, so nothing below it may come to depend on a handle
+// existing.
+func WithMCPTasks(store MCPTaskStore) Option {
+	if store == nil {
+		panic("capability: WithMCPTasks: task handle store must not be nil")
+	}
+	return func(s *Service) { s.mcpTasks = store }
 }
 
 // WithApprovalNotifier wires the out-of-band notification envelope (ADR-0027):
@@ -335,6 +355,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		if ap.created != nil {
 			s.approvalNotifier.NotifyParked(ctx, noticeFor(*ap.created))
 		}
+		// Attach an MCP task handle, if Tasks are wired. Last, and never
+		// fatally: the park is already durable and already audited, and
+		// ADR-0028 requires the universal result path to stay whole with the
+		// shim deleted — so a handle store that is down costs a client its poll
+		// handle and costs the dispatch nothing.
+		ap.parked.TaskID = s.mintTaskHandle(ctx, p, ap.parked.RequestID)
 		return nil, ap.parked
 	}
 
@@ -357,6 +383,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 			dispatchErr = errors.Join(dispatchErr, fmt.Errorf("capability: bind job to approval: %w", err))
 		}
 	}
+
+	// And onto the MCP task handle that was waiting for it, so a poll after the
+	// release reports `completed` rather than `working` forever. Unlike the
+	// binding above this one covers grant-released dispatches too: a handle is
+	// per parked dispatch, so there is exactly one Job to record against it.
+	s.bindTaskHandleJob(ctx, ap.requestID, res.jobID)
 
 	for _, r := range res.results {
 		s.metrics.IncDispatch(r.Outcome)

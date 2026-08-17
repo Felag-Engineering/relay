@@ -73,6 +73,13 @@ var readFiles = map[string]bool{
 var execFiles = map[string]bool{
 	"tools_execution.go": true,
 	"tools_jobs.go":      true,
+	// tasks.go (#374) serves tasks/get and tasks/cancel. It spells
+	// capability.Principal and capability.TaskView for the TaskResolver seam's
+	// signature, so it classifies relaxed alongside the other execution files —
+	// and remains subject to every unconditional rule, including the one that
+	// matters most here: it may never reach capability.Service or newDispatch,
+	// so resolving a task handle can never become a second path to a Node.
+	"tasks.go": true,
 }
 
 // classifyFile reports whether name is a strict read file (strict=true) or a

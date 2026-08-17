@@ -233,7 +233,7 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 	)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(reg, policyCache, vocabCache, opsLister{}, capSvc, results, nil)
+	handler := mcp.New(reg, policyCache, vocabCache, opsLister{}, capSvc, results, nil, nil)
 
 	cert := selfSignedCert(t)
 	controlSrv := controlplane.New(

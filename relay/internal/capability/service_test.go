@@ -45,6 +45,12 @@ type spyDispatcher struct {
 	jobID   string
 	results []NodeResult
 	err     error
+
+	// cancelledJobID and cancelErr let the task-handle tests (#374) assert that
+	// cancelling a task goes through the ORDINARY cancel path, and that a
+	// failed cancel is reported rather than papered over.
+	cancelledJobID string
+	cancelErr      error
 }
 
 func (s *spyDispatcher) run(context.Context, dispatch) (dispatchResult, error) {
@@ -52,9 +58,13 @@ func (s *spyDispatcher) run(context.Context, dispatch) (dispatchResult, error) {
 	return dispatchResult{jobID: s.jobID, results: s.results}, s.err
 }
 
-// cancel satisfies the dispatcher interface's cancel method; no test in this
-// file exercises Job cancellation, so it is a no-op.
-func (s *spyDispatcher) cancel(context.Context, string) error {
+// cancel satisfies the dispatcher interface's cancel method, recording the Job
+// it was asked to cancel so a caller's delegation can be asserted.
+func (s *spyDispatcher) cancel(_ context.Context, jobID string) error {
+	if s.cancelErr != nil {
+		return s.cancelErr
+	}
+	s.cancelledJobID = jobID
 	return nil
 }
 

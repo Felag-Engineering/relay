@@ -23,13 +23,35 @@ func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSessi
 	return session
 }
 
+// ConnectWith is Connect with a hook to configure the underlying client
+// before it dials — the seam a test needs to register custom JSON-RPC methods
+// via sdkmcp.AddSendingCustomMethod, since the extension methods Relay serves
+// (tasks/get, tasks/cancel; #374, SEP-2663) are not on the SDK's standard
+// dispatch table on either side.
+func ConnectWith(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) *sdkmcp.ClientSession {
+	t.Helper()
+	session, err := tryConnect(t, base, client, setup)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	return session
+}
+
 // TryConnect is Connect without the fatal: it returns the connection error
 // instead, for tests asserting that a credential is *refused* at the MCP
 // endpoint (a revoked token, a disabled Account, a non-credential).
 func TryConnect(t *testing.T, base string, client *http.Client) (*sdkmcp.ClientSession, error) {
 	t.Helper()
+	return tryConnect(t, base, client, nil)
+}
+
+func tryConnect(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) (*sdkmcp.ClientSession, error) {
+	t.Helper()
 
 	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "relaytest-client", Version: "0.0.1"}, nil)
+	if setup != nil {
+		setup(c)
+	}
 	transport := &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: client}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

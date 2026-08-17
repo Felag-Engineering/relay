@@ -677,6 +677,11 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// import test (approval.TestApprovalImportsStayNarrow) so widening this
 		// list does not create a transitive back door into the wire types.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval": true,
+		// internal/mcptask joined with #374 (ADR-0028), on exactly the same
+		// terms: a domain package with no proto, no database/sql, and — its own
+		// guard adds this one — no MCP SDK, so admitting it here cannot become
+		// a transitive route to either the wire types or the SDK.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,
