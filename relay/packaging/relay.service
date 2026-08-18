@@ -1,0 +1,124 @@
+# Hardened systemd unit for the Relay (#362).
+#
+# THE HEADLINE DIFFERENCE FROM relay-daemon.service: the Relay needs no
+# privilege at all.
+#
+# The relay-daemon runs as root and cannot stop doing so — service.restart
+# commands PID 1, pkg.install writes the system package database. The Relay
+# does none of that. It is a network server that holds a CA key and a SQLite
+# file, and every privileged act in the system happens on a Node, on the far
+# side of an mTLS tunnel, gated by that Node's local Policy (ADR-0002). So this
+# unit takes everything away: a dedicated unprivileged user, an empty
+# capability bounding set, no new privileges, and a read-only filesystem apart
+# from its own state.
+#
+# Read that as the deployment expression of the architecture rather than as
+# generic hardening advice. If a future change makes the Relay need a
+# capability back, that is a signal worth stopping on — it would mean something
+# privileged had moved to the wrong side of the tunnel.
+#
+# WHAT THIS UNIT PROTECTS, precisely (CLAUDE.md invariant 11): Relay
+# configuration is set at startup by the operator, through this unit and its
+# EnvironmentFile, and is never reachable from any API. A stolen API Token
+# cannot raise a blast cap, repoint the CA, move a listener, or change the
+# OAuth issuer, because no code path exists from a request to any of these
+# values. Every secret arrives as a FILE PATH, never as a value, so nothing
+# sensitive appears in `systemctl show`, `ps`, or a crash dump.
+#
+# Install: relay/packaging/README.md.
+
+[Unit]
+Description=Relay (fleet-administration control plane)
+Documentation=file:///usr/share/doc/relay/relay-install.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+
+# An ordinary unprivileged service account. Create it before first start (see
+# README.md) rather than using DynamicUser: the CA directory and the store must
+# survive restarts with stable ownership, and a rotating UID makes the CA key's
+# file mode meaningless.
+User=relay
+Group=relay
+
+ExecStart=/usr/local/bin/relay
+
+# Carries the RELAY_* startup configuration. The leading '-' means a missing
+# file is not a startup failure, so a Relay running entirely on flags or
+# defaults still starts. See relay.env.example.
+#
+# Install it 0600 root:relay: the Relay reads it, and nothing else should. It
+# holds no secret VALUES today (secrets are passed as paths), but it does hold
+# the security floor — blast caps, the OAuth issuer, the approval-gate path —
+# and an attacker who can edit it can lower that floor at the next restart.
+EnvironmentFile=-/etc/relay/relay.env
+
+Restart=on-failure
+RestartSec=5s
+
+# Writable state: the SQLite store (Jobs, Tasks, audit trail, Accounts, API
+# Tokens, approvals) and the CA key and certificate.
+#
+# 0700, and this matters more here than anywhere else in the deployment: the CA
+# key under /var/lib/relay/ca is what lets the Relay mint Node identities. An
+# attacker who reads it can impersonate the Relay to every Node in the fleet.
+# See docs/operations/ca-disaster-recovery.md for backup and the compromise
+# runbook — the recovery posture is "burn it down", so treat this directory as
+# the thing you least want copied.
+StateDirectory=relay
+StateDirectoryMode=0700
+
+# --- hardening ---
+#
+# NoNewPrivileges plus an EMPTY capability bounding set. The Relay never
+# execs anything, never binds below 1024 by default, and never touches a
+# device. If it ever needs CAP_NET_BIND_SERVICE for a privileged port, prefer
+# a reverse proxy or a high port over granting it here.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# /usr, /etc, /boot, /var read-only except StateDirectory. The root-owned
+# config the Relay reads at startup — the approval-gate file, the
+# control-plane credential hash, the webhook secret — therefore cannot be
+# rewritten by the Relay process itself, which is the point: those files are
+# the operator's, and a compromised Relay must not be able to edit its own
+# security floor.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictSUIDSGID=yes
+
+# The Relay is a network server and nothing else.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+# AF_UNIX is not listed: unlike the daemon, the Relay spawns no child that
+# needs D-Bus. AF_INET/AF_INET6 are the two listeners (Node-plane gRPC and,
+# when enabled, the control plane) plus outbound calls to an OAuth issuer's
+# JWKS endpoint and the approval webhook.
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# --- resource containment ---
+#
+# The Relay's concurrency is bounded by its own connection handling rather than
+# by process spawning, so this is a backstop against a runtime bug rather than
+# against a fork bomb — there is nothing here to fork.
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target
