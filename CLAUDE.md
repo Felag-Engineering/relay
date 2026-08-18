@@ -66,8 +66,14 @@ it needs an ADR, not a quiet workaround.
     structural guard covers it like every other surface.
     (ADR-0009, ADR-0010, ADR-0026)
 11. **The Control API manages runtime objects, never Relay configuration.** Relay config
-    (listeners, CA/TLS, auth bootstrap, blast caps) is a root-owned local file; the API
-    can never raise its own limits. (ADR-0010)
+    (listeners, CA/TLS, auth bootstrap, blast caps) is **operator-set at startup and
+    unreachable from any API** — no code path exists from a request to any of those
+    values, so the API can never raise its own limits. Secrets are supplied as *file
+    paths*, never as values, so nothing sensitive lands in a process listing or a crash
+    dump; a file holding one must be root-owned and not world-readable, and the Relay
+    refuses to start otherwise. Delivered on a host by a root-owned unit file and
+    `EnvironmentFile` (`relay/packaging/`) — the mechanism may change, the property may
+    not. (ADR-0010; settled in #362)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, plan mode). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011)

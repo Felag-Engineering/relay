@@ -55,30 +55,33 @@ type Config struct {
 	// ReadBlastCap and MutateBlastCap are the blast-radius caps by risk class
 	// (ADR-0004, ADR-0012).
 	//
-	// Interim: ADR-0010/0012 call for a root-owned config FILE; the Relay has
-	// no config-file loader yet, so blast caps use the existing startup
-	// flags+env mechanism (same as MaxNodes/mTLS paths). The security
-	// property — set only at startup, never settable via any API — holds. A
-	// real config-file loader is a separate future change. Flagged for human
-	// review. The control-plane credential hash (below) uses the same
-	// interim mechanism: a root-owned FILE (path via flag/env), not a value
-	// on this Config struct — the same deviation, now also covering secret
-	// material.
+	// Set at startup by flag or RELAY_* environment variable, and reachable
+	// from no API — which is invariant 11's actual requirement, settled in
+	// #362. An earlier reading of that invariant expected a config-file
+	// loader and these comments called flags+env an "interim" deviation
+	// pending one; the invariant now states the property rather than a file
+	// format, and the delivered mechanism is the root-owned systemd unit and
+	// EnvironmentFile in relay/packaging/.
+	//
+	// What must stay true: no code path from a request to these values. A
+	// stolen API Token cannot raise its own blast cap, and an API that could
+	// would not be a cap. Secrets stay PATHS rather than values (the
+	// control-plane credential, the approval-webhook secret below), so
+	// nothing sensitive reaches a process listing or a crash dump.
 	ReadBlastCap   int
 	MutateBlastCap int
 
 	// MinDaemonVersion is the minimum relay-daemon version (ADR-0014); empty
-	// means the gate is off and no Node is ever Outdated. It follows the SAME
-	// interim root-owned-file/flags+env mechanism as ReadBlastCap/
-	// MutateBlastCap above: set only at startup, never settable via any API
-	// (invariant #11, ADR-0010). A malformed value refuses startup — see
+	// means the gate is off and no Node is ever Outdated. Same startup-only,
+	// never-API-settable mechanism as ReadBlastCap/MutateBlastCap above
+	// (invariant 11, ADR-0010). A malformed value refuses startup — see
 	// newServer.
 	MinDaemonVersion string
 
 	// ApprovalGatePath is the root-owned approval-gate config (#269,
-	// ADR-0027): which dispatches must park for a human. Same interim
-	// root-owned-file mechanism as the blast caps and the control-plane
-	// credential — a path via flag/env, never settable through any API, since
+	// ADR-0027): which dispatches must park for a human. Same startup-only
+	// mechanism as the blast caps and the control-plane credential — a path,
+	// never settable through any API, since
 	// a stolen credential that could edit its own approval requirements would
 	// make the mechanism decorative.
 	//
