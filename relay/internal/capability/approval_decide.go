@@ -159,7 +159,18 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 		// rung 2 is human-only, and the fact that makes it so is established at
 		// the authentication boundary.
 		DeciderHuman: p.Human(),
-		At:           s.clock(),
+		// The ASSERTED approver, read from the caller's attribution lane
+		// rather than from the decision body. Doing it this way means one
+		// mechanism carries "who is this really for" across every surface —
+		// the API's X-Relay-On-Behalf-Of header and a tool's approver argument
+		// land in the same field and audit identically (ADR-0029 decision 2).
+		//
+		// Read from the UNMASKED ctx on purpose: withoutAssertions above hides
+		// this from the Authorizer, because an assertion must never be an
+		// authorization input. It is attribution, and attribution is exactly
+		// what it is used for here.
+		OnBehalfOf: AssertionsFromContext(ctx).OnBehalfOf,
+		At:         s.clock(),
 	}
 
 	updated, err := s.approvals.RecordDecision(ctx, in.RequestID, d, d.At)

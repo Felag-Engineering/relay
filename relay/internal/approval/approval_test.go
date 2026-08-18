@@ -462,3 +462,103 @@ func TestNewRequestRecordsTheActionKind(t *testing.T) {
 		t.Errorf("Summary = %q, want it to describe the raw exec the ActionKind claims", r.Summary)
 	}
 }
+
+// -----------------------------------------------------------------------
+// ADR-0029: a machine may RELAY an in-band answer, and only relay it
+// -----------------------------------------------------------------------
+
+// TestMachineMayRelayAnAssertedInBandAnswer is the one case ADR-0029 opened.
+//
+// The machine is not confirming its own proposal — it is passing on an answer a
+// human gave its client. Both facts must be present for that reading to be
+// credible: the channel is in-band (so a client with a human in front of it was
+// the surface) and an approver is named (so the trail records who).
+func TestMachineMayRelayAnAssertedInBandAnswer(t *testing.T) {
+	// The rule must ASK for in-band. An unstated channel normalizes to
+	// out-of-band (the fail-closed default), so this carve-out is only ever
+	// reachable where an operator configured it deliberately.
+	rule := req(1, true) // requester_allowed: true
+	rule.Channel = ChannelInBand
+	r := newTestRequest(t, rule)
+
+	relayed := Decision{
+		AccountID: "acct-mike", Account: "mike", Approve: true,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: false,
+		OnBehalfOf: "alice@corp.example",
+		At:         t0.Add(time.Minute),
+	}
+	got, err := r.Decide(relayed, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide: %v — a machine relaying a named human's in-band answer is ADR-0029's one carve-out", err)
+	}
+	if got.State != StateApproved {
+		t.Errorf("State = %v, want approved", got.State)
+	}
+	if got.Decisions[0].OnBehalfOf != "alice@corp.example" {
+		t.Errorf("OnBehalfOf = %q, want the asserted approver preserved — it is the only record of who actually answered",
+			got.Decisions[0].OnBehalfOf)
+	}
+	if got.Decisions[0].DeciderHuman {
+		t.Error("DeciderHuman is true for a machine Account. The carve-out must not launder an assertion " +
+			"into the verified lane — that distinction is the whole reason the asserted lane exists.")
+	}
+}
+
+// TestMachineCannotRelayWithoutNamingAHuman closes the obvious hole in the
+// carve-out: if in-band alone sufficed, any machine could self-approve simply by
+// using the tool surface, and requester_allowed would mean nothing.
+func TestMachineCannotRelayWithoutNamingAHuman(t *testing.T) {
+	r := newTestRequest(t, req(1, true))
+
+	anonymous := Decision{
+		AccountID: "acct-mike", Account: "mike", Approve: true,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: false,
+		OnBehalfOf: "   ", // whitespace is not a human
+		At:         t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(anonymous, t0.Add(time.Minute)); !errors.Is(err, ErrMachineSelfDecision) {
+		t.Fatalf("err = %v, want ErrMachineSelfDecision — an in-band answer naming nobody is a machine deciding", err)
+	}
+}
+
+// TestAssertedApproverDoesNotWeakenAnOutOfBandRule is the guard that keeps
+// ADR-0029 from quietly becoming a downgrade path.
+//
+// A rule demanding out-of-band strength is the two-person tier. Naming an
+// approver must not buy passage through it: the asserted lane adds attribution,
+// never authority.
+func TestAssertedApproverDoesNotWeakenAnOutOfBandRule(t *testing.T) {
+	rule := req(1, true)
+	rule.Channel = ChannelOutOfBand
+	r := newTestRequest(t, rule)
+
+	relayed := Decision{
+		AccountID: "acct-mike", Account: "mike", Approve: true,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: false,
+		OnBehalfOf: "alice@corp.example",
+		At:         t0.Add(time.Minute),
+	}
+	_, err := r.Decide(relayed, t0.Add(time.Minute))
+	if !errors.Is(err, ErrMachineSelfDecision) && !errors.Is(err, ErrWeakChannel) {
+		t.Fatalf("err = %v, want a refusal — an in-band answer must never satisfy an out-of-band requirement", err)
+	}
+}
+
+// TestRelayedAnswerStillCannotSatisfyTwoPersonRule pins the tier boundary.
+//
+// requester_allowed:false is the second-person rung. ADR-0029 relaxed the
+// MACHINE check, not the REQUESTER check, and conflating the two would let one
+// party satisfy a rule that exists precisely to require two.
+func TestRelayedAnswerStillCannotSatisfyTwoPersonRule(t *testing.T) {
+	r := newTestRequest(t, req(1, false)) // requester_allowed: false
+
+	relayed := Decision{
+		AccountID: "acct-mike", Account: "mike", Approve: true,
+		Channel: ChannelInBand, PlanHash: "hash-abc", DeciderHuman: false,
+		OnBehalfOf: "alice@corp.example",
+		At:         t0.Add(time.Minute),
+	}
+	if _, err := r.Decide(relayed, t0.Add(time.Minute)); !errors.Is(err, ErrRequesterExcluded) {
+		t.Fatalf("err = %v, want ErrRequesterExcluded — naming an approver does not turn one party into two", err)
+	}
+}

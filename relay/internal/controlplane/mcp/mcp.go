@@ -191,7 +191,8 @@ const serverVersion = "0.1.0"
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	now func() time.Time
+	now       func() time.Time
+	approvals ApprovalDecider
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
@@ -228,6 +229,11 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	// still return the universal pending_approval result (#371), so the
 	// extension's absence costs a client its poll handle and nothing else.
 	registerTaskMethods(srv, tasks, results, reads, cfg.now)
+	// approve_request (#391, ADR-0029). A nil decider registers nothing, so
+	// the in-band rung is opt-in at the composition root: without it, parked
+	// dispatches are answerable only on the authenticated /api/v1 endpoint,
+	// exactly as before.
+	registerApprovalTools(srv, cfg.approvals)
 
 	// Stateless + JSON responses (MCP spec 2026-07-28; #267): the SDK accepts
 	// the 2026-07-28 protocol only in stateless mode, and every tool here is

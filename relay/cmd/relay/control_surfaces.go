@@ -80,7 +80,19 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// like everything else (invariant 10) rather than reaching a store.
 	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.vocab, d.ops, d.capability,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		readAuditor{sink: d.auditSink}, d.capability))
+		readAuditor{sink: d.auditSink}, d.capability,
+		// The in-band approval rung (#391, ADR-0029): the SAME
+		// *capability.Service the API's decision endpoint uses. One decision
+		// model, two delivery envelopes — a decision made through the tool is
+		// the same act, recorded by the same code, differing only in the
+		// channel it is stamped with and the fact that its approver is
+		// asserted rather than verified.
+		//
+		// Passing it here is what makes rules configured `channel: "in-band"`
+		// reachable at all. A deployment that wants the previous posture
+		// changes nothing in code: leave its gate rules `out-of-band` and
+		// ErrWeakChannel refuses every tool-delivered answer.
+		mcp.WithApprovalDecider(d.capability)))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
