@@ -8,8 +8,10 @@
 #
 # Startup order:
 #   relay (healthy) -> credential (mints the control-plane credential with
-#   `relay bootstrap-token`) -> bootstrap (mints a relay: Enrollment Token +
-#   exports the public CA cert) -> daemon-1..3 (enroll, then go healthy).
+#   `relay bootstrap-token`) -> approver (creates the dev-approver Account that
+#   the approval gate names as its audience) + bootstrap (mints a relay:
+#   Enrollment Token + exports the public CA cert) -> daemon-1..3 (enroll, then
+#   go healthy).
 
 # The three daemon services are byte-identical except for their per-Node
 # environment and their private state volume. This anchor factors out ONLY the
@@ -53,6 +55,14 @@ services:
       RELAY_HOSTNAME: "relay"
       RELAY_CA_DIR: "/var/lib/relay/ca"
       RELAY_STORE_PATH: "/var/lib/relay/store/relay.db"
+      # The approval gate (ADR-0027), baked into the image root-owned 0644 —
+      # Relay CONFIGURATION, not a runtime object, so no Account of any role can
+      # loosen it through the API (invariant 11). It parks fleet-wide mutates
+      # (fan-out >= 2) and every Raw Exec; a single-Node mutate still runs
+      # straight through, so the fleet exercises BOTH paths. Loading it is
+      # fail-closed: a malformed file fails startup rather than silently
+      # meaning "nothing needs approval".
+      RELAY_APPROVAL_GATE_CONFIG: "/etc/relay/approval-gates.json"
     ports:
       # Distinct published host ports: node plane vs control plane. Bound to
       # 127.0.0.1 (loopback) ONLY: the control plane is an execution surface,
@@ -105,6 +115,30 @@ services:
       # by every daemon, and a control-plane admin credential readable by every
       # Node is exactly the shape a compromised Node would exploit. Only the
       # minting service and the bootstrap service see this one.
+      - control-credential:/credential
+
+  # One-shot: creates the `dev-approver` human Account and mints its credential
+  # (docker/mint-approver.sh).
+  #
+  # The dev gate leaves `requester_allowed` unset — the strict default — so the
+  # Account that requests a parked dispatch may NOT approve it. Without a second
+  # Account the fleet could park a dispatch and never release it. This is the
+  # human half of that pair, and its credential deliberately lands on the
+  # control-credential volume that daemons never mount.
+  approver:
+    image: curlimages/curl:8.11.1
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      relay:
+        condition: service_healthy
+      credential:
+        condition: service_completed_successfully
+    entrypoint: ["sh", "/mint-approver.sh"]
+    volumes:
+      - ./docker/mint-approver.sh:/mint-approver.sh:ro
+      # Read-only, and only for the PUBLIC ca-cert.pem it pins its API calls to.
+      - relay-data:/relay-data:ro
       - control-credential:/credential
 
   # One-shot: mints the Enrollment Token and exports the public CA cert, then

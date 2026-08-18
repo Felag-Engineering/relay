@@ -45,3 +45,7 @@
 # Relay SQLite store (default ./relay-data/relay.db) — local Node/audit state, never commit
 /relay/relay-data/
 **/relay-data/
+
+# Dev-fleet host-side state exported by scripts/dev-fleet-mcp.sh: the fleet's CA
+# cert and two LIVE control-plane credentials. Never commit.
+/.dev-fleet/

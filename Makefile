@@ -10,7 +10,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs fuzz-relay fuzz-daemon \
+        gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
+        fuzz-relay fuzz-daemon \
         verify opschema-check openapi-check gen-apiclient apiclient-check
 
 ## --- verify: the local mirror of CI ---
@@ -331,6 +332,13 @@ dev-fleet-down:
 
 dev-fleet-logs:
 	docker compose logs -f
+
+# Export the fleet's CA cert and BOTH control-plane credentials (the founding
+# admin's and dev-approver's) to the gitignored ./.dev-fleet/ so a host-side MCP
+# client or scripts/dev-fleet-mcp.sh can reach the control plane over VERIFIED
+# TLS. Run after dev-fleet-up.
+dev-fleet-creds:
+	bash scripts/dev-fleet-mcp.sh init
 
 clean:
 	cd relay && go clean ./... || true

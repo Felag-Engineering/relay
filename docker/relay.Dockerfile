@@ -22,6 +22,19 @@ FROM busybox:stable-musl
 
 COPY --from=build /out/relay /usr/local/bin/relay
 
+# The approval gate (ADR-0027) arrives WITH THE IMAGE, never over the wire —
+# the same posture as the daemon's Policy file (ADR-0002). COPY lands it
+# root:root 0644, which is what the Relay's fail-closed loader demands: it
+# refuses a group/world-writable gate file, a symlink, or a missing one. A
+# gate file that cannot be loaded is a startup failure, never a silent
+# "nothing needs approval" — so a broken fixture crash-loops this container
+# instead of quietly disarming the fleet's approvals.
+# --chmod is explicit rather than inherited: a plain COPY carries the BUILD
+# HOST's mode, so whoever's umask happened to be 002 would ship a 0664 file and
+# the loader would (correctly) refuse to start. The image mode must not depend
+# on whose laptop built it.
+COPY --chmod=0644 docker/fixtures/approval-gates.json /etc/relay/approval-gates.json
+
 # No credential fixture is baked into the image: since #298 (ADR-0023) the
 # control plane accepts only per-Account API Tokens, and the dev fleet's first
 # one is minted at runtime by the `credential` service (docker/mint-credential.sh)

@@ -33,6 +33,7 @@ never invokes it.
 | --- | --- |
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. CA + SQLite store live on the `relay-data` volume. |
 | `bootstrap` | A one-shot helper that, once the Relay is healthy, mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and exports the Relay's **public** CA certificate for the daemons to pin. Then it exits. |
+| `approver` | A one-shot helper that creates the `dev-approver` **human** Account and mints its credential. It exists because the approval gate forbids self-approval — see [The approval gate](#the-approval-gate) below. Then it exits. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. |
 
 Security-relevant choices, made explicit:
@@ -120,25 +121,64 @@ and `policy_fingerprint`. `node:` and `relay:` labels come back as separate maps
 (ADR-0006). Pass an optional `selector` to filter, e.g.
 `list_nodes(selector="relay:env=dev")`.
 
-Export the CA cert the bootstrap step produced so you can talk to the control
-plane (MCP and `/api/v1`) over verified TLS from the host:
+Export the CA cert and both control-plane credentials to the gitignored
+`./.dev-fleet/`, so you can talk to the control plane (MCP and `/api/v1`) over
+verified TLS from the host:
 
 ```console
-$ docker compose cp relay:/var/lib/relay/ca/ca-cert.pem ./dev-fleet-ca.pem
+$ make dev-fleet-creds
 ```
 
 The Relay's server certificate SAN is `relay` (the in-fleet DNS name), not
-`localhost`. When you connect from the host to `localhost:9443`, either override
-the TLS server name to `relay` or, for a quick look, skip verification.
+`localhost` — so dial `https://relay:9443` with `127.0.0.1 relay` in `/etc/hosts`
+and verification succeeds against `.dev-fleet/ca-cert.pem`. See
+[Connecting Claude Code](#connecting-claude-code) for the one-time setup.
 
 ## Drive the fleet over MCP
 
-Point an MCP client at `https://localhost:9443/mcp` with:
+### Connecting Claude Code
 
-- **Bearer credential:** the token printed by the command in the security notes
-  above.
-- **TLS trust:** the exported `dev-fleet-ca.pem`, with the server name overridden
-  to `relay` (or verification disabled for a quick look).
+The control plane's server certificate has a single SAN: `relay`, the in-fleet DNS name.
+So dial it by that name and TLS verifies against the fleet's own CA with no `-k` and no
+disabled verification. Map the name to loopback once:
+
+```console
+$ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
+```
+
+Export the credentials, then add the server. `NODE_EXTRA_CA_CERTS` is what makes Claude
+Code's Node TLS stack trust the fleet's private CA:
+
+```console
+$ make dev-fleet-creds
+$ claude mcp add --transport http relay https://relay:9443/mcp \
+    --header "Authorization: Bearer $(cat .dev-fleet/control-credential)"
+```
+
+An **http** transport is dialled by the `claude` process itself, not by a subprocess, so
+the CA has to be trusted by that process — `claude mcp add -e` would not help here. Start
+Claude Code with it:
+
+```console
+$ NODE_EXTRA_CA_CERTS=$PWD/.dev-fleet/ca-cert.pem claude
+```
+
+That connects as the **founding admin** — the requester. It deliberately **cannot** approve
+its own parked dispatches; use `dev-approver` for that (see
+[The approval gate](#the-approval-gate)).
+
+Claude Code does not implement the MCP Tasks extension, so gated dispatches come back to it
+as `pending_approval` **results**, never as task handles. That is the universal path and the
+one that matters most; reach the Tasks path with
+[`scripts/dev-fleet-mcp.sh`](#driving-the-mcp-tasks-extension-scriptsdev-fleet-mcpsh).
+
+### Any other MCP client
+
+Point it at `https://relay:9443/mcp` with:
+
+- **Bearer credential:** `.dev-fleet/control-credential` (from `make dev-fleet-creds`).
+- **TLS trust:** `.dev-fleet/ca-cert.pem`. Dial the host as `relay` so the SAN matches —
+  never disable verification just to get a connection.
 
 `run_operation` takes a `selector`, an `operation`, and a named-argument **map**
 keyed by the Operation's argument names (the Relay maps those names to the
@@ -170,6 +210,94 @@ run_operation(selector="relay:env=dev", operation="service.restart", args={"unit
 Each matched Node returns `outcome=denied_by_policy` (the "denied-by-policy"
 result). The verdict is the daemon's, not the Relay's — the Relay never evaluates
 Policy (ADR-0002/0011).
+
+## The approval gate
+
+The fleet ships an **approval gate** (`docker/fixtures/approval-gates.json`, ADR-0027), so
+the parked-dispatch and MCP-task-handle surfaces are exercisable rather than theoretical.
+Two rules:
+
+| Rule | Matches | Requires |
+| --- | --- | --- |
+| `dev-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval from `dev-approver`, out-of-band |
+| `dev-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval from `dev-approver`, out-of-band |
+
+The fan-out threshold is deliberate: it leaves **both** paths reachable in one fleet. A
+mutate that resolves to a single Node runs straight through; the same mutate aimed
+fleet-wide parks. So `node:role=db` (one Node) executes, and `relay:env=dev` (three) waits
+for a human.
+
+Security-relevant choices, made explicit:
+
+- **The gate is Relay configuration, not a runtime object.** It is baked into the image
+  `--chmod=0644`, root-owned, and read from `RELAY_APPROVAL_GATE_CONFIG`. No Account of
+  any role can read or loosen it through the API (invariant 11) — a stolen credential that
+  could edit its own approval requirements would make the whole mechanism decorative.
+- **Loading it is fail-closed.** A malformed, missing, symlinked, or group/world-writable
+  gate file fails Relay startup. It never degrades to "nothing needs approval", so a
+  broken fixture crash-loops the container instead of quietly disarming the fleet. (If you
+  edit the fixture and the `relay` container stops going healthy, read
+  `docker compose logs relay` — the loader says exactly what it objected to.)
+- **`requester_allowed` is unset, which is the strict default.** The Account that requested
+  a parked dispatch may **not** approve it. That is why `dev-approver` exists: with a
+  single Account the fleet could park a dispatch and never release it.
+- **`dev-approver`'s credential is on the `control-credential` volume**, which daemons
+  never mount. An approver credential readable by every Node would let a compromised Node
+  approve its own remediation.
+
+### Approving a parked dispatch
+
+Export both credentials to the gitignored `./.dev-fleet/` first:
+
+```console
+$ make dev-fleet-creds
+```
+
+A gated call comes back as a `pending_approval` **result** (not an error) carrying a
+`request_id`, a `plan_hash`, and a Relay-authored `summary`. Decide it as the approver:
+
+```console
+$ scripts/dev-fleet-mcp.sh api-approver POST \
+    /api/v1/approvals/<request_id>/decision \
+    '{"approve":true,"plan_hash":"<plan_hash>","reason":"looks right"}'
+```
+
+Then **re-issue the original call unchanged** — approving releases a Plan, it does not
+itself dispatch.
+
+Two properties worth watching, because they are the point of the design:
+
+- The **admin** credential cannot decide its own request. It gets
+  `409 requester may not decide their own request`, even though it is an admin.
+- The decision arrives on a credential the requesting MCP session does not hold. That is
+  what `channel: out-of-band` records — evidence, not an assumption about the client.
+
+## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
+
+Relay serves the MCP Tasks extension (SEP-2663, ADR-0028), but **no shipping MCP client
+implements it** — not the Go SDK ([go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626)),
+not the TypeScript or Python ones. The capability that triggers it is advertised in a
+per-request `_meta` that no client sends, so pointing an ordinary client at the fleet can
+never reach `tasks/get`, `tasks/cancel`, or the `CreateTaskResult` shim.
+
+`scripts/dev-fleet-mcp.sh` speaks that wire by hand. It is a curl wrapper, deliberately not
+a client library: its value is showing exactly what goes over the wire, which is the only
+way to check Relay's reading of a spec nobody else has implemented yet.
+
+```console
+$ scripts/dev-fleet-mcp.sh init                 # export CA + both credentials
+$ scripts/dev-fleet-mcp.sh call list_nodes      # ordinary client (no Tasks capability)
+$ scripts/dev-fleet-mcp.sh call-tasks run_operation '{"selector":"relay:env=dev","operation":"pkg.install","args":{"name":"nginx"}}'
+$ scripts/dev-fleet-mcp.sh task-get <taskId>
+$ scripts/dev-fleet-mcp.sh task-cancel <taskId>
+$ scripts/dev-fleet-mcp.sh raw tasks/update '{}' # served? it must not be
+```
+
+The difference between `call` and `call-tasks` is the whole shim: the same gated dispatch
+returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle
+to a Tasks-capable one. Both mint the same `taskId`.
+
+`docs/testing/validate-v0.5.1.md` is the script these commands discharge.
 
 ## Survive `down` / `up`
 
@@ -219,5 +347,5 @@ copy a `daemon-N` service block (bump the name, `HOSTNAME`, and its
 
 ```console
 $ docker compose down -v
-$ rm -f ./dev-fleet-ca.pem
+$ rm -rf ./.dev-fleet
 ```
