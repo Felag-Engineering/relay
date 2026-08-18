@@ -603,6 +603,59 @@ approver sees; the guarantee never depends on harness behavior.
 
 ---
 
+## `v0.5.1` — MCP Tasks Extension (post-beta)
+
+The premium delivery envelope v0.5.0 named but could not build (#372–#377). SEP-2663 is
+Final; `modelcontextprotocol/go-sdk` v1.7.0 does not implement it and
+[go-sdk#626](https://github.com/modelcontextprotocol/go-sdk/issues/626) is open with no
+timeline. **Relay implements the extension itself, as a bounded shim with a written
+removal condition — never a fork** ([ADR-0028](docs/adr/0028-mcp-tasks-extension-transport-layer-shim.md)).
+
+This milestone changes **how an agent waits**, and nothing about **who may decide**.
+
+**Deliverables**
+- **ADR-0028** (#372) — the shim boundary, the two preconditions it rests on (the SDK
+  refuses JSON-RPC batching; the handler runs stateless/JSON, so one message in and one
+  object out), and the deletion condition.
+- **MCP task handle** (#373) — domain type + durable store. One handle per **parked
+  dispatch**, not per Job: parking creates no Job, so the handle carries two nullable
+  bindings rather than one overloaded ID. Status is derived from the live approval Request
+  on every read, never from a stored column. Owner-only, and a handle that is not yours is
+  indistinguishable from one that never existed.
+- **`tasks/get` and `tasks/cancel`** (#374) as SDK custom methods — no shim needed for this
+  half. `tasks/cancel` ends the *client's* interest: a running Job cancels through the
+  ordinary path, and a still-parked request stays pending and decidable.
+- **The `CreateTaskResult` shim** (#375), gated on the client advertising
+  `io.modelcontextprotocol/tasks`. A no-op object for every request that is not a
+  Tasks-capable `tools/call`; when in any doubt, pass through untouched.
+- **Structural guards + wire conformance** (#376) — the shim cannot import the MCP SDK at
+  all, `tasks/update` is a build failure, both guards have tests that plant a violation and
+  assert it is caught, and byte-exact goldens catch SDK-upgrade drift that would otherwise
+  degrade the shim into a silent no-op.
+- **Docs, validation, removal tracking** (#377).
+
+**Out of scope, as a boundary rather than an omission:** `tasks/update` and any
+`inputRequests` elicitation. That is an approval decision arriving over the AI's own MCP
+session, and whether an in-band answer can ever count is #272's open rung-2 question.
+Implementing it requires amending both ADR-0028 and the structural guard, in front of a
+person.
+
+**Acceptance**
+- A Tasks-capable client's gated `run_operation` returns a conformant `CreateTaskResult`;
+  the returned `taskId` resolves through `tasks/get` and reports results once approved.
+- A client that did not advertise the extension gets byte-identical pre-v0.5.1 behaviour.
+- Cancelling a parked handle leaves its approval request pending, queued, and decidable.
+- Polling another Account's handle is refused, indistinguishably from an unknown one.
+- Manual validation: `docs/testing/validate-v0.5.1.md` written — **run waived, 2026-08-17**,
+  on the v0.2.0 precedent: no available MCP client implemented Tasks, so the end-to-end
+  step had nothing to run it with. The waiver and what it would have covered are recorded
+  in the script's header.
+
+**ADRs:** 0028 (Tasks shim, #372); builds on 0027 (approval callout), 0009/0010 (one
+capability layer, three thin surfaces).
+
+---
+
 ## `v0.6.0` — Admin Console: Monitoring (post-beta)
 
 The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
