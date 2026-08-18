@@ -290,7 +290,27 @@ type Decision struct {
 	// set it.
 	DeciderHuman bool
 
+	// OnBehalfOf is the ASSERTED approver identity: who the deciding surface's
+	// client says actually answered. It is never verified — a client supplies
+	// it — and it exists so an in-band decision can name a human without
+	// pretending Relay authenticated one (ADR-0029).
+	//
+	// Its one behavioural effect is to permit a machine Account to relay a
+	// self-decision (see Decide); everywhere else it is attribution the audit
+	// trail carries in the asserted lane, never the verified one.
+	OnBehalfOf string
+
 	At time.Time
+}
+
+// relaysAnAssertedHuman reports whether d is a machine Account relaying an
+// answer a human gave it, rather than one it made itself (ADR-0029 decision 3).
+//
+// Deliberately a method on Decision rather than an inline condition: it is the
+// single place the carve-out is defined, so widening it is one visible edit
+// rather than a condition drifting apart across call sites.
+func (d Decision) relaysAnAssertedHuman() bool {
+	return d.Channel == ChannelInBand && strings.TrimSpace(d.OnBehalfOf) != ""
 }
 
 // Request is one parked Job awaiting its Requirement.
@@ -449,7 +469,16 @@ func (r Request) Decide(d Decision, now time.Time) (Request, error) {
 		// may take it. A machine confirming its own proposal is the same actor
 		// answering twice, so its minimum rung is 3 regardless of configuration
 		// — see ErrMachineSelfDecision.
-		if !d.DeciderHuman {
+		//
+		// ADR-0029 carves out exactly one exception: a machine may RELAY an
+		// answer it did not author. That is credible only when both facts hold
+		// together — the decision arrived in-band (so a client with a human in
+		// front of it was the surface), and it names an asserted approver (so
+		// the trail records who that human was said to be). Either alone is
+		// not enough: an in-band decision with no named approver is a machine
+		// answering anonymously, and an asserted approver on an out-of-band
+		// decision is a verified credential that needs no relay.
+		if !d.DeciderHuman && !d.relaysAnAssertedHuman() {
 			return r, ErrMachineSelfDecision
 		}
 	}

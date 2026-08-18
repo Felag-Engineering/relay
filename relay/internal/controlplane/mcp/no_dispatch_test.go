@@ -87,6 +87,15 @@ var execFiles = map[string]bool{
 	// matters most here: it may never reach capability.Service or newDispatch,
 	// so resolving a task handle can never become a second path to a Node.
 	"tasks.go": true,
+	// tools_approval.go (#391, ADR-0029) serves approve_request, the in-band
+	// approval rung. It spells capability.Principal and
+	// capability.ApprovalDecision for the ApprovalDecider seam, so it
+	// classifies relaxed — but the rule that matters most here is
+	// unconditional and still binds: it may never reach capability.Service or
+	// newDispatch. Approving releases a Plan; it does not run one. Answering a
+	// gate must never become a second path to a Node, and this is what makes
+	// that structural rather than a matter of review.
+	"tools_approval.go": true,
 }
 
 // classifyFile reports whether name is a strict read file (strict=true) or a

@@ -578,9 +578,18 @@ approver sees; the guarantee never depends on harness behavior.
   richer rules (#285 Cedar evaluation covers approval rules + Grants together) land
   without migration. Each decision is its own audit record; partial state visible.
 - **Out-of-band decision endpoint** (#270) — the universal path; **MCP Tasks extension**
-  for parked Jobs (#271) and **elicitation surfaced inside `tasks/get`** (#272) as the
-  delivery envelopes. Elicitation is the primary, first-class channel; **channel
-  strength** (in-band answer vs authenticated out-of-band decision) is per-rule config.
+  for parked Jobs (#271) as the delivery envelope. **channel strength** (in-band answer vs
+  authenticated out-of-band decision) is per-rule config.
+  > **Corrected 2026-08-17 (ADR-0029).** This bullet and the acceptance criterion below
+  > originally named elicitation as "the primary, first-class channel". That was written
+  > before #267 made the MCP handler stateless (`JSONResponse: true`), which removed the
+  > stream a server-initiated `elicitation/create` needs — and before MCP 2026-07-28
+  > removed server-initiated requests outright and forbade `InputRequiredResult` on
+  > `tasks/get`, which is what #272 specified. **Both MCP elicitation envelopes named here
+  > were non-conformant, and #272 is closed as superseded.** The in-band rung is delivered
+  > instead through the tool surface (`approve_request`, ADR-0029), which every MCP client
+  > already supports; MRTR (SEP-2322) is a second envelope over the same decision path when
+  > clients negotiate 2026-07-28.
 - **Plan-hash binding**: approvals bind to the content-addressed Plan (op, args, resolved
   fan-out); material drift at dispatch re-parks for re-approval. **TTL** on parked Jobs.
 - **Batch/window approvals**: one approval covering a declared batch or scoped time
@@ -588,9 +597,11 @@ approver sees; the guarantee never depends on harness behavior.
   grant.
 
 **Acceptance**
-- A gated Gleipnir dispatch parks; the approver receives the Relay-authored Plan via
-  elicitation; the decision lands on the authenticated endpoint; the Job runs; audit
-  answers "who asked / for whom / who approved" in one query with lanes marked.
+- A gated Gleipnir dispatch parks; the approver receives the Relay-authored Plan (via the
+  `pending_approval` result, and — since ADR-0029 — answerable in-band through
+  `approve_request`); the decision lands on the authenticated endpoint for out-of-band
+  rules; the Job runs; audit answers "who asked / for whom / who approved" in one query
+  with lanes marked.
 - A `count: 2` rule dispatches only after two distinct approvers; `requester_allowed:
   false` refuses the requester's own approval.
 - Registry drift between approval and dispatch re-parks the Job; an expired approval

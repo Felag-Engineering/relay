@@ -1,0 +1,13 @@
+-- ADR-0029: an in-band approval names its approver in the ASSERTED lane.
+--
+-- A decision arriving over the tool surface is made on the requesting session's
+-- credential, so `account_id`/`account` identify who was authenticated, never
+-- who actually answered. `on_behalf_of` carries the client's claim about the
+-- human, alongside — never instead of — the verified columns, so an auditor can
+-- always separate "a human authenticated and approved" from "a client said a
+-- human approved".
+--
+-- Nullable with no default: an out-of-band decision has no assertion to make,
+-- and NULL is the honest representation of that. An empty string would read as
+-- "asserted, and empty".
+ALTER TABLE approval_decisions ADD COLUMN on_behalf_of TEXT;

@@ -151,7 +151,7 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 
 func (a *sqliteApprovals) decisionsFor(ctx context.Context, q querier, requestID string) ([]approval.Decision, error) {
 	rows, err := q.QueryContext(ctx, `
-		SELECT account_id, account, approve, reason, channel, plan_hash, decider_human, decided_at
+		SELECT account_id, account, approve, reason, channel, plan_hash, decider_human, on_behalf_of, decided_at
 		  FROM approval_decisions WHERE request_id = ? ORDER BY decision_id`, requestID)
 	if err != nil {
 		return nil, fmt.Errorf("select approval decisions: %w", err)
@@ -165,14 +165,19 @@ func (a *sqliteApprovals) decisionsFor(ctx context.Context, q querier, requestID
 			approve int
 			channel int
 			human   int
-			at      sql.NullString
+			// NULL for every out-of-band decision and for every row written
+			// before ADR-0029, so it must be scanned as nullable — a plain
+			// string would fail the scan on existing data.
+			onBehalf sql.NullString
+			at       sql.NullString
 		)
-		if err := rows.Scan(&d.AccountID, &d.Account, &approve, &d.Reason, &channel, &d.PlanHash, &human, &at); err != nil {
+		if err := rows.Scan(&d.AccountID, &d.Account, &approve, &d.Reason, &channel, &d.PlanHash, &human, &onBehalf, &at); err != nil {
 			return nil, fmt.Errorf("scan approval decision: %w", err)
 		}
 		d.Approve = approve != 0
 		d.Channel = approval.Channel(channel)
 		d.DeciderHuman = human != 0
+		d.OnBehalfOf = onBehalf.String
 		var err error
 		if d.At, err = parseTime(at); err != nil {
 			return nil, fmt.Errorf("parse approval decided_at: %w", err)
@@ -248,10 +253,10 @@ func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d appro
 	}
 
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO approval_decisions (request_id, account_id, account, approve, reason, channel, plan_hash, decider_human, decided_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO approval_decisions (request_id, account_id, account, approve, reason, channel, plan_hash, decider_human, on_behalf_of, decided_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, d.AccountID, d.Account, boolToInt(d.Approve), d.Reason, int(d.Channel), d.PlanHash,
-		boolToInt(d.DeciderHuman), formatTime(roundTripTime(d.At)),
+		boolToInt(d.DeciderHuman), nullIfEmpty(d.OnBehalfOf), formatTime(roundTripTime(d.At)),
 	); err != nil {
 		return approval.Request{}, fmt.Errorf("insert approval decision: %w", err)
 	}
