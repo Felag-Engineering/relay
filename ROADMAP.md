@@ -404,6 +404,29 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 - **LICENSE**: publish as source-available under the **Business Source License (BSL)**
   — parameters (change date, change license, additional-use grant) set before the repo
   gets public attention.
+- **Self-serve evaluation** (#398, #400, #401, #399, #402; blocked by #389 and #397) —
+  added 2026-08-19. This milestone already asks for "documented, repeatable setup from a
+  clean environment"; these five make that true rather than aspirational.
+  - **[1/5]** #398 — ADR: what belongs in the `relay` binary. The line is *acts
+    impossible over the wire because no credential exists yet*. Written first, because
+    it is what stops `relay init` growing back into the CLI #137 cut.
+  - **[2/5]** #400 — `relay init`: one idempotent, re-runnable command for the whole
+    Relay-side bootstrap. Its falsifier is deleting `docker/bootstrap.sh` and
+    `mint-credential.sh`.
+  - **[3/5]** #401 — the join command: Enrollment Token + CA fingerprint in one
+    pasteable string, so a Node needs no out-of-band PEM copy (k3s precedent).
+  - **[4/5]** #399 — official **Relay** container image on Docker Hub. Deliberately no
+    daemon image: a containerized daemon has no host to administer (#389).
+  - **[5/5]** #402 — the quickstart that ties them together.
+
+  > **Why this is here and not in an Ansible milestone.** #361 was going to grow into a
+  > first-party Ansible collection; it was triaged down to a thin role and sequenced
+  > behind this work. An Ansible collection cannot make evaluation easier, because
+  > evaluation is not gated on Ansible — `docker compose up` already works. What is
+  > actually missing is a path from the laptop fleet to real machines, and a bootstrap
+  > chain that does not read as a one-way door. Notably, the fear driving it was
+  > unfounded: everything an operator is asked to copy is re-mintable, and the only
+  > unrecoverable artifact — the CA private key — is the one thing never copied by hand.
 
 **Acceptance**
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted
