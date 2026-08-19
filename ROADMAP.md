@@ -43,6 +43,32 @@ covering everything shipped through v0.0.9 is `docs/testing/validate-v0.0.9-curr
 > aggregation) → **v0.9.0**. Ordering rationale: Accounts → API → Approvals → Console is
 > a strict dependency chain (`docs/design/console-backend-coverage.md`).
 
+## Status, 2026-08-18
+
+**✅ complete · 🚧 in progress · unmarked = not started.**
+
+Post-beta milestones were built ahead of `v0.1.0-beta`, which is deliberate — beta is the
+*real-hardware* proof, and there was more value in having something worth proving. What
+remains before it is small and named below.
+
+| Milestone | State | What is actually outstanding |
+|---|---|---|
+| `v0.0.1`–`v0.0.9` | ✅ | — |
+| `v0.1.0-beta` | not started | **Needs real machines** for the runbook. Two paper deliverables are also unmet: **no `LICENSE` file exists** (BSL parameters are decision #123, still open), and the bulk-enrollment workflow is `v0.4.0` [6/7] (#361). |
+| `v0.2.0` | ✅ | — |
+| `v0.3.0` | ✅ code | Decision #279 (per-Account rate limits) still open; `validate-v0.3.0.md` unwritten. |
+| `v0.4.0` | 🚧 | [6/7] (#361) open; [7/7] (#362) in review. |
+| `v0.5.0` | ✅ code | `validate-v0.5.0.md` unwritten. |
+| `v0.5.1` | ✅ | Validation run waived, recorded — no MCP client implements Tasks yet. |
+
+**The one systematic gap: manual validation scripts.** This file says every milestone ships
+one, and `v0.3.0`, `v0.4.0`, and `v0.5.0` have none. Each of those milestones lists it in
+its own Acceptance section, so all three are complete in code and incomplete by their own
+definition of done. That is worth stating plainly rather than leaving to be discovered:
+either the scripts get written, or the runs get waived on the
+[README rule 7](docs/testing/README.md) precedent — a dated decision with a stated cost,
+which is the opposite of quietly skipping them.
+
 ---
 
 ## `v0.0.1` — Walking Skeleton ✅
@@ -307,7 +333,7 @@ from findings.
 
 ---
 
-## `v0.0.9` — Release Readiness & Residual Hardening 🚧
+## `v0.0.9` — Release Readiness & Residual Hardening ✅
 
 The step between "the security pass is done" and "binaries go on machines that matter."
 v0.0.8 ended with a signed-off threat model and a residual-risk register; this milestone
@@ -378,6 +404,29 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 - **LICENSE**: publish as source-available under the **Business Source License (BSL)**
   — parameters (change date, change license, additional-use grant) set before the repo
   gets public attention.
+- **Self-serve evaluation** (#398, #400, #401, #399, #402; blocked by #389 and #397) —
+  added 2026-08-19. This milestone already asks for "documented, repeatable setup from a
+  clean environment"; these five make that true rather than aspirational.
+  - **[1/5]** #398 — ADR: what belongs in the `relay` binary. The line is *acts
+    impossible over the wire because no credential exists yet*. Written first, because
+    it is what stops `relay init` growing back into the CLI #137 cut.
+  - **[2/5]** #400 — `relay init`: one idempotent, re-runnable command for the whole
+    Relay-side bootstrap. Its falsifier is deleting `docker/bootstrap.sh` and
+    `mint-credential.sh`.
+  - **[3/5]** #401 — the join command: Enrollment Token + CA fingerprint in one
+    pasteable string, so a Node needs no out-of-band PEM copy (k3s precedent).
+  - **[4/5]** #399 — official **Relay** container image on Docker Hub. Deliberately no
+    daemon image: a containerized daemon has no host to administer (#389).
+  - **[5/5]** #402 — the quickstart that ties them together.
+
+  > **Why this is here and not in an Ansible milestone.** #361 was going to grow into a
+  > first-party Ansible collection; it was triaged down to a thin role and sequenced
+  > behind this work. An Ansible collection cannot make evaluation easier, because
+  > evaluation is not gated on Ansible — `docker compose up` already works. What is
+  > actually missing is a path from the laptop fleet to real machines, and a bootstrap
+  > chain that does not read as a one-way door. Notably, the fear driving it was
+  > unfounded: everything an operator is asked to copy is re-mintable, and the only
+  > unrecoverable artifact — the CA private key — is the one thing never copied by hand.
 
 **Acceptance**
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted
@@ -469,7 +518,7 @@ catalog's allow rules and three further denied paths), 0012; ADR-0002 unchanged.
 
 ---
 
-## `v0.3.0` — Accounts & Access (post-beta)
+## `v0.3.0` — Accounts & Access (post-beta) ✅
 
 The unified identity layer (ADR-0010) replaces the single seeded credential — and, per the
 2026-08-07 attribution design (`docs/design/approval-and-attribution.md`), becomes the
@@ -505,12 +554,17 @@ login, audit needs the verified/asserted split.
   its Account and records asserted context in the separate lane.
 - The seeded credential still works and appears in audit as the founding admin Account.
 - Manual validation: `docs/testing/validate-v0.3.0.md` written and signed off.
+  **⚠️ Outstanding — the script does not exist.**
+
+> **Status:** shipped. Two acceptance items remain open: the script above, and decision
+> **#279** (whether per-Account rate limits come forward into this milestone or stay
+> Deferred), which is listed as a deliverable and is still an open issue.
 
 **ADRs:** 0010 (Account model); builds on 0003. Auth code → human-merge lane, always.
 
 ---
 
-## `v0.4.0` — Control API: Execution & OpenAPI (post-beta)
+## `v0.4.0` — Control API: Execution & OpenAPI (post-beta) 🚧
 
 Complete the REST control plane (ADR-0010): the programmable superset — administration
 *and* execution — for IaC tooling, CLIs, and extensions built on Relay. Plumbing before
@@ -555,7 +609,7 @@ porcelain: the Console renders what this API manages.
 
 ---
 
-## `v0.5.0` — Approval Callout (post-beta)
+## `v0.5.0` — Approval Callout (post-beta) ✅
 
 Out-of-band human approval for gated dispatches (epics #208/#210; issues #268–#272;
 design: `docs/design/approval-and-attribution.md`). Notify via MCP, decide out-of-band:
@@ -608,13 +662,25 @@ approver sees; the guarantee never depends on harness behavior.
   cannot dispatch.
 - A machine Account can never satisfy its own gate on any channel.
 - Manual validation: `docs/testing/validate-v0.5.0.md` written and signed off.
+  **⚠️ Outstanding — the script does not exist.**
 
-**ADRs:** 0027 (approval callout, #268); builds on 0011 (Plans), 0010 (Accounts), 0013
-(Job states), 0002 (Policy stays the floor an approval cannot lower).
+> **Status:** shipped, and it grew two things this entry did not plan for.
+>
+> **Batch/window approvals** (#378) landed as ADR-0027 decision 12: one human decision
+> covering a bounded set of future dispatches, because forty elicitations produce forty
+> rubber stamps and a rubber-stamped approval is worse than none.
+>
+> **The in-band channel became reachable** ([ADR-0029](docs/adr/0029-in-band-approval-through-the-tool-surface.md)).
+> ADR-0027 spelled `channel: "in-band"` in the config grammar and then never made any
+> surface able to emit such a decision, so the setting was inert and the product shipped a
+> two-person-only mechanism. ADR-0029 reconciles that against ADR-0028's guard.
+
+**ADRs:** 0027 (approval callout, #268), 0029 (in-band channel); builds on 0011 (Plans),
+0010 (Accounts), 0013 (Job states), 0002 (Policy stays the floor an approval cannot lower).
 
 ---
 
-## `v0.5.1` — MCP Tasks Extension (post-beta)
+## `v0.5.1` — MCP Tasks Extension (post-beta) ✅
 
 The premium delivery envelope v0.5.0 named but could not build (#372–#377). SEP-2663 is
 Final; `modelcontextprotocol/go-sdk` v1.7.0 does not implement it and
