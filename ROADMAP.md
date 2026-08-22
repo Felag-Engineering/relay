@@ -54,10 +54,10 @@ remains before it is small and named below.
 | Milestone | State | What is actually outstanding |
 |---|---|---|
 | `v0.0.1`–`v0.0.9` | ✅ | — |
-| `v0.1.0-beta` | not started | **Needs real machines** for the runbook. Two paper deliverables are also unmet: **no `LICENSE` file exists** (BSL parameters are decision #123, still open), and the bulk-enrollment workflow is `v0.4.0` [6/7] (#361). |
+| `v0.1.0-beta` | not started | **Needs real machines** for the runbook. **No `LICENSE` file exists** (BSL parameters are decision #123, still open). Self-serve evaluation was designed out on 2026-08-18/19 into ADR-0030–0033 and #403–#410 (below); #405 is gated on the #397 role-gate fix, and #403 is a live defect that should land ahead of all of it. |
 | `v0.2.0` | ✅ | — |
 | `v0.3.0` | ✅ code | Decision #279 (per-Account rate limits) still open; `validate-v0.3.0.md` unwritten. |
-| `v0.4.0` | 🚧 | [6/7] (#361) open; [7/7] (#362) in review. |
+| `v0.4.0` | ✅ code | [7/7] (#362) merged in #395. [6/7] (#361, the thin Ansible role) **closed as superseded** 2026-08-18 — the enrollment-bundle capability (ADR-0032, #405) renders the same playbook from the capability layer, so it reaches all three surfaces from one implementation. `validate-v0.4.0.md` unwritten. |
 | `v0.5.0` | ✅ code | `validate-v0.5.0.md` unwritten. |
 | `v0.5.1` | ✅ | Validation run waived, recorded — no MCP client implements Tasks yet. |
 
@@ -404,20 +404,38 @@ Prove the end-to-end path on real machines, documented well enough for a strange
 - **LICENSE**: publish as source-available under the **Business Source License (BSL)**
   — parameters (change date, change license, additional-use grant) set before the repo
   gets public attention.
-- **Self-serve evaluation** (#398, #400, #401, #399, #402; blocked by #389 and #397) —
-  added 2026-08-19. This milestone already asks for "documented, repeatable setup from a
-  clean environment"; these five make that true rather than aspirational.
-  - **[1/5]** #398 — ADR: what belongs in the `relay` binary. The line is *acts
-    impossible over the wire because no credential exists yet*. Written first, because
-    it is what stops `relay init` growing back into the CLI #137 cut.
-  - **[2/5]** #400 — `relay init`: one idempotent, re-runnable command for the whole
-    Relay-side bootstrap. Its falsifier is deleting `docker/bootstrap.sh` and
-    `mint-credential.sh`.
-  - **[3/5]** #401 — the join command: Enrollment Token + CA fingerprint in one
-    pasteable string, so a Node needs no out-of-band PEM copy (k3s precedent).
-  - **[4/5]** #399 — official **Relay** container image on Docker Hub. Deliberately no
-    daemon image: a containerized daemon has no host to administer (#389).
-  - **[5/5]** #402 — the quickstart that ties them together.
+- **Self-serve evaluation** — added 2026-08-19 as five issues, designed out 2026-08-18/19
+  into four ADRs and thirteen work items. This milestone already asks for "documented,
+  repeatable setup from a clean environment"; this is what makes that true rather than
+  aspirational. Full breakdown, dependency order, and per-issue acceptance:
+  [`docs/design/self-serve-enrollment.md`](docs/design/self-serve-enrollment.md).
+
+  Standing up a Relay and joining five Nodes is ~51 discrete acts today, across seven
+  artifacts that must reach every Node with three different trust properties. The target
+  is four commands and two artifacts.
+
+  **Decisions** — [ADR-0030](docs/adr/0030-relay-init-and-the-boundary-of-the-relay-binary.md)
+  (what belongs in the `relay` binary; `relay init` as one atomic first-boot transaction) ·
+  [ADR-0031](docs/adr/0031-one-server-certificate-and-the-fingerprint-pinned-join-string.md)
+  (one server cert for both listeners, multi-SAN, join string replaces
+  `RELAY_CA_BUNDLE_PATH`, server-cert rotation) ·
+  [ADR-0032](docs/adr/0032-enrollment-bundles-are-minted-and-rendered-in-one-act.md)
+  (mint and render are one act) ·
+  [ADR-0033](docs/adr/0033-first-party-installation-artifacts.md) (no `curl | sh`;
+  installer in the release; daemon OS packages first; Policy as a `noreplace` conffile).
+
+  **Relay (Go)** — #403 server-cert rotation *(live defect; lands first and alone)* ·
+  #404 one cert + multi-SAN · #405 enrollment-bundle rendering *(blocked by #397)* ·
+  #400 `relay init`.
+  **relay-daemon (Rust)** — #406 join string + CA fingerprint pinning, replacing
+  `RELAY_CA_BUNDLE_PATH` *(the daemon half of #401)*.
+  **Packaging** — #407 `relay-install.sh` in the release · #408 daemon `.deb`/`.rpm` ·
+  #399 Relay container image *(evaluation artifact; deliberately no daemon image — #389)*.
+  **Migration & docs** — #409 dev fleet + e2e onto `RELAY_JOIN` · #410 operations-docs
+  rewrite and the `CONTEXT.md` **join string** entry · #402 quickstart.
+
+  #398 is satisfied by ADR-0030. One question stays open: whether to build
+  `relay-daemon preflight` (design doc, "Open — needs a call").
 
   > **Why this is here and not in an Ansible milestone.** #361 was going to grow into a
   > first-party Ansible collection; it was triaged down to a thin role and sequenced
@@ -427,6 +445,11 @@ Prove the end-to-end path on real machines, documented well enough for a strange
   > chain that does not read as a one-way door. Notably, the fear driving it was
   > unfounded: everything an operator is asked to copy is re-mintable, and the only
   > unrecoverable artifact — the CA private key — is the one thing never copied by hand.
+  >
+  > **Closed out 2026-08-18.** That last observation is exactly what ADR-0031 leans on to
+  > replace the hand-couriered CA bundle with a fingerprint, and #361 itself is now closed
+  > as superseded by #405 — which renders the same playbook from the capability layer, so
+  > it lands on the Control API, MCP, and the Console from one implementation.
 
 **Acceptance**
 - Stand up a Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted
