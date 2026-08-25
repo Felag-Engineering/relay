@@ -1,8 +1,11 @@
 // Package ca implements the Relay-hosted ECDSA P-256 certificate authority used
-// to mint Node identity certificates at enrollment (ADR-0006).
+// to mint Node identity certificates at enrollment (ADR-0006), and to issue the
+// Relay's own TLS server certificate — which it re-issues before expiry
+// (ServerCertificate, ADR-0031 §5).
 //
 // No logging is performed anywhere in this package; all errors are returned to
-// the caller. Key material is never embedded in error strings.
+// the caller, and rotation is reported through an injected observer rather than
+// a log line. Key material is never embedded in error strings.
 package ca
 
 import (
@@ -34,6 +37,23 @@ const (
 
 	// LeafValidity is the lifetime issued to Node identity certificates (~2 weeks).
 	LeafValidity = 336 * time.Hour
+
+	// ServerLeafValidity is the lifetime issued to the Relay's OWN TLS server
+	// certificate. It is deliberately a separate constant from LeafValidity,
+	// and deliberately far shorter.
+	//
+	// A Node identity certificate is renewed across the network by a daemon
+	// that must survive being offline, so its lifetime is generous. The
+	// Relay's server certificate is re-issued in-process from a CA key already
+	// open in the same address space (see ServerCertificate, ADR-0031 §5), so
+	// a short lifetime costs one function call and bounds the life of a server
+	// key that is otherwise never rotated.
+	//
+	// The two must never share a constant again: borrowing LeafValidity for
+	// the server leaf, with nothing renewing it, is exactly how a Relay up
+	// longer than fourteen days came to serve an expired certificate and take
+	// the whole fleet fail-closed off it (#403).
+	ServerLeafValidity = 24 * time.Hour
 
 	clockSkew = 5 * time.Minute
 )
@@ -165,10 +185,23 @@ func (c *CA) SignCSR(csrPEM []byte, nodeID string) ([]byte, error) {
 }
 
 // IssueServerCertificate mints a server certificate chained to this CA, with
-// ExtKeyUsageServerAuth and the given DNS names and IP SANs. The certificate is
-// signed by the CA so daemons can verify it against the ca_bundle they receive
-// at enrollment (ADR-0006).
+// ExtKeyUsageServerAuth, ServerLeafValidity, and the given DNS names and IP
+// SANs. The certificate is signed by the CA so daemons can verify it against
+// the ca_bundle they receive at enrollment (ADR-0006).
+//
+// A caller that serves TLS must NOT hold the result static: a certificate
+// minted once at process start expires while the process is still running, and
+// every daemon then fail-closes off the Relay (#403). Serve through
+// ServerCertificate.GetCertificate instead, which re-issues before expiry.
+// This entry point remains for tests and one-shot issuance.
 func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tls.Certificate, error) {
+	return c.issueServerCertificate(dnsNames, ipAddresses, time.Now(), ServerLeafValidity)
+}
+
+// issueServerCertificate is IssueServerCertificate with the issuing instant and
+// the leaf lifetime supplied by the caller, so ServerCertificate can issue
+// against an injected clock.
+func (c *CA) issueServerCertificate(dnsNames []string, ipAddresses []net.IP, now time.Time, validity time.Duration) (tls.Certificate, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, fmt.Errorf("ca: generate server key: %w", err)
@@ -179,12 +212,11 @@ func (c *CA) IssueServerCertificate(dnsNames []string, ipAddresses []net.IP) (tl
 		return tls.Certificate{}, fmt.Errorf("ca: generate serial: %w", err)
 	}
 
-	now := time.Now()
 	leaf := x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "Relay"},
 		NotBefore:             now.Add(-clockSkew),
-		NotAfter:              now.Add(LeafValidity),
+		NotAfter:              now.Add(validity),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:              dnsNames,

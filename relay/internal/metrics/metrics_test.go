@@ -187,6 +187,51 @@ func TestIncEnrollment(t *testing.T) {
 	}
 }
 
+// TestIncServerCertRotation_EveryListener drives the server-certificate
+// rotation counter (#403) across both listeners and asserts each renders its
+// own series. A counter that stops advancing is how an operator sees rotation
+// stop, so both series must be present even at zero.
+func TestIncServerCertRotation_EveryListener(t *testing.T) {
+	m := New(GaugeSources{})
+	m.IncServerCertRotation(ListenerNodePlane)
+	m.IncServerCertRotation(ListenerNodePlane)
+	m.IncServerCertRotation(ListenerControlPlane)
+
+	_, body := scrape(t, m)
+	if !strings.Contains(body, "# TYPE relay_server_cert_rotations_total counter") {
+		t.Errorf("body missing relay_server_cert_rotations_total TYPE line; body = %s", body)
+	}
+	for _, want := range []string{
+		`relay_server_cert_rotations_total{listener="node_plane"} 2`,
+		`relay_server_cert_rotations_total{listener="control_plane"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s; body = %s", want, body)
+		}
+	}
+
+	// Never incremented: both series still render, at zero.
+	_, fresh := scrape(t, New(GaugeSources{}))
+	for _, want := range []string{
+		`relay_server_cert_rotations_total{listener="node_plane"} 0`,
+		`relay_server_cert_rotations_total{listener="control_plane"} 0`,
+	} {
+		if !strings.Contains(fresh, want) {
+			t.Errorf("fresh body missing %s; body = %s", want, fresh)
+		}
+	}
+}
+
+func TestIncServerCertRotation_OutOfRangeFallsBackToNodePlane(t *testing.T) {
+	m := New(GaugeSources{})
+	m.IncServerCertRotation(ServerCertListener(99))
+
+	_, body := scrape(t, m)
+	if !strings.Contains(body, `relay_server_cert_rotations_total{listener="node_plane"} 1`) {
+		t.Errorf("out-of-range listener did not fall back to node_plane; body = %s", body)
+	}
+}
+
 // --------------------------------------------------------------------------
 // relay_build_info (#249)
 // --------------------------------------------------------------------------

@@ -41,21 +41,39 @@ type RevocationChecker interface {
 	IsRevoked(nodeID string) bool
 }
 
+// GetCertificateFunc supplies the Relay's server certificate for one
+// handshake. It is the signature of tls.Config.GetCertificate, and
+// *ca.ServerCertificate.GetCertificate satisfies it.
+//
+// The seam is a function rather than a tls.Certificate value on purpose. A
+// certificate handed over once is a certificate that expires while the process
+// still runs, and an expired Relay leaf takes the whole fleet fail-closed off
+// (#403, ADR-0031 §5). Asking per handshake is what makes that impossible.
+type GetCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
 // ServerCredentials builds TLS transport credentials for the Relay's gRPC
-// server. ClientAuth is VerifyClientCertIfGiven: presented certs are verified
-// against clientCAs, but the handshake succeeds with no cert too — enabling
-// the certless Enrollment seam. TLS 1.3 is the minimum version.
+// server. The server certificate is fetched from getCertificate on every
+// handshake, so a rotation is picked up by the next connection without a
+// restart and without disturbing established ones. ClientAuth is
+// VerifyClientCertIfGiven: presented certs are verified against clientCAs, but
+// the handshake succeeds with no cert too — enabling the certless Enrollment
+// seam. TLS 1.3 is the minimum version.
+//
+// Only the certificate rotates. ClientCAs and ClientAuth are fixed for the
+// life of the process, so no GetConfigForClient callback is needed: the trust
+// anchor and the client-auth posture are exactly the values the operator
+// started the Relay with.
 //
 // When checker is non-nil, VerifyConnection is set to reject any client whose
 // verified cert CN appears in the denylist. Certless connections (no verified
 // chain) skip the check so the Enrollment seam is unaffected. This is the
 // handshake-level rejection mandated by ADR-0006.
-func ServerCredentials(serverCert tls.Certificate, clientCAs *x509.CertPool, checker RevocationChecker) credentials.TransportCredentials {
+func ServerCredentials(getCertificate GetCertificateFunc, clientCAs *x509.CertPool, checker RevocationChecker) credentials.TransportCredentials {
 	cfg := &tls.Config{
-		Certificates: []tls.Certificate{serverCert},
-		ClientCAs:    clientCAs,
-		ClientAuth:   tls.VerifyClientCertIfGiven,
-		MinVersion:   tls.VersionTLS13,
+		GetCertificate: getCertificate,
+		ClientCAs:      clientCAs,
+		ClientAuth:     tls.VerifyClientCertIfGiven,
+		MinVersion:     tls.VersionTLS13,
 	}
 	if checker != nil {
 		cfg.VerifyConnection = func(cs tls.ConnectionState) error {

@@ -374,6 +374,36 @@ func parseConfig() Config {
 	return cfg
 }
 
+// serverCertObserver returns the callback that makes one listener's server
+// certificate rotation observable (#403): the log line an operator reads after
+// the fact, and the counter they can alert on. internal/ca deliberately logs
+// nothing itself, so this — the composition root — is where a rotation becomes
+// visible.
+//
+// The fingerprint is the new leaf's, and it is not a secret: it identifies a
+// certificate, never authenticates one. Nothing here touches key material.
+//
+// A failed re-issue with a still-valid certificate in hand is an error, not a
+// warning: rotation stopping is the first act of the outage this whole
+// mechanism exists to prevent, and the leaf's remaining lifetime is all the
+// warning there is.
+func serverCertObserver(listener string, l metrics.ServerCertListener, m *metrics.Metrics) func(ca.Rotation) {
+	return func(r ca.Rotation) {
+		if r.Err != nil {
+			slog.Error("server certificate re-issue failed; still serving the current certificate",
+				"listener", listener, "err", r.Err)
+			return
+		}
+		m.IncServerCertRotation(l)
+		slog.Info("server certificate rotated",
+			"listener", listener,
+			"not_after", r.NotAfter.Format(time.RFC3339),
+			"renew_at", r.RenewAt.Format(time.RFC3339),
+			"fingerprint", r.Fingerprint,
+		)
+	}
+}
+
 // newServer constructs and wires the gRPC server and all its dependencies from
 // cfg. It does not create a listener or call Serve — those belong to main so
 // that tests can construct the server without binding a port.
@@ -386,11 +416,6 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	clientCAs := x509.NewCertPool()
 	if !clientCAs.AppendCertsFromPEM(relayCA.Bundle()) {
 		return nil, nil, fmt.Errorf("parse CA bundle into cert pool")
-	}
-
-	serverCert, err := relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
-	if err != nil {
-		return nil, nil, fmt.Errorf("issue server certificate: %w", err)
 	}
 
 	// A malformed min_daemon_version refuses startup rather than silently
@@ -414,8 +439,6 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// Relay restart (issue #133).
 	denylist := revocation.NewDenylist()
 	conns := revocation.NewConnections()
-
-	creds := transport.ServerCredentials(serverCert, clientCAs, denylist)
 
 	// Enrollment_Enroll is the only certless RPC: daemons call it before they have
 	// a client certificate. All other RPCs (including Tunnel and Enrollment_Renew)
@@ -452,6 +475,25 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			BuildDate: version.BuildDate,
 		},
 	})
+
+	// The node-plane listener's own TLS server certificate (#403, ADR-0031 §5).
+	// Issued here, and RE-issued in-process before it expires: a certificate
+	// minted once and held static expires while the process is still running,
+	// and from that instant every daemon's chain verification fails and the
+	// whole fleet fail-closes off the Relay. The Relay is its own CA, so
+	// re-issuance is a function call against a key already open in this address
+	// space — no restart, no operator, no network. It is wired here rather than
+	// beside the CA above only so the rotation observer can reach appMetrics.
+	nodePlaneCert, err := relayCA.NewServerCertificate([]string{cfg.Hostname}, nil,
+		ca.WithRotationObserver(serverCertObserver("node-plane", metrics.ListenerNodePlane, appMetrics)))
+	if err != nil {
+		return nil, nil, fmt.Errorf("issue node-plane server certificate: %w", err)
+	}
+
+	// Every handshake asks nodePlaneCert for the certificate to present, which
+	// is what makes the guarantee unconditional: rotation is driven by
+	// connections, not by a timer that a sleeping process could miss.
+	creds := transport.ServerCredentials(nodePlaneCert.GetCertificate, clientCAs, denylist)
 
 	// Rehydrate the denylist from the persisted authority before the listener
 	// accepts any connection: the Denylist is a derived cache of
@@ -570,9 +612,13 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	var dispatchRouter *dispatch.Router
 	if cfg.ControlEnabled {
 		// A dedicated server cert for the control-plane listener, independent
-		// of the node-plane gRPC serverCert above: separate listeners get
+		// of the node-plane nodePlaneCert above: separate listeners get
 		// separate certificates, even though both chain to the same Relay CA.
-		controlCert, err := relayCA.IssueServerCertificate([]string{cfg.Hostname}, nil)
+		// They also rotate independently — each holder owns its own leaf, its
+		// own key, and its own jittered renewal instant, so neither listener
+		// can be affected by the other's re-issuance (#403, ADR-0031 §5).
+		controlCert, err := relayCA.NewServerCertificate([]string{cfg.Hostname}, nil,
+			ca.WithRotationObserver(serverCertObserver("control-plane", metrics.ListenerControlPlane, appMetrics)))
 		if err != nil {
 			return nil, nil, fmt.Errorf("issue control-plane server certificate: %w", err)
 		}
@@ -670,7 +716,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
 		controlSrv = controlplane.New(
-			controlplane.Config{Addr: cfg.ControlAddr, TLSCert: controlCert},
+			controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: controlCert.GetCertificate},
 			// Two credential kinds, routed by prefix: per-Account API Tokens
 			// verified against the store, and OAuth sessions verified against
 			// the IdP. No shared secret and no digest held in memory

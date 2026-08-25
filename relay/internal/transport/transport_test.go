@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -79,6 +80,15 @@ func newTestSetup(t *testing.T) *testSetup {
 		t.Fatal("AppendCertsFromPEM: empty pool")
 	}
 	return &testSetup{serverCert: serverCert, clientCAs: pool, relayCA: relayCA}
+}
+
+// certificate presents ts.serverCert through the per-handshake seam
+// ServerCredentials takes. Production hands it *ca.ServerCertificate's method,
+// which re-issues before expiry; a fixed certificate is all these tests need.
+func (ts *testSetup) certificate() transport.GetCertificateFunc {
+	return func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		return &ts.serverCert, nil
+	}
 }
 
 // startServer launches an in-process gRPC server over a bufconn listener with
@@ -179,7 +189,7 @@ func TestTransport_AcceptValidClientCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -229,7 +239,7 @@ func TestTransport_RejectNoCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -262,7 +272,7 @@ func TestTransport_RejectUntrustedCert(t *testing.T) {
 
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -327,7 +337,7 @@ func TestTransport_CertlessSeam(t *testing.T) {
 	certless := map[string]struct{}{tunnelOpenMethod: {}}
 
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, nil)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, nil)),
 	)
@@ -369,7 +379,7 @@ func TestTransport_RejectRevokedCert_Handshake(t *testing.T) {
 	checker := &fakeChecker{revoked: map[string]bool{"node-revoked": true}}
 	certless := map[string]struct{}{}
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, checker)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, checker)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
@@ -415,7 +425,7 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 	// Nil checker in ServerCredentials: TLS layer admits the cert.
 	// Revoking checker in interceptors: per-RPC layer rejects.
 	lis := startServer(t, &gotNodeID,
-		grpc.Creds(transport.ServerCredentials(ts.serverCert, ts.clientCAs, nil)),
+		grpc.Creds(transport.ServerCredentials(ts.certificate(), ts.clientCAs, nil)),
 		grpc.ChainStreamInterceptor(transport.StreamServerInterceptor(certless, checker)),
 		grpc.ChainUnaryInterceptor(transport.UnaryServerInterceptor(certless, checker)),
 	)
@@ -446,4 +456,85 @@ func TestTransport_RejectRevoked_Interceptor(t *testing.T) {
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Errorf("got code %v, want Unauthenticated", code)
 	}
+}
+
+// TestTransport_CertificateIsFetchedEveryHandshake is the structural guard on
+// the defect behind #403: the node plane must ASK for its server certificate
+// per handshake, never capture one at startup. A certificate captured once
+// expires while the process still runs, and every daemon then fail-closes off
+// the Relay.
+//
+// The test rotates the certificate between two handshakes and asserts the
+// second connection is served the new leaf. No rotation policy is under test
+// here — only that the transport consults the seam at all.
+func TestTransport_CertificateIsFetchedEveryHandshake(t *testing.T) {
+	ts := newTestSetup(t)
+
+	rotated, err := ts.relayCA.IssueServerCertificate([]string{"localhost"}, nil)
+	if err != nil {
+		t.Fatalf("IssueServerCertificate: %v", err)
+	}
+
+	var calls atomic.Int64
+	creds := transport.ServerCredentials(func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+		if calls.Add(1) == 1 {
+			return &ts.serverCert, nil
+		}
+		return &rotated, nil
+	}, ts.clientCAs, nil)
+
+	first := handshakePeerLeaf(t, creds, ts.clientCAs)
+	second := handshakePeerLeaf(t, creds, ts.clientCAs)
+
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("server certificate fetched %d times over 2 handshakes, want 2 (a static certificate was captured)", n)
+	}
+	if first.SerialNumber.Cmp(second.SerialNumber) == 0 {
+		t.Fatal("second handshake was served the first certificate; the rotated leaf never reached the wire")
+	}
+	if want := rotated.Leaf.SerialNumber; second.SerialNumber.Cmp(want) != 0 {
+		t.Errorf("second handshake served serial %s, want the rotated leaf's %s", second.SerialNumber, want)
+	}
+}
+
+// handshakePeerLeaf completes one TLS handshake against creds over an
+// in-memory pipe and returns the leaf certificate the server presented. The
+// client is certless, like a daemon reaching Enroll: what is under test is the
+// certificate the SERVER presents.
+func handshakePeerLeaf(t *testing.T, creds credentials.TransportCredentials, roots *x509.CertPool) *x509.Certificate {
+	t.Helper()
+	serverConn, clientConn := net.Pipe()
+	t.Cleanup(func() {
+		serverConn.Close() //nolint:errcheck
+		clientConn.Close() //nolint:errcheck
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := creds.ServerHandshake(serverConn)
+		done <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	client := tls.Client(clientConn, &tls.Config{
+		RootCAs:    roots,
+		ServerName: "localhost",
+		MinVersion: tls.VersionTLS13,
+		// gRPC's credentials enforce ALPN; a real client negotiates h2.
+		NextProtos: []string{"h2"},
+	})
+	if err := client.HandshakeContext(ctx); err != nil {
+		t.Fatalf("client handshake: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("server handshake: %v", err)
+	}
+
+	certs := client.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		t.Fatal("server presented no certificate")
+	}
+	return certs[0]
 }
