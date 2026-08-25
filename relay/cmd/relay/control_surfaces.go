@@ -26,6 +26,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
@@ -58,8 +59,15 @@ type surfaceDeps struct {
 	revocation   *revocation.Service
 	audit        audit.Repository
 	auditSink    *auditsink.Sink
-	now          func() time.Time
-	metrics      *metrics.Metrics
+	// roleGate is the ONE authz.RoleGate the process holds — the same object
+	// the capability layer authorizes dispatches and Freeze with. The Control
+	// API needs it directly for the administrative routes that never reach the
+	// capability layer at all (enrollment-token mint/revoke, Node revoke —
+	// #397), so that their floor is read from the same table rather than a
+	// second one kept per surface (invariant 10).
+	roleGate *authz.RoleGate
+	now      func() time.Time
+	metrics  *metrics.Metrics
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -107,9 +115,13 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Nodes:        d.revocation,
 		Freeze:       d.capability,
 		Audit:        d.audit,
-		Accounts:     d.accountsRepo,
-		APITokens:    d.apiTokens,
-		Now:          d.now,
+		// The role floor for mint/revoke (#397). Same *authz.RoleGate the
+		// capability layer holds — one ladder, consulted from both places,
+		// never re-derived here.
+		Authz:     d.roleGate,
+		Accounts:  d.accountsRepo,
+		APITokens: d.apiTokens,
+		Now:       d.now,
 		// Execution (#356): the SAME *capability.Service instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry

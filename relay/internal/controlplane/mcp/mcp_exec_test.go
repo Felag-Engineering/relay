@@ -30,6 +30,13 @@ func (testAuthorizer) Authorize(context.Context, capability.Principal, jobs.Acti
 	return nil
 }
 
+// AuthorizeControl completes capability.Authorizer's administrative half
+// (#397). The MCP surface exposes no enrollment, revocation, or Freeze tool,
+// so nothing in these tests reaches it — it exists to satisfy the interface.
+func (testAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
+	return nil
+}
+
 // deterministicIDs returns a capability.WithExecNewID-compatible generator
 // that yields "id-1", "id-2", ... in call order, mutex-guarded (the cancel
 // test drives two concurrent tool calls, and the whole suite runs under

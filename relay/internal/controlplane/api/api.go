@@ -56,6 +56,13 @@ type NodeRevoker interface {
 
 // Freezer engages and releases the Relay-wide Freeze (ADR-0013).
 // *capability.Service satisfies this interface.
+//
+// Both methods are role-gated INSIDE the capability layer (#397): engage
+// needs a human `operator`+, release needs `admin` and a reason, and the
+// refusal is audited there. This interface deliberately does not expose
+// capability.Service's EngageFreezeLocal/ReleaseFreezeLocal — the host-signal
+// lever is root-on-the-box authority (ADR-0013) and must not be reachable
+// from an HTTP route, so the narrow interface is what keeps it out of reach.
 type Freezer interface {
 	EngageFreeze(ctx context.Context, p capability.Principal) error
 	ReleaseFreeze(ctx context.Context, p capability.Principal, reason string) error
@@ -100,6 +107,24 @@ type Deps struct {
 	Nodes        NodeRevoker
 	Freeze       Freezer
 	Audit        Auditor
+	// Authz is the control plane's role ladder for the ADMINISTRATIVE acts
+	// that never construct a jobs.Action and so never reach the capability
+	// layer's dispatch pipeline: enrollment-token mint and revoke, and Node
+	// revoke (#397). The composition root passes the SAME *authz.RoleGate the
+	// capability layer holds, so a floor is decided in one table for every
+	// surface (invariant 10) — this package consults it and renders the
+	// answer, it never decides one.
+	//
+	// Freeze is NOT gated here: it goes through Deps.Freeze into the
+	// capability layer, which consults the same object itself. The split is
+	// not a preference — capability's import allowlist bars internal/enroll
+	// and internal/revocation, so mint and revoke have no capability-layer
+	// method to be gated inside.
+	//
+	// Nil refuses every route that needs it with a 500 rather than proceeding
+	// ungated: an unwired gate is a composition-root bug, and #397 exists
+	// because the ungated path failed open silently.
+	Authz capability.ControlAuthorizer
 	// Accounts and APITokens back the identity-management routes (#297).
 	// Both are admin-only at every entry point (see requireAdmin).
 	Accounts  AccountManager
@@ -158,7 +183,13 @@ func (r Route) Pattern() string { return r.Method + " " + r.Path }
 // Register mounts exactly these; the OpenAPI drift gate reads exactly these.
 func Routes() []Route {
 	return []Route{
-		// Enrollment Tokens, Node revocation, Freeze (#116).
+		// Enrollment Tokens, Node revocation, Freeze (#116). Every route
+		// here has a role floor, and every floor is decided by the ONE
+		// authz.RoleGate (#397): the enrollment and revocation routes consult
+		// it through authorizeControl below, the Freeze routes inherit it
+		// inside the capability layer. Which of the two applies to a given
+		// route is asserted by TestEveryRouteIsRoleClassified, so a route
+		// added to this group later cannot silently have neither.
 		{"POST", "/api/v1/enrollment-tokens", handleMintToken},
 		{"DELETE", "/api/v1/enrollment-tokens/{id}", handleRevokeToken},
 		{"POST", "/api/v1/nodes/{node_id}/revoke", handleRevokeNode},
@@ -250,6 +281,38 @@ func principal(w http.ResponseWriter, r *http.Request) (capability.Principal, bo
 	return p, true
 }
 
+// authorizeControl is the surface-side half of #397's fix for the
+// administrative routes that never reach the capability layer's dispatch
+// pipeline (enrollment-token mint/revoke, Node revoke).
+//
+// It DECIDES NOTHING. The floor lives in one table — authz.RoleGate's
+// requiredControlRole — which the capability layer consults for the Freeze
+// and the composition root hands to this package as Deps.Authz, so the same
+// answer reaches MCP, the Control API, and the Console (invariant 10). This
+// function's whole job is to ask, audit a refusal, and render it.
+//
+// A nil Authz refuses with 500. That is the deliberate direction: #397 exists
+// because an ungated administrative route failed open and nothing said so, so
+// an unwired gate must be loud and closed rather than quiet and open.
+//
+// The refusal is recorded as audit.KindRefusal with the acting Principal,
+// matching how the capability layer records a refused dispatch — a refusal is
+// the most interesting kind of audit event, and one that only appears for
+// some refusal paths is worse than none.
+func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, act capability.ControlAction) bool {
+	if d.Authz == nil {
+		writeProblem(w, http.StatusInternalServerError, "authorization unavailable",
+			"no control-plane authorizer is wired; refusing rather than proceeding ungated")
+		return false
+	}
+	if err := d.Authz.AuthorizeControl(r.Context(), p, act); err != nil {
+		recordLifecycle(r.Context(), d, p, audit.KindRefusal, "", err.Error())
+		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
+		return false
+	}
+	return true
+}
+
 // newAuditID mints a unique audit.Record.ID: 16 crypto/rand bytes,
 // hex-encoded, "audit-" prefixed — mirroring
 // relay/internal/auditsink.defaultID. audit_id is the table's PRIMARY KEY
@@ -269,7 +332,8 @@ func defaultAuditID() (string, error) {
 }
 
 // recordLifecycle appends one lifecycle audit.Record (token mint/revoke,
-// Node revoke) attributed to p. Freeze engage/release is audited intrinsically
+// Node revoke, or a refusal of one — see authorizeControl) attributed to p.
+// Freeze engage/release, and a refused Freeze, are audited intrinsically
 // by capability.Service (RecordFreeze) and must never call this — doing so
 // would double-audit (see freeze.go). reason must never carry an Enrollment
 // Token plaintext.

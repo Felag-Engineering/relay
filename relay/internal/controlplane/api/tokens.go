@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 )
 
@@ -41,10 +42,21 @@ type mintTokenResponse struct {
 // handleMintToken implements POST /api/v1/enrollment-tokens: mint a scoped
 // Enrollment Token via TokenMinter.Create, audit the mint (KindTokenMint),
 // and return the plaintext credential exactly once (201).
+//
+// **Requires `admin`** (ADR-0032 §5, #397), checked before the body is even
+// decoded. A token's scope becomes the enrolling Node's relay: labels, and
+// relay: is the namespace the security-sensitive lane targets (invariant 7,
+// ADR-0020) — so minting manufactures Nodes that quarantine, remediation, and
+// secret distribution will treat as authoritative. Until #397 this route
+// checked no role at all: a viewer could stamp `relay:env=prod` onto anything
+// that presented the token.
 func handleMintToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
 		if !ok {
+			return
+		}
+		if !authorizeControl(w, r, d, p, capability.ControlMintEnrollmentToken) {
 			return
 		}
 
@@ -92,10 +104,19 @@ func handleMintToken(d Deps) http.HandlerFunc {
 // Node it enrolled), audit the revoke (KindTokenRevoke), and return 204.
 // Idempotent: revoking an unknown or already-revoked id still returns 204
 // (revocation.Service.RevokeToken swallows enroll.ErrNotFound).
+//
+// **Requires `admin`** (#397). #397's table named the mint and the Node
+// revoke; this route was the same hole, found by the structural guard that
+// issue asked for. It cascades to every Node the token enrolled, tearing down
+// live Tunnels — the same availability blast radius as revoking those Nodes
+// one at a time, which ADR-0020's incident ladder puts at admin.
 func handleRevokeToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
 		if !ok {
+			return
+		}
+		if !authorizeControl(w, r, d, p, capability.ControlRevokeEnrollmentToken) {
 			return
 		}
 

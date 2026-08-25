@@ -198,9 +198,13 @@ _Avoid_: server cert renewal, cert refresh
 
 **Freeze**:
 The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
-leaving in-flight Tasks running and Plans available. Cheap to engage (`operator`+ via
-the Control API, or locally on the Relay host), deliberate to release (`admin`, with an
-audited reason). Persisted across Relay restarts (ADR-0013).
+leaving in-flight Tasks running and Plans available. Cheap to engage — a **human**
+`operator`+ Account via the Control API, or root on the Relay host via the host-side
+lever — and deliberate to release (`admin`, with an audited reason). Engaging is the one
+act in the system gated on an Account being human rather than on its role: a machine
+Account is refused at every role, because an AI-agent halting the plane that supervises
+it is a denial of service rather than a fire alarm, and automation that needs to stop
+dispatch has the host lever. Persisted across Relay restarts (ADR-0013, amended by #397).
 _Avoid_: pause, maintenance mode, lockdown, kill switch
 
 **Cancellation**:

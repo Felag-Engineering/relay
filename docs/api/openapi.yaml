@@ -509,6 +509,10 @@ paths:
         The plaintext credential is returned **once, here** — it is never
         persisted, logged, or audited. Store it in a vault at this moment or
         mint a new one.
+
+        **Requires the `admin` role** (ADR-0032 §5). Minting stamps `relay:`
+        labels, so it is an act the control plane vouches for; a refusal is
+        recorded in the audit trail.
       requestBody:
         required: true
         content:
@@ -522,6 +526,7 @@ paths:
               schema: { $ref: '#/components/schemas/MintedEnrollmentToken' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   /api/v1/enrollment-tokens/{id}:
@@ -538,10 +543,15 @@ paths:
       description: |
         Revokes the token and cascade-revokes the Nodes already enrolled with
         it, tearing down their live Tunnels.
+
+        **Requires the `admin` role**: revocation is the middle rung of
+        ADR-0020's incident ladder, and this route reaches every Node the
+        token enrolled.
       responses:
         "204":
           description: Revoked.
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "404":
           description: No such token.
           content:
@@ -563,10 +573,14 @@ paths:
       description: |
         Revokes a single Node's identity and tears down its live Tunnel
         immediately. The Node cannot reconnect until it re-enrolls.
+
+        **Requires the `admin` role** (ADR-0020's incident ladder:
+        quarantine < revoke < Freeze).
       responses:
         "204":
           description: Revoked.
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   # ---------------------------------------------------------------------------
@@ -584,6 +598,14 @@ paths:
         emergency stop must never be the slower path.
 
         Persisted across Relay restarts.
+
+        **Requires the `operator` role or above, and a human Account.** The
+        role floor is ADR-0013's "engage cheap". The human requirement is not
+        a role question at all: a machine Account halting the fleet — a
+        jailbroken AI-agent switching off its overseers — is a denial of
+        service, not a fire alarm, so a machine Account is refused at every
+        role including `admin`. Use the host-side lever (a signal on the Relay
+        host) for automated engagement.
       responses:
         "200":
           description: The Freeze is engaged.
@@ -591,6 +613,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FreezeResponse' }
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   /api/v1/freeze/release:
@@ -599,9 +622,11 @@ paths:
       operationId: releaseFreeze
       summary: Release the Relay-wide Freeze
       description: |
-        Requires a non-empty `reason`. The asymmetry with engage is deliberate
-        (ADR-0013): stopping the fleet is cheap, restarting it is a deliberate
-        act that must say why, and the reason lands in the audit trail.
+        Requires a non-empty `reason`, and **the `admin` role**. The asymmetry
+        with engage is deliberate (ADR-0013): stopping the fleet is cheap,
+        restarting it is a deliberate act that must say why, and the reason
+        lands in the audit trail. Unlike engage, release is not human-only —
+        an incident must have an automated way back.
       requestBody:
         required: true
         content:
@@ -615,6 +640,7 @@ paths:
               schema: { $ref: '#/components/schemas/FreezeResponse' }
         "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   # ---------------------------------------------------------------------------

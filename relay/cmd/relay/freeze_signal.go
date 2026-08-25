@@ -24,15 +24,22 @@ import (
 // deliberate and always carries an audited reason (SIGUSR2 +
 // RELAY_FREEZE_RELEASE_REASON). Both engage and release are attributed to
 // principal "local-host" and durably audited (RecordFreeze) via
-// capability.Service.EngageFreeze/ReleaseFreeze. The Control API path for
-// Freeze (remote engage/release, richer principals) lands in v0.0.6 — this
-// is deliberately the local-only half.
+// capability.Service.EngageFreezeLocal/ReleaseFreezeLocal. The Control API
+// path for Freeze (remote engage/release, richer principals) lands in v0.0.6
+// — this is deliberately the local-only half.
+//
+// It calls the *Local methods, not the Principal-taking pair the Control API
+// uses (#397). Those are role-gated — a human `operator`+ to engage, `admin`
+// to release — and "local-host" is not an Account and holds no role, so it
+// would fail a ladder it is deliberately outside of. ADR-0013 names this as a
+// second root of authority on purpose: when the distrusted thing may be the
+// API credential itself, root-on-the-box must still be able to pull the cord.
+// Signal privilege on the Relay host is strictly greater than any credential
+// the gate could check, so the split is honest rather than a bypass.
 func watchFreezeSignals(ctx context.Context, svc *capability.Service) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGUSR1, syscall.SIGUSR2)
 	defer signal.Stop(sigCh)
-
-	principal := capability.Principal{Account: "local-host"}
 
 	for {
 		select {
@@ -41,18 +48,18 @@ func watchFreezeSignals(ctx context.Context, svc *capability.Service) {
 		case sig := <-sigCh:
 			switch sig {
 			case syscall.SIGUSR1:
-				if err := svc.EngageFreeze(ctx, principal); err != nil {
+				if err := svc.EngageFreezeLocal(ctx); err != nil {
 					slog.Error("engage freeze failed", "err", err)
 					continue
 				}
-				slog.Info("freeze engaged", "principal", principal.Attribution())
+				slog.Info("freeze engaged", "principal", "local-host")
 			case syscall.SIGUSR2:
 				reason := envOr("RELAY_FREEZE_RELEASE_REASON", "released locally on relay host")
-				if err := svc.ReleaseFreeze(ctx, principal, reason); err != nil {
+				if err := svc.ReleaseFreezeLocal(ctx, reason); err != nil {
 					slog.Error("release freeze failed", "err", err)
 					continue
 				}
-				slog.Info("freeze released", "principal", principal.Attribution(), "reason", reason)
+				slog.Info("freeze released", "principal", "local-host", "reason", reason)
 			}
 		}
 	}

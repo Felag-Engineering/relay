@@ -25,6 +25,15 @@ assume a human can always regain control.
   — when the distrusted thing may be the API credential itself, root-on-the-box must
   suffice to pull the cord. Release: `admin` via the API, or the local path, with an
   audited reason. Fire-alarm asymmetry: anyone may pull; the chief clears re-entry.
+  **Amended by [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397)
+  (2026-08-24): engaging over the Control API additionally requires a HUMAN Account.**
+  A machine Account at `operator` — an AI-agent — halting the fleet is not the fire
+  alarm this clause had in mind: it is a jailbroken driver switching off its own
+  overseers, which is a denial of service the cheapness argument does not cover.
+  "Anyone may pull the handle" was always an argument about people. Automation that
+  genuinely needs to stop dispatch uses the host-side lever, where the authority is
+  root on the box rather than a stealable credential. Release stays `admin` and is
+  deliberately *not* human-only: an incident must have an automated way back.
 - Freeze state changes and every engage/release are audited with their Account (or
   `local-host`).
 

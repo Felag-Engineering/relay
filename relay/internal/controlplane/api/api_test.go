@@ -16,6 +16,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
@@ -62,25 +63,45 @@ type releaseCall struct {
 
 // fakeFreezer is a Freezer fake that records every Engage/Release call and
 // returns configurable errors.
+//
+// gate, when set, runs the REAL authz.RoleGate before the canned result,
+// standing in for what capability.Service does with the same object (#397).
+// The reasoning is fakeExecutor's, and identical: the Freeze floor is the
+// central ladder's answer, so proving it against a fake that returns a canned
+// 403 would prove only that this file can spell errors. What these tests own
+// is that the route hands the capability layer the right Principal and
+// renders its refusal as 403 rather than 500.
 type fakeFreezer struct {
 	mu           sync.Mutex
 	engageCalls  []capability.Principal
 	releaseCalls []releaseCall
 	engageErr    error
 	releaseErr   error
+
+	gate capability.ControlAuthorizer
 }
 
-func (f *fakeFreezer) EngageFreeze(_ context.Context, p capability.Principal) error {
+func (f *fakeFreezer) EngageFreeze(ctx context.Context, p capability.Principal) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.engageCalls = append(f.engageCalls, p)
+	f.mu.Unlock()
+	if f.gate != nil {
+		if err := f.gate.AuthorizeControl(ctx, p, capability.ControlFreezeEngage); err != nil {
+			return err
+		}
+	}
 	return f.engageErr
 }
 
-func (f *fakeFreezer) ReleaseFreeze(_ context.Context, p capability.Principal, reason string) error {
+func (f *fakeFreezer) ReleaseFreeze(ctx context.Context, p capability.Principal, reason string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.releaseCalls = append(f.releaseCalls, releaseCall{Principal: p, Reason: reason})
+	f.mu.Unlock()
+	if f.gate != nil {
+		if err := f.gate.AuthorizeControl(ctx, p, capability.ControlFreezeRelease); err != nil {
+			return err
+		}
+	}
 	return f.releaseErr
 }
 
@@ -147,7 +168,16 @@ func testPrincipal() capability.Principal {
 
 // newTestHandler builds an http.Handler that mounts Register(mux, d) behind
 // a real controlplane.Authenticator accepting testCredential.
+//
+// An unset d.Authz defaults to the PRODUCTION authz.RoleGate (#397), not to a
+// permissive fake. staticVerifier authenticates as the founding admin, so
+// every pre-existing lifecycle test keeps passing the real ladder rather than
+// being waved through — which is the point: if a floor were later raised
+// above admin, these tests would notice.
 func newTestHandler(d Deps) http.Handler {
+	if d.Authz == nil {
+		d.Authz = authz.NewRoleGate()
+	}
 	authn := controlplane.NewAuthenticator(staticVerifier{credential: testCredential})
 	mux := http.NewServeMux()
 	Register(mux, d)

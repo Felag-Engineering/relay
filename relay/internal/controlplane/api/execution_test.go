@@ -126,18 +126,27 @@ func (f fakeJobs) TasksByJob(_ context.Context, _ string) ([]jobs.Task, error) {
 // roleVerifier authenticates testCredential as an Account with a chosen role,
 // so a route can be exercised as viewer/operator/admin. (api_test.go's
 // staticVerifier is admin-only by design.)
+//
+// kind is left empty by the execution routes, which do not care: authority is
+// the Role everywhere except Freeze engage (#397). It defaults to machine —
+// the AI-agent case, and the restrictive one.
 type roleVerifier struct {
 	credential string
 	role       accounts.Role
+	kind       accounts.Kind
 }
 
 func (v roleVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
 	if credential != v.credential {
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
+	kind := v.kind
+	if kind == "" {
+		kind = accounts.KindMachine
+	}
 	return accounts.Account{
 		Name:    "caller-" + string(v.role),
-		Kind:    accounts.KindMachine,
+		Kind:    kind,
 		Role:    v.role,
 		Enabled: true,
 	}, accounts.APIToken{ID: testTokenID}, nil
