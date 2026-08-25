@@ -1,6 +1,9 @@
 # Admin Console — UI advisory (design brief)
 
-**Status:** draft from the 2026-08-07 planning session, for owner ratification. This is the
+**Status:** draft from the 2026-08-07 planning session, for owner ratification. **Amended
+2026-08-24:** the word `outdated` here originally covered Policy-fingerprint drift; it is pinned to
+ADR-0014's meaning (below the dispatch minimum) by ADR-0034, and drift is an observation rather
+than a flag. Per-screen specifications now live in `console/`. This is the
 design plan #264 references; it feeds the #264 ADR (Console execution surface), the
 v0.5.0 approval-record schema, and the v0.6.0/v0.7.0 Console milestones. Companions:
 `console-backend-coverage.md` (what backend each screen needs),
@@ -52,7 +55,8 @@ monitoring phase (v0.6.0), so it is built once, first.
   label key with rollup cards; per-Account saved views (landing = the operator's slice);
   view-scoped delta lane; liveness, facts summary, `node:`/`tag:`/`relay:` labels (the
   three namespaces visually distinct — `node:` and `tag:` quiet, `relay:` is the security
-  lane and must read as such), Policy + template-set fingerprints, `outdated` flags.
+  lane and must read as such), Policy + template-set fingerprints, `state:` labels (ADR-0034 — `outdated` means below the
+  dispatch minimum, never fingerprint divergence).
 - Node detail: facts, effective Policy (rendered from `policyview`), template
   vocabulary, cert/enrollment info, recent Tasks.
 - Jobs: list + detail — per-Node outcomes with the full outcome vocabulary
@@ -124,7 +128,7 @@ screen are necessarily Relay's — liveness, versions, Policy drift, Job history
 
 - **Group-by-first fleet view**: group by any label key; the user's names (`prod`,
   `payments`, `web`) become the headline structure as rollup cards ("prod · 4,012 nodes ·
-  3 offline · 12 outdated"); Relay's machinery view is just "group by nothing".
+  3 offline · 12 on an older Policy fingerprint"); Relay's machinery view is just "group by nothing".
 - **Saved views per Account**: landing is the operator's slice (filter + grouping), not
   the global registry; the "since you last looked" delta lane scopes to the current view.
 - **Jobs mirror it**: the Jobs list filters to "Jobs that touched my view", not only the
@@ -164,7 +168,7 @@ shared across screens:
 - **Anomaly-first ordering**: default sort is by deviation/rarity, never alphabetical.
   The weird Node is row one.
 - **Deltas, not states**: the SSE seam feeds a "what changed" lane — since last look:
-  2 enrolled, 1 offline, 3 became `outdated`. The operator's daily question is "what's
+  2 enrolled, 1 offline, 3 changed Policy fingerprint. The operator's daily question is "what's
   different," not "what's everything."
 - **Progressive-disclosure ladder, uniformly**: count → segmented bar → groups → sampled
   members → full list only on explicit demand. Never skip a rung.
