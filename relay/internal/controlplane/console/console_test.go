@@ -1,0 +1,219 @@
+package console
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+)
+
+const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
+
+// roleVerifier accepts one credential as an Account with the given role, so a
+// test can ask "what does a viewer see?" through the REAL authentication path
+// rather than by hand-injecting a principal. Invariant 10 is one auth path;
+// a test harness that invents a second one stops testing the thing that ships.
+type roleVerifier struct{ role accounts.Role }
+
+func (v roleVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
+	if credential != testCredential {
+		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
+	}
+	return accounts.Account{
+		Name:    "test-" + string(v.role),
+		Kind:    accounts.KindHuman,
+		Role:    v.role,
+		Enabled: true,
+	}, accounts.APIToken{ID: "tok-test"}, nil
+}
+
+// newTestHandler mounts the Console the way the composition root must: the
+// route table inside this package's Secure middleware, inside the real
+// Authenticator.Middleware.
+func newTestHandler(d Deps, role accounts.Role) http.Handler {
+	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
+	mux := http.NewServeMux()
+	Register(mux, d)
+	return authn.Middleware(Secure(mux))
+}
+
+func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// TestConsole_ViewerNavigationIsStructurallySmaller is the acceptance criterion
+// from docs/design/console/11-console-shell.md, and it is the one an
+// implementation is most likely to pass while getting wrong: a greyed-out
+// control also "cannot be used", and reads to a reviewer as compliant.
+//
+// ADR-0009's insight, which ADR-0026 preserved as the reason the flag exists at
+// all, is that ABSENT BEATS FORBIDDEN. So the assertion is about what is not
+// drawn, not about what refuses.
+func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
+	h := newTestHandler(Deps{Execution: true}, accounts.RoleViewer)
+	body := get(t, h, "/console/").Body.String()
+
+	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<"} {
+		if strings.Contains(body, absent) {
+			t.Errorf("a viewer's navigation contains %s — it must be structurally smaller, not merely refusing", absent)
+		}
+	}
+	for _, present := range []string{">Fleet<", ">Agents<", ">Activity<", ">Read egress<"} {
+		if !strings.Contains(body, present) {
+			t.Errorf("a viewer's navigation is missing %s, which a viewer may read", present)
+		}
+	}
+}
+
+// TestConsole_ExecutionOffMakesTheComposerAbsent is ADR-0026 decision 5: when
+// console_execution is off "the execution routes are not mounted and the
+// composer is not rendered — an absent capability, not an RBAC refusal,
+// preserving ADR-0009's original property verbatim for deployments that want
+// it."
+//
+// 404 rather than 403 is the whole point. A 403 would confirm the route exists.
+func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
+	off := newTestHandler(Deps{Execution: false}, accounts.RoleAdmin)
+	if got := get(t, off, "/console/run").Code; got != http.StatusNotFound {
+		t.Errorf("GET /console/run with console_execution off = %d, want 404 — the route must be unmounted, not refused", got)
+	}
+	if body := get(t, off, "/console/").Body.String(); strings.Contains(body, ">Run<") {
+		t.Error("navigation advertises Run with console_execution off")
+	}
+
+	on := newTestHandler(Deps{Execution: true}, accounts.RoleAdmin)
+	if got := get(t, on, "/console/run").Code; got != http.StatusOK {
+		t.Errorf("GET /console/run with console_execution on = %d, want 200", got)
+	}
+}
+
+// TestConsole_NoInlineScript guards the content security policy from the
+// inside. script-src 'self' silently breaks any inline handler, so a template
+// that grows one produces a page that renders and quietly does not work —
+// exactly the failure a reviewer does not see.
+//
+// hx-on: is called out by name because it is the one HTMX attribute that IS
+// script, and it is the natural thing to reach for.
+func TestConsole_NoInlineScript(t *testing.T) {
+	h := newTestHandler(Deps{Execution: true}, accounts.RoleAdmin)
+	body := get(t, h, "/console/").Body.String()
+
+	for _, banned := range []string{"<script", "hx-on:", "javascript:", " onclick=", " onload="} {
+		if strings.Contains(body, banned) {
+			t.Errorf("rendered page contains %q — the content security policy admits no inline script", banned)
+		}
+	}
+}
+
+// TestConsole_SecurityHeaders asserts the policy actually ships. A CSP that is
+// computed and never sent is the most convincing kind of absent control.
+func TestConsole_SecurityHeaders(t *testing.T) {
+	h := newTestHandler(Deps{}, accounts.RoleAdmin)
+	res := get(t, h, "/console/").Result()
+
+	csp := res.Header.Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"default-src 'self'", "script-src 'self'", "frame-ancestors 'none'",
+		"form-action 'self'", "base-uri 'none'", "object-src 'none'",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("Content-Security-Policy is missing %q; got %q", directive, csp)
+		}
+	}
+	if got := res.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+}
+
+// TestConsole_CSRFRefusesUnsafeMethodWithoutToken exercises Secure directly,
+// because the route table is all-GET today and the middleware must already be
+// correct when the first mutating route arrives — not correct as of the change
+// that adds one.
+func TestConsole_CSRFRefusesUnsafeMethodWithoutToken(t *testing.T) {
+	reached := false
+	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+
+	req := httptest.NewRequest(http.MethodPost, "/console/anything", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST without a CSRF token = %d, want 403", rec.Code)
+	}
+	if reached {
+		t.Error("a POST without a CSRF token reached the handler")
+	}
+}
+
+// TestConsole_CSRFAcceptsMatchingToken is the other half: the control must
+// admit a legitimate request, or it is not a control but an outage.
+func TestConsole_CSRFAcceptsMatchingToken(t *testing.T) {
+	reached := false
+	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
+
+	// A GET mints the cookie the page would carry.
+	seed := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	seedRec := httptest.NewRecorder()
+	h.ServeHTTP(seedRec, seed)
+
+	var token string
+	for _, c := range seedRec.Result().Cookies() {
+		if c.Name == csrfCookieName {
+			token = c.Value
+		}
+	}
+	if token == "" {
+		t.Fatal("no CSRF cookie was minted on a GET")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/console/anything", nil)
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: token})
+	req.Header.Set(csrfHeaderName, token)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if !reached || rec.Code == http.StatusForbidden {
+		t.Errorf("a request carrying a matching CSRF token was refused: code=%d reached=%v", rec.Code, reached)
+	}
+}
+
+// TestConsole_NoMutatingGet holds the line the specification draws: "Every
+// mutating request is POST/PUT/DELETE, never GET. A GET that mutates is a CSRF
+// hole regardless of tokens" — because a browser will issue it from an <img>
+// tag, before any token scheme is consulted.
+//
+// Navigation destinations are pages, so they are GET by definition; this fails
+// the day someone gives a nav entry a mutating method.
+func TestConsole_NoMutatingGet(t *testing.T) {
+	for _, r := range Routes(Deps{Execution: true}) {
+		if r.Nav.Label != "" && r.Method != http.MethodGet {
+			t.Errorf("navigation destination %q uses %s — a destination is a page and must be GET", r.Nav.Label, r.Method)
+		}
+		if !isSafeMethod(r.Method) && r.Nav.Label != "" {
+			t.Errorf("route %s %s is both a navigation destination and unsafe", r.Method, r.Path)
+		}
+	}
+}
+
+// TestConsole_UnauthenticatedIsRefused: the Console is behind the same
+// Authenticator as every other control-plane surface, and this asserts the
+// harness has not accidentally mounted it outside one.
+func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
+	h := newTestHandler(Deps{}, accounts.RoleAdmin)
+	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Error("an unauthenticated request rendered a Console page")
+	}
+}
