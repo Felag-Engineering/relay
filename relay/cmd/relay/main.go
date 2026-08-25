@@ -706,8 +706,13 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			// Job-read route. TestSurfaceDeps_AuditSinkIsWired is the regression
 			// guard, because a nil here fails silently by design.
 			auditSink: auditSink,
-			now:       func() time.Time { return time.Now().UTC() },
-			metrics:   appMetrics,
+			// The same RoleGate the capability layer authorizes with (#397):
+			// the Control API's administrative routes never reach the
+			// capability layer, so they read their floor from this object
+			// directly rather than from a second table.
+			roleGate: roleGate,
+			now:      func() time.Time { return time.Now().UTC() },
+			metrics:  appMetrics,
 		}
 		for _, s := range defaultControlSurfaces() {
 			s.Mount(controlSrv.Mux(), sd)

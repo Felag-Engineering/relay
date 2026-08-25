@@ -6,20 +6,86 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// Authorizer decides whether p may perform act against sel. v0.0.5 has no
-// real authn yet (the seeded credential arrives in v0.0.6, Accounts in
-// v0.3.0 — ADR-0010's staged adoption); this seam exists now so surfaces
+// ControlAction names one administrative act on the control plane ITSELF —
+// the acts that are not dispatches and so carry no jobs.Action and no
+// Selector, but still have a role floor (#397).
+//
+// It exists because "who may ask" was previously answered only for things
+// that reach a Node. Minting an Enrollment Token, revoking one, revoking a
+// Node, and engaging or releasing the Freeze never touch the dispatch
+// pipeline, so authz.RoleGate was never consulted for any of them and every
+// one of them was reachable by a viewer. Naming them here — in the capability
+// layer, beside the Action-shaped question — is what lets a single Authorizer
+// answer both, so MCP, the Control API, and the Console inherit one table
+// rather than each surface carrying its own (invariant 10).
+//
+// The values are stable, low-cardinality identifiers: they appear in refusal
+// reasons that land in the audit trail.
+type ControlAction string
+
+const (
+	// ControlMintEnrollmentToken is POST /api/v1/enrollment-tokens. A token's
+	// scope becomes the enrolling Node's relay: labels — the namespace
+	// reserved for the security-sensitive lane (invariant 7, ADR-0020) — so
+	// minting is a claim the control plane vouches for, not a convenience.
+	ControlMintEnrollmentToken ControlAction = "mint_enrollment_token"
+
+	// ControlRevokeEnrollmentToken is DELETE /api/v1/enrollment-tokens/{id},
+	// which cascade-revokes every Node the token enrolled.
+	ControlRevokeEnrollmentToken ControlAction = "revoke_enrollment_token"
+
+	// ControlRevokeNode is POST /api/v1/nodes/{node_id}/revoke: the middle
+	// rung of ADR-0020's incident ladder (quarantine < revoke < Freeze).
+	ControlRevokeNode ControlAction = "revoke_node"
+
+	// ControlFreezeEngage is POST /api/v1/freeze/engage (ADR-0013).
+	ControlFreezeEngage ControlAction = "freeze_engage"
+
+	// ControlFreezeRelease is POST /api/v1/freeze/release (ADR-0013).
+	ControlFreezeRelease ControlAction = "freeze_release"
+)
+
+// ControlAuthorizer decides whether p may perform a ControlAction — the
+// administrative half of the authorization question, split out as its own
+// interface so a surface that only needs *this* half (the Control API's
+// enrollment and revocation routes, which never dispatch) can depend on it
+// without holding anything that can reach a Node.
+type ControlAuthorizer interface {
+	AuthorizeControl(ctx context.Context, p Principal, act ControlAction) error
+}
+
+// Authorizer decides whether p may perform act against sel, and — since
+// #397 — whether p may perform an administrative ControlAction. v0.0.5 had
+// no real authn (the seeded credential arrived in v0.0.6, Accounts in
+// v0.3.0 — ADR-0010's staged adoption); this seam exists so surfaces
 // (MCP, Control API, Admin Console) plug into the pipeline without it being
 // reshaped later.
+//
+// The two questions live on ONE interface deliberately. They are the same
+// question asked about different objects, and the production implementation
+// (authz.RoleGate) is one object holding one ladder; splitting them into two
+// independently-wired seams is how a deployment ends up with a real gate on
+// dispatch and an allow-all gate on enrollment, which is precisely the defect
+// #397 records.
 type Authorizer interface {
 	Authorize(ctx context.Context, p Principal, act jobs.Action, sel Selector) error
+	ControlAuthorizer
 }
 
 // allowAllAuthorizer is the v0.0.5 default: every request is authorized.
 // Real Grant-based authorization is a later v0.0.5/v0.0.6 issue.
+//
+// New's fail-open guard refuses to build a Service that pairs this with a
+// real dispatcher, which is what keeps it out of production for BOTH halves
+// of the interface — a Relay whose Freeze anyone may engage is the same class
+// of wiring bug as one whose Raw Exec anyone may run.
 type allowAllAuthorizer struct{}
 
 func (allowAllAuthorizer) Authorize(context.Context, Principal, jobs.Action, Selector) error {
+	return nil
+}
+
+func (allowAllAuthorizer) AuthorizeControl(context.Context, Principal, ControlAction) error {
 	return nil
 }
 

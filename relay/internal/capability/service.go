@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -436,26 +437,114 @@ func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, 
 	return errors.Join(refusalErr, auditErr)
 }
 
+// ErrFreezeReasonRequired is returned by ReleaseFreeze when reason is empty
+// or whitespace. ADR-0013's asymmetric activation is not decoration: engaging
+// the emergency stop is cheap and reason-free, and releasing it is the
+// deliberate act that must say why, because the reason is what a later reader
+// has to reconstruct the incident from. Enforced here rather than per surface
+// so a Console or a future CLI cannot release without one.
+var ErrFreezeReasonRequired = errors.New("capability: releasing the Freeze requires a non-empty reason (ADR-0013)")
+
+// localHostPrincipal attributes an engage/release performed by root on the
+// Relay host itself (the signal lever, cmd/relay/freeze_signal.go). It is
+// deliberately role-less and kind-less: it is not an Account, it holds no
+// credential, and its authority is process-signal privilege on the box —
+// which is strictly greater than any API credential's.
+//
+// Defined here, once, so the attribution string recorded for the host lever
+// cannot drift from the two methods allowed to use it.
+func localHostPrincipal() Principal { return Principal{Account: "local-host"} }
+
 // EngageFreeze sets the Relay-wide Freeze (ADR-0013), attributed to p:
-// persisted first (so a crash after this call still leaves the Freeze
-// engaged), then recorded via AuditSink.RecordFreeze. If persistence fails,
-// the audit call is skipped — there is nothing true to record — and the
-// persistence error is returned.
+// authorized first, then persisted (so a crash after the store call still
+// leaves the Freeze engaged), then recorded via AuditSink.RecordFreeze. If
+// persistence fails, the audit call is skipped — there is nothing true to
+// record — and the persistence error is returned.
+//
+// The floor is `operator`, AND the Principal must be a human Account (#397).
+// The role half is ADR-0013's "engage cheap": anyone who may run anything may
+// also pull the cord. The human half is the amendment #397 records, and it is
+// not a role question at all — a machine Account at `operator` freezing the
+// fleet is a jailbroken AI-agent switching off its own overseers, a denial of
+// service the fire-alarm argument does not cover. Authority is still the Role
+// (principal.go); Kind answers only the question authority cannot.
+//
+// A refusal is audited as a refusal, with the Principal, exactly like a
+// refused dispatch — see refuseControl.
 func (s *Service) EngageFreeze(ctx context.Context, p Principal) error {
+	if err := s.authz.AuthorizeControl(ctx, p, ControlFreezeEngage); err != nil {
+		return s.refuseControl(ctx, p, err)
+	}
+	return s.engageFreeze(ctx, p)
+}
+
+// EngageFreezeLocal engages the Freeze on behalf of root on the Relay host —
+// ADR-0013's second activation path ("or locally on the Relay host"), which
+// exists precisely for the case where the distrusted thing IS the API
+// credential.
+//
+// It is a separate method rather than a Principal the role gate happens to
+// wave through, because the two are different roots of authority and that
+// difference should be visible at the call site. Authority-by-call-site is
+// also what keeps it unreachable from any surface: the Control API holds a
+// Freezer interface carrying only the gated pair (api.Freezer), so no route
+// can reach this even by accident.
+func (s *Service) EngageFreezeLocal(ctx context.Context) error {
+	return s.engageFreeze(ctx, localHostPrincipal())
+}
+
+func (s *Service) engageFreeze(ctx context.Context, p Principal) error {
 	if err := s.freeze.Engage(ctx, p.Attribution()); err != nil {
 		return fmt.Errorf("capability: engage freeze: %w", err)
 	}
 	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: true, Asserted: AssertionsFromContext(ctx)})
 }
 
-// ReleaseFreeze clears the Relay-wide Freeze (ADR-0013), attributed to p
-// with reason recorded for why: persisted first, then recorded via
-// AuditSink.RecordFreeze, mirroring EngageFreeze.
+// ReleaseFreeze clears the Relay-wide Freeze (ADR-0013), attributed to p with
+// reason recorded for why: authorized first, then persisted, then recorded
+// via AuditSink.RecordFreeze, mirroring EngageFreeze.
+//
+// The floor is `admin` and the reason is mandatory (#397, ADR-0013): the
+// fire-alarm asymmetry is that anyone may pull the handle and the chief
+// clears re-entry. Both refusals are audited with the Principal.
 func (s *Service) ReleaseFreeze(ctx context.Context, p Principal, reason string) error {
+	if err := s.authz.AuthorizeControl(ctx, p, ControlFreezeRelease); err != nil {
+		return s.refuseControl(ctx, p, err)
+	}
+	if strings.TrimSpace(reason) == "" {
+		return s.refuseControl(ctx, p, ErrFreezeReasonRequired)
+	}
+	return s.releaseFreeze(ctx, p, reason)
+}
+
+// ReleaseFreezeLocal is EngageFreezeLocal's counterpart: release by root on
+// the Relay host. The reason stays mandatory — the local lever is a different
+// root of authority, not an exemption from saying why the fleet is running
+// again.
+func (s *Service) ReleaseFreezeLocal(ctx context.Context, reason string) error {
+	if strings.TrimSpace(reason) == "" {
+		return ErrFreezeReasonRequired
+	}
+	return s.releaseFreeze(ctx, localHostPrincipal(), reason)
+}
+
+func (s *Service) releaseFreeze(ctx context.Context, p Principal, reason string) error {
 	if err := s.freeze.Release(ctx, p.Attribution(), reason); err != nil {
 		return fmt.Errorf("capability: release freeze: %w", err)
 	}
 	return s.audit.RecordFreeze(ctx, FreezeEvent{Principal: p, Engage: false, Reason: reason, Asserted: AssertionsFromContext(ctx)})
+}
+
+// refuseControl audits a refused ControlAction and returns the refusal.
+//
+// It is recordRefusal's sibling for the acts that carry no Selector and no
+// Action: nothing was resolved, nothing was dispatched, and there is no
+// fan-out to describe — only who was refused and why. It goes to the SAME
+// AuditKindRefusal the dispatch path uses, so "show me everything this
+// Account was refused" stays one query rather than two (invariant 10 applied
+// to the trail, not only to the code path).
+func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr error) error {
+	return s.recordRefusal(ctx, p, Selector{}, jobs.Action{}, RefusalUnauthorized, refusalErr)
 }
 
 // CancelJob stops jobID's Tasks (#101, ADR-0013): undispatched Tasks are

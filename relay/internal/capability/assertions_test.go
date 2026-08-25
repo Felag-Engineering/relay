@@ -71,3 +71,10 @@ func (a *assertionSpyAuthorizer) Authorize(ctx context.Context, p Principal, _ j
 	a.sawAssertions = AssertionsFromContext(ctx)
 	return nil
 }
+
+func (a *assertionSpyAuthorizer) AuthorizeControl(ctx context.Context, p Principal, _ ControlAction) error {
+	a.called = true
+	a.sawPrincipal = p
+	a.sawAssertions = AssertionsFromContext(ctx)
+	return nil
+}

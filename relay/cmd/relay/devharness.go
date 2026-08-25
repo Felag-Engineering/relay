@@ -79,6 +79,14 @@ func (devHarnessAuthorizer) Authorize(context.Context, capability.Principal, job
 	return nil
 }
 
+// AuthorizeControl completes capability.Authorizer's administrative half
+// (#397). Allow-all like its sibling, for the same reason and under the same
+// build tag: the harness's whole purpose is to drive the pipeline from a
+// local socket with no Account model behind it.
+func (devHarnessAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
+	return nil
+}
+
 // installDevHarness wires the dev-harness control socket into deps, iff
 // RELAY_DEVHARNESS_SOCKET is set. If it is empty, this is a no-op — even a
 // devharness-tagged binary is inert by default (defense in depth).

@@ -24,6 +24,24 @@
 // inherit the same answer. A surface that gated Raw Exec itself would be a
 // second control path, and the first one to be forgotten.
 //
+// # The administrative half (#397)
+//
+// The ladder above answers "who may dispatch". It could not answer "who may
+// mint an Enrollment Token, revoke a Node, or engage the Freeze", because
+// none of those constructs a jobs.Action — so RoleGate was never consulted
+// for any of them and a viewer could do all three. AuthorizeControl adds
+// that table (capability.ControlAction), in this one object, for the same
+// reason the dispatch ladder is here: a floor that each surface keeps for
+// itself is a floor that drifts.
+//
+// One rule there is not a role at all. Engaging the Freeze additionally
+// requires a HUMAN Account: a machine Account at operator halting the fleet
+// is an AI-agent switching off its own overseers, and the fire-alarm
+// argument for cheap engagement ("anyone may pull the handle") is an
+// argument about people. Authority remains the Role — capability.Principal's
+// Kind is not an authorization input anywhere else and does not become one
+// here; it answers only the question authority cannot.
+//
 // authz imports capability, jobs, and accounts — no proto, no store, no HTTP.
 // capability never imports authz, so there is no cycle.
 package authz
@@ -72,6 +90,39 @@ func (e *unauthorizedError) Error() string {
 }
 
 func (e *unauthorizedError) Unwrap() error {
+	return ErrUnauthorized
+}
+
+// notHumanError is the refusal for a control Action that no machine Account
+// may perform at any role (#397: Freeze engage). It is a distinct type from
+// unauthorizedError because the two say genuinely different things to an
+// audit reader — "your role is too low" invites an escalation request, while
+// "this act is human-only" says no amount of role will help — but it unwraps
+// to the same ErrUnauthorized sentinel so every surface's existing
+// refusal-to-403 mapping covers it without knowing it exists.
+//
+// The Principal's KIND is named in the message on purpose: #397's acceptance
+// asks for the refusal to be audited with it, and the reason string is what
+// reaches the trail.
+type notHumanError struct {
+	principal capability.Principal
+	action    string
+}
+
+func (e *notHumanError) Error() string {
+	kind := e.principal.Kind
+	if kind == "" {
+		// Principal.Kind's empty value means "unknown", and every check
+		// written against it must treat unknown as machine (principal.go).
+		// Rendering it as an empty string would read as a missing field
+		// rather than as the reason for the refusal.
+		kind = "unknown"
+	}
+	return fmt.Sprintf("authz: principal %q denied: %s is human-only; account kind is %q",
+		e.principal.Account, e.action, kind)
+}
+
+func (e *notHumanError) Unwrap() error {
 	return ErrUnauthorized
 }
 
@@ -161,6 +212,74 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 	}
 	if !accounts.Role(p.Role).AtLeast(required) {
 		return &unauthorizedError{principal: p, action: "approving " + label, required: required}
+	}
+	return nil
+}
+
+// requiredControlRole returns the minimum role for an administrative
+// ControlAction, whether the act is additionally human-only, and false for an
+// action this gate does not recognize.
+//
+// The floors are not new policy — each was already written down and simply
+// never enforced (#397):
+//
+//	mint an Enrollment Token     admin      ADR-0032 §5
+//	revoke an Enrollment Token   admin      ADR-0020's incident ladder
+//	revoke a Node                admin      ADR-0020's incident ladder
+//	engage the Freeze            operator   ADR-0013 (+ human-only, #397)
+//	release the Freeze           admin      ADR-0013
+//
+// Enrollment sits at admin because a token's scope becomes the enrolling
+// Node's relay: labels — the namespace the security-sensitive lane targets
+// (invariant 7, ADR-0020) — so minting manufactures Nodes the quarantine and
+// secret-distribution paths will treat as authoritative. That is a more
+// durable position than any single dispatch, which is why it cannot sit
+// below the role that may run one.
+func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
+	switch act {
+	case capability.ControlMintEnrollmentToken:
+		return accounts.RoleAdmin, "minting an Enrollment Token", false, true
+	case capability.ControlRevokeEnrollmentToken:
+		return accounts.RoleAdmin, "revoking an Enrollment Token", false, true
+	case capability.ControlRevokeNode:
+		return accounts.RoleAdmin, "revoking a Node", false, true
+	case capability.ControlFreezeEngage:
+		return accounts.RoleOperator, "engaging the Freeze", true, true
+	case capability.ControlFreezeRelease:
+		return accounts.RoleAdmin, "releasing the Freeze", false, true
+	default:
+		return "", "", false, false
+	}
+}
+
+// AuthorizeControl implements capability.ControlAuthorizer (#397): may p
+// perform this administrative act on the control plane itself?
+//
+// Deny-by-default in both directions, exactly as Authorize is: an action this
+// gate does not recognize is refused for every role including admin, so a
+// ControlAction added later has its floor decided deliberately in
+// requiredControlRole rather than inheriting the weakest one by falling
+// through — and an unknown or corrupted role satisfies nothing, because
+// accounts.Role.AtLeast fails closed.
+//
+// Order is role first, then kind. A machine viewer is told the ladder answer
+// ("needs operator") rather than the kind answer, which is the more
+// actionable of the two and does not disclose that a kind rule exists to a
+// caller who would fail the role check anyway.
+func (*RoleGate) AuthorizeControl(_ context.Context, p capability.Principal, act capability.ControlAction) error {
+	required, label, humanOnly, known := requiredControlRole(act)
+	if !known {
+		return &unauthorizedError{
+			principal:   p,
+			action:      fmt.Sprintf("unrecognized control action %q", string(act)),
+			unknownKind: true,
+		}
+	}
+	if !accounts.Role(p.Role).AtLeast(required) {
+		return &unauthorizedError{principal: p, action: label, required: required}
+	}
+	if humanOnly && !p.Human() {
+		return &notHumanError{principal: p, action: label}
 	}
 	return nil
 }

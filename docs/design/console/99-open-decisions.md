@@ -257,7 +257,7 @@ Administer   Add Nodes · Accounts · Incident
 
 ## Prerequisites that already exist as issues
 
-### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate
+### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**
 
 **Broader than earlier drafts of this file recorded.** Three `/api/v1` route families authenticate
 the caller and then never check their role:
@@ -279,11 +279,26 @@ must not be able to freeze the fleet. Recorded on #397 as an acceptance line.
 engage and `admin` with an audited reason to release per ADR-0013; revocation is `admin` + step-up
 per ADR-0020's incident ladder. The gates are specified and absent.
 
-**Blocks two specs, not one:**
+**Blocked two specs, not one:**
 - **[09 — Add Nodes](09-add-nodes.md)**, whose whole subject is minting.
 - **[16 — Incident](16-incident-ladder.md)**, which specifies revoke as `admin` + step-up and
   Freeze as `operator`+ / `admin`. Building a UI whose controls state a role requirement the API
   does not enforce is worse than building nothing: it documents a protection that is not there.
+
+**Resolved (2026-08-24).** The floors are enforced, all five of them, from the one
+`authz.RoleGate` the capability layer already held: mint `admin`, token revoke `admin`
+(the fourth route, which this entry's table did not name — found by the structural guard),
+Node revoke `admin`, Freeze engage a human `operator`+, Freeze release `admin` with a
+reason. Freeze's floor lives in `capability.Service`, so the Console inherits it rather
+than re-deriving it; mint and revoke are checked at the Control API surface because
+`capability`'s import allowlist bars `internal/enroll` and `internal/revocation`, leaving
+no capability-layer method to gate. Every refusal is audited as a `refusal` with the
+Account, and `TestEveryRouteIsRoleClassified` now fails any route added without a declared
+floor.
+
+**One half of D8 is still owed:** ADR-0020 asks for `admin` **+ step-up re-authentication**
+on Node revoke, and there is no step-up mechanism on the Control API yet. Spec 16 may state
+the role requirement as enforced; it may not yet promise the step-up.
 
 ### D13. [#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403) — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
 

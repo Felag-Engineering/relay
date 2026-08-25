@@ -102,6 +102,27 @@ Raw Exec is admin-only and enforced centrally, so an `operator` token cannot rea
 arbitrary-command path from any surface. That is the point of separating the roles: most
 orchestration is Operations, and only Operations.
 
+The administrative acts in that last row are enforced centrally too, from the same role
+ladder (#397). Concretely:
+
+| Act | Floor |
+|---|---|
+| Mint or revoke an Enrollment Token | `admin` |
+| Revoke a Node | `admin` |
+| **Engage** the Freeze | `operator`, **and a human Account** |
+| **Release** the Freeze | `admin`, with a non-empty reason |
+
+The one rule that is not a role: **a machine Account can never engage the Freeze**, at any
+role including `admin`. Halting the whole fleet is a fire alarm for people to pull; an
+AI-agent stopping the plane that supervises it is a denial of service wearing a safety
+feature's clothes. Automation that legitimately needs to stop the fleet does it on the
+Relay host (`SIGUSR1`), where the authority is root on the box rather than a credential
+someone could steal. Releasing is *not* human-only — an incident must have an automated
+way back.
+
+Every one of those refusals is written to the audit trail as a `refusal`, with the Account
+and its role, so "who tried" is answerable and not only "who succeeded".
+
 ## Human sessions: OAuth 2.1 through your IdP
 
 API Tokens are the right credential for headless drivers. For a **person** connecting

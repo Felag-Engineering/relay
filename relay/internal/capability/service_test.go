@@ -14,11 +14,23 @@ import (
 type spyAuthorizer struct {
 	called bool
 	err    error
+
+	// controlCalls records every ControlAction the Service asked about (#397),
+	// and controlErr is what AuthorizeControl returns. Separate from
+	// called/err so a test can assert that the administrative half was
+	// consulted without an Action-shaped call being confused for it.
+	controlCalls []ControlAction
+	controlErr   error
 }
 
 func (s *spyAuthorizer) Authorize(context.Context, Principal, jobs.Action, Selector) error {
 	s.called = true
 	return s.err
+}
+
+func (s *spyAuthorizer) AuthorizeControl(_ context.Context, _ Principal, act ControlAction) error {
+	s.controlCalls = append(s.controlCalls, act)
+	return s.controlErr
 }
 
 // spyCapChecker records the arguments it was called with and returns a fixed error.
