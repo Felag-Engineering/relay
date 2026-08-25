@@ -1,0 +1,168 @@
+package console
+
+import (
+	"embed"
+	"html/template"
+	"net/http"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+)
+
+//go:embed assets/*
+var assetsFS embed.FS
+
+// BannerKind is a condition about THE CONTROL PLANE ITSELF.
+//
+// Every other surface in the Console answers one of the four questions about a
+// Node. This slot is the only place the Console can speak about the Relay, and
+// it exists because the product's most catastrophic failure modes are invisible
+// on a screen full of Nodes: the fleet freeze, and the certificates everything
+// else depends on.
+//
+// These are operational alarms, not configuration. Nothing here is editable and
+// nothing here is a settings page (invariant 11).
+type BannerKind string
+
+const (
+	// BannerFreeze: all new Task dispatch halted. It must state what is STILL
+	// TRUE — in-flight Tasks keep running, Plans still resolve — because an
+	// emergency stop that looks like a total outage gets released in a panic.
+	BannerFreeze BannerKind = "freeze"
+
+	// BannerRelayCertExpiring: automatic rotation of the Relay's server
+	// certificate has failed. Both listeners share that certificate, so once it
+	// lapses the Console is unreachable too — this warning is only useful
+	// BEFORE the event and can never be the only alarm.
+	BannerRelayCertExpiring BannerKind = "relay-cert-expiring"
+
+	// BannerCAExpiring: the trust root every Node pins is running out, and
+	// there is no rotation path today (issue #412).
+	BannerCAExpiring BannerKind = "ca-expiring"
+)
+
+// Banner is a rendered control-plane condition.
+type Banner struct {
+	Kind   BannerKind
+	Text   string
+	Detail string
+}
+
+// Page is everything the layout needs. Handlers build one and call Render;
+// they never assemble HTML by hand.
+type Page struct {
+	Title   string
+	Account string
+	Role    accounts.Role
+
+	Nav    []NavSection
+	Banner *Banner
+
+	// CSRFToken is rendered into the body's hx-headers attribute so every HTMX
+	// request carries it without a line of inline script. An ATTRIBUTE is not
+	// script and the content security policy does not touch it — which is the
+	// entire reason the conventions ban hx-on:, which is.
+	CSRFToken string
+
+	// Content is the screen's own markup, produced by the screen's template.
+	// It is template.HTML, so a screen that interpolates untrusted data without
+	// escaping it has defeated the layout's protection rather than the layout
+	// having failed. Screens render through html/template; none assembles a
+	// string.
+	Content template.HTML
+}
+
+var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} &mdash; Relay Console</title>
+<link rel="stylesheet" href="/console/assets/console.css">
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
+<div class="app">
+  <aside class="nav">
+    <div class="brand"><b>Relay</b> <span>console</span></div>
+    {{range .Nav}}
+    <div class="navsec">{{.Group}}</div>
+    <div class="navlist">
+      {{range .Items}}<a class="navitem{{if .Current}} on{{end}}" href="{{.Path}}">{{.Label}}</a>{{end}}
+    </div>
+    {{end}}
+    <div class="navfoot">signed in as <b>{{.Account}}</b><br>role <b>{{.Role}}</b></div>
+  </aside>
+  <div class="col">
+    {{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}
+    <header class="topbar"><h1>{{.Title}}</h1></header>
+    <main id="content">{{.Content}}</main>
+  </div>
+</div>
+</body>
+</html>
+`))
+
+// Render writes p as a complete Console page.
+func Render(w http.ResponseWriter, p Page) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := layoutTmpl.Execute(w, p); err != nil {
+		// The header is already written, so the response is truncated either
+		// way; log-and-stop beats a half page with a 200 and no error anywhere.
+		http.Error(w, "the Console could not render this page", http.StatusInternalServerError)
+	}
+}
+
+// page assembles the layout data common to every handler.
+func page(d Deps, w http.ResponseWriter, r *http.Request, title string) (Page, bool) {
+	p, ok := principal(w, r)
+	if !ok {
+		return Page{}, false
+	}
+	token, err := ensureCSRFCookie(w, r)
+	if err != nil {
+		http.Error(w, "could not establish a CSRF token", http.StatusInternalServerError)
+		return Page{}, false
+	}
+	role := accounts.Role(p.Role)
+	return Page{
+		Title:     title,
+		Account:   p.Account,
+		Role:      role,
+		Nav:       Nav(d, role, r.URL.Path),
+		CSRFToken: token,
+	}, true
+}
+
+// placeholder renders the shell around a screen that has not been built yet,
+// naming the specification that will replace it.
+//
+// This is deliberate rather than a stub left lying around: it makes the shell —
+// the navigation projection, the security headers, the layout — real and
+// reviewable now, and it turns every subsequent screen issue into "replace one
+// placeholder", which is a much smaller diff to review than "add a screen and
+// the plumbing it needs".
+func placeholder(title, spec string) func(Deps) http.HandlerFunc {
+	return func(d Deps) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			p, ok := page(d, w, r, title)
+			if !ok {
+				return
+			}
+			p.Content = template.HTML(`<div class="placeholder">` +
+				`<p>This screen is not built yet.</p>` +
+				`<p>Its specification is <code>docs/design/console/` +
+				template.HTMLEscapeString(spec) + `</code>.</p></div>`)
+			Render(w, p)
+		}
+	}
+}
+
+// assetHandler serves the Console's own static assets. It exists because the
+// content security policy admits styles only from this origin and nothing
+// inline, so the stylesheet cannot live in the layout.
+func assetHandler(Deps) http.HandlerFunc {
+	fs := http.FileServer(http.FS(assetsFS))
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		fs.ServeHTTP(w, r)
+	}
+}
