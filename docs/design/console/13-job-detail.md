@@ -1,11 +1,12 @@
 # 13 — Job detail
 
 **No artboard** (the Plan renderer and outcome bar are on artboard 9). One command run against many
-Nodes. **Milestone v0.6.0.**
+Nodes. **Milestone v0.6.0** for the record; **v0.7.0** for Cancel.
 
 **Governing:** ADR-0004, ADR-0012, ADR-0013, ADR-0025, invariants #4, #5, #13.
-**Backend:** store queries for a Job and its Tasks, paginated and filterable by outcome; cancel
-through the capability layer.
+**Backend:** store queries for a Job and its Tasks, paginated and filterable by outcome; Cancel
+through the capability layer (v0.7.0 — in v0.6.0 no route on this page reaches the capability
+layer's write or dispatch path).
 
 ## What this screen is for
 
@@ -48,7 +49,7 @@ Styled informative-neutral — slate, never red. A deny is the product working.
 A running Job updates live: counts fill in, the bar grows. **The Plan block never reflows** — it is
 what was agreed, not a live query.
 
-**Cancel** is available while Tasks are in flight and is honest about what it does: it kills the
+**Cancel** (v0.7.0) is available while Tasks are in flight and is honest about what it does: it kills the
 process group on Nodes still working; a Task that already finished reports its real outcome rather
 than a retroactive cancel; the cancelled Task ID stays deduped, so at-most-once still holds.
 
@@ -70,6 +71,7 @@ shows its audited metadata only (ADR-0025).
 - [ ] A Job over 10,000 Nodes renders in one screen with no list until explicitly requested.
 - [ ] All eight outcomes render, with the three "did not run" kinds visually distinct.
 - [ ] The denied group shows the rule verbatim and links to the Node's effective Policy.
-- [ ] Cancel is offered only while Tasks are in flight, and its effect is described accurately.
+- [ ] Cancel (v0.7.0) is offered only while Tasks are in flight, and its effect is described
+      accurately; in v0.6.0 no control on this page reaches the capability layer.
 - [ ] The Plan block does not change while the Job runs.
 - [ ] A three-Node Job is as legible as a ten-thousand-Node one.

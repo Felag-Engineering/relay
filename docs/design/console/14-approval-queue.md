@@ -21,8 +21,8 @@ Each row carries the Operation with its risk badge, the requester as a verified 
 asserted chip when present), the fan-out, quorum state, and a **TTL countdown**. Nothing else — the
 detail is one click away and the row exists to triage.
 
-**Batches render as one row**, matching spec 08's one-card rule. A batch that fragments into forty
-rows here has already defeated the mechanism before anyone opens it.
+**A Grant renders as one row** (spec 08: a batch is a Grant over a Scope). A Grant that fragments
+into one row per Job it could release has defeated the mechanism before anyone opens it.
 
 ## What the queue must convey that a single card cannot
 
@@ -53,7 +53,7 @@ should not have to find their own item in someone else's list.
 
 - An Approve control on a row.
 - A default sort by arrival time.
-- Batches split into member rows.
+- Grants split into per-Job rows.
 
 ## States
 
@@ -66,6 +66,6 @@ should not have to find their own item in someone else's list.
 
 - [ ] Default order is nearest-expiry-first.
 - [ ] No decision is possible without opening the approval object, except bulk deny with step-up.
-- [ ] A declared batch occupies exactly one row.
+- [ ] A Grant occupies exactly one row.
 - [ ] Pending approvals sharing a shape key are visibly grouped.
 - [ ] "Waiting on me" is the default filter when eligibility is determinable.

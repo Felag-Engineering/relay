@@ -17,7 +17,7 @@ incident ladder's first rung sits: setting or removing `relay:quarantine`.
 ```
 Fleet / prod / web-0442        ● online, last seen 12s      [▷ Run here] [Pin to compare]
 ─────────────────────────────────────────────────────────────────────────────────────────
-[relay:quarantine] [node:env=prod] [node:role=web] [tag:pci] [state:template-drift]
+[relay:quarantine] [node:env=prod] [node:role=web] [tag:pci] [state:outdated]      
                                           [Edit tag: labels] [Remove quarantine · admin+step-up]
 ─────────────────────────────────────────────────────────────────────────────────────────
 ┌ Identity & enrollment ─┐  ┌ Effective Policy ───────────────────────────────────────┐
@@ -37,7 +37,8 @@ Fleet / prod / web-0442        ● online, last seen 12s      [▷ Run here] [Pi
 **Identity & enrollment** — `node_id`, certificate SHA-256, issued and expiry, renewal count and
 last renewal (and `state:cert-expiring` when the warning window is crossed), the Enrollment Token it joined with and when, daemon version. Provenance is the
 point: renewal is cert-authenticated and preserves `node_id`, so the chain back to enrollment is
-unbroken.
+unbroken. None of the certificate fields are persisted today — `registry.Node` carries only the
+fingerprint — so this panel depends on #440 landing first.
 
 **Fingerprints** — Policy and template-set, each with how many Nodes in the fleet share it. That
 comparison is the whole value: confirming a rollout landed is string equality, not trust. Template

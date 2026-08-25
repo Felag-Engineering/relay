@@ -177,18 +177,21 @@ a warning ahead of the event and can never be the only alarm.
 
 ## The incident ladder
 
-Four rungs, in ascending order of blast radius. Every screen that offers one must make its
+Three rungs, in ascending order of blast radius. Every screen that offers one must make its
 position on the ladder legible.
 
 | Rung | Fences | Who | Reversible |
 |---|---|---|---|
 | `relay:quarantine` on a Node | one Node | `admin` + step-up | yes |
-| Suspend an Account | one actor | `operator`+ to engage, `admin` + step-up to lift | yes |
 | Revoke a Node | one Node | `admin` + step-up | no |
 | Freeze | the whole fleet | `operator`+ to engage, `admin` + reason to lift | yes |
 
 Cancel is not on the ladder — it stops one in-flight Task and stops nothing future. Every rung
 leaves in-flight Tasks running; Cancel is the only instrument for those.
+
+There is no actor-scoped rung. Account suspension (ADR-0035) was drafted and **deferred, not
+adopted** (#443); stopping one actor is revoking its API Tokens (spec 15) or Freeze. Freeze engage
+is **human-principal only** — a machine Account, whatever its role, cannot pull the cord (#397).
 
 ## Navigation
 

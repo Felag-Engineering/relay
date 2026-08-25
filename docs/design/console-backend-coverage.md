@@ -9,18 +9,18 @@ Console milestones are sequenced by real dependencies rather than optimism.
 
 | Console surface | Backend needed | Status (2026-08-07) |
 |---|---|---|
-| Node registry view (facts, labels, liveness, Policy fingerprint, `outdated`) | registry read seams | ✅ `relay/internal/registry`, consumed by MCP `list_nodes`/`describe_node` |
+| Node registry view (facts, labels, liveness, Policy fingerprint, `outdated`) | registry read seams | ✅ `relay/internal/registry`, consumed by MCP `list_nodes`/`describe_node` — **but** liveness and certificate validity are not on the record; #440 (v0.6.0) adds them for `state:` and Node detail |
 | Effective-Policy viewer per Node | daemon-evaluated Policy queries | ✅ `policyview` (ADR-0011) |
-| Jobs/Tasks, results, audit trail | store + audit queries | ✅ mostly — needs richer filtered/paginated query seams for a UI |
+| Jobs/Tasks, results, audit trail | store + audit queries | ⚠️ `store/audit.go` has only List/ByJob/ByNode/ByAccount/…: no kind, time-range, pagination or arg filter. The Console seams live in the **capability layer's read lane** (invariant #10), never as Console→store calls — #441 (v0.6.0) |
 | Freeze, Enrollment Token mint/revoke, Node revoke | capability layer + API | ✅ `/api/v1` slice (v0.0.6) |
 | Execution composer (`list_operations` schemas, plan, run, raw_exec, cancel) | capability layer | ✅ `capability/{execution,plan,cancel}`, `opvocab` golden schema — MCP-only today; Console adapts the same layer in-process |
 | **Login, roles, sessions** | Account model | ❌ single seeded shared credential; no identity |
 | **Step-up re-auth** on mutate apply / privilege grants | session "recent-auth" concept | ❌ depends on Accounts |
-| **Live updates (SSE)** | event stream off registry/Job state transitions | ❌ nothing emits events; needs an in-process pub/sub seam |
+| **Live updates (SSE)** | event seam with **four publishers** — registry transitions, Job transitions, MCP tool calls (arguments, never read results), enrollment attempts — bounded ring buffer, `Last-Event-ID` resume, `gap` event | ❌ nothing emits events; #416 (v0.6.0) |
 | **Approval queue** | pending-approval Job state + decision endpoint | ❌ = the Approval Callout milestone ([2/6], [3/6]) |
 | **Browser security** (CSRF tokens, CSP, cookie sessions) | new middleware | ❌ bearer-token-only today; #264 puts XSS/CSRF on the most dangerous path |
 | Large-fleet result rendering | aggregation/histogram primitive | ❌ deferred (read-lane milestone); paginate short-term |
-| Saved views + group-by fleet view (`ui-advisory.md` Organizing principle) | per-Account view persistence (small preference store keyed to Accounts) | ❌ depends on Accounts; group-by itself is a pure read over existing registry labels |
+| Saved views + group-by fleet view (`ui-advisory.md` Organizing principle) | per-Account view persistence (small preference store keyed to Accounts) | ❌ #442 (v0.6.0); group-by itself is a pure read over existing registry labels |
 | Label management: `relay:` quarantine lane + `tag:` grouping (ADR-0020) | capability + API endpoints — one mechanism, two authz tiers (`admin`+step-up / `operator`) | ❌ labels set only via token scope at enrollment; scheduled v0.7.0 |
 
 ## Planning consequences

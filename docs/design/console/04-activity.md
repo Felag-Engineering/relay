@@ -4,8 +4,9 @@
 **Milestone v0.6.0.**
 
 **Governing:** ADR-0004, ADR-0013, ADR-0025, ADR-0027, `approval-and-attribution.md`.
-**Backend:** store + audit queries with richer filtered/paginated seams than exist today; the SSE
-seam off registry and Job state transitions.
+**Backend:** the audit and Job query seams — kind, principal, time range, Node, Operation,
+outcome, cursor pagination — exposed through the **capability layer's read lane** (#441, never
+Console→store); the SSE seam's registry, Job and enrollment publishers.
 
 ## What this screen is for
 

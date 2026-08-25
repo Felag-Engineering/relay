@@ -45,18 +45,21 @@ see what is *different*, not re-read what is the same.
 
 It requires a **shape key** on the approval record: a hash over the Operation and the normalised
 Selector, excluding fan-out and any argument expected to vary (D10). Finding the prior approval is
-then a lookup. This is a **v0.5.0 schema decision** — v0.5.0 lands well before the Console, and a
-shape key cannot be recomputed for existing records because normalising a Selector after the fact
-is guesswork.
+then a lookup. It is a retrofit onto the v0.5.0 schema (#415): `v0.1.0-beta` has not started and
+no production approval records exist, so the migration is over test data. For a Grant the key
+hashes the Scope.
 
 When there is no comparable prior approval, say so plainly. Do not manufacture a diff.
 
-## Batches
+## Batches are Grants
 
-A declared batch renders as **one card** — "Batch · 14 actions" — with the member list collapsed
-and one decision. Never forty cards. **Approving a batch requires expanding it at least once.**
-That is a deliberate cost, and it is the only dark-pattern-shaped thing on the screen: it exists to
-buy attention, not to sell it.
+A "batch" is what ADR-0027's #378 amendment built: a **Grant** — an ordinary approval Request whose
+subject is a **Scope** (Operation allow-list, namespace pin, fan-out ceiling, window, `max_uses`)
+rather than one Plan. It renders as **one card** — "Grant · `service.restart` on `tag:web` · ≤ 200
+Nodes · next 2h · 20 uses" — carrying the Scope, its *derived worst-case Requirement*, and, once
+approved, the Jobs it has released so far (audit `grant_id`). Never one card per released Job.
+**Approving a Grant requires expanding its Scope at least once.** That is a deliberate cost, and
+the only dark-pattern-shaped thing on the screen: it exists to buy attention, not to sell it.
 
 ## No editing here
 
@@ -92,7 +95,7 @@ and Activity (spec 04) shows either.
 - [ ] Renders legibly at 390px wide with no horizontal scroll and 44px minimum hit targets.
 - [ ] Approve and Deny are visually identical in weight; neither is focused on load.
 - [ ] Neither decision submits without step-up.
-- [ ] A batch cannot be approved without its member list having been expanded.
+- [ ] A Grant cannot be approved without its Scope having been expanded.
 - [ ] The diff callout is present whenever a comparable prior approval exists, and its absence is
       stated when one does not.
 - [ ] The decision is bound to the plan hash; a plan that changed is not approvable.

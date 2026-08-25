@@ -20,8 +20,10 @@ think "well-typeset technical document," not "dashboard product."
 Rules that override normal dashboard instincts:
 
 1. **Calm by default.** Neutral palette (near-white / near-black surfaces, one restrained
-   accent for interactive elements). Color is *semantic and scarce*: amber is reserved for
-   the global Freeze banner and quarantine, red for nothing routine. A **denied** result is
+   accent for interactive elements). Color is *semantic and scarce*: amber means *attention
+   now* (the control-plane banner, `state:offline`, `state:outdated`, `state:cert-expiring`,
+   over-cap notes); indigo is the security lane (`relay:` labels, quarantine); one muted red
+   exists, on `failure` and `timeout` only (D5 in `console/99-open-decisions.md`). A **denied** result is
    NOT an error — render it neutral/informative (slate chip, not red), because a deny is
    the product working correctly.
 2. **The UI computes what is interesting; the human only ever reads exceptions.** Fleets

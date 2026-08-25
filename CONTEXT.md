@@ -194,17 +194,6 @@ the Control API, or locally on the Relay host), deliberate to release (`admin`, 
 audited reason). Persisted across Relay restarts (ADR-0013).
 _Avoid_: pause, maintenance mode, lockdown, kill switch
 
-**Suspension**:
-A reversible state on an Account that refuses **every** call it makes — not merely dispatch, since
-reading is exfiltration by construction (ADR-0021). A suspended Account may still authenticate and
-connect; it simply gets nowhere, which is what makes suspension durable where dropping a session is
-not (a session is bearer-token authenticated and reconnects). In-flight Tasks keep running;
-Cancellation is the instrument for those. `operator`+ to engage, `admin` + step-up with an audited
-reason to lift — Freeze's fire-alarm asymmetry. Distinct from **revocation**: tokens, scope and
-role all survive, which is what keeps it cheap enough to use. The incident ladder is quarantine <
-suspension < revocation < Freeze (ADR-0035).
-_Avoid_: disable, ban, lock out, kill session (dropping a connection is a convenience, not this)
-
 **Cancellation**:
 Stopping a single in-flight Task by its ID (`TaskCancel`): the daemon kills the Task's
 process group and reports `OUTCOME_CANCELLED`. Best-effort and honest — a Task that already

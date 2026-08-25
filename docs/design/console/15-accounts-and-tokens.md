@@ -24,8 +24,9 @@ otherwise close.
 ## Rows
 
 Accounts listed with kind (**human** or **machine**), role (`viewer` / `operator` / `admin`),
-state, last authentication, and — for machine Accounts — whether a session is connected right now,
-linking to the agent stream (spec 03).
+state, last authentication, and — for machine Accounts — the time of its last tool call, linking to
+the agent stream (spec 03). There is no "connected" state to show: the MCP transport is stateless
+(ADR-0028), so an Account is *active recently* or not, never *connected*.
 
 Machine Accounts are first-class, not a footnote. On a fleet driven by an AI-agent, the busiest
 principal in the system is a machine Account, and treating it as an edge case is how it ends up
@@ -49,11 +50,12 @@ at mint and never again** — the same reveal-once discipline as spec 09, for th
 Revocation is immediate and audited. ADR-0023 retired the shared control-plane credential; nothing
 on this screen may reintroduce one, and there is no such thing as a token not bound to an Account.
 
-## Suspension
+## Stopping one actor
 
-The incident-ladder rung from D2 lives here as well as on the agent stream: **`operator`+ to
-suspend, `admin` + step-up with a reason to lift.** Suspension is not revocation — tokens survive
-it, which is what makes it reversible and therefore usable in a hurry.
+There is no suspension rung: ADR-0035 was drafted and **deferred, not adopted** (#443). The
+instruments are **revoking the Account's API Tokens** here — immediate, audited, `admin` +
+step-up — or Freeze (spec 16). Disabling an Account (`Enabled`) is the durable off-switch: it
+authenticates nowhere; re-enabling is a privilege-granting act and takes step-up.
 
 ## Must not appear
 
@@ -77,4 +79,4 @@ it, which is what makes it reversible and therefore usable in a hurry.
 - [ ] Roles are enforced by the capability layer; this package contains no role interpretation.
 - [ ] An Account cannot elevate itself.
 - [ ] The final `admin` cannot be removed or demoted.
-- [ ] Suspending requires `operator`+; lifting requires `admin` + step-up + a reason.
+- [ ] Revoking a token is immediate: the next request carrying it is refused and audited.
