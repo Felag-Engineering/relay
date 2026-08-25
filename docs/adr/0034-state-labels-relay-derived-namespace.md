@@ -117,5 +117,35 @@ nobody else; `state:` is set by **nobody at all**.
   (file-only, invariant #11). No value is proposed here; it should be a fraction of `LeafValidity`
   rather than an absolute, so it tracks any future change to certificate lifetime.
 
+- **The registry must first carry what the markers read** (#440). Liveness is decided today in
+  the dispatcher's stream set and the registry exposes only `LastSeen`; certificate validity
+  exists only at issuance (`ca.go`) and is not persisted. `state:offline` needs a
+  connected/disconnected seam fed by the transport, and `state:cert-expiring` needs
+  `cert_not_after` — with `enrolled_at`, `renewal_count` and `last_renewed_at`, which Node detail
+  also renders — on the Node record. That lands first, as its own change.
+
+- **The `state:cert-expiring` window is 25% of `LeafValidity` remaining** (84h at 336h). The
+  daemon renews at a jittered 50–75% of the lifetime (`daemon/src/renew.rs`), so a Node with under
+  a quarter left has missed its entire renewal window: the marker is an alarm that automation
+  failed, never a heads-up, and it is quiet on a healthy fleet by construction. Expressed as a
+  fraction so it tracks any change to the lifetime; file-only configuration (invariant #11).
+
+- **The Selector change carries `tag:` parsing too.** `capability/selector.go` parses only
+  `node:` and `relay:` today; the namespace enum grows to four in one pass (the `tag:` *write*
+  path stays with ADR-0020's label management, #430). `NamespaceNames()` reports `state`, so
+  approval-gate rules stay honest about what a Selector touched.
+
+- **Approvals bound to `state:` Selectors re-park more often.** `HashPlan` binds the resolved Node
+  set; `state:offline` and `state:policy-fingerprint=` flip as Nodes reconnect and roll, so a
+  parked Plan over them is likelier to drift before it is answered. Expected and correct — the
+  alternative is a signature over a set that changed.
+
+- **Where the security-lane assertion lives: on the `relay:` write path (#430), not here.** A
+  `relay:` label write accepts explicit Node IDs or a Selector containing only `relay:`
+  predicates; any `node:`, `tag:` or `state:` term is refused, with a structural test. A Console
+  "quarantine these" from a filtered fleet view therefore sends the resolved Node IDs, never the
+  filter. For this ADR the assertion reduces to the compile-time fact that `registry.Node` and
+  `Report` have no state-label field.
+
 - Console surfaces are specified in `docs/design/console/` (01, 02, 05) and depend on this ADR
   landing first.

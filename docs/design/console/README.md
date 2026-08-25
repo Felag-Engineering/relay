@@ -47,7 +47,8 @@ Numbers are identifiers, not sequence. Build in this order:
   the defect and breaks for every user fourteen days after the process starts.
 
 Their fixes are settled in ADR-0032 §5, ADR-0013 and ADR-0031 §5 respectively. See
-`99-open-decisions.md` D8 and D13.
+`99-open-decisions.md` D8 and D13. Both carry the `blocking` label and no milestone: they are
+landed by hand, ahead of the loop.
 
 ## Screens
 
@@ -57,9 +58,9 @@ Their fixes are settled in ADR-0032 §5, ADR-0013 and ADR-0031 §5 respectively.
 | 12 | [Login](12-login.md) | v0.6.0 | — |
 | 1 | [Fleet view](01-fleet-view.md) | v0.6.0 | no (tagging is v0.7.0) |
 | 2 | [Node detail](02-node-detail.md) | v0.6.0 | no (`relay:` writes are v0.7.0) |
-| 3 | [Agent sessions](03-agent-sessions.md) | v0.6.0 stream / v0.7.0 controls | mixed |
+| 3 | [Agent activity](03-agent-sessions.md) | v0.6.0 stream / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 4 | [Activity](04-activity.md) | v0.6.0 | no |
-| 13 | [Job detail](13-job-detail.md) | v0.6.0 | cancel only |
+| 13 | [Job detail](13-job-detail.md) | v0.6.0 record / v0.7.0 Cancel | Cancel only (v0.7.0) |
 | 17 | [Read egress](17-read-egress.md) | v0.6.0 | no |
 | 10 | [Day one](10-day-one.md) | v0.6.0 | no |
 | 14 | [Approval queue](14-approval-queue.md) | v0.6.0 read / v0.7.0 decide | mixed |
@@ -94,14 +95,16 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | Upgrade handling is **progress only** — the Console never offers to push a daemon upgrade | 01 |
 | The composer is reachable **from the nav and contextually** from a filtered fleet view | 01, 05 |
 | Live stream and audit trail are **one surface** (Activity), Job-grained | 04 |
-| Agent sessions are a **separate, call-grained surface** with different retention | 03 |
+| Agent activity is a **separate, call-grained, per-Account surface** with different retention — there are no sessions (ADR-0028) | 03 |
 | **No hold-before-dispatch timer.** Interruption is cancellation (ADR-0013) | 03 |
 | **Plan editing resets quorum**; approvers do not amend | 05, 08 |
 | Policy authoring is **generate-and-copy**; the Relay never transmits Policy | 06, 07 |
 | `state:` labels are **Node-local and objective**; drift is an observation, not a label | 01, 02, 00 |
 | **`outdated`** matches the MCP wire field; `version-gated` was a synonym and is retired | all |
-| Stopping one agent is **Account suspension**, not a session kill | 03, 15, 16 |
+| Stopping one agent: suspension **deferred** (ADR-0035 not adopted, #443); the instruments are token revoke and Freeze. There are no agent sessions to end — MCP is stateless | 03, 15, 16 |
 | The Freeze slot generalises to **control-plane conditions** | 00, all |
 | **No `Jobs` nav destination** — Activity filtered to dispatch | 00, 04 |
-| The SSE seam has **three publishers**, and never carries read output | 00, 03, 11 |
-| The approval record carries a **shape key**, decided in v0.5.0 | 08, 14 |
+| The SSE seam has **four publishers** (registry, Jobs, MCP tool calls, enrollment attempts), resumable from a bounded buffer, and never carries read output | 00, 03, 10, 11 |
+| The approval record carries a **shape key** (retrofit, #415); a batch is a **Grant** over a Scope | 08, 14 |
+| v0.6.0 **mutating** means reaching the capability layer's write or dispatch path; **Cancel is v0.7.0** | 03, 13 |
+| `console_execution` lands with the composer (v0.7.0), not the shell | 05, 11 |

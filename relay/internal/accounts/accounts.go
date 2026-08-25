@@ -156,7 +156,7 @@ type Account struct {
 	Kind Kind
 	Role Role
 
-	// Enabled is false for a suspended Account. A disabled Account
+	// Enabled is the durable off-switch (#296). A disabled Account
 	// authenticates nowhere and authorizes nothing.
 	Enabled bool
 

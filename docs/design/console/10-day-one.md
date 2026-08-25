@@ -3,8 +3,8 @@
 **Artboard 8.** The Console with zero Nodes. **Milestone v0.6.0.**
 
 **Governing:** ADR-0030, ADR-0031, ADR-0033.
-**Backend:** registry (empty); the enrollment-attempt event stream; the CA and server-leaf
-fingerprints from startup.
+**Backend:** registry (empty); the SSE seam's enrollment-attempt publisher (D9's fourth, #416);
+the CA and server-leaf fingerprints from startup.
 
 ## What this screen is for
 
@@ -37,10 +37,17 @@ they continue. It is not an error state and it is not a decorated blank.
 
 ## Failure feedback
 
-The watch panel is the right place for **rejected** enrollment attempts, and they are more
-valuable than successes: a wrong fingerprint, an expired token, a token past `max_uses`, a
-malformed join string. Each is a failure an operator would otherwise discover as journald lines on
-N machines after the fact. Show the attempt, its source, and the reason.
+The watch panel is the right place for **rejected** enrollment attempts, and they are more valuable
+than successes. It shows what the Relay can honestly attribute — **Relay-side rejections**: an
+expired, revoked or unknown token, a token past `max_uses`, a malformed join string. Each carries
+the attempt's source, the token ID (never plaintext) and the reason. Otherwise that whole failure
+class surfaces as journald lines on N machines after the fact.
+
+**A wrong CA fingerprint is rejected on the daemon**, before it sends anything (ADR-0031): the Relay
+sees at most a TLS handshake aborted by the peer — a source address and no token. Surfacing that as
+"a connection from *addr* aborted the handshake before enrolling — usually a fingerprint mismatch"
+needs a listener hook and is a follow-up (#444), not v0.6.0 scope. Until then the quickstart carries
+the check, and the screen must not claim to see what it cannot.
 
 ## Transition
 
@@ -51,6 +58,7 @@ keep a "getting started" panel around afterwards; the empty state's job is finis
 
 - [ ] With zero Nodes, no screen renders an empty table or a zeroed statistic.
 - [ ] Both fingerprints are shown and are the same values the Relay printed at first boot.
-- [ ] A failed enrollment attempt appears here with its reason, live.
+- [ ] A Relay-side enrollment rejection appears here with its reason, live; the screen never
+      claims to see daemon-side rejections.
 - [ ] The first successful enrollment moves the operator to the fleet view without a reload.
 - [ ] Nothing on this screen exposes a token, a private key, or any Relay configuration value.

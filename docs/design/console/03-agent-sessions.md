@@ -1,13 +1,15 @@
-# 03 — Agent sessions
+# 03 — Agent activity
 
 **Artboard 11.** The live trust surface: every call an AI-agent makes, as it makes it.
-**Milestone v0.6.0** for the read-only stream; **v0.7.0** for Disconnect and Suspend.
+**Milestone v0.6.0** for the read-only stream; **v0.7.0** for Cancel.
+
+*(The file keeps its `03-agent-sessions.md` name so existing links hold. The screen is not about
+sessions — see "There are no sessions" below.)*
 
 **Governing:** ADR-0003, ADR-0013, ADR-0021, ADR-0025, ADR-0028, ADR-0029, invariants #10, #13.
-**Backend:** the v0.6.0 SSE seam, **widened to three publishers** — registry transitions, Job
-transitions and MCP tool calls (D9). The tool-call publisher carries arguments but **never** read
-results; `KindRead` audit records; session state on the MCP
-server; Account suspension state on the Account model, and connection termination, both v0.7.0.
+**Backend:** the v0.6.0 SSE seam's MCP tool-call publisher (D9, #416), which carries arguments
+but **never** read results; `KindRead` audit records and the audit query seams (#441) for history;
+Cancel through the capability layer (v0.7.0).
 
 ## What this screen is for
 
@@ -19,12 +21,23 @@ does not see the model's intent, and it must never pretend to. That limitation i
 verified record of what was asked beats a narrated account of why, which an agent under prompt
 injection would happily fabricate.
 
+## There are no sessions
+
+The MCP transport is **stateless** (ADR-0028; `Stateless: true`, no `Mcp-Session-Id` — a Job ID
+is the durable handle). Every tool call is an independent, authenticated request. There is no
+connection to show as "connected", no connect time, no idle state, and nothing to disconnect.
+
+So the unit here is the **Account**, and *active* means "has made a call within the activity
+window" — **15 minutes**. An earlier draft had a sessions rail with Disconnect and Suspend
+controls; Disconnect had no object, and suspension is deferred (ADR-0035, not adopted; #443).
+Stopping one actor today is revoking its API Tokens (spec 15) or Freeze (spec 16).
+
 ## Grain and retention — and why this is not Activity
 
-| | Agent sessions (this) | Activity (spec 04) |
+| | Agent activity (this) | Activity (spec 04) |
 |---|---|---|
 | Grain | one MCP tool call | one Job |
-| Scope | a connected session | the whole control plane |
+| Scope | the Accounts active in the window | the whole control plane |
 | Retention | payloads in flight only | durable audit |
 | A `list_nodes` call | appears | never appears |
 
@@ -36,17 +49,17 @@ does not, and the screen says so rather than hiding it.
 ## Layout
 
 ```
-[nav] │ Agent sessions        every call an AI-agent makes, as it makes it     [mike · admin]
+[nav] │ Agents              every call an AI-agent makes, as it makes it     [mike · admin]
       ├────────────────┬─────────────────────────────────────────────────────────────────
-      │ Connected      │ [all] [run_operation] [raw_exec] [list_nodes] …  [mutate only]
+      │ Active (15m)   │ [all] [run_operation] [raw_exec] [list_nodes] …  [mutate only]
       │ ● gleipnir-prod│ [ filter by argument, Selector, Node, plan hash            ]
       │   47 calls     │ ┌──────────────────────────────────────────────────────────┐
-      │   [Disconnect] │ │ → run_operation  [mutate]  plan=false     ● dispatching   │
-      │   [Suspend]    │ │   args, selector, plan hash, approved-by                  │
+      │   3 mutate     │ │ → run_operation  [mutate]  plan=false     ● dispatching   │
+      │   last 4s ago  │ │   args, selector, plan hash, approved-by                  │
       │ ○ gleipnir-stag│ │ ← job_9d41 · [====progress====] · [Cancel]                │
-      │                │ └──────────────────────────────────────────────────────────┘
-      │ ● mike@desktop │ … one card per call, newest first
-      │                │
+      │   last 12m ago │ └──────────────────────────────────────────────────────────┘
+      │                │ … one card per call, newest first
+      │ ● mike@desktop │
 ```
 
 ## The stream
@@ -59,7 +72,7 @@ separate tool — render it as a distinct badge because it is the trust-critical
 Card contents by kind:
 
 - **Dispatch in flight** — args, Selector with resolved fan-out, plan hash, who approved it if it
-  was parked, then a live progress bar and per-outcome counts, with **Cancel**.
+  was parked, then a live progress bar and per-outcome counts, with **Cancel** (v0.7.0).
 - **Plan** — the arguments, then the grouped verdicts and `would_be_rejected`, and a line saying
   nothing executed and each Node's own engine answered.
 - **Elicitation** (ADR-0029) — the Relay answered a call with `input_required` carrying an
@@ -76,34 +89,17 @@ Card contents by kind:
 ## Filtering
 
 Tool-name chips, a mutate-only toggle, a hide-polling toggle, and a free-text filter over
-arguments, Selector, Node and plan hash. Filters apply to the live tail and the session's history
-identically.
+arguments, Selector, Node and plan hash. Filters apply to the live tail and to an Account's
+history (through #441) identically.
 
-## Sessions rail
+## Accounts rail
 
-Each connected session: Account (with its kind — machine or human — and role), connect time, call
-count, mutate count, idle state. Selecting one scopes the stream.
+Each Account active in the window: name, kind (machine or human), role, first and last call in
+the window, call count, mutate count. Selecting one scopes the stream. An Account outside the
+window drops off the rail; its history stays reachable through the filter and through spec 15.
 
-Two controls, deliberately different in weight and intent (both v0.7.0):
-
-**Disconnect** drops the connection with no state change. For an agent stuck in a loop that needs
-its context broken. **It may reconnect immediately** — the UI must say so plainly. This is a
-convenience, not a security control, and must never be presented as a rung on the incident ladder.
-
-**Suspend** is the durable brake, and it is **Account-scoped, not session-scoped**: a session is
-authenticated by a bearer token, so killing a connection buys seconds while the client reconnects
-with the same credential. A suspended Account may still connect and **every call it makes is
-refused** — not merely dispatch, because the actor is suspended for being untrusted and reading is
-exfiltration by construction. Refused calls are still audited, so a suspended agent stays
-observable through what it attempts. In-flight Tasks keep running; Cancel handles those.
-
-**`operator`+ to engage; `admin` + step-up with an audited reason to lift** — Freeze's asymmetry,
-for Freeze's reasons: no friction on the emergency path, a deliberate ceremony to remove
-protection.
-
-This completes the incident ladder. Quarantine fences one Node, revoke removes one Node, Freeze
-stops the whole fleet — **suspend fences one actor**, which nothing else could do without
-collateral damage. See `99-open-decisions.md` D2.
+**No controls live here.** Cancel sits on the in-flight dispatch card (v0.7.0); token revocation
+is spec 15; Freeze is spec 16.
 
 ## Interruption
 
@@ -120,15 +116,17 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
 - A scheduled or automatic replay of any call.
 - Prompt text, system prompts, or conversation content — the Relay does not have them and must not
   invent a place for them.
+- A Disconnect, End session, or Suspend control — nothing they would act on exists.
+- The word "connected", or any claim that a connection exists.
 
 ## Acceptance
 
 - [ ] Every one of the eight tools renders with a request line and a result line.
 - [ ] A read card states that output is not retained, and the scrollback genuinely has none.
-- [ ] An in-flight dispatch is cancellable from this screen and the cancellation is audited.
-- [ ] Polling collapses; a session doing 200 `get_job` calls does not push everything else off.
+- [ ] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
+      audited; in v0.6.0 no control here reaches the capability layer.
+- [ ] Polling collapses; an Account doing 200 `get_job` calls does not push everything else off.
 - [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
-- [ ] With no sessions connected the screen says so plainly and does not fabricate activity.
-- [ ] Disconnect is labelled as reconnectable and is not presented as a security control.
-- [ ] A suspended Account's every call is refused and each refusal is audited.
-- [ ] Lifting a suspension demands `admin` + step-up and records a reason; engaging it does not.
+- [ ] With no Account active in the window the screen says so plainly and does not fabricate
+      activity.
+- [ ] Nothing on this screen claims a connection exists or offers to end one.

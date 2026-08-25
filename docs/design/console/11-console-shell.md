@@ -4,8 +4,8 @@
 assumes it exists. **Milestone v0.6.0.**
 
 **Governing:** ADR-0009, ADR-0010, ADR-0026, invariants #10, #11.
-**Backend:** the Account model (sessions, roles, step-up state); the SSE seam with its three
-publishers (D9).
+**Backend:** the Account model (sessions, roles, step-up state); the SSE seam with its four
+publishers (D9, #416).
 
 ## Why this has its own spec
 
@@ -49,8 +49,9 @@ process actually mounted for this Account's role. Consequences:
 
 - A `viewer` gets a **structurally smaller** nav — Run, Policy, Add Nodes, Accounts and Incident
   simply are not there.
-- With `console_execution = off`, Run is absent because the route was never mounted, not because a
-  check refused it.
+- With `console_execution = off` (v0.7.0, spec 05), Run is absent because the route was never
+  mounted, not because a check refused it. The flag itself arrives with the composer; in v0.6.0
+  there is no execution route for it to gate.
 
 ADR-0026's insight is that **absent beats forbidden**. An implementation that ships a greyed-out
 composer has given the property away, and the acceptance criterion in spec 05 exists to catch it.
@@ -107,6 +108,8 @@ user whose session rotated mid-action needs to know what happened.
 - **Degrade visibly.** When the stream is down, say so in the affected region rather than showing
   stale data as if it were live. A monitoring surface that silently freezes is worse than one that
   admits it is blind.
+- **Honour `gap`.** When the seam reports the client fell behind its buffer, reload the affected
+  region rather than splicing; continuity that was not real must not look real.
 - **Live but stable** (foundations rule 6) is enforced *here*, not per screen: incoming events for
   a region a user is reading queue behind an explicit control. Build it once.
 
@@ -127,7 +130,6 @@ composer is.
 
 - [ ] A `viewer` session's rendered nav contains no Run, Policy, Add Nodes, Accounts or Incident
       item, and those routes are not mounted.
-- [ ] With `console_execution = off`, no execution route exists in the mounted route table.
 - [ ] No inline `<script>`, no `hx-on:` attribute, and no inline event handler survives in any
       rendered page — assert it in a test over the templates.
 - [ ] Every mutating route rejects a request with a missing or stale CSRF token.

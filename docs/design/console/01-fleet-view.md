@@ -5,8 +5,8 @@ v0.7.0.
 
 **Governing:** ADR-0006, ADR-0014, ADR-0020, invariants #7, #9, #11.
 **Backend:** registry read seams (`relay/internal/registry`, already consumed by MCP
-`list_nodes`/`describe_node`); the SSE seam; per-Account view persistence. Group-by itself is a
-pure read over existing labels.
+`list_nodes`/`describe_node`); the SSE seam; per-Account view persistence (#442 — a preference,
+not a runtime object). Group-by itself is a pure read over existing labels.
 
 ## What this screen is for
 
@@ -133,6 +133,5 @@ config management.
 
 ## Open
 
-- Whether `state:cert-expiring` earns a fifth state. See `99-open-decisions.md`.
 - Bulk `tag:` from the current filter (v0.7.0, `operator`, no step-up) is the fleet view's one and
   only action. Confirm nothing else creeps in.

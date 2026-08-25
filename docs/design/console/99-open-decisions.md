@@ -13,8 +13,9 @@ exists to prevent.
 
 ## Blocking — needs an ADR before the code lands
 
-> **D1 was resolved on 2026-08-24** and is kept here with its reasoning; its ADR is still
-> unwritten and the code still waits on it.
+> **D1 and D2 were resolved on 2026-08-24.** D1's ADR-0034 is merged. D2's ADR-0035 was drafted,
+> then **deferred — not adopted** in review (#443). Both are kept here with their reasoning. A
+> summary of what the review changed after the issues were cut is at the end of this file.
 
 ### D1. The `state:` Label namespace — **RESOLVED 2026-08-24 — drafted as [ADR-0034](../../adr/0034-state-labels-relay-derived-namespace.md)**
 
@@ -25,9 +26,10 @@ ones that are behind" — and today it is not expressible. Labels target; Facts 
 and daemon version and the fingerprints are *neither*, as `Hello` shows by carrying
 `daemon_version` and `Facts` as separate fields.
 
-**Drafted as ADR-0034**, which amends CONTEXT.md's `Selector` and `Label` entries and **CLAUDE.md
-invariant #7** (three namespaces → four) in the same change. All three files are
-escalate-to-a-human: the ADR is written and awaiting review, and no code should assume it merged.
+**ADR-0034 is merged**, with the CONTEXT.md and CLAUDE.md invariant #7 amendments. Its Consequences
+carry the review's additions: the registry must first persist liveness and certificate validity
+(#440), the `cert-expiring` window is 25% of `LeafValidity` remaining, `tag:` parsing lands in the
+same Selector change, and the security-lane assertion lives on the `relay:` write path (#430).
 
 #### The governing rule: every `state:` label is Node-local and objective
 
@@ -95,7 +97,15 @@ Selector grammar to comparisons like `daemon.version < 1.4.2` (a bigger change t
 language, and unnecessary once fingerprints are targetable); the `tag:` bridge (a snapshot that
 goes stale).
 
-### D2. Stopping one agent — **RESOLVED 2026-08-24 — drafted as [ADR-0035](../../adr/0035-account-suspension.md)**
+### D2. Stopping one agent — **DEFERRED 2026-08-24 — [ADR-0035](../../adr/0035-account-suspension.md) drafted, then not adopted**
+
+**Outcome: cut.** Suspension was plumbing for a control nothing yet needs, and review found the
+draft could lock every admin out (an `operator` may suspend admins; lifting is an admin call; every
+call from a suspended Account is refused). Disconnect had no object: MCP is stateless (ADR-0028),
+so there is no connection to drop — and therefore no "agent session" either; spec 03 is now
+per-Account activity. Stopping one actor today is **revoking its API Tokens** or **Freeze**; the
+incident ladder stays at ADR-0020's three rungs. ADR-0035's banner and #443 carry the constraints
+any revival must meet. The reasoning below is kept as the record of the design.
 
 **The problem with the first draft:** an MCP session is authenticated by a bearer token, so killing
 the connection buys seconds — the client reconnects with the same credential. "End session" as
@@ -203,9 +213,11 @@ stolen Node key self-expires in two weeks, bounding the damage of a compromised 
 independently of whether anyone noticed and revoked it. Automatic renewal is what makes a short
 lifetime free to the operator.
 
-**Open sub-question for the ADR:** the warning-window threshold is Relay configuration (file-only,
-invariant #11) and nobody has proposed a value. It should be long enough to act on and short enough
-to stay quiet — a fraction of `LeafValidity` rather than an absolute.
+**Settled in review: 25% of `LeafValidity` remaining** (84h). The daemon renews at a jittered
+50–75% of the lifetime (`daemon/src/renew.rs`), so under a quarter left means the whole renewal
+window was missed. A threshold inside the jitter window would alarm on a healthy fleet. File-only
+configuration (invariant #11), as a fraction so it tracks any change to the lifetime. The registry
+must persist `cert_not_after` first (#440).
 
 ### D5. Colour deviations from the brief — **RESOLVED 2026-08-24: both accepted**
 
@@ -259,6 +271,9 @@ the caller and then never check their role:
 So a `viewer` can mint a token that stamps `relay:` labels, revoke Nodes, and engage or release the
 fleet Freeze — while the documentation says all three are admin-only. `requireAdmin` exists
 (`api/accounts.go`) and is referenced only from `accounts.go`.
+
+**Added in review:** Freeze engage is **human-principal only** — a machine Account at `operator`
+must not be able to freeze the fleet. Recorded on #397 as an acceptance line.
 
 **Nothing here needs deciding.** Minting requires `admin` per ADR-0032 §5; Freeze is `operator`+ to
 engage and `admin` with an audited reason to release per ADR-0013; revocation is `admin` + step-up
@@ -316,8 +331,11 @@ transitions". The agent stream (spec 03) needs **MCP tool-call events**, which i
 publisher, not a filter on the first two: a `list_nodes` call transitions no registry state and
 creates no Job.
 
-**One in-process pub/sub, three publishers** — registry transitions, Job transitions, MCP tool
-calls — built once in v0.6.0. A second event mechanism later is worse than widening this one now,
+**One in-process pub/sub, four publishers** — registry transitions, Job transitions, MCP tool
+calls, and **enrollment attempts** (spec 10's day-one watch: Relay-side outcomes only, token ID
+never plaintext) — built once in v0.6.0. Events carry monotonic IDs from a bounded per-publisher
+ring buffer so a client can resume from `Last-Event-ID`; a client too far behind receives a `gap`
+event and reloads its region rather than pretending continuity. A second event mechanism later is worse than widening this one now,
 and the agent stream is read-only, so v0.6.0's zero-mutating-routes acceptance criterion is
 untouched.
 
@@ -327,7 +345,7 @@ carry read *results*: ADR-0025's no-retention property is about the data, not ab
 an event bus that ships read output has leaked it just as surely as an audit row that stores it.
 Assert this structurally, the way `no_dispatch` is asserted.
 
-`console-backend-coverage.md`'s SSE row should be updated to say three publishers.
+`console-backend-coverage.md`'s SSE row says four publishers.
 
 ### D10. The approval record needs a shape key — **RESOLVED 2026-08-24, and it is a v0.5.0 decision**
 
@@ -342,7 +360,10 @@ exists to express.
 
 **Why this cannot wait.** v0.5.0 lands well before the Console. Retrofitting means a migration over
 records whose shape key cannot be recomputed — normalising a Selector after the fact is guesswork,
-and the approval trail is exactly the data you least want to guess about.
+and the approval trail is exactly the data you least want to guess about. *(v0.5.0 had already
+shipped when this was written, so it is a retrofit — #415 — but `v0.1.0-beta` has not started and
+no production approval records exist, so the migration is over test data.)* For a Grant (#378) the
+key hashes the Scope.
 
 **What the v0.5.0 work must settle:** the normalisation rules for a Selector (term order,
 whitespace, namespace canonicalisation), and which arguments are part of the shape versus part of
@@ -388,3 +409,31 @@ Two dimensions that cut across every screen and are not drawn anywhere: a `viewe
 **structurally smaller** Console rather than a greyed-out one, and `console_execution = off`
 removes Run **entirely** rather than disabling it. ADR-0026's insight is that *absent* beats
 *forbidden*; an implementation that ships a disabled composer has given the property away.
+
+---
+
+## Review, 2026-08-24 — what changed after the issues were cut
+
+Recorded so the issues, the specs and the ROADMAP are read as one thing.
+
+- **There are no agent sessions.** MCP is stateless (ADR-0028); spec 03 is per-Account activity in
+  a 15-minute window. Disconnect is gone; Suspend is deferred (D2, #443). #432 closed.
+- **v0.6.0 "zero mutating routes"** means *no Console route reaches the capability layer's write or
+  dispatch path*. A session, a saved view or an audit query is not that. **Cancel is v0.7.0** on
+  both Job detail (13) and the agent stream (03).
+- **`console_execution`** lands with the composer (v0.7.0, spec 05), through config → packaging
+  sample → drift gate. In v0.6.0 there is no execution route for it to gate; the shell's property
+  is that the nav is built from mounted routes, exercised by the `viewer` dimension.
+- **Backend seams the issues assumed existed:** the registry gains liveness and certificate
+  validity (#440); audit/Job query seams live in the capability layer's read lane (#441); saved
+  views get a preference store (#442). #414 is `state:` evaluation only and is blocked by #440.
+- **Read egress** rows derive from `KindRead`, read-class `KindDispatch` and Task outcomes — no new
+  collection, but not `KindRead` alone.
+- **A batch is a Grant** over a Scope (ADR-0027, #378 amendment); specs 08 and 14 render Scopes.
+- **Day one** shows Relay-side enrollment rejections only; daemon-side fingerprint rejections are
+  invisible to the Relay by design (#444 for a handshake-abort hook).
+- **Login throttling** is not gated on #279 (that is per-Account *Job* rate); spec 12 carries
+  defaults, with progressive delay and no hard lockout.
+- **Freeze engage is human-principal only** (#397).
+- **#397 and #403** carry the `blocking` label and no milestone: they are landed by hand ahead of
+  the loop, since the loop walks milestones.

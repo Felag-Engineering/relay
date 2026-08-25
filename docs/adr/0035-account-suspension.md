@@ -1,5 +1,26 @@
 # Account suspension — fencing one actor without freezing the fleet
 
+> **Status: Deferred — not adopted (2026-08-24).** Withdrawn in the review that followed its
+> drafting, before any code. Kept at its number so the reasoning, and the defects found in it, are
+> not re-derived. Nothing below is in force: the incident ladder remains ADR-0020's three rungs
+> (quarantine < revoke < Freeze), and stopping one actor is done by revoking its API Tokens or by
+> Freeze. Revival is tracked as #443.
+>
+> **Why it was withdrawn.** (1) Plumbing for a control nothing yet needs. (2) As written it can lock
+> every admin out: `operator`+ may suspend any Account including admins, lifting is an admin *call*,
+> and a suspended Account's every call is refused — a hijacked operator session that suspends every
+> admin leaves nobody able to lift. Freeze has no such hole because it never refuses its own
+> release. (3) It omits the Account model's existing `Enabled` off-switch from its Considered
+> Options, and the code comment on that field already used the word "suspended" for it. (4) Its
+> Disconnect clause has no object: the MCP transport is stateless (ADR-0028; `Stateless: true`, no
+> `Mcp-Session-Id`), so there is no connection to drop.
+>
+> **Constraints any revival must satisfy:** a role ceiling (an Account may suspend only Accounts at
+> or below its own role; only `admin` suspends `admin`); no self-suspension; the last active
+> (enabled and unsuspended) admin cannot be suspended; the lift call is *not* exempt from refusal;
+> engage is human-principal only; suspension and `Enabled` are independent states (re-enabling does
+> not lift); storage as columns on the Account with history in audit.
+
 The incident ladder ADR-0020 records is quarantine (`relay:`) < revoke < Freeze. Every rung fences
 a **Node** or the whole fleet. None of them fences an **actor**.
 

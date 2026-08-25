@@ -4,8 +4,12 @@
 **Milestone v0.6.0** (the data already exists).
 
 **Governing:** ADR-0021, ADR-0022, ADR-0025, invariant #13.
-**Backend:** `KindRead` audit records. **No new collection is required** — this screen surfaces
-what the audit trail already holds.
+**Backend:** existing audit and Task records — `KindRead` rows for the four non-dispatching tools
+(`list_nodes`, `describe_node`, `list_operations`, `get_job`), read-class `KindDispatch` rows for
+`file.read`, `log.tail` and the rest of the catalog, and per-Task outcomes for deny-list refusals
+(`denied_by_policy` is a daemon verdict on a Task, not an audit kind). **No new collection is
+required.** The query seams — kind, principal, time range, path/arg, outcome, per-principal counts
+by time bucket — are #441, in the capability layer's read lane.
 
 ## What this screen is for
 
@@ -76,4 +80,5 @@ the auditor who has to answer this question to someone else.
 - [ ] Surfaces deny-list refusals prominently, styled informative-neutral.
 - [ ] Contains no read output at any age or aggregation.
 - [ ] Covers the whole read catalog, not only `file.read`.
-- [ ] Requires no new collection: every row derives from an existing `KindRead` audit record.
+- [ ] Requires no new collection: every row derives from an existing audit or Task record
+      (`KindRead`, read-class `KindDispatch`, Task outcomes).

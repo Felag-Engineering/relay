@@ -28,9 +28,12 @@ Relay holds password hashes).
 - Hashed at rest with a memory-hard KDF. Never logged, never echoed, never in a URL.
 - **No user enumeration.** A wrong username and a wrong password produce the same message and the
   same response time.
-- Rate-limited per source and per Account. **Per-Account rate limits are decision #279 and still
-  open** — until it is settled, implement a conservative default and do not treat the absence of a
-  decision as permission to skip it.
+- Throttled per source and per Account. (#279 is about per-Account *Job* rate limits, the blast
+  cap's sibling; it is not a dependency of this screen.) Defaults: per source, 10 failures a minute
+  then `429` with backoff; per Account, a **progressive delay** that doubles per consecutive
+  failure and caps at 60s. **No hard lockout**: a lockout lets an attacker lock the admin out of
+  the Console during the incident they are causing, which is worse than the brute force it
+  prevents. Every throttled attempt is audited.
 
 ## Sessions
 
@@ -67,7 +70,8 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - **Already signed in** → redirect to the saved view.
 - **Session expired mid-action** → return here with a message saying what was interrupted, then
   back to where they were. Do not silently discard the work.
-- **Locked out** → say so plainly with when it lifts; do not pretend the password was wrong.
+- **Slowed down** → say so plainly, and when the next attempt is accepted; do not pretend the
+  password was wrong.
 - **OIDC configured** → both methods offered; neither is presented as the "insecure" one.
 
 ## Acceptance
@@ -78,3 +82,4 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 - [ ] No route other than login, its assets and health is reachable unauthenticated.
 - [ ] No persistent credential satisfies step-up.
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
+- [ ] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.

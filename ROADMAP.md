@@ -769,7 +769,8 @@ writing code. Backend dependency map: `docs/design/console-backend-coverage.md`.
 > rotates — both listeners share it, so the Console's own TLS rides on the bug and breaks fourteen
 > days after the process starts) and #397 (enrollment-token mint, Node revoke and Freeze
 > engage/release have no role gate). Neither is a Console problem; both make Console work
-> unshippable.
+> unshippable. Both carry the `blocking` label and no milestone — they are landed by hand ahead of
+> the loop. #397 also makes Freeze engage human-principal only.
 
 **Deliverables**
 - **The Console shell** (`console/11`) — layout, HTMX conventions, session and step-up state,
@@ -788,8 +789,9 @@ writing code. Backend dependency map: `docs/design/console-backend-coverage.md`.
   surface; live tail on is "now", filtered is history. There is no separate Jobs destination.
 - **Job detail** (`console/13`) — grouped outcomes across all eight of the wire vocabulary,
   legible at 3 Nodes and at 10,000, with identical output clustered.
-- **Agent sessions** (`console/03`, stream only) — every MCP tool call as it happens, paired
-  request and result, filterable. The trust surface: it shows verified requests, never the model's
+- **Agent activity** (`console/03`, stream only) — every MCP tool call as it happens, per
+  Account (MCP is stateless, ADR-0028 — there are no sessions), paired request and result,
+  filterable. The trust surface: it shows verified requests, never the model's
   reasoning. Read output is never retained, and the screen says so.
 - **Read egress** (`console/17`) — what has been read, by whom, from where, over the existing
   `KindRead` audit records. No new collection. ADR-0021 says reading is exfiltration; this is the
@@ -798,14 +800,26 @@ writing code. Backend dependency map: `docs/design/console-backend-coverage.md`.
   approvals with their Plans and quorum state; deciding arrives in v0.7.0.
 - **Day one** (`console/10`) — the Console with zero Nodes, watching live for the first
   enrollment and surfacing rejected attempts with their reason.
-- **SSE event seam** — an in-process pub/sub with **three publishers**: registry transitions, Job
-  transitions, and MCP tool calls. It carries tool-call *arguments* and **never** read results;
-  assert that structurally.
+- **SSE event seam** (#416) — an in-process pub/sub with **four publishers**: registry
+  transitions, Job transitions, MCP tool calls, and enrollment attempts. Monotonic IDs from a
+  bounded buffer with `Last-Event-ID` resume and a `gap` event. It carries tool-call *arguments*
+  and **never** read results; assert that structurally.
+- **Audit and Job query seams** (#441) — kind, principal, time range, Node, Operation, path/arg,
+  outcome, cursor pagination, per-principal counts by time bucket — in the **capability layer's
+  read lane**, never as Console→store calls. Activity, agent history and read egress read through
+  them.
+- **Registry carries liveness and certificate validity** (#440) — `cert_not_after`, `enrolled_at`,
+  `renewal_count`, `last_renewed_at`, connected/disconnected — what ADR-0034's markers and Node
+  detail read; lands before `state:` evaluation (#414).
+- **Per-Account Console preference store** (#442) — saved views and the delta-lane watermark; a
+  preference, not a runtime object.
 - Internal-only serving.
 
 **Acceptance**
 - An operator logs in and watches fleet state, Jobs, agent tool calls, pending approvals and audit
-  live — with zero mutating routes in the Console (verified by review).
+  live — with **zero mutating routes** in the Console, where *mutating* means reaching the
+  capability layer's write or dispatch path; a session, a saved view or an audit query is not
+  that, and Cancel is v0.7.0 (verified by review).
 - A `viewer` Account sees everything and can change nothing, and its rendered navigation is
   **structurally smaller** — the routes it may not use are not mounted.
 - No Fact appears on a fleet row or in a facet; Facts appear on Node detail and nowhere else.
@@ -833,15 +847,15 @@ deliberately last, behind the step-up and approval machinery it depends on.
 - **Step-up re-authentication** on privilege-granting actions and on mutate apply — the strongest
   per-action intent binding in the system. A recent-auth window on the session, its length
   file-only configuration that no Account can extend.
-- **Lifecycle and the incident ladder** (`console/16`) — the four rungs on one surface in
-  ascending blast radius: quarantine (`relay:`) < **suspend an Account** (**ADR-0035**) < revoke a
-  Node < Freeze. Current state before controls. Cancel is named as the only instrument for
+- **Lifecycle and the incident ladder** (`console/16`) — the three rungs on one surface in
+  ascending blast radius: quarantine (`relay:`) < revoke a Node < Freeze. (Account suspension,
+  ADR-0035, was drafted and deferred — not adopted; #443.) Current state before controls. Cancel is named as the only instrument for
   in-flight Tasks. **Blocked by #397**, which leaves revoke and Freeze ungated.
 - **Label management** (ADR-0020) — post-enrollment `relay:` set/remove (`admin` + step-up) and
   operator-set `tag:` grouping, with bulk tag-from-filter as the fleet view's one action.
-- **Agent controls** (`console/03`) — **Disconnect** (a convenience; the Account may reconnect)
-  and **Suspend** (ADR-0035: Account-scoped, refuses every call, `operator`+ to engage and `admin`
-  + step-up with a reason to lift).
+- **Cancel** from Job detail and the agent stream (`console/13`, `console/03`) — in-flight Tasks
+  only, through the capability layer, audited. (Disconnect and Suspend were cut: MCP is stateless
+  so there is no connection to drop, and suspension is deferred.)
 - **Access management** (`console/15`) — view/create/disable Accounts (incl. machine Accounts for
   AI-agents), assign roles, mint and revoke API Tokens. Every privilege-granting act is step-up
   and audited; an API token's plaintext is shown once.
@@ -870,14 +884,14 @@ deliberately last, behind the step-up and approval machinery it depends on.
 - An `operator` filters the fleet and bulk-applies a `tag:` label without step-up; setting
   `relay:quarantine` demands `admin` + step-up; no surface anywhere writes a `node:` or `state:`
   label.
-- Suspending an Account refuses its every subsequent call, and each refusal is audited; lifting
-  demands `admin` + step-up + a reason.
+- Freeze engage is refused to a machine Account of any role; only a human principal may pull the
+  cord. Quarantine by Selector refuses any term outside `relay:`.
 - The Policy Author emits a file `relay-daemon policy check` accepts, and no route on it writes
   anything anywhere.
 - Manual validation: `docs/testing/validate-v0.7.0.md` written and signed off.
 
 **ADRs:** 0026 (Console execution, supersedes 0009's no-execution clause), 0009 (remainder
-stands), 0010, 0020 (label management), **0035** (Account suspension), 0032 (enrollment bundle
+stands), 0010, 0020 (label management), 0032 (enrollment bundle
 rendering), 0002/0022 (why Policy authoring stops at the clipboard). CLAUDE.md invariant #10 was
 amended with ADR-0026 and invariant #7 with ADR-0034; the threat model carries the delta as the
 "Hijacked Console session" adversary and residual **R11**.

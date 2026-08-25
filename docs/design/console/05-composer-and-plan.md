@@ -106,3 +106,5 @@ filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filli
       capability layer's `RoleGate`, not by this screen.
 - [ ] A denied Node in the Plan shows the rule that fired, verbatim, styled informative-neutral.
 - [ ] Editing any field after a Plan renders invalidates the plan hash visibly.
+- [ ] `console_execution` is file-only Relay configuration: it lands with the packaging config
+      sample and its drift gate, and no API can read or set it.
