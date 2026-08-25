@@ -759,29 +759,63 @@ capability layer, three thin surfaces).
 ## `v0.6.0` — Admin Console: Monitoring (post-beta)
 
 The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
-(ADR-0009), logging in against the v0.3.0 Account model. Backend dependency map:
-`docs/design/console-backend-coverage.md`.
+(ADR-0009), logging in against the v0.3.0 Account model.
+
+**Per-screen specifications: [`docs/design/console/`](docs/design/console/)** — a foundations
+document, one spec per screen, and an open-decisions register that an implementer must read before
+writing code. Backend dependency map: `docs/design/console-backend-coverage.md`.
+
+> **Two defects gate every Console milestone.** #403 (the Relay's server certificate never
+> rotates — both listeners share it, so the Console's own TLS rides on the bug and breaks fourteen
+> days after the process starts) and #397 (enrollment-token mint, Node revoke and Freeze
+> engage/release have no role gate). Neither is a Console problem; both make Console work
+> unshippable.
 
 **Deliverables**
-- Human auth: username/password login (hashed at rest) with optional OIDC; per-human
-  audit attribution; `viewer` role enforced. Session/cookie auth with CSRF/CSP discipline
-  from day one (the execution phase inherits it).
-- Monitoring views: live Node registry (facts, `node:`/`relay:` labels, liveness, Policy
-  + template-set fingerprints, `outdated` flags), Enrollment Token inventory, CA/cert
-  lifecycle, Jobs/Tasks, Freeze state, the audit trail (verified/asserted lanes visible),
-  and a **read-only approval-queue view** (pending approvals with their Plans; deciding
-  arrives in v0.7.0).
-- **SSE event seam**: an in-process pub/sub off registry and Job state transitions; live
-  updates via SSE.
+- **The Console shell** (`console/11`) — layout, HTMX conventions, session and step-up state,
+  CSRF on every mutating route, strict CSP, and the SSE client. ADR-0026 makes CSP and CSRF
+  controls on a fleet-RCE path rather than hygiene, so this is built once, first, and carefully.
+  The `no_dispatch` structural guard extends to the Console package at creation, not at the
+  composer.
+- **Login** (`console/12`) — username/password (hashed at rest) with optional OIDC; per-human
+  audit attribution; `viewer` role enforced; session/cookie auth.
+- **Fleet view** (`console/01`) — live registry, group-by-first with rollup cards, per-Account
+  saved views, a view-scoped delta lane, the pixel wall, facets, and an anomaly-first deviation
+  table. Renders `state:` labels (**ADR-0034**), which is where fleet-scale targeting comes from.
+- **Node detail** (`console/02`) — Facts (this page only), effective Policy from `policyview`,
+  template vocabulary, cert and enrollment provenance, recent Tasks, pin-to-compare.
+- **Activity** (`console/04`) — the live stream and the audit trail as **one** Job-grained
+  surface; live tail on is "now", filtered is history. There is no separate Jobs destination.
+- **Job detail** (`console/13`) — grouped outcomes across all eight of the wire vocabulary,
+  legible at 3 Nodes and at 10,000, with identical output clustered.
+- **Agent sessions** (`console/03`, stream only) — every MCP tool call as it happens, paired
+  request and result, filterable. The trust surface: it shows verified requests, never the model's
+  reasoning. Read output is never retained, and the screen says so.
+- **Read egress** (`console/17`) — what has been read, by whom, from where, over the existing
+  `KindRead` audit records. No new collection. ADR-0021 says reading is exfiltration; this is the
+  first surface that admits it.
+- **Approval queue and approval object** (`console/14`, `console/08`), **read-only** — pending
+  approvals with their Plans and quorum state; deciding arrives in v0.7.0.
+- **Day one** (`console/10`) — the Console with zero Nodes, watching live for the first
+  enrollment and surfacing rejected attempts with their reason.
+- **SSE event seam** — an in-process pub/sub with **three publishers**: registry transitions, Job
+  transitions, and MCP tool calls. It carries tool-call *arguments* and **never** read results;
+  assert that structurally.
 - Internal-only serving.
 
 **Acceptance**
-- An operator logs in and watches fleet state, Jobs, pending approvals, and audit live —
-  with zero mutating routes in the Console (verified by review).
-- A `viewer` Account sees everything and can change nothing.
+- An operator logs in and watches fleet state, Jobs, agent tool calls, pending approvals and audit
+  live — with zero mutating routes in the Console (verified by review).
+- A `viewer` Account sees everything and can change nothing, and its rendered navigation is
+  **structurally smaller** — the routes it may not use are not mounted.
+- No Fact appears on a fleet row or in a facet; Facts appear on Node detail and nowhere else.
+- A fleet of 10,000 Nodes renders without a list of rows until one is explicitly requested.
+- No inline script and no `hx-on:` attribute survives in any rendered page.
 - Manual validation: `docs/testing/validate-v0.6.0.md` written and signed off.
 
-**ADRs:** 0009 (Console, monitoring phase); renders 0010's Account model.
+**ADRs:** 0009 (Console, monitoring phase); renders 0010's Account model; **0034** (`state:`
+labels — required by the fleet view); 0021/0025 (what the read-egress surface may and may not
+show).
 
 ---
 
@@ -789,47 +823,64 @@ The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
 
 Phase two: the keys — and, per [ADR-0026](docs/adr/0026-admin-console-execution-surface.md)
 (#264; supersedes ADR-0009's no-execution clause, invariant #10 amended in the same
-change), the execution surface. Manual experimentation
-is the trust-building wedge: a skeptical operator probes the boundary themselves, then
-hands the keys to the AI. The wall is the same wall.
+change), the execution surface. Manual experimentation is the trust-building wedge: a skeptical
+operator probes the boundary themselves, then hands the keys to the AI. The wall is the same wall.
+
+**Per-screen specifications: [`docs/design/console/`](docs/design/console/).** The composer is
+deliberately last, behind the step-up and approval machinery it depends on.
 
 **Deliverables**
-- Lifecycle control: mint/revoke Enrollment Tokens, revoke Nodes, engage/release the
-  Freeze — through the shared capability layer.
-- **Label management** (ADR-0020): post-enrollment `relay:` set/remove — the quarantine
-  lever (`admin` + step-up; incident ladder quarantine < revoke < Freeze) — and
-  operator-set `tag:` grouping labels, with bulk tag-from-filter as the fleet view's one
-  action; both namespaces through the capability layer + Control API, one mechanism with
-  two authz tiers.
-- **Access management**: view/create/disable Accounts (incl. machine Accounts for
-  AI-agents), assign roles, revoke API Tokens.
-- **Step-up re-authentication** on privilege-granting actions and on mutate apply —
-  the strongest per-action intent binding in the system; it *is* the confirmation
-  ladder's self-confirmation rung fused into the request surface.
-- **Approval-queue decisions**: approve/deny with step-up, satisfying the v0.5.0
-  out-of-band channel; partial-quorum state and batch approvals rendered.
-- **Execution composer** (#264 ADR): `list_operations` schemas, plan-by-default (mirror
-  the CLI's `--apply` discipline), role-gated (`operator`+ run, `admin` raw_exec),
-  **`console_execution = on|off`** root-owned flag (default on), strict CSP/CSRF (browser
-  XSS/CSRF named in the threat model — it is now on the most dangerous path), and the
-  `no_dispatch`-style **structural guard extended to the Console package**.
+- **Step-up re-authentication** on privilege-granting actions and on mutate apply — the strongest
+  per-action intent binding in the system. A recent-auth window on the session, its length
+  file-only configuration that no Account can extend.
+- **Lifecycle and the incident ladder** (`console/16`) — the four rungs on one surface in
+  ascending blast radius: quarantine (`relay:`) < **suspend an Account** (**ADR-0035**) < revoke a
+  Node < Freeze. Current state before controls. Cancel is named as the only instrument for
+  in-flight Tasks. **Blocked by #397**, which leaves revoke and Freeze ungated.
+- **Label management** (ADR-0020) — post-enrollment `relay:` set/remove (`admin` + step-up) and
+  operator-set `tag:` grouping, with bulk tag-from-filter as the fleet view's one action.
+- **Agent controls** (`console/03`) — **Disconnect** (a convenience; the Account may reconnect)
+  and **Suspend** (ADR-0035: Account-scoped, refuses every call, `operator`+ to engage and `admin`
+  + step-up with a reason to lift).
+- **Access management** (`console/15`) — view/create/disable Accounts (incl. machine Accounts for
+  AI-agents), assign roles, mint and revoke API Tokens. Every privilege-granting act is step-up
+  and audited; an API token's plaintext is shown once.
+- **Add Nodes** (`console/09`) — mint an Enrollment Token and render the join artifacts in **one
+  act** (ADR-0032), shown once and never reproducible. `admin`-gated, which **requires #397**.
+- **Approval-queue decisions** (`console/14`, `console/08`) — approve/deny with step-up, partial
+  quorum, batch expansion, and the diff-against-last-approved callout the v0.5.0 shape key exists
+  to serve.
+- **Policy Author** (`console/06`) — compose a Node Policy from the real Operation vocabulary and
+  take the file away, with an Ansible drop-in that validates before it lands. **Generate-and-copy
+  only**: the Relay has no code path that writes Policy to a Node (ADR-0002, invariant #2).
+- **Policy fix, from a deny** (`console/07`) — the reactive half: one deny in, one minimal rule
+  out, plus the rollout ladder that ends at confirming the fingerprint changed.
+- **Execution composer** (`console/05`) — `list_operations` schemas, plan-by-default, role-gated
+  (`operator`+ run, `admin` raw_exec), **`console_execution = on|off`** root-owned flag (default
+  on), and the `no_dispatch` structural guard covering the Console package.
 
 **Acceptance**
-- An `admin` logs in, mints a scoped Enrollment Token, revokes a Node, creates an
-  `operator` machine Account (passing step-up), approves a parked Job, and runs a
-  `mutate` Operation only after its Plan renders and step-up passes — every action
-  attributed in audit; a `viewer` is refused all of it.
-- With `console_execution = off`, the composer is absent and no execution route exists.
+- An `admin` logs in, mints a scoped Enrollment Token, revokes a Node, creates an `operator`
+  machine Account (passing step-up), approves a parked Job, and runs a `mutate` Operation only
+  after its Plan renders and step-up passes — every action attributed in audit; a `viewer` is
+  refused all of it.
+- With `console_execution = off`, the composer is **absent** and no execution route exists — not
+  disabled, not greyed out.
 - A Console route that attempts to dispatch outside the capability layer does not compile.
-- An `operator` filters the fleet and bulk-applies a `tag:` label without step-up;
-  setting `relay:quarantine` on a Node demands `admin` + step-up; no surface anywhere can
-  write a `node:` label.
+- An `operator` filters the fleet and bulk-applies a `tag:` label without step-up; setting
+  `relay:quarantine` demands `admin` + step-up; no surface anywhere writes a `node:` or `state:`
+  label.
+- Suspending an Account refuses its every subsequent call, and each refusal is audited; lifting
+  demands `admin` + step-up + a reason.
+- The Policy Author emits a file `relay-daemon policy check` accepts, and no route on it writes
+  anything anywhere.
 - Manual validation: `docs/testing/validate-v0.7.0.md` written and signed off.
 
-**ADRs:** 0026 (Console execution, supersedes 0009's no-execution clause), 0009
-(remainder stands), 0010, 0020 (label management). CLAUDE.md invariant #10 was amended
-with ADR-0026; the threat model carries the delta as the "Hijacked Console session"
-adversary and residual **R11**.
+**ADRs:** 0026 (Console execution, supersedes 0009's no-execution clause), 0009 (remainder
+stands), 0010, 0020 (label management), **0035** (Account suspension), 0032 (enrollment bundle
+rendering), 0002/0022 (why Policy authoring stops at the clipboard). CLAUDE.md invariant #10 was
+amended with ADR-0026 and invariant #7 with ADR-0034; the threat model carries the delta as the
+"Hijacked Console session" adversary and residual **R11**.
 
 ---
 
