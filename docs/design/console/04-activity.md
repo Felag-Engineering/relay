@@ -74,7 +74,8 @@ Export for an auditor.
 - [ ] Live tail and historical query use the same renderer.
 - [ ] A read row carries no output at any age.
 
-## Open
+## Jobs
 
-- Whether the Jobs nav destination survives, or is just this screen filtered to `dispatch`. It is
-  currently both, which is one too many.
+There is no separate Jobs destination (D6, resolved). This screen filtered to `dispatch` **is** the
+Jobs list, and the filter must be a first-class, linkable state rather than something a user has to
+reconstruct. Job detail remains its own page, reached from any dispatch row here.

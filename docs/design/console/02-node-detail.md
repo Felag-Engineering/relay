@@ -35,7 +35,7 @@ Fleet / prod / web-0442        ● online, last seen 12s      [▷ Run here] [Pi
 ## Data
 
 **Identity & enrollment** — `node_id`, certificate SHA-256, issued and expiry, renewal count and
-last renewal, the Enrollment Token it joined with and when, daemon version. Provenance is the
+last renewal (and `state:cert-expiring` when the warning window is crossed), the Enrollment Token it joined with and when, daemon version. Provenance is the
 point: renewal is cert-authenticated and preserves `node_id`, so the chain back to enrollment is
 unbroken.
 
@@ -66,7 +66,9 @@ explainer of who sets each. Two actions, both v0.7.0:
   sits at the bottom of the incident ladder: quarantine < revoke < Freeze.
 
 `node:` labels are read-only here and everywhere. `state:` labels are derived and settable by
-nobody, including admins — render them, never an edit affordance.
+nobody, including admins — render them, never an edit affordance. The fingerprint rows in the
+Fingerprints panel are the readable form of `state:policy-fingerprint=` and
+`state:template-fingerprint=`; offer a link that targets the same value as a Selector.
 
 ## Pin to compare
 

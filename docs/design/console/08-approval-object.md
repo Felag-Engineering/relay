@@ -43,9 +43,11 @@ This is the single most valuable element on the screen and it must be **the most
 on the card**. Fatigue dies here or nowhere: a reader who has approved this shape before needs to
 see what is *different*, not re-read what is the same.
 
-It requires the approval record to store enough to compare against — same Operation and Selector
-shape — which is why `ui-advisory.md` insists the v0.5.0 schema be designed with this rendering in
-mind rather than retrofitted.
+It requires a **shape key** on the approval record: a hash over the Operation and the normalised
+Selector, excluding fan-out and any argument expected to vary (D10). Finding the prior approval is
+then a lookup. This is a **v0.5.0 schema decision** — v0.5.0 lands well before the Console, and a
+shape key cannot be recomputed for existing records because normalising a Selector after the fact
+is guesswork.
 
 When there is no comparable prior approval, say so plainly. Do not manufacture a diff.
 

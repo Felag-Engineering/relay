@@ -1,12 +1,13 @@
 # 03 — Agent sessions
 
 **Artboard 11.** The live trust surface: every call an AI-agent makes, as it makes it.
-**Milestone v0.6.0** for the read-only stream; **v0.7.0** for End session.
+**Milestone v0.6.0** for the read-only stream; **v0.7.0** for Disconnect and Suspend.
 
 **Governing:** ADR-0003, ADR-0013, ADR-0021, ADR-0025, ADR-0028, ADR-0029, invariants #10, #13.
-**Backend:** an event seam off the MCP surface (new — the SSE seam of v0.6.0 must cover tool
-calls, not only registry and Job transitions); `KindRead` audit records; session state on the MCP
-server; session termination through the capability layer (v0.7.0).
+**Backend:** the v0.6.0 SSE seam, **widened to three publishers** — registry transitions, Job
+transitions and MCP tool calls (D9). The tool-call publisher carries arguments but **never** read
+results; `KindRead` audit records; session state on the MCP
+server; Account suspension state on the Account model, and connection termination, both v0.7.0.
 
 ## What this screen is for
 
@@ -40,12 +41,12 @@ does not, and the screen says so rather than hiding it.
       │ Connected      │ [all] [run_operation] [raw_exec] [list_nodes] …  [mutate only]
       │ ● gleipnir-prod│ [ filter by argument, Selector, Node, plan hash            ]
       │   47 calls     │ ┌──────────────────────────────────────────────────────────┐
-      │   [End session]│ │ → run_operation  [mutate]  plan=false     ● dispatching   │
-      │ ○ gleipnir-stag│ │   args, selector, plan hash, approved-by                  │
-      │ ● mike@desktop │ │ ← job_9d41 · [====progress====] · [Cancel]                │
+      │   [Disconnect] │ │ → run_operation  [mutate]  plan=false     ● dispatching   │
+      │   [Suspend]    │ │   args, selector, plan hash, approved-by                  │
+      │ ○ gleipnir-stag│ │ ← job_9d41 · [====progress====] · [Cancel]                │
       │                │ └──────────────────────────────────────────────────────────┘
-      │ [what ending   │ … one card per call, newest first
-      │  a session does│
+      │ ● mike@desktop │ … one card per call, newest first
+      │                │
 ```
 
 ## The stream
@@ -83,12 +84,26 @@ identically.
 Each connected session: Account (with its kind — machine or human — and role), connect time, call
 count, mutate count, idle state. Selecting one scopes the stream.
 
-**End session** (v0.7.0) drops the connection immediately and refuses its next call. In-flight
-Tasks keep running — those are Cancel's job.
+Two controls, deliberately different in weight and intent (both v0.7.0):
 
-This is **the rung the incident ladder was missing**. Quarantine fences one Node, revoke removes
-one Node, Freeze stops the whole fleet; none of them stop one misbehaving agent without collateral
-damage. It needs a decision before it is built — see `99-open-decisions.md`.
+**Disconnect** drops the connection with no state change. For an agent stuck in a loop that needs
+its context broken. **It may reconnect immediately** — the UI must say so plainly. This is a
+convenience, not a security control, and must never be presented as a rung on the incident ladder.
+
+**Suspend** is the durable brake, and it is **Account-scoped, not session-scoped**: a session is
+authenticated by a bearer token, so killing a connection buys seconds while the client reconnects
+with the same credential. A suspended Account may still connect and **every call it makes is
+refused** — not merely dispatch, because the actor is suspended for being untrusted and reading is
+exfiltration by construction. Refused calls are still audited, so a suspended agent stays
+observable through what it attempts. In-flight Tasks keep running; Cancel handles those.
+
+**`operator`+ to engage; `admin` + step-up with an audited reason to lift** — Freeze's asymmetry,
+for Freeze's reasons: no friction on the emergency path, a deliberate ceremony to remove
+protection.
+
+This completes the incident ladder. Quarantine fences one Node, revoke removes one Node, Freeze
+stops the whole fleet — **suspend fences one actor**, which nothing else could do without
+collateral damage. See `99-open-decisions.md` D2.
 
 ## Interruption
 
@@ -114,3 +129,6 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
 - [ ] Polling collapses; a session doing 200 `get_job` calls does not push everything else off.
 - [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
 - [ ] With no sessions connected the screen says so plainly and does not fabricate activity.
+- [ ] Disconnect is labelled as reconnectable and is not presented as a security control.
+- [ ] A suspended Account's every call is refused and each refusal is audited.
+- [ ] Lifting a suspension demands `admin` + step-up and records a reason; engaging it does not.

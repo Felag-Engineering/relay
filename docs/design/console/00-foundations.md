@@ -59,13 +59,23 @@ is no series to chart even if someone wanted one.
 | `relay:` | the Relay (enrollment stamp, or `admin` + step-up) | the Node | yes | **yes — only this** |
 | `state:` | **derived by the Relay; nobody sets it** | everyone | yes | no |
 
-`state:` is new and **needs an ADR and a CONTEXT.md entry** — see `99-open-decisions.md`. Its
-vocabulary must be **closed** and defined in the contract. Free-form state labels would become a
-second `tag:` namespace with none of the guarantees, and Selectors written against them would
-silently stop matching when a definition changed.
+`state:` is new and **needs an ADR and a CONTEXT.md entry** — see `99-open-decisions.md` D1,
+where its content is settled. Its vocabulary is **closed** and defined in the contract.
 
-Closed vocabulary as drawn: `state:offline`, `state:version-gated`, `state:policy-drift`,
-`state:template-drift`.
+**Every `state:` label is Node-local and objective** — computable from one Node's record with no
+reference to any other Node. A fleet-relative label (the first draft's "fingerprint behind the
+fleet's mode") silently inverts its meaning mid-rollout and smuggles desired-state past invariant
+#9.
+
+Boolean markers: `state:offline`, `state:outdated`, `state:template-unloadable`,
+`state:cert-expiring`.
+Key=value facts: `state:daemon-version=`, `state:policy-fingerprint=`, `state:template-fingerprint=`.
+
+**Drift is not a label.** It is an observation read off the fingerprint facet. "The ones that are
+behind" is targeted as `state:policy-fingerprint=4b18…c02`.
+
+`state:` terms are evaluated at Selector-resolution time, not materialised. Nobody can write one —
+enforced structurally, not by permission check.
 
 Security-lane Selectors (quarantine, remediation, secret distribution) target `relay:` and only
 `relay:` — invariant #7, unchanged. `state:` is excluded because it is computed partly from what
@@ -88,10 +98,10 @@ approval card. They must occupy **different visual channels**:
 
 | Colour | Means | Used on |
 |---|---|---|
-| Amber | needs attention now | Freeze banner, offline, version-gated, over-cap notes |
+| Amber | needs attention now | Freeze banner, offline, outdated, over-cap notes |
 | Indigo | the security lane | `relay:` labels and the acts that set them |
 | Slate | a Policy decision was made | denies, and nothing else |
-| Grey | drift | `state:policy-drift`, `state:template-drift` |
+| Grey | drift and inertness | `state:template-unloadable`, fingerprint distributions in facets |
 | Blue | interactive | links, primary buttons, the live indicator — never semantic |
 | Muted red | failure and timeout | nothing else, ever |
 
@@ -143,24 +153,68 @@ authorised the *session*; step-up proves a human intended *this action*. It carr
 no agent session holds, and it is the reason ADR-0026 could give a browser an execution surface at
 all.
 
-**Freeze banner** (every screen, whenever engaged). Amber, unmissable, in a slot above content. It
-states what is still true — in-flight Tasks keep running, Plans still resolve — because an
-emergency stop that looks like a total outage gets released in a panic.
+**Control-plane banner** (every screen, whenever a condition holds). Amber, unmissable, in a slot
+above content. It is the Console's only surface for conditions about **the control plane itself**
+rather than about Nodes — everything else on every screen answers the four questions, which are
+questions about machines.
+
+Three conditions, in descending urgency:
+
+| Condition | Says |
+|---|---|
+| **Freeze engaged** | all new Task dispatch halted; in-flight Tasks keep running and Plans still resolve; who engaged it and when |
+| **Relay certificate near expiry** | automatic rotation has failed; the whole fleet fail-closes when it lapses |
+| **CA near expiry** | the trust root every Node pins is running out; there is no rotation path today (D14) |
+
+Freeze states what is *still true* on purpose: an emergency stop that looks like a total outage
+gets released in a panic.
+
+The two certificate conditions fire only when automation has already failed, so they are rare and
+mean something. They are operational alarms, not configuration — invariant #11 is untouched, and
+nothing here is editable. Note the limit honestly: both listeners share one certificate
+(ADR-0031), so once the Relay's leaf actually lapses the Console is unreachable too. The banner is
+a warning ahead of the event and can never be the only alarm.
+
+## The incident ladder
+
+Four rungs, in ascending order of blast radius. Every screen that offers one must make its
+position on the ladder legible.
+
+| Rung | Fences | Who | Reversible |
+|---|---|---|---|
+| `relay:quarantine` on a Node | one Node | `admin` + step-up | yes |
+| Suspend an Account | one actor | `operator`+ to engage, `admin` + step-up to lift | yes |
+| Revoke a Node | one Node | `admin` + step-up | no |
+| Freeze | the whole fleet | `operator`+ to engage, `admin` + reason to lift | yes |
+
+Cancel is not on the ladder — it stops one in-flight Task and stops nothing future. Every rung
+leaves in-flight Tasks running; Cancel is the only instrument for those.
 
 ## Navigation
 
-Ten destinations in three groups. The grouping is load-bearing: it makes the model legible and
+Nine destinations in three groups. The grouping is load-bearing: it makes the model legible and
 makes the absence of a settings section visible.
 
 ```
-Observe      Fleet · Agents · Activity · Jobs
+Observe      Fleet · Agents · Activity
 Act          Run · Policy · Approvals
 Administer   Add Nodes · Accounts · Incident
 ```
 
+There is no `Jobs` destination (D6): Activity renders Job rows and filters to them. **Job detail is
+still its own page**, reached from any dispatch row, from a Node's recent Tasks, and from the agent
+stream.
+
 Role and configuration change the nav **structurally, not cosmetically**. A `viewer` sees a
 smaller Console; with `console_execution = off`, Run is absent, not disabled. ADR-0026's insight
 is that *absent* beats *forbidden* — do not ship a greyed-out execution surface.
+
+## Hard prerequisite: E2a
+
+The Relay's server certificate is minted once at process start and never rotates
+(`99-open-decisions.md` D13). Both listeners share one certificate (ADR-0031), so **the Console's
+own TLS rides on it**: a Console shipped against a Relay with this defect breaks for every user
+fourteen days after the process starts. Treat E2a as done-before-done for all Console work.
 
 ## Technical frame
 

@@ -24,17 +24,17 @@ Scope is the four questions in `00-foundations.md`. No collected metrics.
       ├──────────────────────────────────────────────────────────────────────────────────
       │ [My slice ▾]  [ node:env=prod                            ]  [Group by env ▾]
       ├──────────────────────────────────────────────────────────────────────────────────
-      │ Since you last looked (2h)  2 enrolled · 1 offline · 3 gained state:policy-drift
+      │ Since you last looked (2h)  2 enrolled · 1 offline · 3 changed Policy fingerprint
       │                                    [Tag these 4,012]  [▷ Run against these 4,012]
       ├──────────────────────────────────────────────────────────────────────────────────
-      │ ┌ prod   4,012 nodes · 3 offline · 2 version-gated · 12 policy drift · 1 quarantined
+      │ ┌ prod   4,012 nodes · 3 offline · 2 outdated · 12 on an older Policy fingerprint · 1 quarantined
       │ │  [pixel wall — one cell per Node]
       │ │  ┌────────────┬──────────────────────────────────────────────┐
       │ │  │ facet rail │ deviation table, anomaly-first                │
       │ │  └────────────┴──────────────────────────────────────────────┘
       │ ├ staging  612 nodes · no deviations                    (collapsed)
       │ ├ dev      240 nodes · 2 offline                        (collapsed)
-      │ └ edge      96 nodes · 96 version-gated                 (collapsed)
+      │ └ edge      96 nodes · 96 outdated                 (collapsed)
 ```
 
 ## Regions
@@ -80,10 +80,17 @@ Rendered in the State column and counted on the rollup card.
 | State | Meaning | Colour |
 |---|---|---|
 | `state:offline` | not connected right now | amber |
-| `state:version-gated` | daemon below the dispatch minimum; every dispatch returns `version_refused` | amber |
-| `state:policy-drift` | Policy fingerprint behind the fleet's mode | grey |
-| `state:template-drift` | template-set fingerprint behind, or `unloadable` | grey |
+| `state:outdated` | daemon below the dispatch minimum; every dispatch returns `version_refused` | amber |
+| `state:template-unloadable` | template set failed to load; vocabulary empty, fail closed | grey |
+| `state:cert-expiring` | identity certificate near expiry and not renewed; the Node drops off silently if ignored | amber |
 | `relay:quarantine` | deliberately fenced; a declared label, not derived | indigo |
+
+**Drift is not among them** and deliberately so — see `99-open-decisions.md` D1. A fingerprint
+"behind the fleet" is fleet-relative and would invert mid-rollout. Drift is shown two ways
+instead: as a count on the rollup card ("12 on a different Policy fingerprint" — an observation),
+and as the fingerprint distribution in the facet rail. Acting on it means targeting the value:
+`state:policy-fingerprint=4b18…c02`. Clicking the facet fills that into the filter, which is the
+whole interaction.
 
 A Node with no state chip is normal. That is most of them, and the column being empty is the
 calmest thing on the screen.
@@ -107,7 +114,8 @@ config management.
 ## States
 
 - **Empty fleet** → the day-one screen, spec 10. Do not render an empty table.
-- **Frozen** → the Freeze banner above content; the screen is otherwise unchanged (reads still work).
+- **Frozen** → the control-plane banner above content; the screen is otherwise unchanged (reads still work).
+- **Relay or CA certificate near expiry** → the same banner slot, per `00-foundations.md`.
 - **`viewer`** → identical, minus the two action buttons.
 - **Single-Node and small fleets** → the pixel wall becomes a short strip, group cards collapse to
   one row, and the deviation table simply is the fleet. Nothing special-cased.
