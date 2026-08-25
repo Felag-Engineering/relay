@@ -245,13 +245,32 @@ Administer   Add Nodes · Accounts · Incident
 
 ## Prerequisites that already exist as issues
 
-### D8. #397 — enrollment mint has no role gate
+### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate
 
-`POST /api/v1/enrollment-tokens` authenticates the caller and never checks their role, so a
-`viewer` can mint a token that stamps `relay:` labels. **Spec 09 must not ship before this is
-fixed** — rendering on top of an ungated mint wraps a privilege escalation in a convenience.
+**Broader than earlier drafts of this file recorded.** Three `/api/v1` route families authenticate
+the caller and then never check their role:
 
-### D13. E2a — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
+| Route | Handler |
+|---|---|
+| `POST /api/v1/enrollment-tokens` | `api/tokens.go` |
+| `POST /api/v1/nodes/{node_id}/revoke` | `api/nodes.go` |
+| `POST /api/v1/freeze/engage` · `/release` | `api/freeze.go` |
+
+So a `viewer` can mint a token that stamps `relay:` labels, revoke Nodes, and engage or release the
+fleet Freeze — while the documentation says all three are admin-only. `requireAdmin` exists
+(`api/accounts.go`) and is referenced only from `accounts.go`.
+
+**Nothing here needs deciding.** Minting requires `admin` per ADR-0032 §5; Freeze is `operator`+ to
+engage and `admin` with an audited reason to release per ADR-0013; revocation is `admin` + step-up
+per ADR-0020's incident ladder. The gates are specified and absent.
+
+**Blocks two specs, not one:**
+- **[09 — Add Nodes](09-add-nodes.md)**, whose whole subject is minting.
+- **[16 — Incident](16-incident-ladder.md)**, which specifies revoke as `admin` + step-up and
+  Freeze as `operator`+ / `admin`. Building a UI whose controls state a role requirement the API
+  does not enforce is worse than building nothing: it documents a protection that is not there.
+
+### D13. [#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403) — the Relay's server certificate never rotates **(blocking, and not a UI bug)**
 
 `relay/cmd/relay/main.go:391` and `:575` each call `IssueServerCertificate` once at process start.
 There is **no `GetCertificate` callback anywhere**, and the leaf borrows `LeafValidity` (336h — the
@@ -259,8 +278,11 @@ constant meant for Node identity). A Relay running longer than fourteen days ser
 certificate and **the whole fleet fail-closes off it.** Unnoticed only because nothing has run for
 two continuous weeks.
 
-Recorded in `../self-serve-enrollment.md` as **E2a**, "lands first and alone". It is repeated here
-because **the Console's own TLS rides on the same certificate** (ADR-0031 puts both listeners on
+Tracked as [#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403), and as **E2a**
+in `../self-serve-enrollment.md` ("lands first and alone"), with acceptance criteria already
+written there. Its sibling [#404](https://github.com/Felag-Engineering/gleipnir-relay/issues/404)
+collapses the two listeners onto one multi-SAN certificate. **Neither needs a specification** — the
+fix is settled in ADR-0031 §5. Repeated here because **the Console's own TLS rides on the same certificate** (ADR-0031 puts both listeners on
 one): a Console shipped before E2a lands breaks for every user at the fourteen-day mark. No Console
 work should be considered done against a Relay that still has this defect.
 

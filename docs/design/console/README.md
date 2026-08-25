@@ -36,8 +36,17 @@ Numbers are identifiers, not sequence. Build in this order:
    [05](05-composer-and-plan.md) — the composer last, behind the step-up and approval machinery it
    depends on.
 
-**Two defects gate all of it:** [#397](99-open-decisions.md) (the enrollment mint has no role gate)
-and E2a (the Relay's server certificate never rotates, and the Console's TLS rides on it). See
+**Two defects gate all of it, and both are already tracked — neither needs a specification:**
+
+- **[#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397)** — enrollment-token
+  mint, Node revoke and Freeze engage/release have **no role gate**, so a `viewer` can do all
+  three. Blocks specs [09](09-add-nodes.md) and [16](16-incident-ladder.md), whose controls state
+  role requirements the API does not enforce.
+- **[#403](https://github.com/Felag-Engineering/gleipnir-relay/issues/403)** — the Relay's server
+  certificate never rotates. Both listeners share it (ADR-0031), so the Console's own TLS rides on
+  the defect and breaks for every user fourteen days after the process starts.
+
+Their fixes are settled in ADR-0032 §5, ADR-0013 and ADR-0031 §5 respectively. See
 `99-open-decisions.md` D8 and D13.
 
 ## Screens
