@@ -48,6 +48,21 @@ const nOutcomes = 9
 // nRefusalKinds is the number of capability.RefusalKind values (Frozen..Internal).
 const nRefusalKinds = 4
 
+// ServerCertListener names the listener whose server certificate rotated. It
+// is a closed two-value enum rather than a string so the label it renders is
+// bounded by construction, like every other label in this package.
+type ServerCertListener int
+
+const (
+	// ListenerNodePlane is the mTLS gRPC listener the fleet dials.
+	ListenerNodePlane ServerCertListener = iota
+	// ListenerControlPlane is the HTTPS listener operators and AI-agents dial.
+	ListenerControlPlane
+)
+
+// nServerCertListeners is the number of ServerCertListener values.
+const nServerCertListeners = 2
+
 // GaugeSources supplies the live values behind each gauge. Any field left nil
 // is skipped at scrape time (its metric is omitted entirely), which keeps
 // unit tests that only care about counters simple.
@@ -136,6 +151,23 @@ func refusalLabel(k capability.RefusalKind) string {
 	}
 }
 
+// listenerLabel maps l to its Prometheus label value. Any unrecognized value
+// (defensive only — the enum is closed) falls back to the node plane, the
+// listener whose certificate expiring is the fleet-wide failure.
+func listenerLabel(l ServerCertListener) string {
+	if l == ListenerControlPlane {
+		return "control_plane"
+	}
+	return "node_plane"
+}
+
+// listenerOrder is the rendering order of the
+// relay_server_cert_rotations_total series.
+var listenerOrder = []ServerCertListener{
+	ListenerNodePlane,
+	ListenerControlPlane,
+}
+
 // refusalOrder is the rendering order of the relay_refusals_total series.
 var refusalOrder = []capability.RefusalKind{
 	capability.RefusalFrozen,
@@ -149,9 +181,10 @@ var refusalOrder = []capability.RefusalKind{
 type Metrics struct {
 	src GaugeSources
 
-	dispatches  [nOutcomes]atomic.Int64
-	refusals    [nRefusalKinds]atomic.Int64
-	enrollments atomic.Int64
+	dispatches   [nOutcomes]atomic.Int64
+	refusals     [nRefusalKinds]atomic.Int64
+	enrollments  atomic.Int64
+	certRotation [nServerCertListeners]atomic.Int64
 }
 
 var _ capability.MetricsSink = (*Metrics)(nil)
@@ -184,6 +217,18 @@ func (m *Metrics) IncEnrollment() {
 	m.enrollments.Add(1)
 }
 
+// IncServerCertRotation records one in-process re-issuance of a listener's own
+// TLS server certificate (#403, ADR-0031 §5). A counter that stops advancing
+// is how an operator sees rotation stop; the certificate's remaining lifetime
+// after that is their warning window.
+func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
+	idx := int(l)
+	if idx < 0 || idx >= nServerCertListeners {
+		idx = int(ListenerNodePlane)
+	}
+	m.certRotation[idx].Add(1)
+}
+
 // Handler returns the http.Handler that serves the Prometheus text
 // exposition. It is reached only through the control-plane mux's existing
 // bearer-auth middleware (relay/cmd/relay/control_surfaces.go); this package
@@ -200,6 +245,7 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	buf = appendDispatches(buf, &m.dispatches)
 	buf = appendRefusals(buf, &m.refusals)
 	buf = appendCounter(buf, "relay_enrollments_total", "Total successful Node enrollments.", m.enrollments.Load())
+	buf = appendCertRotations(buf, &m.certRotation)
 
 	_, _ = w.Write(buf)
 }
@@ -257,6 +303,17 @@ func appendRefusals(buf []byte, refusals *[nRefusalKinds]atomic.Int64) []byte {
 	buf = appendType(buf, "relay_refusals_total", "counter")
 	for _, k := range refusalOrder {
 		buf = fmt.Appendf(buf, "relay_refusals_total{reason=%q} %d\n", refusalLabel(k), refusals[int(k)].Load())
+	}
+	return buf
+}
+
+func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int64) []byte {
+	buf = appendHelp(buf, "relay_server_cert_rotations_total",
+		"Total in-process re-issuances of the Relay's own TLS server certificate, by listener.")
+	buf = appendType(buf, "relay_server_cert_rotations_total", "counter")
+	for _, l := range listenerOrder {
+		buf = fmt.Appendf(buf, "relay_server_cert_rotations_total{listener=%q} %d\n",
+			listenerLabel(l), rotations[int(l)].Load())
 	}
 	return buf
 }

@@ -14,10 +14,16 @@ type Config struct {
 	// node-plane gRPC listener (separate exposure posture: node-plane faces
 	// the fleet, control-plane faces operators/AI — ADR-0009).
 	Addr string
-	// TLSCert is the server certificate presented on the control-plane
-	// listener. Issued independently of the node-plane's gRPC server
-	// certificate by the composition root.
-	TLSCert tls.Certificate
+	// GetCertificate supplies the server certificate presented on the
+	// control-plane listener, asked once per handshake. Issued independently
+	// of the node-plane's gRPC server certificate by the composition root,
+	// which also re-issues it before it expires (ca.ServerCertificate,
+	// ADR-0031 §5).
+	//
+	// A callback rather than a tls.Certificate value: a certificate handed
+	// over once expires while the process still runs, which is how a Relay up
+	// longer than its leaf's lifetime came to serve a dead certificate (#403).
+	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }
 
 // Server is the Relay's control-plane HTTP surface. Every route registered on
@@ -61,8 +67,8 @@ func New(cfg Config, authn *Authenticator) *Server {
 	public.Handle("/", authn.Middleware(mux))
 
 	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cfg.TLSCert},
-		MinVersion:   tls.VersionTLS13,
+		GetCertificate: cfg.GetCertificate,
+		MinVersion:     tls.VersionTLS13,
 		// One-way TLS: the control plane authenticates callers via the bearer
 		// credential (Authenticator.Middleware), not a client certificate.
 		ClientAuth: tls.NoClientCert,

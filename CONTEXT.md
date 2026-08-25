@@ -187,6 +187,15 @@ from *enrollment*: enrollment is token-authenticated and mints the first identit
 cert-authenticated and refreshes the existing one. (ADR-0006)
 _Avoid_: re-enroll, reissue, cert refresh
 
+**Server certificate rotation**:
+The Relay *re-issuing* its own TLS server certificate from the in-process CA once the leaf
+passes a jittered fraction of its lifetime — on the next handshake, with no restart, no
+operator, and no network. Distinct from *Certificate renewal*, which is a Node refreshing its
+identity certificate over the wire: rotation never leaves the Relay process, and each listener
+rotates independently. The server leaf's lifetime is its own constant, never the Node identity
+one — sharing it is what left the certificate expiring with nothing to renew it (ADR-0031 §5).
+_Avoid_: server cert renewal, cert refresh
+
 **Freeze**:
 The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
 leaving in-flight Tasks running and Plans available. Cheap to engage (`operator`+ via

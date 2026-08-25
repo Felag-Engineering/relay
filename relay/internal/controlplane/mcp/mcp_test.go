@@ -237,7 +237,13 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 
 	cert := selfSignedCert(t)
 	controlSrv := controlplane.New(
-		controlplane.Config{Addr: "127.0.0.1:0", TLSCert: cert},
+		controlplane.Config{
+			Addr: "127.0.0.1:0",
+			// Production hands this *ca.ServerCertificate's method, which
+			// re-issues the leaf before it expires (#403); a fixed
+			// certificate is all this test needs.
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil },
+		},
 		controlplane.NewAuthenticator(staticVerifier{credential: testToken}),
 	)
 	controlSrv.Mux().Handle("/mcp", handler)
