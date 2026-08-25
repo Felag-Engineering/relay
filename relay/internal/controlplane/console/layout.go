@@ -89,7 +89,14 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
       {{range .Items}}<a class="navitem{{if .Current}} on{{end}}" href="{{.Path}}">{{.Label}}</a>{{end}}
     </div>
     {{end}}
-    <div class="navfoot">signed in as <b>{{.Account}}</b><br>role <b>{{.Role}}</b></div>
+    <div class="navfoot">
+      <div>signed in as <b>{{.Account}}</b></div>
+      <div>role <b>{{.Role}}</b></div>
+      <form method="post" action="/console/logout">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <button type="submit" class="linkbtn">Sign out</button>
+      </form>
+    </div>
   </aside>
   <div class="col">
     {{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}
@@ -159,8 +166,19 @@ func placeholder(title, spec string) func(Deps) http.HandlerFunc {
 // assetHandler serves the Console's own static assets. It exists because the
 // content security policy admits styles only from this origin and nothing
 // inline, so the stylesheet cannot live in the layout.
+//
+// StripPrefix is load-bearing rather than tidy: the embedded FS is rooted at
+// "assets/", and a FileServer handed the request path unmodified looks for
+// "console/assets/console.css" and 404s. That is what it did — every Console
+// page rendered completely unstyled, and no test caught it because the shell
+// landed before anything mounted it (#439, found when #418 first stood the
+// Console up in a browser).
+//
+// TestConsole_StylesheetIsActuallyServed is the regression guard, and it
+// asserts the BODY rather than the status, because a 404 page is also a 200-
+// shaped thing to a careless assertion.
 func assetHandler(Deps) http.HandlerFunc {
-	fs := http.FileServer(http.FS(assetsFS))
+	fs := http.StripPrefix("/console/", http.FileServer(http.FS(assetsFS)))
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		fs.ServeHTTP(w, r)

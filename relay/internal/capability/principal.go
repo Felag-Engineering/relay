@@ -61,6 +61,16 @@ type Principal struct {
 	// session, not each model-generated call (ADR-0024).
 	AuthMethod AuthMethod
 
+	// Source is the peer address the request arrived from, as the
+	// authentication boundary read it off the connection. It travels into the
+	// audit trail's verified lane.
+	//
+	// Empty for a Principal built outside a network boundary (a local signal
+	// on the Relay host, a fixture). Never populated from a caller-supplied
+	// header: a claimed source is an assertion, and this is not the assertion
+	// lane.
+	Source string
+
 	// TokenID is the public identifier of the API Token presented, empty when
 	// the action did not arrive through a token boundary (a local signal on
 	// the Relay host, or a test fixture).
@@ -85,6 +95,16 @@ const (
 
 	// AuthMethodOAuth is a session authorized through the external IdP (#299).
 	AuthMethodOAuth AuthMethod = "oauth"
+
+	// AuthMethodConsoleSession is a human's browser session in the Admin
+	// Console (#418, ADR-0009).
+	//
+	// Distinguishable from the other two in audit on purpose: the three call
+	// for different incident responses. A compromised API Token is revoked
+	// here, a compromised IdP account is dealt with at the IdP, and a
+	// compromised Console session is ended by disabling the Account — which
+	// cuts sessions already in flight, not merely the next sign-in.
+	AuthMethodConsoleSession AuthMethod = "console_session"
 )
 
 // PrincipalKindHuman is the one Kind value that means "a person is behind this

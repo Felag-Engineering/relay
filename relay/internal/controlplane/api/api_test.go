@@ -163,6 +163,10 @@ func testPrincipal() capability.Principal {
 	p := controlplane.FoundingAdmin()
 	p.TokenID = testTokenID
 	p.AuthMethod = capability.AuthMethodAPIToken
+	// The authentication boundary now stamps the peer address into the
+	// verified attribution lane (#418). httptest.NewRequest's default
+	// RemoteAddr is 192.0.2.1:1234, and the port is stripped.
+	p.Source = "192.0.2.1"
 	return p
 }
 

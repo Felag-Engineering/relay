@@ -76,10 +76,14 @@ link in the chain `ui-advisory.md` requires end-to-end: **login → action → a
 
 ## Acceptance
 
-- [ ] Wrong username and wrong password are indistinguishable in message and timing.
-- [ ] The session identifier changes on successful login.
-- [ ] Every attempt is audited with source and method.
-- [ ] No route other than login, its assets and health is reachable unauthenticated.
-- [ ] No persistent credential satisfies step-up.
+- [x] Wrong username and wrong password are indistinguishable in message and timing.
+- [x] The session identifier changes on successful login.
+- [x] Every attempt is audited with source and method.
+- [x] No route other than login, its assets and health is reachable unauthenticated.
+- [x] No persistent credential satisfies step-up.
 - [ ] A successful OIDC login for an unknown subject is refused, not auto-provisioned.
-- [ ] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.
+      **Not implemented (#418).** The local password baseline shipped; the human OIDC
+      browser flow did not, so this criterion is untested rather than met. ADR-0024's
+      resource-server half (machine callers) is unaffected and already exists. Tracked
+      as the remaining half of this spec.
+- [x] Repeated failures slow an Account down and never lock it out; the delay is visible and audited.

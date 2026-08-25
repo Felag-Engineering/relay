@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
 
@@ -181,6 +182,17 @@ func (s *Store) MCPTasks() mcptask.Repository {
 // long after the process that wrote it exited.
 func (s *Store) Accounts() accounts.Repository {
 	return &sqliteAccounts{db: s.db}
+}
+
+// Passwords returns the SQLite-backed accounts.PasswordRepository — local
+// Console sign-in credentials for human Accounts (#418).
+//
+// A distinct accessor from Accounts() rather than a wider Repository, so that
+// the set of components able to read a password hash is exactly the set that
+// asked this method for one. Everything else in the process holds an
+// accounts.Repository and structurally cannot reach a hash.
+func (s *Store) Passwords() accounts.PasswordRepository {
+	return &sqlitePasswords{db: s.db, now: time.Now}
 }
 
 // APITokens returns the SQLite-backed accounts.TokenRepository — the control

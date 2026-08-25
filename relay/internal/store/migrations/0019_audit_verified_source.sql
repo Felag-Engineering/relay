@@ -1,0 +1,21 @@
+-- #418: record WHERE a verified identity acted from.
+--
+-- The verified lane already records who acted (0010) and how they
+-- authenticated (0011). Spec docs/design/console/12-login.md requires the
+-- third: every sign-in attempt audited with its source. A brute force,
+-- a stolen cookie replayed from elsewhere, and an operator on the wrong
+-- network are all invisible without it.
+--
+-- It belongs in the VERIFIED lane and not the asserted one because the Relay
+-- reads it off the connection itself -- a caller cannot claim a source
+-- address. Anything a proxy header says is a claim, and this column is not
+-- where claims go.
+--
+-- NULL for a record written outside a network boundary (a local signal on the
+-- Relay host, e.g. the Freeze lever) or before this migration.
+--
+-- NOTE: keep semicolons out of these comments. splitStatements
+-- (store/migrate.go) splits the file on that character without stripping
+-- comments first, so one inside a comment is executed as SQL.
+
+ALTER TABLE audit ADD COLUMN verified_source TEXT;

@@ -92,6 +92,25 @@ const (
 	KindAccountRole    = "account_role"
 	KindAccountEnable  = "account_enable"
 	KindAccountDisable = "account_disable"
+	// The Console's human authentication lane (#418,
+	// docs/design/console/12-login.md). Every attempt is recorded, successful
+	// or not — this is the first link in the chain the UI advisory requires
+	// end-to-end: login -> action -> audit record.
+	//
+	// KindLoginFailed deliberately carries NO indication of which half was
+	// wrong. A trail that recorded "unknown account" separately from "wrong
+	// password" would be the same enumeration oracle the login response
+	// refuses to be, readable by anyone with audit access.
+	//
+	// KindLoginThrottled is distinct from KindLoginFailed because nothing was
+	// checked: the attempt was refused before any credential was compared, so
+	// counting it as a failure would overstate how many guesses were actually
+	// made.
+	KindLoginSucceeded = "login_succeeded"
+	KindLoginFailed    = "login_failed"
+	KindLoginThrottled = "login_throttled"
+	KindLogout         = "logout"
+
 	KindAPITokenMint   = "api_token_mint"
 	KindAPITokenRevoke = "api_token_revoke"
 )
