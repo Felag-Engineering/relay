@@ -16,7 +16,7 @@ exists to prevent.
 > **D1 was resolved on 2026-08-24** and is kept here with its reasoning; its ADR is still
 > unwritten and the code still waits on it.
 
-### D1. The `state:` Label namespace — **RESOLVED 2026-08-24, ADR still to be written**
+### D1. The `state:` Label namespace — **RESOLVED 2026-08-24 — drafted as [ADR-0034](../../adr/0034-state-labels-relay-derived-namespace.md)**
 
 **What:** a fourth namespace of Relay-derived labels, targetable by Selectors, writable by nobody.
 
@@ -25,9 +25,9 @@ ones that are behind" — and today it is not expressible. Labels target; Facts 
 and daemon version and the fingerprints are *neither*, as `Hello` shows by carrying
 `daemon_version` and `Facts` as separate fields.
 
-**Still needs an ADR** because it changes CONTEXT.md's definition of **Selector** ("a label-based
-query") and adds a namespace alongside ADR-0006's and ADR-0020's three. Both files are
-escalate-to-a-human. The decisions below are settled; the ADR records them.
+**Drafted as ADR-0034**, which amends CONTEXT.md's `Selector` and `Label` entries and **CLAUDE.md
+invariant #7** (three namespaces → four) in the same change. All three files are
+escalate-to-a-human: the ADR is written and awaiting review, and no code should assume it merged.
 
 #### The governing rule: every `state:` label is Node-local and objective
 
@@ -95,7 +95,7 @@ Selector grammar to comparisons like `daemon.version < 1.4.2` (a bigger change t
 language, and unnecessary once fingerprints are targetable); the `tag:` bridge (a snapshot that
 goes stale).
 
-### D2. Stopping one agent — **RESOLVED 2026-08-24, ADR still to be written**
+### D2. Stopping one agent — **RESOLVED 2026-08-24 — drafted as [ADR-0035](../../adr/0035-account-suspension.md)**
 
 **The problem with the first draft:** an MCP session is authenticated by a bearer token, so killing
 the connection buys seconds — the client reconnects with the same credential. "End session" as
@@ -144,7 +144,7 @@ settled this asymmetry for Freeze — cheap to engage, deliberate to release —
 transfers: no friction on the emergency path, and an attacker who suspends your agents has made
 noise rather than progress.
 
-#### What the ADR must still record
+#### Recorded in ADR-0035; still open within it
 
 - Whether suspension lives on the Account model (ADR-0010) as a state, or as a capability-layer
   verb. It is an Account-state change, so the former is the presumption.

@@ -43,14 +43,17 @@ it needs an ADR, not a quiet workaround.
 5. **Blast-radius cap is enforced on the Relay before dispatch.** (ADR-0004)
 6. **mTLS everywhere; the daemon refuses an untrusted Relay.** Node identity is its client cert.
    (ADR-0005, 0006)
-7. **Labels use three namespaces, each immutable from the other sides.** `node:` labels are
+7. **Labels use four namespaces, each immutable from the other sides.** `node:` labels are
    node-rooted (set out-of-band via config management), Relay-immutable, and authoritative for
    routine targeting. `relay:` labels are Relay-set (enrollment-stamped, or `admin` + step-up),
    Node-immutable, and reserved for the security-sensitive lane (quarantine, remediation,
    secret-distribution targeting), which must target `relay:` and only `relay:`. `tag:` labels
    are operator-set through the control plane, Node-immutable, for ad-hoc grouping and routine
-   targeting — never a valid security-lane target. A compromised Node can forge its own `node:`
-   labels but never `relay:` or `tag:`. (ADR-0006, ADR-0020)
+   targeting — never a valid security-lane target. `state:` labels are Relay-derived from the
+   registry, set by nobody at all, evaluated at Selector-resolution time from a closed vocabulary,
+   for routine targeting only and never a valid security-lane target. A compromised Node can forge
+   its own `node:` labels, and can influence `state:` by lying in `Hello`, but never `relay:` or
+   `tag:`. (ADR-0006, ADR-0020, ADR-0034)
 8. **`/proto` is the single source of truth** for the wire protocol and Operation vocabulary.
    Change the contract there; regenerate both sides. Don't hand-edit generated code. (ADR-0007)
 9. **The System Model is advisory; its grounding facts are AI-immutable.** The AI-agent may

@@ -107,13 +107,15 @@ different layer.
 _Avoid_: command, unit, step; "task" unqualified in any context where MCP is also in play
 
 **Selector**:
-A label-based query that targets a set of Nodes (e.g. `role=web, env=prod`). Operations
+A query over a Node's Labels that targets a set of Nodes (e.g. `role=web, env=prod`). Operations
 and Raw Exec fan out to every matching Node and return a per-Node result. A single Node is
-just a Selector that matches one.
+just a Selector that matches one. Terms in the `state:` namespace are Relay-derived and evaluated
+at resolution time rather than matched against stored Labels (ADR-0034); every other namespace is a
+stored-Label match.
 _Avoid_: filter, query, target spec
 
 **Label**:
-A key/value tag on a Node used by Selectors to target it. Lives in one of three
+A key/value tag on a Node used by Selectors to target it. Lives in one of four
 non-overlapping namespaces, each immutable from the other sides: **node-space** (`node:…`,
 rooted on the Node and set out-of-band via config management; the Relay records but never
 modifies or removes them; authoritative for routine targeting, trusted only as much as the
@@ -121,7 +123,10 @@ Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment 
 post-enrollment by an `admin` with step-up — and immutable to the Node; reserved for the
 security-sensitive lane), or **tag-space** (`tag:…`, set by operators through the control
 plane with standard auth; immutable to the Node; ad-hoc grouping and routine targeting only,
-never a valid security-lane target — ADR-0020). Remediation/quarantine and secret-distribution
+never a valid security-lane target — ADR-0020), or **state-space** (`state:…`, derived by the Relay
+from the registry, set by nobody — not the Node, not an operator, not an `admin` — evaluated at
+Selector-resolution time, closed vocabulary, for routine targeting only and never a valid
+security-lane target — ADR-0034). Remediation/quarantine and secret-distribution
 Selectors target `relay:` labels only.
 _Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
 annotation
@@ -148,6 +153,15 @@ traveling. Report-only: the Relay observes it but never sets a Node's templates.
 no templates are installed; the literal `unloadable` means the Node's local template set
 failed to load, so its template vocabulary is empty (fail closed).
 _Avoid_: template hash, template version
+
+**`outdated`**:
+The registry and Plan flag for a Node whose daemon is **below the Relay's configured minimum
+version**: it still connects, heartbeats and appears in the registry, but the Job engine refuses to
+send it Tasks, reported per-Task as `OUTCOME_VERSION_REFUSED` (ADR-0014). Surfaced as
+`state:outdated` (ADR-0034). It says nothing about Policy or template freshness — fingerprint
+divergence is an observation read from the registry, never a flag.
+_Avoid_: version-gated, stale, behind, out of date (for Policy or template drift — say
+"a different Policy fingerprint")
 
 **`unsupported`**:
 The per-Node outcome for an Operation that is not in *that Node's* vocabulary — an unloaded
@@ -179,6 +193,17 @@ leaving in-flight Tasks running and Plans available. Cheap to engage (`operator`
 the Control API, or locally on the Relay host), deliberate to release (`admin`, with an
 audited reason). Persisted across Relay restarts (ADR-0013).
 _Avoid_: pause, maintenance mode, lockdown, kill switch
+
+**Suspension**:
+A reversible state on an Account that refuses **every** call it makes — not merely dispatch, since
+reading is exfiltration by construction (ADR-0021). A suspended Account may still authenticate and
+connect; it simply gets nowhere, which is what makes suspension durable where dropping a session is
+not (a session is bearer-token authenticated and reconnects). In-flight Tasks keep running;
+Cancellation is the instrument for those. `operator`+ to engage, `admin` + step-up with an audited
+reason to lift — Freeze's fire-alarm asymmetry. Distinct from **revocation**: tokens, scope and
+role all survive, which is what keeps it cheap enough to use. The incident ladder is quarantine <
+suspension < revocation < Freeze (ADR-0035).
+_Avoid_: disable, ban, lock out, kill session (dropping a connection is a convenience, not this)
 
 **Cancellation**:
 Stopping a single in-flight Task by its ID (`TaskCancel`): the daemon kills the Task's
