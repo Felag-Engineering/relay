@@ -34,6 +34,8 @@ never invokes it.
 | `relay` | The Go Relay. Node-plane gRPC on `:7654`, control-plane HTTPS (MCP + `/api/v1`) on `:9443` — distinct listeners, distinct published ports. CA + SQLite store live on the `relay-data` volume. |
 | `bootstrap` | A one-shot helper that, once the Relay is healthy, mints a `relay:`-scoped Enrollment Token through `POST /api/v1/enrollment-tokens` and exports the Relay's **public** CA certificate for the daemons to pin. Then it exits. |
 | `approver` | A one-shot helper that creates the `dev-approver` **human** Account and mints its credential. It exists because the approval gate forbids self-approval — see [The approval gate](#the-approval-gate) below. Then it exits. |
+| `console-admin` | A one-shot helper that creates the `admin` **human** Account the Admin Console signs in. Then it exits. |
+| `console-password` | A one-shot helper that sets that Account's Console password with `relay console-password`. Separate from `console-admin` because the two acts carry different authorities — see [The Admin Console](#the-admin-console) below. Then it exits. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. |
 
 Security-relevant choices, made explicit:
@@ -70,6 +72,58 @@ Security-relevant choices, made explicit:
   credential goes from the operator's terminal straight into a secret store (see
   [docs/operations/control-plane-credential.md](operations/control-plane-credential.md)).
   Never copy this one out of the fleet.
+
+## The Admin Console
+
+The Console (ADR-0009) is served on the **same** control-plane listener as MCP and
+`/api/v1` — no new listener and no new auth path (invariant 10). Browser sessions
+sit beside API Tokens and OAuth as one of the authenticator's credential lanes,
+rather than the Console authenticating its own requests, which would be a second
+control path and the first one to be forgotten.
+
+```
+https://127.0.0.1:9443/console/
+```
+
+Your browser will warn about the certificate: the Relay signs its own server cert
+with the CA it created on first start, and nothing on your laptop trusts that CA.
+That is the correct behaviour and not a misconfiguration — accept it for the dev
+fleet, or add `ca-cert.pem` to your trust store if the warning gets tiresome.
+
+Sign in with:
+
+| | |
+| --- | --- |
+| username | `admin` |
+| password | `admin1234567` |
+
+Override either with `CONSOLE_ADMIN_NAME` / `CONSOLE_ADMIN_PASSWORD` in the
+environment before `docker compose up`.
+
+**Why the password is not shorter.** The Relay refuses any Console password below
+12 bytes (`accounts.MinPasswordBytes`). The sign-in throttle deliberately has no
+hard lockout — a lockout is a denial-of-service lever pointed at your own
+operators — so an attacker gets slow, unlimited attempts, and length is the only
+thing that makes that safe. What sits behind the credential is the front half of a
+fleet-execution surface (ADR-0026).
+
+**Why setting it takes two containers.** Creating the Account is a control-plane
+request: it goes through `POST /api/v1/accounts` carrying a bearer token, like any
+other administrative act. Setting its first Console password is not, and cannot
+be — reaching the Console requires a password, so the first one has nowhere to
+come from except local root on the Relay's own store. That is the same
+chicken-and-egg as `relay bootstrap-token` (ADR-0023) and the same answer ADR-0002
+gives for Policy: root it in the filesystem. Two authorities, two containers, and
+neither holds the other's power — `console-admin` has a credential and no store
+access, `console-password` has store access and no credential.
+
+**What you can do there today.** Everything and nothing: the v0.6.0 Console is
+**read-only by construction**. The read seams it is wired with have no write
+method on them at all, so "zero mutating routes" is a fact about the types rather
+than a property of the handlers. You can watch the fleet, open a Node, read its
+daemon-reported effective Policy, follow the activity trail, read what has been
+read, and open a parked approval. You cannot run anything, change a label, or
+decide an approval — those arrive in v0.7.0 behind step-up re-authentication.
 
 ## Bring the fleet up
 
