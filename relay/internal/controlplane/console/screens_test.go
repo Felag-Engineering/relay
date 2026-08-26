@@ -21,6 +21,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -841,9 +842,28 @@ func TestJob_SentinelExitCodesAreNotRenderedAsProcessResults(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := hasRealExitStatus(c.outcome, c.code); got != c.want {
-			t.Errorf("%s with code %d: renders exit status = %v, want %v",
+			t.Errorf("%s with code %d: has real exit status = %v, want %v",
 				OutcomeLabel(c.outcome), c.code, got, c.want)
 		}
+	}
+
+	// Having one and being worth screen are different questions. A success
+	// exits zero by definition, so printing it says nothing and prints it in
+	// the failure colour while doing so.
+	shown := func(o jobs.Outcome, code int32) bool {
+		rows, _, _, _ := groupTasks([]jobs.Task{{
+			NodeID: "n", State: jobs.DispatchStateResolved, Outcome: o, ExitCode: code,
+		}}, false)
+		return rows[0].Clusters[0].Rows[0].ShowExit
+	}
+	if shown(jobs.OutcomeSuccess, 0) {
+		t.Error("a successful Task renders \"exit 0\" — the outcome already said so, in the failure colour")
+	}
+	if !shown(jobs.OutcomeFailure, 3) {
+		t.Error("a failing Task hides the exit code that explains it")
+	}
+	if shown(jobs.OutcomeDeniedByPolicy, -1) {
+		t.Error("a deny renders the daemon's no-exit-status sentinel")
 	}
 }
 
@@ -1456,5 +1476,111 @@ func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
 	}
 	if !found {
 		t.Error("the State facet does not count revoked Nodes at all")
+	}
+}
+
+// TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine is node detail's headline
+// acceptance criterion (spec 02, invariant 12): the effective-Policy panel is
+// rendered from a daemon-evaluated query, never from a Relay-side
+// reimplementation, and carries the fact that it was.
+//
+// It exists because the unused-linter noticed that nothing wired the policyview
+// seam: only the "has not reported" branch was covered, so the panel that
+// actually renders a Node's Policy — the showpiece of the whole screen — was
+// never once exercised.
+func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
+	d := fleetFixture()
+	d.Policy = fakePolicy{"node-web-1": policyview.Snapshot{
+		RawExecEnabled:    true,
+		RawAllowPatterns:  []string{`^/usr/bin/systemctl (status|restart) (nginx|php-fpm)$`},
+		RawDenyPatterns:   []string{`\brm\b`},
+		AllowedOperations: []string{"service.restart", "system.facts", "file.read"},
+		OperationRules:    []policyview.OperationRule{{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}}},
+		DenyRules:         []policyview.DenyRule{{Name: "file.read", Args: [][]string{{"/etc/shadow"}}}},
+		PolicyFingerprint: "aaaa111122223333",
+	}}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+
+	if strings.Contains(body, "has not reported its Policy") {
+		t.Fatal("a reported Policy still rendered the unreported branch")
+	}
+	// The provenance claim is the point of the panel.
+	if !strings.Contains(body, "this Node's own engine") {
+		t.Error("the panel does not say the answer came from the Node's own engine")
+	}
+	if !strings.Contains(body, "has no code path that writes it") {
+		t.Error("the panel does not state that the Relay cannot write Policy (ADR-0002, invariant 2)")
+	}
+	// The rules render verbatim. A paraphrased rule is a rule an operator has
+	// to go and check.
+	for _, want := range []string{
+		"service.restart", "system.facts", "file.read",
+		"nginx | php-fpm",
+		"/etc/shadow",
+		`\brm\b`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the effective-Policy panel does not render %q", want)
+		}
+	}
+	// Raw Exec being enabled is the most consequential line in a Policy and
+	// must not render as an ordinary chip.
+	if !strings.Contains(body, `data-risk="mutate">enabled`) {
+		t.Error("raw exec enabled does not render at mutate weight")
+	}
+	// And a different Node with no snapshot still says so, so the fixture is
+	// not accidentally global.
+	other := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-2").Body.String()
+	if !strings.Contains(other, "has not reported its Policy") {
+		t.Error("a Node with no snapshot did not render the unreported branch")
+	}
+}
+
+// TestJob_ReadsPerNodeResultsThroughTheJobSeam covers the path the audit trail
+// cannot serve: exit codes, and Tasks still in flight.
+//
+// Also surfaced by the unused-linter — buildJobView prefers the Task store and
+// falls back to the trail, and only the fallback had a test, so the branch that
+// runs in production was the untested one.
+func TestJob_ReadsPerNodeResultsThroughTheJobSeam(t *testing.T) {
+	d := fleetFixture()
+	d.Audit = fakeAudit{records: []audit.Record{{
+		Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1",
+		OperationName: "service.restart", Args: map[string]string{"unit": "nginx"},
+		Timestamp: testNow,
+	}}}
+	d.Jobs = fakeJobs{
+		job: jobs.Job{ID: "job-1", CreatedAt: testNow},
+		tasks: []jobs.Task{
+			{NodeID: "node-web-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess, Stdout: []byte("restarted")},
+			{NodeID: "node-web-2", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeFailure, ExitCode: 3, Stderr: []byte("unit not found")},
+			// Still running: the trail knows nothing about this one.
+			{NodeID: "node-web-3", State: jobs.DispatchStateDispatched},
+		},
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/jobs/job-1").Body.String()
+
+	if !strings.Contains(body, "1 still in flight") {
+		t.Error("an unresolved Task is not reported as in flight — the audit trail cannot answer this")
+	}
+	// A real exit status renders; the sentinel ones do not.
+	if !strings.Contains(body, "exit 3") {
+		t.Error("a genuine non-zero exit code was not rendered")
+	}
+	// Neither a sentinel nor a redundant zero. `success` already implies exit 0,
+	// and .exit is painted in the failure colour — a green row carrying a red
+	// "exit 0" spends the product's one alarming colour on its calmest event.
+	if strings.Contains(body, "exit -1") || strings.Contains(body, "exit 0") {
+		t.Error("an exit code rendered that the outcome already implied, or a sentinel rendered as a result")
+	}
+	// Mutate-class output IS rendered; this is the branch ADR-0025 does not gag.
+	if !strings.Contains(body, "unit not found") {
+		t.Error("captured stderr from a mutate Task was not rendered")
+	}
+	// Failures sort before successes.
+	if strings.Index(body, "failure") > strings.Index(body, ">success<") {
+		t.Error("success sorted before failure — ordering is by interest, not alphabetical")
 	}
 }

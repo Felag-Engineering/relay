@@ -61,7 +61,7 @@ type taskRow struct {
 	NodeID   string
 	NodeHref string
 
-	// ExitCode is rendered only when HasExit. The daemon uses -1 EXCLUSIVELY as
+	// ExitCode is rendered only when ShowExit. The daemon uses -1 EXCLUSIVELY as
 	// its "no exit status" sentinel — denied before spawn, spawn failure,
 	// signal kill, timeout kill — and Relay-synthesized outcomes (unreachable,
 	// version_refused) carry a zero that means nothing at all.
@@ -71,7 +71,14 @@ type taskRow struct {
 	// read "did not run" as a real process result, and "exit 0" beside
 	// `unreachable` is worse: it says the thing succeeded.
 	ExitCode int32
-	HasExit  bool
+
+	// ShowExit is true only when the code says something the outcome does not
+	// already imply. `success` implies zero, so "exit 0" beside a success chip
+	// is noise — and worse than noise here, because .exit is painted in the
+	// failure colour, and the budget reserves muted red for failure and timeout
+	// and nothing else, ever. A green row with a red "exit 0" on it spends the
+	// one alarming colour in the product on the least alarming event in it.
+	ShowExit bool
 	Output   string
 	// Truncated is the daemon-side size cap, reported as the daemon reported
 	// it: one flag over the whole result, not per-stream.
@@ -242,7 +249,7 @@ func groupTasks(tasks []jobs.Task, readClass bool) ([]outcomeGroup, OutcomeBar, 
 			NodeID:   t.NodeID,
 			NodeHref: "/console/nodes/" + t.NodeID,
 			ExitCode: t.ExitCode,
-			HasExit:  hasRealExitStatus(t.Outcome, t.ExitCode),
+			ShowExit: hasRealExitStatus(t.Outcome, t.ExitCode) && t.ExitCode != 0,
 		}
 		// A read-class Task's captured output is NOT rendered here at any age.
 		// The Task row may still hold it while the Job lives, and this page
@@ -384,7 +391,8 @@ func sharedRule(rows []taskRow) string {
 }
 
 // hasRealExitStatus reports whether a Task's exit code came from a process that
-// actually ran.
+// actually ran. Whether it is worth SCREEN is a separate question — see
+// taskRow.ShowExit.
 //
 // Only success and failure can carry one. A deny never spawned; a timeout or
 // cancel was killed; unreachable and version_refused never left the Relay; and
@@ -476,7 +484,7 @@ Node is audited and what it said is not kept.</p>
       {{range .Rows}}
         <div class="trow">
           <a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>
-          {{if .HasExit}}<span class="exit">exit {{.ExitCode}}</span>{{end}}
+          {{if .ShowExit}}<span class="exit">exit {{.ExitCode}}</span>{{end}}
           {{if .Truncated}}<span class="dim">output truncated by the daemon's size cap</span>{{end}}
         </div>
         {{with .Output}}<pre class="taskout">{{.}}</pre>{{end}}
