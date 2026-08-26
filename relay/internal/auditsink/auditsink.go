@@ -43,9 +43,11 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -432,6 +434,7 @@ func attribution(p capability.Principal, a capability.Assertions) audit.Attribut
 			Role:        p.Role,
 			TokenID:     p.TokenID,
 			Method:      string(p.AuthMethod),
+			Source:      p.Source,
 		},
 		Asserted: audit.Asserted{
 			OnBehalfOf:  a.OnBehalfOf,
@@ -452,4 +455,62 @@ func (s *Sink) append(ctx context.Context, rec audit.Record) error {
 		return fmt.Errorf("auditsink: append audit record: %w", err)
 	}
 	return nil
+}
+
+// RecordLogin implements consoleauth.Auditor: one audit.Record per
+// authentication event on the Console's human lane (#418, spec
+// docs/design/console/12-login.md).
+//
+// # Which lane each field lands in
+//
+// A SUCCESSFUL sign-in has a verified identity, so it fills the verified lane
+// exactly as any other authenticated act does. A FAILED one has no verified
+// identity at all — that is what failing means — so the verified lane carries
+// only the source, and what the caller typed goes in the ASSERTED lane, where
+// unauthenticated claims belong.
+//
+// That split is not bookkeeping. A trail that recorded the submitted username
+// as though it were an Account would let anyone with audit read access
+// enumerate Accounts by watching which names come back, which is the same
+// oracle the login response refuses to be — just readable at leisure.
+func (s *Sink) RecordLogin(ctx context.Context, e consoleauth.LoginEvent) error {
+	rec := audit.Record{
+		Timestamp: s.now(),
+		Kind:      e.Kind,
+		Principal: e.Account,
+		Reason:    e.Reason,
+		Attribution: audit.Attribution{
+			Verified: audit.Verified{
+				AccountID:   e.AccountID,
+				AccountName: e.Account,
+				Role:        e.Role,
+				Method:      e.Method,
+				Source:      e.Source,
+			},
+			Asserted: audit.Asserted{
+				// The submitted name, bounded like every other asserted field:
+				// an unauthenticated caller must not be able to size an audit
+				// record (the #255/#258 unbounded-field lesson), and this one
+				// is reachable by anyone who can reach the sign-in form.
+				OnBehalfOf: truncate(e.SubmittedName, audit.MaxAssertedFieldBytes),
+			},
+		},
+	}
+	if e.Account != "" && e.Role != "" {
+		rec.Principal = e.Account + ":" + e.Role
+	}
+	return s.append(ctx, rec)
+}
+
+// truncate bounds a caller-supplied string to n bytes, cutting on a rune
+// boundary so a truncated record never holds an invalid UTF-8 fragment.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }

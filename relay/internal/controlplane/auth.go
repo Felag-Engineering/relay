@@ -11,6 +11,7 @@ package controlplane
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 
@@ -90,6 +91,12 @@ type Authenticator struct {
 	// no IdP is configured, in which case a non-token credential is simply
 	// refused — the Relay advertises no flow it cannot complete.
 	oauth *oauthResolver
+
+	// console is the human browser lane (#418, ADR-0009). Nil when the Admin
+	// Console is not mounted, in which case a session cookie is simply
+	// ignored: no Console, no session to resolve it against, and no
+	// unauthenticated surface punched in this wrapper. See consolesession.go.
+	console *consoleLane
 }
 
 // AuthOption configures an Authenticator.
@@ -148,20 +155,35 @@ func NewAuthenticator(tokens TokenVerifier, opts ...AuthOption) *Authenticator {
 // either the success or failure path — only hashes are ever compared.
 func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		credential, ok := bearerToken(r)
-		if !ok {
-			a.unauthorized(w)
+		// The Console's sign-in page and its stylesheet are the only routes
+		// on this listener, besides RFC 9728 metadata, that may be reached
+		// without a credential — a sign-in page behind the authentication it
+		// establishes is a locked door with the key inside.
+		//
+		// "Public" means NEVER REFUSED, not "never authenticated": a
+		// credential that resolves is still injected, so the sign-in page can
+		// recognise someone who is already signed in and send them on rather
+		// than asking them to authenticate twice. A public handler that needs
+		// a Principal and finds none still gets the defensive 500 in
+		// console.principal, never an unattributed action.
+		if a.console != nil && a.console.public(r) {
+			if principal, ok := a.authenticateRequest(r); ok {
+				next.ServeHTTP(w, r.WithContext(
+					context.WithValue(r.Context(), principalContextKey{}, principal)))
+				return
+			}
+			next.ServeHTTP(w, r)
 			return
 		}
 
-		principal, ok := a.authenticate(r.Context(), credential)
+		principal, ok := a.authenticateRequest(r)
 		if !ok {
-			// EVERY failure lands here with the same generic 401: malformed
-			// header, unknown token, wrong secret, revoked token, expired
-			// token, disabled Account, unreadable store. Distinguishing them
-			// would tell an attacker that a credential is real and only its
-			// Account is switched off.
-			a.unauthorized(w)
+			// EVERY failure lands here with the same generic refusal:
+			// malformed header, unknown token, wrong secret, revoked token,
+			// expired token, expired or unknown session, disabled Account,
+			// unreadable store. Distinguishing them would tell an attacker
+			// that a credential is real and only its Account is switched off.
+			a.refuse(w, r)
 			return
 		}
 
@@ -180,6 +202,71 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		ctx = capability.WithAssertions(ctx, asserted)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// authenticateRequest picks the credential lane from the SHAPE of the request
+// and runs exactly that one.
+//
+// An Authorization header means a machine caller and is only ever checked
+// against the token/OAuth verifiers; its absence, with the Console mounted,
+// means a browser and is only ever checked against a session. A request
+// carrying a bearer header is never resolved as a session even if it also
+// carries a cookie — so a browser cannot be talked into presenting a stolen
+// session alongside a header, and a script cannot fall back to one.
+func (a *Authenticator) authenticateRequest(r *http.Request) (capability.Principal, bool) {
+	source := sourceAddress(r)
+
+	if credential, ok := bearerToken(r); ok {
+		p, ok := a.authenticate(r.Context(), credential)
+		if !ok {
+			return capability.Principal{}, false
+		}
+		p.Source = source
+		return p, true
+	}
+
+	if a.console != nil {
+		if id, ok := consoleSessionFromRequest(r); ok {
+			return a.authenticateConsole(r.Context(), id, source)
+		}
+	}
+	return capability.Principal{}, false
+}
+
+// sourceAddress is the peer address, port stripped, as read off the
+// connection.
+//
+// Never from X-Forwarded-For or any other header. A header is a claim, and the
+// verified attribution lane is not where claims go (audit.Verified.Source). A
+// deployment behind a proxy will see the proxy here, which is honest; the
+// alternative is an audit trail an attacker can write.
+func sourceAddress(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// refuse renders an authentication failure in the shape the caller can act on:
+// a browser reaching the Console is sent to the sign-in page, everything else
+// gets the generic 401 challenge.
+//
+// The DISTINCTION IS PRESENTATION ONLY. Both paths refuse identically and
+// disclose nothing about why, and the branch is taken on where the request was
+// going, never on anything about the credential presented.
+func (a *Authenticator) refuse(w http.ResponseWriter, r *http.Request) {
+	if a.console != nil && !hasBearer(r) {
+		a.console.unauthorized.ServeHTTP(w, r)
+		return
+	}
+	a.unauthorized(w)
+}
+
+// hasBearer reports whether r carries an Authorization: Bearer header at all.
+func hasBearer(r *http.Request) bool {
+	_, ok := bearerToken(r)
+	return ok
 }
 
 // authenticate turns a presented credential into the acting identity.

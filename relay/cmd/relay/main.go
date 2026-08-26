@@ -22,7 +22,9 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -121,6 +123,20 @@ type Config struct {
 	// `relay bootstrap-token`.
 	ControlEnabled bool
 	ControlAddr    string
+
+	// Console* configure the Admin Console (ADR-0009, ADR-0026), served on the
+	// control-plane listener above rather than one of its own — the Console is
+	// internal-only and shares that listener's exposure posture.
+	//
+	// The two duration fields are file-only Relay configuration in the
+	// invariant-11 sense: operator-set at startup, and there is no code path
+	// from any request to either of them. That matters most for
+	// ConsoleStepUpWindow — an Account that could widen its own step-up window
+	// has removed the strongest per-action control in the system (spec 11).
+	ConsoleEnabled       bool
+	ConsoleSessionMaxAge time.Duration
+	ConsoleSessionIdle   time.Duration
+	ConsoleStepUpWindow  time.Duration
 
 	// OAuth* configure the OAuth 2.1 protected-resource half of the control
 	// plane (#299, ADR-0024): humans authenticate through an external IdP and
@@ -259,6 +275,14 @@ func parseConfig() Config {
 		"enable the control-plane listener (MCP + /api/v1); disabled by default")
 	controlAddr := flag.String("control-addr", ":9443",
 		"control-plane HTTPS listen address (distinct from -addr, the node-plane gRPC listener)")
+	consoleEnabled := flag.Bool("console-enabled", false,
+		"serve the Admin Console on the control-plane listener (ADR-0009); requires -control-enabled")
+	consoleSessionMaxAge := flag.Duration("console-session-max-age", consoleauth.DefaultAbsoluteLifetime,
+		"absolute lifetime of a Console session, never extended by activity")
+	consoleSessionIdle := flag.Duration("console-session-idle", consoleauth.DefaultIdleTimeout,
+		"idle timeout of a Console session")
+	consoleStepUpWindow := flag.Duration("console-step-up-window", consoleauth.DefaultStepUpWindow,
+		"how recently a human must have re-authenticated for a step-up-gated action; file-only, no Account of any role can extend it")
 	oauthIssuer := flag.String("oauth-issuer", "",
 		"OIDC issuer URL for human MCP sessions (ADR-0024); empty disables OAuth")
 	oauthAudience := flag.String("oauth-audience", "",
@@ -365,6 +389,18 @@ func parseConfig() Config {
 		}
 	}
 	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
+
+	cfg.ConsoleEnabled = *consoleEnabled
+	if env := os.Getenv("RELAY_CONSOLE_ENABLED"); env != "" {
+		if v, err := strconv.ParseBool(env); err == nil {
+			cfg.ConsoleEnabled = v
+		} else {
+			slog.Warn("ignoring invalid RELAY_CONSOLE_ENABLED", "value", env)
+		}
+	}
+	cfg.ConsoleSessionMaxAge = durationEnvOr("RELAY_CONSOLE_SESSION_MAX_AGE", *consoleSessionMaxAge)
+	cfg.ConsoleSessionIdle = durationEnvOr("RELAY_CONSOLE_SESSION_IDLE", *consoleSessionIdle)
+	cfg.ConsoleStepUpWindow = durationEnvOr("RELAY_CONSOLE_STEP_UP_WINDOW", *consoleStepUpWindow)
 	cfg.OAuthIssuer = envOr("RELAY_OAUTH_ISSUER", *oauthIssuer)
 	cfg.OAuthAudience = envOr("RELAY_OAUTH_AUDIENCE", *oauthAudience)
 	cfg.OAuthAccountClaim = envOr("RELAY_OAUTH_ACCOUNT_CLAIM", *oauthAccountClaim)
@@ -714,6 +750,47 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			)
 		}
 
+		// The Admin Console's human authentication lane (#418, ADR-0009).
+		//
+		// Built BEFORE the authenticator because it is one of its credential
+		// lanes: browser sessions sit beside API Tokens and OAuth at the one
+		// authentication boundary (invariant 10), rather than the Console
+		// authenticating its own requests, which would be a second control
+		// path and the first one to be forgotten.
+		var consoleAuthSvc *consoleauth.Service
+		if cfg.ConsoleEnabled {
+			consoleSessions := consoleauth.NewStore(
+				consoleauth.WithLifetimes(cfg.ConsoleSessionMaxAge, cfg.ConsoleSessionIdle),
+			)
+			// auditSink, not a nil Auditor: consoleauth FAILS a sign-in it
+			// cannot record, and handing it nothing to record with would turn
+			// that fail-closed property into a silent no-op — the same shape
+			// as the #357 bug where a nil sink disabled every read record in
+			// production and nothing said so.
+			consoleAuthSvc = consoleauth.NewService(
+				st.Accounts(), st.Passwords(), consoleSessions,
+				consoleauth.NewThrottle(), auditSink,
+				consoleauth.WithStepUpWindow(cfg.ConsoleStepUpWindow),
+			)
+			authOpts = append(authOpts, controlplane.WithConsoleSessions(
+				consoleAuthSvc,
+				controlplane.ConsoleSessionOptions{
+					// The ONE hole this punches in the auth wrapper: the
+					// sign-in page and its stylesheet. The predicate is owned
+					// by the package that owns those routes, and its exact
+					// extent is asserted there.
+					Public:       console.Unauthenticated,
+					Unauthorized: console.UnauthorizedHandler(),
+				},
+			))
+			slog.Info("admin console enabled",
+				"path", console.HomePath,
+				"session_max_age", cfg.ConsoleSessionMaxAge,
+				"session_idle", cfg.ConsoleSessionIdle,
+				"step_up_window", cfg.ConsoleStepUpWindow,
+			)
+		}
+
 		authn := controlplane.NewAuthenticator(apiTokenSvc, authOpts...)
 		controlSrv = controlplane.New(
 			controlplane.Config{Addr: cfg.ControlAddr, GetCertificate: controlCert.GetCertificate},
@@ -759,8 +836,18 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			roleGate: roleGate,
 			now:      func() time.Time { return time.Now().UTC() },
 			metrics:  appMetrics,
+
+			consoleAuth: consoleAuthSvc,
 		}
-		for _, s := range defaultControlSurfaces() {
+		surfaces := defaultControlSurfaces()
+		if cfg.ConsoleEnabled {
+			// Appended only when enabled, so with the Console off there is no
+			// /console/ route on the listener at all. Absent, not refusing —
+			// the same posture ADR-0026 requires of console_execution, applied
+			// one level up.
+			surfaces = append(surfaces, consoleSurface{})
+		}
+		for _, s := range surfaces {
 			s.Mount(controlSrv.Mux(), sd)
 		}
 	} else {
@@ -806,6 +893,12 @@ func main() {
 	// Token against the local store and exits; it never starts a server.
 	if len(os.Args) > 1 && os.Args[1] == "bootstrap-token" {
 		os.Exit(runBootstrapTokenCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	// `relay console-password` is the same shape of local, root-owned lever
+	// for the Console's first human credential (#418): reaching the Console
+	// requires a password, so the first one cannot be set through it.
+	if len(os.Args) > 1 && os.Args[1] == "console-password" {
+		os.Exit(runConsolePasswordCommand(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	}
 
 	// `relay --version` prints the build stamp and exits (#249). Checked here,
@@ -933,4 +1026,23 @@ func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
 		Reason: fmt.Sprintf("approval request %s expired at %s without reaching %s (plan %s): %s",
 			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.Progress(), r.PlanHash, r.Summary),
 	})
+}
+
+// durationEnvOr reads a positive duration from the environment, falling back
+// to fallback and warning on anything unparseable.
+//
+// A non-positive value is refused rather than accepted: every duration read
+// this way bounds something (a session's life, a step-up window), and "0"
+// silently meaning "unbounded" is how a control gets turned off by a typo.
+func durationEnvOr(key string, fallback time.Duration) time.Duration {
+	env := os.Getenv(key)
+	if env == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(env)
+	if err != nil || d <= 0 {
+		slog.Warn("ignoring invalid "+key, "value", env)
+		return fallback
+	}
+	return d
 }

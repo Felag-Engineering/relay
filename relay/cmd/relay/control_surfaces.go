@@ -28,8 +28,10 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/api"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -68,6 +70,11 @@ type surfaceDeps struct {
 	roleGate *authz.RoleGate
 	now      func() time.Time
 	metrics  *metrics.Metrics
+
+	// consoleAuth is the Console's sign-in service (#418). Nil when the
+	// Console is not enabled, in which case consoleSurface is not in the
+	// surface list at all — the routes are unmounted, not disabled.
+	consoleAuth *consoleauth.Service
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -162,10 +169,43 @@ func (metricsSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	mux.Handle("GET /metrics", d.metrics.Handler())
 }
 
+// consoleSurface mounts the Admin Console (ADR-0009) onto the same mux — no
+// new listener, no new auth (invariant 10). The Console is internal-only and
+// shares the control-plane listener's exposure posture, which is one of the
+// stacked mitigations that made ADR-0026's execution surface acceptable.
+//
+// It mounts the route table inside console.Secure (the content security
+// policy, the companion headers, CSRF on every unsafe method) and hands that
+// to the shared mux, which controlplane.Server has already wrapped in
+// Authenticator.Middleware. Secure sits INSIDE the authenticator on purpose:
+// CSRF verification on an unauthenticated request is meaningless.
+//
+// A sub-mux rather than registering onto the shared one directly, because
+// Secure must wrap the Console's routes and only those: net/http passes the
+// full path through a nested mux, so the "/console/..." patterns still match.
+type consoleSurface struct{}
+
+func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
+	consoleMux := http.NewServeMux()
+	console.Register(consoleMux, console.Deps{
+		Auth: d.consoleAuth,
+		// Execution is v0.7.0 (spec 05, issue #438). Until it lands there is
+		// no execution route for console_execution to gate, and shipping the
+		// flag ahead of the surface would be a knob that turns nothing off.
+		Execution: false,
+		Now:       d.now,
+	})
+	mux.Handle("/console/", console.Secure(consoleMux))
+}
+
 // defaultControlSurfaces returns every control surface newServer mounts when
 // Config.ControlEnabled. An explicit slice (not init()-registration): adding
 // a surface is an obvious, greppable one-line edit here, with no global
 // mutable registration state.
+//
+// The Console is appended by the caller only when it is enabled, so with it
+// off there is no /console/ route on the listener at all — absent, not
+// refusing.
 func defaultControlSurfaces() []controlSurface {
 	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
 }

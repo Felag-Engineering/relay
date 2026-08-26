@@ -98,3 +98,330 @@ main { padding: 16px 22px; }
 
 .placeholder { color: var(--ink-2); max-width: 46em; }
 .placeholder code { font-family: var(--mono); font-size: 12px; }
+
+.navfoot form { margin: 6px 0 0; }
+/* A button, not a link: signing out is a POST, and a mutating action reachable
+ * by GET is a CSRF hole no token scheme repairs. It is STYLED as a link
+ * because that is what it is to the operator. */
+.linkbtn {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+}
+.linkbtn:hover { text-decoration: underline; }
+
+/* The sign-in page: the only unauthenticated surface.
+ *
+ * Deliberately plain — product name, two fields, one button. No marketing, no
+ * version string, no fleet statistics, no links that reveal whether this
+ * deployment exists or how big it is (spec 12). What looks like restraint here
+ * is the requirement. */
+.loginpage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.loginbox {
+  width: 100%;
+  max-width: 320px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 26px 26px 24px;
+}
+.loginbox .brand { padding: 0 0 18px; }
+.loginbox form { display: flex; flex-direction: column; }
+.loginbox label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.loginbox input {
+  font: inherit;
+  padding: 7px 9px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+}
+.loginbox input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  background: var(--surface);
+}
+.loginbox button[type="submit"] {
+  font: inherit;
+  font-weight: 500;
+  margin-top: 4px;
+  padding: 8px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+.loginbox button[type="submit"]:hover { filter: brightness(1.1); }
+
+.loginnote, .loginmsg {
+  margin: 0 0 16px;
+  padding: 9px 11px;
+  border-radius: 4px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+}
+/* A refused sign-in is not styled as an alarm. It is the overwhelmingly common
+ * case of a mistyped password, and colouring it like a failure spends the
+ * colour budget on the least interesting event in the product. */
+.loginmsg { border-color: var(--line); }
+/* A throttle IS amber: it is the one thing on this page that means "something
+ * needs attention now", and it must not read as "your password was wrong". */
+.loginmsg.slow {
+  background: var(--amber-bg);
+  border-color: var(--amber-line);
+  color: var(--amber);
+}
+
+/* ===========================================================================
+ * Shared components (#419), specified in docs/design/console/00-foundations.md
+ *
+ * THE COLOUR BUDGET IS THE ENTIRE ALLOWANCE. Adding a colour here is not a
+ * style choice — each one carries a meaning, and a seventh dilutes the six:
+ *
+ *   amber  needs attention now      indigo  the security lane
+ *   slate  a Policy decision        grey    drift and inertness
+ *   blue   interactive (never semantic)     muted red  failure and timeout
+ *
+ * Everything else is a near-white or near-black neutral.
+ * =========================================================================== */
+
+:root {
+  --indigo: #4a4a8f;
+  --indigo-bg: #edecf7;
+  --indigo-line: #b9b7dd;
+  --slate: #4a5560;
+  --slate-bg: #eceef0;
+  --slate-line: #b6bfc7;
+  --grey: #7b7871;
+  --grey-bg: #eeece8;
+  --red: #9a4038;
+  --red-bg: #f7eceb;
+  --ok: #4e6b52;
+  --ok-bg: #ecf1ec;
+}
+
+/* --- Chips ---------------------------------------------------------------
+ *
+ * TWO INDEPENDENT GRAMMARS that must not collide. They appear within 200px of
+ * each other on the approval card, so they are given different visual
+ * channels:
+ *
+ *   the trust lane owns FILL VERSUS OUTLINE
+ *   the namespace lane owns HUE, GLYPH and the MONO PREFIX
+ *
+ * If they shared a channel, a caller's claim would read as something the
+ * Relay verified — which is the one confusion the whole attribution model
+ * exists to prevent. */
+
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 11px;
+  line-height: 1.7;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* Label chips: hue and the mono prefix carry the namespace. */
+.chip.lbl .ns {
+  font-family: var(--mono);
+  font-size: 10px;
+  opacity: 0.72;
+}
+.chip.lbl .eq { opacity: 0.5; padding: 0 1px; }
+
+/* node: and tag: are QUIET and subtly differentiated. Most labels on most
+ * screens are these, and a fleet view where every chip shouts is a fleet view
+ * nobody reads. */
+.chip.lbl[data-ns="node"] { background: #e9e7e1; color: var(--ink-2); border-color: #dbd8d0; }
+.chip.lbl[data-ns="tag"]  { background: var(--surface); color: var(--ink-2); border-color: var(--line); }
+
+/* relay: is FILLED, distinct in hue, and carries a lock. It is the only
+ * namespace the security lane may target, and it must be findable at a glance
+ * in a wall of quiet chips. */
+.chip.lbl[data-ns="relay"] {
+  background: var(--indigo-bg);
+  color: var(--indigo);
+  border-color: var(--indigo-line);
+  font-weight: 500;
+}
+.chip.lbl[data-lane="security"] .ns::before { content: "\01F512\00a0"; font-family: var(--sans); }
+
+/* state: carries the tint of its severity behind its mono prefix. Nobody sets
+ * these — they are derived at Selector-resolution time from a closed
+ * vocabulary — so they read as observations rather than as declarations. */
+.chip.lbl[data-ns="state"] { background: var(--grey-bg); color: var(--grey); border-color: #ddd9d2; }
+
+/* Trust chips: FILL means the Relay authenticated this. DASHED means a caller
+ * claimed it and nothing checked. A jailbroken agent can assert anything it
+ * likes; it cannot forge the filled one. */
+.chip.trust[data-trust="verified"] {
+  background: var(--ink);
+  color: var(--surface);
+  border-color: var(--ink);
+}
+.chip.trust[data-trust="asserted"] {
+  background: transparent;
+  color: var(--ink-3);
+  border: 1px dashed var(--ink-3);
+}
+
+/* --- Outcome vocabulary ---------------------------------------------------
+ *
+ * All EIGHT, and three of them are different kinds of "it did not run" that
+ * must not be collapsed. The treatments encode which is which:
+ *
+ *   filled           it resolved (success, denied, cancelled)
+ *   outlined solid   not in this Node's vocabulary; Policy was never asked
+ *   outlined dashed  it never left the Relay (unreachable, version_refused)
+ *   muted red        something ran and failed */
+
+.chip.outcome, .oseg, .okey { --oc: var(--ink-2); --ocbg: var(--surface); }
+
+[data-outcome="success"]          { --oc: var(--ok);    --ocbg: var(--ok-bg); }
+/* SLATE, and filled: a deny is a DECISION, and the product working correctly.
+ * It is never red. If a deny renders as a failure, the product is arguing
+ * against itself. */
+[data-outcome="denied_by_policy"] { --oc: var(--slate); --ocbg: var(--slate-bg); }
+[data-outcome="cancelled"]        { --oc: var(--ink-2); --ocbg: #e9e7e1; }
+[data-outcome="unsupported"]      { --oc: var(--grey);  --ocbg: transparent; }
+[data-outcome="unreachable"]      { --oc: var(--amber); --ocbg: transparent; }
+[data-outcome="version_refused"]  { --oc: var(--amber); --ocbg: transparent; }
+[data-outcome="failure"]          { --oc: var(--red);   --ocbg: var(--red-bg); }
+[data-outcome="timeout"]          { --oc: var(--red);   --ocbg: var(--red-bg); }
+
+.chip.outcome { background: var(--ocbg); color: var(--oc); border-color: var(--oc); font-weight: 500; }
+.chip.outcome[data-outcome="unsupported"] { border-style: solid; }
+.chip.outcome[data-outcome="unreachable"],
+.chip.outcome[data-outcome="version_refused"] { border-style: dashed; }
+
+/* --- Segmented outcome bar ------------------------------------------------
+ *
+ * Minority segments carry a FLOOR WIDTH (see NewOutcomeBar). At 10,000 Nodes,
+ * 14 denies are 0.14% and would vanish — and they are the entire reason
+ * anyone is looking. The bar is therefore deliberately non-proportional in the
+ * small; the key beneath it carries the exact counts, which are the truth. */
+.obar {
+  display: flex;
+  height: 9px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--line);
+  margin: 6px 0 5px;
+  max-width: 640px;
+}
+.oseg { display: block; background: var(--oc); min-width: 3px; }
+.oseg[data-outcome="unsupported"],
+.oseg[data-outcome="unreachable"],
+.oseg[data-outcome="version_refused"] {
+  background: repeating-linear-gradient(135deg, var(--oc) 0 2px, transparent 2px 4px);
+}
+.okeys { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; }
+.okey { color: var(--oc); }
+.okey b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* --- The deny block -------------------------------------------------------
+ *
+ * The showpiece: the product's pitch rendered. Calm and informative, in slate,
+ * never as a red failure. An operator must get from "denied" to "I know
+ * exactly which file to change" without leaving the Console — and the Console
+ * must be VISIBLY UNABLE to make that change for them, which is what the
+ * closing note says out loud. */
+.deny {
+  border: 1px solid var(--slate-line);
+  border-left: 3px solid var(--slate);
+  border-radius: 4px;
+  background: var(--slate-bg);
+  padding: 11px 13px;
+  margin: 10px 0;
+  max-width: 720px;
+}
+.denyhead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.denyop { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+.denynode { color: var(--ink-2); font-size: 12px; }
+.denyrule {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface);
+  border: 1px solid var(--slate-line);
+  border-radius: 3px;
+  padding: 8px 10px;
+  margin: 9px 0 5px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.denyloc { font-family: var(--mono); font-size: 11px; color: var(--slate); }
+.denylinks { display: flex; gap: 16px; margin-top: 9px; font-size: 12px; }
+.denynote { margin: 9px 0 0; font-size: 11.5px; color: var(--slate); }
+
+/* --- The Plan renderer ----------------------------------------------------
+ *
+ * Pinned once rendered and never reflowed: a human is reading it in order to
+ * decide, and a list that moves under them is a decision made about something
+ * else. The cap arithmetic is visible because a cap you can see coming is a
+ * control, and one that silently trims a fan-out is a surprise at the worst
+ * possible moment. */
+.plan {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 13px 15px;
+  max-width: 760px;
+}
+.planhead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.chip.risk { background: var(--surface); border-color: var(--line); color: var(--ink-2); font-family: var(--mono); }
+.chip.risk[data-risk="mutate"] { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); font-weight: 500; }
+/* The plan hash is what an approval commits to — not the prose above it — so
+ * it is rendered as the plan's identity rather than as a technical detail. */
+.planhash { font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-left: auto; }
+.planfan { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.selector { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; }
+.fanmath { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.overcap { font-size: 12px; color: var(--amber); font-weight: 500; }
+.planverdicts { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.planverdicts b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* --- The step-up modal ----------------------------------------------------
+ *
+ * It NAMES WHAT IT AUTHORISES. "Confirm it is you" with no object is how
+ * people are trained to type their password into anything, so the action is
+ * the heading and the consequence is the line beneath it. */
+.stepup {
+  border: 1px solid var(--amber-line);
+  border-radius: 5px;
+  background: var(--surface);
+  padding: 15px 17px;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+}
+.stepup h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.stepupdetail { margin: 0 0 12px; font-size: 12px; color: var(--ink-2); font-family: var(--mono); }
+.stepup label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px; }
+.stepup input { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
+.stepupwindow { margin: 9px 0 0; font-size: 11px; color: var(--ink-3); }
+.stepup button {
+  font: inherit; font-weight: 500; margin-top: 12px; padding: 8px;
+  border: 0; border-radius: 4px; background: var(--amber); color: #fff; cursor: pointer;
+}

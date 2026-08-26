@@ -58,6 +58,20 @@ type Verified struct {
 	// session, which presents no API Token at all.
 	TokenID string
 
+	// Source is WHERE the identity acted from: the peer address the Relay
+	// read off the connection.
+	//
+	// Verified rather than asserted because the Relay observes it directly. A
+	// value taken from a proxy header would be a claim and would belong in the
+	// other lane; nothing populates this field from a header.
+	//
+	// Empty for a record written outside a network boundary — a local signal
+	// on the Relay host, e.g. the Freeze lever.
+	//
+	// Required by docs/design/console/12-login.md: a sign-in trail without a
+	// source cannot tell a brute force from a forgetful operator.
+	Source string
+
 	// Method is HOW the identity was established: "api_token" or "oauth"
 	// (#299). Empty for a record written outside an authentication boundary.
 	//

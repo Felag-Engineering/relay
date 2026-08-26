@@ -253,3 +253,11 @@ func (r *sqliteAccounts) EnsureFoundingAdmin(ctx context.Context) (accounts.Acco
 func isUniqueViolation(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "unique constraint failed")
 }
+
+// isForeignKeyViolation reports whether err is a FOREIGN KEY constraint
+// failure. Matched on the driver's message for the same reason
+// isUniqueViolation is, and narrow enough that any other error surfaces as
+// itself.
+func isForeignKeyViolation(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "foreign key constraint failed")
+}

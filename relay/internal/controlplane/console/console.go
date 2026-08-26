@@ -53,6 +53,14 @@ type Deps struct {
 	// preserve. ADR-0009's insight was that absent beats forbidden.
 	Execution bool
 
+	// Auth is the Console's sign-in service (#418). It can start a session,
+	// end one, and re-prove human presence for step-up; it cannot RESOLVE
+	// one, because resolving a credential belongs to the authentication
+	// boundary (controlplane.Authenticator) and not to a screen.
+	//
+	// Nil only in tests that render the shell without a sign-in path.
+	Auth Authenticator
+
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 }
@@ -125,6 +133,19 @@ func Routes(d Deps) []Route {
 		// out of the layout, since style-src admits this origin and nothing
 		// inline.
 		{"GET", "/console/assets/{path...}", NavEntry{}, accounts.RoleViewer, assetHandler},
+
+		// The sign-in surface (#418). GET renders the form and POST accepts
+		// it; both are reachable without a credential, which is what
+		// Unauthenticated names for the authentication boundary. Sign-out is
+		// POST-only and authenticated like every other mutating route.
+		//
+		// Not navigation destinations: signing in is not somewhere an
+		// operator navigates to, and the sign-out control belongs beside the
+		// account chip rather than in the three groups, whose grouping is the
+		// teaching (nav.go).
+		{"GET", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginForm},
+		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
+		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 	}
 
 	if d.Execution {

@@ -858,6 +858,7 @@ func TestVerifiedLaneMappingIsTotal(t *testing.T) {
 		Role:       "operator",
 		TokenID:    "tok-1",
 		AuthMethod: capability.AuthMethodAPIToken,
+		Source:     "198.51.100.7",
 	}
 	got := attribution(p, capability.Assertions{})
 
