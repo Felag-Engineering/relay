@@ -1,0 +1,1460 @@
+package console
+
+// screens_test.go asserts the properties the per-screen specifications call out
+// as acceptance criteria — the ones a plausible implementation passes by
+// accident and a careless one breaks silently.
+//
+// The bias throughout is towards asserting ABSENCE. "The fleet view renders a
+// row" is easy and worth little; "no Fact appears on a fleet row or in a facet"
+// is the property that stops the targeting model from being quietly widened by
+// a helpful change six months from now.
+
+import (
+	"net/http"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+)
+
+// fleetFixture is a small, deliberately lopsided fleet: two healthy web Nodes,
+// one quarantined database Node that is also offline, and one Node on a
+// different Policy fingerprint. Lopsided because every interesting property of
+// these screens is about the minority.
+func fleetFixture() Deps {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{
+			NodeID:            "node-web-1",
+			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
+			PolicyFingerprint: "aaaa111122223333",
+			DaemonVersion:     "0.6.0",
+			Facts:             registry.Facts{Hostname: "web-1", OS: "debian", Kernel: "6.1.0", Arch: "x86_64"},
+			LastSeen:          testNow.Add(-4 * time.Second),
+		},
+		{
+			NodeID:            "node-web-2",
+			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
+			PolicyFingerprint: "aaaa111122223333",
+			DaemonVersion:     "0.6.0",
+			Facts:             registry.Facts{Hostname: "web-2", OS: "debian"},
+			LastSeen:          testNow.Add(-9 * time.Second),
+		},
+		{
+			NodeID:            "node-web-3",
+			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
+			PolicyFingerprint: "bbbb444455556666",
+			DaemonVersion:     "0.6.0",
+			Facts:             registry.Facts{Hostname: "web-3", OS: "debian"},
+			LastSeen:          testNow.Add(-3 * time.Second),
+		},
+		{
+			NodeID:            "node-db-1",
+			NodeLabels:        map[string]string{"role": "db", "env": "prod"},
+			RelayLabels:       map[string]string{"quarantine": "on"},
+			PolicyFingerprint: "cccc777788889999",
+			DaemonVersion:     "0.5.0",
+			Facts:             registry.Facts{Hostname: "db-1", OS: "debian"},
+			LastSeen:          testNow.Add(-2 * time.Hour),
+		},
+	}}
+	d.Liveness = fakeLiveness{"node-web-1": true, "node-web-2": true, "node-web-3": true}
+	return d
+}
+
+// TestFleet_EmptyRegistryRendersDayOneNotAnEmptyTable is spec 01's "Empty fleet
+// → the day-one screen. Do not render an empty table."
+//
+// The distinction is not cosmetic. Column headings over nothing is a confident
+// statement about a fleet — "this works and you have no machines" — made at the
+// exact moment the operator has not started and cannot tell a working Relay
+// from a broken one.
+func TestFleet_EmptyRegistryRendersDayOneNotAnEmptyTable(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, "No Nodes have enrolled yet") {
+		t.Error("an empty registry did not render the day-one screen")
+	}
+	if strings.Contains(body, "<thead>") {
+		t.Error("an empty registry rendered a table — spec 10 says do not render an empty table")
+	}
+	if !strings.Contains(body, "Rejected attempts are not shown yet") {
+		t.Error("day one did not state that rejected enrollment attempts are invisible — an operator " +
+			"must not read an empty fleet as the absence of attempts")
+	}
+}
+
+// TestFleet_NoFactAppearsOnARowOrInAFacet is the fleet view's acceptance
+// criterion, and the one most likely to be broken by a well-meaning change.
+//
+// Facts are self-reported. A compromised Node can put anything it likes in one,
+// so a Fact used as a targeting axis is a targeting axis an attacker can opt
+// into. They live on node detail and nowhere else.
+func TestFleet_NoFactAppearsOnARowOrInAFacet(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	// Hostnames are the one Fact permitted on a row, as a subtitle under the
+	// node id — they are how an operator recognises a machine. Everything else
+	// must be absent.
+	for _, fact := range []string{"debian", "6.1.0", "x86_64"} {
+		if strings.Contains(body, fact) {
+			t.Errorf("the fleet view rendered the Fact %q — Facts belong on node detail and nowhere else", fact)
+		}
+	}
+}
+
+// TestFleet_DerivesStateAndBucketsTheWall covers the deviation model: offline
+// comes from connectedness, quarantine is a declaration rather than a derived
+// state, and the pixel wall has exactly four buckets.
+func TestFleet_DerivesStateAndBucketsTheWall(t *testing.T) {
+	d := fleetFixture()
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+
+	byKey := map[string]fleetGroup{}
+	for _, g := range v.Groups {
+		byKey[g.Key] = g
+	}
+
+	web, ok := byKey["web"]
+	if !ok {
+		t.Fatalf("no web group; got %v", v.Groups)
+	}
+	if web.Count != 3 {
+		t.Errorf("web group count = %d, want 3", web.Count)
+	}
+	if web.Offline != 0 {
+		t.Errorf("web group offline = %d, want 0 — all three have live Tunnels", web.Offline)
+	}
+	// One of the three web Nodes reports a different Policy fingerprint. That
+	// is DRIFT: an observation counted on the card, never a state label.
+	if web.OffMode != 1 {
+		t.Errorf("web group off-mode fingerprints = %d, want 1", web.OffMode)
+	}
+
+	db := byKey["db"]
+	if db.Quarantined != 1 {
+		t.Errorf("db group quarantined = %d, want 1", db.Quarantined)
+	}
+	if db.Offline != 1 {
+		t.Errorf("db group offline = %d, want 1 — it has no live Tunnel", db.Offline)
+	}
+	// The bucket lives on the row now that the wall is fleet-wide; the db group
+	// has exactly one Node and it is the quarantined one.
+	if len(db.Deviations) != 1 || db.Deviations[0].Bucket != wallFenced {
+		t.Errorf("the quarantined Node did not land in the quarantined bucket: %+v", db.Deviations)
+	}
+}
+
+// TestFleet_OfflineComesFromConnectednessNotLastSeen is worth its own test
+// because the bug it prevents is invisible: a Node that reported four seconds
+// ago and then dropped its connection renders green while every Task to it
+// resolves `unreachable`, and the screen and the dispatcher disagree.
+func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{{
+		NodeID:   "node-a",
+		LastSeen: testNow.Add(-1 * time.Second), // seen a heartbeat ago
+	}}}
+	d.Liveness = fakeLiveness{} // ...and not connected now
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	if len(v.Groups) != 1 || v.Groups[0].Offline != 1 {
+		t.Fatalf("a Node seen 1s ago but not connected was not rendered offline: %+v", v.Groups)
+	}
+}
+
+// TestFleet_FilterUsesTheRealSelectorParser is spec 01's central idea: browsing
+// trains targeting, so the filter box must be the same language, run through
+// the same code. A second parser that agreed today would drift.
+func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
+	d := fleetFixture()
+
+	v := buildFleetView(d, d.Fleet.List(), "node:role=web", "-")
+	if !v.FilterOK {
+		t.Fatalf("a valid node: selector was rejected: %s", v.FilterError)
+	}
+	if v.Matched != 3 {
+		t.Errorf("node:role=web matched %d Nodes, want 3", v.Matched)
+	}
+
+	v = buildFleetView(d, d.Fleet.List(), "relay:quarantine=on", "-")
+	if v.Matched != 1 {
+		t.Errorf("relay:quarantine=on matched %d Nodes, want 1", v.Matched)
+	}
+}
+
+// TestFleet_UnresolvableNamespacesAreRefusedByName covers the honesty rule: a
+// filter on `tag:` or `state:` would match nothing today, and a filter box that
+// silently returns zero rows for a valid-looking term teaches an operator that
+// the box is unreliable.
+func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
+	d := fleetFixture()
+	for _, term := range []string{"tag:pci", "state:offline"} {
+		v := buildFleetView(d, d.Fleet.List(), term, "-")
+		if v.FilterOK {
+			t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
+		}
+		if v.Matched != len(d.Fleet.List()) {
+			t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
+		}
+		if !strings.Contains(v.FilterError, "#") {
+			t.Errorf("the refusal for %q does not name the issue that will fix it: %q", term, v.FilterError)
+		}
+	}
+}
+
+// TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown covers the two halves of
+// spec 02 that are easy to get subtly wrong.
+func TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+
+	for _, fact := range []string{"debian", "6.1.0", "x86_64"} {
+		if !strings.Contains(body, fact) {
+			t.Errorf("node detail is missing the Fact %q — this is the one page they belong on", fact)
+		}
+	}
+	// No policyview snapshot was wired, so the panel must say the Node has not
+	// reported rather than render an empty Policy. An empty Policy reads as
+	// "this Node permits nothing", which is a different and far more alarming
+	// claim than "we have not been told".
+	if !strings.Contains(body, "has not reported its Policy") {
+		t.Error("the effective-Policy panel did not say the Policy is unreported")
+	}
+	if !strings.Contains(body, "Issued, expiry and renewal count are not recorded yet") {
+		t.Error("node detail did not state the certificate-provenance gap — a missing expiry row reads as 'fine'")
+	}
+}
+
+// TestJob_DeniedSortsFirstAndSuccessIsCollapsed is spec 13's ordering rule.
+// Success is the mode and the mode is the least informative thing on the page;
+// a Job detail that opens with nine thousand successes has buried the three
+// denies that were the reason anyone looked.
+func TestJob_DeniedSortsFirstAndSuccessIsCollapsed(t *testing.T) {
+	groups := assembleGroups(
+		map[jobs.Outcome][]taskRow{
+			jobs.OutcomeSuccess:        {{NodeID: "a"}, {NodeID: "b"}},
+			jobs.OutcomeDeniedByPolicy: {{NodeID: "c", Deny: &Deny{Rule: "deny file.read /etc/shadow"}}},
+			jobs.OutcomeFailure:        {{NodeID: "d"}},
+		},
+		map[jobs.Outcome]int{jobs.OutcomeSuccess: 2, jobs.OutcomeDeniedByPolicy: 1, jobs.OutcomeFailure: 1},
+		false,
+	)
+
+	if len(groups) != 3 {
+		t.Fatalf("got %d groups, want 3", len(groups))
+	}
+	if groups[0].Outcome != jobs.OutcomeDeniedByPolicy {
+		t.Errorf("first group is %s, want denied_by_policy — denies sort first", groups[0].Label)
+	}
+	if groups[len(groups)-1].Outcome != jobs.OutcomeSuccess {
+		t.Errorf("last group is %s, want success — success sorts last", groups[len(groups)-1].Label)
+	}
+	for _, g := range groups {
+		wantOpen := g.Outcome != jobs.OutcomeSuccess
+		if g.Open != wantOpen {
+			t.Errorf("group %s open = %v, want %v", g.Label, g.Open, wantOpen)
+		}
+	}
+	if groups[0].SharedRule == "" {
+		t.Error("a single-rule deny group did not report a shared rule — the rule should be shown once")
+	}
+}
+
+// TestJob_ReadClassCarriesNoOutputAtAnyAge is ADR-0025 rendered. The Task row
+// may hold captured bytes while the Job lives; this page must not become the
+// durable place they are read from.
+func TestJob_ReadClassCarriesNoOutputAtAnyAge(t *testing.T) {
+	tasks := []jobs.Task{{
+		NodeID:  "node-web-1",
+		State:   jobs.DispatchStateResolved,
+		Outcome: jobs.OutcomeSuccess,
+		Stdout:  []byte("root:x:0:0:SECRET"),
+	}}
+
+	groups, _, _, _ := groupTasks(tasks, true /* readClass */)
+	for _, g := range groups {
+		for _, c := range g.Clusters {
+			for _, row := range c.Rows {
+				if row.Output != "" {
+					t.Fatalf("a read-class Task rendered output %q — read output is never retained", row.Output)
+				}
+			}
+		}
+	}
+
+	// The same Task on a mutate-class Job does render, which is what makes the
+	// assertion above about the risk class rather than about empty output.
+	groups, _, _, _ = groupTasks(tasks, false)
+	if groups[0].Clusters[0].Rows[0].Output == "" {
+		t.Error("a mutate-class Task rendered no output — the read rule was applied to the wrong class")
+	}
+}
+
+// TestJob_IdenticalOutputClusters is the disclosure ladder: 9,797 identical
+// results are one fact, not 9,797, and rendering them as 9,797 rows is the
+// behaviour clustering exists to prevent.
+func TestJob_IdenticalOutputClusters(t *testing.T) {
+	var tasks []jobs.Task
+	for i := 0; i < 20; i++ {
+		tasks = append(tasks, jobs.Task{
+			NodeID: "n" + itoa(i), State: jobs.DispatchStateResolved,
+			Outcome: jobs.OutcomeSuccess, Stdout: []byte("ok"),
+		})
+	}
+	tasks = append(tasks, jobs.Task{
+		NodeID: "odd", State: jobs.DispatchStateResolved,
+		Outcome: jobs.OutcomeSuccess, Stdout: []byte("different"),
+	})
+
+	groups, _, _, _ := groupTasks(tasks, false)
+	cs := groups[0].Clusters
+	if len(cs) != 2 {
+		t.Fatalf("got %d clusters, want 2", len(cs))
+	}
+	if cs[0].Count != 20 || !cs[0].Representative || len(cs[0].Rows) != 1 {
+		t.Errorf("the 20 identical results did not collapse to one representative: %+v", cs[0])
+	}
+	if cs[1].Count != 1 || cs[1].Representative {
+		t.Errorf("the single differing result was collapsed: %+v", cs[1])
+	}
+}
+
+// TestApprovals_OrderIsNearestExpiryFirst is spec 14's ordering rule. An
+// approval that lapses because it sat below the fold is a failure of the screen,
+// and arrival order is exactly how that happens.
+func TestApprovals_OrderIsNearestExpiryFirst(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{ID: "old-but-roomy", CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(4 * time.Hour), Require: approval.Requirement{Count: 1}},
+		{ID: "new-and-urgent", CreatedAt: testNow.Add(-1 * time.Minute), ExpiresAt: testNow.Add(3 * time.Minute), Require: approval.Requirement{Count: 2}},
+	}, testNow)
+
+	if rows[0].ID != "new-and-urgent" {
+		t.Errorf("first row is %s, want new-and-urgent — order is by expiry, never by arrival", rows[0].ID)
+	}
+	if !rows[0].Urgent {
+		t.Error("a request expiring in 3 minutes is not marked urgent")
+	}
+	if rows[1].Urgent {
+		t.Error("a request with 4 hours left is marked urgent")
+	}
+}
+
+// TestApprovals_QueueOffersNoApproveControl is spec 14's hard rule. A row-level
+// Approve lets someone approve without seeing what they approved, which is the
+// entire failure the mechanism exists to prevent.
+func TestApprovals_QueueOffersNoApproveControl(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Summary: "restart nginx on 412 Nodes",
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+		Require: approval.Requirement{Count: 2},
+	}}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+
+	// Scoped to the screen's own content. The layout carries a sign-out form,
+	// which is a mutating route and is meant to be there — the assertion is
+	// about what the QUEUE offers, not about the shell around it.
+	if content := contentOf(body); strings.Contains(content, "<form") || strings.Contains(content, "<button") {
+		t.Error("the approval queue rendered a form or button — v0.6.0 is read-only and no row may carry a decision")
+	}
+	if !strings.Contains(body, "restart nginx on 412 Nodes") {
+		t.Error("the queue did not render the Relay-authored summary")
+	}
+}
+
+// TestApprovals_EmptyQueueSaysSoPlainly — an empty approval queue is good news,
+// not a blank screen.
+func TestApprovals_EmptyQueueSaysSoPlainly(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = fakeApprovals{}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+	if !strings.Contains(body, "Nothing is waiting") {
+		t.Error("an empty approval queue did not say so")
+	}
+}
+
+// TestReads_CountsCallsTargetsAndNodesSeparately is spec 17's headline: one
+// file.read across 4,000 Nodes is one target and four thousand exposures, and
+// which number matters depends on the question.
+func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
+	v := buildReads([]audit.Record{
+		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/hosts"}, NodeID: "n1", Timestamp: testNow},
+		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/hosts"}, NodeID: "n2", Timestamp: testNow},
+		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
+		// A mutate must not be counted as a read.
+		{Kind: audit.KindDispatch, OperationName: "service.restart", NodeID: "n1", Timestamp: testNow},
+	})
+
+	if v.Calls != 4 {
+		t.Errorf("read calls = %d, want 4 — service.restart must not count as a read", v.Calls)
+	}
+	if v.Nodes != 2 {
+		t.Errorf("Nodes touched = %d, want 2", v.Nodes)
+	}
+	if v.Targets != 3 {
+		t.Errorf("distinct targets = %d, want 3 (two paths plus the registry read)", v.Targets)
+	}
+	if v.Refused != 1 {
+		t.Errorf("refused reads = %d, want 1", v.Refused)
+	}
+	// The refused target sorts first: the deny-list catching something is the
+	// row worth reading.
+	if v.Targets2[0].Refused == 0 {
+		t.Errorf("the refused target did not sort first: %+v", v.Targets2)
+	}
+
+	// Per-target Node counts are DISTINCT Nodes. Counting records instead makes
+	// a repeated read report more Nodes than the fleet contains, on the one
+	// screen whose job is to say how far an agent reached.
+	for _, tg := range v.Targets2 {
+		if tg.Target == "file.read /etc/hosts" && tg.Nodes != 2 {
+			t.Errorf("%s reports %d Nodes, want 2 distinct", tg.Target, tg.Nodes)
+		}
+		if tg.Nodes > v.Nodes {
+			t.Errorf("%s reports %d Nodes, more than the %d the whole window touched",
+				tg.Target, tg.Nodes, v.Nodes)
+		}
+	}
+}
+
+// TestReads_RepeatedReadOfOnePathDoesNotInflateItsNodeCount is the regression
+// guard for the count the dev fleet exposed: three Nodes read five times must
+// read "3 Nodes", not "15".
+func TestReads_RepeatedReadOfOnePathDoesNotInflateItsNodeCount(t *testing.T) {
+	var recs []audit.Record
+	for i := 0; i < 5; i++ {
+		for _, n := range []string{"n1", "n2", "n3"} {
+			recs = append(recs, audit.Record{
+				Kind: audit.KindDispatch, OperationName: "file.read",
+				Args: map[string]string{"path": "/etc/shadow"}, NodeID: n,
+				Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+			})
+		}
+	}
+	v := buildReads(recs)
+
+	if len(v.Targets2) != 1 {
+		t.Fatalf("got %d targets, want 1", len(v.Targets2))
+	}
+	if got := v.Targets2[0].Nodes; got != 3 {
+		t.Errorf("the target reports %d Nodes across a 3-Node fleet, want 3", got)
+	}
+	if v.Targets2[0].Calls != 15 {
+		t.Errorf("calls = %d, want 15 — calls and Nodes are different questions", v.Targets2[0].Calls)
+	}
+}
+
+// TestActivity_DispatchCollapsesToOneJobRow is spec 04's grain rule. One mutate
+// across 2,214 Nodes emits 2,214 records; a tail that renders them individually
+// becomes unreadable exactly when something important is happening.
+func TestActivity_DispatchCollapsesToOneJobRow(t *testing.T) {
+	var recs []audit.Record
+	for i := 0; i < 40; i++ {
+		outcome := jobs.OutcomeSuccess
+		if i == 7 {
+			outcome = jobs.OutcomeDeniedByPolicy
+		}
+		recs = append(recs, audit.Record{
+			Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n" + itoa(i),
+			OperationName: "service.restart", Outcome: outcome, Timestamp: testNow,
+		})
+	}
+	recs = append(recs, audit.Record{Kind: audit.KindFreezeEngage, Timestamp: testNow, Principal: "mike:admin"})
+
+	rows, kinds, _ := buildActivity(recs, "", "")
+
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (one Job, one Freeze): %+v", len(rows), rows)
+	}
+	var job activityRow
+	for _, r := range rows {
+		if r.JobID == "job-1" {
+			job = r
+		}
+	}
+	if job.FanOut != 40 {
+		t.Errorf("the Job row reports fan-out %d, want 40", job.FanOut)
+	}
+	if job.Outcomes.Total != 40 {
+		t.Errorf("the Job row's outcome bar totals %d, want 40", job.Outcomes.Total)
+	}
+	// The single deny must survive into the bar with a visible segment — that
+	// is the entire reason the bar carries a floor width.
+	var denied *Segment
+	for i := range job.Outcomes.Segments {
+		if job.Outcomes.Segments[i].Outcome == jobs.OutcomeDeniedByPolicy {
+			denied = &job.Outcomes.Segments[i]
+		}
+	}
+	if denied == nil {
+		t.Fatal("the one deny in 40 did not appear in the outcome bar")
+	}
+	if denied.Width < minSegmentPercent {
+		t.Errorf("the deny segment is %.2f%% wide, below the %.1f%% floor", denied.Width, minSegmentPercent)
+	}
+
+	if len(kinds) == 0 {
+		t.Error("no kind chips were produced")
+	}
+}
+
+// TestBanner_FreezeStatesWhatIsStillTrue — an emergency stop that reads as a
+// total outage gets released in a panic by the next person to look at it.
+func TestBanner_FreezeStatesWhatIsStillTrue(t *testing.T) {
+	d := fleetFixture()
+	d.Freeze = fakeFreeze{frozen: true}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, "Freeze engaged") {
+		t.Fatal("an engaged Freeze produced no banner")
+	}
+	if !strings.Contains(body, "In-flight Tasks keep running") {
+		t.Error("the Freeze banner does not say what is still true")
+	}
+}
+
+// TestBanner_UnreadableFreezeIsNotReportedAsUnfrozen — the whole value of an
+// emergency stop is that its state is never guessed.
+func TestBanner_UnreadableFreezeIsNotReportedAsUnfrozen(t *testing.T) {
+	d := fleetFixture()
+	d.Freeze = fakeFreeze{err: constErr("store unavailable")}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, "could not be read") {
+		t.Error("an unreadable Freeze rendered no banner — silence here reads as 'not frozen'")
+	}
+}
+
+// TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty is the whole reason
+// unavailable() exists. An empty fleet view is a claim about the fleet.
+func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
+	h := newTestHandler(Deps{}, accounts.RoleAdmin)
+	rec := get(t, h, "/console/")
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("the fleet view with no registry wired = %d, want 500", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "not an empty fleet") {
+		t.Error("the refusal does not distinguish a wiring problem from an empty fleet")
+	}
+}
+
+// TestScreens_NoInlineScriptSurvivesAnywhere extends the shell's CSP guarantee
+// across every new screen. The content security policy admits no inline script,
+// so an `hx-on:` attribute — which IS script — would be silently dead rather
+// than merely non-conforming.
+func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
+	d := fleetFixture()
+	d.Approvals = fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
+	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	for _, path := range []string{
+		"/console/", "/console/nodes/node-web-1", "/console/activity",
+		"/console/agents", "/console/reads", "/console/approvals",
+		"/console/approvals/ap-1", "/console/jobs/job-1",
+	} {
+		rec := get(t, h, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s = %d, want 200", path, rec.Code)
+			continue
+		}
+		body := rec.Body.String()
+		if strings.Contains(body, "<script") {
+			t.Errorf("%s rendered an inline script — the content security policy forbids it", path)
+		}
+		if strings.Contains(body, "hx-on:") {
+			t.Errorf("%s rendered an hx-on: attribute, which IS script and would be dead under the CSP", path)
+		}
+		// An inline STYLE is blocked by `style-src 'self'` exactly as an inline
+		// script is blocked by `script-src 'self'` — and it fails far more
+		// quietly, because the element still renders, just unstyled.
+		//
+		// This assertion exists because the outcome bar shipped with
+		// style="width:N%" and every segment painted at zero width: the bar the
+		// specification calls "the entire reason anyone is looking" had never
+		// once been visible. The Go tests all passed, because they asserted the
+		// segment was in the HTML and it was.
+		if strings.Contains(body, `style="`) || strings.Contains(body, "style='") {
+			t.Errorf("%s rendered an inline style attribute — the content security policy discards it, "+
+				"so the element renders unstyled and nothing says so. Use a class or a data attribute.", path)
+		}
+	}
+}
+
+// contentOf extracts a page's screen content, excluding the shell.
+//
+// The shell legitimately holds one mutating control — sign out — so an
+// assertion about what a SCREEN offers has to be scoped, or it tests the
+// layout and passes or fails for the wrong reason.
+func contentOf(body string) string {
+	const open = `<main id="content">`
+	i := strings.Index(body, open)
+	if i < 0 {
+		return body
+	}
+	rest := body[i+len(open):]
+	if j := strings.Index(rest, "</main>"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// TestFleet_SmallHealthyFleetStillShowsItsNodes is the regression guard for the
+// bug the dev fleet found: three healthy Nodes compressed to two one-line cards
+// and the operator was shown nothing at all.
+//
+// "A list is a bug" is a claim about ten thousand Nodes. At three, the list is
+// the answer, and spec 01 says so in its small-fleet clause — "the deviation
+// table simply IS the fleet. Nothing special-cased."
+func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same"},
+		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same"},
+	}}
+	d.Liveness = fakeLiveness{"node-a": true, "node-b": true}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	g := v.Groups[0]
+
+	if !g.Open {
+		t.Fatal("a small, entirely healthy group compressed to one line — the operator sees nothing")
+	}
+	if !g.ListsWholeFleet {
+		t.Error("the group did not mark itself as listing the whole fleet")
+	}
+	if len(g.Deviations) != 2 {
+		t.Errorf("the table holds %d rows, want 2 — at this size the table is the fleet", len(g.Deviations))
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	for _, id := range []string{"node-a", "node-b"} {
+		if !strings.Contains(body, id) {
+			t.Errorf("a healthy two-Node fleet did not render %s", id)
+		}
+	}
+}
+
+// TestFleet_LargeHealthyGroupStillCompresses is the other half of the same rule:
+// the compression exists, and it must still apply where it was designed to.
+func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
+	var nodes []registry.Node
+	live := fakeLiveness{}
+	for i := 0; i < legibleGroup+10; i++ {
+		id := "node-" + itoa(i)
+		nodes = append(nodes, registry.Node{
+			NodeID: id, NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same",
+		})
+		live[id] = true
+	}
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: nodes}
+	d.Liveness = live
+
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	if v.Groups[0].Open {
+		t.Error("a large, entirely healthy group did not compress to one line")
+	}
+}
+
+// TestOutcomeBar_SegmentsCarryAVisibleWeight is the unit-level half of the same
+// bug: every segment that exists must render wide enough to see.
+//
+// The floor exists because 14 denies in 10,000 Nodes is 0.14% of the bar and
+// they are the entire reason anyone opened the page. A quantisation that
+// rounded them back to nothing would undo the component.
+func TestOutcomeBar_SegmentsCarryAVisibleWeight(t *testing.T) {
+	bar := NewOutcomeBar([]OutcomeCount{
+		{Outcome: jobs.OutcomeSuccess, Count: 9986},
+		{Outcome: jobs.OutcomeDeniedByPolicy, Count: 14},
+	})
+
+	total := 0
+	for _, seg := range bar.Segments {
+		if seg.Grow < 1 {
+			t.Errorf("segment %s has flex weight %d — a segment that exists must be visible", seg.Label, seg.Grow)
+		}
+		total += seg.Grow
+	}
+
+	var denied Segment
+	for _, seg := range bar.Segments {
+		if seg.Outcome == jobs.OutcomeDeniedByPolicy {
+			denied = seg
+		}
+	}
+	// 14 in 10,000 is 0.14%; the floor lifts it to 2.5%, which at 200 steps is
+	// 5. Anything at or near 1 means the floor was lost in the rounding.
+	if denied.Grow < 4 {
+		t.Errorf("the 14 denies got flex weight %d of %d — the minority floor did not survive quantisation",
+			denied.Grow, total)
+	}
+	if denied.Percent > 1 {
+		t.Errorf("Percent is %.2f, want the TRUE 0.14%% share — Percent must never be the floored value", denied.Percent)
+	}
+}
+
+// TestActivity_JobRowCarriesNoSingleNode — a Job row spans its Selector's whole
+// fan-out. Rendering the Node from whichever Task record built the row says the
+// Job targeted one machine when it targeted many.
+func TestActivity_JobRowCarriesNoSingleNode(t *testing.T) {
+	rows, _, _ := buildActivity([]audit.Record{
+		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n1", OperationName: "service.restart", Timestamp: testNow},
+		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n2", OperationName: "service.restart", Timestamp: testNow},
+		{Kind: audit.KindNodeRevoke, NodeID: "n3", Timestamp: testNow},
+	}, "", "")
+
+	for _, row := range rows {
+		switch {
+		case row.JobID != "":
+			if row.NodeID != "" {
+				t.Errorf("the Job row names Node %q — a Job spans its whole fan-out", row.NodeID)
+			}
+			if row.FanOut != 2 {
+				t.Errorf("the Job row reports fan-out %d, want 2", row.FanOut)
+			}
+		case row.EventKind == audit.KindNodeRevoke:
+			// A revoke IS about one Node and must keep its link.
+			if row.NodeID != "n3" || row.NodeHref == "" {
+				t.Errorf("the node_revoke row lost its Node: %+v", row)
+			}
+		}
+	}
+}
+
+// TestVocab_RiskClassInference is the guard for the pair of errors the dev fleet
+// exposed at once: `file.read` rendered as a mutate, and a parked `raw_exec`
+// rendered as a read.
+//
+// The second is the serious one. Raw Exec ALWAYS takes the mutate cap
+// (ADR-0012), and a Console that shows it as a read has told an operator the
+// blast radius was small when it was the largest the product allows.
+func TestVocab_RiskClassInference(t *testing.T) {
+	cases := []struct {
+		name string
+		rec  audit.Record
+		want jobs.RiskClass
+	}{
+		{"file.read is a read even though it dispatches",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "file.read"}, jobs.RiskClassRead},
+		{"system.facts is a read",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "system.facts"}, jobs.RiskClassRead},
+		{"service.restart is a mutate",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart"}, jobs.RiskClassMutate},
+		{"raw exec with argv is always a mutate",
+			audit.Record{Kind: audit.KindDispatch, RawExecArgv: []string{"/bin/systemctl", "status", "nginx"}}, jobs.RiskClassMutate},
+		{"raw exec PARKED, with no argv retained, is still a mutate",
+			audit.Record{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec"}, jobs.RiskClassMutate},
+		{"a registry read tool is a read",
+			audit.Record{Kind: audit.KindRead, ActionKind: "list_nodes"}, jobs.RiskClassRead},
+		{"an unknown Operation is treated as a mutate",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "customer.template.thing"}, jobs.RiskClassMutate},
+	}
+	for _, c := range cases {
+		if got := riskOf(c.rec); got != c.want {
+			t.Errorf("%s: riskOf = %s, want %s", c.name, RiskLabel(got), RiskLabel(c.want))
+		}
+	}
+}
+
+// TestVocab_DenyExplanationDoesNotBlameTheDaemonForADeliberateOmission.
+//
+// A read-class Task's deny reason is gone because ADR-0025 says read output is
+// never retained, and the daemon explains a refusal in that output. Rendering
+// "the daemon did not report the deciding rule" there blames the daemon for the
+// Relay correctly declining to store something.
+func TestVocab_DenyExplanationDoesNotBlameTheDaemonForADeliberateOmission(t *testing.T) {
+	readDeny := audit.Record{Kind: audit.KindDispatch, OperationName: "file.read", Outcome: jobs.OutcomeDeniedByPolicy}
+	got := denyExplanation(readDeny)
+	if strings.Contains(got, "did not report") {
+		t.Errorf("a read-class deny blames the daemon:\n%s", got)
+	}
+	if !strings.Contains(got, "not retained") && !strings.Contains(got, "not recorded") {
+		t.Errorf("a read-class deny does not explain WHY the rule is absent:\n%s", got)
+	}
+
+	mutateDeny := audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart", Outcome: jobs.OutcomeDeniedByPolicy}
+	if got := denyExplanation(mutateDeny); !strings.Contains(got, "did not report") {
+		t.Errorf("a mutate-class deny with no stderr should say the daemon did not report it:\n%s", got)
+	}
+
+	verbatim := audit.Record{Kind: audit.KindDispatch, OperationName: "service.restart",
+		Outcome: jobs.OutcomeDeniedByPolicy, Stderr: []byte("denied by explicit rule for operation 'service.restart'\n")}
+	if got := denyExplanation(verbatim); got != "denied by explicit rule for operation 'service.restart'" {
+		t.Errorf("the daemon's verdict was not rendered verbatim: %q", got)
+	}
+}
+
+// TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome — a parked dispatch
+// has a perfectly well known outcome, and "unspecified" reads as "we don't
+// know".
+func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
+	_, calls, _ := buildAgents([]audit.Record{
+		{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: "agent:operator", Timestamp: testNow},
+	}, "", testNow)
+
+	if len(calls) != 1 {
+		t.Fatalf("got %d calls, want 1", len(calls))
+	}
+	if calls[0].Outcome == "unspecified" {
+		t.Error("a parked dispatch rendered outcome 'unspecified'")
+	}
+	if calls[0].Outcome != "parked" {
+		t.Errorf("outcome = %q, want \"parked\"", calls[0].Outcome)
+	}
+	if calls[0].Risk != "mutate" {
+		t.Errorf("a parked raw_exec rendered risk %q — Raw Exec always takes the mutate cap", calls[0].Risk)
+	}
+}
+
+// TestJob_SentinelExitCodesAreNotRenderedAsProcessResults.
+//
+// The daemon uses -1 exclusively as "no exit status": denied before spawn,
+// killed, never sent. Relay-synthesized outcomes carry a zero that means
+// nothing. Rendering either as an exit code invites an operator to read "did not
+// run" as a real result — and "exit 0" beside `unreachable` says it succeeded.
+func TestJob_SentinelExitCodesAreNotRenderedAsProcessResults(t *testing.T) {
+	cases := []struct {
+		outcome jobs.Outcome
+		code    int32
+		want    bool
+	}{
+		{jobs.OutcomeSuccess, 0, true},
+		{jobs.OutcomeFailure, 2, true},
+		{jobs.OutcomeDeniedByPolicy, -1, false},
+		{jobs.OutcomeTimeout, -1, false},
+		{jobs.OutcomeCancelled, -1, false},
+		{jobs.OutcomeUnreachable, 0, false},
+		{jobs.OutcomeVersionRefused, 0, false},
+		{jobs.OutcomeUnsupported, 0, false},
+	}
+	for _, c := range cases {
+		if got := hasRealExitStatus(c.outcome, c.code); got != c.want {
+			t.Errorf("%s with code %d: renders exit status = %v, want %v",
+				OutcomeLabel(c.outcome), c.code, got, c.want)
+		}
+	}
+}
+
+// TestJob_ReadClassDoesNotClaimIdenticalOutput — on a read Job there is no
+// retained output, so every row's is empty. "3 Nodes reported identical output"
+// describes the Relay's retention policy as if it were a fact about the fleet.
+func TestJob_ReadClassDoesNotClaimIdenticalOutput(t *testing.T) {
+	var tasks []jobs.Task
+	for _, n := range []string{"n1", "n2", "n3", "n4"} {
+		tasks = append(tasks, jobs.Task{
+			NodeID: n, State: jobs.DispatchStateResolved,
+			Outcome: jobs.OutcomeSuccess, Stdout: []byte("secret contents"),
+		})
+	}
+
+	groups, _, _, _ := groupTasks(tasks, true /* readClass */)
+	for _, g := range groups {
+		for _, c := range g.Clusters {
+			if c.Representative {
+				t.Error("a read-class Job claimed Nodes reported identical output — none was retained")
+			}
+			if len(c.Rows) != 4 {
+				t.Errorf("read-class rows were collapsed: got %d, want all 4 listed", len(c.Rows))
+			}
+		}
+	}
+
+	// The same shape on a mutate DOES cluster, which is what makes the
+	// assertion above about the risk class and not about empty output.
+	groups, _, _, _ = groupTasks(tasks, false)
+	if !groups[0].Clusters[0].Representative {
+		t.Error("a mutate-class Job with four identical results did not cluster")
+	}
+}
+
+// TestNode_RepeatedDeniesExplainThemselvesOnce — the same rule refusing the same
+// read every hour is one fact, not twenty, and twenty identical explanations
+// bury the Policy panel the operator came for.
+//
+// The row itself is never dropped: only the duplicated prose is, and the outcome
+// chip stays, so nothing about what happened is hidden.
+func TestNode_RepeatedDeniesExplainThemselvesOnce(t *testing.T) {
+	var recs []audit.Record
+	for i := 0; i < 5; i++ {
+		recs = append(recs, audit.Record{
+			Kind: audit.KindDispatch, NodeID: "node-web-1", OperationName: "service.restart",
+			Args: map[string]string{"unit": "sshd"}, Outcome: jobs.OutcomeDeniedByPolicy,
+			Stderr: []byte("denied by explicit rule for operation 'service.restart'"), Timestamp: testNow,
+		})
+	}
+	d := fleetFixture()
+	d.Audit = fakeAudit{records: recs}
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1")
+	body := rec.Body.String()
+
+	if n := strings.Count(body, `class="deny"`); n != 1 {
+		t.Errorf("the same rule rendered %d deny blocks, want 1", n)
+	}
+	if n := strings.Count(body, "Same rule as above"); n != 4 {
+		t.Errorf("got %d repeat markers, want 4 — every row must still be visible", n)
+	}
+	if n := strings.Count(body, `data-outcome="denied_by_policy"`); n < 5 {
+		t.Errorf("only %d rows carry a denied chip; all 5 must, or the page hides what happened", n)
+	}
+}
+
+// TestFleet_OneWallForTheWholeFleet is the acceptance criterion read literally:
+// "one segmented summary, ONE pixel wall, and the deviating rows".
+//
+// The first build put a wall inside every group card. At three Nodes that is
+// three specks nobody sees; at ten thousand across forty groups it is forty
+// images nobody can compare. The wall's whole value is being one picture of the
+// system.
+func TestFleet_OneWallForTheWholeFleet(t *testing.T) {
+	d := fleetFixture()
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+
+	if len(v.Wall) != 2 {
+		t.Fatalf("the wall has %d groups, want 2 (web, db)", len(v.Wall))
+	}
+	total := 0
+	for _, g := range v.Wall {
+		total += len(g.Nodes)
+	}
+	if total != 4 {
+		t.Errorf("the wall draws %d cells for a 4-Node fleet, want 4", total)
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if n := strings.Count(body, `class="wall"`); n != 1 {
+		t.Errorf("the page renders %d walls, want exactly 1", n)
+	}
+	if !strings.Contains(body, "System state") {
+		t.Error("the wall is not introduced as system state")
+	}
+}
+
+// TestFleet_WallLegendCountsEveryBucketAndLeadsWithTheWorst.
+//
+// The quarantined Node is the reason the wall exists. A legend sorted by count
+// would put it last, because it is rare — which is precisely why it matters.
+func TestFleet_WallLegendCountsEveryBucketAndLeadsWithTheWorst(t *testing.T) {
+	d := fleetFixture()
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+
+	if len(v.Legend) == 0 {
+		t.Fatal("the wall has no legend")
+	}
+	if v.Legend[0].Bucket != wallFenced {
+		t.Errorf("the legend leads with %q, want fenced — rarity is not unimportance", v.Legend[0].Bucket)
+	}
+
+	byBucket := map[wallBucket]int{}
+	for _, l := range v.Legend {
+		byBucket[l.Bucket] = l.Count
+	}
+	if byBucket[wallFenced] != 1 {
+		t.Errorf("legend counts %d fenced, want 1", byBucket[wallFenced])
+	}
+	if byBucket[wallNormal] != 3 {
+		t.Errorf("legend counts %d normal, want 3", byBucket[wallNormal])
+	}
+	sum := 0
+	for _, l := range v.Legend {
+		sum += l.Count
+	}
+	if sum != v.Matched {
+		t.Errorf("the legend accounts for %d Nodes but %d matched — every Node is in exactly one bucket", sum, v.Matched)
+	}
+}
+
+// TestFleet_CellScaleAdaptsToFleetSize — a fixed cell cannot serve three Nodes
+// and ten thousand. The scale is a class because the CSP discards inline styles.
+func TestFleet_CellScaleAdaptsToFleetSize(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{3, "lg"}, {24, "lg"}, {25, "md"}, {150, "md"}, {151, "sm"}, {1500, "sm"}, {10000, "xs"}} {
+		if got := cellSize(c.n); got != c.want {
+			t.Errorf("cellSize(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+// TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline is the review's first and
+// worst finding: the registry keeps a revoked Node's record — deliberately, so
+// it stays investigable and its audit history stays answerable — and the fleet
+// view dropped the field entirely.
+//
+// The consequence was not cosmetic. A revoked Node rendered identically to
+// `state:offline`, so an operator would raise a ticket against a machine nobody
+// will ever reach again.
+func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
+	revokedAt := testNow.Add(-3 * time.Hour)
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-revoked", NodeLabels: map[string]string{"role": "web"}, RevokedAt: revokedAt},
+		{NodeID: "node-offline", NodeLabels: map[string]string{"role": "web"}},
+		{NodeID: "node-fine", NodeLabels: map[string]string{"role": "web"}},
+	}}
+	d.Liveness = fakeLiveness{"node-fine": true}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	g := v.Groups[0]
+
+	if g.Revoked != 1 {
+		t.Errorf("the rollup card counts %d revoked, want 1", g.Revoked)
+	}
+
+	byID := map[string]fleetNode{}
+	for _, n := range g.Deviations {
+		byID[n.ID] = n
+	}
+	if !byID["node-revoked"].Revoked {
+		t.Fatal("the revoked Node does not report itself revoked")
+	}
+	// The distinction the finding is about: revoked and offline must not land
+	// in the same bucket, or the wall says a deliberate irreversible act and a
+	// dead power supply are the same thing.
+	if byID["node-revoked"].Bucket != wallFenced {
+		t.Errorf("revoked landed in %q, want fenced", byID["node-revoked"].Bucket)
+	}
+	if byID["node-offline"].Bucket != wallAttention {
+		t.Errorf("offline landed in %q, want attention", byID["node-offline"].Bucket)
+	}
+	if byID["node-revoked"].signature == byID["node-offline"].signature {
+		t.Error("revoked and offline share a deviation signature — they would collapse into one ladder rung")
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, ">revoked<") {
+		t.Error("the fleet view does not say the Node is revoked")
+	}
+	// It must remain reachable: the whole reason the record is retained is that
+	// somebody needs to go and look at it.
+	if !strings.Contains(body, "/console/nodes/node-revoked") {
+		t.Error("the revoked Node is not linked — the record is kept precisely so it can be investigated")
+	}
+}
+
+// TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority.
+//
+// Sorting on rarity alone inverts the table whenever the deviating Nodes
+// outnumber the healthy ones: a normal Node's rarity is the count of normal
+// Nodes, so the calm rows lead and the incident sits below them.
+func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
+	var nodes []registry.Node
+	live := fakeLiveness{}
+	for i := 0; i < 8; i++ { // offline: the majority
+		nodes = append(nodes, registry.Node{NodeID: "off-" + itoa(i), NodeLabels: map[string]string{"role": "web"}})
+	}
+	for i := 0; i < 2; i++ { // healthy: the minority
+		id := "ok-" + itoa(i)
+		nodes = append(nodes, registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}})
+		live[id] = true
+	}
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: nodes}
+	d.Liveness = live
+
+	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	rows := v.Groups[0].Deviations
+
+	if len(rows) != 10 {
+		t.Fatalf("got %d rows, want all 10", len(rows))
+	}
+	if rows[0].signature == "" {
+		t.Errorf("row one is a healthy Node (%s) in a table captioned \"oddest first\"", rows[0].ID)
+	}
+	for i, n := range rows[:8] {
+		if n.signature == "" {
+			t.Errorf("row %d is healthy but 8 deviating Nodes exist — deviations must lead", i)
+		}
+	}
+}
+
+// TestFleet_HighCardinalityGroupingDoesNotRebuildTheList.
+//
+// "A list is a bug" is a claim about the page, not about one card. Deciding it
+// per group let a thousand-valued label key produce a thousand open cards of ten
+// rows each — verbatim the acceptance criterion this screen must satisfy.
+func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
+	var nodes []registry.Node
+	live := fakeLiveness{}
+	for i := 0; i < 600; i++ {
+		id := "node-" + itoa(i)
+		// One distinct group value per three Nodes: 200 groups.
+		nodes = append(nodes, registry.Node{
+			NodeID: id, NodeLabels: map[string]string{"shard": "s" + itoa(i/3)},
+			PolicyFingerprint: "same",
+		})
+		live[id] = true
+	}
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: nodes}
+	d.Liveness = live
+
+	v := buildFleetView(d, d.Fleet.List(), "", "shard")
+
+	if len(v.Groups) > groupCards {
+		t.Errorf("rendered %d group cards, want at most %d", len(v.Groups), groupCards)
+	}
+	if v.GroupsElided == 0 {
+		t.Error("groups were dropped without saying so — a truncated page that looks complete is the worse failure")
+	}
+	for _, g := range v.Groups {
+		if g.ListsWholeFleet {
+			t.Fatalf("group %q lists every Node on a 600-Node fleet — the whole-fleet listing is a PAGE decision", g.Key)
+		}
+	}
+}
+
+// TestFleet_StateChipsCarryTheirSeverity — one grey for every derived state says
+// "refuses every Task" and "template set failed to load" are the same problem.
+func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{{
+		NodeID:                 "node-a",
+		TemplateSetFingerprint: nodestate.TemplateUnloadable,
+	}}}
+	d.Liveness = fakeLiveness{} // offline
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	bySeverity := map[string]bool{}
+	for _, c := range v.Groups[0].Deviations[0].States {
+		bySeverity[c.Key] = c.Attention
+	}
+	if !bySeverity[string(nodestate.MarkerOffline)] {
+		t.Error("state:offline is not marked as needing attention — every dispatch to it returns unreachable")
+	}
+	if bySeverity[string(nodestate.MarkerTemplateUnloadable)] {
+		t.Error("state:template-unloadable is marked as needing attention — it is inertness, not an alarm")
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, `data-sev="attention"`) {
+		t.Error("no state chip renders its severity")
+	}
+}
+
+// TestFleet_SaysItCannotSeeCertificateExpiry.
+//
+// A clear State column across 10,000 Nodes reads "no Node is near losing its
+// identity". The truth is "the Relay cannot tell" — and foundations calls that
+// silence the worst of the three possible answers.
+func TestFleet_SaysItCannotSeeCertificateExpiry(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, "Certificate expiry is not recorded yet") {
+		t.Error("the fleet view does not admit it cannot see certificate expiry")
+	}
+	if !strings.Contains(body, "state:cert-expiring") {
+		t.Error("the gap note does not name the marker that cannot appear")
+	}
+}
+
+// TestFleet_EveryWallBucketHasAColour is a structural guard against exactly the
+// drift that shipped: the bucket constant was renamed from "quarantined" to
+// "fenced" and its CSS rule was not, so fenced cells rendered with no
+// background at all — invisible, on the one bucket the wall exists to make
+// impossible to miss.
+//
+// Nothing in Go could catch it. The constant compiled, the attribute rendered,
+// the tests passed, and the cell was simply not there on screen. This asserts
+// the two halves agree.
+func TestFleet_EveryWallBucketHasAColour(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	for _, b := range []wallBucket{wallNormal, wallDrift, wallAttention, wallFenced} {
+		rule := `.cell[data-bucket="` + string(b) + `"]`
+		if !strings.Contains(css, rule) {
+			t.Errorf("no stylesheet rule for %s — cells in this bucket render with no colour, "+
+				"which no Go test can see", rule)
+		}
+	}
+
+	// And the reverse: a rule for a bucket that no longer exists is dead weight
+	// that hides the missing one.
+	for _, stale := range []string{"quarantined", "warning", "error"} {
+		if strings.Contains(css, `.cell[data-bucket="`+stale+`"]`) {
+			t.Errorf("stylesheet still styles the retired bucket %q", stale)
+		}
+	}
+}
+
+// TestFleet_WallIsOneImageToAssistiveTechnology is the shape decision for the
+// pixel wall: clickable with a mouse, absent from the tab order.
+//
+// The alternative shipped first and was worse than either principled option —
+// role="img" on the container with nameless FOCUSABLE links inside it. At
+// 10,000 Nodes that is 10,000 unnamed tab stops within an element declaring
+// itself a single image. Ten thousand nameless tab stops is not access.
+//
+// The accessible path is the deviation table: named, ordered, and complete for
+// every Node that deviates, which is every Node anyone needs to reach.
+func TestFleet_WallIsOneImageToAssistiveTechnology(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	wall := body[strings.Index(body, `<div class="wall"`):]
+	wall = wall[:strings.Index(wall, "</div>\n  </div>")]
+
+	if !strings.Contains(wall, `role="img"`) {
+		t.Error("the wall does not present itself as one image")
+	}
+	cells := strings.Count(wall, `class="cell"`)
+	if cells == 0 {
+		t.Fatal("the wall drew no cells")
+	}
+	if n := strings.Count(wall, `tabindex="-1"`); n != cells {
+		t.Errorf("%d of %d cells are in the tab order — at fleet scale that is thousands of nameless stops", cells-n, cells)
+	}
+	if n := strings.Count(wall, `aria-hidden="true"`); n < cells {
+		t.Errorf("only %d of %d cells are hidden from assistive technology", n, cells)
+	}
+	// Still clickable: the specification says clicking a cell opens that Node.
+	if !strings.Contains(wall, `href="/console/nodes/`) {
+		t.Error("wall cells lost their link — the spec says clicking a cell opens that Node")
+	}
+	// The hover title must speak the legend's language, not an internal token.
+	if strings.Contains(wall, "· attention") {
+		t.Error(`a cell title says "attention"; the key three inches above says "needs attention"`)
+	}
+}
+
+// TestFleet_FacetLinksComposeRatherThanReplace — browsing trains targeting, and
+// a filter you can only ever set one term of trains nothing.
+func TestFleet_FacetLinksComposeRatherThanReplace(t *testing.T) {
+	c := linkContext{Filter: "node:env=prod", GroupBy: "env"}
+
+	href := c.href("node:role=web")
+	if !strings.Contains(href, "group=env") {
+		t.Errorf("the facet link drops the grouping: %s", href)
+	}
+	if !strings.Contains(href, url.QueryEscape("node:env=prod, node:role=web")) {
+		t.Errorf("the facet link replaces the filter instead of composing it: %s", href)
+	}
+
+	// Idempotent: clicking the same facet twice must not build a redundant
+	// predicate that reads as a bug in the product.
+	if got := appendTerm("node:env=prod", "node:env=prod"); got != "node:env=prod" {
+		t.Errorf("appendTerm duplicated a term: %q", got)
+	}
+	if got := appendTerm("", "node:role=web"); got != "node:role=web" {
+		t.Errorf("appendTerm on an empty filter = %q", got)
+	}
+	// "Group by nothing" must survive a facet click as nothing, not re-default.
+	if h := (linkContext{GroupBy: ""}).href("node:role=web"); !strings.Contains(h, "group=-") {
+		t.Errorf("grouping by nothing was not preserved: %s", h)
+	}
+}
+
+// TestFleet_AmberIsLegibleAsText guards the token split.
+//
+// --color-amber is #a88608 in light: 3.26:1 on the surface, correct for a fill
+// or a dot (WCAG 1.4.11 asks 3:1) and below AA for 11-13px type. It painted the
+// Freeze banner, which is the Console's loudest alarm and the one thing on any
+// screen that must never be squinted at.
+//
+// The token stays verbatim from Gleipnir; --attention-text is the Console's own
+// alias and is what text uses.
+func TestFleet_AmberIsLegibleAsText(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	if !strings.Contains(css, "--attention-text: #6d5605") {
+		t.Error("the light theme has no text-legible amber")
+	}
+	// The banner is the case that matters most.
+	banner := css[strings.Index(css, ".banner {"):]
+	banner = banner[:strings.Index(banner, "}")]
+	if !strings.Contains(banner, "var(--attention-text)") {
+		t.Errorf("the Freeze banner uses fill-amber as text:\n%s", banner)
+	}
+}
+
+// TestFleet_TablesAndLivenessAreNamed — a dot in an unnamed column in an unnamed
+// table encodes "can I reach this machine" in colour alone (WCAG 1.4.1), and on
+// a page that can now carry forty tables, an unnamed table is forty identical
+// announcements.
+func TestFleet_TablesAndLivenessAreNamed(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, `aria-label="not connected"`) || !strings.Contains(body, `aria-label="connected"`) {
+		t.Error("the liveness dot carries no accessible name — reachability is encoded in colour alone")
+	}
+	if !strings.Contains(body, `<caption`) {
+		t.Error("the deviation table has no caption; forty of them announce identically")
+	}
+	if !strings.Contains(body, `<span class="vh">Reachable</span>`) {
+		t.Error("the liveness column has no header")
+	}
+	// Every header cell must be scoped, or the association is guesswork.
+	//
+	// Counted precisely: `<th` also matches `<thead>`, which is how the first
+	// version of this assertion reported a phantom unscoped cell.
+	scoped := strings.Count(body, `<th scope="col">`)
+	total := strings.Count(body, "<th>") + strings.Count(body, "<th ")
+	if scoped != total {
+		t.Errorf("%d of %d header cells carry scope", scoped, total)
+	}
+	if total == 0 {
+		t.Fatal("no header cells rendered — the assertion is checking nothing")
+	}
+}
+
+// TestFleet_TemplateSetFacetExists — question two of the four is "will it take
+// work?", and its second half is template vocabulary. Without this facet a
+// half-landed template rollout is invisible at fleet level: the unloadable
+// marker was countable, the fingerprint that says which set is installed was
+// nowhere.
+func TestFleet_TemplateSetFacetExists(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "a", TemplateSetFingerprint: "aaaa1111"},
+		{NodeID: "b", TemplateSetFingerprint: "aaaa1111"},
+		{NodeID: "c", TemplateSetFingerprint: "bbbb2222"},
+		{NodeID: "d", TemplateSetFingerprint: nodestate.TemplateUnloadable},
+		{NodeID: "e"},
+	}}
+	d.Liveness = fakeLiveness{"a": true, "b": true, "c": true, "d": true, "e": true}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	var tf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "Template set" {
+			tf = &v.Groups[0].Facets[i]
+		}
+	}
+	if tf == nil {
+		t.Fatalf("no template-set facet; got %v", v.Groups[0].Facets)
+	}
+	got := map[string]int{}
+	for _, val := range tf.Values {
+		got[val.Label] = val.Count
+	}
+	// "no templates installed" and "the template set failed to load" are
+	// different facts and must not collapse.
+	if got["unloadable"] != 1 || got["none installed"] != 1 {
+		t.Errorf("unloadable and none-installed collapsed: %v", got)
+	}
+	if got[shortHash("aaaa1111")] != 2 {
+		t.Errorf("fingerprint distribution wrong: %v", got)
+	}
+}
+
+// TestFleet_StateFacetKeepsNamespacesApart — the facet once listed `offline` and
+// the literal `quarantine (relay:)` as bare strings under one heading: a derived
+// observation and a declared act, told apart by a parenthetical, on a screen
+// whose whole chip grammar exists to keep those apart.
+func TestFleet_StateFacetKeepsNamespacesApart(t *testing.T) {
+	d := fleetFixture()
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+
+	var sf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "State" {
+			sf = &v.Groups[0].Facets[i]
+		}
+	}
+	if sf == nil {
+		t.Fatal("no State facet")
+	}
+	for _, val := range sf.Values {
+		// Revocation is a declared act, not a label — the deviation table
+		// renders it as a fenced chip and the facet must agree. One screen
+		// describing one fact in two grammars is exactly the confusion the
+		// namespace model exists to prevent.
+		if val.Fenced != "" {
+			if val.Chip != nil {
+				t.Errorf("%q renders as both a declared act and a label", val.Label)
+			}
+			continue
+		}
+		if val.Chip == nil {
+			t.Errorf("facet value %q renders as a bare string, not a chip", val.Label)
+			continue
+		}
+		// Only the relay: fence resolves today. A state: term offered as a link
+		// would take an operator to a filter that refuses it.
+		if val.Targetable && val.Chip.Namespace != NamespaceRelay {
+			t.Errorf("%q is offered as a Selector term but its namespace does not resolve yet", val.Label)
+		}
+	}
+	if sf.Hint == "" {
+		t.Error("the State facet does not visibly explain why most of its values are not links")
+	}
+}
+
+// TestFleet_SaysWhenItWasTrue — a tab left open overnight otherwise shows a
+// confidently green fleet from twelve hours ago.
+func TestFleet_SaysWhenItWasTrue(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, "as at "+testNow.Format("2006-01-02 15:04:05Z")) {
+		t.Error("the fleet view does not say when it was rendered")
+	}
+}
+
+// TestRegistry_QuarantineIsPinnedToItsValue is the decision recorded on
+// 2026-08-26: the fence is `relay:quarantine=on`, key AND value.
+//
+// A reader that tests only the key treats `=off` as fenced, while a Selector
+// tests both — so the set the Console draws and the set an operator can target
+// would differ, on the one namespace the security lane may target.
+func TestRegistry_QuarantineIsPinnedToItsValue(t *testing.T) {
+	on := registry.Node{RelayLabels: map[string]string{registry.QuarantineKey: registry.QuarantineOn}}
+	if !on.Quarantined() || !nodestate.Quarantined(on) {
+		t.Error("relay:quarantine=on is not read as quarantined")
+	}
+	for _, v := range []string{"off", "", "true", "yes"} {
+		n := registry.Node{RelayLabels: map[string]string{registry.QuarantineKey: v}}
+		if n.Quarantined() || nodestate.Quarantined(n) {
+			t.Errorf("relay:quarantine=%q was read as quarantined; only %q is the fence",
+				v, registry.QuarantineOn)
+		}
+	}
+	// The console and the registry must never disagree.
+	if nodestate.Quarantined(on) != on.Quarantined() {
+		t.Error("nodestate and registry disagree about what quarantined means")
+	}
+}
+
+// TestFleet_RevokedIsDeclaredInTheFacetToo — the deviation table renders
+// revocation as a fenced act and the State facet once rendered it as
+// `state:revoked`, a derived observation. Same screen, same fact, two grammars,
+// and specifically the two that must never blur.
+func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "gone", RevokedAt: testNow.Add(-time.Hour)},
+	}}
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+
+	var found bool
+	for _, f := range v.Groups[0].Facets {
+		if f.Title != "State" {
+			continue
+		}
+		for _, val := range f.Values {
+			if strings.Contains(val.Label, "revoked") {
+				found = true
+				if val.Chip != nil && val.Chip.Namespace == NamespaceState {
+					t.Error("revocation renders as a state: label — nothing derives it; a person did it")
+				}
+				if val.Fenced == "" {
+					t.Error("revocation does not render as a declared act in the facet")
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("the State facet does not count revoked Nodes at all")
+	}
+}

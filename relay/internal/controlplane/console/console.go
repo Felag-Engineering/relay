@@ -61,8 +61,38 @@ type Deps struct {
 	// Nil only in tests that render the shell without a sign-in path.
 	Auth Authenticator
 
+	// The read seams (seams.go). Every one is satisfied by an object the
+	// composition root already holds and already hands to another surface, and
+	// every one is read-only by its type — see seams.go for why that is a
+	// structural property and not a convention.
+	//
+	// A nil seam makes the screens that need it refuse with an explanation
+	// rather than render an empty one. An empty fleet view is a claim about the
+	// fleet ("you have no Nodes"), and a Console that makes it because nobody
+	// wired the registry has lied about something an operator will act on.
+	Fleet     FleetReader
+	Liveness  Liveness
+	Policy    PolicyReader
+	Audit     AuditReader
+	Approvals ApprovalReader
+	Jobs      JobReader
+	Freeze    FreezeReader
+
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
+}
+
+// now reads the clock, defaulting when the composition root left it unset.
+//
+// Handlers call this rather than d.Now directly so that a Deps built by hand in
+// a test — which is most of them — never panics on a nil func. The zero value of
+// a Deps has to be renderable, because the shell was built before any seam
+// existed and must stay testable without them.
+func (d Deps) now() time.Time {
+	if d.Now == nil {
+		return time.Now().UTC()
+	}
+	return d.Now()
 }
 
 // Route is one Console route: its method, its path, the navigation destination
@@ -115,15 +145,16 @@ func Routes(d Deps) []Route {
 		// execution off, /console/run fell through to this handler and
 		// answered 200, so the composer was shadowed rather than absent.
 		// TestConsole_ExecutionOffMakesTheComposerAbsent caught it.
-		{"GET", "/console/{$}", NavEntry{NavObserve, "Fleet", 10}, accounts.RoleViewer, placeholder("Fleet", "01-fleet-view.md")},
-		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, placeholder("Node detail", "02-node-detail.md")},
-		{"GET", "/console/agents", NavEntry{NavObserve, "Agents", 20}, accounts.RoleViewer, placeholder("Agent sessions", "03-agent-sessions.md")},
-		{"GET", "/console/activity", NavEntry{NavObserve, "Activity", 30}, accounts.RoleViewer, placeholder("Activity", "04-activity.md")},
-		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, placeholder("Job detail", "13-job-detail.md")},
-		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, placeholder("Read egress", "17-read-egress.md")},
+		{"GET", "/console/{$}", NavEntry{NavObserve, "Fleet", 10}, accounts.RoleViewer, handleFleet},
+		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
+		{"GET", "/console/agents", NavEntry{NavObserve, "Agents", 20}, accounts.RoleViewer, handleAgents},
+		{"GET", "/console/activity", NavEntry{NavObserve, "Activity", 30}, accounts.RoleViewer, handleActivity},
+		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
+		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
 		{"GET", "/console/policy", NavEntry{NavAct, "Policy", 20}, accounts.RoleOperator, placeholder("Policy Author", "06-policy-author.md")},
-		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, placeholder("Approvals", "14-approval-queue.md")},
+		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
+		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
 		{"GET", "/console/nodes/add", NavEntry{NavAdminister, "Add Nodes", 10}, accounts.RoleAdmin, placeholder("Add Nodes", "09-add-nodes.md")},
 		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, placeholder("Accounts", "15-accounts-and-tokens.md")},

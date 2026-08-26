@@ -77,7 +77,14 @@ func newLoginFixture(t *testing.T) *loginFixture {
 		}),
 	)
 	mux := http.NewServeMux()
-	Register(mux, Deps{Auth: svc})
+	// The sign-in tests land on the fleet view, so the fixture wires the same
+	// minimal read seams every screen test uses. Without them the landing page
+	// is a 500 by design (an unwired registry is a wiring bug, not an empty
+	// fleet), and the sign-in assertion would fail for a reason that has
+	// nothing to do with signing in.
+	d := renderableDeps()
+	d.Auth = svc
+	Register(mux, d)
 
 	return &loginFixture{
 		handler:  authn.Middleware(Secure(mux)),

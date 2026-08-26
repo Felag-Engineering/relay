@@ -837,6 +837,25 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			now:      func() time.Time { return time.Now().UTC() },
 			metrics:  appMetrics,
 
+			// The Console's read seams (v0.6.0 screens). Every one is an object
+			// already assembled above and already handed to another surface —
+			// the registry the MCP read tools list, the policyview cache
+			// describe_node renders, the trail the Control API appends to. The
+			// Console narrows each to a read-only interface at the boundary
+			// (console/seams.go); nothing new is constructed for it.
+			//
+			// liveness is the dispatch Router, which is the ONLY thing in the
+			// process that knows whether a Node has a live Tunnel this instant.
+			// Reading connectedness off LastSeen instead would render a Node
+			// green while every Task to it resolved unreachable.
+			liveness: dispatchRouter,
+			// freeze is the read half of the Relay-wide emergency stop, for the
+			// control-plane banner. The store's repository, not the capability
+			// layer: the Console must be able to SEE the Freeze and must not be
+			// able to touch it, and handing it an object with Engage on it
+			// would make that a matter of discipline instead of type.
+			freeze: st.Freeze(),
+
 			consoleAuth: consoleAuthSvc,
 		}
 		surfaces := defaultControlSurfaces()

@@ -57,6 +57,19 @@ type Label struct {
 	Namespace Namespace
 	Key       string
 	Value     string
+
+	// Attention marks a `state:` label that is a reason an operator cannot act
+	// on this Node right now — offline, outdated, certificate expiring.
+	//
+	// Foundations says "`state:` carries the tint of its severity behind its
+	// mono prefix", and the severity is the whole informational content of the
+	// chip: "this Node refuses every Task it is sent" and "this Node's template
+	// set failed to load" are different problems with different urgencies, and
+	// rendering them in one grey says they are the same problem.
+	//
+	// It is presentation and nothing takes a decision from it. The derivation
+	// lives in nodestate, which is the one place `state:` is computed.
+	Attention bool
 }
 
 // String renders the label in Selector syntax — `node:env=prod`, or
@@ -152,7 +165,31 @@ type Segment struct {
 	// Width is the rendered share after the floor is applied. It is not the
 	// truth and must never be presented as it — Percent is.
 	Width float64
+
+	// Grow is Width quantised to an integer flex weight, which is what the
+	// template actually renders.
+	//
+	// It exists because of the content security policy. `style-src 'self'`
+	// blocks INLINE STYLES, so the obvious `style="width:42.15%"` is not
+	// merely non-conforming — the browser discards it and every segment paints
+	// at zero. That is exactly what happened, and no Go test caught it: the
+	// segment was in the HTML, and the assertion was that the segment was in
+	// the HTML. It took a real browser enforcing the real policy to show that
+	// the bar had never once been visible.
+	//
+	// So the width crosses into CSS as a data attribute matched by a
+	// pre-generated rule (see .oseg[data-grow] in console.css). Quantising
+	// costs nothing real: this bar is already deliberately non-proportional
+	// because of the minority floor, and the exact counts live in the key
+	// beneath it, which is the truth. Using flex-grow rather than a width also
+	// makes the row fill exactly, so rounding cannot leave a gap.
+	Grow int
 }
+
+// growSteps is the flex-weight resolution: 200 steps over the bar, so one step
+// is half a percent. Fine enough that no one can see the quantisation, coarse
+// enough that the stylesheet carries 200 rules and not 1000.
+const growSteps = 200
 
 // OutcomeBar is a rendered segmented bar.
 type OutcomeBar struct {
@@ -196,12 +233,18 @@ func NewOutcomeBar(counts []OutcomeCount) OutcomeBar {
 			continue
 		}
 		share := float64(c.Count) / float64(total)
+		width := floor + remaining*share
 		bar.Segments = append(bar.Segments, Segment{
 			Outcome: c.Outcome,
 			Count:   c.Count,
 			Label:   OutcomeLabel(c.Outcome),
 			Percent: share * 100,
-			Width:   floor + remaining*share,
+			Width:   width,
+			// Round up, never down, and never to zero: a segment that exists
+			// must be visible. Rounding a single deny out of ten thousand down
+			// to nothing would undo the floor the whole component is built
+			// around.
+			Grow: growWeight(width),
 		})
 	}
 	// Sorted by the outcome enum, not by size: the order must be stable across
@@ -211,6 +254,19 @@ func NewOutcomeBar(counts []OutcomeCount) OutcomeBar {
 		return bar.Segments[i].Outcome < bar.Segments[j].Outcome
 	})
 	return bar
+}
+
+// growWeight quantises a rendered width percentage to a flex weight in
+// [1, growSteps]. It never returns zero for a segment that exists.
+func growWeight(widthPercent float64) int {
+	w := int(widthPercent*float64(growSteps)/100 + 0.5)
+	if w < 1 {
+		return 1
+	}
+	if w > growSteps {
+		return growSteps
+	}
+	return w
 }
 
 // OutcomeLabel renders an outcome as its wire name.
@@ -412,12 +468,12 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// chooses the cap.
 	"risk": RiskLabel,
 }).Parse(`
-{{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
+{{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
 {{define "trust-chip"}}<span class="chip trust" data-trust="{{if .Verified}}verified{{else}}asserted{{end}}" title="{{if .Verified}}The Relay authenticated this identity.{{else}}The caller claimed this. Nothing checked it.{{end}}">{{.Text}}</span>{{end}}
 
 {{define "outcome-bar"}}<div class="obar" role="img" aria-label="{{.Total}} Nodes: {{range .Segments}}{{.Count}} {{.Label}}. {{end}}">
-  {{range .Segments}}<span class="oseg" data-outcome="{{.Label}}" style="width:{{pct .Width}}%" title="{{.Count}} {{.Label}} ({{pct .Percent}}%)"></span>{{end}}
+  {{range .Segments}}<span class="oseg" data-outcome="{{.Label}}" data-grow="{{.Grow}}" title="{{.Count}} {{.Label}} ({{pct .Percent}}%)"></span>{{end}}
 </div>
 <div class="okeys">{{range .Segments}}<span class="okey" data-outcome="{{.Label}}"><b>{{.Count}}</b> {{.Label}}</span>{{end}}</div>{{end}}
 

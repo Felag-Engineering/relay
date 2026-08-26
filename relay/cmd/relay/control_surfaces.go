@@ -75,6 +75,18 @@ type surfaceDeps struct {
 	// Console is not enabled, in which case consoleSurface is not in the
 	// surface list at all — the routes are unmounted, not disabled.
 	consoleAuth *consoleauth.Service
+
+	// liveness is the dispatch Router, read for "is this Node connected right
+	// now". Nil when the Relay is running without a dispatch stack (the
+	// control-plane-only test configurations), in which case the Console
+	// renders every Node as offline — which is TRUE for such a Relay, since
+	// nothing can be dispatched at all.
+	liveness console.Liveness
+
+	// freeze is the read half of the Relay-wide Freeze, for the Console's
+	// control-plane banner. Deliberately the store's repository rather than the
+	// capability layer: this seam must not carry Engage or Release.
+	freeze console.FreezeReader
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -193,6 +205,24 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
 		Execution: false,
+		// The read seams. Each is narrowed to a read-only interface by the
+		// assignment itself: *dispatch.Router has Dispatch and Cancel on it,
+		// and console.Liveness has Connected, so what crosses the boundary is
+		// the ability to ask whether a Node is connected and nothing else.
+		//
+		// registry.Repository likewise arrives as console.FleetReader, which
+		// has no Upsert, no SetRelayLabels and no SetRevoked. That is what
+		// makes "the Console cannot change the fleet" a fact about the types
+		// rather than a promise about the handlers, and it is the property
+		// console/no_dispatch_test.go's registry.Repository assertion guard
+		// exists to keep from being undone by a type switch.
+		Fleet:     d.registry,
+		Liveness:  d.liveness,
+		Policy:    d.policy,
+		Audit:     d.audit,
+		Approvals: d.capability,
+		Jobs:      consoleJobReader{jobs: d.jobs, tasks: d.tasks},
+		Freeze:    d.freeze,
 		Now:       d.now,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux))
@@ -246,4 +276,23 @@ func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
 		return nil
 	}
 	return s
+}
+
+// consoleJobReader adapts the Job and Task repositories to console.JobReader.
+//
+// It lives here rather than beside the Console for the same reason
+// jobResultReader lives here: the adapter is a composition-root concern, and a
+// surface package that imported both repositories to build its own would have
+// widened its dependency surface to do it.
+type consoleJobReader struct {
+	jobs  jobs.JobRepository
+	tasks jobs.TaskRepository
+}
+
+func (r consoleJobReader) Job(ctx context.Context, jobID string) (jobs.Job, error) {
+	return r.jobs.GetJob(ctx, jobID)
+}
+
+func (r consoleJobReader) Tasks(ctx context.Context, jobID string) ([]jobs.Task, error) {
+	return r.tasks.ByJob(ctx, jobID)
 }
