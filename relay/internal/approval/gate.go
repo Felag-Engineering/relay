@@ -22,8 +22,8 @@ type Dispatch struct {
 	FanOut int
 
 	// Namespaces are the label namespaces the Selector used ("node", "relay",
-	// "tag"). A rule may match on one, which is how "anything targeting the
-	// security lane needs two people" is expressed.
+	// "tag", "state"). A rule may match on one, which is how "anything
+	// targeting the security lane needs two people" is expressed.
 	Namespaces []string
 
 	// Account is the requesting Account's name (verified lane).
@@ -138,9 +138,9 @@ func (r Rule) Validate() error {
 		return fmt.Errorf("approval: rule %q: min_fan_out must not be negative", r.Name)
 	}
 	switch r.Match.SelectorNamespace {
-	case "", "node", "relay", "tag":
+	case "", "node", "relay", "tag", "state":
 	default:
-		return fmt.Errorf("approval: rule %q: unknown selector namespace %q (want node, relay, or tag)",
+		return fmt.Errorf("approval: rule %q: unknown selector namespace %q (want node, relay, tag, or state)",
 			r.Name, r.Match.SelectorNamespace)
 	}
 	return nil

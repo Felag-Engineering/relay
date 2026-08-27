@@ -51,6 +51,20 @@ func TestLoadValidConfig(t *testing.T) {
 	}
 }
 
+// TestLoadValidConfig_StateNamespaceValidates is ADR-0034's addition to the
+// approval-gate vocabulary: a rule scoped to the fourth namespace must load
+// exactly as "tag" and "relay" already do.
+func TestLoadValidConfig_StateNamespaceValidates(t *testing.T) {
+	cfg := `{"rules":[{"name":"r","match":{"selector_namespace":"state"},"require":{"count":1}}]}`
+	g, err := Load(writeConfig(t, cfg, 0o600))
+	if err != nil {
+		t.Fatalf("Load with selector_namespace \"state\": %v", err)
+	}
+	if len(g.Rules()) != 1 {
+		t.Fatalf("got %d rules, want 1", len(g.Rules()))
+	}
+}
+
 // TestEmptyPathMeansNoGates: the ONLY way to get a gate-less Relay is to
 // configure no path at all. Everything else is an error.
 func TestEmptyPathMeansNoGates(t *testing.T) {

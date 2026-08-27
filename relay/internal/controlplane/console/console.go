@@ -71,7 +71,6 @@ type Deps struct {
 	// fleet ("you have no Nodes"), and a Console that makes it because nobody
 	// wired the registry has lied about something an operator will act on.
 	Fleet     FleetReader
-	Liveness  Liveness
 	Policy    PolicyReader
 	Audit     AuditReader
 	Approvals ApprovalReader
@@ -80,6 +79,12 @@ type Deps struct {
 
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
+
+	// CertExpiringWithin is the state:cert-expiring warning window
+	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
+	// 11), same "told, never settable" posture as Execution above. Zero (the
+	// default) means the marker never fires.
+	CertExpiringWithin time.Duration
 }
 
 // now reads the clock, defaulting when the composition root left it unset.

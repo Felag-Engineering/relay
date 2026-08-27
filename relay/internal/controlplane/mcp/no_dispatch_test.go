@@ -39,6 +39,15 @@ var capabilityReadAllowlist = map[string]bool{
 	"NamespaceUnspecified": true,
 	"NamespaceNode":        true,
 	"NamespaceRelay":       true,
+	"NamespaceTag":         true,
+	"NamespaceState":       true,
+	// StateEval (#414, ADR-0034) is the evaluation context Selector.Matches
+	// needs beyond a Node's own record — a clock reading and the
+	// cert-expiring window. It carries no dispatch capability of its own: a
+	// read tool builds one from its own clock/window seam and hands it
+	// straight to Matches, exactly as it already hands ParseSelector's
+	// output there.
+	"StateEval": true,
 }
 
 // readFiles and execFiles partition this package's non-test .go files

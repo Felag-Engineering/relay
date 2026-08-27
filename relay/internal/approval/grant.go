@@ -243,9 +243,9 @@ func (s Scope) Validate() error {
 		}
 	}
 	switch s.SelectorNamespace {
-	case "", "node", "relay", "tag":
+	case "", "node", "relay", "tag", "state":
 	default:
-		return fmt.Errorf("%w: scope has unknown selector namespace %q (want node, relay, or tag)", ErrGrantInvalid, s.SelectorNamespace)
+		return fmt.Errorf("%w: scope has unknown selector namespace %q (want node, relay, tag, or state)", ErrGrantInvalid, s.SelectorNamespace)
 	}
 	return nil
 }
@@ -384,8 +384,24 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 }
 
 // knownNamespaces are the label namespaces a Selector may use (ADR-0006,
-// ADR-0020). RequirementForScope walks them when a Scope does not pin one.
-var knownNamespaces = []string{"node", "relay", "tag"}
+// ADR-0020, ADR-0034). RequirementForScope walks them when a Scope does not
+// pin one. Adding a namespace here only ADDS probes to RequirementForScope's
+// own worst-case walk, so — considered in isolation — a Scope that does not
+// pin a namespace can only derive a STRICTER Requirement as the vocabulary
+// grows, never a laxer one.
+//
+// That claim is about RequirementForScope by itself; it says nothing about
+// whether the Requirement it derives is what a covered dispatch actually
+// needs. When a Scope DOES pin SelectorNamespace, RequirementForScope derives
+// the Requirement over only that ONE namespace, while Grant.Covers admits any
+// dispatch whose namespace list merely CONTAINS the pinned one — so a
+// multi-namespace dispatch can be covered by a Grant approved against a
+// single-namespace Requirement. That asymmetry is a pre-existing approval-gate
+// bypass, reachable on main today via a pinned "node" Scope; it predates this
+// change and is not fixed by it. Escalated as its own issue (#482) because
+// changing Covers or RequirementForScope is a real change to approval/authz
+// semantics, not something to fold quietly into a labels change.
+var knownNamespaces = []string{"node", "relay", "tag", "state"}
 
 // RequirementForScope derives what a Grant over s must satisfy: the STRICTEST
 // Requirement any dispatch the Grant could cover would itself have faced.

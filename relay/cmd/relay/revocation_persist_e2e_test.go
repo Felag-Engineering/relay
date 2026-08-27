@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
@@ -30,16 +31,17 @@ func persistTestConfig(t *testing.T) Config {
 	t.Helper()
 	dir := t.TempDir()
 	return Config{
-		Addr:                ":0",
-		CADir:               filepath.Join(dir, "ca"),
-		StorePath:           filepath.Join(dir, "relay.db"),
-		Hostname:            "localhost",
-		EnrollIPRate:        5,
-		EnrollIPBurst:       3,
-		EnrollGlobalRate:    50,
-		EnrollGlobalBurst:   10,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
+		Addr:                 ":0",
+		CADir:                filepath.Join(dir, "ca"),
+		StorePath:            filepath.Join(dir, "relay.db"),
+		Hostname:             "localhost",
+		EnrollIPRate:         5,
+		EnrollIPBurst:        3,
+		EnrollGlobalRate:     50,
+		EnrollGlobalBurst:    10,
+		EnrollMaxTrackedIPs:  100000,
+		MaxNodes:             110000,
+		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 }
 

@@ -144,7 +144,7 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 //  6. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
-	nodes := sel.Resolve(s.reg)
+	nodes := sel.Resolve(s.reg, s.stateEval())
 
 	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)

@@ -3,21 +3,43 @@ package capability
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // Namespace is the label namespace a Predicate is scoped to (ADR-0006,
-// invariant 7). The zero value, NamespaceUnspecified, is deliberately
-// invalid and never matches any Node — a Predicate must always name its
-// namespace explicitly rather than fall back to "either".
+// ADR-0020, ADR-0034, invariant 7). The zero value, NamespaceUnspecified, is
+// deliberately invalid and never matches any Node — a Predicate must always
+// name its namespace explicitly rather than fall back to "either".
+//
+// Values are APPENDED, never renumbered: Namespace is compared in switches
+// across capability, mcp, api and console, and a reordering would silently
+// re-point every existing switch arm.
 type Namespace int
 
 const (
 	NamespaceUnspecified Namespace = iota
 	NamespaceNode
 	NamespaceRelay
+	NamespaceTag
+	NamespaceState
 )
+
+// StateEval is the evaluation context a `state:` Predicate needs beyond the
+// Node's own record: the instant this resolution is happening at, and the
+// certificate-expiry warning window (file-only configuration, invariant 11).
+//
+// A zero StateEval means `state:cert-expiring` can never fire (a zero
+// CertExpiringWithin — see nodestate.Input) — the composition root always
+// sets a real one, and every surface that resolves a Selector (MCP, the
+// Control API, the Console) is handed the SAME value, so a wiring test pins
+// that a zero StateEval never reaches production.
+type StateEval struct {
+	Now                time.Time
+	CertExpiringWithin time.Duration
+}
 
 // Predicate is a single "namespace:key=value" equality test. It is scoped to
 // exactly one namespace; Matches never looks it up against the other one.
@@ -33,12 +55,21 @@ type Selector struct {
 	Predicates []Predicate
 }
 
-// ParseSelector parses a comma-separated list of "node:key=value" and
-// "relay:key=value" terms (e.g. "node:role=web, relay:quarantine=on").
-// Every term MUST carry a node: or relay: prefix — an unprefixed term is a
-// parse error. This is a fail-closed design: the parser never guesses which
-// namespace a bare key belongs to (mirrors protoconv.ParseNodeLabel's
-// prefix-stripping style, extended here to both namespaces).
+// ParseSelector parses a comma-separated list of "node:key=value",
+// "relay:key=value", "tag:key=value" and "state:key[=value]" terms (e.g.
+// "node:role=web, relay:quarantine=on"). Every term MUST carry one of the
+// four namespace prefixes — an unprefixed term is a parse error. This is a
+// fail-closed design: the parser never guesses which namespace a bare key
+// belongs to (mirrors protoconv.ParseNodeLabel's prefix-stripping style,
+// extended here to all four namespaces).
+//
+// node:, relay: and tag: keep the same "key=value, value required" grammar.
+// state: is different because it is closed-vocabulary and typed (ADR-0034):
+// a boolean marker term carries no value ("state:offline") and a fact term
+// requires a non-empty one ("state:daemon-version=1.4.2"). Both directions
+// are parse errors rather than a silently-empty match: a marker written with
+// a value, a fact written without one, an empty fact value, or any key
+// outside the closed vocabulary (nodestate.KeyKind).
 //
 // An empty (or all-whitespace) string parses to an empty Selector, which
 // Resolve treats as matching every Node (see Resolve).
@@ -65,8 +96,19 @@ func ParseSelector(s string) (Selector, error) {
 		case strings.HasPrefix(term, "relay:"):
 			ns = NamespaceRelay
 			rest = strings.TrimPrefix(term, "relay:")
+		case strings.HasPrefix(term, "tag:"):
+			ns = NamespaceTag
+			rest = strings.TrimPrefix(term, "tag:")
+		case strings.HasPrefix(term, "state:"):
+			p, err := parseStateTerm(term, strings.TrimPrefix(term, "state:"))
+			if err != nil {
+				return Selector{}, err
+			}
+			predicates = append(predicates, p)
+			continue
 		default:
-			return Selector{}, fmt.Errorf("capability: selector term %q has no node: or relay: prefix", term)
+			return Selector{}, fmt.Errorf(
+				"capability: selector term %q has no node:, relay:, tag:, or state: prefix", term)
 		}
 
 		key, value, ok := strings.Cut(rest, "=")
@@ -80,14 +122,63 @@ func ParseSelector(s string) (Selector, error) {
 	return Selector{Predicates: predicates}, nil
 }
 
-// Matches reports whether n satisfies every Predicate in sel. Each
-// Predicate's lookup reads exactly one of n's two label maps — NamespaceNode
-// reads only NodeLabels, NamespaceRelay reads only RelayLabels — so node:
-// and relay: predicates can never be satisfied by the other namespace's
-// labels. This mirrors the registry's structural two-disjoint-maps
-// invariant (registry.go). A Predicate with the zero-value Namespace never
-// matches (fail closed).
-func (sel Selector) Matches(n registry.Node) bool {
+// parseStateTerm parses the part of a `state:` term after the prefix, against
+// the closed vocabulary nodestate.KeyKind enumerates. term is the whole
+// original term, kept only for error messages.
+func parseStateTerm(term, rest string) (Predicate, error) {
+	key, value, hasValue := strings.Cut(rest, "=")
+	if key == "" {
+		return Predicate{}, fmt.Errorf("capability: malformed selector term %q, want state:key or state:key=value", term)
+	}
+
+	switch kind := nodestate.KeyKind(key); kind {
+	case nodestate.KindMarker:
+		if hasValue {
+			return Predicate{}, fmt.Errorf(
+				"capability: %q is a boolean marker and takes no value (want state:%s)", term, key)
+		}
+		return Predicate{Namespace: NamespaceState, Key: key}, nil
+	case nodestate.KindFact:
+		if !hasValue || value == "" {
+			// An empty fact value can never match — Facts omits it entirely
+			// rather than emitting `state:key=` — so a term with one would
+			// silently match nothing, which is exactly the failure mode a
+			// closed vocabulary exists to turn into a parse error.
+			return Predicate{}, fmt.Errorf(
+				"capability: %q is a fact and requires a non-empty value (want state:%s=value)", term, key)
+		}
+		return Predicate{Namespace: NamespaceState, Key: key, Value: value}, nil
+	default:
+		return Predicate{}, fmt.Errorf(
+			"capability: %q is not a state: label; the closed vocabulary is markers %v and facts %v",
+			term, nodestate.MarkerKeys(), nodestate.FactKeys())
+	}
+}
+
+// Matches reports whether n satisfies every Predicate in sel, evaluated at
+// ev. Each Predicate's lookup reads exactly one namespace's map — NamespaceNode
+// reads only NodeLabels, NamespaceRelay reads only RelayLabels, NamespaceState
+// reads a nodestate.LabelSet computed for n — so a predicate in one namespace
+// can never be satisfied by another namespace's labels. This mirrors the
+// registry's structural disjoint-maps invariant (registry.go): a forged
+// NodeLabels["offline"]="true" can never satisfy state:offline, because
+// NamespaceState never looks at NodeLabels at all. A Predicate with the
+// zero-value Namespace never matches (fail closed).
+//
+// state's map is computed at most once per call, not once per Predicate:
+// Resolve runs Matches per Node over a registry that may hold 100k of them,
+// and nodestate.Labels is not free.
+func (sel Selector) Matches(n registry.Node, ev StateEval) bool {
+	var states map[string]string
+	for _, p := range sel.Predicates {
+		if p.Namespace == NamespaceState {
+			states = nodestate.LabelSet(nodestate.Input{
+				Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin,
+			})
+			break
+		}
+	}
+
 	for _, p := range sel.Predicates {
 		var labels map[string]string
 		switch p.Namespace {
@@ -95,6 +186,13 @@ func (sel Selector) Matches(n registry.Node) bool {
 			labels = n.NodeLabels
 		case NamespaceRelay:
 			labels = n.RelayLabels
+		case NamespaceState:
+			labels = states
+		case NamespaceTag:
+			// tag-space has no storage on registry.Node until the label-
+			// management write path lands (#430), so no Node carries one —
+			// "matches nothing" is the true answer today, not a placeholder.
+			return false
 		default:
 			return false
 		}
@@ -108,20 +206,29 @@ func (sel Selector) Matches(n registry.Node) bool {
 // String renders sel back into the canonical "node:key=value, relay:key=value"
 // form ParseSelector accepts — the true inverse of ParseSelector, used by the
 // audit adapter to record "the Selector as written" (audit.Record.Selector).
-// An empty Selector renders as "".
+// An empty Selector renders as "". A NamespaceState Predicate with an empty
+// Value renders as "state:key" (a marker, no trailing "="); with a Value it
+// renders as "state:key=value" (a fact) — the same asymmetry ParseSelector
+// requires, so this round-trips through it exactly.
 func (sel Selector) String() string {
 	terms := make([]string, 0, len(sel.Predicates))
 	for _, p := range sel.Predicates {
-		var prefix string
 		switch p.Namespace {
 		case NamespaceNode:
-			prefix = "node:"
+			terms = append(terms, fmt.Sprintf("node:%s=%s", p.Key, p.Value))
 		case NamespaceRelay:
-			prefix = "relay:"
+			terms = append(terms, fmt.Sprintf("relay:%s=%s", p.Key, p.Value))
+		case NamespaceTag:
+			terms = append(terms, fmt.Sprintf("tag:%s=%s", p.Key, p.Value))
+		case NamespaceState:
+			if p.Value == "" {
+				terms = append(terms, "state:"+p.Key)
+			} else {
+				terms = append(terms, fmt.Sprintf("state:%s=%s", p.Key, p.Value))
+			}
 		default:
-			prefix = ""
+			terms = append(terms, fmt.Sprintf("%s=%s", p.Key, p.Value))
 		}
-		terms = append(terms, fmt.Sprintf("%s%s=%s", prefix, p.Key, p.Value))
 	}
 	return strings.Join(terms, ", ")
 }
@@ -133,9 +240,10 @@ func (sel Selector) String() string {
 // fan-out size against the blast-radius cap is the pipeline's job
 // (Service.Run), not the resolver's.
 // NamespaceNames returns the distinct label namespaces this Selector targets,
-// as the lower-case names the approval-gate config uses ("node", "relay").
-// It is how a gate rule expresses "anything targeting the security lane needs
-// two people" (ADR-0027) without package approval knowing about Predicate.
+// as the lower-case names the approval-gate config uses ("node", "relay",
+// "tag", "state"). It is how a gate rule expresses "anything targeting the
+// security lane needs two people" (ADR-0027) without package approval knowing
+// about Predicate.
 //
 // An empty Selector targets no namespace and matches every Node, so it returns
 // nothing — a namespace-scoped rule must not fire on a match-everything
@@ -155,15 +263,30 @@ func (sel Selector) NamespaceNames() []string {
 			out = append(out, "node")
 		case NamespaceRelay:
 			out = append(out, "relay")
+		case NamespaceTag:
+			out = append(out, "tag")
+		case NamespaceState:
+			out = append(out, "state")
 		}
 	}
 	return out
 }
 
-func (sel Selector) Resolve(reg registry.Repository) []registry.Node {
+// Resolve returns every Node in reg that matches sel, evaluated at ev. A
+// Selector with no Predicates matches every Node (inventory semantics —
+// ADR-0003's list_nodes(selector?) is deliberately callable with no selector
+// at all). Resolve itself never bounds the number of Nodes returned; guarding
+// fan-out size against the blast-radius cap is the pipeline's job
+// (Service.Run), not the resolver's.
+//
+// Every Node in one Resolve call is evaluated against the SAME ev — one
+// instant, one cert-expiring window — so a single resolution is internally
+// consistent: a Node cannot be `state:offline` for one Predicate and judged
+// against a different clock reading for another.
+func (sel Selector) Resolve(reg registry.Repository, ev StateEval) []registry.Node {
 	var matched []registry.Node
 	for _, n := range reg.List() {
-		if sel.Matches(n) {
+		if sel.Matches(n, ev) {
 			matched = append(matched, n)
 		}
 	}

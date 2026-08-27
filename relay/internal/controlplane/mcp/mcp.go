@@ -191,14 +191,24 @@ const serverVersion = "0.1.0"
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	now       func() time.Time
-	approvals ApprovalDecider
+	now                func() time.Time
+	approvals          ApprovalDecider
+	certExpiringWithin time.Duration
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
 // (production default: time.Now().UTC()).
 func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
+}
+
+// WithCertExpiringWindow sets the state:cert-expiring warning window
+// (ADR-0034) the read tools evaluate list_nodes/describe_node's state_labels
+// and Selector filtering against. The composition root computes the same
+// value it hands the capability layer and the Console (invariant 11) — a
+// zero window (the default) means the marker never fires.
+func WithCertExpiringWindow(d time.Duration) Option {
+	return func(o *serverOptions) { o.certExpiringWithin = d }
 }
 
 func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
@@ -220,7 +230,7 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
 
-	registerNodeTools(srv, nodes, policy, vocab, reads)
+	registerNodeTools(srv, nodes, policy, vocab, reads, cfg.now, cfg.certExpiringWithin)
 	registerOperationTools(srv, ops, vocab, reads)
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results, reads)

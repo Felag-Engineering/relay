@@ -8,6 +8,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -85,6 +86,13 @@ type nodeResponse struct {
 	RevokedAt string `json:"revoked_at,omitempty"`
 
 	Certificate nodeCertificate `json:"certificate"`
+
+	// StateLabels are the `state:` namespace (ADR-0034, #414): Relay-derived,
+	// evaluated at read time, set by nobody. Rendered in Selector syntax with
+	// the state: prefix — targetable verbatim in RunOperationRequest.selector
+	// and RawExecRequest.selector. Always [], never null, when a Node carries
+	// none (same normalization as node_labels/relay_labels).
+	StateLabels []string `json:"state_labels"`
 }
 
 type nodeFacts struct {
@@ -145,11 +153,18 @@ func handleGetNode(d Deps) http.HandlerFunc {
 				"no Node with that id is in this Relay's registry")
 			return
 		}
-		writeJSON(w, http.StatusOK, nodeResponseFrom(n))
+		ev := capability.StateEval{Now: d.Now(), CertExpiringWithin: d.CertExpiringWithin}
+		writeJSON(w, http.StatusOK, nodeResponseFrom(n, ev))
 	}
 }
 
-func nodeResponseFrom(n registry.Node) nodeResponse {
+func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
+	states := nodestate.Labels(nodestate.Input{Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin})
+	stateLabels := make([]string, 0, len(states))
+	for _, l := range states {
+		stateLabels = append(stateLabels, l.String())
+	}
+
 	out := nodeResponse{
 		NodeID:      n.NodeID,
 		NodeLabels:  n.NodeLabels,
@@ -173,6 +188,7 @@ func nodeResponseFrom(n registry.Node) nodeResponse {
 			Fingerprint:  n.CertFingerprint,
 			RenewalCount: n.RenewalCount,
 		},
+		StateLabels: stateLabels,
 	}
 	if out.NodeLabels == nil {
 		out.NodeLabels = map[string]string{}

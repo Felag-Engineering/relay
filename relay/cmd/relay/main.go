@@ -29,6 +29,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -79,6 +80,17 @@ type Config struct {
 	// (invariant 11, ADR-0010). A malformed value refuses startup — see
 	// newServer.
 	MinDaemonVersion string
+
+	// CertExpiringFraction sets the state:cert-expiring warning window
+	// (ADR-0034, #414): a Node fires the marker once less than this fraction
+	// of its identity certificate's lifetime remains. Same startup-only,
+	// never-API-settable mechanism as the fields above (invariant 11) — a
+	// fraction rather than an absolute duration, so it tracks any future
+	// change to ca.LeafValidity instead of going stale against it. There is
+	// deliberately no "off" value: newServer refuses startup outside (0, 1],
+	// because a silently disabled alarm is exactly the failure this marker
+	// exists to catch.
+	CertExpiringFraction float64
 
 	// ApprovalGatePath is the root-owned approval-gate config (#269,
 	// ADR-0027): which dispatches must park for a human. Same startup-only
@@ -270,6 +282,9 @@ func parseConfig() Config {
 		"total time budget for one approval webhook delivery attempt")
 	minDaemonVersion := flag.String("min-daemon-version", "",
 		"minimum relay-daemon semver version (ADR-0014); empty disables the outdated gate")
+	certExpiringFraction := flag.Float64("cert-expiring-fraction", nodestate.DefaultCertExpiringFraction,
+		"fraction of a Node identity certificate's LeafValidity remaining below which state:cert-expiring "+
+			"fires (ADR-0034); must be in (0, 1] — there is no off value")
 
 	controlEnabled := flag.Bool("control-enabled", false,
 		"enable the control-plane listener (MCP + /api/v1); disabled by default")
@@ -368,6 +383,8 @@ func parseConfig() Config {
 	}
 
 	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
+	cfg.CertExpiringFraction = certExpiringFractionFromEnv(
+		os.Getenv("RELAY_CERT_EXPIRING_FRACTION"), *certExpiringFraction)
 	cfg.ApprovalGatePath = envOr("RELAY_APPROVAL_GATE_CONFIG", *approvalGatePath)
 	cfg.ApprovalWebhookURL = envOr("RELAY_APPROVAL_WEBHOOK_URL", *approvalWebhookURL)
 	cfg.ApprovalWebhookSecretPath = envOr("RELAY_APPROVAL_WEBHOOK_SECRET_FILE", *approvalWebhookSecret)
@@ -460,6 +477,19 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	if cfg.MinDaemonVersion != "" && !registry.ValidVersion(cfg.MinDaemonVersion) {
 		return nil, nil, fmt.Errorf("invalid min-daemon-version %q: not a valid semver version", cfg.MinDaemonVersion)
 	}
+
+	// There is deliberately no "off" value for the cert-expiring fraction
+	// (ADR-0034): a silently disabled alarm is exactly the failure
+	// state:cert-expiring exists to catch, so an out-of-range value refuses
+	// startup rather than degrading to "never fires".
+	if cfg.CertExpiringFraction <= 0 || cfg.CertExpiringFraction > 1 {
+		return nil, nil, fmt.Errorf("invalid cert-expiring-fraction %v: must be in (0, 1]", cfg.CertExpiringFraction)
+	}
+	// Computed once, from the CA's own LeafValidity constant, and handed to
+	// every surface below (invariant 11) — a Duration, never the fraction
+	// itself, so capability/mcp/api never need to import internal/ca to make
+	// sense of it (nodestate's own package doc explains why).
+	certExpiringWithin := nodestate.CertExpiringWindow(ca.LeafValidity, cfg.CertExpiringFraction)
 
 	st, err := store.Open(cfg.StorePath, store.WithMaxNodes(cfg.MaxNodes), store.WithMinDaemonVersion(cfg.MinDaemonVersion))
 	if err != nil {
@@ -622,6 +652,9 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// the gate parked, so with no rules configured nothing parks and the
 		// table stays empty.
 		capability.WithMCPTasks(st.MCPTasks()),
+		// state:cert-expiring's warning window (#414, ADR-0034), computed
+		// once above and shared by every surface below.
+		capability.WithCertExpiringWindow(certExpiringWithin),
 	}
 
 	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
@@ -844,11 +877,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			// Console narrows each to a read-only interface at the boundary
 			// (console/seams.go); nothing new is constructed for it.
 			//
-			// liveness is the dispatch Router, which is the ONLY thing in the
-			// process that knows whether a Node has a live Tunnel this instant.
-			// Reading connectedness off LastSeen instead would render a Node
-			// green while every Task to it resolved unreachable.
-			liveness: dispatchRouter,
+			// There is no separate liveness seam: connectedness comes off
+			// registry.Node.Connected, the same fact every other surface reads,
+			// fed by the same tunnel handler that registers the dispatch sink
+			// above — see nodestate.Input's doc comment (#414).
+			//
 			// freeze is the read half of the Relay-wide emergency stop, for the
 			// control-plane banner. The store's repository, not the capability
 			// layer: the Console must be able to SEE the Freeze and must not be
@@ -857,6 +890,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			freeze: st.Freeze(),
 
 			consoleAuth: consoleAuthSvc,
+
+			// state:cert-expiring's warning window (#414, ADR-0034), the same
+			// value every other surface below was handed.
+			certExpiringWithin: certExpiringWithin,
 		}
 		surfaces := defaultControlSurfaces()
 		if cfg.ConsoleEnabled {
@@ -976,6 +1013,7 @@ func main() {
 		"read_blast_cap", cfg.ReadBlastCap,
 		"mutate_blast_cap", cfg.MutateBlastCap,
 		"min_daemon_version", cfg.MinDaemonVersion,
+		"cert_expiring_fraction", cfg.CertExpiringFraction,
 	)
 
 	// The control-plane listener (MCP + /api/v1, ADR-0009/0010) is separate
@@ -1064,4 +1102,28 @@ func durationEnvOr(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// certExpiringFractionFromEnv reads RELAY_CERT_EXPIRING_FRACTION, given the
+// flag-derived fallback.
+//
+// Unlike every other RELAY_* env var in parseConfig, an unparsable value
+// here does NOT fall back to fallback: ADR-0034 and relay.env.example both
+// promise the Relay REFUSES TO START on a state:cert-expiring fraction
+// outside (0, 1], and silently keeping the default would let a typo
+// (`0.o5`) swap in a different alarm threshold than the operator wrote, with
+// nothing but a log line to notice by. This returns 0 — itself out of
+// range — so the value routes through newServer's existing (0, 1] check and
+// fails startup there: one range check, one fail-startup error message, not
+// two.
+func certExpiringFractionFromEnv(env string, fallback float64) float64 {
+	if env == "" {
+		return fallback
+	}
+	v, err := strconv.ParseFloat(env, 64)
+	if err != nil {
+		slog.Error("invalid RELAY_CERT_EXPIRING_FRACTION; refusing to start", "value", env, "err", err)
+		return 0
+	}
+	return v
 }
