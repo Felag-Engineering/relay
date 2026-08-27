@@ -324,6 +324,16 @@ type Deny struct {
 	// has to go and check.
 	Rule string
 
+	// RuleClipped says Rule was cut to a length bound before it got here, so
+	// the block can say how much of it is shown.
+	//
+	// A rule is the daemon's stderr and a Node writes its own stderr, so a
+	// screen that renders one per Node — Job detail lists up to 100 — renders
+	// a Node-controlled string as many times. Verbatim is a promise about
+	// FIDELITY, not about length: the bytes shown are exactly the bytes
+	// reported, and the block says when there were more.
+	RuleClipped bool
+
 	// File and Line locate the rule in the Node's own Policy.
 	File string
 	Line int
@@ -370,6 +380,18 @@ type Plan struct {
 	// Selector as written, in the same syntax the fleet-view filter speaks.
 	Selector string
 
+	// SelectorNote fills the Selector's own SLOT — the same element, holding
+	// prose instead of a Selector — when Selector is empty.
+	//
+	// It exists for one state: a Plan rendered for a Job that has ALREADY
+	// been dispatched. A Job carries no Selector of its own — it lives in the
+	// dispatch audit record, which the Job engine writes only after the
+	// dispatch returns — so a running Job's Selector is not readable yet and
+	// arrives at completion. Filling the slot rather than omitting it is what
+	// keeps foundations rule 6 (a rendered Plan never reflows) true of the
+	// BLOCK: one slot resolves, and nothing moves.
+	SelectorNote string
+
 	// Matched is how many Nodes the Selector resolved to; Cap is the
 	// blast-radius cap for this risk class.
 	//
@@ -386,8 +408,23 @@ type Plan struct {
 	// Hash is the plan hash, in mono. THIS is what an approval commits to —
 	// not the prose above it — so it is rendered as the identity of the plan
 	// rather than as a technical detail.
+	//
+	// EMPTY OMITS THE SLOT ENTIRELY. Only an approval retains a plan hash, so
+	// a dispatch that was never gated has none, and rendering an empty hash —
+	// or worse, some other identifier in its place — presents a thing an
+	// operator is trained to compare.
 	Hash string
 
+	// Verdicts are the per-Node predictions. EMPTY OMITS THE "N would run · N
+	// would be denied" LINE, because a Plan with no verdicts is a Plan that
+	// predicted nothing: Job detail renders one for a dispatch that has
+	// already happened, where "0 would run" would be a prediction nobody made.
+	//
+	// The consequence, stated because it is easy to trip over: a COMPOSED plan
+	// whose Selector matched zero Nodes also renders no verdict line. If that
+	// screen needs to say "0 would run" out loud, this type grows an explicit
+	// Dispatched flag rather than the renderer guessing from the length of a
+	// slice.
 	Verdicts []PlanVerdict
 }
 
@@ -482,6 +519,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
     {{with .OperationName}}<span class="denyop">{{.}}</span>{{end}}
     {{with .NodeID}}<span class="denynode">on {{.}}</span>{{end}}</div>
   <pre class="denyrule">{{.Rule}}</pre>
+  {{if .RuleClipped}}<p class="denynote">Shown to the first 2 KB of the refusal the daemon reported.</p>{{end}}
   {{with .Location}}<div class="denyloc">{{.}}</div>{{end}}
   <div class="denylinks">
     {{with .PolicyHref}}<a href="{{.}}">See this Node&#39;s effective Policy</a>{{end}}
@@ -493,14 +531,14 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 {{define "plan"}}<section class="plan" aria-label="Plan">
   <div class="planhead">
     <span class="chip risk" data-risk="{{.RiskClass | risk}}">{{.RiskClass | risk}}</span>
-    <code class="planhash" title="This is what an approval commits to.">{{.Hash}}</code>
+    {{if .Hash}}<code class="planhash" title="This is what an approval commits to.">{{.Hash}}</code>{{end}}
   </div>
   <div class="planfan">
-    <code class="selector">{{.Selector}}</code>
+    <code class="selector">{{if .Selector}}{{.Selector}}{{else}}{{.SelectorNote}}{{end}}</code>
     <span class="fanmath">{{.Matched}} Nodes matched{{if .Cap}} &middot; cap {{.Cap}}{{end}}</span>
     {{if .OverCap}}<span class="overcap">over the {{.RiskClass | risk}} cap &mdash; this Job will not dispatch</span>{{end}}
   </div>
-  <div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>
+  {{if .Verdicts}}<div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>{{end}}
   {{range .Verdicts}}{{if .Deny}}{{template "deny-block" .Deny}}{{end}}{{end}}
 </section>{{end}}
 

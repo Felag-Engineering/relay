@@ -33,12 +33,14 @@ package console
 // this package can read from anywhere.
 //
 // The filtered, paginated, per-principal audit/Job query lane landed in the
-// capability layer as issue #441 — see QueryReader below. AuditReader still
-// offers only whole-trail and by-key reads, because that is what today's
-// screens (Activity, Job detail, agent history, read egress) are built
-// against; migrating each to QueryReader is #422/#424/#423/#425. Until a
-// given screen migrates, it keeps capping what it renders and SAYING it
-// capped it — see auditWindow.
+// capability layer as issue #441 — see QueryReader below. Job detail was the
+// first screen to migrate onto it (#423) and reads nothing else: its counts
+// are one aggregate row and its Task rows are small per-outcome pages, so
+// the screen is bounded by construction at 10,000 Nodes rather than capped
+// after the fact. AuditReader still offers whole-trail and by-Node reads for
+// the screens that have not migrated yet (Activity, agent history, read
+// egress — #422/#424/#425); until each does, it keeps capping what it
+// renders and SAYING it capped it — see auditWindow.
 
 import (
 	"context"
@@ -47,7 +49,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -82,9 +83,12 @@ type PolicyReader interface {
 // Append is deliberately absent. The Console does cause audit records — a
 // sign-in writes one — but it causes them by calling consoleauth, which records
 // its own; a screen that could append directly could author history.
+// ByJob is deliberately absent: it loaded every record for a Job — including
+// every Node's captured output — to render one screen, and that screen (Job
+// detail) now reads one bounded page through QueryReader instead. Nothing
+// else asked for it, so the seam does not keep offering it.
 type AuditReader interface {
 	List(ctx context.Context) ([]audit.Record, error)
-	ByJob(ctx context.Context, jobID string) ([]audit.Record, error)
 	ByNode(ctx context.Context, nodeID string) ([]audit.Record, error)
 }
 
@@ -107,28 +111,16 @@ type ApprovalReader interface {
 // above — nothing here dispatches or decides, and the narrowed method set is
 // what keeps this package's grip on the capability layer to reads only.
 //
-// Unused THIS issue by design: the screens that plug into it are #422
-// (Activity), #423 (Job detail), #424 (agent history), and #425 (read
-// egress). Landing the seam here, ahead of any screen using it, is what lets
-// all four be built against one settled contract instead of four
-// independently-guessed ones.
+// Job detail (#423) is its first consumer; Activity (#422), agent history
+// (#424) and read egress (#425) follow. Landing the seam ahead of any screen
+// using it is what let all four be built against one settled contract
+// instead of four independently-guessed ones.
 type QueryReader interface {
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
 	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)
 	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
-}
-
-// JobReader reads a Job and its Tasks. The composition root's jobResultReader
-// adapter satisfies it.
-//
-// Task carries captured Stdout/Stderr. Job detail renders it for mutate-class
-// Tasks and does NOT render it for read-class ones — ADR-0025 says read output
-// is not retained, and the Console must not become the place it quietly is.
-type JobReader interface {
-	Job(ctx context.Context, jobID string) (jobs.Job, error)
-	Tasks(ctx context.Context, jobID string) ([]jobs.Task, error)
 }
 
 // FreezeReader reports whether the Relay-wide Freeze is engaged (ADR-0013), for

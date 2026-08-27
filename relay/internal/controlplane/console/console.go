@@ -74,7 +74,6 @@ type Deps struct {
 	Policy    PolicyReader
 	Audit     AuditReader
 	Approvals ApprovalReader
-	Jobs      JobReader
 	Freeze    FreezeReader
 
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
@@ -82,8 +81,7 @@ type Deps struct {
 
 	// Queries is the capability layer's read lane (#441): filtered,
 	// paginated queries over the audit trail and over Jobs/Tasks (seams.go).
-	// Unused THIS issue by design — the screen issues (#422/#423/#424/#425)
-	// plug into it.
+	// Job detail (#423) reads through it exclusively; #422/#424/#425 follow.
 	Queries QueryReader
 
 	// CertExpiringWithin is the state:cert-expiring warning window

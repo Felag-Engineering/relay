@@ -13,7 +13,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -48,10 +48,6 @@ type fakeAudit struct {
 }
 
 func (f fakeAudit) List(context.Context) ([]audit.Record, error) { return f.records, f.err }
-
-func (f fakeAudit) ByJob(_ context.Context, jobID string) ([]audit.Record, error) {
-	return f.filter(func(r audit.Record) bool { return r.JobID == jobID }), f.err
-}
 
 func (f fakeAudit) ByNode(_ context.Context, nodeID string) ([]audit.Record, error) {
 	return f.filter(func(r audit.Record) bool { return r.NodeID == nodeID }), f.err
@@ -89,15 +85,114 @@ func (e constErr) Error() string { return string(e) }
 
 const errNotFound = constErr("not found")
 
-// fakeJobs is a Job/Task read seam.
-type fakeJobs struct {
-	job   jobs.Job
-	tasks []jobs.Task
+// fakeQueries is the capability layer's read lane (#441) over in-memory
+// slices.
+//
+// Limit and Outcome are HONOURED, and the per-method call counts are kept: a
+// fake that ignored the page size would let a "renders no list at 10,000"
+// test pass while the real screen fetched ten thousand rows, which is the one
+// property this seam exists to make provable. Nothing here strips output
+// either — the real QueryTasks does, and a test that wants to prove the
+// Console gates on the declared risk class needs a seam that hands the bytes
+// over anyway.
+type fakeQueries struct {
+	jobs  []capability.JobSummary
+	tasks []capability.TaskRow
+	rows  []capability.AuditRow
+
+	// taskJobID is the Job the tasks belong to. Empty means "any", for the
+	// fixtures that do not care.
+	taskJobID string
+
+	jobsErr  error
+	tasksErr error
+	auditErr error
+
+	jobCalls   int
+	auditCalls int
+	// taskLimits records the Limit of every QueryTasks call, in order, so a
+	// test can assert both how many Task queries one render costs and that
+	// none of them was unbounded.
+	taskLimits []int
 }
 
-func (f fakeJobs) Job(context.Context, string) (jobs.Job, error) { return f.job, nil }
+func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filter capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
+	f.auditCalls++
+	if f.auditErr != nil {
+		return capability.AuditPage{}, f.auditErr
+	}
+	var out []capability.AuditRow
+	for _, row := range f.rows {
+		if filter.JobID != "" && row.JobID != filter.JobID {
+			continue
+		}
+		if len(filter.Kinds) > 0 && !containsString(filter.Kinds, row.Kind) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return capability.AuditPage{Rows: limitRows(out, page.Limit), Limit: page.Limit}, nil
+}
 
-func (f fakeJobs) Tasks(context.Context, string) ([]jobs.Task, error) { return f.tasks, nil }
+func (f *fakeQueries) AuditCounts(context.Context, capability.Principal, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
+	return nil, nil
+}
+
+func (f *fakeQueries) AuditReach(context.Context, capability.Principal, capability.AuditFilter) (capability.Reach, error) {
+	return capability.Reach{}, nil
+}
+
+func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	f.jobCalls++
+	if f.jobsErr != nil {
+		return capability.JobPage{}, f.jobsErr
+	}
+	var out []capability.JobSummary
+	for _, j := range f.jobs {
+		if filter.JobID != "" && j.JobID != filter.JobID {
+			continue
+		}
+		out = append(out, j)
+	}
+	return capability.JobPage{Jobs: limitRows(out, page.Limit), Limit: page.Limit}, nil
+}
+
+func (f *fakeQueries) QueryTasks(_ context.Context, _ capability.Principal, filter capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error) {
+	f.taskLimits = append(f.taskLimits, page.Limit)
+	if f.tasksErr != nil {
+		return capability.TaskPage{}, f.tasksErr
+	}
+	var out []capability.TaskRow
+	for _, t := range f.tasks {
+		// JobID is honoured, not assumed: every fixture here holds one Job, so
+		// a screen that fetched the WRONG Job's Tasks would otherwise render
+		// perfectly and no test would notice.
+		if filter.JobID != "" && f.taskJobID != "" && filter.JobID != f.taskJobID {
+			continue
+		}
+		if filter.Outcome != nil && t.Outcome != *filter.Outcome {
+			continue
+		}
+		out = append(out, t)
+	}
+	return capability.TaskPage{Tasks: limitRows(out, page.Limit), Limit: page.Limit}, nil
+}
+
+func limitRows[T any](rows []T, limit int) []T {
+	if limit <= 0 || limit > len(rows) {
+		return rows
+	}
+	return rows[:limit]
+}
+
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
 
 // fakeFreeze is the Freeze read seam.
 type fakeFreeze struct {

@@ -26,6 +26,9 @@ package console
 // rather than hunting for the places that guessed.
 
 import (
+	"sort"
+	"strings"
+
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
@@ -84,33 +87,74 @@ func riskOf(rec audit.Record) jobs.RiskClass {
 // rawExecActionKind is how the audit trail spells Raw Exec in ActionKind.
 const rawExecActionKind = "raw_exec"
 
-// denyExplanation renders what the Console can honestly say about WHY a Task
-// was denied.
+// denyExplanation renders what the Console can honestly say about WHY an
+// audited Task was denied. The Task lane calls denyText below directly.
+func denyExplanation(rec audit.Record) string {
+	return denyText(rec.Stderr, rec.Reason, riskOf(rec) == jobs.RiskClassRead)
+}
+
+// denyText is the one explanation both lanes share — the audit trail's
+// records (denyExplanation above) and the Task query lane's rows (job.go).
 //
-// The three answers are genuinely different and must not collapse:
+// The four answers are genuinely different and must not collapse:
 //
-//   - The daemon's verdict, verbatim, when the trail retained it.
-//   - "Not retained" for a READ-class Task. Read output is never kept
-//     (ADR-0025), and the daemon's explanation arrives in that output — so the
-//     rule is gone by design, not missing by accident. Saying "the daemon did
-//     not report the deciding rule" here blames the daemon for the Relay
-//     correctly declining to store something.
+//   - The daemon's verdict, verbatim, when it was retained.
+//   - The recorded reason, when the trail has one and no verdict text. The
+//     Task lane never has one (jobs.TaskSummary carries no Reason field), so
+//     there the rule comes from the daemon's stderr or from nothing.
+//   - "Not recorded in the trail" for a READ-class Task. The audit trail never
+//     retains read output (ADR-0025) and the daemon's explanation arrives in
+//     that output — so the rule is absent from the trail by design, not missing
+//     by accident. Saying "the daemon did not report the deciding rule" here
+//     blames the daemon for the Relay correctly declining to record something.
+//     Note the scope: the TRAIL never kept it. The Task row may still hold it
+//     until the Job is collected, which is why this sentence names the trail
+//     rather than claiming the bytes do not exist anywhere.
 //   - "The daemon did not report it" for a mutate-class Task, which is the only
 //     case where that sentence is true.
-func denyExplanation(rec audit.Record) string {
-	if r := trimmed(rec.Stderr); r != "" {
+//
+// It exists as its own function because a second call site re-spelling the
+// last two answers is how the same refusal comes to be explained two
+// different ways on two screens.
+func denyText(stderr []byte, reason string, readClass bool) string {
+	if r := trimmed(stderr); r != "" {
 		return r
 	}
-	if rec.Reason != "" {
-		return rec.Reason
+	if reason != "" {
+		return reason
 	}
-	if riskOf(rec) == jobs.RiskClassRead {
-		return "The deciding rule is not recorded for a read-class Task.\n\n" +
-			"The daemon explains a refusal in the Task's output, and read output is never\n" +
-			"retained — reading is exfiltration, so what left the Node is audited and what it\n" +
-			"said is not kept. Query this Node's effective Policy to see the rule."
+	if readClass {
+		return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
+			"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
+			"retains read output — reading is exfiltration, so what left the Node is audited\n" +
+			"and what it said is not (ADR-0025). Query this Node's effective Policy to see\n" +
+			"the rule."
 	}
 	return "The daemon refused this Operation and did not report the deciding rule."
+}
+
+// argsSummary renders what was asked for: Raw Exec's argv, or an Operation's
+// arguments in a stable key order.
+//
+// Sorted, never map order: two renders of the same dispatch that disagree
+// about the order of `unit=nginx path=/etc` read as two different dispatches.
+func argsSummary(args map[string]string, argv []string) string {
+	if len(argv) > 0 {
+		return strings.Join(argv, " ")
+	}
+	if len(args) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+args[k])
+	}
+	return strings.Join(parts, " ")
 }
 
 func trimmed(b []byte) string {
