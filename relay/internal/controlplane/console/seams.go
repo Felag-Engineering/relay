@@ -63,19 +63,6 @@ type FleetReader interface {
 	Get(nodeID string) (registry.Node, bool)
 }
 
-// Liveness answers "is there a live Tunnel to this Node right now".
-// *dispatch.Router satisfies it.
-//
-// This is a separate seam from FleetReader because it is a different KIND of
-// fact. The registry's LastSeen is durable history; connectedness is a property
-// of a socket that exists this instant. Rendering "last seen 4s ago" as online
-// is how a fleet view shows green while every Task resolves `unreachable` —
-// ADR-0004 fails a matched-but-disconnected Node fast, without dispatching, and
-// the screen has to agree with that or it is lying.
-type Liveness interface {
-	Connected(nodeID string) bool
-}
-
 // PolicyReader is the display-only cache of each Node's daemon-reported
 // effective Policy (ADR-0011, invariant 12). *policyview.Cache satisfies it.
 //

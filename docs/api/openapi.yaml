@@ -1112,6 +1112,16 @@ components:
         revoked_at:
           type: string
           format: date-time
+        state_labels:
+          type: array
+          items: { type: string }
+          description: |
+            The `state:` namespace (ADR-0034): Relay-derived, evaluated at read
+            time, and set by nobody — not the Node, not an operator, not an
+            admin. Rendered in Selector syntax with the `state:` prefix (e.g.
+            `state:offline`, `state:daemon-version=1.4.2`) and targetable
+            verbatim in `RunOperationRequest.selector`/`RawExecRequest.selector`.
+            Closed vocabulary. Always an array, `[]` when a Node carries none.
         certificate:
           type: object
           description: |
@@ -1199,8 +1209,13 @@ components:
           type: string
           description: |
             Selector filter, e.g. `node:role=web` or `relay:env=prod`. Every term
-            must carry a `node:`, `relay:`, or `tag:` prefix. Empty or omitted
-            matches every Node — subject to the blast cap.
+            must carry a `node:`, `relay:`, `tag:`, or `state:` prefix. `state:`
+            is a closed, Relay-derived vocabulary (ADR-0034): the boolean
+            markers `state:offline`, `state:outdated`, `state:template-unloadable`,
+            `state:cert-expiring`, and the facts `state:daemon-version=`,
+            `state:policy-fingerprint=`, `state:template-fingerprint=` — any
+            other `state:` key is a parse error, not an empty match. Empty or
+            omitted matches every Node — subject to the blast cap.
           examples: ["node:role=web"]
         operation:
           type: string
@@ -1670,7 +1685,7 @@ components:
             floor.
         selector_namespace:
           type: string
-          enum: [node, relay, tag]
+          enum: [node, relay, tag, state]
           description: |
             Optionally narrows to dispatches whose Selector used this namespace.
             Absent means any — the one permitted widening default here, because

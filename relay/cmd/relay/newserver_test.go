@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"net/http"
 	"os"
@@ -10,6 +11,11 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // baseTestConfig returns a Config with the same non-control-plane fields as
@@ -18,18 +24,19 @@ import (
 func baseTestConfig(t *testing.T) Config {
 	t.Helper()
 	return Config{
-		Addr:                ":0",
-		CADir:               t.TempDir(),
-		StorePath:           filepath.Join(t.TempDir(), "relay.db"),
-		Hostname:            "localhost",
-		EnrollIPRate:        5,
-		EnrollIPBurst:       3,
-		EnrollGlobalRate:    50,
-		EnrollGlobalBurst:   10,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
-		ReadBlastCap:        10000,
-		MutateBlastCap:      100,
+		Addr:                 ":0",
+		CADir:                t.TempDir(),
+		StorePath:            filepath.Join(t.TempDir(), "relay.db"),
+		Hostname:             "localhost",
+		EnrollIPRate:         5,
+		EnrollIPBurst:        3,
+		EnrollGlobalRate:     50,
+		EnrollGlobalBurst:    10,
+		EnrollMaxTrackedIPs:  100000,
+		MaxNodes:             110000,
+		ReadBlastCap:         10000,
+		MutateBlastCap:       100,
+		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 }
 
@@ -38,18 +45,19 @@ func baseTestConfig(t *testing.T) Config {
 // previously-unreachable revocation.Service — without needing a live listener.
 func TestNewServer_Smoke(t *testing.T) {
 	cfg := Config{
-		Addr:                ":0",
-		CADir:               t.TempDir(),
-		StorePath:           filepath.Join(t.TempDir(), "relay.db"),
-		Hostname:            "localhost",
-		EnrollIPRate:        5,
-		EnrollIPBurst:       3,
-		EnrollGlobalRate:    50,
-		EnrollGlobalBurst:   10,
-		EnrollMaxTrackedIPs: 100000,
-		MaxNodes:            110000,
-		ReadBlastCap:        10000,
-		MutateBlastCap:      100,
+		Addr:                 ":0",
+		CADir:                t.TempDir(),
+		StorePath:            filepath.Join(t.TempDir(), "relay.db"),
+		Hostname:             "localhost",
+		EnrollIPRate:         5,
+		EnrollIPBurst:        3,
+		EnrollGlobalRate:     50,
+		EnrollGlobalBurst:    10,
+		EnrollMaxTrackedIPs:  100000,
+		MaxNodes:             110000,
+		ReadBlastCap:         10000,
+		MutateBlastCap:       100,
+		CertExpiringFraction: nodestate.DefaultCertExpiringFraction,
 	}
 
 	srv, deps, err := newServer(cfg)
@@ -194,6 +202,126 @@ func TestNewServer_MinDaemonVersion(t *testing.T) {
 		t.Cleanup(func() { deps.store.Close() }) //nolint:errcheck
 		t.Cleanup(srv.Stop)
 	})
+}
+
+// TestCertExpiringFraction_RefusesAnInvalidValue is ADR-0034's startup guard
+// (#414): there is deliberately no "off" value for the state:cert-expiring
+// warning window, so a fraction outside (0, 1] must refuse startup rather
+// than silently leaving the alarm disabled.
+func TestCertExpiringFraction_RefusesAnInvalidValue(t *testing.T) {
+	for _, frac := range []float64{0, -0.1, 1.1} {
+		cfg := baseTestConfig(t)
+		cfg.CertExpiringFraction = frac
+
+		srv, deps, err := newServer(cfg)
+		if err == nil {
+			t.Errorf("cert-expiring-fraction %v: newServer succeeded, want a refusal", frac)
+			continue
+		}
+		if srv != nil || deps != nil {
+			t.Errorf("cert-expiring-fraction %v: newServer returned non-nil srv/deps on error", frac)
+		}
+	}
+}
+
+// TestCertExpiringFractionFromEnv_UnparsableRefusesRatherThanFallsBack is the
+// parseConfig-level half of the same guard (#414 security review, F3): an
+// unparsable RELAY_CERT_EXPIRING_FRACTION used to log a warning and silently
+// keep the flag default, contradicting relay.env.example's documented
+// "refuses to start outside (0, 1]" — a typo like "0.o5" would silently swap
+// in a different alarm threshold than the operator wrote. It must now return
+// a value that itself refuses TestCertExpiringFraction_RefusesAnInvalidValue's
+// (0, 1] check, not the fallback.
+func TestCertExpiringFractionFromEnv_UnparsableRefusesRatherThanFallsBack(t *testing.T) {
+	const fallback = 0.25
+	for _, env := range []string{"0.o5", "not-a-number", "  ", "1,5"} {
+		got := certExpiringFractionFromEnv(env, fallback)
+		if got == fallback {
+			t.Errorf("certExpiringFractionFromEnv(%q, %v) = %v, want a value outside (0, 1] "+
+				"(the fallback must not be used for an unparsable value)", env, fallback, got)
+		}
+		if got > 0 && got <= 1 {
+			t.Errorf("certExpiringFractionFromEnv(%q, %v) = %v, which is inside (0, 1] and would "+
+				"NOT refuse startup", env, fallback, got)
+		}
+	}
+}
+
+func TestCertExpiringFractionFromEnv_EmptyUsesFallback(t *testing.T) {
+	if got := certExpiringFractionFromEnv("", 0.25); got != 0.25 {
+		t.Errorf("certExpiringFractionFromEnv(\"\", 0.25) = %v, want 0.25 (the fallback)", got)
+	}
+}
+
+func TestCertExpiringFractionFromEnv_ValidValuePassesThrough(t *testing.T) {
+	if got := certExpiringFractionFromEnv("0.5", 0.25); got != 0.5 {
+		t.Errorf("certExpiringFractionFromEnv(\"0.5\", 0.25) = %v, want 0.5", got)
+	}
+}
+
+// TestCertExpiringWindow_IsOneValueAcrossSurfaces is the wiring-level guard
+// that a zero-value capability.StateEval never reaches production: the window
+// newServer computes once from ca.LeafValidity must be what BOTH the Control
+// API (which resolves through the capability layer's own Plan) and the MCP
+// surface (which renders state_labels) agree a Node's certificate falls
+// inside — for the identical Node, in the same request.
+//
+// If either surface were wired with its own window (or the zero value),
+// state:cert-expiring would mean one thing in a Selector and another on a
+// tool's output, which is exactly the drift #414's acceptance criteria forbid.
+func TestCertExpiringWindow_IsOneValueAcrossSurfaces(t *testing.T) {
+	const fraction = 0.5 // half of LeafValidity: comfortably inside or outside, no edge-rounding
+	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) {
+		c.CertExpiringFraction = fraction
+	}))
+
+	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-cert"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	// Just inside a 50%-of-LeafValidity window.
+	notAfter := time.Now().Add(ca.LeafValidity/2 - time.Minute)
+	if err := f.Deps.registry.RecordEnrollment("node-cert",
+		registry.Certificate{Fingerprint: "fp-cert", NotAfter: notAfter}, time.Now()); err != nil {
+		t.Fatalf("RecordEnrollment: %v", err)
+	}
+
+	// The Control API resolves through the SAME capability.Service Plan
+	// threads a Selector resolution through (service.go's stateEval).
+	resp := controlAPIRequest(t, f.Client(), http.MethodPost, f.ControlBase+"/api/v1/operations",
+		f.Credential, map[string]any{"operation": "system.facts", "selector": "state:cert-expiring", "plan": true})
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("plan status = %d, want 200", resp.StatusCode)
+	}
+	var plan struct {
+		Matched int `json:"matched"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&plan); err != nil {
+		t.Fatalf("decode plan: %v", err)
+	}
+	if plan.Matched != 1 {
+		t.Fatalf("state:cert-expiring matched %d Nodes through the Control API, want 1 — the capability layer's window disagrees with newServer's", plan.Matched)
+	}
+
+	// The MCP surface, over the SAME Node.
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "describe_node", map[string]any{"node_id": "node-cert"})
+	if res.IsError {
+		t.Fatalf("describe_node returned IsError; content = %+v", res.Content)
+	}
+	var out mcp.DescribeNodeOutput
+	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &out); err != nil {
+		t.Fatalf("decode MCP output: %v", err)
+	}
+	found := false
+	for _, l := range out.StateLabels {
+		if l == "state:cert-expiring" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("MCP describe_node state_labels = %v, want state:cert-expiring — the MCP surface's window disagrees with the Control API's", out.StateLabels)
+	}
 }
 
 // TestListeners_Independent verifies that the node-plane gRPC listener keeps

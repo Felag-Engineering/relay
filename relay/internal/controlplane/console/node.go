@@ -148,13 +148,12 @@ func handleNode(d Deps) http.HandlerFunc {
 }
 
 func buildNodeView(d Deps, r *http.Request, n registry.Node) nodeView {
-	connected := d.Liveness != nil && d.Liveness.Connected(n.NodeID)
-	in := nodestate.Input{Node: n, Connected: connected}
+	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
 	v := nodeView{
 		ID:                  n.NodeID,
 		Hostname:            n.Facts.Hostname,
-		Connected:           connected,
+		Connected:           n.Connected,
 		LastSeen:            nodestate.Since(n.LastSeen, d.now()),
 		LastSeenAbs:         n.LastSeen.UTC().Format("2006-01-02 15:04:05Z"),
 		Revoked:             !n.RevokedAt.IsZero(),

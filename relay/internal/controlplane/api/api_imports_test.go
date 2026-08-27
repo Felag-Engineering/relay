@@ -60,8 +60,16 @@ func TestAPIImportsAreAllowlisted(t *testing.T) {
 		// It is also what capability's own allowlist already permits
 		// (TestCapabilityImportsOnlyRegistryAndJobs), so the two thin surfaces
 		// describe Nodes in one language instead of each inventing a mirror type.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry":     true,
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability":   true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry":   true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability": true,
+		// nodestate arrived with the Node read route's state_labels (#414,
+		// ADR-0034): the proto-free, SQL-free `state:` derivation over one
+		// registry.Node. It names no Relay configuration and reaches no
+		// CA/store — it holds only a DEFAULT fraction and a pure conversion
+		// (nodestate.CertExpiringWindow); the composition root does the
+		// actual multiplication and hands this surface a time.Duration
+		// through Deps.CertExpiringWithin (invariant 11).
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate":    true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane": true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll":       true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation":   true,

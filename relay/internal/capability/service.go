@@ -86,6 +86,13 @@ type Service struct {
 	// real dispatcher riding the allow-all/no-op default seams — see the
 	// contract note below.
 	realDispatcher bool
+
+	// certExpiringWithin is the state:cert-expiring warning window
+	// (ADR-0034), threaded into every Selector resolution via stateEval.
+	// Zero (the default) means the marker never fires — set only by
+	// WithCertExpiringWindow, which the composition root always calls with a
+	// real value (invariant 11: file-only, no API reads or sets it).
+	certExpiringWithin time.Duration
 }
 
 // Option configures a Service built by New.
@@ -242,6 +249,24 @@ func WithMetrics(m MetricsSink) Option {
 	return func(s *Service) { s.metrics = m }
 }
 
+// WithCertExpiringWindow sets the state:cert-expiring warning window
+// (ADR-0034): a Node fires the marker once less than d of its certificate's
+// remaining lifetime is left. d is a Duration rather than a fraction because
+// this package must never import internal/ca (its own import allowlist bars
+// it) — the composition root computes d once via
+// nodestate.CertExpiringWindow(ca.LeafValidity, fraction) and hands every
+// surface, including this one, the same value (invariant 11).
+//
+// Panics on d < 0: a negative window is a composition-root bug, not a
+// runtime condition to degrade under. The zero value (never calling this
+// option) is the safe default and means the marker never fires.
+func WithCertExpiringWindow(d time.Duration) Option {
+	if d < 0 {
+		panic("capability: WithCertExpiringWindow: d must not be negative")
+	}
+	return func(s *Service) { s.certExpiringWithin = d }
+}
+
 // New returns a Service backed by reg, with allowAllAuthorizer,
 // noopCapChecker, noopDispatcher, noopAuditSink, and noopFreezeStore
 // defaults (functional-option pattern, mirroring registry.NewInMemory).
@@ -318,6 +343,23 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	return s
 }
 
+// stateEval is the StateEval every Selector resolution inside this Service
+// evaluates against: the Service's own clock (the same seam WithClock
+// overrides for deterministic tests) and its configured cert-expiring
+// window. One method, so Run and Plan can never resolve the same Selector
+// against two different instants.
+//
+// Falls back to time.Now().UTC() when now is unset, mirroring New's own
+// default — a *Service built as a struct literal in a test (bypassing New)
+// must stay callable rather than panic on a nil func field.
+func (s *Service) stateEval() StateEval {
+	now := s.now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	return StateEval{Now: now(), CertExpiringWithin: s.certExpiringWithin}
+}
+
 // Run is the pipeline every surface must call to act on Nodes: check the
 // Freeze, resolve the Selector, authorize the Principal, check the
 // blast-radius cap, dispatch, then audit — in that order. The Freeze gate,
@@ -356,7 +398,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
-	nodes := sel.Resolve(s.reg)
+	nodes := sel.Resolve(s.reg, s.stateEval())
 
 	// withoutAssertions: an authorization decision must not be able to read
 	// anything the caller asserted (see assertions.go).

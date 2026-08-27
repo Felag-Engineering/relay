@@ -187,6 +187,11 @@ type fleetGroup struct {
 	Revoked     int
 	Unloadable  int
 	OffMode     int
+	// Expiring counts state:cert-expiring — the identity-alarm marker #414
+	// adds a threshold for. A marker no rollup counts is a half-landed
+	// marker: it would render on the row but never surface in the card's
+	// header line.
+	Expiring int
 
 	Facets     []facet
 	Deviations []fleetNode
@@ -269,13 +274,15 @@ type fleetView struct {
 	// does not — Nodes that enrolled before the Relay began recording validity
 	// and have not renewed since.
 	//
-	// Neither gates whether the screen talks about expiry, because a clear
-	// State column has two causes and only one of them is missing data: the
-	// threshold that decides "expiring" is #414's to set (see
-	// nodestate.MarkerCertExpiring), so no Node can carry the marker yet even
-	// where the validity is known. The banner therefore always states that,
-	// and names the data gap only where one exists. Reading a clean column as
-	// "no Node is near losing its identity" is the mistake being prevented.
+	// The threshold now exists (#414, ADR-0034): a Node with under 25% of its
+	// certificate's remaining lifetime shows state:cert-expiring like any
+	// other marker, counted in Expiring above and chipped on its row. What
+	// these two fields still gate is narrower — whether the judgement can be
+	// COMPLETE: a Node with no recorded validity at all cannot be judged
+	// either way, so a clean State column has two possible causes (nothing is
+	// close to lapsing, or the Relay cannot yet say), and the banner names
+	// which Nodes fall in the second bucket rather than letting a clean
+	// column read as "no Node is near losing its identity".
 	CertExpiryKnown   bool
 	CertExpiryUnknown int
 }
@@ -388,9 +395,10 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 			// like an outage.
 			matched = nodes
 		} else {
+			ev := capability.StateEval{Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 			matched = matched[:0:0]
 			for _, n := range nodes {
-				if sel.Matches(n) {
+				if sel.Matches(n, ev) {
 					matched = append(matched, n)
 				}
 			}
@@ -504,17 +512,13 @@ func cellSize(n int) string {
 
 // newFleetNode projects one registry record into a row.
 func newFleetNode(d Deps, n registry.Node) fleetNode {
-	connected := false
-	if d.Liveness != nil {
-		connected = d.Liveness.Connected(n.NodeID)
-	}
-	in := nodestate.Input{Node: n, Connected: connected}
+	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
 	fn := fleetNode{
 		ID:                  n.NodeID,
 		Hostname:            n.Facts.Hostname,
 		Href:                "/console/nodes/" + n.NodeID,
-		Connected:           connected,
+		Connected:           n.Connected,
 		LastSeen:            nodestate.Since(n.LastSeen, d.now()),
 		States:              stateChips(nodestate.Markers(in)),
 		Labels:              declaredChips(n),
@@ -629,26 +633,28 @@ func sortedKeys(m map[string]string) []string {
 }
 
 // parseFleetFilter runs the filter through the real Selector parser, refusing
-// namespaces it cannot yet express with a message that names the reason.
+// `tag:` — the one namespace it still cannot express — with a message that
+// names the reason.
 //
-// `tag:` and `state:` are in the model (invariant 7, ADR-0034) and not in the
-// parser: #430 gives `tag:` its storage and #414 makes `state:` resolvable at
-// Selector time. Until then a filter on either would match nothing, and a
-// filter box that silently returns zero rows for a valid-looking term is worse
-// than one that refuses.
+// `tag:` is in the model (invariant 7, ADR-0020) and not in the parser: it
+// has no storage on registry.Node until #430 gives it one, so a filter on it
+// would silently match nothing today, and a filter box that returns zero
+// rows for a valid-looking term is worse than one that refuses.
+//
+// `state:` is NOT refused here (#414, ADR-0034): it resolves through
+// capability.ParseSelector/Matches exactly like node: and relay:, so a
+// `state:offline` filter narrows the table the same way a facet click does
+// — one resolver, no surface-local evaluation.
 func parseFleetFilter(s string) (capability.Selector, error) {
 	for _, term := range strings.Split(s, ",") {
 		term = strings.TrimSpace(term)
-		switch {
-		case strings.HasPrefix(term, "tag:"):
-			return capability.Selector{}, filterErr("tag: labels are not resolvable yet — operator-set grouping lands with label management (#430). Filter on node: or relay: for now.")
-		case strings.HasPrefix(term, "state:"):
-			return capability.Selector{}, filterErr("state: labels are derived and rendered, but not yet resolvable as Selector terms (#414). They appear as chips on every row.")
+		if strings.HasPrefix(term, "tag:") {
+			return capability.Selector{}, filterErr("tag: labels are not resolvable yet — operator-set grouping lands with label management (#430). Filter on node:, relay:, or state: for now.")
 		}
 	}
 	sel, err := capability.ParseSelector(s)
 	if err != nil {
-		return capability.Selector{}, filterErr("every term needs a namespace prefix and a value, like node:role=web. " + strings.TrimPrefix(err.Error(), "capability: "))
+		return capability.Selector{}, filterErr("every term needs a namespace prefix, like node:role=web or state:offline. " + strings.TrimPrefix(err.Error(), "capability: "))
 	}
 	return sel, nil
 }
@@ -767,6 +773,8 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 				g.Offline++
 			case string(nodestate.MarkerOutdated):
 				g.Outdated++
+			case string(nodestate.MarkerCertExpiring):
+				g.Expiring++
 			case string(nodestate.MarkerTemplateUnloadable):
 				g.Unloadable++
 			}
@@ -930,8 +938,8 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	// The State facet mixes two namespaces on purpose — an operator scanning for
 	// "what is wrong here" wants derived conditions and declared fences in one
 	// list — so each row renders as its own CHIP and the namespace stays
-	// visible. `relay:quarantine=on` is the one term here a Selector can
-	// actually resolve today.
+	// visible. Both `relay:` fences and `state:` markers resolve as a Selector
+	// term (#414); `revoked` alone does not, because it is not a label at all.
 	stateFacet := facet{Title: "State"}
 	stateCounts := map[string]int{}
 	stateChip := map[string]Label{}
@@ -957,9 +965,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 		}
 		chip := stateChip[term]
 		v := facetValue{Label: term, Count: count, Term: term, Chip: &chip}
-		// Only the relay: fence resolves as a Selector term today; `state:` is
-		// #414 and `revoked` is not a label at all.
-		if chip.Namespace == NamespaceRelay {
+		if chip.Namespace == NamespaceRelay || chip.Namespace == NamespaceState {
 			v.Targetable = true
 			v.Href = link.href(term)
 		}
@@ -967,7 +973,6 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	}
 	if len(stateFacet.Values) > 0 {
 		sortFacet(&stateFacet)
-		stateFacet.Hint = "only relay: terms resolve as a Selector today"
 		out = append(out, stateFacet)
 	}
 
@@ -977,18 +982,28 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			versions[n.DaemonVersion]++
 		}
 	}
-	if f := facetFrom("Daemon version", versions, link, noTerm); len(f.Values) > 0 {
+	if f := facetFrom("Daemon version", versions, link, func(k string) (string, bool) {
+		return "state:daemon-version=" + k, true
+	}); len(f.Values) > 0 {
 		out = append(out, f)
 	}
 
+	// Policy fingerprint is keyed by its short hash for display (the facet's
+	// Label), but the Selector term must carry the FULL value — a short hash
+	// is a display convenience, not something ParseSelector accepts — so a
+	// short->full map rides alongside the counts.
 	policies := map[string]int{}
+	policyFull := map[string]string{}
 	for _, n := range nodes {
 		if n.PolicyFingerprint != "" {
-			policies[shortHash(n.PolicyFingerprint)]++
+			short := shortHash(n.PolicyFingerprint)
+			policies[short]++
+			policyFull[short] = n.PolicyFingerprint
 		}
 	}
-	if f := facetFrom("Policy fingerprint", policies, link, noTerm); len(f.Values) > 0 {
-		f.Hint = "not resolvable as a Selector term yet — #414"
+	if f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, bool) {
+		return "state:policy-fingerprint=" + policyFull[k], true
+	}); len(f.Values) > 0 {
 		out = append(out, f)
 	}
 
@@ -998,17 +1013,32 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	// fingerprint that says WHICH set is installed — and therefore whether a
 	// rollout is half-landed — was nowhere.
 	templates := map[string]int{}
+	templateFull := map[string]string{}
 	for _, n := range nodes {
 		switch {
 		case n.TemplateFingerprint == nodestate.TemplateUnloadable:
 			templates["unloadable"]++
 		case n.TemplateFingerprint != "":
-			templates[shortHash(n.TemplateFingerprint)]++
+			short := shortHash(n.TemplateFingerprint)
+			templates[short]++
+			templateFull[short] = n.TemplateFingerprint
 		default:
 			templates["none installed"]++
 		}
 	}
-	if f := facetFrom("Template set", templates, link, noTerm); len(f.Values) > 0 {
+	if f := facetFrom("Template set", templates, link, func(k string) (string, bool) {
+		switch k {
+		case "unloadable":
+			// "unloadable" maps to the marker term, not a fact: the fingerprint
+			// field holds the literal "unloadable" rather than a hash (ADR-0021).
+			return "state:template-unloadable", true
+		case "none installed":
+			// Absence is not a label — there is nothing to target.
+			return "", false
+		default:
+			return "state:template-fingerprint=" + templateFull[k], true
+		}
+	}); len(f.Values) > 0 {
 		out = append(out, f)
 	}
 
@@ -1028,8 +1058,6 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 
 	return out
 }
-
-func noTerm(string) (string, bool) { return "", false }
 
 // fencedRevoked is how the State facet names revocation. Not a label — a
 // revoked Node carries no label at all — so it is spelled once here and
@@ -1125,6 +1153,7 @@ var fleetTmpl = newScreen("fleet", `
     <span class="gcount">{{.Count}} {{plural .Count "Node" "Nodes"}}</span>
     {{if .Offline}}<span class="gdev attn">{{.Offline}} offline</span>{{end}}
     {{if .Outdated}}<span class="gdev attn">{{.Outdated}} outdated</span>{{end}}
+    {{if .Expiring}}<span class="gdev attn">{{.Expiring}} certificate expiring</span>{{end}}
     {{if .Unloadable}}<span class="gdev drift">{{.Unloadable}} template-unloadable</span>{{end}}
     {{if .Quarantined}}<span class="gdev quar">{{.Quarantined}} quarantined</span>{{end}}
     {{if .Revoked}}<span class="gdev quar">{{.Revoked}} revoked</span>{{end}}
@@ -1186,16 +1215,14 @@ var fleetTmpl = newScreen("fleet", `
 This page draws the {{len .Groups}} largest. Narrow the filter, or group by a coarser label key —
 a grouping with hundreds of values is a list of Nodes wearing a different hat.</p>{{end}}
 
-<p class="gap"><b>Certificate expiry is recorded, but not yet judged.</b> No Node here can show
-<code>state:cert-expiring</code> — including one whose identity certificate lapses tomorrow. The
-registry does carry each Node&#39;s certificate validity, and Node detail renders it; what is missing
-is the threshold that decides &#34;expiring&#34;, which is file-only configuration arriving with
-<code>state:</code> evaluation (#414). A clear State column means the Relay is not judging expiry
-yet, not that no Node is close to lapsing.
-{{if not .CertExpiryKnown}} {{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node" "Nodes"}} here
-{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all, having enrolled before the
-Relay began storing it; that fills in at the next renewal, which is at most one leaf lifetime
-away.{{end}}</p>
+{{if not .CertExpiryKnown}}
+<p class="gap"><b>{{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node" "Nodes"}} here
+{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all</b>, having enrolled before
+the Relay began storing it, so <code>state:cert-expiring</code> cannot say whether
+{{if eq .CertExpiryUnknown 1}}it is{{else}}they are{{end}} close to lapsing — a clean State column
+for {{if eq .CertExpiryUnknown 1}}this Node{{else}}these Nodes{{end}} is silence, not an all-clear.
+This fills in at the next renewal, which is at most one leaf lifetime away.</p>
+{{end}}
 
 <p class="scopenote">This screen answers only what Relay can honestly answer about a Node: whether
 it is reachable, whether it will take work, what it will permit, and who vouched for it. There are
