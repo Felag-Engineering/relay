@@ -48,8 +48,19 @@ func TestAPIImportsAreAllowlisted(t *testing.T) {
 		// evaluated in this package, and the gate CONFIGURATION (which is Relay
 		// configuration, invariant 11) is reachable only through approval.Load,
 		// which nothing here calls.
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval":     true,
-		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit":        true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval": true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit":    true,
+		// registry arrived with the Node read route (#440), and belongs in the
+		// same category as accounts, approval and jobs: it is the proto-free,
+		// SQL-free Node domain — registry.Node, registry.Facts, and the
+		// Repository INTERFACE. The SQLite implementation lives in
+		// internal/store, which stays barred, so this widens the vocabulary this
+		// package can name without widening what it can reach.
+		//
+		// It is also what capability's own allowlist already permits
+		// (TestCapabilityImportsOnlyRegistryAndJobs), so the two thin surfaces
+		// describe Nodes in one language instead of each inventing a mirror type.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability":   true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane": true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll":       true,

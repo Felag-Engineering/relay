@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite" // registers the "sqlite" driver; pure Go, no CGO
@@ -36,6 +37,11 @@ type Store struct {
 	db               *sql.DB
 	maxNodes         int    // 0 = unlimited; see WithMaxNodes
 	minDaemonVersion string // ADR-0014 gate; empty = off; see WithMinDaemonVersion
+
+	// regOnce/reg memoise the registry, which unlike the other repositories
+	// carries in-memory state (the live Tunnel set). See Registry().
+	regOnce sync.Once
+	reg     *sqliteRegistry
 }
 
 // Option configures a Store at Open time.
@@ -119,8 +125,27 @@ func (s *Store) Close() error {
 }
 
 // Registry returns the SQLite-backed registry.Repository.
+//
+// MEMOISED, unlike the other repositories on this Store, and deliberately so:
+// since #440 the registry holds one piece of state that is not in SQLite — the
+// live Tunnel set behind SetConnected/Node.Connected. Handing out a fresh
+// instance per call would give each caller its own empty connection set, so the
+// transport would mark a Node connected on one object while a screen read
+// connectedness off another and rendered the whole fleet offline.
+//
+// The other accessors here are stateless wrappers over *sql.DB and are correct
+// to construct per call; this one is not, and the difference is worth the
+// asymmetry rather than making every caller remember to share one.
 func (s *Store) Registry() registry.Repository {
-	return &sqliteRegistry{db: s.db, maxNodes: s.maxNodes, minDaemonVersion: s.minDaemonVersion}
+	s.regOnce.Do(func() {
+		s.reg = &sqliteRegistry{
+			db:               s.db,
+			maxNodes:         s.maxNodes,
+			minDaemonVersion: s.minDaemonVersion,
+			connected:        make(map[string]struct{}),
+		}
+	})
+	return s.reg
 }
 
 // Jobs returns the SQLite-backed jobs.JobRepository.

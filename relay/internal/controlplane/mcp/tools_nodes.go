@@ -31,6 +31,7 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 		TemplateSetFingerprint: n.TemplateSetFingerprint,
 		Revoked:                !n.RevokedAt.IsZero(),
 		Outdated:               n.Outdated,
+		Connected:              n.Connected,
 	}
 	if !n.LastSeen.IsZero() {
 		item.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
@@ -39,6 +40,31 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 		item.RevokedAt = n.RevokedAt.UTC().Format(time.RFC3339)
 	}
 	return item
+}
+
+// certificateFromNode renders the Node's identity provenance (#440).
+//
+// Recorded gates every other field. A Node that enrolled before provenance was
+// stored has a zero NotAfter, and emitting that as an RFC3339 timestamp would
+// hand a caller an expiry in 1970 — a Node that reads as catastrophically
+// overdue rather than one the Relay simply has nothing to say about.
+func certificateFromNode(n registry.Node) CertificateOutput {
+	out := CertificateOutput{
+		Recorded:     n.CertProvenanceKnown(),
+		Fingerprint:  n.CertFingerprint,
+		RenewalCount: n.RenewalCount,
+	}
+	if !out.Recorded {
+		return out
+	}
+	out.NotAfter = n.CertNotAfter.UTC().Format(time.RFC3339)
+	if !n.EnrolledAt.IsZero() {
+		out.EnrolledAt = n.EnrolledAt.UTC().Format(time.RFC3339)
+	}
+	if !n.LastRenewedAt.IsZero() {
+		out.LastRenewedAt = n.LastRenewedAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 
 // normalizeArgSets maps a nil positional arg-set list to an empty one, so a
@@ -184,7 +210,10 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			return nil, DescribeNodeOutput{}, fmt.Errorf("node %q not found", in.NodeID)
 		}
 
-		out := DescribeNodeOutput{NodeItem: nodeItemFromNode(n)}
+		out := DescribeNodeOutput{
+			NodeItem:    nodeItemFromNode(n),
+			Certificate: certificateFromNode(n),
+		}
 		vsnap, vok := vocab.Get(in.NodeID)
 		out.TemplateVocabulary = templateVocabularyOutput(vsnap, vok)
 		if snap, ok := policy.Get(in.NodeID); ok {

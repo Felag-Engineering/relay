@@ -230,7 +230,9 @@ func TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown(t *testing.T) {
 	if !strings.Contains(body, "has not reported its Policy") {
 		t.Error("the effective-Policy panel did not say the Policy is unreported")
 	}
-	if !strings.Contains(body, "Issued, expiry and renewal count are not recorded yet") {
+	// The fixture Node has no recorded provenance, so the panel must say which —
+	// a missing "expires" row reads as the reassuring answer.
+	if !strings.Contains(body, "certificate provenance is not recorded") {
 		t.Error("node detail did not state the certificate-provenance gap — a missing expiry row reads as 'fine'")
 	}
 }
@@ -1582,5 +1584,51 @@ func TestJob_ReadsPerNodeResultsThroughTheJobSeam(t *testing.T) {
 	// Failures sort before successes.
 	if strings.Index(body, "failure") > strings.Index(body, ">success<") {
 		t.Error("success sorted before failure — ordering is by interest, not alphabetical")
+	}
+}
+
+// TestNode_RecordedCertificateProvenanceRenders is the other half of #440 on
+// this screen: once the Relay knows when an identity expires, the panel must say
+// so rather than keep apologising.
+func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
+	joined := testNow.Add(-30 * 24 * time.Hour)
+	d := fleetFixture()
+	nodes := d.Fleet.List()
+	for i := range nodes {
+		if nodes[i].NodeID == "node-web-1" {
+			nodes[i].EnrolledAt = joined
+			nodes[i].CertNotAfter = testNow.Add(11 * 24 * time.Hour)
+			nodes[i].RenewalCount = 2
+			nodes[i].LastRenewedAt = testNow.Add(-3 * 24 * time.Hour)
+		}
+	}
+	d.Fleet = fakeFleet{nodes: nodes}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+
+	if strings.Contains(body, "certificate provenance is not recorded") {
+		t.Fatal("a Node with recorded provenance still renders the gap note")
+	}
+	for _, want := range []string{
+		joined.Format("2006-01-02 15:04:05Z"), // enrolled
+		"in 11d",                              // expiry, in units worth reading
+		"last " + testNow.Add(-3*24*time.Hour).Format("2006-01-02 15:04:05Z"),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the certificate panel does not render %q", want)
+		}
+	}
+
+	// A lapsed identity reads as overdue, not as negative validity.
+	nodes[0].CertNotAfter = testNow.Add(-2 * 24 * time.Hour)
+	for i := range nodes {
+		if nodes[i].NodeID == "node-web-1" {
+			nodes[i].CertNotAfter = testNow.Add(-2 * 24 * time.Hour)
+		}
+	}
+	d.Fleet = fakeFleet{nodes: nodes}
+	body = get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	if !strings.Contains(body, "expired 2d ago") {
+		t.Error("a lapsed certificate does not read as expired")
 	}
 }

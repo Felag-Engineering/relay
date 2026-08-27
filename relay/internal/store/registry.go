@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -19,6 +20,12 @@ type sqliteRegistry struct {
 	db               *sql.DB
 	maxNodes         int    // 0 = unlimited
 	minDaemonVersion string // ADR-0014 gate; empty = off
+
+	// connected is the live Tunnel set. In memory and never written to SQLite:
+	// a Relay restart means nothing is connected, and a persisted flag that
+	// outlived the process would be a lie every read repeated.
+	connMu    sync.RWMutex
+	connected map[string]struct{}
 }
 
 var _ registry.Repository = (*sqliteRegistry)(nil)
@@ -154,6 +161,69 @@ func (r *sqliteRegistry) SetRelayLabels(nodeID string, labels map[string]string)
 
 // SetRevoked records that nodeID is revoked as of at. Returns
 // registry.ErrNotFound if the Node is not in the registry.
+// RecordEnrollment persists first-enrollment certificate provenance.
+//
+// enrolled_at is written only when NULL: re-enrolling an existing node_id must
+// not rewrite the join date, because a daemon reinstall is not the Node joining
+// the fleet a second time and the provenance chain is the whole point.
+func (r *sqliteRegistry) RecordEnrollment(nodeID string, cert registry.Certificate, at time.Time) error {
+	ctx := context.Background()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nodes
+		   SET cert_not_after = ?,
+		       enrolled_at    = COALESCE(enrolled_at, ?)
+		 WHERE node_id = ?`,
+		formatTime(roundTripTime(cert.NotAfter)), formatTime(roundTripTime(at)), nodeID)
+	if err != nil {
+		return fmt.Errorf("record enrollment: %w", err)
+	}
+	return requireRowsAffected(res)
+}
+
+// RecordRenewal persists a reissued certificate.
+//
+// There is deliberately no enrolled_at in this statement. "Provenance survives
+// renewal" is therefore enforced by the SQL, not by a caller remembering to pass
+// the right flag.
+func (r *sqliteRegistry) RecordRenewal(nodeID string, cert registry.Certificate, at time.Time) error {
+	ctx := context.Background()
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE nodes
+		   SET cert_not_after  = ?,
+		       renewal_count   = renewal_count + 1,
+		       last_renewed_at = ?
+		 WHERE node_id = ?`,
+		formatTime(roundTripTime(cert.NotAfter)), formatTime(roundTripTime(at)), nodeID)
+	if err != nil {
+		return fmt.Errorf("record renewal: %w", err)
+	}
+	return requireRowsAffected(res)
+}
+
+// SetConnected records a Tunnel opening or closing.
+//
+// In memory, never in SQLite — see registry.Node.Connected. A persisted
+// connected flag surviving a crash would render as a green dot for a Node
+// nothing can reach.
+func (r *sqliteRegistry) SetConnected(nodeID string, connected bool) {
+	r.connMu.Lock()
+	defer r.connMu.Unlock()
+
+	if connected {
+		r.connected[nodeID] = struct{}{}
+		return
+	}
+	delete(r.connected, nodeID)
+}
+
+// isConnected reports whether nodeID currently holds a Tunnel.
+func (r *sqliteRegistry) isConnected(nodeID string) bool {
+	r.connMu.RLock()
+	defer r.connMu.RUnlock()
+	_, ok := r.connected[nodeID]
+	return ok
+}
+
 func (r *sqliteRegistry) SetRevoked(nodeID string, at time.Time) error {
 	ctx := context.Background()
 	res, err := r.db.ExecContext(ctx, `UPDATE nodes SET revoked_at = ? WHERE node_id = ?`,
@@ -238,6 +308,10 @@ func (r *sqliteRegistry) List() []registry.Node {
 // to matter there.
 func (r *sqliteRegistry) withOutdated(n registry.Node) registry.Node {
 	n.Outdated = registry.Outdated(n.DaemonVersion, r.minDaemonVersion)
+	// Connected is derived on the same read, for the same reason: it is a fact
+	// about right now, and a stored one would go stale the instant a stream
+	// closed.
+	n.Connected = r.isConnected(n.NodeID)
 	return n
 }
 
@@ -289,15 +363,19 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 		daemonVersion, templateSetFingerprint           string
 		lastSeen                                        string
 		revokedAt                                       sql.NullString
+		certNotAfter, enrolledAt, lastRenewedAt         sql.NullString
+		renewalCount                                    int
 	)
 	err := q.QueryRowContext(ctx, `
 		SELECT cert_fingerprint, hostname, os, kernel, arch, ip_addresses,
 			enrolling_token_id, policy_fingerprint, daemon_version,
-			template_set_fingerprint, last_seen, revoked_at
+			template_set_fingerprint, last_seen, revoked_at,
+			cert_not_after, enrolled_at, renewal_count, last_renewed_at
 		FROM nodes WHERE node_id = ?`, nodeID,
 	).Scan(&certFingerprint, &hostname, &osName, &kernel, &arch, &ipAddresses,
 		&enrollingTokenID, &policyFingerprint, &daemonVersion, &templateSetFingerprint,
-		&lastSeen, &revokedAt)
+		&lastSeen, &revokedAt,
+		&certNotAfter, &enrolledAt, &renewalCount, &lastRenewedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return registry.Node{}, false, nil
 	}
@@ -327,6 +405,21 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 	if err != nil {
 		return registry.Node{}, false, fmt.Errorf("parse revoked_at for node %q: %w", nodeID, err)
 	}
+	// NULL parses to the zero time, which the domain defines as "not recorded"
+	// (Node.CertProvenanceKnown). Nodes that enrolled before migration 0020
+	// carry NULL here until their next renewal.
+	certNotAfterTime, err := parseTime(certNotAfter)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("parse cert_not_after for node %q: %w", nodeID, err)
+	}
+	enrolledAtTime, err := parseTime(enrolledAt)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("parse enrolled_at for node %q: %w", nodeID, err)
+	}
+	lastRenewedAtTime, err := parseTime(lastRenewedAt)
+	if err != nil {
+		return registry.Node{}, false, fmt.Errorf("parse last_renewed_at for node %q: %w", nodeID, err)
+	}
 
 	return registry.Node{
 		NodeID:          nodeID,
@@ -341,6 +434,10 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 		NodeLabels:             nodeLabels,
 		RelayLabels:            relayLabels,
 		LastSeen:               lastSeenTime,
+		CertNotAfter:           certNotAfterTime,
+		EnrolledAt:             enrolledAtTime,
+		RenewalCount:           renewalCount,
+		LastRenewedAt:          lastRenewedAtTime,
 		EnrollingTokenID:       enrollingTokenID,
 		PolicyFingerprint:      policyFingerprint,
 		DaemonVersion:          daemonVersion,

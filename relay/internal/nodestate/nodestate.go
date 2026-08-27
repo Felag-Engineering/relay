@@ -78,12 +78,18 @@ const (
 	// drops off the fleet when it lapses — silently, which is why it is worth
 	// a marker at all.
 	//
-	// NOT YET DERIVABLE. registry.Node carries the certificate FINGERPRINT and
-	// nothing else — no notAfter, no renewal count — so there is no honest way
-	// to compute this today; issue #440 adds the fields. Labels therefore never
-	// emits it, and CertExpiryKnown reports false so a caller renders "not
-	// recorded" rather than "fine". A marker that silently reads as absent when
-	// it is really unknown is the worst of the three possible answers.
+	// The DATA now exists (#440): registry.Node carries CertNotAfter. What is
+	// still missing is the THRESHOLD — ADR-0034 fires this at under 25% of the
+	// leaf lifetime remaining, and that fraction is file-only configuration no
+	// API may read or set, which is a decision #414 owns along with evaluating
+	// `state:` at Selector-resolution time.
+	//
+	// So Labels still does not emit it. That is deliberate rather than
+	// forgotten: emitting it here with a threshold invented locally would put a
+	// second definition of "expiring" in the tree, and the fleet view and a
+	// Selector would then disagree about which Nodes are about to fall off.
+	// CertExpiryKnown reports truthfully, so a caller can render the expiry
+	// itself today and the marker arrives with its threshold.
 	MarkerCertExpiring Marker = "cert-expiring"
 )
 
@@ -197,12 +203,11 @@ func Labels(in Input) []Label {
 // CertExpiryKnown reports whether the Relay records enough about a Node's
 // certificate to say anything about its expiry.
 //
-// It is a function returning a constant false, which looks silly and is not:
-// it gives every caller one place to ask, so when #440 lands the Console's
-// "not recorded" panels become live by changing this file rather than by
-// finding every screen that guessed. The alternative — screens that quietly
-// omit the row — hides the gap instead of stating it.
-func CertExpiryKnown(registry.Node) bool { return false }
+// Until #440 this returned a constant false and every caller rendered "not
+// recorded". It now delegates, so the panels that were honest about the gap
+// became live by changing one function rather than by finding every screen that
+// had guessed — which was the point of routing them all through here.
+func CertExpiryKnown(n registry.Node) bool { return n.CertProvenanceKnown() }
 
 // Attention reports whether any marker for in demands attention. It is the
 // fleet view's rollup predicate.
@@ -254,6 +259,23 @@ func Since(t, now time.Time) string {
 	default:
 		return itoa(int(d.Hours()/24)) + "d"
 	}
+}
+
+// Until renders how long remains before t, in the same coarse units Since uses
+// for the past. "in 11d" is the answer to "should I care yet"; a duration to the
+// nanosecond is not.
+//
+// A time already past reads as overdue rather than as a negative duration: a
+// Node whose identity lapsed two days ago has a problem, not a negative eleven
+// days of validity.
+func Until(t, now time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	if !t.After(now) {
+		return "expired " + Since(t, now) + " ago"
+	}
+	return "in " + Since(now.Add(-t.Sub(now)), now)
 }
 
 // itoa avoids pulling strconv in for one call site.

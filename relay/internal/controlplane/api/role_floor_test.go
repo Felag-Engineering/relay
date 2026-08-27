@@ -75,8 +75,16 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/enrollment-tokens":        floorSurface,
 	"DELETE /api/v1/enrollment-tokens/{id}": floorSurface,
 	"POST /api/v1/nodes/{node_id}/revoke":   floorSurface,
-	"POST /api/v1/freeze/engage":            floorCapability,
-	"POST /api/v1/freeze/release":           floorCapability,
+	// Reading one Node is a read, and the read floor is `viewer` — which every
+	// authenticated Account already clears. Consistent with MCP's describe_node,
+	// which is likewise ungated, and with the Console's own rule that a viewer
+	// sees everything and changes nothing.
+	//
+	// Ungated does not mean unrecorded: the handler audits the read before it
+	// answers anything and fails closed if it cannot (ADR-0025).
+	"GET /api/v1/nodes/{node_id}": floorNone,
+	"POST /api/v1/freeze/engage":  floorCapability,
+	"POST /api/v1/freeze/release": floorCapability,
 
 	// Identity management (#297): admin in full, gated per handler.
 	"POST /api/v1/accounts":                floorSurface,

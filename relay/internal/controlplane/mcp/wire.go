@@ -52,6 +52,15 @@ type NodeItem struct {
 	Revoked   bool   `json:"revoked"`
 	RevokedAt string `json:"revoked_at,omitempty"`
 	Outdated  bool   `json:"outdated"`
+
+	// Connected is whether the Node holds a live Tunnel right now (#440).
+	//
+	// Distinct from LastSeen, and the distinction is the point: a Node that
+	// reported four seconds ago and then dropped its stream is unreachable for
+	// dispatch *now*, and ADR-0004 resolves such a Task `unreachable` without
+	// sending it. A caller that inferred reachability from last_seen would
+	// disagree with the dispatcher about what its own fleet can do.
+	Connected bool `json:"connected" jsonschema:"Whether the Node holds a live Tunnel right now. A Task dispatched to a Node that is not connected resolves 'unreachable' without being sent — this is NOT inferable from last_seen."`
 }
 
 // ListNodesOutput is list_nodes' result shape.
@@ -153,6 +162,42 @@ type DescribeNodeOutput struct {
 	NodeItem
 	EffectivePolicy    EffectivePolicyOutput    `json:"effective_policy"`
 	TemplateVocabulary TemplateVocabularyOutput `json:"template_vocabulary"`
+
+	// Certificate is the Node's identity provenance (#440). Present only on
+	// describe_node: it is per-Node detail, and list_nodes is deliberately a
+	// fleet-shaped view.
+	Certificate CertificateOutput `json:"certificate"`
+}
+
+// CertificateOutput is what the Relay knows about the identity it issued to a
+// Node — all of it Relay-knowledge, none of it Node-reported. A daemon cannot
+// influence any value here; the Relay signed the certificate.
+//
+// Recorded is the field to read FIRST. A Node that enrolled before this was
+// stored carries no provenance until its next renewal, and every other field is
+// then a zero value. A caller that skipped this flag would read `not_after` as
+// an expiry in 1970 — catastrophically overdue rather than simply unknown.
+type CertificateOutput struct {
+	Recorded bool `json:"recorded" jsonschema:"False when the Relay has not recorded this Node's certificate provenance — every other field here is then meaningless, NOT an expiry in the past. Nodes enrolled before provenance was stored fill in at their next renewal."`
+
+	// Fingerprint is the SHA-256 of the DER bytes: the Node's identity on the
+	// wire, and what mTLS authenticates it by.
+	Fingerprint string `json:"fingerprint,omitempty"`
+
+	// NotAfter is when this identity stops working. A Node past it cannot
+	// connect at all, and nothing else warns first.
+	NotAfter string `json:"not_after,omitempty"`
+
+	// EnrolledAt is when the Node FIRST joined, and it survives every renewal.
+	// Renewal is certificate-authenticated and preserves node_id, so this is one
+	// end of an unbroken chain whose other end is enrolling_token_id.
+	EnrolledAt string `json:"enrolled_at,omitempty"`
+
+	// RenewalCount and LastRenewedAt describe whether renewal is still working.
+	// A count that has stopped climbing while not_after approaches is the exact
+	// silent failure that ends with a Node dropping off the fleet.
+	RenewalCount  int    `json:"renewal_count"`
+	LastRenewedAt string `json:"last_renewed_at,omitempty"`
 }
 
 // OperationItem is one Operation's vocabulary entry, rendered by

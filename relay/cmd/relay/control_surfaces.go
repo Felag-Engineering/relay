@@ -140,7 +140,10 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Authz:     d.roleGate,
 		Accounts:  d.accountsRepo,
 		APITokens: d.apiTokens,
-		Now:       d.now,
+		// The Node read route (#440). The same registry every other surface
+		// reads, narrowed to a single Get on the way in.
+		NodeReader: d.registry,
+		Now:        d.now,
 		// Execution (#356): the SAME *capability.Service instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
 		// (invariant 10), so Freeze/authz/blast-cap/audit and at-most-once carry

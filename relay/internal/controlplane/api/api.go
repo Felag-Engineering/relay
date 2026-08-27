@@ -129,6 +129,12 @@ type Deps struct {
 	// Both are admin-only at every entry point (see requireAdmin).
 	Accounts  AccountManager
 	APITokens APITokenService
+	// NodeReader is the single-Node registry view behind GET
+	// /api/v1/nodes/{node_id} (#440). A read-only narrowing of
+	// registry.Repository: this surface has no business holding Upsert,
+	// SetRelayLabels or SetRevoked, and the revoke route reaches revocation
+	// through Nodes above rather than through the registry.
+	NodeReader NodeReader
 	// Exec and Jobs back the execution routes (#356). Exec is the SAME
 	// capability layer the MCP surface dispatches through — never a second
 	// control path (invariant 10) — and Jobs is a read-only view used to render
@@ -192,6 +198,7 @@ func Routes() []Route {
 		// added to this group later cannot silently have neither.
 		{"POST", "/api/v1/enrollment-tokens", handleMintToken},
 		{"DELETE", "/api/v1/enrollment-tokens/{id}", handleRevokeToken},
+		{"GET", "/api/v1/nodes/{node_id}", handleGetNode},
 		{"POST", "/api/v1/nodes/{node_id}/revoke", handleRevokeNode},
 		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},

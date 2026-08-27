@@ -86,9 +86,18 @@ type nodeView struct {
 	CertFingerprint string
 	EnrollingToken  string
 	DaemonVersion   string
-	// CertProvenanceKnown is false until the registry records certificate
-	// validity (#440). The panel then says what it does NOT know rather than
-	// omitting the rows, because a missing "expires" row reads as "fine".
+
+	// The certificate provenance the Relay issued (#440). Rendered only when
+	// CertProvenanceKnown — a Node that enrolled before it was stored has a zero
+	// expiry, and printing that would report an identity overdue since 1970.
+	CertNotAfter  string
+	CertExpiresIn string
+	EnrolledAt    string
+	RenewalCount  int
+	LastRenewedAt string
+	// CertProvenanceKnown gates the certificate rows. False means the Relay has
+	// nothing recorded for this Node — not that it is fine — so the panel says
+	// which, because a missing "expires" row reads as the reassuring answer.
 	CertProvenanceKnown bool
 
 	PolicyFingerprint   string
@@ -163,6 +172,17 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node) nodeView {
 	}
 	if v.Revoked {
 		v.RevokedAt = n.RevokedAt.UTC().Format("2006-01-02 15:04:05Z")
+	}
+	if v.CertProvenanceKnown {
+		v.CertNotAfter = n.CertNotAfter.UTC().Format("2006-01-02 15:04:05Z")
+		v.CertExpiresIn = nodestate.Until(n.CertNotAfter, d.now())
+		v.RenewalCount = n.RenewalCount
+		if !n.EnrolledAt.IsZero() {
+			v.EnrolledAt = n.EnrolledAt.UTC().Format("2006-01-02 15:04:05Z")
+		}
+		if !n.LastRenewedAt.IsZero() {
+			v.LastRenewedAt = n.LastRenewedAt.UTC().Format("2006-01-02 15:04:05Z")
+		}
 	}
 
 	// Fingerprint sharing counts, computed over the fleet the Console can see.
@@ -362,11 +382,16 @@ var nodeTmpl = newScreen("node", `
         <dt>enrolled via</dt><dd>{{if .EnrollingToken}}<code>{{.EnrollingToken}}</code>{{else}}<span class="dim">not recorded</span>{{end}}</dd>
         <dt>daemon</dt><dd>{{if .DaemonVersion}}<code>{{.DaemonVersion}}</code>{{else}}<span class="dim">not reported</span>{{end}}</dd>
       </dl>
-      {{if not .CertProvenanceKnown}}
-      <p class="gap"><b>Issued, expiry and renewal count are not recorded yet.</b> The registry
-      stores this Node's certificate fingerprint and nothing else, so the Console cannot tell you
-      when this identity expires or how many times it has renewed. That is a gap in what is
-      stored, not a property of this Node.</p>
+      {{if .CertProvenanceKnown}}
+      <dl>
+        <dt>enrolled</dt><dd>{{if .EnrolledAt}}{{.EnrolledAt}}{{else}}<span class="dim">before this was recorded</span>{{end}}</dd>
+        <dt>expires</dt><dd>{{.CertNotAfter}} <span class="dim">{{.CertExpiresIn}}</span></dd>
+        <dt>renewals</dt><dd>{{.RenewalCount}}{{if .LastRenewedAt}} <span class="dim">last {{.LastRenewedAt}}</span>{{else}} <span class="dim">never renewed</span>{{end}}</dd>
+      </dl>
+      {{else}}
+      <p class="gap"><b>This Node's certificate provenance is not recorded.</b> It enrolled before
+      the Relay began storing certificate validity, so there is no expiry to compare a clock
+      against. It fills in at this Node's next renewal, which is at most one leaf lifetime away.</p>
       {{end}}
       <p class="note">Renewal is certificate-authenticated and preserves the node id, so this
       identity chains unbroken back to the Enrollment Token above.</p>

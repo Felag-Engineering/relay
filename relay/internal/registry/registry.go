@@ -72,6 +72,46 @@ type Node struct {
 	// (see below); only SetRevoked writes it.
 	RevokedAt time.Time
 
+	// The certificate provenance the RELAY issued (#440). Every field here is
+	// Relay-knowledge, not Node-report: the Relay minted the certificate, so it
+	// alone knows when it expires. Report has no field for any of them, exactly
+	// as it has none for RelayLabels or RevokedAt.
+	//
+	// A zero value means NOT RECORDED, never "expires at the epoch" — Nodes
+	// enrolled before this landed carry zeros until their next renewal. Callers
+	// must distinguish the two; CertProvenanceKnown is the one place that test
+	// is written.
+	//
+	// CertNotAfter is read off the certificate that was actually signed rather
+	// than recomputed from the CA's validity constant, so a change to that
+	// constant cannot retroactively rewrite what a Node is holding.
+	CertNotAfter time.Time
+
+	// EnrolledAt is when this Node FIRST joined, written once and never again.
+	// Renewal is certificate-authenticated and preserves NodeID, so this anchors
+	// an unbroken chain back to the Enrollment Token in EnrollingTokenID.
+	EnrolledAt time.Time
+
+	// RenewalCount and LastRenewedAt move on renewal only. A Node whose renewal
+	// count has stopped climbing while CertNotAfter approaches is precisely the
+	// silent failure `state:cert-expiring` exists to catch: nothing else notices
+	// until the Node drops off the fleet.
+	RenewalCount  int
+	LastRenewedAt time.Time
+
+	// Connected is DERIVED and NEVER STORED: whether this Node holds a live
+	// Tunnel at the instant of the read.
+	//
+	// Not persisted, deliberately. A `connected = true` that survived a Relay
+	// crash would be a lie the fleet view renders as a green dot, and the
+	// correct answer after a restart is "nothing is connected" until each Node
+	// dials back in. It is also NOT inferred from LastSeen: a Node that reported
+	// four seconds ago and then dropped its stream is unreachable for dispatch
+	// *now*, and ADR-0004 fails such a Task fast without sending it — a screen
+	// that disagreed with the dispatcher would be telling an operator the fleet
+	// is healthier than it is.
+	Connected bool
+
 	// Outdated is DERIVED, not stored: true when DaemonVersion is below the
 	// Relay's configured min_daemon_version (ADR-0014). It is computed fresh
 	// on every read from the Relay's current config, never persisted — the
@@ -121,6 +161,28 @@ const (
 // value bug this constant pair exists to close.
 func (n Node) Quarantined() bool {
 	return n.RelayLabels[QuarantineKey] == QuarantineOn
+}
+
+// CertProvenanceKnown reports whether the Relay has recorded this Node's
+// certificate provenance.
+//
+// It exists so that "not recorded" and "expires at the epoch" can never be
+// confused at a call site. A surface that finds this false must SAY the value is
+// unknown rather than omitting the row: a missing expiry reads as "fine", and
+// for the one signal that warns before a Node silently leaves the fleet, silence
+// is the worst of the three possible answers.
+func (n Node) CertProvenanceKnown() bool { return !n.CertNotAfter.IsZero() }
+
+// Certificate is what the Relay issued to a Node, as read back off the signed
+// certificate itself.
+type Certificate struct {
+	// Fingerprint is the SHA-256 of the DER bytes, hex-encoded — the same value
+	// that identifies the Node on the wire.
+	Fingerprint string
+
+	// NotAfter is the expiry the CA actually set, parsed from the issued
+	// certificate rather than recomputed from ca.LeafValidity.
+	NotAfter time.Time
 }
 
 // Report is the input to Upsert. It deliberately carries no relay-label field —
@@ -176,6 +238,34 @@ type Repository interface {
 	// unspecified; the InMemory implementation sorts by NodeID for determinism,
 	// but callers must not rely on it.
 	List() []Node
+
+	// RecordEnrollment persists the certificate provenance for a Node's FIRST
+	// enrollment: the certificate the Relay just issued, and the moment it
+	// joined. Returns ErrNotFound if the Node is not in the registry.
+	//
+	// Split from RecordRenewal rather than taking an is-renewal flag, because
+	// the difference between them is an invariant and not a parameter: this
+	// method writes EnrolledAt, that one has no SQL for it. "Provenance survives
+	// renewal" is therefore a property of which function exists, not of a
+	// boolean somebody has to pass correctly.
+	RecordEnrollment(nodeID string, cert Certificate, at time.Time) error
+
+	// RecordRenewal persists a reissued certificate: a new expiry, an
+	// incremented renewal count, and the renewal time. It NEVER writes
+	// EnrolledAt. Returns ErrNotFound if the Node is not in the registry.
+	RecordRenewal(nodeID string, cert Certificate, at time.Time) error
+
+	// SetConnected records that a Node's Tunnel opened or closed.
+	//
+	// In-memory and never persisted (see Node.Connected). Fed by the transport's
+	// stream lifecycle, so a stream close flips the answer immediately rather
+	// than waiting for a LastSeen timeout to expire — which is what lets the
+	// fleet view and the dispatcher agree about reachability.
+	//
+	// Takes no error: connectedness is a fact the transport observed, not a
+	// request that can be refused, and a caller in a defer has nothing useful to
+	// do with a failure. An unknown nodeID is ignored.
+	SetConnected(nodeID string, connected bool)
 
 	// SetRevoked records that a Node is revoked as of at. It is the
 	// structural sibling of SetRelayLabels: Relay-set, Node-immutable, and

@@ -72,7 +72,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		`"facts":{"hostname":"web-1","os":"linux","kernel":"6.1.0","arch":"amd64","ip_addresses":["10.0.0.1"]},` +
 		`"last_seen":"2024-01-01T00:00:00Z","policy_fingerprint":"sha256:node-a-fingerprint",` +
 		`"template_set_fingerprint":"sha256:node-a-template-set","revoked":false,` +
-		`"outdated":true,` +
+		`"outdated":true,"connected":false,` +
 		`"effective_policy":{"raw_exec_enabled":true,"raw_allow_patterns":["^/usr/bin/systemctl restart .+$"],` +
 		`"raw_deny_patterns":[".*rm -rf.*"],"allowed_operations":["system.facts"],` +
 		`"policy_fingerprint":"sha256:node-a-fingerprint","reported":true,` +
@@ -80,7 +80,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		`"deny_rules":[{"name":"file.read","args":[["/etc/shadow"]]}]},` +
 		`"template_vocabulary":{"template_set_fingerprint":"sha256:node-a-template-set","reported":true,` +
 		`"templates":[{"name":"log.tail","risk_class":"read",` +
-		`"slots":[{"name":"lines","type":"integer","enum_values":[]}]}]}}`
+		`"slots":[{"name":"lines","type":"integer","enum_values":[]}]}]},"certificate":{"recorded":false,"renewal_count":0}}`
 
 	if string(got) != want {
 		t.Errorf("json.Marshal(DescribeNodeOutput) =\n%s\nwant\n%s\n(NodeItem's fields must flatten into the "+
