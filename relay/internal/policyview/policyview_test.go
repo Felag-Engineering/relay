@@ -1,9 +1,17 @@
 package policyview
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
+
+// fixedClock is the receipt clock every test here stamps against, so a
+// rendered or asserted receipt time is a value rather than a race with the
+// wall clock.
+var fixedClock = time.Date(2026, 8, 25, 11, 58, 30, 0, time.UTC)
 
 func TestCache_SetGet_RoundTrip(t *testing.T) {
-	c := New()
+	c := New(WithClock(func() time.Time { return fixedClock }))
 	want := Snapshot{
 		RawExecEnabled:    true,
 		RawAllowPatterns:  []string{`^/usr/bin/systemctl restart .+$`},
@@ -33,6 +41,32 @@ func TestCache_SetGet_RoundTrip(t *testing.T) {
 	if len(got.AllowedOperations) != 2 {
 		t.Errorf("AllowedOperations = %v, want 2 entries", got.AllowedOperations)
 	}
+	if !got.ReportedAt.Equal(fixedClock) {
+		t.Errorf("ReportedAt = %v, want %v (the Relay's own receipt clock)", got.ReportedAt, fixedClock)
+	}
+}
+
+// TestCache_Set_StampsTheRelaysOwnClock is the property the effective-Policy
+// panel's timestamp rests on: the receipt time is the Relay's, and a caller —
+// which is ultimately a Node's report crossing the transport — cannot supply
+// one. A daemon-chosen timestamp would be self-reported like a Fact, and a
+// compromised Node could make a stale Policy view look a second old.
+func TestCache_Set_StampsTheRelaysOwnClock(t *testing.T) {
+	c := New(WithClock(func() time.Time { return fixedClock }))
+	injected := time.Date(1999, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	c.Set("node-1", Snapshot{PolicyFingerprint: "sha256:abc123", ReportedAt: injected})
+
+	got, ok := c.Get("node-1")
+	if !ok {
+		t.Fatal("Get(node-1): ok = false, want true")
+	}
+	if got.ReportedAt.Equal(injected) {
+		t.Fatal("Set kept the caller's ReportedAt — the receipt time must never be injectable")
+	}
+	if !got.ReportedAt.Equal(fixedClock) {
+		t.Errorf("ReportedAt = %v, want %v (the Cache's own clock)", got.ReportedAt, fixedClock)
+	}
 }
 
 func TestCache_Get_MissingKey(t *testing.T) {
@@ -43,7 +77,7 @@ func TestCache_Get_MissingKey(t *testing.T) {
 		t.Fatalf("Get(no-such-node): ok = true, want false; got %+v", got)
 	}
 	if got.PolicyFingerprint != "" || got.RawExecEnabled || len(got.RawAllowPatterns) != 0 ||
-		len(got.RawDenyPatterns) != 0 || len(got.AllowedOperations) != 0 {
+		len(got.RawDenyPatterns) != 0 || len(got.AllowedOperations) != 0 || !got.ReportedAt.IsZero() {
 		t.Errorf("Get(no-such-node): got %+v, want zero value", got)
 	}
 }

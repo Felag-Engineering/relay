@@ -23,7 +23,10 @@
 // stale, possibly-wrong Policy view.
 package policyview
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // OperationRule is a proto-free mirror of relayv1.OperationRule: one
 // [[operation]] allow rule from the daemon's loaded Policy file, verbatim.
@@ -53,8 +56,23 @@ type Snapshot struct {
 	RawDenyPatterns   []string
 	AllowedOperations []string
 	PolicyFingerprint string
-	OperationRules    []OperationRule
-	DenyRules         []DenyRule
+
+	// ReportedAt is the instant the RELAY received this report, on the
+	// Relay's own clock. It is stamped inside Set and is NOT on the wire.
+	//
+	// A daemon-chosen timestamp would be self-reported, exactly like a Fact:
+	// a compromised Node could claim its Policy was read a second ago and a
+	// screen would say so. What the Relay can honestly state is when it was
+	// TOLD, so that is what this field is, and a surface rendering it must
+	// say "reported at", never "queried at" — the snapshot is captured on
+	// (re)connect, not on demand.
+	//
+	// Zero for a Snapshot that never went through Set. A caller rendering it
+	// must say the time is not recorded rather than print 1970.
+	ReportedAt time.Time
+
+	OperationRules []OperationRule
+	DenyRules      []DenyRule
 }
 
 // cloneArgSets returns a deep copy of a [][]string so no shared backing
@@ -101,22 +119,50 @@ func (s Snapshot) clone() Snapshot {
 // Cache is an in-memory, thread-safe store of the most recently reported
 // Snapshot per node_id.
 type Cache struct {
-	mu sync.RWMutex
-	m  map[string]Snapshot
+	mu  sync.RWMutex
+	m   map[string]Snapshot
+	now func() time.Time
+}
+
+// Option configures a Cache built by New.
+type Option func(*Cache)
+
+// WithClock overrides the Cache's clock (production default: time.Now, UTC).
+// Mirrors events.WithClock and capability.WithExecClock — a test seam for the
+// receipt stamp, never a production knob.
+func WithClock(now func() time.Time) Option {
+	return func(c *Cache) { c.now = now }
 }
 
 // New returns an empty Cache.
-func New() *Cache {
-	return &Cache{m: make(map[string]Snapshot)}
+func New(opts ...Option) *Cache {
+	c := &Cache{
+		m:   make(map[string]Snapshot),
+		now: func() time.Time { return time.Now().UTC() },
+	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // Set records the latest Snapshot reported for nodeID, replacing any
 // previous value. s is deep-copied on entry so a later mutation by the
 // caller cannot reach the cached value.
+//
+// ReportedAt is stamped HERE, from this Cache's clock, overwriting whatever
+// the caller passed. That is deliberate: the receipt time is the one field on
+// a Snapshot the Relay knows rather than repeats, and a transport that could
+// supply it would be a transport that could let a Node choose how fresh its
+// own Policy looks. The wire has no such field either (relayv1.PolicySnapshot
+// carries none, so cmd/relay's snapshotFromProto has nothing to populate) —
+// belt and braces, in the one place every report passes through.
 func (c *Cache) Set(nodeID string, s Snapshot) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.m[nodeID] = s.clone()
+	out := s.clone()
+	out.ReportedAt = c.now()
+	c.m[nodeID] = out
 }
 
 // Get returns a deep copy of the most recently reported Snapshot for
