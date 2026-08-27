@@ -32,17 +32,21 @@ package console
 // configuration — Execution — is a mirror the composition root sets, not a value
 // this package can read from anywhere.
 //
-// There is also no audit QUERY. AuditReader offers whole-trail and by-key reads
-// only, because that is what the store offers today; the filtered, paginated,
-// per-principal query lane is issue #441 and belongs in the capability layer
-// where the Control API can share it. Until it lands, the screens that read the
-// trail cap what they render and SAY they capped it — see auditWindow.
+// The filtered, paginated, per-principal audit/Job query lane landed in the
+// capability layer as issue #441 — see QueryReader below. AuditReader still
+// offers only whole-trail and by-key reads, because that is what today's
+// screens (Activity, Job detail, agent history, read egress) are built
+// against; migrating each to QueryReader is #422/#424/#423/#425. Until a
+// given screen migrates, it keeps capping what it renders and SAYING it
+// capped it — see auditWindow.
 
 import (
 	"context"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -95,6 +99,25 @@ type AuditReader interface {
 type ApprovalReader interface {
 	PendingApprovals(ctx context.Context) ([]approval.Request, error)
 	Approval(ctx context.Context, id string) (approval.Request, error)
+}
+
+// QueryReader is the capability layer's read lane (#441): filtered,
+// paginated, aggregating queries over the audit trail and over Jobs/Tasks.
+// *capability.Service satisfies it, exactly as ApprovalReader is satisfied
+// above — nothing here dispatches or decides, and the narrowed method set is
+// what keeps this package's grip on the capability layer to reads only.
+//
+// Unused THIS issue by design: the screens that plug into it are #422
+// (Activity), #423 (Job detail), #424 (agent history), and #425 (read
+// egress). Landing the seam here, ahead of any screen using it, is what lets
+// all four be built against one settled contract instead of four
+// independently-guessed ones.
+type QueryReader interface {
+	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
+	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)
+	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
+	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
+	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
 }
 
 // JobReader reads a Job and its Tasks. The composition root's jobResultReader

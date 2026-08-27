@@ -230,6 +230,9 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Jobs:      consoleJobReader{jobs: d.jobs, tasks: d.tasks},
 		Freeze:    d.freeze,
 		Now:       d.now,
+		// The read lane (#441). d.capability (*capability.Service) already
+		// implements console.QueryReader's five methods.
+		Queries: d.capability,
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,

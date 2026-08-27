@@ -80,6 +80,12 @@ type Deps struct {
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 
+	// Queries is the capability layer's read lane (#441): filtered,
+	// paginated queries over the audit trail and over Jobs/Tasks (seams.go).
+	// Unused THIS issue by design — the screen issues (#422/#423/#424/#425)
+	// plug into it.
+	Queries QueryReader
+
 	// CertExpiringWithin is the state:cert-expiring warning window
 	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
 	// 11), same "told, never settable" posture as Execution above. Zero (the

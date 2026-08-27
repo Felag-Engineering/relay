@@ -163,6 +163,22 @@ func (s *Store) Audit() audit.Repository {
 	return &sqliteAudit{db: s.db}
 }
 
+// AuditQueries returns the SQLite-backed audit.QueryRepository — the trail's
+// filtered/paginated/aggregating read lane (#441), the capability layer's
+// seam for it. Backed by the SAME *sqliteAudit type as Audit(): the two are
+// deliberately separate interfaces (append+by-key vs. query-only), not
+// separate implementations, so there is exactly one place the audit table's
+// SELECT logic lives.
+func (s *Store) AuditQueries() audit.QueryRepository {
+	return &sqliteAudit{db: s.db}
+}
+
+// JobQueries returns the SQLite-backed jobs.QueryRepository — the Job/Task
+// read lane (#441), the capability layer's seam for it.
+func (s *Store) JobQueries() jobs.QueryRepository {
+	return &sqliteJobQueries{db: s.db}
+}
+
 // Freeze returns the SQLite-backed freeze.Repository — the persisted
 // Relay-wide emergency stop (ADR-0013).
 func (s *Store) Freeze() freeze.Repository {

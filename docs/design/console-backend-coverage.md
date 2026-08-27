@@ -11,7 +11,7 @@ Console milestones are sequenced by real dependencies rather than optimism.
 |---|---|---|
 | Node registry view (facts, labels, liveness, Policy fingerprint, `outdated`) | registry read seams | ✅ `relay/internal/registry`, consumed by MCP `list_nodes`/`describe_node` — **but** liveness and certificate validity are not on the record; #440 (v0.6.0) adds them for `state:` and Node detail |
 | Effective-Policy viewer per Node | daemon-evaluated Policy queries | ✅ `policyview` (ADR-0011) |
-| Jobs/Tasks, results, audit trail | store + audit queries | ⚠️ `store/audit.go` has only List/ByJob/ByNode/ByAccount/…: no kind, time-range, pagination or arg filter. The Console seams live in the **capability layer's read lane** (invariant #10), never as Console→store calls — #441 (v0.6.0) |
+| Jobs/Tasks, results, audit trail | store + audit queries | ✅ #441 landed the capability layer's read lane — `capability.{QueryAudit,AuditCounts,AuditReach,QueryJobs,QueryTasks}` (`internal/auditquery` adapts `store/auditquery.go`+`store/jobquery.go`), exposed to the Console as `console.QueryReader` (invariant #10, never a Console→store call); the screens that consume it (#422/#423/#424/#425) are separate issues |
 | Freeze, Enrollment Token mint/revoke, Node revoke | capability layer + API | ✅ `/api/v1` slice (v0.0.6) |
 | Execution composer (`list_operations` schemas, plan, run, raw_exec, cancel) | capability layer | ✅ `capability/{execution,plan,cancel}`, `opvocab` golden schema — MCP-only today; Console adapts the same layer in-process |
 | **Login, roles, sessions** | Account model | ❌ single seeded shared credential; no identity |

@@ -18,6 +18,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approvalnotify"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
@@ -615,6 +616,12 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// the same writer.
 	auditSink := auditsink.New(st.Audit())
 
+	// The read lane (#441): filtered, paginated queries over the audit trail
+	// and over Jobs/Tasks, adapted onto capability.AuditQuery/JobQuery by
+	// internal/auditquery — auditsink's twin, for the same import-boundary
+	// reason (capability's allowlist bars internal/audit).
+	queries := auditquery.New(st.AuditQueries(), st.JobQueries())
+
 	// The approval gate (#269, ADR-0027). Loaded BEFORE the capability layer is
 	// built, and a load failure aborts startup rather than degrading: an empty
 	// Gate must only ever mean "no rules configured", never "the rules could
@@ -652,6 +659,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// the gate parked, so with no rules configured nothing parks and the
 		// table stays empty.
 		capability.WithMCPTasks(st.MCPTasks()),
+		// The read lane (#441): filtered, paginated queries over the audit
+		// trail and over Jobs/Tasks — one seam, shared by every surface
+		// (invariant 10).
+		capability.WithQueries(queries, queries),
 		// state:cert-expiring's warning window (#414, ADR-0034), computed
 		// once above and shared by every surface below.
 		capability.WithCertExpiringWindow(certExpiringWithin),

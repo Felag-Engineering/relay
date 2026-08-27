@@ -98,11 +98,21 @@ type spyAuditSink struct {
 	err         error
 	freezeCalls []FreezeEvent
 	cancelCalls []cancelCall
+	readCalls   []readCall
 }
 
 // cancelCall records one RecordCancel invocation's arguments.
 type cancelCall struct {
 	Principal Principal
+	JobID     string
+}
+
+// readCall records one RecordRead invocation's arguments (#441).
+type readCall struct {
+	Principal Principal
+	Tool      string
+	Selector  string
+	NodeID    string
 	JobID     string
 }
 
@@ -120,6 +130,11 @@ func (s *spyAuditSink) RecordFreeze(_ context.Context, e FreezeEvent) error {
 
 func (s *spyAuditSink) RecordCancel(_ context.Context, p Principal, jobID string) error {
 	s.cancelCalls = append(s.cancelCalls, cancelCall{Principal: p, JobID: jobID})
+	return s.err
+}
+
+func (s *spyAuditSink) RecordRead(_ context.Context, p Principal, tool, selector, nodeID, jobID string) error {
+	s.readCalls = append(s.readCalls, readCall{Principal: p, Tool: tool, Selector: selector, NodeID: nodeID, JobID: jobID})
 	return s.err
 }
 
