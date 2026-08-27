@@ -28,6 +28,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/ca"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -84,10 +85,16 @@ type surfaceDeps struct {
 	// capability layer: this seam must not carry Engage or Release.
 	freeze console.FreezeReader
 
-	// events is the event seam (#416) — the SSE route (#422) will mount over
-	// this. mcpSurface also wires it into the MCP server's tool-call
-	// observer below.
+	// events is the event seam (#416). consoleSurface mounts the Console's
+	// one live-read route over it, narrowed to console.EventReader — which
+	// has no Publish method on it at all. mcpSurface wires the SAME bus
+	// into the MCP server's tool-call observer below, on the writing side.
 	events *events.Bus
+
+	// trust is the CA and control-plane server-certificate fingerprints for
+	// day one (spec 10, #427): two strings, so the Console never holds a CA.
+	// Nil leaves that block on the screen saying it is not wired.
+	trust console.TrustReader
 
 	// certExpiringWithin is the state:cert-expiring warning window (#414,
 	// ADR-0034), computed once in newServer from ca.LeafValidity and handed
@@ -241,6 +248,21 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Approvals: d.capability,
 		Freeze:    d.freeze,
 		Now:       d.now,
+		// The two fingerprints day one renders. Digests over public
+		// certificate DER, computed at startup and at read time from
+		// certificates this Relay's own CA minted — not configuration, and
+		// no CA object crosses the seam (console/seams.go).
+		Trust: d.trust,
+		// The live-read seam. This is the SAME *events.Bus the MCP surface
+		// publishes tool calls into above; the Console is handed it through
+		// console.EventReader, which carries Subscribe, Recent and
+		// RetentionWindow and no Publish method of any kind, so this surface
+		// can watch the seam's history and can never author it.
+		//
+		// Through the helper, never `Events: d.events` — see
+		// consoleEventsOrNil for Go's typed-nil trap and what it would cost
+		// here.
+		Events: consoleEventsOrNil(d.events),
 		// The read lane (#441). d.capability (*capability.Service) already
 		// implements console.QueryReader's five methods. Job detail (#423)
 		// reads Jobs and Tasks through it and through nothing else, which is
@@ -316,6 +338,24 @@ func (o toolCallObserver) ToolCall(ctx context.Context, e mcp.ToolCallEvent) {
 	eventsink.ToolCall(o.bus, p.Account, p.AccountID, e)
 }
 
+// consoleEventsOrNil returns b as a console.EventReader, or an untyped nil when
+// b is nil — the same typed-nil guard readAuditorOrNil exists for, below, and
+// needed here for a sharper reason.
+//
+// Assigning a nil *events.Bus straight into the interface field yields a
+// NON-nil interface holding a nil pointer, so console's `d.Events == nil`
+// guards all pass: day one would call Recent on a nil Bus while rendering, and
+// the SSE route would call Subscribe on one instead of answering its 503. Three
+// written promises — Deps.Events' doc, the route's unavailable branch, and the
+// test that covers it — would be false, and the failure would be a nil-pointer
+// panic on the Console's first screen.
+func consoleEventsOrNil(b *events.Bus) console.EventReader {
+	if b == nil {
+		return nil
+	}
+	return b
+}
+
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s
 // is nil.
 //
@@ -328,4 +368,30 @@ func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
 		return nil
 	}
 	return s
+}
+
+// consoleTrustReader adapts the CA and the control-plane server certificate to
+// console.TrustReader.
+//
+// It lives in the composition root, like every other surface adapter in this
+// file, and that placement is what keeps package console from importing
+// internal/ca — so no screen can reach a CA, a private key, or the issuance
+// path. Two strings cross the boundary and nothing else.
+//
+// caFingerprint is captured once at startup because the CA certificate does not
+// change while the process runs. serverCert is held live because its leaf is
+// re-issued about daily, and Fingerprint reads the published pointer without
+// ever triggering a re-issuance (ca.ServerCertificate.Fingerprint).
+type consoleTrustReader struct {
+	caFingerprint string
+	serverCert    *ca.ServerCertificate
+}
+
+func (r consoleTrustReader) CAFingerprint() string { return r.caFingerprint }
+
+func (r consoleTrustReader) ServerFingerprint() string {
+	if r.serverCert == nil {
+		return ""
+	}
+	return r.serverCert.Fingerprint()
 }

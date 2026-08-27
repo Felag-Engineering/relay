@@ -518,7 +518,7 @@ func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
 // so an `hx-on:` attribute — which IS script — would be silently dead rather
 // than merely non-conforming.
 func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
-	d := fleetFixture()
+	d := withExecution(fleetFixture(), true)
 	d.Approvals = fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses
@@ -538,23 +538,51 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 	}
 	h := newTestHandler(d, accounts.RoleAdmin)
 
-	for _, path := range []string{
-		"/console/", "/console/nodes/node-web-1", "/console/activity",
-		"/console/agents", "/console/reads", "/console/approvals",
-		"/console/approvals/ap-1", "/console/jobs/job-1",
-		"/console/compare?nodes=node-web-1,node-web-2",
-	} {
-		rec := get(t, h, path)
+	// Derived from the mounted route table (walkableScreens), so a screen
+	// added later is swept without anyone remembering to add it here.
+	var renders []struct {
+		name    string
+		handler http.Handler
+		path    string
+	}
+	for _, path := range walkableScreens(d, fixtureIDs) {
+		renders = append(renders, struct {
+			name    string
+			handler http.Handler
+			path    string
+		}{path, h, path})
+	}
+	if len(renders) < 8 {
+		t.Fatalf("the sweep derived only %d screens — it is not walking the route table", len(renders))
+	}
+
+	// A SECOND rendering of "/console/", with a zero-Node fleet and the event
+	// seam wired, so the sweep actually walks the one screen in the package
+	// that loads a script. Every other fixture here wires Nodes, so the fleet
+	// view renders and day one never does — which is why this needs its own
+	// entry rather than another path.
+	renders = append(renders, struct {
+		name    string
+		handler http.Handler
+		path    string
+	}{"/console/ (day one)", newTestHandler(dayOneDeps(), accounts.RoleAdmin), "/console/"})
+
+	for _, r := range renders {
+		path := r.name
+		rec := get(t, r.handler, r.path)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s = %d, want 200", path, rec.Code)
 			continue
 		}
 		body := rec.Body.String()
-		if strings.Contains(body, "<script") {
-			t.Errorf("%s rendered an inline script — the content security policy forbids it", path)
-		}
+		assertNoInlineScript(t, path, body)
 		if strings.Contains(body, "hx-on:") {
 			t.Errorf("%s rendered an hx-on: attribute, which IS script and would be dead under the CSP", path)
+		}
+		for _, handler := range []string{" onclick=", " onload=", " onerror=", " onfocus="} {
+			if strings.Contains(body, handler) {
+				t.Errorf("%s rendered %q — an event-handler attribute is inline script", path, handler)
+			}
 		}
 		// An inline STYLE is blocked by `style-src 'self'` exactly as an inline
 		// script is blocked by `script-src 'self'` — and it fails far more

@@ -9,11 +9,13 @@ package console
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -225,6 +227,85 @@ type fakeFreeze struct {
 }
 
 func (f fakeFreeze) Frozen(context.Context) (bool, error) { return f.frozen, f.err }
+
+// fakeTrust is the fingerprint seam: two strings and nothing else, which is
+// the whole shape of TrustReader.
+type fakeTrust struct{ ca, server string }
+
+func (f fakeTrust) CAFingerprint() string     { return f.ca }
+func (f fakeTrust) ServerFingerprint() string { return f.server }
+
+// testCAFingerprint and testServerFingerprint are shaped like the real thing:
+// 64 lowercase hex characters, so a test asserting the screen shortens one and
+// keeps the full value in a title is asserting against a realistic value.
+const (
+	testCAFingerprint     = "5f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+	testServerFingerprint = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+)
+
+// fakeEvents is the live seam, wrapping a REAL *events.Bus rather than a
+// hand-rolled stub: the resume, gap and eviction semantics a day-one test
+// exercises are then the ones that ship, not a second implementation of them.
+//
+// It records the Subscriptions it hands out so a test can assert the handler
+// CLOSED its own — a leaked Subscription stays in the bus forever and every
+// later publish fans out to a channel nobody reads.
+type fakeEvents struct {
+	bus *events.Bus
+
+	mu   sync.Mutex
+	subs []*events.Subscription
+}
+
+func newFakeEvents(opts ...events.Option) *fakeEvents {
+	return &fakeEvents{bus: events.NewBus(opts...)}
+}
+
+func (f *fakeEvents) Subscribe(kinds []events.Kind, lastEventID string) *events.Subscription {
+	sub := f.bus.Subscribe(kinds, lastEventID)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.subs = append(f.subs, sub)
+	return sub
+}
+
+func (f *fakeEvents) Recent(kinds []events.Kind, n int) []events.Event {
+	return f.bus.Recent(kinds, n)
+}
+
+func (f *fakeEvents) RetentionWindow() time.Duration { return f.bus.RetentionWindow() }
+
+// publish puts one enrollment attempt on the bus, exactly as internal/eventsink
+// does in production.
+func (f *fakeEvents) publish(e events.EnrollmentEvent) { f.bus.PublishEnrollment(e) }
+
+// subscriptions counts the Subscriptions handed out so far.
+func (f *fakeEvents) subscriptions() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.subs)
+}
+
+// subscription returns the nth Subscription handed out, or nil.
+func (f *fakeEvents) subscription(n int) *events.Subscription {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n >= len(f.subs) {
+		return nil
+	}
+	return f.subs[n]
+}
+
+// dayOneDeps is a fresh Relay: no Nodes, an empty trail, the fingerprints and
+// the event seam wired. This is what the Console looks like on first boot, and
+// several properties in spec 10 are only visible in it.
+func dayOneDeps() Deps {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{}
+	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
+	d.Events = newFakeEvents()
+	return d
+}
 
 // testNow is the fixed clock every screen test renders against, so a rendered
 // relative time is an assertable string rather than a race with the wall clock.

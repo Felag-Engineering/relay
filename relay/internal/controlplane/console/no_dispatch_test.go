@@ -36,6 +36,7 @@ const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 )
 
 // localImportAlias resolves the local identifier file uses for importPath: the
@@ -63,19 +64,117 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	capAlias, capImported := localImportAlias(file, capabilityImportPath)
 	regAlias, regImported := localImportAlias(file, registryImportPath)
 	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	evAlias, evImported := localImportAlias(file, eventsImportPath)
 
-	checkRepositoryAssertion := func(expr ast.Expr) {
+	// A dot-import of either banned package erases the qualifier every check
+	// below matches on: `import . ".../events"` turns the recovery into
+	// `d.Events.(*Bus)`, which names nothing this guard can see. There is no
+	// legitimate reason for one here, so it is a violation on its own.
+	for _, banned := range []struct{ alias, pkg string }{
+		{regAlias, "registry"}, {evAlias, "events"}, {capAlias, "capability"},
+	} {
+		if banned.alias == "." {
+			violations = append(violations, fmt.Sprintf(
+				"%s dot-imports %s — that erases the package qualifier this guard matches on, so "+
+					"every check below silently stops working", fileName, banned.pkg))
+		}
+	}
+
+	// bannedSelector reports whether expr NAMES one of the two write
+	// surfaces the read seams exist to withhold, pointer or not.
+	//
+	// registry.Repository carries Upsert, SetRelayLabels and SetRevoked.
+	// events.Bus carries all four Publish methods, so a Console file that
+	// recovered it could author an enrollment attempt that never happened or
+	// a tool call nobody made — history, on the surface whose entire job is
+	// to report history.
+	//
+	// The pointer unwrap is load-bearing: registry.Repository is an interface
+	// and is named bare, but events.Bus is a STRUCT and is only ever
+	// recovered as *events.Bus. A guard that matched SelectorExpr alone
+	// looked right and caught nothing.
+	bannedSelector := func(expr ast.Expr) (message string, banned bool) {
+		if star, ok := expr.(*ast.StarExpr); ok {
+			expr = star.X
+		}
 		sel, ok := expr.(*ast.SelectorExpr)
 		if !ok {
-			return
+			return "", false
 		}
 		pkg, ok := sel.X.(*ast.Ident)
-		if !ok || !regImported || pkg.Name != regAlias || sel.Sel.Name != "Repository" {
-			return
+		if !ok {
+			return "", false
 		}
-		violations = append(violations, fmt.Sprintf(
-			"%s: type-asserts to registry.Repository — the Console must never recover the full registry write surface from a narrowed reader (no-dispatch structural guarantee)",
-			fileName))
+		switch {
+		case regImported && pkg.Name == regAlias && sel.Sel.Name == "Repository":
+			return "names registry.Repository — the Console must never recover the full registry " +
+				"write surface from a narrowed reader (no-dispatch structural guarantee)", true
+		case evImported && pkg.Name == evAlias && sel.Sel.Name == "Bus":
+			return "names events.Bus — the Console must never recover the event seam's four Publish " +
+				"methods from a narrowed EventReader; the Console watches history and never authors " +
+				"it (seams.go)", true
+		}
+		return "", false
+	}
+
+	// A type alias is the cheapest way past a name-matching guard: after
+	// `type b = events.Bus` the assertion is `d.Events.(*b)` and mentions
+	// events nowhere. Collect the local names first so the check below can
+	// resolve them. A DEFINED type (no `=`) is collected too: it cannot
+	// actually satisfy the assertion, but naming one of these here has no
+	// legitimate purpose either, and a guard that has to reason about which
+	// spelling compiles is a guard nobody trusts.
+	aliasOf := map[string]string{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.TypeSpec)
+		if !ok {
+			return true
+		}
+		if msg, banned := bannedSelector(spec.Type); banned {
+			aliasOf[spec.Name.Name] = msg
+		}
+		return true
+	})
+
+	// writeSurfaceMethod matches the method names that make an interface a
+	// WRITE surface. An anonymous interface is the third way around a
+	// name-matching guard — `d.Events.(interface{ PublishEnrollment(...) })`
+	// recovers exactly one publisher and names no banned type at all — and it
+	// is the shape that needs no import to work.
+	writeSurfaceMethod := func(name string) bool {
+		return strings.HasPrefix(name, "Publish") || strings.HasPrefix(name, "Set") ||
+			name == "Upsert"
+	}
+
+	checkRecoveredWriteSurface := func(expr ast.Expr) {
+		if star, ok := expr.(*ast.StarExpr); ok {
+			expr = star.X
+		}
+		switch t := expr.(type) {
+		case *ast.SelectorExpr:
+			if msg, banned := bannedSelector(t); banned {
+				violations = append(violations, fmt.Sprintf("%s: type-asserts to a type that %s", fileName, msg))
+			}
+		case *ast.Ident:
+			if msg, ok := aliasOf[t.Name]; ok {
+				violations = append(violations, fmt.Sprintf(
+					"%s: type-asserts to the local type %q, which %s", fileName, t.Name, msg))
+			}
+		case *ast.InterfaceType:
+			if t.Methods == nil {
+				return
+			}
+			for _, m := range t.Methods.List {
+				for _, name := range m.Names {
+					if writeSurfaceMethod(name.Name) {
+						violations = append(violations, fmt.Sprintf(
+							"%s: type-asserts to an anonymous interface declaring %s — recovering a "+
+								"write method from a narrowed read seam is the thing this guard "+
+								"exists to stop, whichever type it is spelled through", fileName, name.Name))
+					}
+				}
+			}
+		}
 	}
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -124,10 +223,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 					fileName))
 			}
 		case *ast.TypeAssertExpr:
-			checkRepositoryAssertion(v.Type)
+			checkRecoveredWriteSurface(v.Type)
 		case *ast.CaseClause:
 			for _, expr := range v.List {
-				checkRepositoryAssertion(expr)
+				checkRecoveredWriteSurface(expr)
 			}
 		}
 		return true

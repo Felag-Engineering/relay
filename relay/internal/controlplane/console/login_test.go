@@ -531,3 +531,40 @@ func TestConsole_StylesheetIsActuallyServed(t *testing.T) {
 		t.Error("the sign-in page does not link the stylesheet")
 	}
 }
+
+// TestConsole_SignInPageCarriesNoInlineScript closes the one gap in the
+// package's script policy.
+//
+// Both rendered-body sweeps skip /console/login, and correctly: it answers a
+// signed-in request with a redirect, so a sweep built from authenticated
+// renders would assert nothing about it. But it is THE ONLY PAGE REACHABLE
+// WITHOUT A CREDENTIAL, which makes it the one page where an inline handler
+// would be reachable by anyone who can route to the control plane at all — and
+// it renders through the same shell that now carries the layout's script hook.
+//
+// So it gets its own unauthenticated render. The ban list is the shell's,
+// deliberately: a page whose whole job is to accept a password is not the place
+// to start making exceptions.
+func TestConsole_SignInPageCarriesNoInlineScript(t *testing.T) {
+	f := newLoginFixture(t)
+
+	rec := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s unauthenticated = %d, want 200", LoginPath, rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "password") {
+		t.Fatal("the sign-in form did not render, so this asserts nothing")
+	}
+
+	assertNoInlineScript(t, LoginPath, body)
+	for _, banned := range []string{
+		"hx-on:", "javascript:", " onclick=", " onload=", " onerror=", " onfocus=",
+		`style="`, "style='",
+	} {
+		if strings.Contains(body, banned) {
+			t.Errorf("the sign-in page contains %q — the content security policy admits no inline "+
+				"script or style, and this is the only page an unauthenticated caller can render", banned)
+		}
+	}
+}

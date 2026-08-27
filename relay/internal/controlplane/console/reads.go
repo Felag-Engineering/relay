@@ -72,6 +72,14 @@ type readsView struct {
 	Truncated bool
 	Window    int
 
+	// Any is whether anything has been read at all. On a fresh Relay the
+	// headline row would otherwise render five zeroed statistics, and spec
+	// 10's first acceptance criterion is that with zero Nodes no screen
+	// renders an empty table or a zeroed statistic — a row of zeros is a
+	// measurement, and it says "we measured your exposure and it is nil"
+	// where the truth is that nothing has happened yet.
+	Any bool
+
 	// Calls, Nodes, Targets and Refused describe reads that reached a NODE —
 	// bytes pulled off a machine by a read-class Operation.
 	Calls   int
@@ -200,6 +208,7 @@ func buildReads(recs []audit.Record) readsView {
 
 	v.Nodes = len(allNodes)
 	v.Targets = len(allTargets)
+	v.Any = v.Calls+v.Enumerations > 0
 
 	for _, p := range byPrincipal {
 		p.Nodes = len(p.nodes)
@@ -309,6 +318,7 @@ to grow the ability to.</p>
 <p class="dim">The audit trail is not wired into this Console.</p>
 {{else}}
 
+{{if .Any}}
 <div class="statrow">
   <div class="stat"><b>{{.Calls}}</b><span>{{plural .Calls "read from a Node" "reads from Nodes"}}</span></div>
   <div class="stat"><b>{{.Targets}}</b><span>distinct {{plural .Targets "target" "targets"}}</span></div>
@@ -321,6 +331,9 @@ one target and four thousand exposures; which one matters depends on whether you
 was seen or how far it reached. Enumerations are counted apart from all three: listing the
 registry is exposure — it hands over the shape of your estate — but it is not bytes off a machine,
 and a headline that mixes the two makes both softer than they are.</p>
+{{else}}
+<p class="dim">Nothing has been read yet.</p>
+{{end}}
 
 <section class="panel">
   <h3>By principal</h3>
