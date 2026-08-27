@@ -402,14 +402,25 @@ func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
 		{Kind: audit.KindDispatch, OperationName: "service.restart", NodeID: "n1", Timestamp: testNow},
 	})
 
-	if v.Calls != 4 {
-		t.Errorf("read calls = %d, want 4 — service.restart must not count as a read", v.Calls)
+	// Node reads and control-plane enumerations are counted apart. list_nodes
+	// touches no Node and can carry no Policy verdict, so folding it into these
+	// figures only ever moved the denominators — and it sat in the by-target
+	// table reporting "0 Nodes" beside rows with a real reach.
+	if v.Calls != 3 {
+		t.Errorf("reads from Nodes = %d, want 3 — service.restart is a mutate and "+
+			"list_nodes is an enumeration; neither is a read from a Node", v.Calls)
+	}
+	if v.Enumerations != 1 {
+		t.Errorf("control-plane enumerations = %d, want 1 (list_nodes)", v.Enumerations)
 	}
 	if v.Nodes != 2 {
 		t.Errorf("Nodes touched = %d, want 2", v.Nodes)
 	}
-	if v.Targets != 3 {
-		t.Errorf("distinct targets = %d, want 3 (two paths plus the registry read)", v.Targets)
+	if v.Targets != 2 {
+		t.Errorf("distinct targets = %d, want 2 (the two paths read off a Node)", v.Targets)
+	}
+	if len(v.EnumTargets) != 1 || v.EnumTargets[0].Target != "list_nodes" {
+		t.Errorf("enumeration targets = %+v, want one list_nodes row", v.EnumTargets)
 	}
 	if v.Refused != 1 {
 		t.Errorf("refused reads = %d, want 1", v.Refused)
@@ -423,7 +434,12 @@ func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
 	// Per-target Node counts are DISTINCT Nodes. Counting records instead makes
 	// a repeated read report more Nodes than the fleet contains, on the one
 	// screen whose job is to say how far an agent reached.
+	// And no enumeration leaks into the by-target table, where every row is
+	// supposed to have reached a machine.
 	for _, tg := range v.Targets2 {
+		if tg.Nodes == 0 {
+			t.Errorf("%s is in the Node-read table with no Node — it is an enumeration", tg.Target)
+		}
 		if tg.Target == "file.read /etc/hosts" && tg.Nodes != 2 {
 			t.Errorf("%s reports %d Nodes, want 2 distinct", tg.Target, tg.Nodes)
 		}
@@ -2037,4 +2053,164 @@ func relLuminance(hex string) float64 {
 		return math.Pow((f+0.055)/1.055, 2.4)
 	}
 	return 0.2126*c(1) + 0.7152*c(3) + 0.0722*c(5)
+}
+
+// TestLayout_NavigationIsALandmark.
+//
+// The sidebar was an <aside class="nav">, so assistive technology was told the
+// primary navigation was "complementary" content and the jump-to-navigation
+// gesture found nothing. The three groupings — observe, then act, then
+// administer — are what nav.go calls the teaching, and they reached sighted
+// operators only: styled divs carry no heading semantics and a bare run of
+// anchors is not announced as a list with a length.
+func TestLayout_NavigationIsALandmark(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, `<nav class="navgroups" aria-label="Console">`) {
+		t.Error("the navigation is not inside a <nav> landmark")
+	}
+	for _, group := range []NavGroup{NavObserve, NavAct, NavAdminister} {
+		slug := strings.ToLower(string(group))
+		if !strings.Contains(body, `<h2 class="navsec" id="navsec-`+slug+`">`) {
+			t.Errorf("the %s group is not a heading", group)
+		}
+		if !strings.Contains(body, `<ul class="navlist" aria-labelledby="navsec-`+slug+`">`) {
+			t.Errorf("the %s group is not a list labelled by its own heading", group)
+		}
+	}
+	// The current destination is marked in the accessibility tree, not only by
+	// a CSS class that a screen reader cannot see.
+	if !strings.Contains(body, `aria-current="page"`) {
+		t.Error("the current navigation item is not marked aria-current")
+	}
+	// And a keyboard user can get past the whole sidebar in one stroke.
+	if !strings.Contains(body, `<a class="skiplink" href="#content">`) {
+		t.Error("no skip link — reaching the content means tabbing the whole nav on every page")
+	}
+}
+
+// TestLayout_AccountFooterIsNotNavigation keeps the landmark honest. Signing
+// out and the identity chip are not destinations, and a <nav> that swallows
+// them makes the landmark less useful, not more.
+func TestLayout_AccountFooterIsNotNavigation(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	nav := body[strings.Index(body, `<nav class="navgroups"`):]
+	nav = nav[:strings.Index(nav, "</nav>")]
+	if strings.Contains(nav, "navfoot") || strings.Contains(nav, "Sign out") {
+		t.Error("the account footer is inside the navigation landmark")
+	}
+}
+
+// TestActivity_ControlPlaneReadsSayWhatWasRead.
+//
+// A read that reaches a Node arrives as a read-class dispatch and is rolled up
+// by Job. The other family — the non-dispatching tools — fell through to the
+// default branch of summarize and rendered as the bare word "read": no target,
+// no Node, no outcome, on the surface billed as the audit trail. The same
+// records were meanwhile driving the Read-egress screen's enumeration panel,
+// so the trail had the fact and this screen declined to say it.
+func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
+	// Both shapes the trail actually produces. The real records carry the tool
+	// in OperationName; ActionKind is the older shape and is empty on them.
+	// The first fix here read ActionKind only, so Activity said "the registry"
+	// while Read egress said "list_nodes" about the same row — which is why
+	// both screens now go through readTargetOf.
+	recs := []audit.Record{
+		{Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, OperationName: "list_operations", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "describe_node", Timestamp: testNow},
+	}
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=read").Body.String()
+	for _, want := range []string{"enumerated list_nodes", "enumerated list_operations", "enumerated describe_node"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the activity trail does not say %q — the row renders as the bare word \"read\"", want)
+		}
+	}
+	if strings.Contains(body, "enumerated registry read") {
+		t.Error("a read fell back to the generic name although the record names its tool")
+	}
+
+	// The two screens must name the same record the same way. They read the
+	// same trail, and an operator who sees "the registry" on one and
+	// "list_nodes" on the other stops trusting both.
+	for _, tg := range buildReads(recs).EnumTargets {
+		if !strings.Contains(body, "enumerated "+tg.Target) {
+			t.Errorf("Read egress calls it %q and Activity does not", tg.Target)
+		}
+	}
+}
+
+// TestReads_EnumerationsAreCountedApartFromNodeReads.
+//
+// list_nodes and list_operations touch no Node and can carry no Policy verdict
+// — Policy is a Node's, and there is no Node. They sat inside the headline
+// "read calls" and "distinct targets" beside file.read /etc/shadow, and in the
+// by-target table reporting "0 Nodes" next to rows with a real reach. Both are
+// exposure and both are still counted; blending them made each number mean
+// less, on the screen whose whole argument is that reading is exfiltration.
+func TestReads_EnumerationsAreCountedApartFromNodeReads(t *testing.T) {
+	v := buildReads([]audit.Record{
+		{Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_operations", Timestamp: testNow},
+	})
+
+	if v.Calls != 1 {
+		t.Errorf("reads from Nodes = %d, want 1", v.Calls)
+	}
+	if v.Enumerations != 3 {
+		t.Errorf("enumerations = %d, want 3", v.Enumerations)
+	}
+	if len(v.Targets2) != 1 {
+		t.Errorf("by-target has %d rows, want 1 — enumerations belong in their own panel", len(v.Targets2))
+	}
+	if len(v.EnumTargets) != 2 {
+		t.Fatalf("enumeration targets = %d, want 2 distinct tools", len(v.EnumTargets))
+	}
+	// Busiest tool first.
+	if v.EnumTargets[0].Target != "list_nodes" || v.EnumTargets[0].Calls != 2 {
+		t.Errorf("enumeration targets are %+v, want list_nodes with 2 calls first", v.EnumTargets)
+	}
+
+	// Per-principal, the two families stay in their own columns.
+	if len(v.Principals) != 1 {
+		t.Fatalf("principals = %d, want 1", len(v.Principals))
+	}
+	if p := v.Principals[0]; p.Calls != 1 || p.Enum != 3 {
+		t.Errorf("principal reports %d Node reads and %d enumerations, want 1 and 3", p.Calls, p.Enum)
+	}
+}
+
+// TestAgents_NarrowViewportsStackRatherThanOverflow.
+//
+// A 64-character node id is the widest unbreakable token the Console renders,
+// and at 900px the 252px account rail plus the feed could not hold one — so
+// the document scrolled sideways. The rail stacks above the feed instead.
+//
+// The ids are deliberately neither broken nor shortened: comparing identifiers
+// is most of what this stream is for. The container moves, the identifier does
+// not — the same choice .devtable and .tablescroll make.
+func TestAgents_NarrowViewportsStackRatherThanOverflow(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	if !strings.Contains(css, "@media (max-width: 1000px)") {
+		t.Error("no narrow-viewport rule for the agent stream")
+	}
+	if !strings.Contains(css, ".evmeta, .denyhead { min-width: 0; overflow-x: auto; }") {
+		t.Error("no overflow backstop on the rows that carry full node ids")
+	}
+	// The backstop is worthless without min-width:0 — a flex item will not
+	// shrink below its content, so overflow-x never engages.
+	i := strings.Index(css, ".evmeta, .denyhead {")
+	if rule := css[i : i+80]; !strings.Contains(rule, "min-width: 0") {
+		t.Error("the overflow backstop has no min-width:0 and will never engage")
+	}
 }

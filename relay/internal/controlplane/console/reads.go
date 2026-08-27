@@ -45,7 +45,10 @@ type readPrincipal struct {
 	Nodes    int
 	Targets  int
 	Denied   int
-	Last     string
+	// Enum counts control-plane enumerations, kept in its own column rather
+	// than folded into Calls. See readsView.Enumerations.
+	Enum int
+	Last string
 }
 
 type readTarget struct {
@@ -69,10 +72,26 @@ type readsView struct {
 	Truncated bool
 	Window    int
 
+	// Calls, Nodes, Targets and Refused describe reads that reached a NODE —
+	// bytes pulled off a machine by a read-class Operation.
 	Calls   int
 	Nodes   int
 	Targets int
 	Refused int
+
+	// Enumerations describes the other family: the non-dispatching tools
+	// (`list_nodes`, `list_operations`, `describe_node`, `get_job`) that read
+	// the Relay's own registry and catalogue and never touch a Node.
+	//
+	// Both are exposure and both are counted — knowing an agent enumerated a
+	// 10,000-Node estate four hundred times is worth a look. They are reported
+	// SEPARATELY because blending them makes each number mean less: a
+	// headline of "13 read calls / 6 distinct targets" that mixes
+	// `file.read /etc/shadow` with `list_operations` softens the one figure
+	// this screen's entire argument rests on, and the mixed rows carried
+	// "0 Nodes" where every neighbouring row carried a real reach.
+	Enumerations int
+	EnumTargets  []readTarget
 
 	Principals []readPrincipal
 	Targets2   []readTarget
@@ -112,6 +131,7 @@ func buildReads(recs []audit.Record) readsView {
 	}
 	byPrincipal := map[string]*pAgg{}
 	byTarget := map[string]*readTarget{}
+	byEnum := map[string]*readTarget{}
 	targetNodes := map[string]map[string]bool{}
 	allNodes := map[string]bool{}
 	allTargets := map[string]bool{}
@@ -120,7 +140,6 @@ func buildReads(recs []audit.Record) readsView {
 		if !isRead(rec) {
 			continue
 		}
-		v.Calls++
 
 		name := principalText(rec)
 		p, seen := byPrincipal[name]
@@ -133,6 +152,25 @@ func buildReads(recs []audit.Record) readsView {
 			}
 			byPrincipal[name] = p
 		}
+
+		// The two families are tallied apart from here down. An enumeration
+		// has no Node and no Operation, so it can contribute neither reach nor
+		// a Policy refusal — folding it into the fleet-read counters only ever
+		// moved the denominators.
+		if isEnumeration(rec) {
+			v.Enumerations++
+			p.Enum++
+			target := readTargetOf(rec)
+			t, ok := byEnum[target]
+			if !ok {
+				t = &readTarget{Target: target}
+				byEnum[target] = t
+			}
+			t.Calls++
+			continue
+		}
+
+		v.Calls++
 		p.Calls++
 
 		target := readTargetOf(rec)
@@ -180,6 +218,15 @@ func buildReads(recs []audit.Record) readsView {
 		t.Nodes = len(targetNodes[key])
 		v.Targets2 = append(v.Targets2, *t)
 	}
+	for _, t := range byEnum {
+		v.EnumTargets = append(v.EnumTargets, *t)
+	}
+	sort.SliceStable(v.EnumTargets, func(i, j int) bool {
+		if v.EnumTargets[i].Calls != v.EnumTargets[j].Calls {
+			return v.EnumTargets[i].Calls > v.EnumTargets[j].Calls
+		}
+		return v.EnumTargets[i].Target < v.EnumTargets[j].Target
+	})
 	// Refused first, then volume. The deny-list catching something is the row
 	// worth reading; the rest is background.
 	sort.SliceStable(v.Targets2, func(i, j int) bool {
@@ -193,6 +240,15 @@ func buildReads(recs []audit.Record) readsView {
 	})
 	return v
 }
+
+// isEnumeration reports whether a read was of the Relay's OWN registry or
+// catalogue rather than of a Node.
+//
+// audit.KindRead is exactly the non-dispatching tools — `list_nodes`,
+// `describe_node`, `list_operations`, `get_job`. None of them reaches a
+// machine, which is why every one of these rows carried "0 Nodes" while
+// sitting in the same table as reads that had a real reach.
+func isEnumeration(rec audit.Record) bool { return rec.Kind == audit.KindRead }
 
 // isRead reports whether a record describes something leaving a Node or the
 // registry for a caller.
@@ -254,20 +310,24 @@ to grow the ability to.</p>
 {{else}}
 
 <div class="statrow">
-  <div class="stat"><b>{{.Calls}}</b><span>{{plural .Calls "read call" "read calls"}}</span></div>
+  <div class="stat"><b>{{.Calls}}</b><span>{{plural .Calls "read from a Node" "reads from Nodes"}}</span></div>
   <div class="stat"><b>{{.Targets}}</b><span>distinct {{plural .Targets "target" "targets"}}</span></div>
   <div class="stat"><b>{{.Nodes}}</b><span>{{plural .Nodes "Node touched" "Nodes touched"}}</span></div>
   <div class="stat{{if .Refused}} attn{{end}}"><b>{{.Refused}}</b><span>refused by Policy</span></div>
+  <div class="stat"><b>{{.Enumerations}}</b><span>control-plane {{plural .Enumerations "enumeration" "enumerations"}}</span></div>
 </div>
 <p class="note">Two different numbers on purpose. One <code>file.read</code> across 4,000 Nodes is
 one target and four thousand exposures; which one matters depends on whether you are asking what
-was seen or how far it reached.</p>
+was seen or how far it reached. Enumerations are counted apart from all three: listing the
+registry is exposure — it hands over the shape of your estate — but it is not bytes off a machine,
+and a headline that mixes the two makes both softer than they are.</p>
 
 <section class="panel">
   <h3>By principal</h3>
   {{if .Principals}}
+  <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Account</th><th class="num">Calls</th><th class="num">Targets</th><th class="num">Nodes</th><th class="num">Refused</th><th>Most recent</th></tr></thead>
+    <thead><tr><th>Account</th><th class="num">Node reads</th><th class="num">Targets</th><th class="num">Nodes</th><th class="num">Refused</th><th class="num">Enumerations</th><th>Most recent</th></tr></thead>
     <tbody>
     {{range .Principals}}
       <tr>
@@ -276,11 +336,13 @@ was seen or how far it reached.</p>
         <td class="num">{{.Targets}}</td>
         <td class="num">{{.Nodes}}</td>
         <td class="num{{if .Denied}} attn{{end}}">{{.Denied}}</td>
+        <td class="num">{{.Enum}}</td>
         <td class="num">{{.Last}}</td>
       </tr>
     {{end}}
     </tbody>
   </table>
+  </div>
   <p class="note">A machine Account whose read volume jumps against its own baseline is the single
   most useful row this screen can produce. Baselines need per-principal counts by time bucket,
   which is the capability layer's read lane and is not built yet — today this is the window's
@@ -289,8 +351,9 @@ was seen or how far it reached.</p>
 </section>
 
 <section class="panel">
-  <h3>By target</h3>
+  <h3>By target &mdash; read from Nodes</h3>
   {{if .Targets2}}
+  <div class="tablescroll">
   <table class="rows">
     <thead><tr><th>Target</th><th class="num">Calls</th><th class="num">Nodes</th><th class="num">Refused</th></tr></thead>
     <tbody>
@@ -304,7 +367,31 @@ was seen or how far it reached.</p>
     {{end}}
     </tbody>
   </table>
-  {{else}}<p class="dim">No targets in the window.</p>{{end}}
+  </div>
+  {{else}}<p class="dim">Nothing has been read from a Node.</p>{{end}}
+</section>
+
+<section class="panel">
+  <h3>Control-plane enumeration</h3>
+  {{if .EnumTargets}}
+  <div class="tablescroll">
+  <table class="rows">
+    <thead><tr><th>Tool</th><th class="num">Calls</th></tr></thead>
+    <tbody>
+    {{range .EnumTargets}}
+      <tr>
+        <td><code>{{.Target}}</code></td>
+        <td class="num">{{.Calls}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <p class="note">These read the Relay&#39;s own registry and Operation catalogue, never a Node, so
+  they have no reach and no Policy verdict — Policy is a Node&#39;s and there is no Node here. They
+  still disclose: the shape of the estate, its labels, and what the fleet will permit. An agent
+  that enumerates far more than it reads is mapping rather than working.</p>
+  {{else}}<p class="dim">Nothing has been enumerated.</p>{{end}}
 </section>
 
 <p class="gap"><b>Read-class dispatches are identified by Operation name.</b> The audit record does

@@ -2,6 +2,7 @@ package console
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
@@ -44,6 +45,12 @@ type NavSection struct {
 	Group NavGroup
 	Items []NavItem
 }
+
+// Slug is the section's id-safe name, used to point each list's
+// aria-labelledby at its own heading. Without it the three lists are announced
+// as three anonymous lists, and the grouping — which nav.go calls the teaching
+// — reaches a sighted operator and nobody else.
+func (s NavSection) Slug() string { return strings.ToLower(string(s.Group)) }
 
 // Nav projects the mounted route table into the navigation a principal with
 // role should see, marking currentPath.

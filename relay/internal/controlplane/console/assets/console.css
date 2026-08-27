@@ -247,6 +247,20 @@ code, pre, .mono { font-family: var(--font-mono); }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-xs); }
 
+/* The skip link: hidden until focused, then the first thing a keyboard user
+ * reaches. Without it, getting to the content on any screen means tabbing past
+ * every navigation item on every page load. It jumps to <main id="content">,
+ * which the layout has always carried. */
+.skiplink {
+  position: absolute; left: var(--space-2); top: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated); color: var(--text-primary);
+  border: 1px solid var(--border-mid); border-radius: var(--radius-lg);
+  transform: translateY(-200%);
+}
+.skiplink:focus { transform: none; text-decoration: none; }
+
 /* Visually hidden, still announced. The stylesheet had no such utility, which
  * is a large part of why the tables ended up with unnamed columns and the
  * liveness dot ended up encoded in colour alone: there was no cheap way to give
@@ -283,7 +297,16 @@ code, pre, .mono { font-family: var(--font-mono); }
   color: var(--color-blue);
   font-weight: var(--weight-medium);
 }
+/* The navigation proper, inside the sidebar but not the whole of it: the
+ * account footer below is not somewhere you navigate to. .nav stays the flex
+ * column so .navfoot's margin-top:auto still pins it to the bottom. */
+.navgroups { display: block; }
+/* An <h2>, so the three groupings reach a screen reader as headings rather
+ * than as styled divs — the grouping is the teaching (nav.go), and it used to
+ * be visible to sighted operators only. The margin reset is the UA default
+ * for a heading; everything else here is unchanged. */
 .navsec {
+  margin: 0;
   padding: var(--space-5) var(--space-4) var(--space-1);
   font-size: var(--text-2xs);
   letter-spacing: 0.12em;
@@ -291,7 +314,13 @@ code, pre, .mono { font-family: var(--font-mono); }
   color: var(--text-muted);
   font-weight: var(--weight-medium);
 }
-.navlist { display: flex; flex-direction: column; gap: 1px; padding: 0 var(--space-2); }
+/* A <ul>, so each group is announced with its length ("list, 4 items") and its
+ * own heading via aria-labelledby. list-style and the UA's padding-inline-start
+ * go; the flex column is exactly as it was. */
+.navlist {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 0; padding: 0 var(--space-2); list-style: none;
+}
 .navitem {
   display: block;
   padding: var(--space-2) var(--space-3);
@@ -931,6 +960,36 @@ dl.kv { grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5); }
 .astats, .asub { grid-column: 2; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .astats b { color: var(--text-primary); }
 .agentfeed { flex: 1; min-width: 0; }
+
+/* Below this width the 252px rail and the feed cannot both hold a 64-character
+ * node id, and the id is the widest unbreakable token on the screen. The rail
+ * goes above the feed rather than beside it, which hands the feed the full
+ * column instead of pushing the document sideways.
+ *
+ * The ids themselves are NOT broken or shortened: comparing identifiers is
+ * most of what this stream is for, and half an id on each of two lines is no
+ * longer a token an operator can select and compare. Same reasoning as
+ * .devtable and .tablescroll — the container moves, the identifier does not. */
+@media (max-width: 1000px) {
+  .agentcols { flex-direction: column; }
+  .agentrail { width: auto; align-self: stretch; }
+}
+
+/* Stacking alone made this WORSE, which is worth recording. In a row-direction
+ * flex container .agentfeed's `min-width: 0` capped it on the MAIN axis, so a
+ * wide row overflowed only its own box. Turning the container to a column
+ * moved the main axis to vertical, min-width stopped constraining anything,
+ * and the feed grew to its widest child — 1224px inside a 900px viewport, a
+ * bigger sideways scroll than before. max-width is what caps a flex item on
+ * the cross axis. */
+.agentfeed { max-width: 100%; }
+.ev, .evbody { min-width: 0; }
+
+/* The backstop, for a viewport narrow enough that even the full column will
+ * not hold a 64-character node id: the row scrolls inside itself rather than
+ * pushing the document. min-width:0 is what lets a flex item shrink below its
+ * content at all — without it overflow-x never engages. */
+.evhead, .evmeta, .denyhead { min-width: 0; overflow-x: auto; }
 .scoped { font-size: var(--text-sm); color: var(--text-second); margin: 0 0 var(--space-3); }
 
 /* --- Read egress ---------------------------------------------------------- */

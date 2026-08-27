@@ -405,6 +405,24 @@ func summarize(rec audit.Record) string {
 		return "was refused"
 	case audit.KindPlan:
 		return "resolved a Plan — nothing executed"
+	case audit.KindRead:
+		// A read that reached a Node arrives as a read-class DISPATCH and is
+		// rolled up by Job through dispatchRow. What lands here is the other
+		// family: the non-dispatching tools that read the Relay's own registry
+		// and Operation catalogue.
+		//
+		// These rendered as the bare word "read" — no target, no Node, no
+		// outcome — while the very same records drove the Read-egress screen's
+		// enumeration panel. The trail had the fact and this surface, which is
+		// billed as the trail, declined to say it.
+		//
+		// readTargetOf is reused rather than reimplemented, and that is the
+		// point: the first attempt here read rec.ActionKind, which is empty on
+		// these records — the tool name lives in OperationName — so Activity
+		// said "the registry" while Read egress said "list_nodes" about the
+		// same audit row. Two screens naming one thing two ways is how an
+		// operator stops trusting either.
+		return "enumerated " + readTargetOf(rec)
 	default:
 		return rec.Kind
 	}
