@@ -40,6 +40,30 @@ func (f fakePolicy) Get(nodeID string) (policyview.Snapshot, bool) {
 	return s, ok
 }
 
+// reportedSnapshot stamps s with the receipt time policyview.Cache.Set would
+// have stamped it with, so a screen test can assert the rendered timestamp
+// without standing up the cache. In production the field is only ever written
+// inside Set, from the Relay's own clock.
+func reportedSnapshot(s policyview.Snapshot, at time.Time) policyview.Snapshot {
+	s.ReportedAt = at
+	return s
+}
+
+// countingFleet records how many times a screen enumerated the fleet.
+//
+// It exists for one assertion: the comparison screen resolves the Nodes it was
+// named and never calls List. That is what keeps it a hand-assembled 2-3 Node
+// view rather than a fleet surface.
+type countingFleet struct {
+	fakeFleet
+	lists *int
+}
+
+func (f countingFleet) List() []registry.Node {
+	*f.lists++
+	return f.fakeFleet.List()
+}
+
 // fakeAudit is an audit read seam over a slice, ordered oldest-first as the
 // real repository orders it.
 type fakeAudit struct {

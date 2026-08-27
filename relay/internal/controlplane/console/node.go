@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
@@ -109,10 +110,61 @@ type nodeView struct {
 	PolicyShared   int
 	TemplateShared int
 
+	// PolicyFingerprintHref, TemplateFingerprintHref and
+	// TemplateUnloadableHref target every Node reporting the same value, as a
+	// Selector. Empty when there is nothing targetable — including when the
+	// self-reported value failed nodestate's value validation, in which case
+	// the fingerprint renders as text with no link rather than as a sanitised
+	// one.
+	PolicyFingerprintHref   string
+	TemplateFingerprintHref string
+	TemplateUnloadableHref  string
+
 	Facts []nodeFact
 
 	Policy         *policyview.Snapshot
 	PolicyReported bool
+
+	// PolicyReportedAt and PolicyReportedAgo are when the RELAY received this
+	// report, from policyview's own clock. Both stay empty for a snapshot with
+	// no receipt time, which the panel says out loud — a zero time rendered
+	// absolutely is a Policy read in 1970.
+	PolicyReportedAt  string
+	PolicyReportedAgo string
+
+	// PolicyStale marks a reported Policy that cannot be re-read: the Node is
+	// offline, and the snapshot refreshes on (re)connect and at no other time.
+	PolicyStale bool
+
+	// PolicyAuthorHref is the link to the Policy Author, drawn for an operator
+	// and above. Presentation, not authorization — the capability layer's
+	// RoleGate answers the second (nav.go says the same about the navigation).
+	PolicyAuthorHref string
+
+	// RunHref is the composer (/console/run, spec 05), drawn only where the
+	// Relay has execution on AND the reader is an operator or above. Absent,
+	// never disabled (ADR-0026 decision 5): a greyed-out control gives away
+	// the property the console_execution flag exists to preserve.
+	//
+	// In v0.6.0 this is reachable in tests only. The composition root
+	// hard-codes Execution false (cmd/relay/control_surfaces.go) until the
+	// composer exists, so its absence in a running Relay is the design and not
+	// a bug.
+	RunHref string
+
+	// The revocation record, read from the trail. RevokedBy is who did it;
+	// RevocationRecorded distinguishes "the trail has no record" from "the
+	// record says nothing", because the registry retains RevokedAt whether or
+	// not the trail was ever wired.
+	RevokedBy          string
+	RevocationRecorded bool
+
+	// Pin is the pinned set and the bar that draws it (the shared "pin-bar"
+	// component). PinHref pins THIS Node and is empty once it is pinned or the
+	// set is full — the bar itself says which.
+	Pin     pinState
+	Pinned  bool
+	PinHref string
 
 	Tasks       []nodeTask
 	TasksElided bool
@@ -143,11 +195,12 @@ func handleNode(d Deps) http.HandlerFunc {
 			return
 		}
 		p.Banner = banner(d, r)
-		renderScreen(w, p, nodeTmpl, buildNodeView(d, r, n))
+		pins, _ := parsePins(r.URL.Query().Get("pin"))
+		renderScreen(w, p, nodeTmpl, buildNodeView(d, r, n, p.Role, pins))
 	}
 }
 
-func buildNodeView(d Deps, r *http.Request, n registry.Node) nodeView {
+func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role, pins []string) nodeView {
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
 	v := nodeView{
@@ -184,6 +237,52 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node) nodeView {
 		}
 	}
 
+	// Fingerprint Selector links, built from nodestate's own derivation rather
+	// than by concatenating the raw fingerprint into a term.
+	//
+	// The values are self-reported and reach the registry unvalidated, and this
+	// link is advertised as directly targetable. nodestate.Facts runs
+	// validFactValue, which drops a value carrying a comma, whitespace or a
+	// namespace prefix — the injection that would otherwise let a Node add a
+	// second Selector term to a link the Console offers. A rejected value
+	// renders as text with no link; it is never sanitised into one.
+	link := linkContext{}
+	for _, l := range nodestate.Facts(in) {
+		switch l.Key {
+		case string(nodestate.FactPolicyFingerprint):
+			v.PolicyFingerprintHref = link.href(l.String())
+		case string(nodestate.FactTemplateFingerprint):
+			v.TemplateFingerprintHref = link.href(l.String())
+		}
+	}
+	// The unloadable literal is a MARKER, not a fact: nodestate.Facts excludes
+	// it by name, because "templates broken" and "this template set" are
+	// different claims and only one of them is a fingerprint.
+	for _, l := range nodestate.Markers(in) {
+		if l.Key == string(nodestate.MarkerTemplateUnloadable) {
+			v.TemplateUnloadableHref = link.href(l.String())
+		}
+	}
+
+	if role.AtLeast(accounts.RoleOperator) {
+		v.PolicyAuthorHref = "/console/policy"
+		if d.Execution {
+			v.RunHref = "/console/run"
+		}
+	}
+
+	// The pin set travels in the query string, which is what keeps this screen
+	// free of a mutating route: pinning is a link, not a write.
+	v.Pin = buildPinState(d, pins, "/console/nodes/"+n.NodeID, "pin")
+	for _, id := range pins {
+		if id == n.NodeID {
+			v.Pinned = true
+		}
+	}
+	if !v.Pinned && !v.Pin.Full {
+		v.PinHref = "/console/nodes/" + n.NodeID + pinQuery(append(append([]string(nil), pins...), n.NodeID))
+	}
+
 	// Fingerprint sharing counts, computed over the fleet the Console can see.
 	for _, other := range d.Fleet.List() {
 		if n.PolicyFingerprint != "" && other.PolicyFingerprint == n.PolicyFingerprint {
@@ -198,11 +297,32 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node) nodeView {
 		if snap, ok := d.Policy.Get(n.NodeID); ok {
 			v.Policy = &snap
 			v.PolicyReported = true
+			if !snap.ReportedAt.IsZero() {
+				v.PolicyReportedAt = snap.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
+				v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
+			}
+			// A snapshot refreshes on (re)connect and at no other moment, so an
+			// offline Node's panel is the last thing its engine said and cannot
+			// be re-asked. Saying so is the difference between a stale answer
+			// and an answer known to be stale.
+			v.PolicyStale = !n.Connected
 		}
 	}
 
 	if d.Audit != nil {
 		if recs, err := d.Audit.ByNode(r.Context(), n.NodeID); err == nil {
+			// The revocation record is read from the WHOLE trail, not from the
+			// windowed rows below: a Node with forty later records would
+			// otherwise lose the one act that explains its state. The trail is
+			// oldest-first, so the last match is the latest.
+			for i := len(recs) - 1; i >= 0; i-- {
+				if recs[i].Kind == audit.KindNodeRevoke {
+					v.RevokedBy = principalText(recs[i])
+					v.RevocationRecorded = true
+					break
+				}
+			}
+
 			rows, elided := windowed(recs, nodeTaskRows)
 			v.TasksElided = elided
 			// The same rule denied over and over is ONE fact, not twenty. A
@@ -359,13 +479,20 @@ var nodeTmpl = newScreen("node", `
   {{with .Hostname}}<span class="sub">{{.}}</span>{{end}}
   <span class="seen" title="{{.LastSeenAbs}}">{{if .Connected}}connected{{else}}last seen {{.LastSeen}} ago{{end}}</span>
   {{if .Revoked}}<span class="chip outcome" data-outcome="cancelled">revoked {{.RevokedAt}}</span>{{end}}
+  {{with .RunHref}}<a class="act" href="{{.}}">Run here</a>{{end}}
+  {{if .Pinned}}<span class="act dim">Pinned to compare</span>
+  {{else}}{{with .PinHref}}<a class="act" href="{{.}}">Pin to compare</a>{{end}}{{end}}
 </div>
+
+{{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 <div class="labelrow">
   {{range .Labels}}{{template "label-chip" .}}{{end}}
   {{range .States}}{{template "label-chip" .}}{{end}}
   <span class="labelnote">
     <b>node:</b> set by the machine's config management, immutable to the Relay ·
+    <b>tag:</b> set by operators through the control plane, immutable to the Node, and never a valid
+    security-lane target — no storage for one exists yet (#430), so none renders here ·
     <b>relay:</b> set by the Relay, immutable to the Node, and the only namespace the security lane may target ·
     <b>state:</b> derived from this record, set by nobody
   </span>
@@ -381,6 +508,15 @@ var nodeTmpl = newScreen("node", `
         <dt>enrolled via</dt><dd>{{if .EnrollingToken}}<code>{{.EnrollingToken}}</code>{{else}}<span class="dim">not recorded</span>{{end}}</dd>
         <dt>daemon</dt><dd>{{if .DaemonVersion}}<code>{{.DaemonVersion}}</code>{{else}}<span class="dim">not reported</span>{{end}}</dd>
       </dl>
+      {{if .Revoked}}
+      <p class="gap"><b>This Node was revoked at {{.RevokedAt}}.</b>
+      {{if .RevocationRecorded}}The trail attributes it to <b>{{.RevokedBy}}</b>, and records no
+      reason — the revoke endpoint does not accept one.
+      {{else}}No revocation record is in the trail: the registry keeps the timestamp whether or not
+      the trail was wired when it happened, so who did it cannot be answered from here.{{end}}
+      The record is retained deliberately, so the machine stays investigable and its history stays
+      answerable; the certificate is not, and this Node cannot reconnect.</p>
+      {{end}}
       {{if .CertProvenanceKnown}}
       <dl>
         <dt>enrolled</dt><dd>{{if .EnrolledAt}}{{.EnrolledAt}}{{else}}<span class="dim">before this was recorded</span>{{end}}</dd>
@@ -400,18 +536,21 @@ var nodeTmpl = newScreen("node", `
       <h3>Fingerprints</h3>
       <dl>
         <dt>Policy</dt>
-        <dd>{{if .PolicyFingerprint}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>
+        <dd>{{if .PolicyFingerprint}}{{with .PolicyFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code>{{if .PolicyFingerprintHref}}</a>{{end}}
           <span class="dim">{{.PolicyShared}} {{plural .PolicyShared "Node" "Nodes"}} report this</span>
         {{else}}<span class="dim">not reported</span>{{end}}</dd>
         <dt>Template set</dt>
-        <dd>{{if .TemplateUnloadable}}<span class="chip lbl" data-ns="state"><span class="ns">state:</span>template-unloadable</span>
+        <dd>{{if .TemplateUnloadable}}{{with .TemplateUnloadableHref}}<a href="{{.}}">{{end}}<span class="chip lbl" data-ns="state"><span class="ns">state:</span>template-unloadable</span>{{if .TemplateUnloadableHref}}</a>{{end}}
           <span class="dim">the Node's local template set failed to load; its template vocabulary is empty and it fails closed</span>
-        {{else if .TemplateFingerprint}}<code title="{{.TemplateFingerprint}}">{{short .TemplateFingerprint}}</code>
+        {{else if .TemplateFingerprint}}{{with .TemplateFingerprintHref}}<a href="{{.}}">{{end}}<code title="{{.TemplateFingerprint}}">{{short .TemplateFingerprint}}</code>{{if .TemplateFingerprintHref}}</a>{{end}}
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node" "Nodes"}} report this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
       <p class="note">Confirming a rollout landed is string equality against these, not trust.
-      Relay reports what the daemon says it loaded; it never sets either.</p>
+      Relay reports what the daemon says it loaded; it never sets either. Each links to every Node
+      reporting the same value — the readable form of <code>state:policy-fingerprint=</code> and
+      <code>state:template-fingerprint=</code>, targeted as a Selector. A value the Node reported in
+      a shape a Selector cannot carry is shown without a link rather than trimmed to fit.</p>
     </section>
 
     <section class="panel">
@@ -429,8 +568,11 @@ var nodeTmpl = newScreen("node", `
     <section class="panel">
       <h3>Effective Policy</h3>
       {{if .PolicyReported}}
-        <p class="note">Answered by <b>this Node's own engine</b> and reported on its last
-        connection. The Relay never evaluates Policy and has no code path that writes it.</p>
+        <p class="note">Answered by <b>this Node's own engine</b> and received by the Relay
+        {{if .PolicyReportedAt}}at <b>{{.PolicyReportedAt}}</b>, {{.PolicyReportedAgo}} ago{{else}}at <b>a time that was not recorded</b>{{end}}.
+        That is a receipt time, not a query time: the snapshot is captured when the Node connects,
+        so this is what the Node said then.
+        The Relay never evaluates Policy and has no code path that writes it.</p>
         <div class="polblock">
           <div class="polrow"><span class="pk">raw exec</span>
             {{if .Policy.RawExecEnabled}}<span class="chip risk" data-risk="mutate">enabled</span>{{else}}<span class="chip risk">disabled</span>{{end}}</div>
@@ -445,6 +587,16 @@ var nodeTmpl = newScreen("node", `
             <div class="polrow"><span class="pk">deny</span><pre>{{.Name}}{{range .Args}} [{{join " | " .}}]{{end}}</pre></div>
           {{end}}
         </div>
+        {{if .PolicyStale}}
+        <p class="gap"><b>This Node is offline, so this panel cannot be refreshed.</b> It is the last
+        thing its engine reported{{with .PolicyReportedAt}}, at {{.}}{{end}}, and nothing has re-asked
+        it since — a snapshot is taken when a Node connects and at no other time.</p>
+        {{end}}
+        {{with .PolicyAuthorHref}}
+        <p class="gap"><a href="{{.}}">Draft a Policy from this vocabulary</a> — Relay generates a
+        file for you to take to your config management. There is no path from this screen to this
+        Node's Policy: Policy is rooted on the machine and the Relay is not one of its writers.</p>
+        {{end}}
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
         <p class="note">The Console shows nothing rather than a remembered answer: a Policy view

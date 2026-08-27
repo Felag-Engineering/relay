@@ -157,6 +157,7 @@ func TestConsole_OnlyLoginAndItsAssetsAreReachableUnauthenticated(t *testing.T) 
 		"/console/incident",
 		"/console/nodes/node-1",
 		"/console/jobs/job-1",
+		"/console/compare",
 		LogoutPath,
 		// Traversals must not smuggle a private route through the predicate:
 		// it matches on the CLEANED path for exactly this reason.

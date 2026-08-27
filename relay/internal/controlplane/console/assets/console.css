@@ -954,6 +954,52 @@ tr.attnrow td { background: var(--attention-bg); }
 .labelnote { flex-basis: 100%; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); line-height: 1.7; }
 .labelnote b { color: var(--text-second); font-family: var(--font-mono); font-weight: var(--weight-medium); }
 
+/* A header action. Hearth, because it is interactive and never semantic — the
+ * colour budget spends this hue on "you can click it" and on nothing else. */
+.act { font-size: var(--text-sm); color: var(--color-blue); }
+.act.dim { color: var(--text-muted); }
+
+/* --- Pin to compare ------------------------------------------------------- */
+/* The pin set lives in the query string, so every control here is an anchor.
+ * There is no button and no form: a pin that wrote a cookie would be a
+ * mutating GET on a surface whose acceptance criterion is zero mutating
+ * routes. */
+.pinbar {
+  display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap;
+  padding: var(--space-2) var(--space-4); background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
+  margin-bottom: var(--space-4); font-size: var(--text-sm);
+}
+.pinlbl {
+  font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-second); font-weight: var(--weight-medium);
+}
+.pinchip {
+  display: inline-flex; align-items: baseline; gap: var(--space-2);
+  padding: 2px var(--space-2); border: 1px solid var(--border-mid); border-radius: var(--radius-md);
+}
+.pinchip code { font-family: var(--font-mono); font-size: var(--text-xs); }
+/* An id that resolved to no Node keeps its chip and loses its link: it is
+ * still in the pin set, so it must still be unpinnable. */
+.pinchip .dim { font-size: var(--text-2xs); }
+.unpin { font-size: var(--text-2xs); color: var(--text-second); }
+
+/* --- Compare ------------------------------------------------------------- */
+/* A differing row is marked with WEIGHT and a border, not a new hue. Six
+ * meanings is the whole colour budget and "these two strings are not equal" is
+ * not one of them — nor is it a judgement about either Node. */
+.cmp th[scope="row"] {
+  text-transform: none; letter-spacing: 0; font-family: var(--font-mono);
+  font-size: var(--text-xs); white-space: nowrap; vertical-align: top; width: 1%;
+}
+.cmp td pre, .cmp td code {
+  margin: 0; font-family: var(--font-mono); font-size: var(--text-xs);
+  white-space: pre-wrap; word-break: break-all; color: var(--text-second);
+}
+.cmp tr[data-diff="1"] { background: var(--bg-elevated); }
+.cmp tr[data-diff="1"] th[scope="row"] { color: var(--text-primary); font-weight: var(--weight-semibold); border-left: 2px solid var(--border-mid); }
+.cmp tr[data-diff="1"] td pre, .cmp tr[data-diff="1"] td code { color: var(--text-primary); font-weight: var(--weight-medium); }
+
 .panels { display: flex; gap: var(--space-4); align-items: flex-start; flex-wrap: wrap; }
 .pcol { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: var(--space-4); }
 .pcol.wide { flex: 1.9; }

@@ -620,6 +620,7 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 		"/console/", "/console/nodes/node-web-1", "/console/activity",
 		"/console/agents", "/console/reads", "/console/approvals",
 		"/console/approvals/ap-1", "/console/jobs/job-1",
+		"/console/compare?nodes=node-web-1,node-web-2",
 	} {
 		rec := get(t, h, path)
 		if rec.Code != http.StatusOK {
@@ -1876,6 +1877,7 @@ func TestConsole_ShipsNoEmoji(t *testing.T) {
 		"/console/assets/console.css",
 		"/console/", "/console/agents", "/console/activity",
 		"/console/reads", "/console/approvals", "/console/login",
+		"/console/nodes/node-web-1", "/console/compare?nodes=node-web-1,node-web-2",
 	} {
 		body := get(t, h, path).Body.String()
 

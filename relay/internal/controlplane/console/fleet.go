@@ -285,6 +285,11 @@ type fleetView struct {
 	// column read as "no Node is near losing its identity".
 	CertExpiryKnown   bool
 	CertExpiryUnknown int
+
+	// Pin is the pinned-Node set this request carried, set by the handler
+	// after the view is built. It only ever travels through this screen —
+	// every row and facet link appends it so a click does not lose the pins.
+	Pin pinState
 }
 
 // groupCards bounds how many rollup cards the page draws. Forty is well past
@@ -367,6 +372,12 @@ func handleFleet(d Deps) http.HandlerFunc {
 		}
 
 		v := buildFleetView(d, nodes, r.URL.Query().Get("filter"), r.URL.Query().Get("group"))
+		// The pin is carried, not computed: this screen is where an operator
+		// picks the second and third Node of a comparison, and a fleet view
+		// that dropped the pin on the way through would make pinning one Node
+		// the only thing possible.
+		pins, _ := parsePins(r.URL.Query().Get("pin"))
+		v.Pin = buildPinState(d, pins, fleetPath, "pin")
 		renderScreen(w, p, fleetTmpl, v)
 	}
 }
@@ -515,8 +526,11 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
 	fn := fleetNode{
-		ID:                  n.NodeID,
-		Hostname:            n.Facts.Hostname,
+		ID:       n.NodeID,
+		Hostname: n.Facts.Hostname,
+		// Href carries NO query string, and must not start: the template
+		// appends the pin with fleetView.Pin.Query, which begins with "?".
+		// A parameter added here would silently produce "...?a=b?pin=...".
 		Href:                "/console/nodes/" + n.NodeID,
 		Connected:           n.Connected,
 		LastSeen:            nodestate.Since(n.LastSeen, d.now()),
@@ -1120,9 +1134,12 @@ var fleetTmpl = newScreen("fleet", `
     <option value="-"{{if eq .GroupBy ""}} selected{{end}}>nothing</option>
     {{range .GroupKeys}}<option value="{{.}}"{{if eq $.GroupBy .}} selected{{end}}>node:{{.}}</option>{{end}}
   </select>
+  {{with .Pin.Raw}}<input type="hidden" name="pin" value="{{.}}">{{end}}
   <button type="submit">Apply</button>
   <span class="vcount">{{.Matched}} of {{.Total}} {{plural .Total "Node" "Nodes"}}</span>
 </form>
+
+{{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 {{if not .FilterOK}}<div class="filtererr"><b>That filter was not applied.</b> {{.FilterError}}</div>{{end}}
 
@@ -1139,7 +1156,7 @@ var fleetTmpl = newScreen("fleet", `
   <div class="wall" data-size="{{.CellSize}}" role="img" aria-label="{{.WallTotal}} Nodes: {{range .Legend}}{{.Count}} {{.Label}}. {{end}}Individual Nodes are listed in the tables below.">
     {{range .Wall}}<div class="wallgroup">
       {{if $.GroupBy}}<span class="walllabel" aria-hidden="true">{{.Key}}</span>{{end}}
-      <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}" tabindex="-1" aria-hidden="true" title="{{.ID}}{{with .Hostname}} — {{.}}{{end}} · {{.BucketLabel}}"></a>{{end}}</div>
+      <div class="wallcells">{{range .Nodes}}<a class="cell" data-bucket="{{.Bucket}}" href="{{.Href}}{{$.Pin.Query}}" tabindex="-1" aria-hidden="true" title="{{.ID}}{{with .Hostname}} — {{.}}{{end}} · {{.BucketLabel}}"></a>{{end}}</div>
     </div>{{end}}
   </div>
   {{if .WallElided}}<p class="mode">{{.WallElided}} more {{plural .WallElided "Node is" "Nodes are"}} not drawn — the wall caps at {{.WallCap}} cells.</p>{{end}}
@@ -1170,7 +1187,7 @@ var fleetTmpl = newScreen("fleet", `
         {{range .Values}}
         <div class="frow">
           {{if .Fenced}}<span class="chip fenced">{{.Fenced}}</span>
-          {{else if .Targetable}}<a href="{{.Href}}">{{if .Chip}}{{template "label-chip" .Chip}}{{else}}{{.Label}}{{end}}</a>
+          {{else if .Targetable}}<a href="{{.Href}}{{$.Pin.Param}}">{{if .Chip}}{{template "label-chip" .Chip}}{{else}}{{.Label}}{{end}}</a>
           {{else}}<span>{{if .Chip}}{{template "label-chip" .Chip}}{{else}}{{.Label}}{{end}}</span>{{end}}
           <b>{{.Count}}</b>
         </div>
@@ -1192,7 +1209,7 @@ var fleetTmpl = newScreen("fleet", `
         {{range .Deviations}}
           <tr>
             <td><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
-            <td><a href="{{.Href}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
+            <td><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
             <td class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
               {{range .States}}{{template "label-chip" .}}{{end}}</td>
