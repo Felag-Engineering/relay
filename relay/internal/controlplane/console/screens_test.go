@@ -43,6 +43,7 @@ func fleetFixture() Deps {
 			DaemonVersion:     "0.6.0",
 			Facts:             registry.Facts{Hostname: "web-1", OS: "debian", Kernel: "6.1.0", Arch: "x86_64"},
 			LastSeen:          testNow.Add(-4 * time.Second),
+			Connected:         true,
 		},
 		{
 			NodeID:            "node-web-2",
@@ -51,6 +52,7 @@ func fleetFixture() Deps {
 			DaemonVersion:     "0.6.0",
 			Facts:             registry.Facts{Hostname: "web-2", OS: "debian"},
 			LastSeen:          testNow.Add(-9 * time.Second),
+			Connected:         true,
 		},
 		{
 			NodeID:            "node-web-3",
@@ -59,6 +61,7 @@ func fleetFixture() Deps {
 			DaemonVersion:     "0.6.0",
 			Facts:             registry.Facts{Hostname: "web-3", OS: "debian"},
 			LastSeen:          testNow.Add(-3 * time.Second),
+			Connected:         true,
 		},
 		{
 			NodeID:            "node-db-1",
@@ -68,9 +71,9 @@ func fleetFixture() Deps {
 			DaemonVersion:     "0.5.0",
 			Facts:             registry.Facts{Hostname: "db-1", OS: "debian"},
 			LastSeen:          testNow.Add(-2 * time.Hour),
+			// Not connected: this is the fixture's offline, quarantined Node.
 		},
 	}}
-	d.Liveness = fakeLiveness{"node-web-1": true, "node-web-2": true, "node-web-3": true}
 	return d
 }
 
@@ -168,8 +171,8 @@ func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
 	d.Fleet = fakeFleet{nodes: []registry.Node{{
 		NodeID:   "node-a",
 		LastSeen: testNow.Add(-1 * time.Second), // seen a heartbeat ago
+		// Connected left false: not connected now, despite the recent LastSeen.
 	}}}
-	d.Liveness = fakeLiveness{} // ...and not connected now
 
 	v := buildFleetView(d, d.Fleet.List(), "", "-")
 	if len(v.Groups) != 1 || v.Groups[0].Offline != 1 {
@@ -198,21 +201,52 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 }
 
 // TestFleet_UnresolvableNamespacesAreRefusedByName covers the honesty rule: a
-// filter on `tag:` or `state:` would match nothing today, and a filter box that
-// silently returns zero rows for a valid-looking term teaches an operator that
-// the box is unreliable.
+// filter on `tag:` would match nothing today (no storage until #430), and a
+// filter box that silently returns zero rows for a valid-looking term teaches
+// an operator that the box is unreliable.
 func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 	d := fleetFixture()
-	for _, term := range []string{"tag:pci", "state:offline"} {
-		v := buildFleetView(d, d.Fleet.List(), term, "-")
-		if v.FilterOK {
-			t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
-		}
-		if v.Matched != len(d.Fleet.List()) {
-			t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
-		}
-		if !strings.Contains(v.FilterError, "#") {
-			t.Errorf("the refusal for %q does not name the issue that will fix it: %q", term, v.FilterError)
+	term := "tag:pci"
+	v := buildFleetView(d, d.Fleet.List(), term, "-")
+	if v.FilterOK {
+		t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
+	}
+	if v.Matched != len(d.Fleet.List()) {
+		t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
+	}
+	if !strings.Contains(v.FilterError, "#") {
+		t.Errorf("the refusal for %q does not name the issue that will fix it: %q", term, v.FilterError)
+	}
+}
+
+// TestFleet_StateFilterResolvesLikeAnyOtherNamespace is #414's acceptance 1
+// at the fleet-view level: a `state:` filter is NOT refused — it resolves
+// through the same capability.ParseSelector/Matches every other namespace
+// does, and the filtered set is exactly the set carrying the matching chip.
+func TestFleet_StateFilterResolvesLikeAnyOtherNamespace(t *testing.T) {
+	d := fleetFixture()
+
+	v := buildFleetView(d, d.Fleet.List(), "state:offline", "-")
+	if !v.FilterOK {
+		t.Fatalf("state:offline was rejected as a filter: %s", v.FilterError)
+	}
+	if v.Matched != 1 {
+		t.Fatalf("state:offline matched %d Nodes, want 1 (node-db-1, the only one not connected)", v.Matched)
+	}
+
+	// The drawn set and the targetable set are the same set: every matched
+	// Node's row must carry the state:offline chip.
+	for _, g := range v.Groups {
+		for _, n := range g.Deviations {
+			found := false
+			for _, s := range n.States {
+				if s.Key == string(nodestate.MarkerOffline) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("Node %q matched state:offline but its row carries no state:offline chip", n.ID)
+			}
 		}
 	}
 }
@@ -643,10 +677,9 @@ func contentOf(body string) string {
 func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 	d := renderableDeps()
 	d.Fleet = fakeFleet{nodes: []registry.Node{
-		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same"},
-		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same"},
+		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
+		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
 	}}
-	d.Liveness = fakeLiveness{"node-a": true, "node-b": true}
 
 	v := buildFleetView(d, d.Fleet.List(), "", "role")
 	g := v.Groups[0]
@@ -673,17 +706,14 @@ func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 // the compression exists, and it must still apply where it was designed to.
 func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
 	var nodes []registry.Node
-	live := fakeLiveness{}
 	for i := 0; i < legibleGroup+10; i++ {
 		id := "node-" + itoa(i)
 		nodes = append(nodes, registry.Node{
-			NodeID: id, NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same",
+			NodeID: id, NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true,
 		})
-		live[id] = true
 	}
 	d := renderableDeps()
 	d.Fleet = fakeFleet{nodes: nodes}
-	d.Liveness = live
 
 	v := buildFleetView(d, d.Fleet.List(), "", "role")
 	if v.Groups[0].Open {
@@ -1045,9 +1075,8 @@ func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
 	d.Fleet = fakeFleet{nodes: []registry.Node{
 		{NodeID: "node-revoked", NodeLabels: map[string]string{"role": "web"}, RevokedAt: revokedAt},
 		{NodeID: "node-offline", NodeLabels: map[string]string{"role": "web"}},
-		{NodeID: "node-fine", NodeLabels: map[string]string{"role": "web"}},
+		{NodeID: "node-fine", NodeLabels: map[string]string{"role": "web"}, Connected: true},
 	}}
-	d.Liveness = fakeLiveness{"node-fine": true}
 
 	v := buildFleetView(d, d.Fleet.List(), "", "role")
 	g := v.Groups[0]
@@ -1094,18 +1123,15 @@ func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
 // Nodes, so the calm rows lead and the incident sits below them.
 func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 	var nodes []registry.Node
-	live := fakeLiveness{}
 	for i := 0; i < 8; i++ { // offline: the majority
 		nodes = append(nodes, registry.Node{NodeID: "off-" + itoa(i), NodeLabels: map[string]string{"role": "web"}})
 	}
 	for i := 0; i < 2; i++ { // healthy: the minority
 		id := "ok-" + itoa(i)
-		nodes = append(nodes, registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}})
-		live[id] = true
+		nodes = append(nodes, registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}, Connected: true})
 	}
 	d := renderableDeps()
 	d.Fleet = fakeFleet{nodes: nodes}
-	d.Liveness = live
 
 	v := buildFleetView(d, d.Fleet.List(), "", "role")
 	rows := v.Groups[0].Deviations
@@ -1130,19 +1156,17 @@ func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 // rows each — verbatim the acceptance criterion this screen must satisfy.
 func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
 	var nodes []registry.Node
-	live := fakeLiveness{}
 	for i := 0; i < 600; i++ {
 		id := "node-" + itoa(i)
 		// One distinct group value per three Nodes: 200 groups.
 		nodes = append(nodes, registry.Node{
 			NodeID: id, NodeLabels: map[string]string{"shard": "s" + itoa(i/3)},
 			PolicyFingerprint: "same",
+			Connected:         true,
 		})
-		live[id] = true
 	}
 	d := renderableDeps()
 	d.Fleet = fakeFleet{nodes: nodes}
-	d.Liveness = live
 
 	v := buildFleetView(d, d.Fleet.List(), "", "shard")
 
@@ -1166,8 +1190,8 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 	d.Fleet = fakeFleet{nodes: []registry.Node{{
 		NodeID:                 "node-a",
 		TemplateSetFingerprint: nodestate.TemplateUnloadable,
+		// Connected left false: offline.
 	}}}
-	d.Liveness = fakeLiveness{} // offline
 
 	v := buildFleetView(d, d.Fleet.List(), "", "-")
 	bySeverity := map[string]bool{}
@@ -1187,28 +1211,43 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 	}
 }
 
-// TestFleet_SaysItIsNotJudgingCertificateExpiry.
-//
-// A clear State column across 10,000 Nodes reads "no Node is near losing its
-// identity". The truth is "the Relay is not judging that yet" — and foundations
-// calls that silence the worst of the three possible answers.
-//
-// The banner used to give a DIFFERENT reason: that the registry held only a
-// fingerprint and no validity at all. #440 made that false — registry.Node
-// carries CertNotAfter, and Node detail renders the expiry and the renewal
-// count one click away — while this screen went on asserting the Relay was
-// blind to something it was displaying next door. The gap is real and the note
-// stays; what it says about the cause had to stop being wrong.
-func TestFleet_SaysItIsNotJudgingCertificateExpiry(t *testing.T) {
-	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
-	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
-		t.Error("the fleet view does not say it is not judging certificate expiry")
+// TestFleet_CertExpiringMarkerFires is #414's positive case: a Node whose
+// identity certificate has fallen inside the configured warning window
+// carries state:cert-expiring — chipped on its own row, counted in its
+// group's rollup line, and sorted into the attention bucket — exactly like
+// the other alarm markers.
+func TestFleet_CertExpiringMarkerFires(t *testing.T) {
+	d := renderableDeps()
+	d.CertExpiringWithin = 84 * time.Hour
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, CertNotAfter: testNow.Add(10 * time.Hour)},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	g := v.Groups[0]
+	if g.Expiring != 1 {
+		t.Fatalf("group Expiring = %d, want 1", g.Expiring)
 	}
-	if !strings.Contains(body, "state:cert-expiring") {
-		t.Error("the gap note does not name the marker that cannot appear")
+	n := g.Deviations[0]
+	found := false
+	for _, s := range n.States {
+		if s.Key == string(nodestate.MarkerCertExpiring) {
+			found = true
+			if !s.Attention {
+				t.Error("the state:cert-expiring chip does not carry Attention")
+			}
+		}
 	}
-	if strings.Contains(body, "certificate fingerprint and nothing else") {
-		t.Error("the retired claim that the registry stores no certificate validity is back — #440 made it false")
+	if !found {
+		t.Error("a Node inside the cert-expiring window does not carry the state:cert-expiring chip")
+	}
+	if n.Bucket != wallAttention {
+		t.Errorf("Node bucket = %q, want %q (state:cert-expiring is an alarm)", n.Bucket, wallAttention)
+	}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, "certificate expiring") {
+		t.Error("the group card does not render the certificate-expiring rollup line")
 	}
 }
 
@@ -1225,8 +1264,8 @@ func TestFleet_NamesTheNodesWithNoRecordedValidity(t *testing.T) {
 
 // TestFleet_SilentAboutValidityWhenEveryNodeHasIt is the other side: with
 // CertNotAfter on every matched Node there is no data gap to report, so the
-// conditional sentence must disappear. The #414 headline stays, because the
-// missing threshold is not a data problem and does not go away with the data.
+// gap note must not render at all — silence is the correct answer once the
+// judgement can be complete, exactly as it is for every other clean marker.
 func TestFleet_SilentAboutValidityWhenEveryNodeHasIt(t *testing.T) {
 	d := fleetFixture()
 	f := d.Fleet.(fakeFleet)
@@ -1240,9 +1279,6 @@ func TestFleet_SilentAboutValidityWhenEveryNodeHasIt(t *testing.T) {
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
 	if strings.Contains(body, "no recorded validity at all") {
 		t.Error("the fleet view reports a validity gap when every Node has recorded validity")
-	}
-	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
-		t.Error("the #414 note vanished with the data gap — the missing threshold is a separate cause")
 	}
 }
 
@@ -1404,13 +1440,12 @@ func TestFleet_TablesAndLivenessAreNamed(t *testing.T) {
 func TestFleet_TemplateSetFacetExists(t *testing.T) {
 	d := renderableDeps()
 	d.Fleet = fakeFleet{nodes: []registry.Node{
-		{NodeID: "a", TemplateSetFingerprint: "aaaa1111"},
-		{NodeID: "b", TemplateSetFingerprint: "aaaa1111"},
-		{NodeID: "c", TemplateSetFingerprint: "bbbb2222"},
-		{NodeID: "d", TemplateSetFingerprint: nodestate.TemplateUnloadable},
-		{NodeID: "e"},
+		{NodeID: "a", TemplateSetFingerprint: "aaaa1111", Connected: true},
+		{NodeID: "b", TemplateSetFingerprint: "aaaa1111", Connected: true},
+		{NodeID: "c", TemplateSetFingerprint: "bbbb2222", Connected: true},
+		{NodeID: "d", TemplateSetFingerprint: nodestate.TemplateUnloadable, Connected: true},
+		{NodeID: "e", Connected: true},
 	}}
-	d.Liveness = fakeLiveness{"a": true, "b": true, "c": true, "d": true, "e": true}
 
 	v := buildFleetView(d, d.Fleet.List(), "", "-")
 	var tf *facet
@@ -1433,6 +1468,51 @@ func TestFleet_TemplateSetFacetExists(t *testing.T) {
 	}
 	if got[shortHash("aaaa1111")] != 2 {
 		t.Errorf("fingerprint distribution wrong: %v", got)
+	}
+}
+
+// TestFleet_FingerprintFacetTermsResolveToTheFullValue covers the fingerprint
+// facets' term-building: the facet is KEYED by shortHash for display, but the
+// Selector term it links to must carry the FULL fingerprint — ParseSelector
+// has no notion of a short hash — and that term must actually resolve back to
+// the Nodes the facet counted.
+func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "a", PolicyFingerprint: "aaaa111122223333", Connected: true},
+		{NodeID: "b", PolicyFingerprint: "aaaa111122223333", Connected: true},
+		{NodeID: "c", PolicyFingerprint: "bbbb444455556666", Connected: true},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	var pf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
+			pf = &v.Groups[0].Facets[i]
+		}
+	}
+	if pf == nil {
+		t.Fatal("no Policy fingerprint facet")
+	}
+	var term string
+	for _, val := range pf.Values {
+		if val.Label == shortHash("aaaa111122223333") {
+			if !val.Targetable {
+				t.Fatalf("Policy fingerprint facet value %q is not targetable", val.Label)
+			}
+			term = val.Term
+		}
+	}
+	if term != "state:policy-fingerprint=aaaa111122223333" {
+		t.Fatalf("facet term = %q, want the FULL fingerprint, not the short hash", term)
+	}
+
+	got := buildFleetView(d, d.Fleet.List(), term, "-")
+	if !got.FilterOK {
+		t.Fatalf("the facet's own term %q was rejected as a filter: %s", term, got.FilterError)
+	}
+	if got.Matched != 2 {
+		t.Fatalf("filtering on the facet term matched %d Nodes, want 2 (a, b)", got.Matched)
 	}
 }
 
@@ -1468,14 +1548,11 @@ func TestFleet_StateFacetKeepsNamespacesApart(t *testing.T) {
 			t.Errorf("facet value %q renders as a bare string, not a chip", val.Label)
 			continue
 		}
-		// Only the relay: fence resolves today. A state: term offered as a link
-		// would take an operator to a filter that refuses it.
-		if val.Targetable && val.Chip.Namespace != NamespaceRelay {
-			t.Errorf("%q is offered as a Selector term but its namespace does not resolve yet", val.Label)
+		// Both relay: fences and state: markers resolve as a Selector term
+		// (#414) — every non-fenced value here must be a live link.
+		if !val.Targetable {
+			t.Errorf("%q is not offered as a Selector term, even though its namespace resolves", val.Label)
 		}
-	}
-	if sf.Hint == "" {
-		t.Error("the State facet does not visibly explain why most of its values are not links")
 	}
 }
 

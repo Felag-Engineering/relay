@@ -32,11 +32,6 @@ func (f fakeFleet) Get(nodeID string) (registry.Node, bool) {
 	return registry.Node{}, false
 }
 
-// fakeLiveness reports a fixed connected set.
-type fakeLiveness map[string]bool
-
-func (f fakeLiveness) Connected(nodeID string) bool { return f[nodeID] }
-
 // fakePolicy is a policyview read seam.
 type fakePolicy map[string]policyview.Snapshot
 
@@ -120,10 +115,9 @@ var testNow = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 // Screen tests start here and override the one seam they are about.
 func renderableDeps() Deps {
 	return Deps{
-		Fleet:    fakeFleet{nodes: []registry.Node{{NodeID: "node-a"}}},
-		Liveness: fakeLiveness{"node-a": true},
-		Audit:    fakeAudit{},
-		Now:      func() time.Time { return testNow },
+		Fleet: fakeFleet{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
+		Audit: fakeAudit{},
+		Now:   func() time.Time { return testNow },
 	}
 }
 

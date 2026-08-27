@@ -33,6 +33,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 			TemplateSetFingerprint: "sha256:node-a-template-set",
 			Revoked:                false,
 			Outdated:               true,
+			StateLabels:            []string{"state:outdated"},
 		},
 		EffectivePolicy: EffectivePolicyOutput{
 			RawExecEnabled:    true,
@@ -72,7 +73,7 @@ func TestDescribeNodeOutput_JSONShapeIsFlattened(t *testing.T) {
 		`"facts":{"hostname":"web-1","os":"linux","kernel":"6.1.0","arch":"amd64","ip_addresses":["10.0.0.1"]},` +
 		`"last_seen":"2024-01-01T00:00:00Z","policy_fingerprint":"sha256:node-a-fingerprint",` +
 		`"template_set_fingerprint":"sha256:node-a-template-set","revoked":false,` +
-		`"outdated":true,"connected":false,` +
+		`"outdated":true,"connected":false,"state_labels":["state:outdated"],` +
 		`"effective_policy":{"raw_exec_enabled":true,"raw_allow_patterns":["^/usr/bin/systemctl restart .+$"],` +
 		`"raw_deny_patterns":[".*rm -rf.*"],"allowed_operations":["system.facts"],` +
 		`"policy_fingerprint":"sha256:node-a-fingerprint","reported":true,` +

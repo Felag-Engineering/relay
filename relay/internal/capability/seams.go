@@ -124,6 +124,22 @@ type AuditSink interface {
 	// after the cancel itself was attempted successfully; see CancelJob's
 	// doc comment.
 	RecordCancel(ctx context.Context, p Principal, jobID string) error
+
+	// RecordRead records one metadata-only read-access event (#288, ADR-0025;
+	// #441 extends it to the trail's own read lane): who read, which tool,
+	// what they aimed it at, and when — never the result. tool is a
+	// low-cardinality name (readlane.go's constants); selector, nodeID, and
+	// jobID are whichever of "what was aimed at" apply, empty otherwise.
+	//
+	// *auditsink.Sink already implements exactly this signature
+	// (auditsink.go), so it joins the AuditSink interface rather than
+	// getting its own seam — the same reason Record/RecordFreeze/
+	// RecordCancel are one interface (this file's doc comment above): a
+	// separately-wired read auditor is how a deployment ends up with audited
+	// dispatch and an unaudited trail, and New's real-dispatcher fail-open
+	// guard (service.go) then covers the read lane for free, with no new
+	// guard to remember.
+	RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error
 }
 
 // AuditKind distinguishes what kind of Run outcome an AuditEntry describes.
@@ -246,6 +262,10 @@ func (noopAuditSink) RecordFreeze(context.Context, FreezeEvent) error {
 }
 
 func (noopAuditSink) RecordCancel(context.Context, Principal, string) error {
+	return nil
+}
+
+func (noopAuditSink) RecordRead(context.Context, Principal, string, string, string, string) error {
 	return nil
 }
 

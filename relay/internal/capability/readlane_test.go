@@ -1,0 +1,415 @@
+package capability
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+)
+
+// spyAuditQuery is a spy capability.AuditQuery, in the style of
+// service_test.go's spyAuditSink.
+type spyAuditQuery struct {
+	queryCalled bool
+	gotFilter   AuditFilter
+	gotPage     PageRequest
+	queryResult AuditPage
+	queryErr    error
+
+	countsCalled bool
+	gotBucket    time.Duration
+	countsResult []PrincipalBucket
+	countsErr    error
+
+	reachCalled bool
+	reachResult Reach
+	reachErr    error
+}
+
+func (s *spyAuditQuery) QueryAudit(_ context.Context, f AuditFilter, page PageRequest) (AuditPage, error) {
+	s.queryCalled = true
+	s.gotFilter = f
+	s.gotPage = page
+	return s.queryResult, s.queryErr
+}
+
+func (s *spyAuditQuery) AuditCounts(_ context.Context, f AuditFilter, bucket time.Duration) ([]PrincipalBucket, error) {
+	s.countsCalled = true
+	s.gotFilter = f
+	s.gotBucket = bucket
+	return s.countsResult, s.countsErr
+}
+
+func (s *spyAuditQuery) AuditReach(_ context.Context, f AuditFilter) (Reach, error) {
+	s.reachCalled = true
+	s.gotFilter = f
+	return s.reachResult, s.reachErr
+}
+
+// spyJobQuery is a spy capability.JobQuery.
+type spyJobQuery struct {
+	jobsCalled   bool
+	gotJobFilter JobFilter
+	gotJobPage   PageRequest
+	jobsResult   JobPage
+	jobsErr      error
+
+	tasksCalled   bool
+	gotTaskFilter TaskFilter
+	gotTaskPage   PageRequest
+	tasksResult   TaskPage
+	tasksErr      error
+}
+
+func (s *spyJobQuery) QueryJobs(_ context.Context, f JobFilter, page PageRequest) (JobPage, error) {
+	s.jobsCalled = true
+	s.gotJobFilter = f
+	s.gotJobPage = page
+	return s.jobsResult, s.jobsErr
+}
+
+func (s *spyJobQuery) QueryTasks(_ context.Context, f TaskFilter, page PageRequest) (TaskPage, error) {
+	s.tasksCalled = true
+	s.gotTaskFilter = f
+	s.gotTaskPage = page
+	return s.tasksResult, s.tasksErr
+}
+
+// readLaneFixture builds a Service wired with spy read-lane seams and a spy
+// AuditSink, for the tests below.
+func readLaneFixture(t *testing.T) (*Service, *spyAuditQuery, *spyJobQuery, *spyAuditSink) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	auditQ := &spyAuditQuery{}
+	jobQ := &spyJobQuery{}
+	audit := &spyAuditSink{}
+	svc := New(reg, WithQueries(auditQ, jobQ), WithAuditSink(audit))
+	return svc, auditQ, jobQ, audit
+}
+
+var testPrincipal = Principal{AccountID: "acct-1", Account: "gleipnir", Role: "operator"}
+
+// validAggWindow is a bounded Since/Until pair satisfying AuditFilter.
+// validateWindow (F1, #441 cycle-2 security review): AuditCounts and
+// AuditReach reject AuditFilter{} outright now, so every test exercising
+// them for reasons OTHER than that specific rejection needs a filter that
+// clears it.
+var validAggWindow = AuditFilter{
+	Since: time.Date(2026, 8, 20, 11, 0, 0, 0, time.UTC),
+	Until: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
+}
+
+// TestReadLane_RecordsReadBeforeQuerying is acceptance line 23 (ADR-0025
+// fail-closed): every read-lane method records exactly one RecordRead with
+// the right tool name, and does so BEFORE the underlying query seam is
+// reached — proven by making RecordRead fail and asserting the query spy was
+// never called.
+func TestReadLane_RecordsReadBeforeQuerying(t *testing.T) {
+	cases := []struct {
+		name string
+		tool string
+		call func(svc *Service) error
+		spy  func(auditQ *spyAuditQuery, jobQ *spyJobQuery) bool // returns whether the underlying seam was called
+	}{
+		{
+			"QueryAudit", toolQueryAudit,
+			func(svc *Service) error {
+				_, err := svc.QueryAudit(context.Background(), testPrincipal, AuditFilter{}, PageRequest{})
+				return err
+			},
+			func(auditQ *spyAuditQuery, _ *spyJobQuery) bool { return auditQ.queryCalled },
+		},
+		{
+			"AuditCounts", toolAuditCounts,
+			func(svc *Service) error {
+				_, err := svc.AuditCounts(context.Background(), testPrincipal, validAggWindow, time.Hour)
+				return err
+			},
+			func(auditQ *spyAuditQuery, _ *spyJobQuery) bool { return auditQ.countsCalled },
+		},
+		{
+			"AuditReach", toolAuditReach,
+			func(svc *Service) error {
+				_, err := svc.AuditReach(context.Background(), testPrincipal, validAggWindow)
+				return err
+			},
+			func(auditQ *spyAuditQuery, _ *spyJobQuery) bool { return auditQ.reachCalled },
+		},
+		{
+			"QueryJobs", toolQueryJobs,
+			func(svc *Service) error {
+				_, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{}, PageRequest{})
+				return err
+			},
+			func(_ *spyAuditQuery, jobQ *spyJobQuery) bool { return jobQ.jobsCalled },
+		},
+		{
+			"QueryTasks", toolQueryTasks,
+			func(svc *Service) error {
+				_, err := svc.QueryTasks(context.Background(), testPrincipal, TaskFilter{JobID: "job-1"}, PageRequest{})
+				return err
+			},
+			func(_ *spyAuditQuery, jobQ *spyJobQuery) bool { return jobQ.tasksCalled },
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name+"/success", func(t *testing.T) {
+			svc, auditQ, jobQ, audit := readLaneFixture(t)
+			if err := c.call(svc); err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if len(audit.readCalls) != 1 {
+				t.Fatalf("RecordRead called %d times, want 1", len(audit.readCalls))
+			}
+			if got := audit.readCalls[0].Tool; got != c.tool {
+				t.Errorf("tool = %q, want %q", got, c.tool)
+			}
+			if audit.readCalls[0].Principal != testPrincipal {
+				t.Errorf("RecordRead principal = %+v, want %+v", audit.readCalls[0].Principal, testPrincipal)
+			}
+			if !c.spy(auditQ, jobQ) {
+				t.Errorf("%s: underlying query seam was never called", c.name)
+			}
+		})
+
+		t.Run(c.name+"/failClosedOnUnauditableRead", func(t *testing.T) {
+			svc, auditQ, jobQ, audit := readLaneFixture(t)
+			audit.err = errors.New("audit write failed")
+			if err := c.call(svc); err == nil {
+				t.Fatalf("%s: err = nil, want the audit write failure to propagate", c.name)
+			}
+			if len(audit.readCalls) != 1 {
+				t.Fatalf("RecordRead called %d times, want 1 (attempted even though it failed)", len(audit.readCalls))
+			}
+			if c.spy(auditQ, jobQ) {
+				t.Errorf("%s: underlying query seam was called despite RecordRead failing — not fail-closed", c.name)
+			}
+		})
+	}
+}
+
+// TestReadLane_FilterValidation covers Until-before-Since on every filter
+// type, and TaskFilter's required JobID.
+func TestReadLane_FilterValidation(t *testing.T) {
+	svc, _, _, _ := readLaneFixture(t)
+	ctx := context.Background()
+	since := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	until := since.Add(-time.Hour)
+
+	if _, err := svc.QueryAudit(ctx, testPrincipal, AuditFilter{Since: since, Until: until}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryAudit with Until before Since: err = %v, want ErrInvalidFilter", err)
+	}
+	if _, err := svc.AuditCounts(ctx, testPrincipal, AuditFilter{Since: since, Until: until}, time.Hour); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("AuditCounts with Until before Since: err = %v, want ErrInvalidFilter", err)
+	}
+	if _, err := svc.AuditReach(ctx, testPrincipal, AuditFilter{Since: since, Until: until}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("AuditReach with Until before Since: err = %v, want ErrInvalidFilter", err)
+	}
+	if _, err := svc.QueryJobs(ctx, testPrincipal, JobFilter{Since: since, Until: until}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryJobs with Until before Since: err = %v, want ErrInvalidFilter", err)
+	}
+	if _, err := svc.QueryTasks(ctx, testPrincipal, TaskFilter{}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryTasks with no JobID: err = %v, want ErrInvalidFilter", err)
+	}
+
+	// A valid filter with an arg prefix but no arg key is refused too.
+	if _, err := svc.QueryAudit(ctx, testPrincipal, AuditFilter{ArgValuePrefix: "/etc"}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryAudit with ArgValuePrefix but no ArgKey: err = %v, want ErrInvalidFilter", err)
+	}
+}
+
+// TestReadLane_LimitClamping covers 0 -> DefaultPageSize, over-max ->
+// clamped, and Page.Limit reporting the effective value.
+func TestReadLane_LimitClamping(t *testing.T) {
+	svc, auditQ, jobQ, _ := readLaneFixture(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		name  string
+		limit int
+		want  int
+	}{
+		{"zero", 0, DefaultPageSize},
+		{"negative", -5, DefaultPageSize},
+		{"underMax", 10, 10},
+		{"overMax", MaxPageSize + 100, MaxPageSize},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := svc.QueryAudit(ctx, testPrincipal, AuditFilter{}, PageRequest{Limit: c.limit}); err != nil {
+				t.Fatalf("QueryAudit: %v", err)
+			}
+			if auditQ.gotPage.Limit != c.want {
+				t.Errorf("QueryAudit effective limit = %d, want %d", auditQ.gotPage.Limit, c.want)
+			}
+
+			if _, err := svc.QueryJobs(ctx, testPrincipal, JobFilter{}, PageRequest{Limit: c.limit}); err != nil {
+				t.Fatalf("QueryJobs: %v", err)
+			}
+			if jobQ.gotJobPage.Limit != c.want {
+				t.Errorf("QueryJobs effective limit = %d, want %d", jobQ.gotJobPage.Limit, c.want)
+			}
+		})
+	}
+}
+
+// TestReadLane_QueryTasksStripsReadClassOutput covers D3: TaskRow output is
+// blanked for every Task EXCEPT one whose RiskClass is explicitly
+// jobs.RiskClassMutate, and preserved for that one — including
+// RiskClassUnspecified, which F3 (#441 cycle-2 security review) requires to
+// strip rather than retain. Before the fix, the condition was
+// "== RiskClassRead", which left RiskClassUnspecified's output untouched; a
+// build that regresses to that condition fails the "unspecified" case below.
+func TestReadLane_QueryTasksStripsReadClassOutput(t *testing.T) {
+	svc, _, jobQ, _ := readLaneFixture(t)
+	jobQ.tasksResult = TaskPage{Tasks: []TaskRow{
+		{TaskID: "t-read", RiskClass: jobs.RiskClassRead, Stdout: []byte("secret output"), Stderr: []byte("secret err")},
+		{TaskID: "t-mutate", RiskClass: jobs.RiskClassMutate, Stdout: []byte("mutate out"), Stderr: []byte("mutate err")},
+		{TaskID: "t-unspecified", RiskClass: jobs.RiskClassUnspecified, Stdout: []byte("unspecified output"), Stderr: []byte("unspecified err")},
+	}}
+
+	page, err := svc.QueryTasks(context.Background(), testPrincipal, TaskFilter{JobID: "job-1"}, PageRequest{})
+	if err != nil {
+		t.Fatalf("QueryTasks: %v", err)
+	}
+	if len(page.Tasks) != 3 {
+		t.Fatalf("Tasks = %d, want 3", len(page.Tasks))
+	}
+	for _, row := range page.Tasks {
+		switch row.TaskID {
+		case "t-read", "t-unspecified":
+			if row.Stdout != nil || row.Stderr != nil {
+				t.Errorf("non-mutate-class Task %s kept output: stdout=%q stderr=%q", row.TaskID, row.Stdout, row.Stderr)
+			}
+		case "t-mutate":
+			if string(row.Stdout) != "mutate out" || string(row.Stderr) != "mutate err" {
+				t.Errorf("mutate-class Task %s output altered: stdout=%q stderr=%q", row.TaskID, row.Stdout, row.Stderr)
+			}
+		}
+	}
+}
+
+// TestReadLane_NilSeamReturnsError asserts a Service built without
+// WithQueries returns ErrQueriesUnavailable — never an empty page, which
+// would be a claim ("there is nothing here") rather than an absence.
+func TestReadLane_NilSeamReturnsError(t *testing.T) {
+	svc := New(registry.NewInMemory())
+	ctx := context.Background()
+
+	if _, err := svc.QueryAudit(ctx, testPrincipal, AuditFilter{}, PageRequest{}); !errors.Is(err, ErrQueriesUnavailable) {
+		t.Errorf("QueryAudit: err = %v, want ErrQueriesUnavailable", err)
+	}
+	if _, err := svc.AuditCounts(ctx, testPrincipal, AuditFilter{}, time.Hour); !errors.Is(err, ErrQueriesUnavailable) {
+		t.Errorf("AuditCounts: err = %v, want ErrQueriesUnavailable", err)
+	}
+	if _, err := svc.AuditReach(ctx, testPrincipal, AuditFilter{}); !errors.Is(err, ErrQueriesUnavailable) {
+		t.Errorf("AuditReach: err = %v, want ErrQueriesUnavailable", err)
+	}
+	if _, err := svc.QueryJobs(ctx, testPrincipal, JobFilter{}, PageRequest{}); !errors.Is(err, ErrQueriesUnavailable) {
+		t.Errorf("QueryJobs: err = %v, want ErrQueriesUnavailable", err)
+	}
+	if _, err := svc.QueryTasks(ctx, testPrincipal, TaskFilter{JobID: "job-1"}, PageRequest{}); !errors.Is(err, ErrQueriesUnavailable) {
+		t.Errorf("QueryTasks: err = %v, want ErrQueriesUnavailable", err)
+	}
+}
+
+// TestReadLane_AuditCounts_RejectsUnboundedFilter is F1's headline case
+// (#441 cycle-2 security review): AuditFilter{} — a legal match-everything
+// filter for QueryAudit — must be refused by AuditCounts before it ever
+// reaches the seam or gets recorded as an attempted read, since AuditCounts
+// has no LIMIT to fall back on.
+func TestReadLane_AuditCounts_RejectsUnboundedFilter(t *testing.T) {
+	svc, auditQ, _, audit := readLaneFixture(t)
+
+	_, err := svc.AuditCounts(context.Background(), testPrincipal, AuditFilter{}, time.Hour)
+	if !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("AuditCounts(AuditFilter{}): err = %v, want ErrInvalidFilter", err)
+	}
+	if auditQ.countsCalled {
+		t.Error("AuditCounts: underlying seam was called for an unbounded filter")
+	}
+	if len(audit.readCalls) != 0 {
+		t.Errorf("AuditCounts: RecordRead called %d times for a refused filter, want 0", len(audit.readCalls))
+	}
+}
+
+// TestReadLane_AuditReach_RejectsUnboundedFilter is AuditCounts' sibling
+// case: AuditReach has no LIMIT either (F1/F6, #441 cycle-2 security
+// review), so it is bound by the same required window.
+func TestReadLane_AuditReach_RejectsUnboundedFilter(t *testing.T) {
+	svc, auditQ, _, audit := readLaneFixture(t)
+
+	_, err := svc.AuditReach(context.Background(), testPrincipal, AuditFilter{})
+	if !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("AuditReach(AuditFilter{}): err = %v, want ErrInvalidFilter", err)
+	}
+	if auditQ.reachCalled {
+		t.Error("AuditReach: underlying seam was called for an unbounded filter")
+	}
+	if len(audit.readCalls) != 0 {
+		t.Errorf("AuditReach: RecordRead called %d times for a refused filter, want 0", len(audit.readCalls))
+	}
+}
+
+// TestReadLane_AuditCounts_ClampsBucket is F1: a caller-chosen bucket below
+// MinAuditBucket reaches the seam floored to MinAuditBucket rather than
+// being refused — the same "clamp, don't reject" convention as Limit.
+func TestReadLane_AuditCounts_ClampsBucket(t *testing.T) {
+	svc, auditQ, _, _ := readLaneFixture(t)
+
+	if _, err := svc.AuditCounts(context.Background(), testPrincipal, validAggWindow, time.Second); err != nil {
+		t.Fatalf("AuditCounts: %v", err)
+	}
+	if !auditQ.countsCalled {
+		t.Fatal("AuditCounts: underlying seam was never called")
+	}
+	if auditQ.gotBucket != MinAuditBucket {
+		t.Errorf("bucket reaching the seam = %s, want MinAuditBucket (%s)", auditQ.gotBucket, MinAuditBucket)
+	}
+
+	// A bucket already at or above the floor passes through unchanged.
+	if _, err := svc.AuditCounts(context.Background(), testPrincipal, validAggWindow, time.Hour); err != nil {
+		t.Fatalf("AuditCounts: %v", err)
+	}
+	if auditQ.gotBucket != time.Hour {
+		t.Errorf("bucket reaching the seam = %s, want 1h (unchanged)", auditQ.gotBucket)
+	}
+}
+
+// TestWithQueriesRefusesNoopAuditSink is F5 (#441 cycle-2 security review):
+// a Service built with WithQueries but no WithAuditSink must panic at
+// construction, the same class of composition-root guard
+// TestWithExecutionRefusesDefaultSeams asserts for a real dispatcher —
+// otherwise every trail query is answered while recording nothing, exactly
+// the "unauditable read succeeded" state ADR-0025 forbids.
+func TestWithQueriesRefusesNoopAuditSink(t *testing.T) {
+	reg := registry.NewInMemory()
+	auditQ := &spyAuditQuery{}
+	jobQ := &spyJobQuery{}
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New(reg, WithQueries(...)) without a real AuditSink should panic")
+		}
+	}()
+	New(reg, WithQueries(auditQ, jobQ))
+}
+
+// TestWithQueriesAcceptsRealAuditSink is the positive twin of
+// TestWithQueriesRefusesNoopAuditSink: WithQueries plus a real (spy)
+// AuditSink constructs successfully regardless of the two Options' order.
+func TestWithQueriesAcceptsRealAuditSink(t *testing.T) {
+	reg := registry.NewInMemory()
+	auditQ := &spyAuditQuery{}
+	jobQ := &spyJobQuery{}
+	audit := &spyAuditSink{}
+
+	// WithAuditSink BEFORE WithQueries.
+	New(reg, WithAuditSink(audit), WithQueries(auditQ, jobQ))
+	// WithAuditSink AFTER WithQueries — the guard must not depend on order.
+	New(reg, WithQueries(auditQ, jobQ), WithAuditSink(audit))
+}

@@ -76,6 +76,14 @@ type Service struct {
 	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
 	approvalNotifier ApprovalNotifier
 
+	// auditQ and jobQ are the read lane (#441): filtered, paginated queries
+	// over the audit trail and over Jobs/Tasks. Nil means the read lane is
+	// not wired — readlane.go's methods return ErrQueriesUnavailable rather
+	// than an empty page, since an empty page is a claim ("there is nothing
+	// here") and a nil seam has not actually looked.
+	auditQ AuditQuery
+	jobQ   JobQuery
+
 	// now and newApprovalID are seams so tests get deterministic parks.
 	now           func() time.Time
 	newApprovalID idGen
@@ -85,6 +93,13 @@ type Service struct {
 	// real dispatcher riding the allow-all/no-op default seams — see the
 	// contract note below.
 	realDispatcher bool
+
+	// certExpiringWithin is the state:cert-expiring warning window
+	// (ADR-0034), threaded into every Selector resolution via stateEval.
+	// Zero (the default) means the marker never fires — set only by
+	// WithCertExpiringWindow, which the composition root always calls with a
+	// real value (invariant 11: file-only, no API reads or sets it).
+	certExpiringWithin time.Duration
 }
 
 // Option configures a Service built by New.
@@ -193,6 +208,36 @@ func WithApprovalNotifier(n ApprovalNotifier) Option {
 	return func(s *Service) { s.approvalNotifier = n }
 }
 
+// WithQueries wires the read lane (#441): audit is the trail's filtered/
+// paginated/aggregating seam, job is the same for Jobs/Tasks. Both required
+// together — a Job lane with no audit lane would leave Activity able to list
+// Jobs and unable to attribute them, mirroring WithApprovals' "all required
+// together" reasoning.
+//
+// Optional overall: a Service built without WithQueries still dispatches
+// exactly as before #441, and its own read-lane methods (readlane.go) return
+// ErrQueriesUnavailable rather than degrading. Its own fail-closed property
+// is RecordRead's "record first" ordering in readlane.go — but New's guard
+// now ALSO requires a real AuditSink whenever WithQueries was used (F5,
+// #441 cycle-2 security review): WithQueries sat outside the real-dispatcher
+// fail-open guard, so a Service built with WithQueries but no WithAuditSink
+// answered every trail query while auditing none of them — exactly the
+// "unauditable read succeeded" state ADR-0025 forbids, and a composition-root
+// footgun distinct from (and checked independently of) the real-dispatcher
+// case. See New.
+func WithQueries(audit AuditQuery, job JobQuery) Option {
+	if audit == nil {
+		panic("capability: WithQueries: audit query seam must not be nil")
+	}
+	if job == nil {
+		panic("capability: WithQueries: job query seam must not be nil")
+	}
+	return func(s *Service) {
+		s.auditQ = audit
+		s.jobQ = job
+	}
+}
+
 // WithClock overrides the Service's clock. Test seam only: approval expiry and
 // park timestamps are time-dependent, and a test that sleeps is a test that
 // flakes.
@@ -216,6 +261,24 @@ func WithMetrics(m MetricsSink) Option {
 // fail-open guard does not require it.
 func WithJobEvents(s JobEventSink) Option {
 	return func(svc *Service) { svc.jobEvents = s }
+}
+
+// WithCertExpiringWindow sets the state:cert-expiring warning window
+// (ADR-0034): a Node fires the marker once less than d of its certificate's
+// remaining lifetime is left. d is a Duration rather than a fraction because
+// this package must never import internal/ca (its own import allowlist bars
+// it) — the composition root computes d once via
+// nodestate.CertExpiringWindow(ca.LeafValidity, fraction) and hands every
+// surface, including this one, the same value (invariant 11).
+//
+// Panics on d < 0: a negative window is a composition-root bug, not a
+// runtime condition to degrade under. The zero value (never calling this
+// option) is the safe default and means the marker never fires.
+func WithCertExpiringWindow(d time.Duration) Option {
+	if d < 0 {
+		panic("capability: WithCertExpiringWindow: d must not be negative")
+	}
+	return func(s *Service) { s.certExpiringWithin = d }
 }
 
 // New returns a Service backed by reg, with allowAllAuthorizer,
@@ -242,6 +305,10 @@ func WithJobEvents(s JobEventSink) Option {
 // is the same class of bug: an un-stoppable executor, since "never frozen"
 // means the emergency stop (ADR-0013) can never actually halt it. See
 // dispatcher's doc comment in dispatch.go.
+//
+// Separately, and regardless of s.realDispatcher: WithQueries also requires
+// a real AuditSink (F5, #441 cycle-2 security review) — see WithQueries' doc
+// comment.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
 		reg:              reg,
@@ -284,7 +351,37 @@ func New(reg registry.Repository, opts ...Option) *Service {
 			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (WithFreeze); noopFreezeStore is never frozen, making the emergency stop unreachable")
 		}
 	}
+	// WithQueries requires a real AuditSink (F5, #441 cycle-2 security
+	// review), independent of s.realDispatcher and checked here — not inside
+	// WithQueries itself — so the result does not depend on the order two
+	// Options were passed to New. Without this, a Service built with
+	// WithQueries but no WithAuditSink answers every trail query while
+	// recording none of them: exactly the "unauditable read succeeded" state
+	// ADR-0025 forbids, the read-lane analogue of the real-dispatcher guard
+	// above.
+	if s.auditQ != nil {
+		if _, ok := s.audit.(noopAuditSink); ok {
+			panic("capability: New: WithQueries requires a real AuditSink (WithAuditSink); noopAuditSink would answer every trail query while recording none of them")
+		}
+	}
 	return s
+}
+
+// stateEval is the StateEval every Selector resolution inside this Service
+// evaluates against: the Service's own clock (the same seam WithClock
+// overrides for deterministic tests) and its configured cert-expiring
+// window. One method, so Run and Plan can never resolve the same Selector
+// against two different instants.
+//
+// Falls back to time.Now().UTC() when now is unset, mirroring New's own
+// default — a *Service built as a struct literal in a test (bypassing New)
+// must stay callable rather than panic on a nil func field.
+func (s *Service) stateEval() StateEval {
+	now := s.now
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	return StateEval{Now: now(), CertExpiringWithin: s.certExpiringWithin}
 }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
@@ -325,7 +422,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalFrozen, &FrozenError{})
 	}
 
-	nodes := sel.Resolve(s.reg)
+	nodes := sel.Resolve(s.reg, s.stateEval())
 
 	// withoutAssertions: an authorization decision must not be able to read
 	// anything the caller asserted (see assertions.go).

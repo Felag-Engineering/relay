@@ -192,9 +192,10 @@ const serverVersion = "0.1.0"
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	now       func() time.Time
-	approvals ApprovalDecider
-	toolCalls ToolCallObserver
+	now                func() time.Time
+	approvals          ApprovalDecider
+	toolCalls          ToolCallObserver
+	certExpiringWithin time.Duration
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
@@ -211,6 +212,15 @@ func WithClock(now func() time.Time) Option {
 // register*-style function that itself no-ops on a nil collaborator.
 func WithToolCallObserver(o ToolCallObserver) Option {
 	return func(cfg *serverOptions) { cfg.toolCalls = o }
+}
+
+// WithCertExpiringWindow sets the state:cert-expiring warning window
+// (ADR-0034) the read tools evaluate list_nodes/describe_node's state_labels
+// and Selector filtering against. The composition root computes the same
+// value it hands the capability layer and the Console (invariant 11) — a
+// zero window (the default) means the marker never fires.
+func WithCertExpiringWindow(d time.Duration) Option {
+	return func(o *serverOptions) { o.certExpiringWithin = d }
 }
 
 func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
@@ -241,7 +251,7 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
-	registerNodeTools(srv, nodes, policy, vocab, reads)
+	registerNodeTools(srv, nodes, policy, vocab, reads, cfg.now, cfg.certExpiringWithin)
 	registerOperationTools(srv, ops, vocab, reads)
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results, reads)

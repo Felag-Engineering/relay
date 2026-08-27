@@ -192,6 +192,32 @@ func TestSelectorNamespaceNarrows(t *testing.T) {
 	}
 }
 
+// TestSelectorNamespaceState is TestSelectorNamespaceNarrows' sibling for
+// ADR-0034's fourth namespace: a Scope must be able to pin "state", and it
+// narrows the same way "relay" and "tag" do.
+func TestSelectorNamespaceState(t *testing.T) {
+	s := validScope()
+	s.SelectorNamespace = "state"
+	if err := s.Validate(); err != nil {
+		t.Fatalf("Scope with selector_namespace \"state\" did not validate: %v", err)
+	}
+
+	g := validGrant()
+	g.Scope.SelectorNamespace = "state"
+
+	wrong := coveredDispatch()
+	wrong.Namespaces = []string{"node"}
+	if g.Covers(wrong, grantNow) {
+		t.Error("grant scoped to state: covered a node: Selector")
+	}
+
+	right := coveredDispatch()
+	right.Namespaces = []string{"state"}
+	if !g.Covers(right, grantNow) {
+		t.Error("grant scoped to state: did not cover a state: Selector")
+	}
+}
+
 // --- the window and the counter ---
 
 func TestGrantWindowIsEnforced(t *testing.T) {

@@ -682,6 +682,13 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// guard adds this one — no MCP SDK, so admitting it here cannot become
 		// a transitive route to either the wire types or the SDK.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask": true,
+		// nodestate joined with #414 (ADR-0034): the `state:` label derivation
+		// over one registry.Node. Proto-free, SQL-free, and it imports only
+		// time and registry (see nodestate's own package doc for why it never
+		// imports internal/ca), so admitting it opens no transitive back door
+		// — and it is admitted precisely so `state:` has exactly one
+		// definition, shared by Selector.Matches and every rendering surface.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,

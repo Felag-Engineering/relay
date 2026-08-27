@@ -20,6 +20,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -53,6 +54,14 @@ func (f *fakeNodeRevoker) RevokeNode(nodeID string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calledWith = append(f.calledWith, nodeID)
+}
+
+// fakeNodeReader is a NodeReader fake over a fixed map.
+type fakeNodeReader map[string]registry.Node
+
+func (f fakeNodeReader) Get(nodeID string) (registry.Node, bool) {
+	n, ok := f[nodeID]
+	return n, ok
 }
 
 // releaseCall captures one ReleaseFreeze invocation.
@@ -415,6 +424,67 @@ func TestHandleRevokeNode(t *testing.T) {
 	if got.Principal != controlplane.FoundingAdmin().Attribution() {
 		t.Errorf("audit Principal = %q, want %q", got.Principal, controlplane.FoundingAdmin().Attribution())
 	}
+}
+
+// -----------------------------------------------------------------------
+// Node read (#414, ADR-0034)
+// -----------------------------------------------------------------------
+
+// TestHandleGetNode_StateLabels covers acceptance 8 on the Control API: a
+// Node's derived state: labels render on GET /nodes/{id}, prefixed and never
+// null — the same nodestate.Labels every other surface renders.
+func TestHandleGetNode_StateLabels(t *testing.T) {
+	t.Run("offline Node carries state:offline", func(t *testing.T) {
+		nr := fakeNodeReader{"node-a": {NodeID: "node-a"}} // never connected
+		d := Deps{NodeReader: nr, Audit: &fakeAuditor{}, Now: fixedNow}
+		h := newTestHandler(d)
+
+		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var out nodeResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		if out.StateLabels == nil {
+			t.Fatal("state_labels is null, want a (possibly empty) array")
+		}
+		found := false
+		for _, l := range out.StateLabels {
+			if l == "state:offline" {
+				found = true
+			}
+			if !strings.HasPrefix(l, "state:") {
+				t.Errorf("state label %q is not state:-prefixed", l)
+			}
+		}
+		if !found {
+			t.Errorf("state_labels = %v, want state:offline (never connected)", out.StateLabels)
+		}
+	})
+
+	t.Run("no Node carries no state label at all: empty array, not null", func(t *testing.T) {
+		n := registry.Node{NodeID: "node-b", Connected: true}
+		nr := fakeNodeReader{"node-b": n}
+		d := Deps{NodeReader: nr, Audit: &fakeAuditor{}, Now: fixedNow}
+		h := newTestHandler(d)
+
+		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-b", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		var out nodeResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		if out.StateLabels == nil {
+			t.Fatal("state_labels is null, want []")
+		}
+		if len(out.StateLabels) != 0 {
+			t.Errorf("state_labels = %v, want empty — this Node is connected, current, and its template set is not unloadable", out.StateLabels)
+		}
+	})
 }
 
 // -----------------------------------------------------------------------

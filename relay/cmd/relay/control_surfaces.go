@@ -79,13 +79,6 @@ type surfaceDeps struct {
 	// surface list at all — the routes are unmounted, not disabled.
 	consoleAuth *consoleauth.Service
 
-	// liveness is the dispatch Router, read for "is this Node connected right
-	// now". Nil when the Relay is running without a dispatch stack (the
-	// control-plane-only test configurations), in which case the Console
-	// renders every Node as offline — which is TRUE for such a Relay, since
-	// nothing can be dispatched at all.
-	liveness console.Liveness
-
 	// freeze is the read half of the Relay-wide Freeze, for the Console's
 	// control-plane banner. Deliberately the store's repository rather than the
 	// capability layer: this seam must not carry Engage or Release.
@@ -95,6 +88,12 @@ type surfaceDeps struct {
 	// this. mcpSurface also wires it into the MCP server's tool-call
 	// observer below.
 	events *events.Bus
+
+	// certExpiringWithin is the state:cert-expiring warning window (#414,
+	// ADR-0034), computed once in newServer from ca.LeafValidity and handed
+	// to every surface below — MCP, the Control API, and the Console all
+	// resolve `state:` against the SAME window (invariant 11).
+	certExpiringWithin time.Duration
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -131,7 +130,10 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// The tool-call event publisher (#416, D9) — every tools/call
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.
-		mcp.WithToolCallObserver(toolCallObserver{bus: d.events})))
+		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
+		// state:cert-expiring's warning window (#414, ADR-0034) — the same
+		// value every other surface resolves `state:` against.
+		mcp.WithCertExpiringWindow(d.certExpiringWithin)))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
@@ -182,6 +184,9 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// interface) and turn every audited read into a nil-receiver panic
 		// instead of the documented skip.
 		Reads: readAuditorOrNil(d.auditSink),
+		// state:cert-expiring's warning window (#414, ADR-0034) — the same
+		// value every other surface resolves `state:` against.
+		CertExpiringWithin: d.certExpiringWithin,
 	})
 }
 
@@ -220,25 +225,29 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
 		Execution: false,
-		// The read seams. Each is narrowed to a read-only interface by the
-		// assignment itself: *dispatch.Router has Dispatch and Cancel on it,
-		// and console.Liveness has Connected, so what crosses the boundary is
-		// the ability to ask whether a Node is connected and nothing else.
+		// The read seams. registry.Repository arrives as console.FleetReader,
+		// which has no Upsert, no SetRelayLabels and no SetRevoked. That is
+		// what makes "the Console cannot change the fleet" a fact about the
+		// types rather than a promise about the handlers, and it is the
+		// property console/no_dispatch_test.go's registry.Repository
+		// assertion guard exists to keep from being undone by a type switch.
 		//
-		// registry.Repository likewise arrives as console.FleetReader, which
-		// has no Upsert, no SetRelayLabels and no SetRevoked. That is what
-		// makes "the Console cannot change the fleet" a fact about the types
-		// rather than a promise about the handlers, and it is the property
-		// console/no_dispatch_test.go's registry.Repository assertion guard
-		// exists to keep from being undone by a type switch.
+		// There is no separate Liveness seam (#414): registry.Node.Connected
+		// is itself derived from the same live-Tunnel set, so the fleet view
+		// and a state:offline Selector now read one fact instead of two.
 		Fleet:     d.registry,
-		Liveness:  d.liveness,
 		Policy:    d.policy,
 		Audit:     d.audit,
 		Approvals: d.capability,
 		Jobs:      consoleJobReader{jobs: d.jobs, tasks: d.tasks},
 		Freeze:    d.freeze,
 		Now:       d.now,
+		// The read lane (#441). d.capability (*capability.Service) already
+		// implements console.QueryReader's five methods.
+		Queries: d.capability,
+		// state:cert-expiring's warning window (#414, ADR-0034) — the same
+		// value every other surface resolves `state:` against.
+		CertExpiringWithin: d.certExpiringWithin,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux))
 }

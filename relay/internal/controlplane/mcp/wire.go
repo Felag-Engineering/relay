@@ -61,6 +61,15 @@ type NodeItem struct {
 	// sending it. A caller that inferred reachability from last_seen would
 	// disagree with the dispatcher about what its own fleet can do.
 	Connected bool `json:"connected" jsonschema:"Whether the Node holds a live Tunnel right now. A Task dispatched to a Node that is not connected resolves 'unreachable' without being sent — this is NOT inferable from last_seen."`
+
+	// StateLabels are the `state:` namespace (ADR-0034, #414): Relay-DERIVED
+	// labels, evaluated at read time and set by nobody — not the Node, not an
+	// operator, not an admin. Rendered in Selector syntax with the `state:`
+	// prefix (e.g. "state:offline", "state:daemon-version=1.4.2") and
+	// targetable verbatim in any Selector. Closed vocabulary: every value here
+	// is one of the markers or facts nodestate.Labels enumerates. Always a
+	// non-nil array, never null.
+	StateLabels []string `json:"state_labels" jsonschema:"Relay-derived state: labels (ADR-0034), evaluated at read time and set by nobody. Rendered in Selector syntax with the state: prefix (e.g. 'state:offline', 'state:daemon-version=1.4.2') and targetable verbatim in any selector. Closed vocabulary. Always an array, never null."`
 }
 
 // ListNodesOutput is list_nodes' result shape.
