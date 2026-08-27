@@ -119,6 +119,24 @@ func (c *CA) Bundle() []byte {
 	return cp
 }
 
+// Fingerprint returns the hex-encoded SHA-256 digest of the CA certificate's
+// DER bytes — the number `openssl x509 -noout -fingerprint -sha256` prints,
+// minus the colons.
+//
+// Public-certificate data only: this is a digest over the same bytes Bundle
+// already hands to every enrolling daemon, and it involves no key material. It
+// exists so an operator can compare the trust root a machine is about to pin
+// against the one this Relay actually holds (ADR-0031) — the Console's day-one
+// screen and the startup log line both render it.
+//
+// It reuses the same fingerprint helper the server-certificate rotation
+// observer and the enrollment handler use, deliberately: this value is meant to
+// be compared against numbers those paths report, and two implementations of
+// one digest is a fleet-wide trust bug waiting to happen.
+func (c *CA) Fingerprint() string {
+	return fingerprint(c.cert.Raw)
+}
+
 // SignCSR verifies csrPEM (a "CERTIFICATE REQUEST" PEM block whose key must be
 // ECDSA P-256), then issues a Node identity certificate chained to this CA.
 //

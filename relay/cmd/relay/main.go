@@ -479,6 +479,16 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		return nil, nil, fmt.Errorf("parse CA bundle into cert pool")
 	}
 
+	// The number an operator checks a daemon's configured trust root against
+	// (ADR-0031): it identifies the certificate authority every Node's
+	// certificate chains to, so it survives the server leaf's daily
+	// re-issue, and the Console's day-one screen renders the same value.
+	// ADR-0031 decision 3 will have a daemon PIN it through a join string;
+	// neither exists yet, so this is a value to compare, not yet a value
+	// anything enforces. A digest over a public certificate — no key
+	// material, nothing secret, and safe to log.
+	slog.Info("relay certificate authority", "ca_fingerprint", relayCA.Fingerprint())
+
 	// A malformed min_daemon_version refuses startup rather than silently
 	// leaving the outdated gate in an unpredictable state (ADR-0014). Empty
 	// is valid — it means the gate is off.
@@ -926,8 +936,24 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 			consoleAuth: consoleAuthSvc,
 
-			// The event seam (#416) — the SSE route (#422) mounts over this.
+			// The event seam (#416) — the Console's one live-read route
+			// mounts over this, narrowed to a reader with no Publish
+			// method on it (console/seams.go).
 			events: eventBus,
+
+			// The two fingerprints day one renders (#427). The CA's is
+			// fixed for the life of the process; the server leaf's is read
+			// live because it is re-issued about daily.
+			//
+			// controlCert, not nodePlaneCert: this is the certificate the
+			// browser reading that screen is actually talking to. ADR-0031
+			// decision 1 (one certificate for both listeners) is not
+			// implemented yet, so "the server certificate" is still
+			// listener-scoped and the screen says which one it means.
+			trust: consoleTrustReader{
+				caFingerprint: relayCA.Fingerprint(),
+				serverCert:    controlCert,
+			},
 			// state:cert-expiring's warning window (#414, ADR-0034), the same
 			// value every other surface below was handed.
 			certExpiringWithin: certExpiringWithin,

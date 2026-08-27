@@ -49,6 +49,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -121,6 +122,62 @@ type QueryReader interface {
 	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
+}
+
+// TrustReader is the two numbers a machine needs in order to decide whether
+// this Relay is the one it was told to join (spec 10, ADR-0031). The
+// composition root's consoleTrustReader satisfies it.
+//
+// Two plain strings, deliberately: this package never imports internal/ca, so
+// no screen can reach a CA object, a private key, or the certificate issuance
+// path from a rendered page.
+//
+// These are SHA-256 digests over PUBLIC certificate DER. They identify a
+// certificate and authenticate nothing on their own, they are derived at
+// runtime from certificates this Relay's own CA minted, and they are therefore
+// not the "Relay configuration value" spec 10's fifth acceptance criterion
+// forbids — nothing here was set by an operator and nothing here is settable
+// from any surface.
+//
+// Note what is still absent, because this is the seam most likely to grow into
+// the settings page invariant 11 and foundations rule 7 both forbid: no
+// address, no listener, no port, no certificate validity, no CA object. The
+// address a Node dials is delivered by whatever installs the daemon, not by
+// this Console — and ADR-0031's join string, once built, will carry it.
+type TrustReader interface {
+	CAFingerprint() string
+	ServerFingerprint() string
+}
+
+// EventReader is the in-process event seam (#416), read-only. *events.Bus
+// satisfies it.
+//
+// The absence is the load-bearing part, exactly as with AuditReader above: no
+// Publish method crosses this seam, so a Console file holding an EventReader
+// cannot author a registry transition, a Job transition, a tool call or an
+// enrollment attempt. The Console watches history; it never writes it.
+//
+// TWO guards, because the interface alone is not enough. This package now
+// imports internal/events, so a handler could type-assert an EventReader back
+// to *events.Bus and recover all four publishers — the same recovery
+// no_dispatch_test.go already forbids for registry.Repository. So:
+// TestConsole_EventSeamCannotPublish pins the method set here, and
+// no_dispatch_test.go fails any non-test file in this package that NAMES
+// events.Bus in a type assertion — directly, through a local alias, or through
+// an anonymous interface declaring a Publish method — and refuses a dot-import
+// of the package, which would erase the qualifier the guard matches on.
+//
+// Subscribe and Recent both take a kind set, and both accept ANY Kind: the
+// narrowing to what a given screen may see is done by the HANDLER's closed
+// allowlist (events.go), not by this type. That distinction matters, because
+// KindToolCall carries raw_exec's full argv.
+//
+// RetentionWindow is here so a screen can state the window it can actually
+// see, read off the bus it is actually reading (events.Bus.RetentionWindow).
+type EventReader interface {
+	Subscribe(kinds []events.Kind, lastEventID string) *events.Subscription
+	Recent(kinds []events.Kind, n int) []events.Event
+	RetentionWindow() time.Duration
 }
 
 // FreezeReader reports whether the Relay-wide Freeze is engaged (ADR-0013), for

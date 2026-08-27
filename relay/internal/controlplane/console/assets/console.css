@@ -916,14 +916,26 @@ tr.attnrow td { background: var(--attention-bg); }
 .dayone { max-width: 48em; }
 .dayone h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); letter-spacing: -0.01em; }
 .lede { font-size: var(--text-base); color: var(--text-second); max-width: 58em; line-height: 1.65; }
-.steps { padding-left: var(--space-5); margin: var(--space-6) 0; }
-.steps li { margin-bottom: var(--space-3); color: var(--text-second); line-height: 1.65; }
-.steps b { color: var(--text-primary); font-weight: var(--weight-semibold); }
-.watching {
-  display: flex; gap: var(--space-3); align-items: center;
+/* What is true right now, as a list rather than a checklist of steps nobody
+ * verified. Spec 10 forbids the second. */
+.truths { list-style: none; padding: 0; margin: var(--space-5) 0; }
+.truths li { color: var(--text-second); line-height: 1.8; font-size: var(--text-sm); }
+.truths b { color: var(--text-primary); font-weight: var(--weight-medium); }
+
+/* One path forward. One primary action, no competing calls. */
+.firststep { margin: var(--space-6) 0; }
+.firststep .primary {
+  display: inline-block; padding: var(--space-2) var(--space-5);
+  background: var(--color-blue); color: #fff; border-radius: var(--radius-lg);
+  font-weight: var(--weight-medium);
+}
+.firststep .primary:hover { background: var(--accent-hover); text-decoration: none; }
+
+.watch {
   padding: var(--space-4) var(--space-5); background: var(--bg-surface);
   border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin: var(--space-6) 0;
 }
+.watchhead { display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap; }
 /* Hearth: interactive, never semantic. The live indicator is the one
  * non-semantic use of the accent and it is called out in the colour budget. */
 .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--color-blue); flex: none; }
@@ -931,6 +943,50 @@ tr.attnrow td { background: var(--attention-bg); }
   .pulse { animation: gPulse 2s ease-in-out infinite; }
   @keyframes gPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 }
+
+/* Degrade VISIBLY (spec 11): a monitoring surface that silently freezes is
+ * worse than one that admits it is blind. The indicator stops moving and the
+ * panel says which state it is in — one message per state, all of them written
+ * in Go and selected here, so the script file holds no product language. */
+.watch[data-live="down"] .pulse,
+.watch[data-live="gap"] .pulse,
+.watch[data-live="ended"] .pulse,
+.watch[data-live="off"] .pulse { background: var(--text-muted); animation: none; }
+.wmsg { display: none; font-size: var(--text-sm); color: var(--text-second); }
+.watch[data-live="on"] .wmsg[data-when="on"],
+.watch[data-live="down"] .wmsg[data-when="down"],
+.watch[data-live="gap"] .wmsg[data-when="gap"],
+.watch[data-live="ended"] .wmsg[data-when="ended"],
+.watch[data-live="off"] .wmsg[data-when="off"] { display: inline; }
+
+.attempts { list-style: none; padding: 0; margin: var(--space-3) 0 0; }
+.attempt {
+  display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap;
+  padding: var(--space-2) 0; border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-sm); color: var(--text-second);
+}
+/* A refused token is the Relay working correctly, so the marker is a Policy
+ * decision (slate), never the amber that means "needs attention now". The
+ * colour budget gives amber to one meaning and this is not it. */
+.aout {
+  font-size: var(--text-2xs); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 2px var(--space-2); border-radius: var(--radius-lg);
+  background: var(--bg-elevated); color: var(--text-second); border: 1px solid var(--border-subtle);
+  flex: none;
+}
+.attempt[data-outcome="accepted"] .aout { color: var(--text-primary); }
+.areason { color: var(--text-primary); }
+.atok code, .asrc, .awhen { font-size: var(--text-xs); color: var(--text-muted); }
+.awhen { margin-left: auto; font-family: var(--font-mono); }
+
+/* The fingerprints. The CA value comes first because it is the one to compare
+ * and pin; the leaf is beside it, labelled as rotating (ADR-0031). */
+.trust { margin: var(--space-6) 0; }
+.trust h3 {
+  margin: 0 0 var(--space-3); font-size: var(--text-2xs); letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
+}
+.trust .note { display: block; margin-top: var(--space-1); }
 
 /* A stated gap. Deliberately NOT amber: a gap in what the product records is
  * not an alarm about the fleet, and colouring it as one would spend attention

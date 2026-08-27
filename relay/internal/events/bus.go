@@ -22,8 +22,8 @@ const (
 	defaultMaxAge    = 10 * time.Minute
 
 	// subscriberBuffer is the fixed per-Subscription channel capacity. One
-	// Subscription serves one Console session — #422 creates exactly one
-	// per session and Closes it when the request ends.
+	// Subscription serves one Console session — the Console's SSE route
+	// creates exactly one per session and Closes it when the request ends.
 	subscriberBuffer = 256
 )
 
@@ -304,6 +304,84 @@ func (b *Bus) replayBacklog(kinds map[Kind]bool, seq uint64) []Event {
 	}
 	sort.Slice(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
 	return events
+}
+
+// Recent returns the last n retained events across kinds, oldest first, after
+// pruning each requested ring against the age bound.
+//
+// It exists because Subscribe with an empty Last-Event-ID is live-only. A
+// screen that only subscribed would render an empty list for everything that
+// happened before the page was opened — a day-one watch loaded thirty seconds
+// after a failed playbook would show nothing, and "nothing tried" is the one
+// conclusion an operator must not draw from a screen that cannot see the
+// difference. A reader bootstraps from Recent, then resumes the stream from the
+// newest ID it was handed, so nothing is shown twice and nothing falls between
+// the two.
+//
+// Recent never synthesises a gap: the caller is asking for whatever history
+// survives, not for a continuous stream, and it is told nothing about what
+// aged out. n <= 0 returns nil.
+func (b *Bus) Recent(kinds []Kind, n int) []Event {
+	if n <= 0 {
+		return nil
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	now := b.now()
+	kindSet := make(map[Kind]bool, len(kinds))
+	for _, k := range kinds {
+		kindSet[k] = true
+		if r, ok := b.rings[k]; ok {
+			r.prune(now, b.maxAge)
+		}
+	}
+
+	// One kind is the common case — a screen subscribes to what it renders —
+	// and a single ring is already ascending by Seq, so take its tail
+	// directly. This matters because every publisher takes b.mu, including
+	// enrollment and dispatch: the merge-and-sort path below is O(n log n)
+	// over up to maxEvents entries, and running it under this lock for the
+	// one-kind case would put a page refresh in front of a Node enrolling.
+	if len(kindSet) == 1 {
+		for k := range kindSet {
+			r, ok := b.rings[k]
+			if !ok {
+				return nil
+			}
+			tail := r.events
+			if len(tail) > n {
+				tail = tail[len(tail)-n:]
+			}
+			return append([]Event(nil), tail...)
+		}
+	}
+
+	// Seq 0 is below every published event, so this is "everything retained",
+	// merged in ascending Seq order by the same helper Subscribe replays with.
+	events := b.replayBacklog(kindSet, 0)
+	if len(events) > n {
+		events = events[len(events)-n:]
+	}
+	return events
+}
+
+// RetentionWindow is the age half of this Bus's retention bound: nothing it
+// holds is older than this, whatever the count bound allowed.
+//
+// A method rather than an exported constant, because a screen that watches
+// this seam STATES the window it can see — day one says "no enrollment
+// attempts in the last N minutes" and that sentence has to be true of the bus
+// it is actually reading, not of the default a differently-constructed one
+// might not have. A constant would be right until the first WithRetention.
+//
+// Not configuration: there is no flag and no RELAY_* env var for it (see
+// defaultMaxAge), and nothing can set it through any surface.
+func (b *Bus) RetentionWindow() time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxAge
 }
 
 // resumePlan implements Subscribe's gap decision. Exactly one of its three

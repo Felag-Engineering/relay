@@ -109,11 +109,18 @@ func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
 //
 // hx-on: is called out by name because it is the one HTMX attribute that IS
 // script, and it is the natural thing to reach for.
+//
+// The script rule itself is assertNoInlineScript (no_inline_script_test.go):
+// the property is that no script is INLINE, not that no script exists, since
+// the specification requires the one external file day one loads. The rest of
+// this list is unchanged.
 func TestConsole_NoInlineScript(t *testing.T) {
 	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
 	body := get(t, h, "/console/").Body.String()
 
-	for _, banned := range []string{"<script", "hx-on:", "javascript:", " onclick=", " onload="} {
+	assertNoInlineScript(t, "/console/", body)
+
+	for _, banned := range []string{"hx-on:", "javascript:", " onclick=", " onload=", " onerror=", " onfocus="} {
 		if strings.Contains(body, banned) {
 			t.Errorf("rendered page contains %q — the content security policy admits no inline script", banned)
 		}
@@ -222,6 +229,51 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Error("an unauthenticated request rendered a Console page")
 	}
+}
+
+// fixtureIDs are the object ids the screen fixtures actually contain, so a
+// parameterised route can be walked rather than skipped.
+var fixtureIDs = map[string]string{
+	"{node_id}":     "node-web-1",
+	"{job_id}":      "job-1",
+	"{approval_id}": "ap-1",
+}
+
+// walkableScreens derives the GET screens a sweep should render FROM THE
+// MOUNTED ROUTE TABLE, substituting ids from subs.
+//
+// Derived rather than hand-listed because a hand-listed sweep is a list that
+// silently stops covering the package: a screen added later is simply not in
+// it, and nothing fails. The two sweeps that use this — the inline-script guard
+// and the zeroed-statistic guard — are exactly the ones whose value comes from
+// being exhaustive.
+//
+// Three routes are never walked, with reasons:
+//   - /console/events streams until its context is cancelled;
+//   - /console/assets/{path...} serves bytes, not a screen;
+//   - /console/login answers a signed-in request with a redirect.
+//
+// A parameterised route with no substitution in subs is skipped: the caller's
+// fixture has no such object to name.
+func walkableScreens(d Deps, subs map[string]string) []string {
+	var paths []string
+	for _, r := range Routes(d) {
+		if r.Method != http.MethodGet {
+			continue
+		}
+		if r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
+			continue
+		}
+		path := r.Link()
+		for placeholder, id := range subs {
+			path = strings.ReplaceAll(path, placeholder, id)
+		}
+		if strings.Contains(path, "{") {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
 }
 
 // navOf extracts the shell's navigation aside from a rendered page, so an

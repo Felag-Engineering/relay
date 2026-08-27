@@ -192,6 +192,25 @@ func (s *ServerCertificate) reissue() (*tls.Certificate, error) {
 	return &next.cert, nil
 }
 
+// Fingerprint returns the hex-encoded SHA-256 digest of the leaf this holder
+// is currently presenting, or "" before the first one is minted.
+//
+// It reads the published pointer and NEVER calls GetCertificate. That is the
+// whole point of it existing separately: GetCertificate re-issues once the
+// current leaf has reached its renewal instant, so routing a display read
+// through it would let rendering a web page rotate the Relay's TLS identity.
+// A reader wants to know what is being served, not to cause a new one.
+//
+// Lock-free for the reason the type doc gives: current is replaced wholesale
+// and an issued value, once stored, is immutable.
+func (s *ServerCertificate) Fingerprint() string {
+	cur := s.current.Load()
+	if cur == nil {
+		return ""
+	}
+	return fingerprint(cur.cert.Leaf.Raw)
+}
+
 // issue mints one certificate and computes when it should be replaced. Each
 // call generates a fresh key: rotating the certificate without rotating the
 // key would leave the key's lifetime unbounded, which is half of what

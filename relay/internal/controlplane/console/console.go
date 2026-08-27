@@ -76,6 +76,17 @@ type Deps struct {
 	Approvals ApprovalReader
 	Freeze    FreezeReader
 
+	// Trust is the CA and server-certificate fingerprints day one renders
+	// (spec 10). Nil renders that block as "not wired" rather than as two
+	// blanks: an empty fingerprint field beside the words "compare this
+	// before you trust the Relay" is worse than an admission.
+	Trust TrustReader
+
+	// Events is the in-process event seam (#416) behind the Console's ONE
+	// live-read path, GET /console/events. Nil leaves day one on its honest
+	// "rejected attempts are not shown yet" paragraph and mounts no script.
+	Events EventReader
+
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 
@@ -181,8 +192,18 @@ func Routes(d Deps) []Route {
 
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing
-		// inline.
+		// inline, and the one external script file for the same reason.
 		{"GET", "/console/assets/{path...}", NavEntry{}, accounts.RoleViewer, assetHandler},
+
+		// Not a destination either: the Console's ONE live-read path (spec
+		// 11 — one connection per session, multiplexing the kinds the
+		// screens on it render). GET, so Secure's safe-method
+		// short-circuit applies and no CSRF token is required, which is
+		// correct because an EventSource cannot set a header.
+		//
+		// MinRole here is presentation like every other row in this table
+		// and gates NOTHING (see Route.MinRole, and events.go's header).
+		{"GET", "/console/events", NavEntry{}, accounts.RoleViewer, handleEvents},
 
 		// The sign-in surface (#418). GET renders the form and POST accepts
 		// it; both are reachable without a credential, which is what

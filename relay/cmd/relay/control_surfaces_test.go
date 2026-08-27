@@ -7,7 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 )
 
 // TestDefaultControlSurfaces_MountWithoutCollision mounts every surface
@@ -98,4 +101,95 @@ func TestSurfaceDeps_AuditSinkIsWired(t *testing.T) {
 		}
 	}
 	t.Fatal("no KindRead record after a Job read — surfaceDeps.auditSink is not wired, so read auditing is silently disabled (ADR-0025)")
+}
+
+// TestConsoleSurface_MountsTheLiveReadRouteAndTheFingerprints is the wiring
+// half of #427, in the shape TestSurfaceDeps_AuditSinkIsWired established: a
+// seam the Console degrades gracefully without is a seam whose absence is
+// invisible, so the only way to notice it was never wired is to assert it.
+//
+// Day one renders "not wired" for missing fingerprints and drops its live watch
+// for a missing event seam. Both are correct behaviour and both look exactly
+// like a composition-root bug.
+func TestConsoleSurface_MountsTheLiveReadRouteAndTheFingerprints(t *testing.T) {
+	mux := http.NewServeMux()
+	consoleSurface{}.Mount(mux, surfaceDeps{
+		now:    func() time.Time { return time.Time{} },
+		events: events.NewBus(),
+		trust:  consoleTrustReader{caFingerprint: "abc123"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/console/events?kinds=enrollment", nil)
+	if h, pattern := mux.Handler(req); h == nil || pattern == "" {
+		t.Errorf("GET /console/events is not mounted (pattern=%q) — the Console has no live path", pattern)
+	}
+}
+
+// TestConsoleSurface_UnwiredSeamsCrossTheBoundaryAsNil is Go's typed-nil trap,
+// which this file already names for the audit sink: assigning a nil
+// *events.Bus straight into an interface field produces a NON-nil interface
+// holding a nil pointer, so every `d.Events == nil` guard in package console
+// passes it through and the first call panics.
+//
+// The Console's contract is that an unwired seam makes the screens that need
+// it degrade — day one drops its live watch, the stream answers 503. That is
+// three written promises, and all three are false if the interface is never
+// nil. Not reachable in production (newServer always builds a bus), which is
+// exactly why it needs a test rather than a runtime check.
+func TestConsoleSurface_UnwiredSeamsCrossTheBoundaryAsNil(t *testing.T) {
+	if got := consoleEventsOrNil(nil); got != nil {
+		t.Errorf("consoleEventsOrNil(nil) = %#v, want an untyped nil — a typed nil makes every "+
+			"`d.Events == nil` guard in the Console false and the first call a panic", got)
+	}
+
+	// The whole surface, mounted with nothing wired, behind a real
+	// authenticator — because the route's nil check comes BEFORE it resolves
+	// a principal, and a request without one is refused earlier and never
+	// reaches the seam at all. With the typed nil, this panics inside
+	// Subscribe on a nil *events.Bus.
+	mux := http.NewServeMux()
+	consoleSurface{}.Mount(mux, surfaceDeps{now: func() time.Time { return time.Time{} }})
+	authn := controlplane.NewAuthenticator(stubVerifier{})
+	handler := authn.Middleware(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/console/events?kinds=enrollment", nil)
+	req.Header.Set("Authorization", "Bearer "+stubCredential)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req) // a panic here fails the test, which is the point
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET /console/events with no event seam wired = %d, want 503 — an unwired seam "+
+			"must reach the Console as an untyped nil so the route can say so", rec.Code)
+	}
+}
+
+// stubVerifier authenticates one credential, so a test can drive a mounted
+// surface through the REAL authentication boundary without standing up an
+// Account store.
+type stubVerifier struct{}
+
+const stubCredential = accounts.TokenPrefix + "0123456789abcdef.stub" //nolint:gosec // test fixture
+
+func (stubVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
+	if credential != stubCredential {
+		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
+	}
+	return accounts.Account{
+		Name: "stub-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}, accounts.APIToken{ID: "tok-stub"}, nil
+}
+
+// TestConsoleTrustReader_ReportsNothingRatherThanGuessing: the server leaf is
+// held live because it rotates, and a Relay assembled without one must produce
+// an empty string — which day one renders as "not wired" rather than as a
+// fingerprint an operator might compare against.
+func TestConsoleTrustReader_ReportsNothingRatherThanGuessing(t *testing.T) {
+	r := consoleTrustReader{caFingerprint: "ca-digest"}
+
+	if got := r.CAFingerprint(); got != "ca-digest" {
+		t.Errorf("CAFingerprint() = %q, want the CA's digest", got)
+	}
+	if got := r.ServerFingerprint(); got != "" {
+		t.Errorf("ServerFingerprint() with no certificate = %q, want empty", got)
+	}
 }

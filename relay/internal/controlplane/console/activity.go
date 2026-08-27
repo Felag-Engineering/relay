@@ -434,7 +434,7 @@ var activityTmpl = newScreen("activity", `
   <input id="q" name="q" value="{{.Filter}}" placeholder="account, Operation, Node, Job, Selector" spellcheck="false" autocomplete="off">
   {{with .KindFilter}}<input type="hidden" name="kind" value="{{.}}">{{end}}
   <button type="submit">Apply</button>
-  <span class="vcount">{{len .Rows}} {{plural (len .Rows) "event" "events"}}</span>
+  {{if .Rows}}<span class="vcount">{{len .Rows}} {{plural (len .Rows) "event" "events"}}</span>{{end}}
 </form>
 
 {{if .Kinds}}
@@ -478,7 +478,10 @@ event here as the event not having happened.</p>
     </div>
   </article>
 {{else}}
-  {{if .Wired}}<p class="dim">Nothing matches.</p>{{end}}
+  {{if .Wired}}
+    {{if or .Filter .KindFilter}}<p class="dim">Nothing matches.</p>
+    {{else}}<p class="dim">Nothing has been recorded yet.</p>{{end}}
+  {{end}}
 {{end}}
 </div>
 `)
