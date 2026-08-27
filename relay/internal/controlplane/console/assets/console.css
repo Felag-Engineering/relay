@@ -183,6 +183,33 @@
   --failure-bg: rgba(240, 85, 69, 0.10);
 
   --ok: var(--color-green);
+
+  /* The pixel wall's four buckets, as their OWN tokens.
+   *
+   * They were borrowed: normal from --border-mid and drift from --inert, which
+   * is itself an alias of --text-muted. Two things went wrong with that.
+   *
+   * --border-mid is chosen to be just visible as a 1px hairline. As a 20px
+   * filled cell it measured 2.31:1 against the card in dark and 2.02:1 in
+   * light — the only bucket below the 3:1 non-text floor, and the one that
+   * draws the SHAPE of the fleet. On a healthy fleet, which is nearly every
+   * fleet nearly all of the time, the whole wall was under-visible: the
+   * instrument that exists so an unusual colour in an unusual place catches
+   * the eye had no baseline you could see.
+   *
+   * And aliasing a swatch to a TEXT token means text-legibility work moves it.
+   * Raising --text-muted to clear AA moved the drift cell as a side effect.
+   * A swatch pinned by a rule about reading is a swatch that will drift again,
+   * so these are literals and the wall owns them.
+   *
+   * Attention and fenced stay aliased to the semantic tokens, which is correct
+   * — an amber cell and the amber Freeze banner mean the same thing, and the
+   * colour budget in 00-foundations.md spends one hue on each. Both already
+   * clear the floor comfortably (9.86:1 and 5.85:1 here). */
+  --wall-normal: #6a8274;
+  --wall-drift: #97a296;
+  --wall-attention: var(--attention);
+  --wall-fenced: var(--security);
   --ok-bg: rgba(74, 222, 106, 0.10);
 }
 
@@ -222,6 +249,20 @@
     --security-line: rgba(109, 60, 199, 0.30);
     --failure-bg: rgba(212, 58, 42, 0.08);
     --ok-bg: rgba(26, 150, 64, 0.09);
+    /* Same reasoning as the dark theme above. Normal was 2.02:1 here.
+     *
+     * Attention needs its own light value too, which the dark theme does not.
+     * --color-amber is #a88608 in light and measures 3.26:1 on --bg-surface
+     * but 2.83:1 on --bg-elevated — so the "needs attention now" bucket, the
+     * one cell an operator must never miss, fell under the floor on exactly
+     * the cards the wall is drawn in. Darkened until it clears on both.
+     *
+     * The stylesheet already separates --attention-text from --attention for
+     * the same reason: amber has to work harder on a light ground, and a
+     * banner's amber and a 20px swatch's amber are not the same problem. */
+    --wall-normal: #887c6a;
+    --wall-drift: #645f54;
+    --wall-attention: #997a07;
   }
 }
 
@@ -765,10 +806,10 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 /* Normal is a QUIET neutral, not a green. Most Nodes are normal, and a wall of
  * four thousand saturated cells is a wall in which nothing pops — which is the
  * one thing the wall has to do. */
-.cell[data-bucket="normal"]      { background: var(--border-mid); }
-.cell[data-bucket="drift"]       { background: var(--inert); }
-.cell[data-bucket="attention"]   { background: var(--attention); }
-.cell[data-bucket="fenced"]      { background: var(--security); }
+.cell[data-bucket="normal"]      { background: var(--wall-normal); }
+.cell[data-bucket="drift"]       { background: var(--wall-drift); }
+.cell[data-bucket="attention"]   { background: var(--wall-attention); }
+.cell[data-bucket="fenced"]      { background: var(--wall-fenced); }
 
 .gbody { display: flex; align-items: stretch; border-top: 1px solid var(--border-subtle); }
 

@@ -2015,10 +2015,25 @@ func splitThemes(t *testing.T, css string) (dark, light map[string]string) {
 	if i < 0 {
 		t.Fatal("no light-theme block in the stylesheet")
 	}
-	return tokensIn(css[:i]), tokensIn(css[i:])
+	dark = tokensIn(css[:i])
+
+	// The light block redeclares only what differs; everything else cascades
+	// from :root. A map holding only the overrides would report inherited
+	// tokens as undeclared and quietly skip half the assertions.
+	light = map[string]string{}
+	for k, v := range dark {
+		light[k] = v
+	}
+	for k, v := range tokensIn(css[i:]) {
+		light[k] = v
+	}
+	return dark, light
 }
 
-var tokenDecl = regexp.MustCompile(`(--[a-z-]+):\s*(#[0-9a-fA-F]{6})\s*;`)
+// Literal colours and one-level var() aliases both count: the palette declares
+// --attention as var(--color-amber), and a test that only saw hex would report
+// half the tokens as undeclared.
+var tokenDecl = regexp.MustCompile(`(--[a-z-]+):\s*(#[0-9a-fA-F]{6}|var\(--[a-z-]+\))\s*;`)
 
 func tokensIn(s string) map[string]string {
 	out := map[string]string{}
@@ -2213,4 +2228,105 @@ func TestAgents_NarrowViewportsStackRatherThanOverflow(t *testing.T) {
 	if rule := css[i : i+80]; !strings.Contains(rule, "min-width: 0") {
 		t.Error("the overflow backstop has no min-width:0 and will never engage")
 	}
+}
+
+// TestFleet_EveryWallBucketIsVisible.
+//
+// TestFleet_EveryWallBucketHasAColour proves each bucket has a RULE. It cannot
+// prove the colour can be seen, and one could not: `normal` borrowed
+// --border-mid, a token chosen to be just visible as a 1px hairline, and used
+// it as a 20px filled cell. It measured 2.31:1 against the card in dark and
+// 2.02:1 in light, against the 3:1 floor for non-text — the only bucket under
+// it, and the one that draws the shape of the fleet.
+//
+// That is the wall's whole purpose. It preserves the fleet's structure so that
+// a colour appearing in an unusual place is itself information, and a baseline
+// nobody can see gives the unusual colour nothing to appear against. On a
+// healthy fleet — nearly every fleet, nearly always — the entire instrument
+// read as faint grey smudges.
+//
+// The 3:1 floor is WCAG 1.4.11 for non-text content, which is what a 20px
+// swatch carrying meaning is.
+func TestFleet_EveryWallBucketIsVisible(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	dark, light := splitThemes(t, css)
+
+	// The wall sits in a card, which sits on the canvas.
+	cards := []string{"--bg-surface", "--bg-elevated"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for _, bucket := range []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced"} {
+			fg, ok := resolveToken(theme.tokens, bucket)
+			if !ok {
+				t.Errorf("%s theme does not resolve %s to a colour", theme.name, bucket)
+				continue
+			}
+			for _, bk := range cards {
+				if r := contrastRatio(fg, theme.tokens[bk]); r < 3 {
+					t.Errorf("%s: %s on %s is %.2f:1, below the 3:1 floor for a swatch that carries meaning",
+						theme.name, bucket, bk, r)
+				}
+			}
+		}
+	}
+}
+
+// TestFleet_WallBucketsDoNotBorrowTextOrBorderTokens.
+//
+// The wall borrowed --border-mid for normal and --inert (an alias of
+// --text-muted) for drift, which coupled two unrelated things: raising
+// --text-muted to clear AA for body copy silently moved a cell colour on the
+// fleet view. A swatch governed by a rule about READING will move again the
+// next time that rule is applied.
+//
+// Attention and fenced deliberately DO alias the semantic tokens — an amber
+// cell and the amber Freeze banner mean the same thing, and the colour budget
+// spends one hue on each meaning.
+func TestFleet_WallBucketsDoNotBorrowTextOrBorderTokens(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	for _, borrowed := range []string{
+		"--wall-normal: var(--border-mid)",
+		"--wall-drift: var(--inert)",
+		"--wall-drift: var(--text-muted)",
+		"--wall-normal: var(--text-muted)",
+	} {
+		if strings.Contains(css, borrowed) {
+			t.Errorf("the wall borrows a text or border token (%s) — legibility work on text will move a cell colour", borrowed)
+		}
+	}
+	// And the rules must read from the wall's own tokens, not the old ones.
+	for _, stale := range []string{
+		`.cell[data-bucket="normal"]      { background: var(--border-mid); }`,
+		`.cell[data-bucket="drift"]       { background: var(--inert); }`,
+	} {
+		if strings.Contains(css, stale) {
+			t.Errorf("a cell rule still points at a borrowed token: %s", stale)
+		}
+	}
+}
+
+// resolveToken follows a var() chain to the literal colour at its end.
+//
+// The palette aliases deliberately — --wall-attention is var(--attention) is
+// var(--color-amber) — so a token's value is only meaningful once the chain is
+// walked. The bound stops a cycle from hanging the suite.
+func resolveToken(tokens map[string]string, name string) (string, bool) {
+	for range 8 {
+		v, ok := tokens[name]
+		if !ok {
+			return "", false
+		}
+		if strings.HasPrefix(v, "var(") {
+			name = strings.TrimSuffix(strings.TrimPrefix(v, "var("), ")")
+			continue
+		}
+		return v, true
+	}
+	return "", false
 }
