@@ -63,6 +63,24 @@ type Page struct {
 	// entire reason the conventions ban hx-on:, which is.
 	CSRFToken string
 
+	// Scripts are external script files this page loads, each an absolute
+	// path under /console/assets/.
+	//
+	// This is the shell's ONLY script hook, and its shape is the whole
+	// point: a src from this origin, deferred, with an EMPTY element body.
+	// The content security policy admits `script-src 'self'` and nothing
+	// inline, so an inline handler — or an hx-on: attribute, which is
+	// script — produces a page that renders and quietly does not work. The
+	// specification says the same thing from the other direction:
+	// "Behaviour that needs JavaScript lives in an external file served
+	// from the Console's own origin."
+	//
+	// assertNoInlineScript (no_inline_script_test.go) checks every rendered
+	// page against exactly that shape, and a source-level guard in the same
+	// file permits the `<script` byte sequence in this file and nowhere
+	// else in the package.
+	Scripts []string
+
 	// Content is the screen's own markup, produced by the screen's template.
 	// It is template.HTML, so a screen that interpolates untrusted data without
 	// escaping it has defeated the layout's protection rather than the layout
@@ -107,6 +125,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
     <main id="content">{{.Content}}</main>
   </div>
 </div>
+{{range .Scripts}}<script src="{{.}}" defer></script>{{end}}
 </body>
 </html>
 `))
