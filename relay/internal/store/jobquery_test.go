@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,5 +337,112 @@ func TestTaskSummary_NoTruncatedField(t *testing.T) {
 	typ := reflect.TypeOf(jobs.TaskSummary{})
 	if _, ok := typ.FieldByName("Truncated"); ok {
 		t.Error("jobs.TaskSummary has a Truncated field with no backing column (coordinator ruling B3)")
+	}
+}
+
+// TestJobQuery_SingleJob is the Job-detail screen's whole data acquisition:
+// one Job's exact per-outcome tally as ONE aggregate row, and an unknown
+// JobID as an EMPTY page rather than every Job. The second half is the
+// fail-open shape to guard against — a filter that silently degrades to "no
+// predicate" would hand a screen the wrong Job's counts.
+func TestJobQuery_SingleJob(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+
+	createJobFixture(t, ctx, st, "job-wanted", base, []jobs.Task{
+		{ID: "job-wanted-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+		{ID: "job-wanted-t2", NodeID: "node-2", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeDeniedByPolicy},
+		{ID: "job-wanted-t3", NodeID: "node-3", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateDispatched},
+	})
+	dispatchAuditRecord(t, ctx, st, "audit-wanted", "job-wanted", "node:role=web", "acct-1", "gleipnir", base)
+
+	createJobFixture(t, ctx, st, "job-other", base, []jobs.Task{
+		{ID: "job-other-t1", NodeID: "node-9", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeFailure},
+	})
+	dispatchAuditRecord(t, ctx, st, "audit-other", "job-other", "node:role=db", "acct-2", "someone-else", base)
+
+	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{JobID: "job-wanted"}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	if len(page.Jobs) != 1 || page.Jobs[0].JobID != "job-wanted" {
+		t.Fatalf("QueryJobs = %+v, want exactly [job-wanted]", page.Jobs)
+	}
+	got := page.Jobs[0]
+	if got.Total != 3 || got.Unresolved != 1 {
+		t.Errorf("Total/Unresolved = %d/%d, want 3/1", got.Total, got.Unresolved)
+	}
+	want := map[jobs.Outcome]int{jobs.OutcomeSuccess: 1, jobs.OutcomeDeniedByPolicy: 1}
+	if !reflect.DeepEqual(got.Counts, want) {
+		t.Errorf("Counts = %v, want %v — the other Job's failure leaked into this tally", got.Counts, want)
+	}
+	if got.Selector != "node:role=web" || got.Requester != "gleipnir" {
+		t.Errorf("Selector/Requester = %q/%q, want node:role=web/gleipnir", got.Selector, got.Requester)
+	}
+	if got.RiskClass != jobs.RiskClassMutate {
+		t.Errorf("RiskClass = %v, want mutate — the declared class the Job-detail screen gates output on", got.RiskClass)
+	}
+
+	page, err = st.JobQueries().QueryJobs(ctx, jobs.JobQuery{JobID: "job-that-never-existed"}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs(unknown): %v", err)
+	}
+	if len(page.Jobs) != 0 {
+		t.Fatalf("an unknown JobID returned %d Jobs, want 0 — the filter must not fail open", len(page.Jobs))
+	}
+}
+
+// TestJobQuery_SingleJobDoesNotScanEveryTask is the boundedness property of
+// the Job-detail screen, asserted where it can actually be lost.
+//
+// SQLite cannot flatten an aggregate subquery and will not push an outer
+// WHERE into the right operand of a LEFT JOIN, so `WHERE j.job_id = ?` alone
+// leaves both derived tables aggregating the WHOLE of tasks and audit on
+// every page view. The predicate has to be pushed into each of them, and
+// nothing about the RESULTS changes when it is not — which is why the plan
+// itself is the assertion.
+func TestJobQuery_SingleJobDoesNotScanEveryTask(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	stmt, args := jobQuerySelect(jobs.JobQuery{JobID: "job-wanted"})
+	conds, whereArgs := buildJobWhere(jobs.JobQuery{JobID: "job-wanted"})
+	args = append(args, whereArgs...)
+	stmt += ` WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY j.created_at DESC, j.job_id DESC LIMIT ?`
+	args = append(args, 2)
+
+	rows, err := st.db.QueryContext(ctx, `EXPLAIN QUERY PLAN `+stmt, args...)
+	if err != nil {
+		t.Fatalf("EXPLAIN QUERY PLAN: %v", err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatalf("scan plan row: %v", err)
+		}
+		plan.WriteString(detail)
+		plan.WriteString("\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate plan: %v", err)
+	}
+
+	if strings.Contains(plan.String(), "SCAN tasks") {
+		t.Errorf("a single-Job query plans a full SCAN of tasks — every Job-detail page view would aggregate the whole table:\n%s", plan.String())
+	}
+	// Both derived tables, not just the Task one: without the pushdown the
+	// audit aggregate plans "SEARCH audit ... (kind=?)", which is every
+	// dispatch row ever written rather than this Job's.
+	for _, want := range []string{"SEARCH tasks", "SEARCH audit"} {
+		if !strings.Contains(plan.String(), want) {
+			t.Errorf("a single-Job query does not %q:\n%s", want, plan.String())
+		}
+	}
+	if strings.Contains(plan.String(), "(kind=?)") {
+		t.Errorf("the audit aggregate is keyed on kind alone, so it reads every dispatch row in the trail:\n%s", plan.String())
 	}
 }

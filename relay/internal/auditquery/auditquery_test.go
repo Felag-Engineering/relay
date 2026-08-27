@@ -205,6 +205,24 @@ func TestQueries_QueryJobs_QueryTasks_RoundTrip(t *testing.T) {
 		t.Errorf("Job risk class = %v, want Mutate", jobPage.Jobs[0].RiskClass)
 	}
 
+	// JobFilter.JobID round-trips through toJobQuery — the Job-detail
+	// screen's one aggregate read (#423). An unknown id is an empty page,
+	// never every Job.
+	onePage, err := q.QueryJobs(ctx, capability.JobFilter{JobID: "job-1"}, capability.PageRequest{})
+	if err != nil {
+		t.Fatalf("QueryJobs(JobID): %v", err)
+	}
+	if len(onePage.Jobs) != 1 || onePage.Jobs[0].JobID != "job-1" {
+		t.Fatalf("QueryJobs(JobID) = %+v, want exactly [job-1]", onePage.Jobs)
+	}
+	nonePage, err := q.QueryJobs(ctx, capability.JobFilter{JobID: "job-nope"}, capability.PageRequest{})
+	if err != nil {
+		t.Fatalf("QueryJobs(unknown JobID): %v", err)
+	}
+	if len(nonePage.Jobs) != 0 {
+		t.Fatalf("QueryJobs(unknown JobID) = %+v, want an empty page", nonePage.Jobs)
+	}
+
 	taskPage, err := q.QueryTasks(ctx, capability.TaskFilter{JobID: "job-1"}, capability.PageRequest{})
 	if err != nil {
 		t.Fatalf("QueryTasks: %v", err)

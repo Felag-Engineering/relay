@@ -32,6 +32,12 @@ const (
 // JobQuery is the Job list's filter. Every non-zero field ANDs; the zero
 // value matches every Job.
 type JobQuery struct {
+	// JobID restricts to one Job. It is what lets a Job-detail screen read
+	// the whole per-outcome tally as ONE aggregate row without
+	// materialising a single Task — the property that makes that screen
+	// bounded at 10,000 Nodes rather than merely paginated.
+	JobID string
+
 	// State restricts to JobStateRunning or JobStateComplete. nil means
 	// either.
 	State *JobState

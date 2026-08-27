@@ -128,6 +128,10 @@ type Reach struct {
 // internal/jobs is already an allowed import here (unlike internal/audit),
 // so mirroring its enums would only add a conversion with nothing to guard.
 type JobFilter struct {
+	// JobID restricts to one Job — the Job-detail screen's whole header:
+	// exact per-outcome counts as ONE aggregate row, with no Task
+	// materialised. Mirrors AuditFilter.JobID above.
+	JobID              string
 	State              *jobs.JobState
 	RequesterAccountID string
 	Operation          string
@@ -256,6 +260,13 @@ func (f AuditFilter) validate() error {
 	if !f.Since.IsZero() && !f.Until.IsZero() && !f.Until.After(f.Since) {
 		return fmt.Errorf("%w: until must be after since", ErrInvalidFilter)
 	}
+	// The same bound JobFilter and TaskFilter carry (readlane.go's
+	// validateJobID). All three land in the read record — this one in its
+	// job_id COLUMN, not merely in the summary — so bounding two of the three
+	// would leave the bound in place only where it was cheapest to add.
+	if err := validateJobID(f.JobID); err != nil {
+		return err
+	}
 	if len(f.Kinds) > 32 {
 		return fmt.Errorf("%w: %d kinds requested, max 32", ErrInvalidFilter, len(f.Kinds))
 	}
@@ -357,23 +368,59 @@ func validArgKey(s string) bool {
 // reasoning as every other caller-controlled audit field.
 const maxFilterSummaryBytes = 256
 
+// filterSummary accumulates a filter's "name=value" pairs, joined by ';',
+// for the read record's selector.
+//
+// One builder for both filters, and it ESCAPES ';' and '=' inside a value.
+// stripControl removes control characters and nothing else, so without this a
+// caller-controlled field could forge the summary's own structure: a Job ID
+// of `x;requester=admin;op=raw_exec` would be recorded as a selector no human
+// reading the trail could tell from a genuine multi-field filter. The trail is
+// evidence, and evidence whose structure the subject can write is not.
+type filterSummary struct{ b strings.Builder }
+
+func (s *filterSummary) field(name, value string) {
+	if value == "" {
+		return
+	}
+	if s.b.Len() > 0 {
+		s.b.WriteByte(';')
+	}
+	s.b.WriteString(name)
+	s.b.WriteByte('=')
+	s.b.WriteString(escapeFilterValue(value))
+}
+
+// String renders the accumulated fields, stripped of control characters and
+// bounded, exactly as it is recorded.
+func (s *filterSummary) String() string {
+	return truncateBytes(stripControl(s.b.String()), maxFilterSummaryBytes)
+}
+
+// escapeFilterValue backslash-escapes the two characters that carry structure
+// in a summary, and the backslash itself so the escaping is reversible.
+func escapeFilterValue(v string) string {
+	if !strings.ContainsAny(v, `;=\`) {
+		return v
+	}
+	var b strings.Builder
+	b.Grow(len(v) + 8)
+	for _, r := range v {
+		if r == ';' || r == '=' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 // summary renders f as a compact, control-character-stripped string —
 // "kinds=...;account=...;node=...;op=...;since=...;until=...;arg=..." —
 // recorded as the read record's selector (readlane.go), so the trail can
 // answer "who searched the trail for what".
 func (f AuditFilter) summary() string {
-	var b strings.Builder
-	field := func(name, value string) {
-		if value == "" {
-			return
-		}
-		if b.Len() > 0 {
-			b.WriteByte(';')
-		}
-		b.WriteString(name)
-		b.WriteByte('=')
-		b.WriteString(value)
-	}
+	var s filterSummary
+	field := s.field
 	field("kinds", strings.Join(f.Kinds, ","))
 	field("account", f.AccountID)
 	field("on_behalf_of", f.OnBehalfOf)
@@ -389,9 +436,12 @@ func (f AuditFilter) summary() string {
 		field("until", f.Until.UTC().Format(time.RFC3339))
 	}
 	if f.ArgKey != "" {
-		field("arg", f.ArgKey+"="+f.ArgValuePrefix)
+		// ArgKey is validated as an identifier and the '=' between the two is
+		// this field's own structure, so only the caller-controlled prefix is
+		// escaped.
+		field("arg", f.ArgKey+"="+escapeFilterValue(f.ArgValuePrefix))
 	}
-	return truncateBytes(stripControl(b.String()), maxFilterSummaryBytes)
+	return s.String()
 }
 
 // stripControl removes C0/C1 control characters and DEL — the same rule
