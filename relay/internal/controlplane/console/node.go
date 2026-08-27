@@ -28,7 +28,6 @@ package console
 
 import (
 	"net/http"
-	"sort"
 	"strings"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -428,24 +427,7 @@ func operationText(rec audit.Record) string {
 	return rec.ActionKind
 }
 
-func argsText(rec audit.Record) string {
-	if len(rec.RawExecArgv) > 0 {
-		return strings.Join(rec.RawExecArgv, " ")
-	}
-	if len(rec.Args) == 0 {
-		return ""
-	}
-	keys := make([]string, 0, len(rec.Args))
-	for k := range rec.Args {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+rec.Args[k])
-	}
-	return strings.Join(parts, " ")
-}
+func argsText(rec audit.Record) string { return argsSummary(rec.Args, rec.RawExecArgv) }
 
 // principalText prefers the verified Account name.
 //

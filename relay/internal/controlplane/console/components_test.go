@@ -380,6 +380,37 @@ func TestPlan_HashIsRenderedAsTheThingAnApprovalCommitsTo(t *testing.T) {
 	}
 }
 
+// TestPlan_ADispatchedPlanPredictsNothing is the Job-detail case (#423): the
+// same renderer, invoked for a Plan that has already run.
+//
+// "0 would run, 0 would be denied" on a finished Job is a lie about a
+// prediction nobody made, and an empty plan hash presented as one is the
+// mislabel #465 named. Both slots are omitted rather than filled with
+// something false; the fan-out and the risk class — the facts that ARE known
+// — still render.
+func TestPlan_ADispatchedPlanPredictsNothing(t *testing.T) {
+	out := render(t, "plan", Plan{
+		Matched:      10000,
+		RiskClass:    jobs.RiskClassMutate,
+		SelectorNote: "recorded when the dispatch completes",
+	})
+	if strings.Contains(out, "would run") {
+		t.Errorf("a Plan with no verdicts predicts an outcome anyway: %s", out)
+	}
+	if strings.Contains(out, "planhash") {
+		t.Errorf("a Plan with no hash renders an empty one as if it were the identity of the plan: %s", out)
+	}
+	// The Selector's SLOT is still there, holding the note. A block that grows
+	// a line when the Selector arrives has reflowed, which is exactly what
+	// foundations rule 6 forbids.
+	if !strings.Contains(out, "recorded when the dispatch completes") {
+		t.Errorf("the Selector slot is missing entirely rather than pending: %s", out)
+	}
+	if !strings.Contains(out, "10000 Nodes matched") || !strings.Contains(out, `data-risk="mutate"`) {
+		t.Errorf("a dispatched Plan dropped the facts it does know: %s", out)
+	}
+}
+
 // --- The step-up modal ------------------------------------------------------
 
 // TestStepUp_NamesWhatItAuthorises is the shell spec's acceptance criterion.

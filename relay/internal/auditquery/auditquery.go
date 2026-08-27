@@ -195,6 +195,7 @@ func fromReach(r audit.Reach) capability.Reach {
 
 func toJobQuery(f capability.JobFilter) jobs.JobQuery {
 	return jobs.JobQuery{
+		JobID:              f.JobID,
 		State:              f.State,
 		RequesterAccountID: f.RequesterAccountID,
 		Operation:          f.Operation,

@@ -239,11 +239,12 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Policy:    d.policy,
 		Audit:     d.audit,
 		Approvals: d.capability,
-		Jobs:      consoleJobReader{jobs: d.jobs, tasks: d.tasks},
 		Freeze:    d.freeze,
 		Now:       d.now,
 		// The read lane (#441). d.capability (*capability.Service) already
-		// implements console.QueryReader's five methods.
+		// implements console.QueryReader's five methods. Job detail (#423)
+		// reads Jobs and Tasks through it and through nothing else, which is
+		// why the Console is handed no Job repository of its own.
 		Queries: d.capability,
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
@@ -327,23 +328,4 @@ func readAuditorOrNil(s *auditsink.Sink) api.ReadAuditor {
 		return nil
 	}
 	return s
-}
-
-// consoleJobReader adapts the Job and Task repositories to console.JobReader.
-//
-// It lives here rather than beside the Console for the same reason
-// jobResultReader lives here: the adapter is a composition-root concern, and a
-// surface package that imported both repositories to build its own would have
-// widened its dependency surface to do it.
-type consoleJobReader struct {
-	jobs  jobs.JobRepository
-	tasks jobs.TaskRepository
-}
-
-func (r consoleJobReader) Job(ctx context.Context, jobID string) (jobs.Job, error) {
-	return r.jobs.GetJob(ctx, jobID)
-}
-
-func (r consoleJobReader) Tasks(ctx context.Context, jobID string) ([]jobs.Task, error) {
-	return r.tasks.ByJob(ctx, jobID)
 }

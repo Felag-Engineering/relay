@@ -51,19 +51,40 @@ func jobOutcomeSumColumns() []string {
 	return cols
 }
 
-// jobQuerySelect is the QueryJobs SELECT: one row per Job, LEFT JOINed to a
-// per-Job Task aggregate and a per-Job audit aggregate.
+// jobQuerySelect renders the QueryJobs SELECT for filter: one row per Job,
+// LEFT JOINed to a per-Job Task aggregate and a per-Job audit aggregate. It
+// returns the statement and the arguments bound INSIDE it, which precede
+// every WHERE/cursor/limit argument in the text.
 //
 // Both joins are LEFT, deliberately: a zero-Task Job (fan-out matched
 // nothing) has no row in the tasks aggregate, and an IN-FLIGHT Job has no
 // audit row yet at all — capability/service.go's dispatcher writes the audit
-// record only after disp.run returns (capability/service.go:409's
-// AuditSink.Record call happens after dispatch, not before). An INNER JOIN
-// would make either kind of Job disappear from a query the instant it was
-// created, which is exactly the race a Job list must not have: Job state and
-// risk class come from the tasks table, never from the trail, so they are
-// correct from the moment CreateTask commits.
-var jobQuerySelect = `SELECT j.job_id, j.created_at,
+// record only after disp.run returns (capability/service.go's AuditSink.Record
+// call happens after dispatch, not before). An INNER JOIN would make either
+// kind of Job disappear from a query the instant it was created, which is
+// exactly the race a Job list must not have: Job state and risk class come
+// from the tasks table, never from the trail, so they are correct from the
+// moment CreateTask commits.
+//
+// # Why job_id is pushed into both derived tables
+//
+// It is a statement, not an optimisation. SQLite cannot flatten an aggregate
+// subquery, and it does not push an outer WHERE into the RIGHT OPERAND of a
+// LEFT JOIN — which both derived tables are. So `WHERE j.job_id = ?` alone
+// leaves each of them a full aggregate over EVERY row of tasks and every
+// dispatch row of audit, on every single-Job query: at 10,000 Tasks with
+// retained history that is millions of rows per Job-detail page view,
+// repeatable by anyone holding down refresh. With the predicate pushed down,
+// both become an index SEARCH. TestJobQuery_SingleJobDoesNotScanEveryTask
+// asserts the query plan, because nothing else would notice the regression.
+func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
+	taskWhere, auditWhere := "", "\n\tWHERE kind = 'dispatch'"
+	if filter.JobID != "" {
+		taskWhere = "\n\tWHERE job_id = ?"
+		auditWhere += "\n\t\tAND job_id = ?"
+		args = []any{filter.JobID, filter.JobID}
+	}
+	stmt = `SELECT j.job_id, j.created_at,
 	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
@@ -77,15 +98,16 @@ LEFT JOIN (
 		MIN(operation_name) AS operation_name,
 		MIN(risk_class) AS risk_class,
 		` + strings.Join(jobOutcomeSumColumns(), ",\n\t\t") + `
-	FROM tasks
+	FROM tasks` + taskWhere + `
 	GROUP BY job_id
 ) t ON t.job_id = j.job_id
 LEFT JOIN (
 	SELECT job_id, MIN(selector) AS selector, MIN(account_id) AS account_id, MIN(account_name) AS account_name
-	FROM audit
-	WHERE kind = 'dispatch'
+	FROM audit` + auditWhere + `
 	GROUP BY job_id
 ) a ON a.job_id = j.job_id`
+	return stmt, args
+}
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
 // for the outer SELECT — the inner aggregate's SUM is NULL only when a Job
@@ -105,7 +127,9 @@ func jobOutcomeColumnRefs() []string {
 func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, limit int, cursor string) (jobs.JobPage, error) {
 	limit = clampPageSize(limit)
 
-	conds, args := buildJobWhere(filter)
+	stmt, args := jobQuerySelect(filter)
+	conds, whereArgs := buildJobWhere(filter)
+	args = append(args, whereArgs...)
 	if cursor != "" {
 		lastCreatedAt, lastJobID, err := decodeCursor2(cursor, jobs.ErrInvalidCursor)
 		if err != nil {
@@ -115,7 +139,6 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 		args = append(args, lastCreatedAt, lastCreatedAt, lastJobID)
 	}
 
-	stmt := jobQuerySelect
 	if len(conds) > 0 {
 		stmt += ` WHERE ` + strings.Join(conds, " AND ")
 	}
@@ -164,6 +187,13 @@ func (q *sqliteJobQueries) QueryJobs(ctx context.Context, filter jobs.JobQuery, 
 // (ANDed by the caller, referencing the jobQuerySelect aliases j/t/a) and
 // their bound arguments.
 func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
+	if filter.JobID != "" {
+		// Also pushed into both derived tables by jobQuerySelect — see there
+		// for why one predicate in three places is the point rather than a
+		// duplication.
+		conds = append(conds, `j.job_id = ?`)
+		args = append(args, filter.JobID)
+	}
 	if filter.State != nil {
 		switch *filter.State {
 		case jobs.JobStateRunning:

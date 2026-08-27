@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -412,4 +413,98 @@ func TestWithQueriesAcceptsRealAuditSink(t *testing.T) {
 	New(reg, WithAuditSink(audit), WithQueries(auditQ, jobQ))
 	// WithAuditSink AFTER WithQueries — the guard must not depend on order.
 	New(reg, WithQueries(auditQ, jobQ), WithAuditSink(audit))
+}
+
+// TestReadLane_JobFilterCarriesOneJob is the Job-detail screen's read (#423):
+// the filter reaches the seam intact, and the read record it writes names the
+// Job on its own column — so "who looked at this Job" is answerable by the
+// same lookup every other Job question uses, not by parsing a summary string.
+func TestReadLane_JobFilterCarriesOneJob(t *testing.T) {
+	svc, _, jobQ, sink := readLaneFixture(t)
+
+	if _, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{JobID: "job-1"}, PageRequest{Limit: 1}); err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	if jobQ.gotJobFilter.JobID != "job-1" {
+		t.Errorf("the seam got JobID %q, want job-1", jobQ.gotJobFilter.JobID)
+	}
+	if len(sink.readCalls) != 1 {
+		t.Fatalf("got %d read records, want 1", len(sink.readCalls))
+	}
+	if got := sink.readCalls[0].JobID; got != "job-1" {
+		t.Errorf("the read record's JobID = %q, want job-1", got)
+	}
+	if got := sink.readCalls[0].Selector; got != "job=job-1" {
+		t.Errorf("the read record's selector = %q, want job=job-1", got)
+	}
+}
+
+// TestReadLane_OverLongJobIDIsRefused bounds a caller-controlled value that
+// lands in the append-only trail, on both Job filters — the same reasoning
+// AuditFilter.validate bounds Kinds and Operations on.
+func TestReadLane_OverLongJobIDIsRefused(t *testing.T) {
+	svc, _, jobQ, _ := readLaneFixture(t)
+	long := strings.Repeat("a", maxJobIDBytes+1)
+
+	if _, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{JobID: long}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryJobs with a %d-byte job id = %v, want ErrInvalidFilter", len(long), err)
+	}
+	if _, err := svc.QueryTasks(context.Background(), testPrincipal, TaskFilter{JobID: long}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryTasks with a %d-byte job id = %v, want ErrInvalidFilter", len(long), err)
+	}
+	if jobQ.jobsCalled || jobQ.tasksCalled {
+		t.Error("a refused filter still reached the query seam")
+	}
+}
+
+// TestReadLane_EmptyJobFilterIsEveryJob pins the shape the Job-detail screen
+// depends on NOT having: an empty JobID must remain "every Job" (the Job
+// list's own query), so a screen that means "one Job" has to say so. The
+// guard is against the reverse reading — a future validate() that treated ""
+// as a match-nothing sentinel would silently empty the Job list.
+func TestReadLane_EmptyJobFilterIsEveryJob(t *testing.T) {
+	svc, _, jobQ, _ := readLaneFixture(t)
+	if _, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{}, PageRequest{}); err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	if !jobQ.jobsCalled || jobQ.gotJobFilter.JobID != "" {
+		t.Errorf("an unfiltered Job query reached the seam as %+v", jobQ.gotJobFilter)
+	}
+}
+
+// TestReadLane_FilterSummaryCannotForgeItsOwnStructure — the read record's
+// selector is evidence, and a caller-controlled field that can write ';' and
+// '=' into it forges a filter no human reading the trail could tell from a
+// real one. stripControl removes control characters and nothing else, so the
+// separators are escaped here.
+func TestReadLane_FilterSummaryCannotForgeItsOwnStructure(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+	forged := "x;requester=admin;op=raw_exec"
+
+	if _, err := svc.QueryJobs(context.Background(), testPrincipal, JobFilter{JobID: forged}, PageRequest{}); err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	got := sink.readCalls[0].Selector
+	if strings.Contains(got, ";requester=") {
+		t.Errorf("the recorded selector %q reads as a multi-field filter the caller never asked for", got)
+	}
+	if want := `job=x\;requester\=admin\;op\=raw_exec`; got != want {
+		t.Errorf("selector = %q, want %q", got, want)
+	}
+}
+
+// TestReadLane_AuditFilterJobIDIsBoundedToo — all three filters that carry a
+// Job ID reach the append-only trail with it, this one in the read record's
+// job_id COLUMN. A bound applied to two of the three is a bound on its way
+// out.
+func TestReadLane_AuditFilterJobIDIsBoundedToo(t *testing.T) {
+	svc, auditQ, _, _ := readLaneFixture(t)
+	long := strings.Repeat("a", maxJobIDBytes+1)
+
+	if _, err := svc.QueryAudit(context.Background(), testPrincipal, AuditFilter{JobID: long}, PageRequest{}); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("QueryAudit with a %d-byte job id = %v, want ErrInvalidFilter", len(long), err)
+	}
+	if auditQ.queryCalled {
+		t.Error("a refused filter still reached the trail seam")
+	}
 }

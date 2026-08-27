@@ -68,10 +68,47 @@ shows its audited metadata only (ADR-0025).
 
 ## Acceptance
 
-- [ ] A Job over 10,000 Nodes renders in one screen with no list until explicitly requested.
-- [ ] All eight outcomes render, with the three "did not run" kinds visually distinct.
-- [ ] The denied group shows the rule verbatim and links to the Node's effective Policy.
-- [ ] Cancel (v0.7.0) is offered only while Tasks are in flight, and its effect is described
+- [x] A Job over 10,000 Nodes renders in one screen with no list until explicitly requested.
+      The counts come from ONE aggregate row (`capability.QueryJobs` filtered to the Job), so
+      they are exact without a Task being materialised; rows come from at most one bounded page
+      per outcome, and the success group fetches none at all above 50 Tasks.
+- [x] All eight outcomes render, with the three "did not run" kinds visually distinct.
+- [x] The denied group shows the rule verbatim and links to the Node's effective Policy.
+      The link lands on the Node page; an anchor to its effective-Policy panel waits on #421.
+      The second link the layout calls for — into the Policy fix screen (spec 07) — is NOT
+      rendered, because spec 07 is not built in v0.6.0 and a link to a screen that does not
+      exist is worse than no link.
+- [x] Cancel (v0.7.0) is offered only while Tasks are in flight, and its effect is described
       accurately; in v0.6.0 no control on this page reaches the capability layer.
+      The v0.6.0 half is met and asserted (no `<form>`, no `<button>`, no POST anywhere on the
+      screen). Cancel itself is v0.7.0 and deliberately absent.
 - [ ] The Plan block does not change while the Job runs.
-- [ ] A three-Node Job is as legible as a ten-thousand-Node one.
+      **Partially met.** Everything the block renders is fixed at dispatch — risk class,
+      fan-out (every Task is created before the first one runs), and the plan hash the bound
+      approval committed to — except the Selector, which a Job carries nowhere of its own: it
+      lives in the dispatch audit record, and the Job engine writes that record only AFTER the
+      dispatch returns. So a running Job has no Selector to render. The block's STRUCTURE does
+      not reflow — the Selector's own slot holds a note saying where the value comes from, and
+      resolves in place at completion — but that one slot does change. Closing this properly
+      means putting the Selector on the Job itself (`jobs.Job`'s doc comment already names the
+      follow-up); `approval.Request` cannot serve as the earlier source, because it carries a
+      plan hash and no Selector.
+- [x] A three-Node Job is as legible as a ten-thousand-Node one.
+      At or below 50 Tasks every group lists everything, success included.
+
+### Not delivered by this build
+
+**Live updates.** "A running Job updates live: counts fill in, the bar grows" is prose in this
+spec rather than an acceptance checkbox, and it is not built: the Console has no SSE client and
+loads no JavaScript at all. (The layout does emit `hx-headers` attributes and the CSP admits a
+same-origin event stream, but the HTMX script is not loaded, so nothing acts on them.) The page
+renders per request; a running Job updates when it is reloaded. Building a transport for one
+screen is not in v0.6.0's scope.
+
+**Exact clustering above 50 Tasks.** "9,797 identical (view one) · 3 differ" is exact only when
+the page listed the whole group. Above that the success group fetches nothing by default and at
+most 100 rows under `?show=`, so the page says what it actually computed — "N of the M listed" —
+rather than printing a cluster count over rows it never saw. The exact answer is one
+`GROUP BY hash(stdout||stderr)` aggregate away, which is precisely the v0.9.0 histogram
+primitive this component was laid out for: it replaces what computes the counts and nothing
+about the shape of the answer.

@@ -3,7 +3,6 @@ package capability
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -119,7 +118,10 @@ func (s *Service) QueryJobs(ctx context.Context, p Principal, f JobFilter, page 
 	if err := f.validate(); err != nil {
 		return JobPage{}, err
 	}
-	if err := s.recordQueryRead(ctx, p, toolQueryJobs, f.summary(), "", ""); err != nil {
+	// The Job ID is recorded on the read record itself, not only inside the
+	// summary, so the trail can answer "who looked at this Job" by the same
+	// indexed column every other lookup uses.
+	if err := s.recordQueryRead(ctx, p, toolQueryJobs, f.summary(), "", f.JobID); err != nil {
 		return JobPage{}, err
 	}
 	return s.jobQ.QueryJobs(ctx, f, PageRequest{Limit: clampPage(page), Cursor: page.Cursor})
@@ -188,6 +190,24 @@ func (f JobFilter) validate() error {
 	if !f.Since.IsZero() && !f.Until.IsZero() && !f.Until.After(f.Since) {
 		return fmt.Errorf("%w: until must be after since", ErrInvalidFilter)
 	}
+	if err := validateJobID(f.JobID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// maxJobIDBytes bounds a caller-supplied Job ID on the read lane. A Job ID
+// the Relay issued is 32 hex characters (execution.go), so this is four
+// times the real thing and still a bound — the value is caller-controlled
+// and lands in the append-only trail as the read record's own selector, the
+// same reason AuditFilter.validate bounds Kinds and Operations (F2, #441
+// cycle-2 security review).
+const maxJobIDBytes = 128
+
+func validateJobID(id string) error {
+	if len(id) > maxJobIDBytes {
+		return fmt.Errorf("%w: job id exceeds %d bytes", ErrInvalidFilter, maxJobIDBytes)
+	}
 	return nil
 }
 
@@ -195,18 +215,9 @@ func (f JobFilter) validate() error {
 // recorded as the read record's selector — the Job-list analogue of
 // AuditFilter.summary.
 func (f JobFilter) summary() string {
-	var b strings.Builder
-	field := func(name, value string) {
-		if value == "" {
-			return
-		}
-		if b.Len() > 0 {
-			b.WriteByte(';')
-		}
-		b.WriteString(name)
-		b.WriteByte('=')
-		b.WriteString(value)
-	}
+	var s filterSummary
+	field := s.field
+	field("job", f.JobID)
 	if f.State != nil {
 		field("state", jobStateLabel(*f.State))
 	}
@@ -221,7 +232,7 @@ func (f JobFilter) summary() string {
 	if !f.Until.IsZero() {
 		field("until", f.Until.UTC().Format(time.RFC3339))
 	}
-	return truncateBytes(stripControl(b.String()), maxFilterSummaryBytes)
+	return s.String()
 }
 
 // validate checks f before it reaches any seam. JobID is required: an empty
@@ -232,17 +243,18 @@ func (f TaskFilter) validate() error {
 	if f.JobID == "" {
 		return fmt.Errorf("%w: job id is required", ErrInvalidFilter)
 	}
-	return nil
+	return validateJobID(f.JobID)
 }
 
 // summary renders f as a compact string, recorded as the read record's
 // selector.
 func (f TaskFilter) summary() string {
-	s := "job=" + f.JobID
+	var s filterSummary
+	s.field("job", f.JobID)
 	if f.Outcome != nil {
-		s += ";outcome=" + outcomeLabel(*f.Outcome)
+		s.field("outcome", outcomeLabel(*f.Outcome))
 	}
-	return truncateBytes(stripControl(s), maxFilterSummaryBytes)
+	return s.String()
 }
 
 // jobStateLabel and riskClassLabel render their jobs.* enums as the fixed,

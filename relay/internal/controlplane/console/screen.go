@@ -118,3 +118,20 @@ func unavailable(w http.ResponseWriter, what string) {
 			"This is a configuration or build problem, not an empty fleet.",
 		http.StatusInternalServerError)
 }
+
+// unreadable renders a screen whose backing seam IS wired and FAILED.
+//
+// It is a separate sentence from unavailable's on purpose. The two are
+// indistinguishable on screen if they share one message, and they send an
+// operator to opposite places: a wiring fault is a build or configuration
+// problem to be fixed at the composition root, and a query error is a runtime
+// failure of a store that is running right now — which is to say, an incident,
+// usually at the moment someone is trying to read a page in order to
+// understand a different one.
+func unreadable(w http.ResponseWriter, what string) {
+	http.Error(w,
+		"the Console cannot render this screen: "+what+" could not be read from this Relay. "+
+			"This is a runtime failure of a seam that IS wired — not a configuration problem, "+
+			"and not an empty result.",
+		http.StatusInternalServerError)
+}

@@ -23,6 +23,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -275,100 +276,6 @@ func TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown(t *testing.T) {
 	}
 }
 
-// TestJob_DeniedSortsFirstAndSuccessIsCollapsed is spec 13's ordering rule.
-// Success is the mode and the mode is the least informative thing on the page;
-// a Job detail that opens with nine thousand successes has buried the three
-// denies that were the reason anyone looked.
-func TestJob_DeniedSortsFirstAndSuccessIsCollapsed(t *testing.T) {
-	groups := assembleGroups(
-		map[jobs.Outcome][]taskRow{
-			jobs.OutcomeSuccess:        {{NodeID: "a"}, {NodeID: "b"}},
-			jobs.OutcomeDeniedByPolicy: {{NodeID: "c", Deny: &Deny{Rule: "deny file.read /etc/shadow"}}},
-			jobs.OutcomeFailure:        {{NodeID: "d"}},
-		},
-		map[jobs.Outcome]int{jobs.OutcomeSuccess: 2, jobs.OutcomeDeniedByPolicy: 1, jobs.OutcomeFailure: 1},
-		false,
-	)
-
-	if len(groups) != 3 {
-		t.Fatalf("got %d groups, want 3", len(groups))
-	}
-	if groups[0].Outcome != jobs.OutcomeDeniedByPolicy {
-		t.Errorf("first group is %s, want denied_by_policy — denies sort first", groups[0].Label)
-	}
-	if groups[len(groups)-1].Outcome != jobs.OutcomeSuccess {
-		t.Errorf("last group is %s, want success — success sorts last", groups[len(groups)-1].Label)
-	}
-	for _, g := range groups {
-		wantOpen := g.Outcome != jobs.OutcomeSuccess
-		if g.Open != wantOpen {
-			t.Errorf("group %s open = %v, want %v", g.Label, g.Open, wantOpen)
-		}
-	}
-	if groups[0].SharedRule == "" {
-		t.Error("a single-rule deny group did not report a shared rule — the rule should be shown once")
-	}
-}
-
-// TestJob_ReadClassCarriesNoOutputAtAnyAge is ADR-0025 rendered. The Task row
-// may hold captured bytes while the Job lives; this page must not become the
-// durable place they are read from.
-func TestJob_ReadClassCarriesNoOutputAtAnyAge(t *testing.T) {
-	tasks := []jobs.Task{{
-		NodeID:  "node-web-1",
-		State:   jobs.DispatchStateResolved,
-		Outcome: jobs.OutcomeSuccess,
-		Stdout:  []byte("root:x:0:0:SECRET"),
-	}}
-
-	groups, _, _, _ := groupTasks(tasks, true /* readClass */)
-	for _, g := range groups {
-		for _, c := range g.Clusters {
-			for _, row := range c.Rows {
-				if row.Output != "" {
-					t.Fatalf("a read-class Task rendered output %q — read output is never retained", row.Output)
-				}
-			}
-		}
-	}
-
-	// The same Task on a mutate-class Job does render, which is what makes the
-	// assertion above about the risk class rather than about empty output.
-	groups, _, _, _ = groupTasks(tasks, false)
-	if groups[0].Clusters[0].Rows[0].Output == "" {
-		t.Error("a mutate-class Task rendered no output — the read rule was applied to the wrong class")
-	}
-}
-
-// TestJob_IdenticalOutputClusters is the disclosure ladder: 9,797 identical
-// results are one fact, not 9,797, and rendering them as 9,797 rows is the
-// behaviour clustering exists to prevent.
-func TestJob_IdenticalOutputClusters(t *testing.T) {
-	var tasks []jobs.Task
-	for i := 0; i < 20; i++ {
-		tasks = append(tasks, jobs.Task{
-			NodeID: "n" + itoa(i), State: jobs.DispatchStateResolved,
-			Outcome: jobs.OutcomeSuccess, Stdout: []byte("ok"),
-		})
-	}
-	tasks = append(tasks, jobs.Task{
-		NodeID: "odd", State: jobs.DispatchStateResolved,
-		Outcome: jobs.OutcomeSuccess, Stdout: []byte("different"),
-	})
-
-	groups, _, _, _ := groupTasks(tasks, false)
-	cs := groups[0].Clusters
-	if len(cs) != 2 {
-		t.Fatalf("got %d clusters, want 2", len(cs))
-	}
-	if cs[0].Count != 20 || !cs[0].Representative || len(cs[0].Rows) != 1 {
-		t.Errorf("the 20 identical results did not collapse to one representative: %+v", cs[0])
-	}
-	if cs[1].Count != 1 || cs[1].Representative {
-		t.Errorf("the single differing result was collapsed: %+v", cs[1])
-	}
-}
-
 // TestApprovals_OrderIsNearestExpiryFirst is spec 14's ordering rule. An
 // approval that lapses because it sat below the fold is a failure of the screen,
 // and arrival order is exactly how that happens.
@@ -614,6 +521,21 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 	d := fleetFixture()
 	d.Approvals = fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
+	// Job detail reads through the capability layer's query lane and refuses
+	// rather than rendering an empty Job when it is not wired (#423), so this
+	// cross-screen sweep has to wire it to reach the screen at all.
+	d.Queries = &fakeQueries{
+		jobs: []capability.JobSummary{{
+			JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
+			RiskClass: jobs.RiskClassMutate, Total: 1,
+			Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 1},
+		}},
+		tasks: []capability.TaskRow{{
+			TaskID: "task-1", NodeID: "node-web-1", Outcome: jobs.OutcomeSuccess,
+			RiskClass: jobs.RiskClassMutate, Stdout: []byte("restarted"),
+		}},
+		rows: []capability.AuditRow{{Kind: audit.KindDispatch, JobID: "job-1", OperationName: "service.restart"}},
+	}
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	for _, path := range []string{
@@ -869,86 +791,6 @@ func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
 	}
 	if calls[0].Risk != "mutate" {
 		t.Errorf("a parked raw_exec rendered risk %q — Raw Exec always takes the mutate cap", calls[0].Risk)
-	}
-}
-
-// TestJob_SentinelExitCodesAreNotRenderedAsProcessResults.
-//
-// The daemon uses -1 exclusively as "no exit status": denied before spawn,
-// killed, never sent. Relay-synthesized outcomes carry a zero that means
-// nothing. Rendering either as an exit code invites an operator to read "did not
-// run" as a real result — and "exit 0" beside `unreachable` says it succeeded.
-func TestJob_SentinelExitCodesAreNotRenderedAsProcessResults(t *testing.T) {
-	cases := []struct {
-		outcome jobs.Outcome
-		code    int32
-		want    bool
-	}{
-		{jobs.OutcomeSuccess, 0, true},
-		{jobs.OutcomeFailure, 2, true},
-		{jobs.OutcomeDeniedByPolicy, -1, false},
-		{jobs.OutcomeTimeout, -1, false},
-		{jobs.OutcomeCancelled, -1, false},
-		{jobs.OutcomeUnreachable, 0, false},
-		{jobs.OutcomeVersionRefused, 0, false},
-		{jobs.OutcomeUnsupported, 0, false},
-	}
-	for _, c := range cases {
-		if got := hasRealExitStatus(c.outcome, c.code); got != c.want {
-			t.Errorf("%s with code %d: has real exit status = %v, want %v",
-				OutcomeLabel(c.outcome), c.code, got, c.want)
-		}
-	}
-
-	// Having one and being worth screen are different questions. A success
-	// exits zero by definition, so printing it says nothing and prints it in
-	// the failure colour while doing so.
-	shown := func(o jobs.Outcome, code int32) bool {
-		rows, _, _, _ := groupTasks([]jobs.Task{{
-			NodeID: "n", State: jobs.DispatchStateResolved, Outcome: o, ExitCode: code,
-		}}, false)
-		return rows[0].Clusters[0].Rows[0].ShowExit
-	}
-	if shown(jobs.OutcomeSuccess, 0) {
-		t.Error("a successful Task renders \"exit 0\" — the outcome already said so, in the failure colour")
-	}
-	if !shown(jobs.OutcomeFailure, 3) {
-		t.Error("a failing Task hides the exit code that explains it")
-	}
-	if shown(jobs.OutcomeDeniedByPolicy, -1) {
-		t.Error("a deny renders the daemon's no-exit-status sentinel")
-	}
-}
-
-// TestJob_ReadClassDoesNotClaimIdenticalOutput — on a read Job there is no
-// retained output, so every row's is empty. "3 Nodes reported identical output"
-// describes the Relay's retention policy as if it were a fact about the fleet.
-func TestJob_ReadClassDoesNotClaimIdenticalOutput(t *testing.T) {
-	var tasks []jobs.Task
-	for _, n := range []string{"n1", "n2", "n3", "n4"} {
-		tasks = append(tasks, jobs.Task{
-			NodeID: n, State: jobs.DispatchStateResolved,
-			Outcome: jobs.OutcomeSuccess, Stdout: []byte("secret contents"),
-		})
-	}
-
-	groups, _, _, _ := groupTasks(tasks, true /* readClass */)
-	for _, g := range groups {
-		for _, c := range g.Clusters {
-			if c.Representative {
-				t.Error("a read-class Job claimed Nodes reported identical output — none was retained")
-			}
-			if len(c.Rows) != 4 {
-				t.Errorf("read-class rows were collapsed: got %d, want all 4 listed", len(c.Rows))
-			}
-		}
-	}
-
-	// The same shape on a mutate DOES cluster, which is what makes the
-	// assertion above about the risk class and not about empty output.
-	groups, _, _, _ = groupTasks(tasks, false)
-	if !groups[0].Clusters[0].Representative {
-		t.Error("a mutate-class Job with four identical results did not cluster")
 	}
 }
 
@@ -1678,54 +1520,6 @@ func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 	other := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-2").Body.String()
 	if !strings.Contains(other, "has not reported its Policy") {
 		t.Error("a Node with no snapshot did not render the unreported branch")
-	}
-}
-
-// TestJob_ReadsPerNodeResultsThroughTheJobSeam covers the path the audit trail
-// cannot serve: exit codes, and Tasks still in flight.
-//
-// Also surfaced by the unused-linter — buildJobView prefers the Task store and
-// falls back to the trail, and only the fallback had a test, so the branch that
-// runs in production was the untested one.
-func TestJob_ReadsPerNodeResultsThroughTheJobSeam(t *testing.T) {
-	d := fleetFixture()
-	d.Audit = fakeAudit{records: []audit.Record{{
-		Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1",
-		OperationName: "service.restart", Args: map[string]string{"unit": "nginx"},
-		Timestamp: testNow,
-	}}}
-	d.Jobs = fakeJobs{
-		job: jobs.Job{ID: "job-1", CreatedAt: testNow},
-		tasks: []jobs.Task{
-			{NodeID: "node-web-1", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess, Stdout: []byte("restarted")},
-			{NodeID: "node-web-2", State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeFailure, ExitCode: 3, Stderr: []byte("unit not found")},
-			// Still running: the trail knows nothing about this one.
-			{NodeID: "node-web-3", State: jobs.DispatchStateDispatched},
-		},
-	}
-
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/jobs/job-1").Body.String()
-
-	if !strings.Contains(body, "1 still in flight") {
-		t.Error("an unresolved Task is not reported as in flight — the audit trail cannot answer this")
-	}
-	// A real exit status renders; the sentinel ones do not.
-	if !strings.Contains(body, "exit 3") {
-		t.Error("a genuine non-zero exit code was not rendered")
-	}
-	// Neither a sentinel nor a redundant zero. `success` already implies exit 0,
-	// and .exit is painted in the failure colour — a green row carrying a red
-	// "exit 0" spends the product's one alarming colour on its calmest event.
-	if strings.Contains(body, "exit -1") || strings.Contains(body, "exit 0") {
-		t.Error("an exit code rendered that the outcome already implied, or a sentinel rendered as a result")
-	}
-	// Mutate-class output IS rendered; this is the branch ADR-0025 does not gag.
-	if !strings.Contains(body, "unit not found") {
-		t.Error("captured stderr from a mutate Task was not rendered")
-	}
-	// Failures sort before successes.
-	if strings.Index(body, "failure") > strings.Index(body, ">success<") {
-		t.Error("success sorted before failure — ordering is by interest, not alphabetical")
 	}
 }
 
