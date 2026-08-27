@@ -7,8 +7,9 @@
 // Executor (Service.Run/CancelJob's exact shape) and JobResultReader
 // (per-Job Task read-back for rendering per-Node results).
 //
-// This file (mcp.go) — along with tools_nodes.go, tools_operations.go, and
-// attribution.go — is a strict READ file: its non-test source never spells a
+// This file (mcp.go) — along with tools_nodes.go, tools_operations.go,
+// attribution.go, and toolevents.go (#416, the tool-call event publisher) —
+// is a strict READ file: its non-test source never spells a
 // capability. token at all (not even capability.Principal), never imports
 // *capability.Service, and never calls capability.New. NodeReader,
 // PolicyReader, and OperationLister below are read-only interfaces —
@@ -193,12 +194,23 @@ type Option func(*serverOptions)
 type serverOptions struct {
 	now       func() time.Time
 	approvals ApprovalDecider
+	toolCalls ToolCallObserver
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
 // (production default: time.Now().UTC()).
 func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
+}
+
+// WithToolCallObserver attaches a ToolCallObserver (#416, toolevents.go)
+// that is called once per tools/call invocation, before the tool's handler
+// runs. A nil observer (the default) installs no middleware at all — see
+// New, where AddReceivingMiddleware has no nil-tolerant form, so the guard
+// is an explicit `if cfg.toolCalls != nil` around the call, not a
+// register*-style function that itself no-ops on a nil collaborator.
+func WithToolCallObserver(o ToolCallObserver) Option {
+	return func(cfg *serverOptions) { cfg.toolCalls = o }
 }
 
 func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
@@ -219,6 +231,15 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 	results = jobResultReaderAdapter{r: results}
 
 	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay", Version: serverVersion}, nil)
+
+	// The tool-call event publisher (#416, toolevents.go). Installed before
+	// any tool is registered so it is in place for every one of them from
+	// the first request; AddReceivingMiddleware has no nil-tolerant form,
+	// so a nil observer installs no middleware at all rather than a
+	// disabled branch inside one.
+	if cfg.toolCalls != nil {
+		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
+	}
 
 	registerNodeTools(srv, nodes, policy, vocab, reads)
 	registerOperationTools(srv, ops, vocab, reads)

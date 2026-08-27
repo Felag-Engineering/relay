@@ -16,7 +16,7 @@ Console milestones are sequenced by real dependencies rather than optimism.
 | Execution composer (`list_operations` schemas, plan, run, raw_exec, cancel) | capability layer | ✅ `capability/{execution,plan,cancel}`, `opvocab` golden schema — MCP-only today; Console adapts the same layer in-process |
 | **Login, roles, sessions** | Account model | ❌ single seeded shared credential; no identity |
 | **Step-up re-auth** on mutate apply / privilege grants | session "recent-auth" concept | ❌ depends on Accounts |
-| **Live updates (SSE)** | event seam with **four publishers** — registry transitions, Job transitions, MCP tool calls (arguments, never read results), enrollment attempts — bounded ring buffer, `Last-Event-ID` resume, `gap` event | ❌ nothing emits events; #416 (v0.6.0) |
+| **Live updates (SSE)** | event seam with **four publishers** — registry transitions, Job transitions, MCP tool calls (arguments, never read results), enrollment attempts — bounded ring buffer, `Last-Event-ID` resume, `gap` event | ✅ seam landed: `internal/events` + `internal/eventsink`, wired into the composition root (#416, v0.6.0) — the SSE HTTP route over it is still outstanding, #422 |
 | **Approval queue** | pending-approval Job state + decision endpoint | ❌ = the Approval Callout milestone ([2/6], [3/6]) |
 | **Browser security** (CSRF tokens, CSP, cookie sessions) | new middleware | ❌ bearer-token-only today; #264 puts XSS/CSRF on the most dangerous path |
 | Large-fleet result rendering | aggregation/histogram primitive | ❌ deferred (read-lane milestone); paginate short-term |

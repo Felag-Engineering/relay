@@ -328,6 +328,51 @@ func (noopMetricsSink) IncDispatch(jobs.Outcome) {}
 
 func (noopMetricsSink) IncRefusal(RefusalKind) {}
 
+// JobTransition is one Job-grained lifecycle fact the event seam (#416)
+// publishes for the Admin Console's live view.
+type JobTransition int
+
+const (
+	JobCreated JobTransition = iota
+	JobCompleted
+	JobCancelled
+)
+
+// JobEvent is one Job-grained transition, published through JobEventSink.
+// Purely observational, exactly like MetricsSink's doc above: it must never
+// affect a dispatch decision, and nothing here can — it is built and
+// published AFTER the decision it describes was already made.
+//
+// Outcomes carries per-outcome COUNTS — never []NodeResult. This is
+// deliberate and is the second place (alongside internal/events itself)
+// the no-read-output property is made structural: NodeResult carries
+// Stdout/Stderr (dispatch.go), and the audit path already proves how easily
+// output rides along on a "Job-grained" record (AuditEntry.Results,
+// auditsink copies Stdout/Stderr verbatim). Counts are the Job-grained
+// fact; the internal/eventsink adapter that maps this onto the bus (#416)
+// never holds output at all.
+type JobEvent struct {
+	Transition JobTransition
+	JobID      string
+	Principal  Principal
+	Selector   Selector
+	Action     jobs.Action
+	Nodes      int
+	Outcomes   map[jobs.Outcome]int
+}
+
+// JobEventSink records a Job-grained transition. Mirrors MetricsSink's
+// shape exactly (no ctx, no error) so it stays inside capability's narrow
+// import allowlist (execution_test.go's TestCapabilityImportsOnlyRegistryAndJobs).
+type JobEventSink interface {
+	RecordJob(e JobEvent)
+}
+
+// noopJobEventSink is the default: nothing is recorded.
+type noopJobEventSink struct{}
+
+func (noopJobEventSink) RecordJob(JobEvent) {}
+
 // FrozenError is returned by Service.Run when the Relay-wide Freeze is
 // engaged: dispatch is refused before any Task is sent. It is exported and
 // typed so a surface can recognize a Freeze refusal via errors.As without

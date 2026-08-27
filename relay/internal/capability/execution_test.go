@@ -724,3 +724,198 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		}
 	}
 }
+
+// spyJobEventSink is a JobEventSink test double: it appends every RecordJob
+// call, nothing else.
+type spyJobEventSink struct {
+	events []JobEvent
+}
+
+func (s *spyJobEventSink) RecordJob(e JobEvent) {
+	s.events = append(s.events, e)
+}
+
+// TestEngine_JobEvents_CreatedThenCompleted is the ROADMAP acceptance line
+// for the event seam's Job publisher (#416): a Job fans out to N Nodes but
+// publishes exactly TWO events — JobCreated once, JobCompleted once — never
+// one per Task, with JobCompleted's Outcomes matching the real per-Node
+// results.
+func TestEngine_JobEvents_CreatedThenCompleted(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+
+	const nodeCount = 50
+	nodes := make([]registry.Node, 0, nodeCount)
+	for i := 0; i < nodeCount; i++ {
+		id := "node-" + strconv.Itoa(i)
+		nodes = append(nodes, testNode(id))
+		conduit.connected[id] = true
+		conduit.results[id] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	}
+
+	sink := &spyJobEventSink{}
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+		events:    sink,
+	}
+
+	principal := Principal{Account: "alice"}
+	sel := Selector{}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(principal, sel, nodes, act)
+
+	if _, err := e.run(context.Background(), d); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if len(sink.events) != 2 {
+		t.Fatalf("got %d JobEvents for a %d-Node Job, want exactly 2 (created, completed), never one per Task: %+v",
+			len(sink.events), nodeCount, sink.events)
+	}
+	created, completed := sink.events[0], sink.events[1]
+
+	if created.Transition != JobCreated || created.Nodes != nodeCount {
+		t.Errorf("created event = %+v, want Transition=JobCreated Nodes=%d", created, nodeCount)
+	}
+	if completed.Transition != JobCompleted {
+		t.Errorf("completed event Transition = %v, want JobCompleted", completed.Transition)
+	}
+	if created.JobID == "" || created.JobID != completed.JobID {
+		t.Errorf("created.JobID=%q completed.JobID=%q, want equal and non-empty", created.JobID, completed.JobID)
+	}
+	if got := completed.Outcomes[jobs.OutcomeSuccess]; got != nodeCount {
+		t.Errorf("completed.Outcomes[OutcomeSuccess] = %d, want %d", got, nodeCount)
+	}
+}
+
+// TestEngine_JobEvents_NeverCarryOutput is the behavioural leak test the
+// plan review (S1) asked for: JobEvent has five free-form string fields
+// (Account/AccountID/Selector/Operation/RiskClass on events.JobEvent, and
+// here capability.JobEvent's own Selector/Action), so a marker planted in a
+// dispatched Task's Stdout must never appear anywhere in a published
+// JobEvent — only the per-outcome COUNTS may describe what happened.
+func TestEngine_JobEvents_NeverCarryOutput(t *testing.T) {
+	const marker = "leak-marker-capability-stdout-71c2"
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte(marker)}
+
+	sink := &spyJobEventSink{}
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+		events:    sink,
+	}
+
+	nodes := []registry.Node{testNode("node-1")}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
+
+	dr, err := e.run(context.Background(), d)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(dr.results) != 1 || !strings.Contains(string(dr.results[0].Stdout), marker) {
+		t.Fatal("test setup broken: dispatch result does not even contain the marker")
+	}
+
+	for _, ev := range sink.events {
+		if strings.Contains(ev.Selector.String(), marker) {
+			t.Fatalf("JobEvent leaked the marker via Selector: %+v", ev)
+		}
+		if strings.Contains(ev.Action.OperationName, marker) {
+			t.Fatalf("JobEvent leaked the marker via Action.OperationName: %+v", ev)
+		}
+		// Outcomes is map[jobs.Outcome]int — an int-keyed count, not a
+		// string, so it is structurally incapable of carrying the marker;
+		// asserting Outcomes is untouched by run's Stdout/Stderr is
+		// TestEngine_JobEvents_CreatedThenCompleted's job (it checks the
+		// counts match the real per-Node outcomes).
+	}
+}
+
+// TestService_CancelJob_PublishesJobCancelled proves Service.CancelJob
+// publishes exactly one JobCancelled event, attributed to the calling
+// Principal, after the cancel itself succeeds.
+func TestService_CancelJob_PublishesJobCancelled(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+
+	const jobID = "job-cancel-events"
+	if err := jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: at}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if err := jobsRepo.AddStage(ctx, jobs.Stage{ID: "stage-1", JobID: jobID, Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+
+	e := &jobEngine{jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: newFakeConduit(nil), now: func() time.Time { return at }}
+	sink := &spyJobEventSink{}
+	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink}
+
+	principal := Principal{Account: "bob", Role: "operator"}
+	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+
+	if len(sink.events) != 1 {
+		t.Fatalf("got %d JobEvents, want exactly 1: %+v", len(sink.events), sink.events)
+	}
+	ev := sink.events[0]
+	if ev.Transition != JobCancelled || ev.JobID != jobID || ev.Principal != principal {
+		t.Errorf("event = %+v, want Transition=JobCancelled JobID=%q Principal=%+v", ev, jobID, principal)
+	}
+}
+
+// TestJobEventsAreObservationalOnly asserts a JobEventSink that records
+// everything (spyJobEventSink, panic-free) never changes a dispatch's
+// returned results or error: with and without the sink wired, both must be
+// byte-identical.
+func TestJobEventsAreObservationalOnly(t *testing.T) {
+	run := func(sink JobEventSink) ([]NodeResult, error) {
+		jobsRepo, tasksRepo := testEngineStore(t)
+		conduit := newFakeConduit(nil)
+		conduit.connected["node-1"] = true
+		conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess, Stdout: []byte("ok")}
+
+		e := &jobEngine{
+			jobsRepo:  jobsRepo,
+			tasksRepo: tasksRepo,
+			conduit:   conduit,
+			newID:     sequentialIDs("id-"),
+			now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+			events:    sink,
+		}
+		nodes := []registry.Node{testNode("node-1")}
+		act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+		d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
+		dr, err := e.run(context.Background(), d)
+		return dr.results, err
+	}
+
+	withoutSink, errWithout := run(nil)
+	withSink, errWith := run(&spyJobEventSink{})
+
+	if errWithout != nil || errWith != nil {
+		t.Fatalf("unexpected errors: without=%v with=%v", errWithout, errWith)
+	}
+	if len(withoutSink) != len(withSink) {
+		t.Fatalf("result count differs: without=%d with=%d", len(withoutSink), len(withSink))
+	}
+	for i := range withoutSink {
+		a, b := withoutSink[i], withSink[i]
+		if a.NodeID != b.NodeID || a.Outcome != b.Outcome || string(a.Stdout) != string(b.Stdout) ||
+			string(a.Stderr) != string(b.Stderr) || a.Truncated != b.Truncated {
+			t.Errorf("result[%d] differs: without=%+v with=%+v", i, a, b)
+		}
+	}
+}
