@@ -73,7 +73,19 @@ type agentCall struct {
 	JobID   string
 	JobHref string
 
-	Deny      *Deny
+	Deny *Deny
+
+	// RepeatDeny marks a deny whose Operation and rule were already explained
+	// higher up the stream. The row keeps its outcome chip and its Node; only
+	// the duplicated prose is dropped.
+	//
+	// One fleet-wide dispatch produces one deny per Node, all with the same
+	// explanation. Repeating the full block per Node made a three-Node refusal
+	// three screens tall and would make a thousand-Node one unreadable — the
+	// stream then hides the NEXT call rather than showing this one. Node detail
+	// already collapses these the same way.
+	RepeatDeny bool
+
 	ReadClass bool
 }
 
@@ -155,6 +167,26 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		if account == "" || account == name {
 			calls = append(calls, agentCallFrom(rec))
 		}
+	}
+
+	// Collapse repeated deny prose, newest kept. Keyed on Operation AND rule,
+	// not the rule alone as Node detail can afford to: this stream spans Nodes
+	// and Operations, and read-class denies share one generic explanation, so
+	// keying on the text alone would silently collapse refusals of DIFFERENT
+	// Operations into one.
+	seenDeny := map[string]bool{}
+	for i := range calls {
+		d := calls[i].Deny
+		if d == nil {
+			continue
+		}
+		key := d.OperationName + "\x00" + d.Rule
+		if seenDeny[key] {
+			calls[i].Deny = nil
+			calls[i].RepeatDeny = true
+			continue
+		}
+		seenDeny[key] = true
 	}
 
 	out := make([]agentAccount, 0, len(byAccount))
@@ -333,6 +365,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
           {{if .JobHref}}<a href="{{.JobHref}}">job {{short .JobID}}</a>{{end}}
         </div>
         {{with .Deny}}{{template "deny-block" .}}{{end}}
+        {{if .RepeatDeny}}<div class="repeatdeny">Same Operation and rule as above.</div>{{end}}
         {{if .ReadClass}}<div class="evnote">The call is audited; the result is not retained.</div>{{end}}
       </div>
     </article>

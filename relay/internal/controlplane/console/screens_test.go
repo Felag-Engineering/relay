@@ -10,8 +10,11 @@ package console
 // a helpful change six months from now.
 
 import (
+	"math"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1167,18 +1170,62 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 	}
 }
 
-// TestFleet_SaysItCannotSeeCertificateExpiry.
+// TestFleet_SaysItIsNotJudgingCertificateExpiry.
 //
 // A clear State column across 10,000 Nodes reads "no Node is near losing its
-// identity". The truth is "the Relay cannot tell" — and foundations calls that
-// silence the worst of the three possible answers.
-func TestFleet_SaysItCannotSeeCertificateExpiry(t *testing.T) {
+// identity". The truth is "the Relay is not judging that yet" — and foundations
+// calls that silence the worst of the three possible answers.
+//
+// The banner used to give a DIFFERENT reason: that the registry held only a
+// fingerprint and no validity at all. #440 made that false — registry.Node
+// carries CertNotAfter, and Node detail renders the expiry and the renewal
+// count one click away — while this screen went on asserting the Relay was
+// blind to something it was displaying next door. The gap is real and the note
+// stays; what it says about the cause had to stop being wrong.
+func TestFleet_SaysItIsNotJudgingCertificateExpiry(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
-	if !strings.Contains(body, "Certificate expiry is not recorded yet") {
-		t.Error("the fleet view does not admit it cannot see certificate expiry")
+	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
+		t.Error("the fleet view does not say it is not judging certificate expiry")
 	}
 	if !strings.Contains(body, "state:cert-expiring") {
 		t.Error("the gap note does not name the marker that cannot appear")
+	}
+	if strings.Contains(body, "certificate fingerprint and nothing else") {
+		t.Error("the retired claim that the registry stores no certificate validity is back — #440 made it false")
+	}
+}
+
+// TestFleet_NamesTheNodesWithNoRecordedValidity covers the second, conditional
+// half of the same note: Nodes that enrolled before #440 and have not renewed
+// have no CertNotAfter at all, and the screen counts them rather than implying
+// the gap is fleet-wide. The fixture sets validity on none of its four.
+func TestFleet_NamesTheNodesWithNoRecordedValidity(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, "4 Nodes here") || !strings.Contains(body, "no recorded validity at all") {
+		t.Error("the note does not count the Nodes whose certificate validity is unrecorded")
+	}
+}
+
+// TestFleet_SilentAboutValidityWhenEveryNodeHasIt is the other side: with
+// CertNotAfter on every matched Node there is no data gap to report, so the
+// conditional sentence must disappear. The #414 headline stays, because the
+// missing threshold is not a data problem and does not go away with the data.
+func TestFleet_SilentAboutValidityWhenEveryNodeHasIt(t *testing.T) {
+	d := fleetFixture()
+	f := d.Fleet.(fakeFleet)
+	nodes := make([]registry.Node, len(f.nodes))
+	copy(nodes, f.nodes)
+	for i := range nodes {
+		nodes[i].CertNotAfter = testNow.Add(30 * 24 * time.Hour)
+	}
+	d.Fleet = fakeFleet{nodes: nodes}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if strings.Contains(body, "no recorded validity at all") {
+		t.Error("the fleet view reports a validity gap when every Node has recorded validity")
+	}
+	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
+		t.Error("the #414 note vanished with the data gap — the missing threshold is a separate cause")
 	}
 }
 
@@ -1631,4 +1678,363 @@ func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 	if !strings.Contains(body, "expired 2d ago") {
 		t.Error("a lapsed certificate does not read as expired")
 	}
+}
+
+// TestApprovals_DifferentPlansAreNeverCalledIdentical.
+//
+// The queue's grouping hint claimed two parked dispatches were "the same shape"
+// whenever they shared an ActionKind, a risk class and a gate rule — which one
+// fixture gate rule makes true of nearly everything it parks. A dev fleet
+// parked service.restart(unit="sshd") and pkg.install(name="nginx") and the
+// screen told the approver they were alike.
+//
+// On the one surface whose job is telling a human what they are about to
+// authorise, a hint that overclaims is worse than no hint. The key is now the
+// plan hash — the same thing a decision binds to — so equal means identical.
+func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{
+			ID: "restart-sshd", PlanHash: "hash-restart-sshd",
+			Summary:      `service.restart(unit="sshd") [mutate] on 3 node(s)`,
+			ActionKind:   jobs.ActionOperation,
+			RiskClass:    jobs.RiskClassMutate,
+			MatchedRules: []string{"dev-fleet-wide-mutates-need-a-human"},
+			CreatedAt:    testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "install-nginx", PlanHash: "hash-install-nginx",
+			Summary:      `pkg.install(name="nginx") [mutate] on 3 node(s)`,
+			ActionKind:   jobs.ActionOperation,
+			RiskClass:    jobs.RiskClassMutate,
+			MatchedRules: []string{"dev-fleet-wide-mutates-need-a-human"},
+			CreatedAt:    testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+	}, testNow)
+
+	for _, r := range rows {
+		if r.Identical != 1 {
+			t.Errorf("%s is grouped with %d others — two different plans are not identical",
+				r.ID, r.Identical-1)
+		}
+	}
+	if rows[0].IdenticalKey == rows[1].IdenticalKey {
+		t.Error("two different plans share a grouping key")
+	}
+}
+
+// TestApprovals_SamePlanTwiceIsGrouped is the case the hint exists for:
+// re-issuing a gated call parks it again, and approving the same plan three
+// times without noticing is the fatigue failure being caught.
+func TestApprovals_SamePlanTwiceIsGrouped(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{
+			ID: "first", PlanHash: "same-hash",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "second", PlanHash: "same-hash",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+	}, testNow)
+
+	for _, r := range rows {
+		if r.Identical != 2 {
+			t.Errorf("%s reports %d with the same Plan, want 2", r.ID, r.Identical)
+		}
+	}
+}
+
+// TestConsole_ShipsNoEmoji is a house rule with a structural guard.
+//
+// Relay is an administrative instrument for a fleet-execution surface, and
+// emoji are not its register. The rule also has a mechanical edge: the
+// stylesheet marked the `relay:` security lane with a lock (U+1F512) that IBM
+// Plex does not carry, so it fell through to whatever emoji font the viewer had
+// — and on a bare server or a locked-down corporate image, that is none. The
+// glyph distinguishing the one namespace the security lane may target rendered
+// as a replacement box, silently, on exactly the machines least likely to have
+// fonts installed.
+//
+// Both the taste and the failure mode point the same way, so this asserts the
+// absence rather than trusting review to catch the next one. It checks the CSS
+// escape forms too: `content: "\01F512"` carries no literal emoji byte and
+// would pass a naive scan of the source.
+func TestConsole_ShipsNoEmoji(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+
+	emojiRange := func(r rune) bool {
+		switch {
+		case r >= 0x1F300 && r <= 0x1FAFF: // pictographs, symbols, supplements
+			return true
+		case r >= 0x2600 && r <= 0x27BF: // misc symbols, dingbats
+			return true
+		case r == 0xFE0F || r == 0x200D: // variation selector, ZWJ
+			return true
+		}
+		return false
+	}
+
+	for _, path := range []string{
+		"/console/assets/console.css",
+		"/console/", "/console/agents", "/console/activity",
+		"/console/reads", "/console/approvals", "/console/login",
+	} {
+		body := get(t, h, path).Body.String()
+
+		for _, r := range body {
+			if emojiRange(r) {
+				t.Errorf("%s renders emoji %q (U+%04X) — Relay is an administrative "+
+					"instrument, and a glyph IBM Plex lacks degrades to a replacement box", path, r, r)
+				break
+			}
+		}
+
+		// The CSS escape form, which carries no emoji byte in the source.
+		for _, esc := range []string{`\01F5`, `\1F5`, `\01F6`, `\1F6`, `\26`, `\27`} {
+			if strings.Contains(body, `content: "`+esc) {
+				t.Errorf("%s injects an emoji through a CSS escape (%s…)", path, esc)
+			}
+		}
+	}
+}
+
+// TestConsole_EveryRenderedWeightHasAFace.
+//
+// The templates carry dozens of <b> and <strong> tags, and the UA default for
+// both is font-weight: bold — 700. The stylesheet shipped 400/500/600 only, so
+// every one of them was SYNTHESISED off the 600 face rather than drawn, which
+// is why emphasis read as smeared instead of heavier. Nothing in Go could see
+// it: the markup was correct, the font loaded, and the browser quietly faked
+// the weight.
+//
+// 700 is the same latin subset the Gleipnir frontend loads
+// (@fontsource/ibm-plex-sans 400/500/600/700), so the two surfaces render the
+// same word the same way.
+func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	css := get(t, h, "/console/assets/console.css").Body.String()
+
+	for _, weight := range []string{"400", "500", "600", "700"} {
+		if !strings.Contains(css, "font-weight: "+weight+";\n  font-display") {
+			t.Errorf("no @font-face at weight %s — the browser synthesises it", weight)
+		}
+		if got := get(t, h, "/console/assets/fonts/ibm-plex-sans-"+weight+".woff2"); got.Code != 200 {
+			t.Errorf("ibm-plex-sans-%s.woff2 is declared but not served (%d)", weight, got.Code)
+		}
+	}
+
+	// The markup that needs 700. If this ever stops being true the face above
+	// becomes dead weight rather than a fix.
+	body := get(t, h, "/console/").Body.String()
+	if !strings.Contains(body, "<b>") && !strings.Contains(body, "<strong>") {
+		t.Skip("no bold markup on the fleet view any more")
+	}
+}
+
+// TestAgents_RepeatedDenyProseIsCollapsed.
+//
+// One fleet-wide dispatch produces one deny per Node, every one carrying the
+// same explanation. The agent stream rendered the full block for each: a
+// three-Node refusal ran three screens, and a thousand-Node refusal would bury
+// every call after it. The stream then hides the next call rather than showing
+// this one.
+//
+// The first keeps the prose; the rest keep their outcome chip, their Node and a
+// one-line marker. Node detail has collapsed these the same way all along.
+func TestAgents_RepeatedDenyProseIsCollapsed(t *testing.T) {
+	var recs []audit.Record
+	for _, n := range []string{"n1", "n2", "n3"} {
+		recs = append(recs, audit.Record{
+			Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: n,
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		})
+	}
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != 3 {
+		t.Fatalf("got %d calls, want 3 — collapsing prose must never drop a row", len(calls))
+	}
+
+	explained := 0
+	for _, c := range calls {
+		if c.Deny != nil {
+			explained++
+		}
+		if c.Deny == nil && !c.RepeatDeny {
+			t.Error("a denied call carries neither an explanation nor the repeat marker")
+		}
+		if c.Outcome == "" || c.NodeID == "" {
+			t.Error("collapsing the prose also dropped the outcome or the Node")
+		}
+	}
+	if explained != 1 {
+		t.Errorf("%d rows carry the full deny block, want exactly 1", explained)
+	}
+}
+
+// TestAgents_DifferentOperationsKeepTheirOwnDenyProse.
+//
+// The collapse is keyed on Operation AND rule, not the rule alone. Read-class
+// denies share one generic explanation ("the deciding rule is not recorded for
+// a read-class Task"), so keying on the text would silently collapse refusals
+// of DIFFERENT Operations into one — hiding the second refusal entirely.
+func TestAgents_DifferentOperationsKeepTheirOwnDenyProse(t *testing.T) {
+	recs := []audit.Record{
+		{
+			Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		},
+		{
+			Kind: audit.KindDispatch, OperationName: "service.restart",
+			Args: map[string]string{"unit": "sshd"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		},
+	}
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	for _, c := range calls {
+		if c.Deny == nil {
+			t.Errorf("the refusal of %s was collapsed into another Operation's explanation", c.Args)
+		}
+	}
+}
+
+// TestNode_RecentTasksScrollsInsideItsPanel.
+//
+// The Recent Tasks table has five columns, two of them full identifiers, and it
+// carried no scroll container. The whole DOCUMENT scrolled sideways instead —
+// at every viewport including 1600px — and the Job column, the one cell that
+// links onward, was clipped off the right edge.
+//
+// The fleet view's .devtable already did this correctly; node detail simply
+// missed the wrapper.
+func TestNode_RecentTasksScrollsInsideItsPanel(t *testing.T) {
+	d := fleetFixture()
+	d.Audit = fakeAudit{records: []audit.Record{{
+		Kind: audit.KindDispatch, OperationName: "file.read",
+		Args: map[string]string{"path": "/etc/os-release"}, NodeID: "node-web-1",
+		JobID: "job-1", Outcome: jobs.OutcomeSuccess, Timestamp: testNow,
+	}}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+	css := get(t, h, "/console/assets/console.css").Body.String()
+
+	if !strings.Contains(css, ".tablescroll { overflow-x: auto; }") {
+		t.Error("no .tablescroll rule — the wrapper exists in markup but does nothing")
+	}
+
+	body := get(t, h, "/console/nodes/node-web-1").Body.String()
+	i := strings.Index(body, `<table class="rows">`)
+	if i < 0 {
+		t.Skip("the Recent Tasks table did not render for this fixture")
+	}
+	if before := body[:i]; !strings.Contains(before[max0(len(before)-120):], `<div class="tablescroll">`) {
+		t.Error("the Recent Tasks table is not wrapped in a scroll container — " +
+			"it pushes the whole page sideways and clips the Job column")
+	}
+}
+
+func max0(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// TestConsole_TextTokensClearAA computes the actual contrast ratio of every
+// text token against every background token, in both themes.
+//
+// This has already regressed once. A previous pass found --text-muted at
+// 2.98:1, moved `th` off it, wrote the measurement into a comment — and left
+// the token itself alone, so everything else still on it stayed below AA: the
+// as-at staleness stamp, the facet hints, the scope notes and both nav labels.
+// Nearly all of it renders at --text-xs or --text-2xs, where WCAG's large-text
+// allowance does not apply, so 4.5:1 is the floor and not 3:1.
+//
+// A comment recording a measurement is not a guard. This is.
+func TestConsole_TextTokensClearAA(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	dark, light := splitThemes(t, css)
+
+	// --text-faint is #3a4840 == --border-subtle: it draws rules, never text.
+	texts := []string{"--text-primary", "--text-second", "--text-muted"}
+	bgs := []string{"--bg-canvas", "--bg-surface", "--bg-elevated", "--bg-sidebar", "--bg-code", "--bg-subtle"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for _, tk := range texts {
+			fg, ok := theme.tokens[tk]
+			if !ok {
+				t.Fatalf("%s theme declares no %s", theme.name, tk)
+			}
+			for _, bk := range bgs {
+				bg, ok := theme.tokens[bk]
+				if !ok {
+					t.Fatalf("%s theme declares no %s", theme.name, bk)
+				}
+				if r := contrastRatio(fg, bg); r < 4.5 {
+					t.Errorf("%s: %s on %s is %.2f:1, below the 4.5:1 floor "+
+						"(these tokens carry --text-xs and --text-2xs body copy)",
+						theme.name, tk, bk, r)
+				}
+			}
+		}
+	}
+}
+
+// splitThemes pulls the custom-property declarations out of the dark :root
+// block and the light prefers-color-scheme block.
+func splitThemes(t *testing.T, css string) (dark, light map[string]string) {
+	t.Helper()
+	i := strings.Index(css, "@media (prefers-color-scheme: light)")
+	if i < 0 {
+		t.Fatal("no light-theme block in the stylesheet")
+	}
+	return tokensIn(css[:i]), tokensIn(css[i:])
+}
+
+var tokenDecl = regexp.MustCompile(`(--[a-z-]+):\s*(#[0-9a-fA-F]{6})\s*;`)
+
+func tokensIn(s string) map[string]string {
+	out := map[string]string{}
+	for _, m := range tokenDecl.FindAllStringSubmatch(s, -1) {
+		// First declaration wins: a later override inside a narrower rule is
+		// not the theme's value.
+		if _, seen := out[m[1]]; !seen {
+			out[m[1]] = m[2]
+		}
+	}
+	return out
+}
+
+func contrastRatio(a, b string) float64 {
+	l1, l2 := relLuminance(a), relLuminance(b)
+	if l1 < l2 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+func relLuminance(hex string) float64 {
+	c := func(i int) float64 {
+		v, err := strconv.ParseInt(hex[i:i+2], 16, 0)
+		if err != nil {
+			return 0
+		}
+		f := float64(v) / 255
+		if f <= 0.03928 {
+			return f / 12.92
+		}
+		return math.Pow((f+0.055)/1.055, 2.4)
+	}
+	return 0.2126*c(1) + 0.7152*c(3) + 0.0722*c(5)
 }

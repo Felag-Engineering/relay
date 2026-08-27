@@ -62,6 +62,20 @@
   font-display: swap;
   src: url('/console/assets/fonts/ibm-plex-sans-600.woff2') format('woff2');
 }
+/* 700 is not decoration. The templates carry 42 <b>/<strong> tags, and the UA
+ * default for both is font-weight: bold — that is, 700. Shipping only 400/500/
+ * 600 meant every one of them was SYNTHESISED: the browser took the 600 face
+ * and smeared it, which is why emphasis read as slightly muddy rather than
+ * heavier. This is the same latin subset at the same weight the Gleipnir
+ * frontend loads (@fontsource/ibm-plex-sans 400/500/600/700), byte-identical,
+ * so the two surfaces render the same word the same way. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-sans-700.woff2') format('woff2');
+}
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
@@ -90,7 +104,23 @@
   --border-mid: #4d5e54;
 
   --text-faint: #3a4840;
-  --text-muted: #636e62;
+  /* --text-muted was #636e62: 2.67:1 on --bg-elevated, 3.05:1 on --bg-surface,
+   * 3.46:1 on --bg-canvas — below AA everywhere it was used, and used almost
+   * entirely at --text-xs/--text-2xs, where the size allowance does not apply.
+   * An earlier pass moved `th` off it and left the rest: the as-at staleness
+   * stamp, the facet hints, the scope notes, and both nav labels. Raised to
+   * clear 4.5:1 against every background token it lands on, --bg-subtle at
+   * 4.61 being the tightest pairing.
+   *
+   * Known consequence, stated rather than papered over: --text-muted and
+   * --text-second are now close in luminance (6.00 vs 6.27 on --bg-surface),
+   * so the third tier reads mostly through hue — muted is cool, second is
+   * warm — rather than through brightness. On a dark ground there is little
+   * room between a 4.5:1 floor and --text-primary, and buying a visible third
+   * step by going back under that floor is not a trade worth making. If this
+   * hierarchy needs to be louder it should come from size, weight or spacing.
+   * See TestConsole_TextTokensClearAA. */
+  --text-muted: #97a296;
   --text-second: #a8a090;
   --text-primary: #e4ddd2;
 
@@ -117,7 +147,7 @@
   --font-body: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600;
+  --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
 
   --text-2xs: 10px; --text-xs: 11px; --text-sm: 13px;
   --text-base: 15px; --text-lg: 18px; --text-xl: 24px;
@@ -168,7 +198,10 @@
     --border-subtle: #d4cfc4;
     --border-mid: #b8b0a4;
     --text-faint: #d4cfc4;
-    --text-muted: #8a8474;
+    /* Was #8a8474: 2.99:1 on --bg-sidebar, 3.05:1 on --bg-elevated, 3.31:1 on
+     * --bg-canvas. Same correction as the dark theme above, same 4.5:1 floor
+     * against every background token. */
+    --text-muted: #645f54;
     --text-second: #5c5848;
     --text-primary: #2c2a24;
     --color-blue: #b8733e;
@@ -403,14 +436,22 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 .chip.lbl[data-ns="node"] { background: var(--bg-elevated); color: var(--text-second); border-color: var(--border-subtle); }
 .chip.lbl[data-ns="tag"]  { background: transparent; color: var(--text-second); border-color: var(--border-mid); }
 
-/* relay: is FILLED, distinct in hue, and carries a lock. It is the only
- * namespace the security lane may target, and it must be findable at a glance
- * in a wall of quiet chips. */
+/* relay: is FILLED, distinct in hue, and weighted. It is the only namespace the
+ * security lane may target, and it must be findable at a glance in a wall of
+ * quiet chips.
+ *
+ * It also carried a lock emoji (U+1F512) until 2026-08-27. Three reasons it
+ * went: this is an administrative instrument and emoji are not its register;
+ * IBM Plex carries no such glyph, so it fell through to whatever emoji font the
+ * viewer's machine happened to have, and on a bare server or a locked-down
+ * image that is none — the marker distinguishing the security lane rendered as
+ * a replacement box. And it was redundant, because the chip already names its
+ * namespace in mono on a security-hue ground no other namespace uses. Nothing
+ * here depends on an optional font now, so nothing silently degrades. */
 .chip.lbl[data-ns="relay"] {
   background: var(--security-bg); color: var(--security);
   border-color: var(--security-line); font-weight: var(--weight-medium);
 }
-.chip.lbl[data-lane="security"] .ns::before { content: "\01F512\00a0"; font-family: var(--font-body); }
 
 /* state: is derived and set by nobody, so it reads as an observation rather
  * than a declaration — but it still carries the TINT OF ITS SEVERITY, because
@@ -432,12 +473,15 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 /* The fenced chip: a DECLARED act, not a derived observation. It borrows the
  * security lane's hue because that is what it is — the two lower rungs of the
  * incident ladder — and deliberately not the `state:` grammar, because a human
- * did this and the Relay merely recorded it. */
+ * did this and the Relay merely recorded it.
+ *
+ * It carried the same lock emoji and lost it for the same reasons (see the
+ * relay: chip above). It reads "revoked" or "quarantined" in words, which is
+ * the part that was ever doing the work. */
 .chip.fenced {
   background: var(--security-bg); color: var(--security);
   border-color: var(--security-line); font-weight: var(--weight-medium);
 }
-.chip.fenced::before { content: "\01F512\00a0"; font-family: var(--font-body); opacity: 0.8; }
 .statecell { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 
 /* Trust chips: FILL means the Relay authenticated this. DASHED means a caller
@@ -730,6 +774,14 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
   font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-second); margin-bottom: var(--space-2); text-align: left;
 }
+/* Any table that can outgrow its panel scrolls INSIDE that panel rather than
+ * pushing the document sideways. Without this the Recent Tasks table on Node
+ * detail made the whole page scroll horizontally at every viewport, 1600px
+ * included, and clipped the Job column — the one cell that links onward. Same
+ * reasoning as .devtable above: an identifier wrapped across two lines is no
+ * longer a token you can select and compare, so the columns keep their width
+ * and the container moves. */
+.tablescroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
 /* --text-second, not --text-muted. --text-muted is 2.98:1 on the surface in
  * dark and 3.31:1 in light — below AA at these sizes — and it was carrying half
