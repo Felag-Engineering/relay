@@ -103,6 +103,13 @@ type jobEngine struct {
 	conduit   Conduit
 	newID     idGen
 	now       func() time.Time
+
+	// events is the event seam's Job-grained publisher (#416). Defaulted to
+	// noopJobEventSink by WithExecution so a directly-constructed engine is
+	// never nil; Service.New propagates a real one on top when WithJobEvents
+	// was used (service.go). Purely observational — see JobEventSink's doc
+	// comment.
+	events JobEventSink
 }
 
 var _ dispatcher = (*jobEngine)(nil)
@@ -118,6 +125,17 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	if err := e.jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: e.now()}); err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
+	// Published error-free by construction (#416): the sink is
+	// observational and can never change dispatch control flow — the same
+	// MetricsSink precedent as service.go's IncDispatch/IncRefusal calls.
+	e.publishJobEvent(JobEvent{
+		Transition: JobCreated,
+		JobID:      jobID,
+		Principal:  d.principal,
+		Selector:   d.selector,
+		Action:     d.action,
+		Nodes:      len(d.nodes),
+	})
 
 	stageID, err := e.prefixedID("stage-")
 	if err != nil {
@@ -169,7 +187,38 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 		})
 	}
 
+	// Tally ONLY r.Outcome — never r.Stdout/r.Stderr. This is the second
+	// place (alongside internal/events itself) the no-read-output property
+	// is made structural: JobEvent.Outcomes is counts, never []NodeResult,
+	// so this adapter never even touches captured output (JobEvent's doc
+	// comment, seams.go).
+	outcomes := make(map[jobs.Outcome]int, len(results))
+	for _, r := range results {
+		outcomes[r.Outcome]++
+	}
+	e.publishJobEvent(JobEvent{
+		Transition: JobCompleted,
+		JobID:      jobID,
+		Principal:  d.principal,
+		Selector:   d.selector,
+		Action:     d.action,
+		Nodes:      len(d.nodes),
+		Outcomes:   outcomes,
+	})
+
 	return dispatchResult{jobID: jobID, results: results}, errors.Join(errs...)
+}
+
+// publishJobEvent publishes ev via e.events if one is wired. WithExecution
+// defaults events to noopJobEventSink so a *jobEngine built through it is
+// never nil, but this package's own white-box tests construct &jobEngine{}
+// literals directly (bypassing WithExecution) — the nil check keeps run
+// safe for those too, exactly like s.observer's nil check in
+// enroll.Server.Enroll and mcp's `cfg.toolCalls != nil` guard.
+func (e *jobEngine) publishJobEvent(ev JobEvent) {
+	if e.events != nil {
+		e.events.RecordJob(ev)
+	}
 }
 
 // pendingTask pairs a persisted (Pending) Task with its source Node's
@@ -341,6 +390,10 @@ func WithExecution(jr jobs.JobRepository, tr jobs.TaskRepository, c Conduit, opt
 		conduit:   c,
 		newID:     defaultID,
 		now:       func() time.Time { return time.Now().UTC() },
+		// A directly-constructed engine (e.g. in a test that never calls
+		// Service.New) must never hold a nil sink. Service.New overwrites
+		// this with the real one when WithJobEvents was used (service.go).
+		events: noopJobEventSink{},
 	}
 	for _, o := range opts {
 		o(e)

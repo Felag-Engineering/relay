@@ -41,6 +41,13 @@ type Service struct {
 	// never affects a dispatch, authz, cap, or Freeze decision.
 	metrics MetricsSink
 
+	// jobEvents is the event seam's Job-grained publisher (#416,
+	// JobEventSink, seams.go) — the same "purely observational" contract as
+	// metrics. propagated onto the real Job engine (jobEngine.events) at
+	// the end of New, below, because both Service.CancelJob and
+	// jobEngine.run need the same sink and option order must not matter.
+	jobEvents JobEventSink
+
 	// gate and approvals are the approval callout (ADR-0027). The defaults
 	// gate nothing, which is a deployment with no approval rules — safe
 	// because a gate can only add a reason to stop. approvals is only
@@ -249,6 +256,13 @@ func WithMetrics(m MetricsSink) Option {
 	return func(s *Service) { s.metrics = m }
 }
 
+// WithJobEvents overrides the default noopJobEventSink (#416). Like
+// WithMetrics, this is never security-relevant — New's real-dispatcher
+// fail-open guard does not require it.
+func WithJobEvents(s JobEventSink) Option {
+	return func(svc *Service) { svc.jobEvents = s }
+}
+
 // WithCertExpiringWindow sets the state:cert-expiring warning window
 // (ADR-0034): a Node fires the marker once less than d of its certificate's
 // remaining lifetime is left. d is a Duration rather than a fraction because
@@ -304,6 +318,7 @@ func New(reg registry.Repository, opts ...Option) *Service {
 		audit:            noopAuditSink{},
 		freeze:           noopFreezeStore{},
 		metrics:          noopMetricsSink{},
+		jobEvents:        noopJobEventSink{},
 		gate:             noopApprovalGate{},
 		approvalNotifier: noopApprovalNotifier{},
 
@@ -312,6 +327,15 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	// Propagate the Job-event sink onto the real Job engine, if one is
+	// wired (WithExecution, execution.go). This is here — AFTER the option
+	// loop, alongside this fail-open validation — rather than as an
+	// ExecOption, because option order must not matter and both
+	// Service.CancelJob (below) and jobEngine.run (execution.go) need the
+	// same sink.
+	if e, ok := s.disp.(*jobEngine); ok {
+		e.events = s.jobEvents
 	}
 	if s.realDispatcher {
 		if _, ok := s.authz.(allowAllAuthorizer); ok {
@@ -662,6 +686,14 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) error {
 	if err := s.disp.cancel(ctx, jobID); err != nil {
 		return err
+	}
+	// Published after the cancel succeeded, and never in a way that changes
+	// the returned error (#416, JobEventSink) — observational only, exactly
+	// like the MetricsSink calls elsewhere in this file. Nil-checked because
+	// this package's own white-box tests construct &Service{} literals
+	// directly, bypassing New's noopJobEventSink default.
+	if s.jobEvents != nil {
+		s.jobEvents.RecordJob(JobEvent{Transition: JobCancelled, JobID: jobID, Principal: p})
 	}
 	return s.audit.RecordCancel(ctx, p, jobID)
 }

@@ -425,3 +425,13 @@ ADR-0009's no-execution scope). A thin adapter over the same operator capability
 the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. Distinct
 from the **AI-agent**, which drives the Relay over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"
+
+**Event seam**:
+The Relay's one in-process pub/sub (`internal/events`) feeding the Admin Console's live
+views: exactly four publishers — registry transitions, Job transitions, MCP tool calls,
+and enrollment attempts — with monotonic IDs over per-publisher bounded ring buffers
+(1,000 events or 10 minutes, whichever first), `Last-Event-ID` resume, and a `gap` event
+the seam emits rather than fabricate continuity. It carries tool-call ARGUMENTS and never
+read RESULTS (ADR-0025) — enforced structurally, not by convention: the package imports
+nothing but the standard library. Memory-only; nothing here is persisted.
+_Avoid_: event stream, notifications, the firehose, pubsub

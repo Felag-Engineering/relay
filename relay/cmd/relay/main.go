@@ -28,6 +28,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/dispatch"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/eventsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
@@ -213,6 +215,11 @@ type appDeps struct {
 	// metrics is the real capability.MetricsSink/enroll.EnrollmentObserver
 	// (#182), exposed so tests can assert on its counters/gauges directly.
 	metrics *metrics.Metrics
+	// events is the Relay's one in-process event seam (#416): registry
+	// transitions, Job transitions, MCP tool calls, and enrollment
+	// attempts. Exposed so integration tests can Subscribe without a route
+	// (the SSE route itself is #422).
+	events *events.Bus
 }
 
 // opvocabLister adapts opvocab.Operations (a package-level func) to the
@@ -522,7 +529,19 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		GlobalBurst:      float64(cfg.EnrollGlobalBurst),
 		MaxTrackedIPs:    cfg.EnrollMaxTrackedIPs,
 	})
-	reg := st.Registry()
+
+	// eventBus is the Relay's one in-process event seam (#416): registry
+	// transitions, Job transitions, MCP tool calls, and enrollment
+	// attempts. Built here — before reg, which wraps it below — because it
+	// depends on nothing and reg's ObserveRegistry decorator needs it.
+	eventBus := events.NewBus()
+
+	// st.Registry() is memoised (store.go) and this is its only non-test
+	// caller, so wrapping it ONCE here covers every caller in the process —
+	// including tunnel.go's SetConnected and enroll's SetRelayLabels —
+	// without an edit to either file (eventsink.ObserveRegistry's doc
+	// comment).
+	reg := eventsink.ObserveRegistry(st.Registry(), eventBus)
 
 	// appMetrics is the real capability.MetricsSink/enroll.EnrollmentObserver
 	// (#182): its counters are always live (wired into enrollSrv and base
@@ -579,7 +598,8 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	enrollSrv := enroll.NewServer(tokenSvc, relayCA, reg,
 		enroll.WithPostEnrollRevocationCheck(tokenSvc, revocationSvc),
 		enroll.WithRateLimiter(limiter),
-		enroll.WithEnrollmentObserver(appMetrics))
+		enroll.WithEnrollmentObserver(appMetrics),
+		enroll.WithAttemptObserver(eventsink.Enrollment(eventBus)))
 
 	// policyCache is the display-only effective-Policy cache (#117, invariant
 	// 12 / ADR-0002): the tunnel handler records what a daemon reports in
@@ -666,6 +686,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// state:cert-expiring's warning window (#414, ADR-0034), computed
 		// once above and shared by every surface below.
 		capability.WithCertExpiringWindow(certExpiringWithin),
+		// The event seam's Job-grained publisher (#416). Appended last so
+		// this hunk stays additive alongside concurrent branches also
+		// touching the end of this slice.
+		capability.WithJobEvents(eventsink.Jobs(eventBus)),
 	}
 
 	// The out-of-band notification envelope (#270, ADR-0027). Optional: with no
@@ -902,6 +926,8 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 
 			consoleAuth: consoleAuthSvc,
 
+			// The event seam (#416) — the SSE route (#422) mounts over this.
+			events: eventBus,
 			// state:cert-expiring's warning window (#414, ADR-0034), the same
 			// value every other surface below was handed.
 			certExpiringWithin: certExpiringWithin,
@@ -949,6 +975,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		control:    controlSrv,
 		dispatch:   dispatchRouter,
 		metrics:    appMetrics,
+		events:     eventBus,
 	}
 	return srv, deps, nil
 }

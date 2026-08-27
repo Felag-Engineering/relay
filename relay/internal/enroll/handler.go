@@ -70,6 +70,65 @@ type EnrollmentObserver interface {
 	IncEnrollment()
 }
 
+// AttemptReason is the closed vocabulary of Relay-side outcomes for one
+// Enroll attempt (#416, feeding #427's day-one watch). It is distinct from
+// EnrollmentObserver: that counter is success-only; this covers every
+// terminal point of Enroll, success and rejection alike.
+type AttemptReason string
+
+const (
+	AttemptExpired              AttemptReason = "expired"
+	AttemptRevoked              AttemptReason = "revoked"
+	AttemptUnknown              AttemptReason = "unknown"
+	AttemptExhausted            AttemptReason = "exhausted"
+	AttemptMalformed            AttemptReason = "malformed"
+	AttemptRateLimited          AttemptReason = "rate_limited"
+	AttemptAtCapacity           AttemptReason = "at_capacity"
+	AttemptRevokedMidEnrollment AttemptReason = "revoked_mid_enrollment"
+	AttemptInternal             AttemptReason = "internal"
+)
+
+// AttemptEvent is one Enroll attempt, accepted or rejected.
+//
+// SECURITY NOTE: the distinct Reason here goes ONLY to AttemptObserver, over
+// the in-process event bus and on to the Console's authenticated surface —
+// never onto the wire. Every rejection Enroll actually RETURNS to the
+// enrolling daemon still collapses to the same codes.PermissionDenied
+// (below); this event exists beside that response, not instead of it, so
+// the no-oracle property enrollment relies on stays exactly as it was
+// before this type existed.
+type AttemptEvent struct {
+	Accepted bool
+	Reason   AttemptReason
+	// TokenID is the PUBLIC half of the presented credential (see tokenID's
+	// extraction below at (d)) — never the plaintext, and never the secret
+	// half. Empty when the credential did not parse.
+	TokenID string
+	NodeID  string
+	// Source is the caller's IP (peerIP(ctx)).
+	Source string
+}
+
+// AttemptObserver records one Enroll attempt. The composition root supplies
+// an adapter that publishes to the event bus.
+//
+// No error return — an enrollment must never fail because an event could
+// not be published, mirroring EnrollmentObserver and, in package mcp,
+// ToolCallObserver.
+type AttemptObserver interface {
+	Attempt(ctx context.Context, e AttemptEvent)
+}
+
+// WithAttemptObserver attaches an AttemptObserver, called at every terminal
+// point of Enroll — accept and reject alike (Renew publishes nothing: it is
+// certificate-authenticated, not an enrollment attempt). Pass a nil observer
+// (the default) to skip observation, matching WithEnrollmentObserver.
+func WithAttemptObserver(o AttemptObserver) ServerOption {
+	return func(s *Server) {
+		s.attempts = o
+	}
+}
+
 // ServerOption configures a Server at construction.
 type ServerOption func(*Server)
 
@@ -130,6 +189,7 @@ type Server struct {
 	nodeDenylister    NodeDenylister
 	limiter           RateLimiter
 	observer          EnrollmentObserver
+	attempts          AttemptObserver
 	now               func() time.Time
 }
 
@@ -216,6 +276,52 @@ func peerIP(ctx context.Context) string {
 	return host
 }
 
+// tokenIDLen is the exact length of a genuine token id: 16 random bytes,
+// hex-encoded (token.go's Create). Anything else is not a real id.
+const tokenIDLen = 32
+
+// looksLikeTokenID reports whether s has the exact shape Create produces:
+// tokenIDLen lowercase hex characters, no more, no less. e.TokenID reaches
+// this function BEFORE Validate has confirmed the id names a real token
+// (e.g. on the AttemptUnknown path), so it must be validated by shape
+// alone, not by a repository lookup.
+func looksLikeTokenID(s string) bool {
+	if len(s) != tokenIDLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// attempt publishes e via s.attempts, the ONE place an AttemptEvent is
+// built. e.TokenID reaches this function as SplitN(presented, secretSep,
+// 2)[0] of the RAW, UNAUTHENTICATED, PRE-VALIDATION request field (d,
+// below) — attacker-controlled in both length and content up to gRPC's
+// message-size limit, and the bus retains published events for the full
+// retention window. A genuine token id is always exactly tokenIDLen
+// lowercase hex characters (token.go's Create), so anything else —
+// oversized, wrong charset, containing secretSep, empty — is blanked
+// before publish. This is lossless for every real token and bounds both
+// the bytes this pre-auth endpoint can push into the bus and the
+// control-character/newline injection surface a future SSE renderer
+// (#422) would otherwise inherit.
+//
+// A nil s.attempts (the default) is a no-op, matching s.observer.
+func (s *Server) attempt(ctx context.Context, e AttemptEvent) {
+	if s.attempts == nil {
+		return
+	}
+	if !looksLikeTokenID(e.TokenID) {
+		e.TokenID = ""
+	}
+	s.attempts.Attempt(ctx, e)
+}
+
 // Enroll validates the Enrollment Token, signs the CSR with a Relay-assigned node_id,
 // records the Node in the registry, and returns the issued certificate, CA bundle, and
 // relay-space labels stamped from the token scope.
@@ -223,16 +329,23 @@ func peerIP(ctx context.Context) string {
 // Sign and registry writes happen ONLY after the token validates; any rejection leaves
 // no certificate and no registry entry (fail-closed).
 func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relayv1.EnrollResponse, error) {
+	source := peerIP(ctx)
+
 	// a. Rate-limit check: runs BEFORE any token validation or CSR signing so that
 	//    a throttled rejection cannot be used to probe whether an Enrollment Token
 	//    is valid (no oracle). Nil limiter is skipped to preserve backward
 	//    compatibility for servers constructed without WithRateLimiter.
-	if s.limiter != nil && !s.limiter.Allow(peerIP(ctx)) {
+	if s.limiter != nil && !s.limiter.Allow(source) {
+		// The token is not parsed yet, and parsing it here would undo the
+		// no-oracle ordering above (rate-limit before Validate) — TokenID
+		// stays empty.
+		s.attempt(ctx, AttemptEvent{Reason: AttemptRateLimited, Source: source})
 		return nil, status.Error(codes.ResourceExhausted, "enrollment rate limit exceeded")
 	}
 
 	// b. Reject empty token or empty CSR.
 	if req.GetEnrollmentToken() == "" || len(req.GetCsr()) == 0 {
+		s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
 		return nil, status.Error(codes.InvalidArgument, "enrollment_token and csr are required")
 	}
 
@@ -243,6 +356,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	for _, l := range req.GetSelfLabels() {
 		bare, ok := protoconv.ParseNodeLabel(l.GetKey())
 		if !ok {
+			s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
 			return nil, status.Error(codes.InvalidArgument, "self_labels must be node:-prefixed")
 		}
 		nodeLabels[bare] = l.GetValue()
@@ -259,6 +373,22 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//    PermissionDenied so the caller cannot use error distinctions as a state oracle.
 	scope, err := s.tokens.Validate(ctx, req.GetEnrollmentToken())
 	if err != nil {
+		// ErrInvalidToken deliberately fuses malformed/unknown-id/wrong-secret
+		// at the RPC boundary (token.go), so AttemptUnknown is the honest name
+		// for it here — the Console gets one bucket for "not a real token",
+		// same as the daemon's single PermissionDenied.
+		reason := AttemptInternal
+		switch {
+		case errors.Is(err, ErrExpired):
+			reason = AttemptExpired
+		case errors.Is(err, ErrRevoked):
+			reason = AttemptRevoked
+		case errors.Is(err, ErrExhausted):
+			reason = AttemptExhausted
+		case errors.Is(err, ErrInvalidToken):
+			reason = AttemptUnknown
+		}
+		s.attempt(ctx, AttemptEvent{Reason: reason, TokenID: tokenID, Source: source})
 		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrExpired) ||
 			errors.Is(err, ErrRevoked) || errors.Is(err, ErrExhausted) {
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
@@ -269,12 +399,16 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	// f. Generate a Relay-assigned node_id; the CSR subject is never trusted (ADR-0006).
 	nodeID, err := s.newID()
 	if err != nil {
+		s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, Source: source})
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
 	// g. Sign the CSR. SignCSR ignores the CSR subject and sets CN=nodeID authoritatively.
 	certPEM, err := s.signer.SignCSR(req.GetCsr(), nodeID)
 	if err != nil {
+		// A caller-supplied CSR failing to sign reads more honestly as
+		// malformed input than a Relay-internal failure.
+		s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, TokenID: tokenID, NodeID: nodeID, Source: source})
 		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
 	}
 
@@ -305,8 +439,10 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		EnrollingTokenID: tokenID,
 	}); err != nil {
 		if errors.Is(err, registry.ErrAtCapacity) {
+			s.attempt(ctx, AttemptEvent{Reason: AttemptAtCapacity, TokenID: tokenID, NodeID: nodeID, Source: source})
 			return nil, status.Error(codes.ResourceExhausted, "fleet registry at capacity")
 		}
+		s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, NodeID: nodeID, Source: source})
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
@@ -315,6 +451,14 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	//     Node is enrolled and working and refusing it would strand a machine
 	//     over a bookkeeping write. The cost of the miss is bounded: the next
 	//     renewal records the expiry, and that is at most one leaf lifetime away.
+	//
+	//     Deliberately publishes NO AttemptEvent: this is not a terminal
+	//     branch — Enroll falls through to (k), the revocation recheck, and
+	//     (n) IncEnrollment, then returns success. Publishing here would emit
+	//     a phantom rejection ahead of the real Accepted:true event for what
+	//     is, from the enrolling daemon's point of view, a successful
+	//     enrollment — exactly the false alarm #427's day-one watch must not
+	//     see.
 	if err := s.registry.RecordEnrollment(nodeID, issued, s.now()); err != nil {
 		slog.Warn("recording enrollment certificate provenance failed",
 			"node_id", nodeID, "err", err)
@@ -332,6 +476,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		}
 	}
 	if err := s.registry.SetRelayLabels(nodeID, relayBare); err != nil {
+		s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, NodeID: nodeID, Source: source})
 		return nil, status.Error(codes.Internal, "enrollment failed")
 	}
 
@@ -362,6 +507,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			// reachable. err is a repository error, never credential material.
 			slog.Warn("enrollment denied: token revoked mid-enrollment",
 				"node_id", nodeID, "token_id", tokenID, "check_err", err)
+			s.attempt(ctx, AttemptEvent{Reason: AttemptRevokedMidEnrollment, TokenID: tokenID, NodeID: nodeID, Source: source})
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
 		}
 	}
@@ -393,6 +539,7 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	if s.observer != nil {
 		s.observer.IncEnrollment()
 	}
+	s.attempt(ctx, AttemptEvent{Accepted: true, NodeID: nodeID, TokenID: tokenID, Source: source})
 
 	// o. Return the response.
 	return &relayv1.EnrollResponse{

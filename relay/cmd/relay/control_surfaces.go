@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -34,6 +35,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/eventsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
@@ -81,6 +84,11 @@ type surfaceDeps struct {
 	// capability layer: this seam must not carry Engage or Release.
 	freeze console.FreezeReader
 
+	// events is the event seam (#416) — the SSE route (#422) will mount over
+	// this. mcpSurface also wires it into the MCP server's tool-call
+	// observer below.
+	events *events.Bus
+
 	// certExpiringWithin is the state:cert-expiring warning window (#414,
 	// ADR-0034), computed once in newServer from ca.LeafValidity and handed
 	// to every surface below — MCP, the Control API, and the Console all
@@ -119,6 +127,10 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// changes nothing in code: leave its gate rules `out-of-band` and
 		// ErrWeakChannel refuses every tool-delivered answer.
 		mcp.WithApprovalDecider(d.capability),
+		// The tool-call event publisher (#416, D9) — every tools/call
+		// invocation, read and execution alike, feeds the Console's live
+		// view via toolCallObserver below.
+		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		mcp.WithCertExpiringWindow(d.certExpiringWithin)))
@@ -274,6 +286,33 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
 	}
 	return a.sink.RecordRead(ctx, p, e.Tool, e.Selector, e.NodeID, e.JobID)
+}
+
+// toolCallObserver adapts the event bus to mcp.ToolCallObserver (#416, D9).
+//
+// It lives here, beside readAuditor, for the same reason: the mcp package
+// must not name a capability type on its read path (no_dispatch_test.go),
+// so the Principal is resolved on THIS side of the seam.
+//
+// Unlike readAuditor, it does NOT fail closed on a missing Principal — it
+// publishes with an empty Account and logs a warning instead. Dropping the
+// event would hide a tool call from the trust surface entirely (spec 03),
+// which is worse than rendering it unattributed; and /mcp is always behind
+// Authenticator.Middleware, so the missing-Principal branch is unreachable
+// in production.
+//
+// The warning below logs e.Tool, which is caller-supplied — safe only
+// because ToolCallEvent.Tool is already capped at maxToolNameBytes by the
+// publishing middleware (S3, review-feedback.md cycle 2) before it ever
+// reaches this observer.
+type toolCallObserver struct{ bus *events.Bus }
+
+func (o toolCallObserver) ToolCall(ctx context.Context, e mcp.ToolCallEvent) {
+	p, ok := controlplane.PrincipalFromContext(ctx)
+	if !ok {
+		slog.Warn("tool-call event published with no authenticated principal in context", "tool", e.Tool)
+	}
+	eventsink.ToolCall(o.bus, p.Account, p.AccountID, e)
 }
 
 // readAuditorOrNil returns s as an api.ReadAuditor, or an untyped nil when s

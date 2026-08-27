@@ -84,6 +84,15 @@ var readFiles = map[string]bool{
 	// JSON and writes JSON; it cannot resolve a Selector, build an Action, or
 	// reach the Job engine even by accident.
 	"taskshim.go": true,
+	// toolevents.go (#416, D9) is the tool-call event publisher for the
+	// Admin Console's live feed. It classifies STRICT — the strongest
+	// available guarantee, and deliberately so: it sits on the /mcp RCE
+	// path and sees EVERY request (its middleware wraps "tools/call" for
+	// every tool, read and execution alike), so the guard makes it
+	// structurally unable to name a capability identifier at all. Its
+	// entire purpose is to emit metadata about calls it must never be able
+	// to execute or read the result of.
+	"toolevents.go": true,
 }
 
 var execFiles = map[string]bool{
@@ -529,4 +538,90 @@ func f(p capability.Principal, sel capability.Selector) (capability.NodeResult, 
 	if violations := dispatchViolations("fixture.go", file, true); len(violations) == 0 {
 		t.Fatal("dispatchViolations(strict=true) = empty, want violations (read files may not reference capability.Principal/Selector/NodeResult/FrozenError/CapExceededError)")
 	}
+}
+
+// toolCallEventAllowedFields is mcp.ToolCallEvent's exact, closed field
+// set — the same AST field-allowlist rule internal/events applies to its
+// own copy of the type (events/no_read_output_test.go), applied here to
+// this package's copy. An unlisted field fails the build; a
+// result-shaped-name match (case-insensitive substring, on either the field
+// name or its type expression) fails it too, so "just widen the allowlist"
+// alone can't smuggle output through.
+var toolCallEventAllowedFields = map[string]bool{
+	"Tool":               true,
+	"Arguments":          true,
+	"ArgumentsTruncated": true,
+}
+
+var resultShapedFieldNames = []string{
+	"result", "results", "output", "stdout", "stderr", "content",
+	"body", "payload", "truncatedoutput", "exitcode", "noderesult",
+}
+
+// TestToolCallEventHasNoResultField AST-locates `type ToolCallEvent struct`
+// in toolevents.go and asserts its field-name set is exactly
+// toolCallEventAllowedFields, with the result-shaped-name denylist layered
+// on top (ADR-0025; D9 in docs/design/console/99-open-decisions.md).
+func TestToolCallEventHasNoResultField(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	path := filepath.Join(filepath.Dir(thisFile), "toolevents.go")
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parser.ParseFile(%s): %v", path, err)
+	}
+
+	fields, found := toolCallEventFields(file)
+	if !found {
+		t.Fatal("toolevents.go does not declare type ToolCallEvent struct — this test has nothing to check")
+	}
+
+	seen := map[string]bool{}
+	for _, f := range fields {
+		for _, n := range f.Names {
+			seen[n.Name] = true
+			if !toolCallEventAllowedFields[n.Name] {
+				t.Errorf("ToolCallEvent has field %q, which is not on the exact allowlist (%v) — ADR-0025", n.Name, toolCallEventAllowedFields)
+			}
+			lower := strings.ToLower(n.Name)
+			for _, denied := range resultShapedFieldNames {
+				if strings.Contains(lower, denied) {
+					t.Errorf("ToolCallEvent field %q matches the result-shaped denylist entry %q (ADR-0025)", n.Name, denied)
+				}
+			}
+		}
+	}
+	for name := range toolCallEventAllowedFields {
+		if !seen[name] {
+			t.Errorf("ToolCallEvent is missing expected field %q", name)
+		}
+	}
+}
+
+// toolCallEventFields AST-locates `type ToolCallEvent struct { ... }` in
+// file and returns its fields, or found=false if no such declaration
+// exists.
+func toolCallEventFields(file *ast.File) (fields []*ast.Field, found bool) {
+	for _, decl := range file.Decls {
+		gd, isGen := decl.(*ast.GenDecl)
+		if !isGen || gd.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			ts, isType := spec.(*ast.TypeSpec)
+			if !isType || ts.Name.Name != "ToolCallEvent" {
+				continue
+			}
+			st, isStruct := ts.Type.(*ast.StructType)
+			if !isStruct {
+				continue
+			}
+			return st.Fields.List, true
+		}
+	}
+	return nil, false
 }
