@@ -410,3 +410,38 @@ func TestBundle_IsCAPEM(t *testing.T) {
 		t.Error("Bundle contains more than one PEM block")
 	}
 }
+
+// TestFingerprint_IsTheCACertificateDigest: this is the number an operator
+// compares a Node's configured trust root against, and the one ADR-0031 will
+// have a daemon pin — so it must be the digest of the certificate the Bundle
+// actually delivers, and it must be stable across reopens of the same CA
+// directory.
+func TestFingerprint_IsTheCACertificateDigest(t *testing.T) {
+	dir := t.TempDir()
+	c, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	block, _ := pem.Decode(c.Bundle())
+	if block == nil {
+		t.Fatal("Bundle did not contain a PEM block")
+	}
+	want := fingerprint(block.Bytes)
+
+	if got := c.Fingerprint(); got != want {
+		t.Errorf("Fingerprint() = %q, want the digest of the bundled certificate %q", got, want)
+	}
+	if len(c.Fingerprint()) != 64 {
+		t.Errorf("Fingerprint() = %q, want 64 hex characters (SHA-256, no colons)", c.Fingerprint())
+	}
+
+	reopened, err := Open(dir)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if got := reopened.Fingerprint(); got != want {
+		t.Errorf("Fingerprint() after reopen = %q, want %q — a value daemons pin cannot move "+
+			"when the process restarts", got, want)
+	}
+}

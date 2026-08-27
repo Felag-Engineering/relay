@@ -354,3 +354,97 @@ func TestBus_RaceGuard(t *testing.T) {
 
 	<-done
 }
+
+// TestBus_RecentReturnsRetainedHistoryOldestFirst is the bootstrap the Console
+// renders before it connects: Subscribe with an empty Last-Event-ID is
+// live-only, so without Recent a page opened thirty seconds after a failed
+// playbook would render an empty list — "nothing tried", which is the one
+// conclusion an operator must not draw.
+func TestBus_RecentReturnsRetainedHistoryOldestFirst(t *testing.T) {
+	b := NewBus()
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: "first"})
+	b.PublishJob(JobEvent{Transition: JobCreated, JobID: "job-1"})
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: "second"})
+
+	got := b.Recent([]Kind{KindEnrollment}, 10)
+	if len(got) != 2 {
+		t.Fatalf("Recent returned %d events, want the 2 enrollments", len(got))
+	}
+	if got[0].Enrollment.TokenID != "first" || got[1].Enrollment.TokenID != "second" {
+		t.Fatalf("Recent is not oldest-first: %q then %q",
+			got[0].Enrollment.TokenID, got[1].Enrollment.TokenID)
+	}
+	if got[0].Seq >= got[1].Seq {
+		t.Fatalf("Recent did not order by Seq: %d then %d", got[0].Seq, got[1].Seq)
+	}
+}
+
+// TestBus_RecentClampsToN keeps the NEWEST n, not the oldest: a screen is read
+// in the order of what matters now.
+func TestBus_RecentClampsToN(t *testing.T) {
+	b := NewBus()
+	for i := 0; i < 5; i++ {
+		b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: string(rune('a' + i))})
+	}
+
+	got := b.Recent([]Kind{KindEnrollment}, 2)
+	if len(got) != 2 {
+		t.Fatalf("Recent(2) returned %d events", len(got))
+	}
+	if got[0].Enrollment.TokenID != "d" || got[1].Enrollment.TokenID != "e" {
+		t.Fatalf("Recent(2) returned %q, %q — want the two newest",
+			got[0].Enrollment.TokenID, got[1].Enrollment.TokenID)
+	}
+	if n := b.Recent([]Kind{KindEnrollment}, 0); n != nil {
+		t.Fatalf("Recent(0) returned %d events, want none", len(n))
+	}
+}
+
+// TestBus_RecentMergesKindsAndFiltersTheRest: one process-global sequence
+// multiplexing the kinds asked for, and nothing from the kinds that were not.
+func TestBus_RecentMergesKindsAndFiltersTheRest(t *testing.T) {
+	b := NewBus()
+	b.PublishToolCall(ToolCallEvent{Tool: "raw_exec"})
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentAccepted})
+	b.PublishJob(JobEvent{Transition: JobCreated})
+
+	got := b.Recent([]Kind{KindEnrollment, KindJob}, 10)
+	if len(got) != 2 {
+		t.Fatalf("Recent returned %d events, want 2", len(got))
+	}
+	if got[0].Kind != KindEnrollment || got[1].Kind != KindJob {
+		t.Fatalf("Recent merged out of order: %s then %s", got[0].Kind, got[1].Kind)
+	}
+	for _, ev := range got {
+		if ev.Kind == KindToolCall {
+			t.Fatal("Recent returned a kind that was not asked for")
+		}
+	}
+}
+
+// TestBus_RecentEvictsByAge holds the honesty property day one's copy depends
+// on: the screen says "no attempts in the last RetentionWindow()", so Recent
+// must not hand it anything older.
+func TestBus_RecentEvictsByAge(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b := NewBus(WithClock(func() time.Time { return now }))
+
+	b.PublishEnrollment(EnrollmentEvent{Outcome: EnrollmentRejected, TokenID: "old"})
+	now = now.Add(defaultMaxAge + time.Minute)
+
+	if got := b.Recent([]Kind{KindEnrollment}, 10); len(got) != 0 {
+		t.Fatalf("Recent returned %d events past the retention window", len(got))
+	}
+}
+
+// TestBus_RetentionWindowReportsThisBusesBound, not the package default: a
+// screen renders the number this method returns, so a Bus built with a
+// different bound must report the one it actually has or the copy is a lie.
+func TestBus_RetentionWindowReportsThisBusesBound(t *testing.T) {
+	if got := NewBus().RetentionWindow(); got != defaultMaxAge {
+		t.Errorf("RetentionWindow() = %s, want the default %s", got, defaultMaxAge)
+	}
+	if got := NewBus(WithRetention(10, time.Minute)).RetentionWindow(); got != time.Minute {
+		t.Errorf("RetentionWindow() = %s, want the configured 1m", got)
+	}
+}

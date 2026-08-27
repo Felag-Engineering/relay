@@ -355,3 +355,49 @@ func TestServerLeafValidity_IsNotNodeIdentityValidity(t *testing.T) {
 		t.Error("server leaf and Node identity leaf still have the same lifetime")
 	}
 }
+
+// TestServerCertificate_FingerprintNeverRotates is the reason this method
+// exists separately from GetCertificate.
+//
+// GetCertificate re-issues once the current leaf reaches its renewal instant.
+// Fingerprint is read by a page render, so if it went through GetCertificate,
+// displaying a screen could rotate the Relay's TLS identity. It reads the
+// published pointer instead: past the threshold it still reports what is being
+// served, and only a real handshake changes that.
+func TestServerCertificate_FingerprintNeverRotates(t *testing.T) {
+	clk := newTestClock()
+	_, s, rec := testServerCert(t, clk)
+
+	leaf, _ := mustGet(t, s)
+	if got := s.Fingerprint(); got != fingerprint(leaf.Raw) {
+		t.Errorf("Fingerprint() = %q, want the served leaf's digest %q", got, fingerprint(leaf.Raw))
+	}
+
+	// Past the renewal threshold, but with no handshake.
+	clk.Advance(ServerLeafValidity - time.Duration(float64(ServerLeafValidity)*renewMinFraction) + time.Hour)
+
+	if got := s.Fingerprint(); got != fingerprint(leaf.Raw) {
+		t.Error("Fingerprint() rotated the certificate — a page render must never be able to " +
+			"re-issue the Relay's server certificate")
+	}
+	if got := rec.count(); got != 0 {
+		t.Fatalf("observed rotations = %d, want 0 — reading a fingerprint issued a certificate", got)
+	}
+
+	// A handshake does rotate it, and the reported value follows.
+	rotated, _ := mustGet(t, s)
+	if got := s.Fingerprint(); got != fingerprint(rotated.Raw) {
+		t.Errorf("Fingerprint() = %q after rotation, want the new leaf's %q", got, fingerprint(rotated.Raw))
+	}
+}
+
+// TestServerCertificate_FingerprintBeforeFirstIssue: the zero value reports
+// nothing rather than a digest of nothing. NewServerCertificate mints eagerly,
+// so this is only reachable through the zero value, and "" is what the Console
+// renders as "not wired" rather than as a fingerprint.
+func TestServerCertificate_FingerprintBeforeFirstIssue(t *testing.T) {
+	var s ServerCertificate
+	if got := s.Fingerprint(); got != "" {
+		t.Errorf("Fingerprint() with no certificate = %q, want empty", got)
+	}
+}
