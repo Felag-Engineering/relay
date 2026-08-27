@@ -161,6 +161,16 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/agents", NavEntry{NavObserve, "Agents", 20}, accounts.RoleViewer, handleAgents},
 		{"GET", "/console/activity", NavEntry{NavObserve, "Activity", 30}, accounts.RoleViewer, handleActivity},
 		{"GET", "/console/jobs/{job_id}", NavEntry{}, accounts.RoleViewer, handleJob},
+
+		// Compare is deliberately NOT /console/nodes/compare. Node ids are
+		// unvalidated — registry.Upsert takes what enrollment gives it — so a
+		// literal segment under /console/nodes/ permanently shadows any Node
+		// whose id is that word. /console/nodes/add already carries that
+		// hazard; a second one is not worth a tidier URL.
+		//
+		// No Nav entry: it is reached from a pin bar, like node detail and Job
+		// detail, not from the menu.
+		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
 		{"GET", "/console/policy", NavEntry{NavAct, "Policy", 20}, accounts.RoleOperator, placeholder("Policy Author", "06-policy-author.md")},

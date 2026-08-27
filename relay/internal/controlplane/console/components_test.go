@@ -422,6 +422,10 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 		"deny-block":  Deny{Rule: "deny x", File: "p.toml", Line: 1},
 		"plan":        Plan{Selector: "s", Matched: 1, Cap: 5, Hash: "h"},
 		"step-up":     StepUp{Action: "a", FormAction: "/x", CSRFToken: "t"},
+		"pin-bar": pinState{
+			Pins:        []nodePin{{ID: "n1", Known: true, Href: "/console/nodes/n1", UnpinHref: "/console/"}},
+			CompareHref: "/console/compare?nodes=n1", FleetHref: "/console/?pin=n1",
+		},
 	}
 	for name, data := range samples {
 		out := render(t, name, data)

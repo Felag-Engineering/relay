@@ -35,6 +35,7 @@ import (
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 )
 
 // localImportAlias resolves the local identifier file uses for importPath: the
@@ -61,6 +62,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 
 	capAlias, capImported := localImportAlias(file, capabilityImportPath)
 	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
 
 	checkRepositoryAssertion := func(expr ast.Expr) {
 		sel, ok := expr.(*ast.SelectorExpr)
@@ -90,6 +92,28 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.New — the exported dispatch constructor must never be called from a Console file (no-dispatch structural guarantee, ADR-0026 decision 1)",
 							fileName))
+					}
+				}
+			}
+			// policyview.Cache is the type that carries Set. The Console is
+			// handed PolicyReader (seams.go), which is Get only, and this rule
+			// stops any file in the package recovering the writer by naming
+			// the concrete type — a type assertion, a type switch case, or a
+			// second construction of the cache.
+			//
+			// What this buys is narrower than "no type can be recovered". An
+			// anonymous interface — `d.Policy.(interface{ Set(string,
+			// policyview.Snapshot) })` — recovers Set without ever naming
+			// Cache, and this guard would not see it (the registry.Repository
+			// rule above has the identical hole). It closes the obvious door,
+			// not every door; the seam's type and review close the rest.
+			if pvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias {
+					switch v.Sel.Name {
+					case "Cache", "New":
+						violations = append(violations, fmt.Sprintf(
+							"%s references policyview.%s — the Console must never hold a *policyview.Cache: Cache carries Set, and the effective-Policy panel is read-only STRUCTURALLY rather than by permission (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+							fileName, v.Sel.Name))
 					}
 				}
 			}
@@ -138,5 +162,106 @@ func TestConsole_NoDispatchOutsideCapabilityLayer(t *testing.T) {
 	// success forever. Assert it actually walked the package.
 	if checked == 0 {
 		t.Fatal("no_dispatch guard inspected zero files — the guard is not running")
+	}
+}
+
+// TestDispatchViolations_Fixtures exercises the guard on sources that are not
+// in this package, because a guard nobody has ever seen fail is a guard that
+// might not run. Mirrors api/no_dispatch_test.go's fixture table.
+func TestDispatchViolations_Fixtures(t *testing.T) {
+	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
+	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
+
+	cases := []struct {
+		name       string
+		src        string
+		wantSubstr string // "" = expect NO violations
+	}{
+		{
+			name: "type assertion recovering the policyview cache",
+			src: `package console
+import ` + pvImport + `
+func f(p any) { _ = p.(*policyview.Cache) }
+`,
+			wantSubstr: "policyview.Cache",
+		},
+		{
+			name: "type-switch case recovering the policyview cache",
+			src: `package console
+import ` + pvImport + `
+func f(p any) {
+	switch p.(type) {
+	case *policyview.Cache:
+	}
+}
+`,
+			wantSubstr: "policyview.Cache",
+		},
+		{
+			name: "constructing a policyview cache, through an alias",
+			src: `package console
+import pv ` + pvImport + `
+var _ = pv.New()
+`,
+			wantSubstr: "policyview.New",
+		},
+		{
+			// The false-positive guard: this is exactly what seams.go and
+			// node.go do, and must keep doing.
+			name: "reading a reported Snapshot produces nothing",
+			src: `package console
+import ` + pvImport + `
+type reader interface {
+	Get(nodeID string) (policyview.Snapshot, bool)
+}
+func f(r reader) *policyview.Snapshot {
+	s, _ := r.Get("n")
+	return &s
+}
+`,
+			wantSubstr: "",
+		},
+		{
+			name: "type assertion recovering registry.Repository",
+			src: `package console
+import ` + regImport + `
+func f(nodes any) { _ = nodes.(registry.Repository) }
+`,
+			wantSubstr: "registry.Repository",
+		},
+		{
+			name: "aliased capability import dodging the literal package name",
+			src: `package console
+import c2 ` + capImport + `
+var _ = c2.Service{}
+`,
+			wantSubstr: "capability.Service",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parser.ParseFile: %v", err)
+			}
+
+			violations := dispatchViolations("fixture.go", file)
+
+			if tc.wantSubstr == "" {
+				if len(violations) != 0 {
+					t.Fatalf("dispatchViolations() = %v, want none (this is legitimate read usage)", violations)
+				}
+				return
+			}
+			for _, v := range violations {
+				if strings.Contains(v, tc.wantSubstr) {
+					return
+				}
+			}
+			t.Fatalf("dispatchViolations() = %v, want a violation containing %q", violations, tc.wantSubstr)
+		})
 	}
 }

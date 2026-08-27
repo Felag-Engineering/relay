@@ -453,6 +453,16 @@ type StepUp struct {
 	WindowText string
 }
 
+// --- Pin to compare ---------------------------------------------------------
+
+// The pin bar's type is pinState in compare.go, beside the builder that
+// resolves each pinned id against the registry. Only the MARKUP is here, and
+// it is here for the reason at the top of this file: the bar is on three
+// screens (fleet, node detail, comparison), and the first version of it was
+// duplicated in three templates and had already diverged — the comparison
+// screen's "pick another from the fleet" link dropped the pin set, on the one
+// screen whose whole purpose is adding a third Node.
+
 // --- Rendering --------------------------------------------------------------
 
 // componentsTmpl holds every shared component as a named template. Screens
@@ -503,6 +513,17 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   <div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>
   {{range .Verdicts}}{{if .Deny}}{{template "deny-block" .Deny}}{{end}}{{end}}
 </section>{{end}}
+
+{{define "pin-bar"}}<div class="pinbar">
+  <span class="pinlbl">Pinned</span>
+  {{range .Pins}}<span class="pinchip">
+    {{if .Known}}<a href="{{.Href}}"><code>{{.ID}}</code></a>
+    {{else}}<code class="dim">{{.ID}}</code><span class="dim" title="A pinned id is whatever the link carried; the Relay resolves each one against the registry.">not in this registry</span>{{end}}
+    <a class="unpin" href="{{.UnpinHref}}">unpin</a></span>{{end}}
+  {{with .CompareHref}}<a class="act" href="{{.}}">Compare these Nodes</a>{{end}}
+  {{with .FleetHref}}<a href="{{.}}">Pick another from the fleet</a>{{end}}
+  {{if .Full}}<span class="dim">Three is the maximum &mdash; unpin one to pin another.</span>{{end}}
+</div>{{end}}
 
 {{define "step-up"}}<form class="stepup" method="post" action="{{.FormAction}}">
   <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
