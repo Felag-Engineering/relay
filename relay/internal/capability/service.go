@@ -69,6 +69,14 @@ type Service struct {
 	// notification plumbing. Best-effort by construction — see ApprovalNotifier.
 	approvalNotifier ApprovalNotifier
 
+	// auditQ and jobQ are the read lane (#441): filtered, paginated queries
+	// over the audit trail and over Jobs/Tasks. Nil means the read lane is
+	// not wired — readlane.go's methods return ErrQueriesUnavailable rather
+	// than an empty page, since an empty page is a claim ("there is nothing
+	// here") and a nil seam has not actually looked.
+	auditQ AuditQuery
+	jobQ   JobQuery
+
 	// now and newApprovalID are seams so tests get deterministic parks.
 	now           func() time.Time
 	newApprovalID idGen
@@ -186,6 +194,36 @@ func WithApprovalNotifier(n ApprovalNotifier) Option {
 	return func(s *Service) { s.approvalNotifier = n }
 }
 
+// WithQueries wires the read lane (#441): audit is the trail's filtered/
+// paginated/aggregating seam, job is the same for Jobs/Tasks. Both required
+// together — a Job lane with no audit lane would leave Activity able to list
+// Jobs and unable to attribute them, mirroring WithApprovals' "all required
+// together" reasoning.
+//
+// Optional overall: a Service built without WithQueries still dispatches
+// exactly as before #441, and its own read-lane methods (readlane.go) return
+// ErrQueriesUnavailable rather than degrading. Its own fail-closed property
+// is RecordRead's "record first" ordering in readlane.go — but New's guard
+// now ALSO requires a real AuditSink whenever WithQueries was used (F5,
+// #441 cycle-2 security review): WithQueries sat outside the real-dispatcher
+// fail-open guard, so a Service built with WithQueries but no WithAuditSink
+// answered every trail query while auditing none of them — exactly the
+// "unauditable read succeeded" state ADR-0025 forbids, and a composition-root
+// footgun distinct from (and checked independently of) the real-dispatcher
+// case. See New.
+func WithQueries(audit AuditQuery, job JobQuery) Option {
+	if audit == nil {
+		panic("capability: WithQueries: audit query seam must not be nil")
+	}
+	if job == nil {
+		panic("capability: WithQueries: job query seam must not be nil")
+	}
+	return func(s *Service) {
+		s.auditQ = audit
+		s.jobQ = job
+	}
+}
+
 // WithClock overrides the Service's clock. Test seam only: approval expiry and
 // park timestamps are time-dependent, and a test that sleeps is a test that
 // flakes.
@@ -228,6 +266,10 @@ func WithMetrics(m MetricsSink) Option {
 // is the same class of bug: an un-stoppable executor, since "never frozen"
 // means the emergency stop (ADR-0013) can never actually halt it. See
 // dispatcher's doc comment in dispatch.go.
+//
+// Separately, and regardless of s.realDispatcher: WithQueries also requires
+// a real AuditSink (F5, #441 cycle-2 security review) — see WithQueries' doc
+// comment.
 func New(reg registry.Repository, opts ...Option) *Service {
 	s := &Service{
 		reg:              reg,
@@ -258,6 +300,19 @@ func New(reg registry.Repository, opts ...Option) *Service {
 		}
 		if _, ok := s.freeze.(noopFreezeStore); ok {
 			panic("capability: New: a real dispatcher (WithExecution) requires a real FreezeStore (WithFreeze); noopFreezeStore is never frozen, making the emergency stop unreachable")
+		}
+	}
+	// WithQueries requires a real AuditSink (F5, #441 cycle-2 security
+	// review), independent of s.realDispatcher and checked here — not inside
+	// WithQueries itself — so the result does not depend on the order two
+	// Options were passed to New. Without this, a Service built with
+	// WithQueries but no WithAuditSink answers every trail query while
+	// recording none of them: exactly the "unauditable read succeeded" state
+	// ADR-0025 forbids, the read-lane analogue of the real-dispatcher guard
+	// above.
+	if s.auditQ != nil {
+		if _, ok := s.audit.(noopAuditSink); ok {
+			panic("capability: New: WithQueries requires a real AuditSink (WithAuditSink); noopAuditSink would answer every trail query while recording none of them")
 		}
 	}
 	return s

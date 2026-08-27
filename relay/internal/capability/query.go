@@ -1,0 +1,456 @@
+package capability
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
+
+// query.go is the capability layer's read-lane vocabulary (#441): the
+// filtered, paginated, aggregating query surface over the audit trail and
+// over Jobs/Tasks, so the Console's Activity, Job detail, agent history, and
+// read-egress screens — and any future /api/v1 audit route — share ONE
+// seam (invariant 10) instead of each materialising the whole trail.
+//
+// Every type here MIRRORS internal/audit's and internal/jobs' read-lane
+// types rather than reusing them directly. That is deliberate for the
+// audit half: capability's import allowlist bars internal/audit
+// (assertions.go's doc comment, and TestCapabilityImportsOnlyRegistryAndJobs)
+// specifically so a caller-controlled value never gets a path to the store
+// through this package, and internal/auditquery — auditsink's twin — owns
+// the total mapping in both directions. The Job/Task half is mirrored too,
+// even though internal/jobs IS an allowed import here, so the capability
+// layer's own public contract (Filter/Row naming) does not simply re-export
+// whatever internal/jobs.QueryRepository happens to look like today.
+
+// AuditFilter is the trail's read filter — capability's mirror of
+// audit.Query. Every non-zero field ANDs; the zero value matches every Row.
+type AuditFilter struct {
+	Kinds      []string
+	AccountID  string
+	OnBehalfOf string
+	Operations []string
+	NodeID     string
+	JobID      string
+	ApprovalID string
+	GrantID    string
+	// Outcome is a pointer because jobs.OutcomeUnspecified is itself a real,
+	// meaningful value (refusals, plans, and Freeze rows all carry it) — see
+	// audit.Query.Outcome's doc comment.
+	Outcome      *jobs.Outcome
+	Since, Until time.Time
+	// ArgKey and ArgValuePrefix filter on one key of a Record's Args map. See
+	// audit.Query's doc comment for the exact matching semantics.
+	ArgKey, ArgValuePrefix string
+}
+
+// VerifiedIdentity is AuditRow's verified-lane mirror of audit.Verified —
+// capability's own vocabulary for the attribution the Relay itself
+// established, kept separate from the caller-claimed Assertions type the
+// dispatch pipeline already carries (assertions.go).
+type VerifiedIdentity struct {
+	AccountID   string
+	AccountName string
+	Role        string
+	TokenID     string
+	Method      string
+	Source      string
+}
+
+// AuditRow is the projection QueryAudit returns — capability's mirror of
+// audit.Row.
+//
+// **AuditRow has NO Stdout/Stderr/Truncated field.** That absence is the
+// acceptance criterion for issue #441 ("a read-class query never returns
+// read output — the seam has no field for it"), not an oversight: the SELECT
+// behind audit.Row does not name those columns either (internal/store/
+// auditquery.go), so no output ever crosses this seam to redact — there is
+// nothing here for a caller of this package to accidentally forward.
+type AuditRow struct {
+	ID        string
+	Timestamp time.Time
+	Kind      string
+	Principal string
+
+	// Verified and Asserted are the two attribution lanes (#300). Verified is
+	// this file's own VerifiedIdentity; Asserted reuses the existing
+	// capability.Assertions type, since that is already this package's
+	// vocabulary for the caller-claimed lane.
+	Verified VerifiedIdentity
+	Asserted Assertions
+
+	Selector      string
+	JobID         string
+	NodeID        string
+	ActionKind    string
+	OperationName string
+	Args          map[string]string
+	RawExecArgv   []string
+	Outcome       jobs.Outcome
+	Reason        string
+
+	ApprovalID string
+	GrantID    string
+}
+
+// AuditPage is one page of AuditRow, cursor-paginated newest first.
+type AuditPage struct {
+	Rows  []AuditRow
+	Next  string
+	Limit int
+}
+
+// PrincipalBucket is one principal's Record count within one time bucket —
+// capability's mirror of audit.Bucket, backing read egress's "trend against
+// own baseline".
+type PrincipalBucket struct {
+	AccountID   string
+	AccountName string
+	Start       time.Time
+	Count       int
+}
+
+// Reach is AuditReach's aggregate over an AuditFilter — capability's mirror
+// of audit.Reach: how many calls, how many distinct targets, and how many
+// distinct Nodes.
+type Reach struct {
+	Calls           int
+	DistinctTargets int
+	DistinctNodes   int
+}
+
+// JobFilter is the Job list's filter — capability's mirror of jobs.JobQuery.
+// jobs.JobState and jobs.RiskClass are reused directly rather than mirrored:
+// internal/jobs is already an allowed import here (unlike internal/audit),
+// so mirroring its enums would only add a conversion with nothing to guard.
+type JobFilter struct {
+	State              *jobs.JobState
+	RequesterAccountID string
+	Operation          string
+	RiskClass          *jobs.RiskClass
+	Since, Until       time.Time
+}
+
+// JobSummary is one row of a Job list — capability's mirror of
+// jobs.JobSummary.
+type JobSummary struct {
+	JobID     string
+	CreatedAt time.Time
+	State     jobs.JobState
+
+	ActionKind    jobs.ActionKind
+	OperationName string
+	RiskClass     jobs.RiskClass
+
+	// Selector, Requester, and RequesterAccountID are empty for a Job whose
+	// audit row has not been written yet (in-flight) — see
+	// jobs.JobSummary's doc comment.
+	Selector           string
+	Requester          string
+	RequesterAccountID string
+
+	Total      int
+	Counts     map[jobs.Outcome]int
+	Unresolved int
+}
+
+// JobPage is one page of JobSummary, cursor-paginated newest first.
+type JobPage struct {
+	Jobs  []JobSummary
+	Next  string
+	Limit int
+}
+
+// TaskFilter is a single Job's Task list filter — capability's mirror of
+// jobs.TaskQuery.
+type TaskFilter struct {
+	JobID   string
+	Outcome *jobs.Outcome
+}
+
+// TaskRow is one row of a Job's Task list — capability's mirror of
+// jobs.TaskSummary.
+//
+// Stdout, Stderr, and RiskClass ARE present here — unlike AuditRow. D3 (the
+// #441 plan's decision, deliberately flagged for human review): #423 (job
+// detail) clusters Tasks by identical output and renders the deny rule
+// verbatim, which needs the captured bytes for mutate-class Tasks, and the
+// tasks table already stores them. RiskClass is what lets readlane.go strip
+// output before a TaskRow ever leaves this package for every Task EXCEPT one
+// whose RiskClass is explicitly RiskClassMutate — see QueryTasks in
+// readlane.go for exactly where and why the condition is "!= Mutate" and not
+// "== Read" (F3, #441 cycle-2 security review: output retention must fail
+// safe toward STRIPPING, the opposite of this codebase's usual
+// Unspecified-means-mutate guardrail default). If a reviewer reads
+// acceptance line 22 ("a read-class query never returns read output") as
+// covering the Task lane too, the
+// alternative is an output-free TaskRow with #423 kept on the existing
+// JobReader for output instead — that reversal touches only this struct and
+// readlane.go's QueryTasks, nothing else in the #441 plan.
+//
+// Truncated is deliberately ABSENT — see jobs.TaskSummary's doc comment: the
+// tasks table has no truncated column, and this seam does not invent one.
+type TaskRow struct {
+	TaskID   string
+	NodeID   string
+	State    jobs.DispatchState
+	Outcome  jobs.Outcome
+	ExitCode int32
+
+	RiskClass jobs.RiskClass
+	Stdout    []byte
+	Stderr    []byte
+
+	CreatedAt    time.Time
+	DispatchedAt time.Time
+	ResolvedAt   time.Time
+}
+
+// TaskPage is one page of TaskRow.
+type TaskPage struct {
+	Tasks []TaskRow
+	Next  string
+	Limit int
+}
+
+// PageRequest is a query lane caller's pagination ask. Limit <= 0 means
+// DefaultPageSize; a Limit above MaxPageSize is clamped, never refused, and
+// the effective value is reported back on the resulting Page.
+type PageRequest struct {
+	Limit  int
+	Cursor string
+}
+
+// DefaultPageSize and MaxPageSize bound every query-lane page. Code
+// constants, not settings — invariant 11: nothing here reads or exposes
+// Relay configuration, and no API can raise them.
+const (
+	DefaultPageSize = 50
+	MaxPageSize     = 500
+)
+
+// ErrInvalidFilter is returned when a Filter fails validation before it ever
+// reaches a seam.
+var ErrInvalidFilter = errors.New("capability: invalid query filter")
+
+// ErrInvalidCursor is returned when a caller-supplied pagination cursor
+// cannot be parsed. Never a silent reset to page one — see readlane.go.
+var ErrInvalidCursor = errors.New("capability: invalid pagination cursor")
+
+// ErrQueriesUnavailable is returned by the read-lane methods on a Service
+// built without WithQueries. A wiring fault, surfaced as a legible error
+// rather than a nil-seam panic — mirrors ErrApprovalUnavailable.
+var ErrQueriesUnavailable = errors.New("capability: audit/Job queries are not configured on this Relay")
+
+// validate checks f before it reaches any seam. Caller-controlled inputs are
+// bounded HERE, not just at the store: a query filter reaches an append-only
+// table by way of the read-audit record readlane.go writes for every call
+// (the #255/#258 unbounded-field lesson audit/attribution.go's
+// MaxAssertedFieldBytes states — the same reasoning applies to a filter that
+// gets recorded as the search itself).
+func (f AuditFilter) validate() error {
+	if !f.Since.IsZero() && !f.Until.IsZero() && !f.Until.After(f.Since) {
+		return fmt.Errorf("%w: until must be after since", ErrInvalidFilter)
+	}
+	if len(f.Kinds) > 32 {
+		return fmt.Errorf("%w: %d kinds requested, max 32", ErrInvalidFilter, len(f.Kinds))
+	}
+	for _, k := range f.Kinds {
+		if len(k) > 64 {
+			return fmt.Errorf("%w: kind %q exceeds 64 bytes", ErrInvalidFilter, k)
+		}
+	}
+	// Operations is capped exactly as Kinds is (F2, #441 cycle-2 security
+	// review): buildAuditWhere emits one bound placeholder per entry, and an
+	// uncapped list is an asymmetric caller-driven allocation on a request
+	// path — confirmed empirically to fail SQLite's "too many SQL variables"
+	// limit at 60,000 entries. It fails closed rather than injecting, but
+	// refusing it here means the caller gets a legible error instead of a
+	// driver error from three layers down.
+	if len(f.Operations) > 32 {
+		return fmt.Errorf("%w: %d operations requested, max 32", ErrInvalidFilter, len(f.Operations))
+	}
+	for _, op := range f.Operations {
+		if len(op) > 64 {
+			return fmt.Errorf("%w: operation %q exceeds 64 bytes", ErrInvalidFilter, op)
+		}
+	}
+	if f.ArgValuePrefix != "" {
+		if !validArgKey(f.ArgKey) {
+			return fmt.Errorf("%w: arg key %q is not a valid identifier (^[a-z][a-z0-9_]*$)", ErrInvalidFilter, f.ArgKey)
+		}
+		if len(f.ArgValuePrefix) > 256 {
+			return fmt.Errorf("%w: arg value prefix exceeds 256 bytes", ErrInvalidFilter)
+		}
+	}
+	return nil
+}
+
+// MaxAggregateWindow bounds Since..Until on the AGGREGATE paths — AuditCounts
+// and AuditReach — validated by validateWindow (F1, #441 cycle-2 security
+// review). Unlike QueryAudit, neither aggregate paginates: AuditCounts has
+// no LIMIT and AuditReach returns one row computed over every matching
+// Record, so an unbounded window is an unbounded scan/allocation reachable
+// from any authenticated caller with AuditFilter{}. 90 days covers a
+// quarterly trend view with room to spare.
+const MaxAggregateWindow = 90 * 24 * time.Hour
+
+// MinAuditBucket floors AuditCounts' caller-supplied bucket width (F1): with
+// no floor, a caller-chosen 1-second bucket over the maximum window
+// materialises one PrincipalBucket per (account, second) — on a large trail,
+// tens of millions of rows and gigabytes of heap, in one request, repeatable.
+// A bucket below the floor is clamped up to it, never refused — the same
+// "clamp, don't reject" convention clampPage uses for Limit.
+const MinAuditBucket = 60 * time.Second
+
+// validateWindow checks f is safe to hand to an aggregate path (AuditCounts,
+// AuditReach): both require a bounded Since/Until window before the filter
+// ever reaches SQL, because neither aggregate has a page size to clamp
+// against. AuditFilter{} — otherwise a perfectly legal match-everything
+// filter for QueryAudit — is exactly the hostile case this refuses for the
+// aggregate paths.
+func (f AuditFilter) validateWindow() error {
+	if f.Since.IsZero() || f.Until.IsZero() {
+		return fmt.Errorf("%w: aggregate queries require both since and until", ErrInvalidFilter)
+	}
+	if f.Until.Sub(f.Since) > MaxAggregateWindow {
+		return fmt.Errorf("%w: window exceeds the maximum of %s", ErrInvalidFilter, MaxAggregateWindow)
+	}
+	return nil
+}
+
+// clampBucket floors a caller-supplied bucket width to MinAuditBucket — a
+// caller asking for finer granularity than allowed gets the coarsest safe
+// granularity instead of a refusal, mirroring clampPage.
+func clampBucket(d time.Duration) time.Duration {
+	if d < MinAuditBucket {
+		return MinAuditBucket
+	}
+	return d
+}
+
+// validArgKey reports whether s matches ^[a-z][a-z0-9_]*$, hand-written
+// because capability's import allowlist admits no regexp package.
+func validArgKey(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case i > 0 && c >= '0' && c <= '9':
+		case i > 0 && c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// maxFilterSummaryBytes bounds summary()'s rendering — recorded as the read
+// record's selector, so it is subject to the same storage-exhaustion
+// reasoning as every other caller-controlled audit field.
+const maxFilterSummaryBytes = 256
+
+// summary renders f as a compact, control-character-stripped string —
+// "kinds=...;account=...;node=...;op=...;since=...;until=...;arg=..." —
+// recorded as the read record's selector (readlane.go), so the trail can
+// answer "who searched the trail for what".
+func (f AuditFilter) summary() string {
+	var b strings.Builder
+	field := func(name, value string) {
+		if value == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteByte(';')
+		}
+		b.WriteString(name)
+		b.WriteByte('=')
+		b.WriteString(value)
+	}
+	field("kinds", strings.Join(f.Kinds, ","))
+	field("account", f.AccountID)
+	field("on_behalf_of", f.OnBehalfOf)
+	field("node", f.NodeID)
+	field("job", f.JobID)
+	field("op", strings.Join(f.Operations, ","))
+	field("approval", f.ApprovalID)
+	field("grant", f.GrantID)
+	if !f.Since.IsZero() {
+		field("since", f.Since.UTC().Format(time.RFC3339))
+	}
+	if !f.Until.IsZero() {
+		field("until", f.Until.UTC().Format(time.RFC3339))
+	}
+	if f.ArgKey != "" {
+		field("arg", f.ArgKey+"="+f.ArgValuePrefix)
+	}
+	return truncateBytes(stripControl(b.String()), maxFilterSummaryBytes)
+}
+
+// stripControl removes C0/C1 control characters and DEL — the same rule
+// audit.isControl applies, hand-copied because capability may not import
+// internal/audit: a newline in a recorded search is a log-forging vector
+// exactly as it is in an asserted attribution field.
+func stripControl(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// truncateBytes bounds s to n bytes, cutting on a UTF-8 rune boundary (a
+// continuation byte has its top two bits "10", hand-checked because
+// capability's import allowlist admits no unicode/utf8 package) so a
+// truncated summary never holds an invalid fragment.
+func truncateBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+	return s[:cut]
+}
+
+// AuditQuery is the trail's read-lane seam: filtered, paginated queries and
+// aggregations. Satisfied by internal/auditquery.Queries, the adapter to
+// internal/audit.QueryRepository — see this file's package doc comment for
+// why the adapter lives in its own package.
+type AuditQuery interface {
+	// QueryAudit returns one page of AuditRow matching f, newest first.
+	QueryAudit(ctx context.Context, f AuditFilter, page PageRequest) (AuditPage, error)
+
+	// AuditCounts returns f's matching Records grouped by verified Account
+	// and by time bucket — read egress's per-principal trend.
+	AuditCounts(ctx context.Context, f AuditFilter, bucket time.Duration) ([]PrincipalBucket, error)
+
+	// AuditReach returns f's call count, distinct-target count, and
+	// distinct-Node count — read egress's "how far did this reach" summary.
+	AuditReach(ctx context.Context, f AuditFilter) (Reach, error)
+}
+
+// JobQuery is the Job/Task read-lane seam: filtered, paginated summaries.
+// Satisfied by internal/auditquery.Queries, the adapter to
+// internal/jobs.QueryRepository.
+type JobQuery interface {
+	// QueryJobs returns one page of JobSummary matching f, newest
+	// (CreatedAt) first.
+	QueryJobs(ctx context.Context, f JobFilter, page PageRequest) (JobPage, error)
+
+	// QueryTasks returns one page of TaskRow for f.JobID, optionally
+	// filtered by f.Outcome.
+	QueryTasks(ctx context.Context, f TaskFilter, page PageRequest) (TaskPage, error)
+}
