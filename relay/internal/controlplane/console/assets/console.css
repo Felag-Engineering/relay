@@ -202,14 +202,43 @@
    * A swatch pinned by a rule about reading is a swatch that will drift again,
    * so these are literals and the wall owns them.
    *
-   * Attention and fenced stay aliased to the semantic tokens, which is correct
-   * — an amber cell and the amber Freeze banner mean the same thing, and the
-   * colour budget in 00-foundations.md spends one hue on each. Both already
-   * clear the floor comfortably (9.86:1 and 5.85:1 here). */
-  --wall-normal: #6a8274;
+   * NORMAL IS GREEN, by owner decision on 2026-08-27, and 00-foundations.md's
+   * colour budget was amended in the same change. It is a departure from that
+   * document's rule 2 ("the human reads only exceptions"), whose argument was
+   * that a 10,000-cell field of saturated green leaves the seven amber cells
+   * competing with it rather than standing out. The counter-argument, which
+   * carried: the fleet row 200px below already shows a GREEN liveness dot for
+   * the same Node, so the page was teaching green-means-reachable and then
+   * contradicting itself in the wall.
+   *
+   * Green forced the other three to move, and that is the real cost of the
+   * decision rather than a detail. Green and amber sat at 1.09:1 in luminance
+   * — they differ only on the red-green axis, which is exactly the axis a
+   * deuteranope or protanope cannot see, so "fine" and "needs attention now"
+   * became one colour for roughly one man in twelve. The four buckets are now
+   * spread across four luminance bands so hue carries the MEANING and
+   * luminance carries the SEPARATION.
+   *
+   * Measured worst pair across normal vision, deuteranopia and protanopia
+   * (Viénot 1999), against the previous palette:
+   *
+   *     dark   1.03:1 -> 1.22:1        light  1.06:1 -> 1.30:1
+   *
+   * so every pair is better separated than before, not merely no worse. The
+   * weakest remaining pair is drift/fenced in dark at 1.22:1 — grey against
+   * indigo, a collision that predates this change and that four recognisable
+   * hues above a 3:1 floor cannot fully resolve on luminance alone. If it
+   * needs to go, it needs a non-colour channel (a border or a distinct cell
+   * shape for fenced), not more searching in this file.
+   *
+   * These are literals rather than aliases of --attention/--security because
+   * the wall needs its own luminance placement: a banner's amber and a 20px
+   * swatch's amber are not the same problem, which the stylesheet already
+   * concedes by separating --attention-text from --attention. */
+  --wall-normal: #1a8e33;
   --wall-drift: #97a296;
-  --wall-attention: var(--attention);
-  --wall-fenced: var(--security);
+  --wall-attention: #f0c933;
+  --wall-fenced: #bca7fb;
   --ok-bg: rgba(74, 222, 106, 0.10);
 }
 
@@ -260,9 +289,10 @@
      * The stylesheet already separates --attention-text from --attention for
      * the same reason: amber has to work harder on a light ground, and a
      * banner's amber and a 20px swatch's amber are not the same problem. */
-    --wall-normal: #887c6a;
-    --wall-drift: #645f54;
-    --wall-attention: #997a07;
+    --wall-normal: #1a943f;
+    --wall-drift: #534f46;
+    --wall-attention: #7f6506;
+    --wall-fenced: #492787;
   }
 }
 

@@ -10,6 +10,7 @@ package console
 // a helpful change six months from now.
 
 import (
+	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -2329,4 +2330,107 @@ func resolveToken(tokens map[string]string, name string) (string, bool) {
 		return v, true
 	}
 	return "", false
+}
+
+// TestFleet_WallBucketsSurviveColourBlindness.
+//
+// The wall codes meaning in hue across four buckets, and hue is the one
+// channel a dichromat does not fully have. When `normal` became green (owner
+// decision, 2026-08-27) it landed at 1.09:1 in luminance against the amber of
+// `attention` — the two differing almost purely on the red-green axis, which
+// is exactly the axis deuteranopes and protanopes cannot see. "Everything is
+// fine" and "needs attention now" would have been one colour for roughly one
+// man in twelve, on a fleet-execution surface.
+//
+// The fix is not more hue, it is luminance: hue carries the meaning, luminance
+// carries the separation. This asserts every pair stays apart under normal
+// vision AND under simulated deuteranopia and protanopia (Viénot 1999).
+//
+// The floor is 1.2:1, which is where two 20px swatches stop being reliably
+// tellable apart. The weakest pair today is drift/fenced in dark at 1.22 —
+// grey against indigo, a collision that predates the green decision. Four
+// recognisable hues above a 3:1 visibility floor cannot all be separated on
+// luminance; closing that last one needs a non-colour channel, not a different
+// hex value.
+func TestFleet_WallBucketsSurviveColourBlindness(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	dark, light := splitThemes(t, css)
+
+	buckets := []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for i := 0; i < len(buckets); i++ {
+			for j := i + 1; j < len(buckets); j++ {
+				a, okA := resolveToken(theme.tokens, buckets[i])
+				b, okB := resolveToken(theme.tokens, buckets[j])
+				if !okA || !okB {
+					t.Fatalf("%s: cannot resolve %s or %s", theme.name, buckets[i], buckets[j])
+				}
+				for _, vision := range []string{"normal", "deuteranopia", "protanopia"} {
+					r := contrastRatio(simulateCVD(a, vision), simulateCVD(b, vision))
+					if r < 1.2 {
+						t.Errorf("%s/%s: %s and %s are %.2f:1 apart — indistinguishable",
+							theme.name, vision, buckets[i], buckets[j], r)
+					}
+				}
+			}
+		}
+		// And the pair that matters most: fine versus needs-attention.
+		n, _ := resolveToken(theme.tokens, "--wall-normal")
+		a, _ := resolveToken(theme.tokens, "--wall-attention")
+		for _, vision := range []string{"deuteranopia", "protanopia"} {
+			if r := contrastRatio(simulateCVD(n, vision), simulateCVD(a, vision)); r < 1.25 {
+				t.Errorf("%s/%s: normal and attention are %.2f:1 apart — "+
+					"\"everything is fine\" and \"look at this now\" are one colour", theme.name, vision, r)
+			}
+		}
+	}
+}
+
+// simulateCVD renders hex as a dichromat sees it (Viénot, Brettel & Mollon
+// 1999), returning hex. "normal" passes the colour through unchanged.
+func simulateCVD(hex, vision string) string {
+	if vision == "normal" {
+		return hex
+	}
+	toLinear := func(i int) float64 {
+		v, err := strconv.ParseInt(hex[i:i+2], 16, 0)
+		if err != nil {
+			return 0
+		}
+		f := float64(v) / 255
+		if f <= 0.04045 {
+			return f / 12.92
+		}
+		return math.Pow((f+0.055)/1.055, 2.4)
+	}
+	r, g, b := toLinear(1), toLinear(3), toLinear(5)
+
+	l := 17.8824*r + 43.5161*g + 4.11935*b
+	m := 3.45565*r + 27.1554*g + 3.86714*b
+	s := 0.0299566*r + 0.184309*g + 1.46709*b
+	switch vision {
+	case "deuteranopia":
+		m = 0.494207*l + 1.24827*s
+	case "protanopia":
+		l = 2.02344*m - 2.52581*s
+	}
+
+	toSRGB := func(v float64) int64 {
+		v = math.Max(0, math.Min(1, v))
+		if v <= 0.0031308 {
+			v *= 12.92
+		} else {
+			v = 1.055*math.Pow(v, 1/2.4) - 0.055
+		}
+		return int64(math.Round(v * 255))
+	}
+	return fmt.Sprintf("#%02x%02x%02x",
+		toSRGB(0.080944*l-0.130504*m+0.116721*s),
+		toSRGB(-0.0102485*l+0.0540194*m-0.113615*s),
+		toSRGB(-0.000365294*l-0.00412163*m+0.693513*s))
 }
