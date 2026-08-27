@@ -62,6 +62,20 @@
   font-display: swap;
   src: url('/console/assets/fonts/ibm-plex-sans-600.woff2') format('woff2');
 }
+/* 700 is not decoration. The templates carry 42 <b>/<strong> tags, and the UA
+ * default for both is font-weight: bold — that is, 700. Shipping only 400/500/
+ * 600 meant every one of them was SYNTHESISED: the browser took the 600 face
+ * and smeared it, which is why emphasis read as slightly muddy rather than
+ * heavier. This is the same latin subset at the same weight the Gleipnir
+ * frontend loads (@fontsource/ibm-plex-sans 400/500/600/700), byte-identical,
+ * so the two surfaces render the same word the same way. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-sans-700.woff2') format('woff2');
+}
 @font-face {
   font-family: 'IBM Plex Mono';
   font-style: normal;
@@ -90,7 +104,23 @@
   --border-mid: #4d5e54;
 
   --text-faint: #3a4840;
-  --text-muted: #636e62;
+  /* --text-muted was #636e62: 2.67:1 on --bg-elevated, 3.05:1 on --bg-surface,
+   * 3.46:1 on --bg-canvas — below AA everywhere it was used, and used almost
+   * entirely at --text-xs/--text-2xs, where the size allowance does not apply.
+   * An earlier pass moved `th` off it and left the rest: the as-at staleness
+   * stamp, the facet hints, the scope notes, and both nav labels. Raised to
+   * clear 4.5:1 against every background token it lands on, --bg-subtle at
+   * 4.61 being the tightest pairing.
+   *
+   * Known consequence, stated rather than papered over: --text-muted and
+   * --text-second are now close in luminance (6.00 vs 6.27 on --bg-surface),
+   * so the third tier reads mostly through hue — muted is cool, second is
+   * warm — rather than through brightness. On a dark ground there is little
+   * room between a 4.5:1 floor and --text-primary, and buying a visible third
+   * step by going back under that floor is not a trade worth making. If this
+   * hierarchy needs to be louder it should come from size, weight or spacing.
+   * See TestConsole_TextTokensClearAA. */
+  --text-muted: #97a296;
   --text-second: #a8a090;
   --text-primary: #e4ddd2;
 
@@ -117,7 +147,7 @@
   --font-body: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600;
+  --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
 
   --text-2xs: 10px; --text-xs: 11px; --text-sm: 13px;
   --text-base: 15px; --text-lg: 18px; --text-xl: 24px;
@@ -153,6 +183,62 @@
   --failure-bg: rgba(240, 85, 69, 0.10);
 
   --ok: var(--color-green);
+
+  /* The pixel wall's four buckets, as their OWN tokens.
+   *
+   * They were borrowed: normal from --border-mid and drift from --inert, which
+   * is itself an alias of --text-muted. Two things went wrong with that.
+   *
+   * --border-mid is chosen to be just visible as a 1px hairline. As a 20px
+   * filled cell it measured 2.31:1 against the card in dark and 2.02:1 in
+   * light — the only bucket below the 3:1 non-text floor, and the one that
+   * draws the SHAPE of the fleet. On a healthy fleet, which is nearly every
+   * fleet nearly all of the time, the whole wall was under-visible: the
+   * instrument that exists so an unusual colour in an unusual place catches
+   * the eye had no baseline you could see.
+   *
+   * And aliasing a swatch to a TEXT token means text-legibility work moves it.
+   * Raising --text-muted to clear AA moved the drift cell as a side effect.
+   * A swatch pinned by a rule about reading is a swatch that will drift again,
+   * so these are literals and the wall owns them.
+   *
+   * NORMAL IS GREEN, by owner decision on 2026-08-27, and 00-foundations.md's
+   * colour budget was amended in the same change. It is a departure from that
+   * document's rule 2 ("the human reads only exceptions"), whose argument was
+   * that a 10,000-cell field of saturated green leaves the seven amber cells
+   * competing with it rather than standing out. The counter-argument, which
+   * carried: the fleet row 200px below already shows a GREEN liveness dot for
+   * the same Node, so the page was teaching green-means-reachable and then
+   * contradicting itself in the wall.
+   *
+   * Green forced the other three to move, and that is the real cost of the
+   * decision rather than a detail. Green and amber sat at 1.09:1 in luminance
+   * — they differ only on the red-green axis, which is exactly the axis a
+   * deuteranope or protanope cannot see, so "fine" and "needs attention now"
+   * became one colour for roughly one man in twelve. The four buckets are now
+   * spread across four luminance bands so hue carries the MEANING and
+   * luminance carries the SEPARATION.
+   *
+   * Measured worst pair across normal vision, deuteranopia and protanopia
+   * (Viénot 1999), against the previous palette:
+   *
+   *     dark   1.03:1 -> 1.22:1        light  1.06:1 -> 1.30:1
+   *
+   * so every pair is better separated than before, not merely no worse. The
+   * weakest remaining pair is drift/fenced in dark at 1.22:1 — grey against
+   * indigo, a collision that predates this change and that four recognisable
+   * hues above a 3:1 floor cannot fully resolve on luminance alone. If it
+   * needs to go, it needs a non-colour channel (a border or a distinct cell
+   * shape for fenced), not more searching in this file.
+   *
+   * These are literals rather than aliases of --attention/--security because
+   * the wall needs its own luminance placement: a banner's amber and a 20px
+   * swatch's amber are not the same problem, which the stylesheet already
+   * concedes by separating --attention-text from --attention. */
+  --wall-normal: #1a8e33;
+  --wall-drift: #97a296;
+  --wall-attention: #f0c933;
+  --wall-fenced: #bca7fb;
   --ok-bg: rgba(74, 222, 106, 0.10);
 }
 
@@ -168,7 +254,10 @@
     --border-subtle: #d4cfc4;
     --border-mid: #b8b0a4;
     --text-faint: #d4cfc4;
-    --text-muted: #8a8474;
+    /* Was #8a8474: 2.99:1 on --bg-sidebar, 3.05:1 on --bg-elevated, 3.31:1 on
+     * --bg-canvas. Same correction as the dark theme above, same 4.5:1 floor
+     * against every background token. */
+    --text-muted: #645f54;
     --text-second: #5c5848;
     --text-primary: #2c2a24;
     --color-blue: #b8733e;
@@ -189,6 +278,21 @@
     --security-line: rgba(109, 60, 199, 0.30);
     --failure-bg: rgba(212, 58, 42, 0.08);
     --ok-bg: rgba(26, 150, 64, 0.09);
+    /* Same reasoning as the dark theme above. Normal was 2.02:1 here.
+     *
+     * Attention needs its own light value too, which the dark theme does not.
+     * --color-amber is #a88608 in light and measures 3.26:1 on --bg-surface
+     * but 2.83:1 on --bg-elevated — so the "needs attention now" bucket, the
+     * one cell an operator must never miss, fell under the floor on exactly
+     * the cards the wall is drawn in. Darkened until it clears on both.
+     *
+     * The stylesheet already separates --attention-text from --attention for
+     * the same reason: amber has to work harder on a light ground, and a
+     * banner's amber and a 20px swatch's amber are not the same problem. */
+    --wall-normal: #1a943f;
+    --wall-drift: #534f46;
+    --wall-attention: #7f6506;
+    --wall-fenced: #492787;
   }
 }
 
@@ -213,6 +317,20 @@ a:hover { color: var(--accent-hover); text-decoration: underline; }
 code, pre, .mono { font-family: var(--font-mono); }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-xs); }
+
+/* The skip link: hidden until focused, then the first thing a keyboard user
+ * reaches. Without it, getting to the content on any screen means tabbing past
+ * every navigation item on every page load. It jumps to <main id="content">,
+ * which the layout has always carried. */
+.skiplink {
+  position: absolute; left: var(--space-2); top: var(--space-2);
+  z-index: 10;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated); color: var(--text-primary);
+  border: 1px solid var(--border-mid); border-radius: var(--radius-lg);
+  transform: translateY(-200%);
+}
+.skiplink:focus { transform: none; text-decoration: none; }
 
 /* Visually hidden, still announced. The stylesheet had no such utility, which
  * is a large part of why the tables ended up with unnamed columns and the
@@ -250,7 +368,16 @@ code, pre, .mono { font-family: var(--font-mono); }
   color: var(--color-blue);
   font-weight: var(--weight-medium);
 }
+/* The navigation proper, inside the sidebar but not the whole of it: the
+ * account footer below is not somewhere you navigate to. .nav stays the flex
+ * column so .navfoot's margin-top:auto still pins it to the bottom. */
+.navgroups { display: block; }
+/* An <h2>, so the three groupings reach a screen reader as headings rather
+ * than as styled divs — the grouping is the teaching (nav.go), and it used to
+ * be visible to sighted operators only. The margin reset is the UA default
+ * for a heading; everything else here is unchanged. */
 .navsec {
+  margin: 0;
   padding: var(--space-5) var(--space-4) var(--space-1);
   font-size: var(--text-2xs);
   letter-spacing: 0.12em;
@@ -258,7 +385,13 @@ code, pre, .mono { font-family: var(--font-mono); }
   color: var(--text-muted);
   font-weight: var(--weight-medium);
 }
-.navlist { display: flex; flex-direction: column; gap: 1px; padding: 0 var(--space-2); }
+/* A <ul>, so each group is announced with its length ("list, 4 items") and its
+ * own heading via aria-labelledby. list-style and the UA's padding-inline-start
+ * go; the flex column is exactly as it was. */
+.navlist {
+  display: flex; flex-direction: column; gap: 1px;
+  margin: 0; padding: 0 var(--space-2); list-style: none;
+}
 .navitem {
   display: block;
   padding: var(--space-2) var(--space-3);
@@ -403,14 +536,22 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 .chip.lbl[data-ns="node"] { background: var(--bg-elevated); color: var(--text-second); border-color: var(--border-subtle); }
 .chip.lbl[data-ns="tag"]  { background: transparent; color: var(--text-second); border-color: var(--border-mid); }
 
-/* relay: is FILLED, distinct in hue, and carries a lock. It is the only
- * namespace the security lane may target, and it must be findable at a glance
- * in a wall of quiet chips. */
+/* relay: is FILLED, distinct in hue, and weighted. It is the only namespace the
+ * security lane may target, and it must be findable at a glance in a wall of
+ * quiet chips.
+ *
+ * It also carried a lock emoji (U+1F512) until 2026-08-27. Three reasons it
+ * went: this is an administrative instrument and emoji are not its register;
+ * IBM Plex carries no such glyph, so it fell through to whatever emoji font the
+ * viewer's machine happened to have, and on a bare server or a locked-down
+ * image that is none — the marker distinguishing the security lane rendered as
+ * a replacement box. And it was redundant, because the chip already names its
+ * namespace in mono on a security-hue ground no other namespace uses. Nothing
+ * here depends on an optional font now, so nothing silently degrades. */
 .chip.lbl[data-ns="relay"] {
   background: var(--security-bg); color: var(--security);
   border-color: var(--security-line); font-weight: var(--weight-medium);
 }
-.chip.lbl[data-lane="security"] .ns::before { content: "\01F512\00a0"; font-family: var(--font-body); }
 
 /* state: is derived and set by nobody, so it reads as an observation rather
  * than a declaration — but it still carries the TINT OF ITS SEVERITY, because
@@ -432,12 +573,15 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 /* The fenced chip: a DECLARED act, not a derived observation. It borrows the
  * security lane's hue because that is what it is — the two lower rungs of the
  * incident ladder — and deliberately not the `state:` grammar, because a human
- * did this and the Relay merely recorded it. */
+ * did this and the Relay merely recorded it.
+ *
+ * It carried the same lock emoji and lost it for the same reasons (see the
+ * relay: chip above). It reads "revoked" or "quarantined" in words, which is
+ * the part that was ever doing the work. */
 .chip.fenced {
   background: var(--security-bg); color: var(--security);
   border-color: var(--security-line); font-weight: var(--weight-medium);
 }
-.chip.fenced::before { content: "\01F512\00a0"; font-family: var(--font-body); opacity: 0.8; }
 .statecell { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 
 /* Trust chips: FILL means the Relay authenticated this. DASHED means a caller
@@ -692,10 +836,10 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 /* Normal is a QUIET neutral, not a green. Most Nodes are normal, and a wall of
  * four thousand saturated cells is a wall in which nothing pops — which is the
  * one thing the wall has to do. */
-.cell[data-bucket="normal"]      { background: var(--border-mid); }
-.cell[data-bucket="drift"]       { background: var(--inert); }
-.cell[data-bucket="attention"]   { background: var(--attention); }
-.cell[data-bucket="fenced"]      { background: var(--security); }
+.cell[data-bucket="normal"]      { background: var(--wall-normal); }
+.cell[data-bucket="drift"]       { background: var(--wall-drift); }
+.cell[data-bucket="attention"]   { background: var(--wall-attention); }
+.cell[data-bucket="fenced"]      { background: var(--wall-fenced); }
 
 .gbody { display: flex; align-items: stretch; border-top: 1px solid var(--border-subtle); }
 
@@ -730,6 +874,14 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
   font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-second); margin-bottom: var(--space-2); text-align: left;
 }
+/* Any table that can outgrow its panel scrolls INSIDE that panel rather than
+ * pushing the document sideways. Without this the Recent Tasks table on Node
+ * detail made the whole page scroll horizontally at every viewport, 1600px
+ * included, and clipped the Job column — the one cell that links onward. Same
+ * reasoning as .devtable above: an identifier wrapped across two lines is no
+ * longer a token you can select and compare, so the columns keep their width
+ * and the container moves. */
+.tablescroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
 /* --text-second, not --text-muted. --text-muted is 2.98:1 on the surface in
  * dark and 3.31:1 in light — below AA at these sizes — and it was carrying half
@@ -879,6 +1031,36 @@ dl.kv { grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5); }
 .astats, .asub { grid-column: 2; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .astats b { color: var(--text-primary); }
 .agentfeed { flex: 1; min-width: 0; }
+
+/* Below this width the 252px rail and the feed cannot both hold a 64-character
+ * node id, and the id is the widest unbreakable token on the screen. The rail
+ * goes above the feed rather than beside it, which hands the feed the full
+ * column instead of pushing the document sideways.
+ *
+ * The ids themselves are NOT broken or shortened: comparing identifiers is
+ * most of what this stream is for, and half an id on each of two lines is no
+ * longer a token an operator can select and compare. Same reasoning as
+ * .devtable and .tablescroll — the container moves, the identifier does not. */
+@media (max-width: 1000px) {
+  .agentcols { flex-direction: column; }
+  .agentrail { width: auto; align-self: stretch; }
+}
+
+/* Stacking alone made this WORSE, which is worth recording. In a row-direction
+ * flex container .agentfeed's `min-width: 0` capped it on the MAIN axis, so a
+ * wide row overflowed only its own box. Turning the container to a column
+ * moved the main axis to vertical, min-width stopped constraining anything,
+ * and the feed grew to its widest child — 1224px inside a 900px viewport, a
+ * bigger sideways scroll than before. max-width is what caps a flex item on
+ * the cross axis. */
+.agentfeed { max-width: 100%; }
+.ev, .evbody { min-width: 0; }
+
+/* The backstop, for a viewport narrow enough that even the full column will
+ * not hold a 64-character node id: the row scrolls inside itself rather than
+ * pushing the document. min-width:0 is what lets a flex item shrink below its
+ * content at all — without it overflow-x never engages. */
+.evhead, .evmeta, .denyhead { min-width: 0; overflow-x: auto; }
 .scoped { font-size: var(--text-sm); color: var(--text-second); margin: 0 0 var(--space-3); }
 
 /* --- Read egress ---------------------------------------------------------- */

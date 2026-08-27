@@ -457,6 +457,7 @@ var nodeTmpl = newScreen("node", `
     <section class="panel">
       <h3>Recent Tasks</h3>
       {{if .Tasks}}
+      <div class="tablescroll">
       <table class="rows">
         <thead><tr><th>When</th><th>Operation</th><th>By</th><th>Outcome</th><th>Job</th></tr></thead>
         <tbody>
@@ -474,6 +475,7 @@ var nodeTmpl = newScreen("node", `
         {{end}}
         </tbody>
       </table>
+      </div>
       {{if .TasksElided}}<p class="gap">Older Tasks are not shown — this page renders the most
       recent {{len .Tasks}} and the trail has more. Filtered history is on
       <a href="/console/activity">Activity</a>.</p>{{end}}

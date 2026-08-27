@@ -80,15 +80,18 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
 <link rel="stylesheet" href="/console/assets/console.css">
 </head>
 <body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
+<a class="skiplink" href="#content">Skip to content</a>
 <div class="app">
   <aside class="nav">
     <div class="brand"><b>Relay</b> <span>console</span></div>
+    <nav class="navgroups" aria-label="Console">
     {{range .Nav}}
-    <div class="navsec">{{.Group}}</div>
-    <div class="navlist">
-      {{range .Items}}<a class="navitem{{if .Current}} on{{end}}" href="{{.Path}}">{{.Label}}</a>{{end}}
-    </div>
+    <h2 class="navsec" id="navsec-{{.Slug}}">{{.Group}}</h2>
+    <ul class="navlist" aria-labelledby="navsec-{{.Slug}}">
+      {{range .Items}}<li><a class="navitem{{if .Current}} on{{end}}" href="{{.Path}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a></li>{{end}}
+    </ul>
     {{end}}
+    </nav>
     <div class="navfoot">
       <div>signed in as <b>{{.Account}}</b></div>
       <div>role <b>{{.Role}}</b></div>

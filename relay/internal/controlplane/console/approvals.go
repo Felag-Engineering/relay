@@ -33,7 +33,6 @@ package console
 import (
 	"net/http"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -65,11 +64,21 @@ type approvalRow struct {
 	MatchedRules []string
 	PlanHash     string
 
-	// ShapeKey groups pending approvals that are the same shape. Approving
-	// three identical requests one at a time without noticing they are
-	// identical is precisely the fatigue failure the grouping exists to catch.
-	ShapeKey  string
-	SameShape int
+	// IdenticalKey groups pending approvals that are the SAME PLAN, and
+	// Identical counts how many share it. Approving three identical requests
+	// one at a time without noticing they are identical is precisely the
+	// fatigue failure the grouping exists to catch.
+	//
+	// It is deliberately the plan hash and not the coarser "shape" of #415.
+	// The stored Request carries no Operation, so a shape could only be
+	// approximated from ActionKind and the matched rules — which grouped
+	// service.restart(sshd) with pkg.install(nginx) under one gate rule and
+	// told the approver they were the same. On the one screen whose job is
+	// telling a human what they are about to authorise, a hint that overclaims
+	// is worse than no hint. The plan hash never overclaims: equal hashes are
+	// the same plan, which is also what a decision binds to.
+	IdenticalKey string
+	Identical    int
 }
 
 type approvalsView struct {
@@ -143,14 +152,14 @@ func handleApprovals(d Deps) http.HandlerFunc {
 }
 
 func buildApprovalRows(reqs []approval.Request, now time.Time) []approvalRow {
-	shapes := map[string]int{}
+	identical := map[string]int{}
 	for _, req := range reqs {
-		shapes[shapeKey(req)]++
+		identical[identicalKey(req)]++
 	}
 
 	rows := make([]approvalRow, 0, len(reqs))
 	for _, req := range reqs {
-		key := shapeKey(req)
+		key := identicalKey(req)
 		ttl := req.ExpiresAt.Sub(now)
 		row := approvalRow{
 			ID:           req.ID,
@@ -167,8 +176,8 @@ func buildApprovalRows(reqs []approval.Request, now time.Time) []approvalRow {
 			Lapsed:       ttl <= 0,
 			MatchedRules: req.MatchedRules,
 			PlanHash:     req.PlanHash,
-			ShapeKey:     key,
-			SameShape:    shapes[key],
+			IdenticalKey: key,
+			Identical:    identical[key],
 		}
 		rows = append(rows, row)
 	}
@@ -264,19 +273,18 @@ func approvalOperation(req approval.Request) string {
 	}
 }
 
-// shapeKey groups pending requests that are the same shape.
+// identicalKey groups pending requests that are the same plan.
 //
-// Approximated from the structured fields the Request already carries, because
-// the stored shape key is its own issue (#415). Approximating it here is honest
-// as a GROUPING hint and would be wrong as anything an approval committed to —
-// which is why the plan hash, not this, is what a decision is recorded against.
-func shapeKey(req approval.Request) string {
-	return strings.Join([]string{
-		approvalOperation(req),
-		RiskLabel(req.RiskClass),
-		strings.Join(req.MatchedRules, "+"),
-	}, "|")
-}
+// The plan hash IS the identity of what was parked, and it is what a decision
+// is recorded against, so grouping by it cannot tell an approver two requests
+// are alike when they are not. That is the whole requirement here: a grouping
+// hint on the approval queue either narrows what a human must read or it
+// misleads them, and there is no useful middle.
+//
+// The coarser "same shape" grouping — same Operation and arguments across
+// different Node sets — needs an Operation on the stored Request, which is
+// #415. Until then this deliberately under-groups rather than over-groups.
+func identicalKey(req approval.Request) string { return req.PlanHash }
 
 func countApprovals(req approval.Request) int {
 	n := 0
@@ -330,7 +338,7 @@ below the fold is a failure of this screen.</p>
     <div class="qside">
       <div class="quorum"><b>{{.Signed}}</b> of {{.Required}} signed</div>
       <div class="qttl">{{.TTL}}</div>
-      {{if gt .SameShape 1}}<div class="qshape">{{.SameShape}} pending with the same shape</div>{{end}}
+      {{if gt .Identical 1}}<div class="qshape">{{.Identical}} pending with the same Plan</div>{{end}}
     </div>
   </a>
 {{end}}

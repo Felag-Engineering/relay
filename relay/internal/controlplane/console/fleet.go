@@ -264,11 +264,20 @@ type fleetView struct {
 	// has no Nodes in it.
 	GroupsElided int
 
-	// CertExpiryKnown is false until the registry records certificate validity
-	// (#440). The screen SAYS so rather than rendering a clean State column,
-	// which reads as "no Node is near losing its identity" when the truth is
-	// "the Relay cannot tell".
-	CertExpiryKnown bool
+	// CertExpiryKnown reports whether the registry holds certificate validity
+	// for EVERY matched Node (#440), and CertExpiryUnknown counts the ones it
+	// does not — Nodes that enrolled before the Relay began recording validity
+	// and have not renewed since.
+	//
+	// Neither gates whether the screen talks about expiry, because a clear
+	// State column has two causes and only one of them is missing data: the
+	// threshold that decides "expiring" is #414's to set (see
+	// nodestate.MarkerCertExpiring), so no Node can carry the marker yet even
+	// where the validity is known. The banner therefore always states that,
+	// and names the data gap only where one exists. Reading a clean column as
+	// "no Node is near losing its identity" is the mistake being prevented.
+	CertExpiryKnown   bool
+	CertExpiryUnknown int
 }
 
 // groupCards bounds how many rollup cards the page draws. Forty is well past
@@ -414,6 +423,16 @@ func buildFleetView(d Deps, nodes []registry.Node, filter, groupBy string) fleet
 		v.Groups = append(v.Groups, buildGroup(g.key, g.nodes, listWhole, link))
 	}
 	buildWall(&v, groups)
+
+	// Counted over the MATCHED set, not the whole fleet: the sentence the
+	// banner renders is about the Nodes on this page.
+	for _, n := range matched {
+		if !nodestate.CertExpiryKnown(n) {
+			v.CertExpiryUnknown++
+		}
+	}
+	v.CertExpiryKnown = v.CertExpiryUnknown == 0
+
 	return v
 }
 
@@ -1167,13 +1186,16 @@ var fleetTmpl = newScreen("fleet", `
 This page draws the {{len .Groups}} largest. Narrow the filter, or group by a coarser label key —
 a grouping with hundreds of values is a list of Nodes wearing a different hat.</p>{{end}}
 
-{{if not .CertExpiryKnown}}
-<p class="gap"><b>Certificate expiry is not recorded yet.</b> No Node here can show
-<code>state:cert-expiring</code> — including one whose identity certificate lapses tomorrow. A
-clear State column means the Relay has nothing to report, not that nothing is wrong: the registry
-stores each Node&#39;s certificate fingerprint and nothing else, so there is no expiry to compare a
-clock against. A Node that quietly stops renewing drops off the fleet with no warning here.</p>
-{{end}}
+<p class="gap"><b>Certificate expiry is recorded, but not yet judged.</b> No Node here can show
+<code>state:cert-expiring</code> — including one whose identity certificate lapses tomorrow. The
+registry does carry each Node&#39;s certificate validity, and Node detail renders it; what is missing
+is the threshold that decides &#34;expiring&#34;, which is file-only configuration arriving with
+<code>state:</code> evaluation (#414). A clear State column means the Relay is not judging expiry
+yet, not that no Node is close to lapsing.
+{{if not .CertExpiryKnown}} {{.CertExpiryUnknown}} {{plural .CertExpiryUnknown "Node" "Nodes"}} here
+{{plural .CertExpiryUnknown "has" "have"}} no recorded validity at all, having enrolled before the
+Relay began storing it; that fills in at the next renewal, which is at most one leaf lifetime
+away.{{end}}</p>
 
 <p class="scopenote">This screen answers only what Relay can honestly answer about a Node: whether
 it is reachable, whether it will take work, what it will permit, and who vouched for it. There are

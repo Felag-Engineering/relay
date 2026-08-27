@@ -10,8 +10,12 @@ package console
 // a helpful change six months from now.
 
 import (
+	"fmt"
+	"math"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -399,14 +403,25 @@ func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
 		{Kind: audit.KindDispatch, OperationName: "service.restart", NodeID: "n1", Timestamp: testNow},
 	})
 
-	if v.Calls != 4 {
-		t.Errorf("read calls = %d, want 4 — service.restart must not count as a read", v.Calls)
+	// Node reads and control-plane enumerations are counted apart. list_nodes
+	// touches no Node and can carry no Policy verdict, so folding it into these
+	// figures only ever moved the denominators — and it sat in the by-target
+	// table reporting "0 Nodes" beside rows with a real reach.
+	if v.Calls != 3 {
+		t.Errorf("reads from Nodes = %d, want 3 — service.restart is a mutate and "+
+			"list_nodes is an enumeration; neither is a read from a Node", v.Calls)
+	}
+	if v.Enumerations != 1 {
+		t.Errorf("control-plane enumerations = %d, want 1 (list_nodes)", v.Enumerations)
 	}
 	if v.Nodes != 2 {
 		t.Errorf("Nodes touched = %d, want 2", v.Nodes)
 	}
-	if v.Targets != 3 {
-		t.Errorf("distinct targets = %d, want 3 (two paths plus the registry read)", v.Targets)
+	if v.Targets != 2 {
+		t.Errorf("distinct targets = %d, want 2 (the two paths read off a Node)", v.Targets)
+	}
+	if len(v.EnumTargets) != 1 || v.EnumTargets[0].Target != "list_nodes" {
+		t.Errorf("enumeration targets = %+v, want one list_nodes row", v.EnumTargets)
 	}
 	if v.Refused != 1 {
 		t.Errorf("refused reads = %d, want 1", v.Refused)
@@ -420,7 +435,12 @@ func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
 	// Per-target Node counts are DISTINCT Nodes. Counting records instead makes
 	// a repeated read report more Nodes than the fleet contains, on the one
 	// screen whose job is to say how far an agent reached.
+	// And no enumeration leaks into the by-target table, where every row is
+	// supposed to have reached a machine.
 	for _, tg := range v.Targets2 {
+		if tg.Nodes == 0 {
+			t.Errorf("%s is in the Node-read table with no Node — it is an enumeration", tg.Target)
+		}
 		if tg.Target == "file.read /etc/hosts" && tg.Nodes != 2 {
 			t.Errorf("%s reports %d Nodes, want 2 distinct", tg.Target, tg.Nodes)
 		}
@@ -1167,18 +1187,62 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 	}
 }
 
-// TestFleet_SaysItCannotSeeCertificateExpiry.
+// TestFleet_SaysItIsNotJudgingCertificateExpiry.
 //
 // A clear State column across 10,000 Nodes reads "no Node is near losing its
-// identity". The truth is "the Relay cannot tell" — and foundations calls that
-// silence the worst of the three possible answers.
-func TestFleet_SaysItCannotSeeCertificateExpiry(t *testing.T) {
+// identity". The truth is "the Relay is not judging that yet" — and foundations
+// calls that silence the worst of the three possible answers.
+//
+// The banner used to give a DIFFERENT reason: that the registry held only a
+// fingerprint and no validity at all. #440 made that false — registry.Node
+// carries CertNotAfter, and Node detail renders the expiry and the renewal
+// count one click away — while this screen went on asserting the Relay was
+// blind to something it was displaying next door. The gap is real and the note
+// stays; what it says about the cause had to stop being wrong.
+func TestFleet_SaysItIsNotJudgingCertificateExpiry(t *testing.T) {
 	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
-	if !strings.Contains(body, "Certificate expiry is not recorded yet") {
-		t.Error("the fleet view does not admit it cannot see certificate expiry")
+	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
+		t.Error("the fleet view does not say it is not judging certificate expiry")
 	}
 	if !strings.Contains(body, "state:cert-expiring") {
 		t.Error("the gap note does not name the marker that cannot appear")
+	}
+	if strings.Contains(body, "certificate fingerprint and nothing else") {
+		t.Error("the retired claim that the registry stores no certificate validity is back — #440 made it false")
+	}
+}
+
+// TestFleet_NamesTheNodesWithNoRecordedValidity covers the second, conditional
+// half of the same note: Nodes that enrolled before #440 and have not renewed
+// have no CertNotAfter at all, and the screen counts them rather than implying
+// the gap is fleet-wide. The fixture sets validity on none of its four.
+func TestFleet_NamesTheNodesWithNoRecordedValidity(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	if !strings.Contains(body, "4 Nodes here") || !strings.Contains(body, "no recorded validity at all") {
+		t.Error("the note does not count the Nodes whose certificate validity is unrecorded")
+	}
+}
+
+// TestFleet_SilentAboutValidityWhenEveryNodeHasIt is the other side: with
+// CertNotAfter on every matched Node there is no data gap to report, so the
+// conditional sentence must disappear. The #414 headline stays, because the
+// missing threshold is not a data problem and does not go away with the data.
+func TestFleet_SilentAboutValidityWhenEveryNodeHasIt(t *testing.T) {
+	d := fleetFixture()
+	f := d.Fleet.(fakeFleet)
+	nodes := make([]registry.Node, len(f.nodes))
+	copy(nodes, f.nodes)
+	for i := range nodes {
+		nodes[i].CertNotAfter = testNow.Add(30 * 24 * time.Hour)
+	}
+	d.Fleet = fakeFleet{nodes: nodes}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+	if strings.Contains(body, "no recorded validity at all") {
+		t.Error("the fleet view reports a validity gap when every Node has recorded validity")
+	}
+	if !strings.Contains(body, "Certificate expiry is recorded, but not yet judged") {
+		t.Error("the #414 note vanished with the data gap — the missing threshold is a separate cause")
 	}
 }
 
@@ -1631,4 +1695,742 @@ func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 	if !strings.Contains(body, "expired 2d ago") {
 		t.Error("a lapsed certificate does not read as expired")
 	}
+}
+
+// TestApprovals_DifferentPlansAreNeverCalledIdentical.
+//
+// The queue's grouping hint claimed two parked dispatches were "the same shape"
+// whenever they shared an ActionKind, a risk class and a gate rule — which one
+// fixture gate rule makes true of nearly everything it parks. A dev fleet
+// parked service.restart(unit="sshd") and pkg.install(name="nginx") and the
+// screen told the approver they were alike.
+//
+// On the one surface whose job is telling a human what they are about to
+// authorise, a hint that overclaims is worse than no hint. The key is now the
+// plan hash — the same thing a decision binds to — so equal means identical.
+func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{
+			ID: "restart-sshd", PlanHash: "hash-restart-sshd",
+			Summary:      `service.restart(unit="sshd") [mutate] on 3 node(s)`,
+			ActionKind:   jobs.ActionOperation,
+			RiskClass:    jobs.RiskClassMutate,
+			MatchedRules: []string{"dev-fleet-wide-mutates-need-a-human"},
+			CreatedAt:    testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "install-nginx", PlanHash: "hash-install-nginx",
+			Summary:      `pkg.install(name="nginx") [mutate] on 3 node(s)`,
+			ActionKind:   jobs.ActionOperation,
+			RiskClass:    jobs.RiskClassMutate,
+			MatchedRules: []string{"dev-fleet-wide-mutates-need-a-human"},
+			CreatedAt:    testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+	}, testNow)
+
+	for _, r := range rows {
+		if r.Identical != 1 {
+			t.Errorf("%s is grouped with %d others — two different plans are not identical",
+				r.ID, r.Identical-1)
+		}
+	}
+	if rows[0].IdenticalKey == rows[1].IdenticalKey {
+		t.Error("two different plans share a grouping key")
+	}
+}
+
+// TestApprovals_SamePlanTwiceIsGrouped is the case the hint exists for:
+// re-issuing a gated call parks it again, and approving the same plan three
+// times without noticing is the fatigue failure being caught.
+func TestApprovals_SamePlanTwiceIsGrouped(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{
+			ID: "first", PlanHash: "same-hash",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "second", PlanHash: "same-hash",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+	}, testNow)
+
+	for _, r := range rows {
+		if r.Identical != 2 {
+			t.Errorf("%s reports %d with the same Plan, want 2", r.ID, r.Identical)
+		}
+	}
+}
+
+// TestConsole_ShipsNoEmoji is a house rule with a structural guard.
+//
+// Relay is an administrative instrument for a fleet-execution surface, and
+// emoji are not its register. The rule also has a mechanical edge: the
+// stylesheet marked the `relay:` security lane with a lock (U+1F512) that IBM
+// Plex does not carry, so it fell through to whatever emoji font the viewer had
+// — and on a bare server or a locked-down corporate image, that is none. The
+// glyph distinguishing the one namespace the security lane may target rendered
+// as a replacement box, silently, on exactly the machines least likely to have
+// fonts installed.
+//
+// Both the taste and the failure mode point the same way, so this asserts the
+// absence rather than trusting review to catch the next one. It checks the CSS
+// escape forms too: `content: "\01F512"` carries no literal emoji byte and
+// would pass a naive scan of the source.
+func TestConsole_ShipsNoEmoji(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+
+	emojiRange := func(r rune) bool {
+		switch {
+		case r >= 0x1F300 && r <= 0x1FAFF: // pictographs, symbols, supplements
+			return true
+		case r >= 0x2600 && r <= 0x27BF: // misc symbols, dingbats
+			return true
+		case r == 0xFE0F || r == 0x200D: // variation selector, ZWJ
+			return true
+		}
+		return false
+	}
+
+	for _, path := range []string{
+		"/console/assets/console.css",
+		"/console/", "/console/agents", "/console/activity",
+		"/console/reads", "/console/approvals", "/console/login",
+	} {
+		body := get(t, h, path).Body.String()
+
+		for _, r := range body {
+			if emojiRange(r) {
+				t.Errorf("%s renders emoji %q (U+%04X) — Relay is an administrative "+
+					"instrument, and a glyph IBM Plex lacks degrades to a replacement box", path, r, r)
+				break
+			}
+		}
+
+		// The CSS escape form, which carries no emoji byte in the source.
+		for _, esc := range []string{`\01F5`, `\1F5`, `\01F6`, `\1F6`, `\26`, `\27`} {
+			if strings.Contains(body, `content: "`+esc) {
+				t.Errorf("%s injects an emoji through a CSS escape (%s…)", path, esc)
+			}
+		}
+	}
+}
+
+// TestConsole_EveryRenderedWeightHasAFace.
+//
+// The templates carry dozens of <b> and <strong> tags, and the UA default for
+// both is font-weight: bold — 700. The stylesheet shipped 400/500/600 only, so
+// every one of them was SYNTHESISED off the 600 face rather than drawn, which
+// is why emphasis read as smeared instead of heavier. Nothing in Go could see
+// it: the markup was correct, the font loaded, and the browser quietly faked
+// the weight.
+//
+// 700 is the same latin subset the Gleipnir frontend loads
+// (@fontsource/ibm-plex-sans 400/500/600/700), so the two surfaces render the
+// same word the same way.
+func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
+	h := newTestHandler(fleetFixture(), accounts.RoleAdmin)
+	css := get(t, h, "/console/assets/console.css").Body.String()
+
+	for _, weight := range []string{"400", "500", "600", "700"} {
+		if !strings.Contains(css, "font-weight: "+weight+";\n  font-display") {
+			t.Errorf("no @font-face at weight %s — the browser synthesises it", weight)
+		}
+		if got := get(t, h, "/console/assets/fonts/ibm-plex-sans-"+weight+".woff2"); got.Code != 200 {
+			t.Errorf("ibm-plex-sans-%s.woff2 is declared but not served (%d)", weight, got.Code)
+		}
+	}
+
+	// The markup that needs 700. If this ever stops being true the face above
+	// becomes dead weight rather than a fix.
+	body := get(t, h, "/console/").Body.String()
+	if !strings.Contains(body, "<b>") && !strings.Contains(body, "<strong>") {
+		t.Skip("no bold markup on the fleet view any more")
+	}
+}
+
+// TestAgents_RepeatedDenyProseIsCollapsed.
+//
+// One fleet-wide dispatch produces one deny per Node, every one carrying the
+// same explanation. The agent stream rendered the full block for each: a
+// three-Node refusal ran three screens, and a thousand-Node refusal would bury
+// every call after it. The stream then hides the next call rather than showing
+// this one.
+//
+// The first keeps the prose; the rest keep their outcome chip, their Node and a
+// one-line marker. Node detail has collapsed these the same way all along.
+func TestAgents_RepeatedDenyProseIsCollapsed(t *testing.T) {
+	var recs []audit.Record
+	for _, n := range []string{"n1", "n2", "n3"} {
+		recs = append(recs, audit.Record{
+			Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: n,
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		})
+	}
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != 3 {
+		t.Fatalf("got %d calls, want 3 — collapsing prose must never drop a row", len(calls))
+	}
+
+	explained := 0
+	for _, c := range calls {
+		if c.Deny != nil {
+			explained++
+		}
+		if c.Deny == nil && !c.RepeatDeny {
+			t.Error("a denied call carries neither an explanation nor the repeat marker")
+		}
+		if c.Outcome == "" || c.NodeID == "" {
+			t.Error("collapsing the prose also dropped the outcome or the Node")
+		}
+	}
+	if explained != 1 {
+		t.Errorf("%d rows carry the full deny block, want exactly 1", explained)
+	}
+}
+
+// TestAgents_DifferentOperationsKeepTheirOwnDenyProse.
+//
+// The collapse is keyed on Operation AND rule, not the rule alone. Read-class
+// denies share one generic explanation ("the deciding rule is not recorded for
+// a read-class Task"), so keying on the text would silently collapse refusals
+// of DIFFERENT Operations into one — hiding the second refusal entirely.
+func TestAgents_DifferentOperationsKeepTheirOwnDenyProse(t *testing.T) {
+	recs := []audit.Record{
+		{
+			Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		},
+		{
+			Kind: audit.KindDispatch, OperationName: "service.restart",
+			Args: map[string]string{"unit": "sshd"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
+		},
+	}
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	for _, c := range calls {
+		if c.Deny == nil {
+			t.Errorf("the refusal of %s was collapsed into another Operation's explanation", c.Args)
+		}
+	}
+}
+
+// TestNode_RecentTasksScrollsInsideItsPanel.
+//
+// The Recent Tasks table has five columns, two of them full identifiers, and it
+// carried no scroll container. The whole DOCUMENT scrolled sideways instead —
+// at every viewport including 1600px — and the Job column, the one cell that
+// links onward, was clipped off the right edge.
+//
+// The fleet view's .devtable already did this correctly; node detail simply
+// missed the wrapper.
+func TestNode_RecentTasksScrollsInsideItsPanel(t *testing.T) {
+	d := fleetFixture()
+	d.Audit = fakeAudit{records: []audit.Record{{
+		Kind: audit.KindDispatch, OperationName: "file.read",
+		Args: map[string]string{"path": "/etc/os-release"}, NodeID: "node-web-1",
+		JobID: "job-1", Outcome: jobs.OutcomeSuccess, Timestamp: testNow,
+	}}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+	css := get(t, h, "/console/assets/console.css").Body.String()
+
+	if !strings.Contains(css, ".tablescroll { overflow-x: auto; }") {
+		t.Error("no .tablescroll rule — the wrapper exists in markup but does nothing")
+	}
+
+	body := get(t, h, "/console/nodes/node-web-1").Body.String()
+	i := strings.Index(body, `<table class="rows">`)
+	if i < 0 {
+		t.Skip("the Recent Tasks table did not render for this fixture")
+	}
+	if before := body[:i]; !strings.Contains(before[max0(len(before)-120):], `<div class="tablescroll">`) {
+		t.Error("the Recent Tasks table is not wrapped in a scroll container — " +
+			"it pushes the whole page sideways and clips the Job column")
+	}
+}
+
+func max0(n int) int {
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// TestConsole_TextTokensClearAA computes the actual contrast ratio of every
+// text token against every background token, in both themes.
+//
+// This has already regressed once. A previous pass found --text-muted at
+// 2.98:1, moved `th` off it, wrote the measurement into a comment — and left
+// the token itself alone, so everything else still on it stayed below AA: the
+// as-at staleness stamp, the facet hints, the scope notes and both nav labels.
+// Nearly all of it renders at --text-xs or --text-2xs, where WCAG's large-text
+// allowance does not apply, so 4.5:1 is the floor and not 3:1.
+//
+// A comment recording a measurement is not a guard. This is.
+func TestConsole_TextTokensClearAA(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	dark, light := splitThemes(t, css)
+
+	// --text-faint is #3a4840 == --border-subtle: it draws rules, never text.
+	texts := []string{"--text-primary", "--text-second", "--text-muted"}
+	bgs := []string{"--bg-canvas", "--bg-surface", "--bg-elevated", "--bg-sidebar", "--bg-code", "--bg-subtle"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for _, tk := range texts {
+			fg, ok := theme.tokens[tk]
+			if !ok {
+				t.Fatalf("%s theme declares no %s", theme.name, tk)
+			}
+			for _, bk := range bgs {
+				bg, ok := theme.tokens[bk]
+				if !ok {
+					t.Fatalf("%s theme declares no %s", theme.name, bk)
+				}
+				if r := contrastRatio(fg, bg); r < 4.5 {
+					t.Errorf("%s: %s on %s is %.2f:1, below the 4.5:1 floor "+
+						"(these tokens carry --text-xs and --text-2xs body copy)",
+						theme.name, tk, bk, r)
+				}
+			}
+		}
+	}
+}
+
+// splitThemes pulls the custom-property declarations out of the dark :root
+// block and the light prefers-color-scheme block.
+func splitThemes(t *testing.T, css string) (dark, light map[string]string) {
+	t.Helper()
+	i := strings.Index(css, "@media (prefers-color-scheme: light)")
+	if i < 0 {
+		t.Fatal("no light-theme block in the stylesheet")
+	}
+	dark = tokensIn(css[:i])
+
+	// The light block redeclares only what differs; everything else cascades
+	// from :root. A map holding only the overrides would report inherited
+	// tokens as undeclared and quietly skip half the assertions.
+	light = map[string]string{}
+	for k, v := range dark {
+		light[k] = v
+	}
+	for k, v := range tokensIn(css[i:]) {
+		light[k] = v
+	}
+	return dark, light
+}
+
+// Literal colours and one-level var() aliases both count: the palette declares
+// --attention as var(--color-amber), and a test that only saw hex would report
+// half the tokens as undeclared.
+var tokenDecl = regexp.MustCompile(`(--[a-z-]+):\s*(#[0-9a-fA-F]{6}|var\(--[a-z-]+\))\s*;`)
+
+func tokensIn(s string) map[string]string {
+	out := map[string]string{}
+	for _, m := range tokenDecl.FindAllStringSubmatch(s, -1) {
+		// First declaration wins: a later override inside a narrower rule is
+		// not the theme's value.
+		if _, seen := out[m[1]]; !seen {
+			out[m[1]] = m[2]
+		}
+	}
+	return out
+}
+
+func contrastRatio(a, b string) float64 {
+	l1, l2 := relLuminance(a), relLuminance(b)
+	if l1 < l2 {
+		l1, l2 = l2, l1
+	}
+	return (l1 + 0.05) / (l2 + 0.05)
+}
+
+func relLuminance(hex string) float64 {
+	c := func(i int) float64 {
+		v, err := strconv.ParseInt(hex[i:i+2], 16, 0)
+		if err != nil {
+			return 0
+		}
+		f := float64(v) / 255
+		if f <= 0.03928 {
+			return f / 12.92
+		}
+		return math.Pow((f+0.055)/1.055, 2.4)
+	}
+	return 0.2126*c(1) + 0.7152*c(3) + 0.0722*c(5)
+}
+
+// TestLayout_NavigationIsALandmark.
+//
+// The sidebar was an <aside class="nav">, so assistive technology was told the
+// primary navigation was "complementary" content and the jump-to-navigation
+// gesture found nothing. The three groupings — observe, then act, then
+// administer — are what nav.go calls the teaching, and they reached sighted
+// operators only: styled divs carry no heading semantics and a bare run of
+// anchors is not announced as a list with a length.
+func TestLayout_NavigationIsALandmark(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, `<nav class="navgroups" aria-label="Console">`) {
+		t.Error("the navigation is not inside a <nav> landmark")
+	}
+	for _, group := range []NavGroup{NavObserve, NavAct, NavAdminister} {
+		slug := strings.ToLower(string(group))
+		if !strings.Contains(body, `<h2 class="navsec" id="navsec-`+slug+`">`) {
+			t.Errorf("the %s group is not a heading", group)
+		}
+		if !strings.Contains(body, `<ul class="navlist" aria-labelledby="navsec-`+slug+`">`) {
+			t.Errorf("the %s group is not a list labelled by its own heading", group)
+		}
+	}
+	// The current destination is marked in the accessibility tree, not only by
+	// a CSS class that a screen reader cannot see.
+	if !strings.Contains(body, `aria-current="page"`) {
+		t.Error("the current navigation item is not marked aria-current")
+	}
+	// And a keyboard user can get past the whole sidebar in one stroke.
+	if !strings.Contains(body, `<a class="skiplink" href="#content">`) {
+		t.Error("no skip link — reaching the content means tabbing the whole nav on every page")
+	}
+}
+
+// TestLayout_AccountFooterIsNotNavigation keeps the landmark honest. Signing
+// out and the identity chip are not destinations, and a <nav> that swallows
+// them makes the landmark less useful, not more.
+func TestLayout_AccountFooterIsNotNavigation(t *testing.T) {
+	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+
+	nav := body[strings.Index(body, `<nav class="navgroups"`):]
+	nav = nav[:strings.Index(nav, "</nav>")]
+	if strings.Contains(nav, "navfoot") || strings.Contains(nav, "Sign out") {
+		t.Error("the account footer is inside the navigation landmark")
+	}
+}
+
+// TestActivity_ControlPlaneReadsSayWhatWasRead.
+//
+// A read that reaches a Node arrives as a read-class dispatch and is rolled up
+// by Job. The other family — the non-dispatching tools — fell through to the
+// default branch of summarize and rendered as the bare word "read": no target,
+// no Node, no outcome, on the surface billed as the audit trail. The same
+// records were meanwhile driving the Read-egress screen's enumeration panel,
+// so the trail had the fact and this screen declined to say it.
+func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
+	// Both shapes the trail actually produces. The real records carry the tool
+	// in OperationName; ActionKind is the older shape and is empty on them.
+	// The first fix here read ActionKind only, so Activity said "the registry"
+	// while Read egress said "list_nodes" about the same row — which is why
+	// both screens now go through readTargetOf.
+	recs := []audit.Record{
+		{Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, OperationName: "list_operations", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "describe_node", Timestamp: testNow},
+	}
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=read").Body.String()
+	for _, want := range []string{"enumerated list_nodes", "enumerated list_operations", "enumerated describe_node"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the activity trail does not say %q — the row renders as the bare word \"read\"", want)
+		}
+	}
+	if strings.Contains(body, "enumerated registry read") {
+		t.Error("a read fell back to the generic name although the record names its tool")
+	}
+
+	// The two screens must name the same record the same way. They read the
+	// same trail, and an operator who sees "the registry" on one and
+	// "list_nodes" on the other stops trusting both.
+	for _, tg := range buildReads(recs).EnumTargets {
+		if !strings.Contains(body, "enumerated "+tg.Target) {
+			t.Errorf("Read egress calls it %q and Activity does not", tg.Target)
+		}
+	}
+}
+
+// TestReads_EnumerationsAreCountedApartFromNodeReads.
+//
+// list_nodes and list_operations touch no Node and can carry no Policy verdict
+// — Policy is a Node's, and there is no Node. They sat inside the headline
+// "read calls" and "distinct targets" beside file.read /etc/shadow, and in the
+// by-target table reporting "0 Nodes" next to rows with a real reach. Both are
+// exposure and both are still counted; blending them made each number mean
+// less, on the screen whose whole argument is that reading is exfiltration.
+func TestReads_EnumerationsAreCountedApartFromNodeReads(t *testing.T) {
+	v := buildReads([]audit.Record{
+		{Kind: audit.KindDispatch, OperationName: "file.read",
+			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "list_operations", Timestamp: testNow},
+	})
+
+	if v.Calls != 1 {
+		t.Errorf("reads from Nodes = %d, want 1", v.Calls)
+	}
+	if v.Enumerations != 3 {
+		t.Errorf("enumerations = %d, want 3", v.Enumerations)
+	}
+	if len(v.Targets2) != 1 {
+		t.Errorf("by-target has %d rows, want 1 — enumerations belong in their own panel", len(v.Targets2))
+	}
+	if len(v.EnumTargets) != 2 {
+		t.Fatalf("enumeration targets = %d, want 2 distinct tools", len(v.EnumTargets))
+	}
+	// Busiest tool first.
+	if v.EnumTargets[0].Target != "list_nodes" || v.EnumTargets[0].Calls != 2 {
+		t.Errorf("enumeration targets are %+v, want list_nodes with 2 calls first", v.EnumTargets)
+	}
+
+	// Per-principal, the two families stay in their own columns.
+	if len(v.Principals) != 1 {
+		t.Fatalf("principals = %d, want 1", len(v.Principals))
+	}
+	if p := v.Principals[0]; p.Calls != 1 || p.Enum != 3 {
+		t.Errorf("principal reports %d Node reads and %d enumerations, want 1 and 3", p.Calls, p.Enum)
+	}
+}
+
+// TestAgents_NarrowViewportsStackRatherThanOverflow.
+//
+// A 64-character node id is the widest unbreakable token the Console renders,
+// and at 900px the 252px account rail plus the feed could not hold one — so
+// the document scrolled sideways. The rail stacks above the feed instead.
+//
+// The ids are deliberately neither broken nor shortened: comparing identifiers
+// is most of what this stream is for. The container moves, the identifier does
+// not — the same choice .devtable and .tablescroll make.
+func TestAgents_NarrowViewportsStackRatherThanOverflow(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	if !strings.Contains(css, "@media (max-width: 1000px)") {
+		t.Error("no narrow-viewport rule for the agent stream")
+	}
+	if !strings.Contains(css, ".evmeta, .denyhead { min-width: 0; overflow-x: auto; }") {
+		t.Error("no overflow backstop on the rows that carry full node ids")
+	}
+	// The backstop is worthless without min-width:0 — a flex item will not
+	// shrink below its content, so overflow-x never engages.
+	i := strings.Index(css, ".evmeta, .denyhead {")
+	if rule := css[i : i+80]; !strings.Contains(rule, "min-width: 0") {
+		t.Error("the overflow backstop has no min-width:0 and will never engage")
+	}
+}
+
+// TestFleet_EveryWallBucketIsVisible.
+//
+// TestFleet_EveryWallBucketHasAColour proves each bucket has a RULE. It cannot
+// prove the colour can be seen, and one could not: `normal` borrowed
+// --border-mid, a token chosen to be just visible as a 1px hairline, and used
+// it as a 20px filled cell. It measured 2.31:1 against the card in dark and
+// 2.02:1 in light, against the 3:1 floor for non-text — the only bucket under
+// it, and the one that draws the shape of the fleet.
+//
+// That is the wall's whole purpose. It preserves the fleet's structure so that
+// a colour appearing in an unusual place is itself information, and a baseline
+// nobody can see gives the unusual colour nothing to appear against. On a
+// healthy fleet — nearly every fleet, nearly always — the entire instrument
+// read as faint grey smudges.
+//
+// The 3:1 floor is WCAG 1.4.11 for non-text content, which is what a 20px
+// swatch carrying meaning is.
+func TestFleet_EveryWallBucketIsVisible(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	dark, light := splitThemes(t, css)
+
+	// The wall sits in a card, which sits on the canvas.
+	cards := []string{"--bg-surface", "--bg-elevated"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for _, bucket := range []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced"} {
+			fg, ok := resolveToken(theme.tokens, bucket)
+			if !ok {
+				t.Errorf("%s theme does not resolve %s to a colour", theme.name, bucket)
+				continue
+			}
+			for _, bk := range cards {
+				if r := contrastRatio(fg, theme.tokens[bk]); r < 3 {
+					t.Errorf("%s: %s on %s is %.2f:1, below the 3:1 floor for a swatch that carries meaning",
+						theme.name, bucket, bk, r)
+				}
+			}
+		}
+	}
+}
+
+// TestFleet_WallBucketsDoNotBorrowTextOrBorderTokens.
+//
+// The wall borrowed --border-mid for normal and --inert (an alias of
+// --text-muted) for drift, which coupled two unrelated things: raising
+// --text-muted to clear AA for body copy silently moved a cell colour on the
+// fleet view. A swatch governed by a rule about READING will move again the
+// next time that rule is applied.
+//
+// Attention and fenced deliberately DO alias the semantic tokens — an amber
+// cell and the amber Freeze banner mean the same thing, and the colour budget
+// spends one hue on each meaning.
+func TestFleet_WallBucketsDoNotBorrowTextOrBorderTokens(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	for _, borrowed := range []string{
+		"--wall-normal: var(--border-mid)",
+		"--wall-drift: var(--inert)",
+		"--wall-drift: var(--text-muted)",
+		"--wall-normal: var(--text-muted)",
+	} {
+		if strings.Contains(css, borrowed) {
+			t.Errorf("the wall borrows a text or border token (%s) — legibility work on text will move a cell colour", borrowed)
+		}
+	}
+	// And the rules must read from the wall's own tokens, not the old ones.
+	for _, stale := range []string{
+		`.cell[data-bucket="normal"]      { background: var(--border-mid); }`,
+		`.cell[data-bucket="drift"]       { background: var(--inert); }`,
+	} {
+		if strings.Contains(css, stale) {
+			t.Errorf("a cell rule still points at a borrowed token: %s", stale)
+		}
+	}
+}
+
+// resolveToken follows a var() chain to the literal colour at its end.
+//
+// The palette aliases deliberately — --wall-attention is var(--attention) is
+// var(--color-amber) — so a token's value is only meaningful once the chain is
+// walked. The bound stops a cycle from hanging the suite.
+func resolveToken(tokens map[string]string, name string) (string, bool) {
+	for range 8 {
+		v, ok := tokens[name]
+		if !ok {
+			return "", false
+		}
+		if strings.HasPrefix(v, "var(") {
+			name = strings.TrimSuffix(strings.TrimPrefix(v, "var("), ")")
+			continue
+		}
+		return v, true
+	}
+	return "", false
+}
+
+// TestFleet_WallBucketsSurviveColourBlindness.
+//
+// The wall codes meaning in hue across four buckets, and hue is the one
+// channel a dichromat does not fully have. When `normal` became green (owner
+// decision, 2026-08-27) it landed at 1.09:1 in luminance against the amber of
+// `attention` — the two differing almost purely on the red-green axis, which
+// is exactly the axis deuteranopes and protanopes cannot see. "Everything is
+// fine" and "needs attention now" would have been one colour for roughly one
+// man in twelve, on a fleet-execution surface.
+//
+// The fix is not more hue, it is luminance: hue carries the meaning, luminance
+// carries the separation. This asserts every pair stays apart under normal
+// vision AND under simulated deuteranopia and protanopia (Viénot 1999).
+//
+// The floor is 1.2:1, which is where two 20px swatches stop being reliably
+// tellable apart. The weakest pair today is drift/fenced in dark at 1.22 —
+// grey against indigo, a collision that predates the green decision. Four
+// recognisable hues above a 3:1 visibility floor cannot all be separated on
+// luminance; closing that last one needs a non-colour channel, not a different
+// hex value.
+func TestFleet_WallBucketsSurviveColourBlindness(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+	dark, light := splitThemes(t, css)
+
+	buckets := []string{"--wall-normal", "--wall-drift", "--wall-attention", "--wall-fenced"}
+
+	for _, theme := range []struct {
+		name   string
+		tokens map[string]string
+	}{{"dark", dark}, {"light", light}} {
+		for i := 0; i < len(buckets); i++ {
+			for j := i + 1; j < len(buckets); j++ {
+				a, okA := resolveToken(theme.tokens, buckets[i])
+				b, okB := resolveToken(theme.tokens, buckets[j])
+				if !okA || !okB {
+					t.Fatalf("%s: cannot resolve %s or %s", theme.name, buckets[i], buckets[j])
+				}
+				for _, vision := range []string{"normal", "deuteranopia", "protanopia"} {
+					r := contrastRatio(simulateCVD(a, vision), simulateCVD(b, vision))
+					if r < 1.2 {
+						t.Errorf("%s/%s: %s and %s are %.2f:1 apart — indistinguishable",
+							theme.name, vision, buckets[i], buckets[j], r)
+					}
+				}
+			}
+		}
+		// And the pair that matters most: fine versus needs-attention.
+		n, _ := resolveToken(theme.tokens, "--wall-normal")
+		a, _ := resolveToken(theme.tokens, "--wall-attention")
+		for _, vision := range []string{"deuteranopia", "protanopia"} {
+			if r := contrastRatio(simulateCVD(n, vision), simulateCVD(a, vision)); r < 1.25 {
+				t.Errorf("%s/%s: normal and attention are %.2f:1 apart — "+
+					"\"everything is fine\" and \"look at this now\" are one colour", theme.name, vision, r)
+			}
+		}
+	}
+}
+
+// simulateCVD renders hex as a dichromat sees it (Viénot, Brettel & Mollon
+// 1999), returning hex. "normal" passes the colour through unchanged.
+func simulateCVD(hex, vision string) string {
+	if vision == "normal" {
+		return hex
+	}
+	toLinear := func(i int) float64 {
+		v, err := strconv.ParseInt(hex[i:i+2], 16, 0)
+		if err != nil {
+			return 0
+		}
+		f := float64(v) / 255
+		if f <= 0.04045 {
+			return f / 12.92
+		}
+		return math.Pow((f+0.055)/1.055, 2.4)
+	}
+	r, g, b := toLinear(1), toLinear(3), toLinear(5)
+
+	l := 17.8824*r + 43.5161*g + 4.11935*b
+	m := 3.45565*r + 27.1554*g + 3.86714*b
+	s := 0.0299566*r + 0.184309*g + 1.46709*b
+	switch vision {
+	case "deuteranopia":
+		m = 0.494207*l + 1.24827*s
+	case "protanopia":
+		l = 2.02344*m - 2.52581*s
+	}
+
+	toSRGB := func(v float64) int64 {
+		v = math.Max(0, math.Min(1, v))
+		if v <= 0.0031308 {
+			v *= 12.92
+		} else {
+			v = 1.055*math.Pow(v, 1/2.4) - 0.055
+		}
+		return int64(math.Round(v * 255))
+	}
+	return fmt.Sprintf("#%02x%02x%02x",
+		toSRGB(0.080944*l-0.130504*m+0.116721*s),
+		toSRGB(-0.0102485*l+0.0540194*m-0.113615*s),
+		toSRGB(-0.000365294*l-0.00412163*m+0.693513*s))
 }

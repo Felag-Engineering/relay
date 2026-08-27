@@ -102,8 +102,45 @@ approval card. They must occupy **different visual channels**:
 | Indigo | the security lane | `relay:` labels and the acts that set them |
 | Slate | a Policy decision was made | denies, and nothing else |
 | Grey | drift and inertness | `state:template-unloadable`, fingerprint distributions in facets |
+| Green | reachable, and it worked | liveness dot, `success` outcome, the pixel wall's `normal` bucket |
 | Blue | interactive | links, primary buttons, the live indicator — never semantic |
 | Muted red | failure and timeout | nothing else, ever |
+
+**Green was added on 2026-08-27 (owner decision).** It had been in the product
+without being in this table — the liveness dot and the `success` outcome chip
+have always been green — while the pixel wall drew `normal` as a neutral, on the
+argument in rule 2 above: a 10,000-cell field of saturated green leaves the seven
+amber cells competing with it instead of standing out. That argument is real and
+is the reason this entry is narrow.
+
+What overruled it is that the fleet view already taught the opposite two hundred
+pixels lower down. The deviation table shows a green liveness dot for the very
+Node the wall drew as a grey square, so the page contradicted itself, and a
+reader who had learned green-means-reachable read the wall as broken rather than
+as calm.
+
+**Green never means "healthy" in general** — Relay does not know whether a
+machine is healthy, only whether it answered (see "The four questions"). It means
+reachable, or it worked. Nothing else may take it.
+
+### Luminance is a second channel, not decoration
+
+Hue carries the meaning; **luminance carries the separation**. The pixel wall's
+four buckets sit in four distinct luminance bands, and that is a requirement
+rather than a preference: when `normal` first became green it landed 1.09:1 from
+`attention`'s amber, differing almost purely on the red-green axis — precisely
+the axis a deuteranope or protanope does not have. "Everything is fine" and
+"needs attention now" were one colour for roughly one man in twelve.
+
+Any new categorical colour must clear **3:1 against the surface it sits on**
+(WCAG 1.4.11 — a swatch that carries meaning is non-text content) and **1.2:1
+against every sibling under simulated deuteranopia and protanopia**.
+`TestFleet_WallBucketsSurviveColourBlindness` enforces both.
+
+The weakest surviving pair is grey against indigo in the dark theme, at 1.22:1.
+Four recognisable hues above a 3:1 floor cannot all be separated on luminance;
+closing that one needs a non-colour channel — a border, or a distinct cell shape
+for `fenced` — and is open.
 
 Everything else is a near-white or near-black neutral. Two deviations from
 `console-wireframe-brief.md` are recorded in `99-open-decisions.md`.
