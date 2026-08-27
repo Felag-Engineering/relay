@@ -235,11 +235,14 @@ func TestLabelChip_OnlyTheSecurityLaneIsMarked(t *testing.T) {
 }
 
 func TestParseLabel_RefusesAnUnknownNamespace(t *testing.T) {
+	// Named fields, not positional: Label gained a severity channel and every
+	// one of these literals broke at once. A parser test should not have to be
+	// edited because a rendering concern was added to the type it parses into.
 	good := map[string]Label{
-		"node:env=prod":                    {NamespaceNode, "env", "prod"},
-		"tag:migration-a":                  {NamespaceTag, "migration-a", ""},
-		"relay:quarantine":                 {NamespaceRelay, "quarantine", ""},
-		"state:policy-fingerprint=4b18c02": {NamespaceState, "policy-fingerprint", "4b18c02"},
+		"node:env=prod":                    {Namespace: NamespaceNode, Key: "env", Value: "prod"},
+		"tag:migration-a":                  {Namespace: NamespaceTag, Key: "migration-a"},
+		"relay:quarantine":                 {Namespace: NamespaceRelay, Key: "quarantine"},
+		"state:policy-fingerprint=4b18c02": {Namespace: NamespaceState, Key: "policy-fingerprint", Value: "4b18c02"},
 	}
 	for term, want := range good {
 		got, ok := ParseLabel(term)

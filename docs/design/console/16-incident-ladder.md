@@ -56,7 +56,19 @@ gets released in a panic — the release path is where that panic is slowed deli
 
 ## Quarantine
 
-Setting `relay:quarantine` on a Node. `admin` + step-up, per ADR-0020. Reached here by explicit
+Setting `relay:quarantine=on` on a Node.
+
+> **The value is pinned, and pinned deliberately.** The fence is
+> `relay:quarantine=`**`on`** — key *and* value — not the bare presence of the key.
+> A reader that tests only for the key treats `relay:quarantine=off` as fenced,
+> while a Selector tests both (`capability.Predicate`), so the set the Console
+> draws and the set an operator can target would differ. On the security lane,
+> "fence these Nodes" resolving to a different set than the one on screen is the
+> failure that matters. Decided **2026-08-26**, before any writer exists — which is
+> the cheap moment, since after one ships this becomes a fleet-wide migration of a
+> security-lane label. The constants are `registry.QuarantineKey` /
+> `registry.QuarantineOn`; the label-management work (#430) must write through
+> them, and no surface may spell the string itself. `admin` + step-up, per ADR-0020. Reached here by explicit
 Node IDs, or by a Selector containing **only `relay:` predicates** — a `node:`, `tag:` or `state:`
 term is refused (ADR-0034, #430). A filtered fleet view resolves to Node IDs before it arrives
 here; the filter itself is routine-lane. Also from Node detail (spec 02) for the single-Node case.

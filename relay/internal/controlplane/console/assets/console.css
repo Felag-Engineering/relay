@@ -1,427 +1,1165 @@
-/* The Console shell's structural styles only.
+/* The Relay Console's stylesheet.
  *
- * The design language — the chip grammar, the colour budget, the deny block,
- * the Plan renderer — lands with the shared-components issue (#419) and is
- * specified in docs/design/console/00-foundations.md. What is here is the
- * skeleton those components will sit inside: nothing decorative, and no colour
- * that carries meaning, because meaning-bearing colour is scarce by design and
- * allocating it here would spend it before the components exist. */
+ * ===========================================================================
+ * DESIGN SYSTEM: Nordic Forest, shared with Gleipnir
+ * ===========================================================================
+ *
+ * Relay and Gleipnir are one product family — Gleipnir is the AI-agent system
+ * that drives Relay — and an operator moving between them must not feel they
+ * have changed tools. The tokens below are lifted from Gleipnir's
+ * `frontend/src/tokens.css` VERBATIM: the same warm parchment/forest palette,
+ * the same hearth accent, the same IBM Plex pairing, the same 4px spacing
+ * scale. Where a value differs from Gleipnir's, that is a bug, not a choice.
+ *
+ * Dark is the default, as it is there. Light arrives on `prefers-color-scheme:
+ * light` — the Console has no theme switcher because it has no JavaScript, so
+ * the operating system's preference is the only signal available, and honouring
+ * it is better than picking for everyone.
+ *
+ * The fonts are SELF-HOSTED (assets/fonts/). The content security policy admits
+ * `font-src 'self'` and nothing else, so a Google Fonts link would be silently
+ * blocked and the Console would render in a system fallback while looking, to
+ * whoever wrote it, like it worked.
+ *
+ * ===========================================================================
+ * THE COLOUR BUDGET IS THE ENTIRE ALLOWANCE
+ * ===========================================================================
+ *
+ * Six meanings, and a seventh dilutes the six. Each maps onto exactly one
+ * Gleipnir semantic token, aliased below so the meaning stays legible at every
+ * use site and the theme swap happens in one place:
+ *
+ *   amber   needs attention now          --color-amber
+ *   purple  the security lane (relay:)   --color-purple
+ *   slate   a Policy decision was made   --text-second on --bg-elevated
+ *   grey    drift and inertness          --text-muted
+ *   hearth  interactive — never semantic --color-blue (warm; the name is historical)
+ *   red     failure and timeout          --color-red
+ *
+ * Green is success and is deliberately quiet: success is the mode, and the mode
+ * is the least informative thing on any screen in this product.
+ * =========================================================================== */
 
-*, *::before, *::after { box-sizing: border-box; }
-
-:root {
-  --bg: #f4f4f2;
-  --surface: #ffffff;
-  --line: #dedbd4;
-  --ink: #1b1b18;
-  --ink-2: #5e5c56;
-  --ink-3: #918e86;
-  --accent: #3d5a76;
-  --amber: #a86f10;
-  --amber-bg: #fbf1dd;
-  --amber-line: #e0bd7c;
-  --sans: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+/* --- Self-hosted IBM Plex (latin) ---------------------------------------- */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-sans-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-sans-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-sans-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-mono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/console/assets/fonts/ibm-plex-mono-500.woff2') format('woff2');
 }
 
+/* --- Tokens: dark (default), from Gleipnir ------------------------------- */
+:root {
+  --bg-canvas: #141a16;
+  --bg-surface: #1b2420;
+  --bg-elevated: #243029;
+  --bg-sidebar: #141a16;
+  --bg-code: #121916;
+  --bg-subtle: #2c3832;
+
+  --border-subtle: #3a4840;
+  --border-mid: #4d5e54;
+
+  --text-faint: #3a4840;
+  --text-muted: #636e62;
+  --text-second: #a8a090;
+  --text-primary: #e4ddd2;
+
+  --color-blue: #d4915a;
+  --color-orange: #e0a26e;
+  --color-amber: #f0c830;
+  --color-green: #4ade6a;
+  --color-red: #f05545;
+  --color-purple: #a78bfa;
+  --color-teal: #34d399;
+  --color-info: #40c8e0;
+
+  --accent-hover: #e0a26e;
+  --accent-muted: rgba(212, 145, 90, 0.14);
+
+  --sidebar-width: 212px;
+
+  --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
+
+  --radius-xs: 2px; --radius-sm: 3px; --radius-md: 4px;
+  --radius-lg: 6px; --radius-section: 8px;
+
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --weight-normal: 400; --weight-medium: 500; --weight-semibold: 600;
+
+  --text-2xs: 10px; --text-xs: 11px; --text-sm: 13px;
+  --text-base: 15px; --text-lg: 18px; --text-xl: 24px;
+
+  --duration-fast: 120ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* --- The Console's six meanings, as aliases ---------------------------
+   * Named for what they MEAN, not for what colour they are, so a use site
+   * reads as a claim about the thing rather than as a paint choice. */
+  --attention: var(--color-amber);
+  --attention-bg: rgba(240, 200, 48, 0.10);
+  --attention-line: rgba(240, 200, 48, 0.34);
+  /* Amber AS TEXT needs its own value. --color-amber is #a88608 in light, which
+   * is 3.26:1 on the surface — fine for a fill, a dot or a border (WCAG 1.4.11
+   * asks 3:1) and below AA for 11-13px type. The token itself stays verbatim
+   * from Gleipnir; this alias is the Console's own, and the dark value is the
+   * token unchanged because it already clears AA there. */
+  --attention-text: var(--color-amber);
+
+  --security: var(--color-purple);
+  --security-bg: rgba(167, 139, 250, 0.12);
+  --security-line: rgba(167, 139, 250, 0.36);
+
+  --decision: var(--text-second);
+  --decision-bg: var(--bg-elevated);
+  --decision-line: var(--border-mid);
+
+  --inert: var(--text-muted);
+  --inert-bg: var(--bg-subtle);
+
+  --failure: var(--color-red);
+  --failure-bg: rgba(240, 85, 69, 0.10);
+
+  --ok: var(--color-green);
+  --ok-bg: rgba(74, 222, 106, 0.10);
+}
+
+/* --- Tokens: light parchment, from Gleipnir ------------------------------ */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg-canvas: #f4f1eb;
+    --bg-surface: #faf8f4;
+    --bg-elevated: #ece8e0;
+    --bg-sidebar: #eae6dd;
+    --bg-code: #e8e4db;
+    --bg-subtle: #e0dbd2;
+    --border-subtle: #d4cfc4;
+    --border-mid: #b8b0a4;
+    --text-faint: #d4cfc4;
+    --text-muted: #8a8474;
+    --text-second: #5c5848;
+    --text-primary: #2c2a24;
+    --color-blue: #b8733e;
+    --color-orange: #c07a48;
+    --color-amber: #a88608;
+    --color-green: #1a9640;
+    --color-red: #d43a2a;
+    --color-purple: #6d3cc7;
+    --color-teal: #0a8276;
+    --color-info: #1a8ea0;
+    --accent-hover: #c07a48;
+    --accent-muted: rgba(184, 115, 62, 0.12);
+
+    --attention-bg: rgba(168, 134, 8, 0.10);
+    --attention-line: rgba(168, 134, 8, 0.34);
+    --attention-text: #6d5605; /* 6.6:1 on canvas */
+    --security-bg: rgba(109, 60, 199, 0.09);
+    --security-line: rgba(109, 60, 199, 0.30);
+    --failure-bg: rgba(212, 58, 42, 0.08);
+    --ok-bg: rgba(26, 150, 64, 0.09);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --duration-fast: 0ms; }
+}
+
+/* --- Reset --------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--ink);
-  font-family: var(--sans);
-  font-size: 13px;
-  line-height: 1.45;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a { color: var(--color-blue); text-decoration: none; }
+a:hover { color: var(--accent-hover); text-decoration: underline; }
+code, pre, .mono { font-family: var(--font-mono); }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-xs); }
 
+/* Visually hidden, still announced. The stylesheet had no such utility, which
+ * is a large part of why the tables ended up with unnamed columns and the
+ * liveness dot ended up encoded in colour alone: there was no cheap way to give
+ * something a name without also giving it a box. */
+.vh {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* --- Shell --------------------------------------------------------------- */
 .app { display: flex; min-height: 100%; }
 
 .nav {
-  width: 184px;
+  width: var(--sidebar-width);
   flex: none;
-  background: #eeece7;
-  border-right: 1px solid var(--line);
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
-  padding: 14px 0 12px;
+  padding: var(--space-5) 0 var(--space-3);
 }
-.brand { padding: 0 16px 6px; font-size: 16px; letter-spacing: -0.02em; }
-.brand span { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
-.navsec {
-  padding: 13px 16px 4px;
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
+.brand {
+  padding: 0 var(--space-4) var(--space-2);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+.brand span {
+  font-size: var(--text-2xs);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--ink-3);
-  font-weight: 500;
+  color: var(--color-blue);
+  font-weight: var(--weight-medium);
 }
-.navlist { display: flex; flex-direction: column; gap: 1px; }
-.navitem { display: block; padding: 5px 16px; color: var(--ink-2); }
-.navitem.on { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: inset 2px 0 0 var(--accent); }
+.navsec {
+  padding: var(--space-5) var(--space-4) var(--space-1);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: var(--weight-medium);
+}
+.navlist { display: flex; flex-direction: column; gap: 1px; padding: 0 var(--space-2); }
+.navitem {
+  display: block;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-second);
+  border-radius: var(--radius-lg);
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.navitem:hover { background: var(--bg-elevated); color: var(--text-primary); text-decoration: none; }
+.navitem.on {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+  box-shadow: inset 2px 0 0 var(--color-blue);
+}
 .navfoot {
   margin-top: auto;
-  padding: 12px 16px 0;
-  border-top: 1px solid var(--line);
-  font-size: 11px;
-  color: var(--ink-3);
-  line-height: 1.5;
+  padding: var(--space-3) var(--space-4) 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.6;
 }
+.navfoot b { color: var(--text-second); font-weight: var(--weight-medium); }
+.navfoot form { margin: var(--space-2) 0 0; }
+
+/* A button, not a link: signing out is a POST, and a mutating action reachable
+ * by GET is a CSRF hole no token scheme repairs. Styled as a link because that
+ * is what it is to the operator. */
+.linkbtn {
+  background: none; border: 0; padding: 0; font: inherit;
+  color: var(--color-blue); cursor: pointer;
+}
+.linkbtn:hover { color: var(--accent-hover); text-decoration: underline; }
 
 .col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 
-/* The control-plane banner: the only slot in which the Console speaks about
- * the Relay rather than about Nodes. Unmissable on purpose. */
+/* The control-plane banner: the only slot in which the Console speaks about the
+ * Relay rather than about Nodes. Amber, unmissable, above content. */
 .banner {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  padding: 9px 22px;
-  background: var(--amber-bg);
-  border-bottom: 1px solid var(--amber-line);
-  color: var(--amber);
-  font-size: 12px;
+  display: flex; gap: var(--space-3); align-items: baseline;
+  padding: var(--space-3) var(--space-6);
+  background: var(--attention-bg);
+  border-bottom: 1px solid var(--attention-line);
+  color: var(--attention-text);
+  font-size: var(--text-sm);
 }
+.banner b { font-weight: var(--weight-semibold); }
+.banner span { color: var(--text-second); }
 
 .topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-5) var(--space-6);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-canvas);
 }
-.topbar h1 { font-size: 18px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
-
-main { padding: 16px 22px; }
-
-.placeholder { color: var(--ink-2); max-width: 46em; }
-.placeholder code { font-family: var(--mono); font-size: 12px; }
-
-.navfoot form { margin: 6px 0 0; }
-/* A button, not a link: signing out is a POST, and a mutating action reachable
- * by GET is a CSRF hole no token scheme repairs. It is STYLED as a link
- * because that is what it is to the operator. */
-.linkbtn {
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  color: var(--accent);
-  cursor: pointer;
+.topbar h1 {
+  font-size: var(--text-xl); font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em; margin: 0;
 }
-.linkbtn:hover { text-decoration: underline; }
+main { padding: var(--space-5) var(--space-6) var(--space-12); }
 
-/* The sign-in page: the only unauthenticated surface.
+.placeholder { color: var(--text-second); max-width: 46em; }
+.placeholder code { font-family: var(--font-mono); font-size: var(--text-sm); }
+
+/* --- Sign in: the only unauthenticated surface ---------------------------
  *
- * Deliberately plain — product name, two fields, one button. No marketing, no
- * version string, no fleet statistics, no links that reveal whether this
- * deployment exists or how big it is (spec 12). What looks like restraint here
- * is the requirement. */
-.loginpage {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-}
+ * Deliberately plain — product name, two fields, one button. No version string,
+ * no fleet statistics, no links that reveal whether this deployment exists or
+ * how big it is. What looks like restraint here is the requirement. */
+.loginpage { display: flex; align-items: center; justify-content: center; padding: var(--space-12) var(--space-6); }
 .loginbox {
-  width: 100%;
-  max-width: 320px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 26px 26px 24px;
+  width: 100%; max-width: 360px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section);
+  padding: var(--space-8);
 }
-.loginbox .brand { padding: 0 0 18px; }
+.loginbox .brand { padding: 0 0 var(--space-6); }
 .loginbox form { display: flex; flex-direction: column; }
 .loginbox label {
-  font-size: 11px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--ink-3);
-  margin-bottom: 5px;
+  font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--text-muted); margin-bottom: var(--space-2); font-weight: var(--weight-medium);
 }
 .loginbox input {
-  font: inherit;
-  padding: 7px 9px;
-  margin-bottom: 14px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--ink);
+  font: inherit; font-size: var(--text-base);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--bg-canvas); color: var(--text-primary);
 }
-.loginbox input:focus {
-  outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  background: var(--surface);
-}
+.loginbox input:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; background: var(--bg-surface); }
 .loginbox button[type="submit"] {
-  font: inherit;
-  font-weight: 500;
-  margin-top: 4px;
-  padding: 8px;
-  border: 0;
-  border-radius: 4px;
-  background: var(--accent);
-  color: #fff;
-  cursor: pointer;
+  font: inherit; font-weight: var(--weight-medium);
+  margin-top: var(--space-1); padding: var(--space-3);
+  border: 0; border-radius: var(--radius-lg);
+  background: var(--color-blue); color: #fff; cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
 }
-.loginbox button[type="submit"]:hover { filter: brightness(1.1); }
+.loginbox button[type="submit"]:hover { background: var(--accent-hover); }
 
 .loginnote, .loginmsg {
-  margin: 0 0 16px;
-  padding: 9px 11px;
-  border-radius: 4px;
-  font-size: 12px;
-  border: 1px solid var(--line);
-  background: var(--bg);
-  color: var(--ink-2);
+  margin: 0 0 var(--space-4); padding: var(--space-3);
+  border-radius: var(--radius-lg); font-size: var(--text-sm);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated); color: var(--text-second);
 }
-/* A refused sign-in is not styled as an alarm. It is the overwhelmingly common
- * case of a mistyped password, and colouring it like a failure spends the
- * colour budget on the least interesting event in the product. */
-.loginmsg { border-color: var(--line); }
+/* A refused sign-in is not an alarm. It is the overwhelmingly common case of a
+ * mistyped password, and colouring it like a failure spends the colour budget
+ * on the least interesting event in the product. */
+.loginmsg { border-color: var(--border-subtle); }
 /* A throttle IS amber: it is the one thing on this page that means "something
  * needs attention now", and it must not read as "your password was wrong". */
-.loginmsg.slow {
-  background: var(--amber-bg);
-  border-color: var(--amber-line);
-  color: var(--amber);
-}
+.loginmsg.slow { background: var(--attention-bg); border-color: var(--attention-line); color: var(--attention-text); }
 
 /* ===========================================================================
- * Shared components (#419), specified in docs/design/console/00-foundations.md
+ * Shared components
  *
- * THE COLOUR BUDGET IS THE ENTIRE ALLOWANCE. Adding a colour here is not a
- * style choice — each one carries a meaning, and a seventh dilutes the six:
- *
- *   amber  needs attention now      indigo  the security lane
- *   slate  a Policy decision        grey    drift and inertness
- *   blue   interactive (never semantic)     muted red  failure and timeout
- *
- * Everything else is a near-white or near-black neutral.
- * =========================================================================== */
-
-:root {
-  --indigo: #4a4a8f;
-  --indigo-bg: #edecf7;
-  --indigo-line: #b9b7dd;
-  --slate: #4a5560;
-  --slate-bg: #eceef0;
-  --slate-line: #b6bfc7;
-  --grey: #7b7871;
-  --grey-bg: #eeece8;
-  --red: #9a4038;
-  --red-bg: #f7eceb;
-  --ok: #4e6b52;
-  --ok-bg: #ecf1ec;
-}
-
-/* --- Chips ---------------------------------------------------------------
- *
- * TWO INDEPENDENT GRAMMARS that must not collide. They appear within 200px of
- * each other on the approval card, so they are given different visual
- * channels:
+ * TWO INDEPENDENT CHIP GRAMMARS that must not collide. They appear within 200px
+ * of each other on the approval card, so they occupy different visual channels:
  *
  *   the trust lane owns FILL VERSUS OUTLINE
  *   the namespace lane owns HUE, GLYPH and the MONO PREFIX
  *
- * If they shared a channel, a caller's claim would read as something the
- * Relay verified — which is the one confusion the whole attribution model
- * exists to prevent. */
+ * If they shared a channel, a caller's CLAIM would read as something the Relay
+ * verified — the one confusion the whole attribution model exists to prevent.
+ * =========================================================================== */
 
 .chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 1px;
-  padding: 1px 7px;
+  display: inline-flex; align-items: baseline; gap: 1px;
+  padding: 1px var(--space-2);
   border-radius: 10px;
-  font-size: 11px;
-  line-height: 1.7;
+  font-size: var(--text-xs); line-height: 1.8;
   white-space: nowrap;
   border: 1px solid transparent;
 }
-
-/* Label chips: hue and the mono prefix carry the namespace. */
-.chip.lbl .ns {
-  font-family: var(--mono);
-  font-size: 10px;
-  opacity: 0.72;
-}
+.chip.lbl .ns { font-family: var(--font-mono); font-size: var(--text-2xs); opacity: 0.75; }
 .chip.lbl .eq { opacity: 0.5; padding: 0 1px; }
 
-/* node: and tag: are QUIET and subtly differentiated. Most labels on most
- * screens are these, and a fleet view where every chip shouts is a fleet view
- * nobody reads. */
-.chip.lbl[data-ns="node"] { background: #e9e7e1; color: var(--ink-2); border-color: #dbd8d0; }
-.chip.lbl[data-ns="tag"]  { background: var(--surface); color: var(--ink-2); border-color: var(--line); }
+/* node: and tag: are QUIET. Most labels on most screens are these, and a fleet
+ * view where every chip shouts is a fleet view nobody reads. */
+.chip.lbl[data-ns="node"] { background: var(--bg-elevated); color: var(--text-second); border-color: var(--border-subtle); }
+.chip.lbl[data-ns="tag"]  { background: transparent; color: var(--text-second); border-color: var(--border-mid); }
 
 /* relay: is FILLED, distinct in hue, and carries a lock. It is the only
  * namespace the security lane may target, and it must be findable at a glance
  * in a wall of quiet chips. */
 .chip.lbl[data-ns="relay"] {
-  background: var(--indigo-bg);
-  color: var(--indigo);
-  border-color: var(--indigo-line);
-  font-weight: 500;
+  background: var(--security-bg); color: var(--security);
+  border-color: var(--security-line); font-weight: var(--weight-medium);
 }
-.chip.lbl[data-lane="security"] .ns::before { content: "\01F512\00a0"; font-family: var(--sans); }
+.chip.lbl[data-lane="security"] .ns::before { content: "\01F512\00a0"; font-family: var(--font-body); }
 
-/* state: carries the tint of its severity behind its mono prefix. Nobody sets
- * these — they are derived at Selector-resolution time from a closed
- * vocabulary — so they read as observations rather than as declarations. */
-.chip.lbl[data-ns="state"] { background: var(--grey-bg); color: var(--grey); border-color: #ddd9d2; }
+/* state: is derived and set by nobody, so it reads as an observation rather
+ * than a declaration — but it still carries the TINT OF ITS SEVERITY, because
+ * "this Node refuses every Task" and "its template set failed to load" are
+ * different problems and one grey for both says they are the same problem.
+ *
+ * The base tier is --text-second, not --inert: --inert on --inert-bg measures
+ * 2.29:1 in dark and 2.70:1 in light, which put the most actionable fact on the
+ * row below even the 3:1 non-text floor. It was the least visible thing on a
+ * line it should have led. */
+.chip.lbl[data-ns="state"] {
+  background: var(--inert-bg); color: var(--text-second); border-color: var(--border-subtle);
+}
+.chip.lbl[data-ns="state"][data-sev="attention"] {
+  background: var(--attention-bg); color: var(--attention-text);
+  border-color: var(--attention-line); font-weight: var(--weight-medium);
+}
+
+/* The fenced chip: a DECLARED act, not a derived observation. It borrows the
+ * security lane's hue because that is what it is — the two lower rungs of the
+ * incident ladder — and deliberately not the `state:` grammar, because a human
+ * did this and the Relay merely recorded it. */
+.chip.fenced {
+  background: var(--security-bg); color: var(--security);
+  border-color: var(--security-line); font-weight: var(--weight-medium);
+}
+.chip.fenced::before { content: "\01F512\00a0"; font-family: var(--font-body); opacity: 0.8; }
+.statecell { display: flex; flex-wrap: wrap; gap: var(--space-1); }
 
 /* Trust chips: FILL means the Relay authenticated this. DASHED means a caller
  * claimed it and nothing checked. A jailbroken agent can assert anything it
  * likes; it cannot forge the filled one. */
-.chip.trust[data-trust="verified"] {
-  background: var(--ink);
-  color: var(--surface);
-  border-color: var(--ink);
-}
-.chip.trust[data-trust="asserted"] {
-  background: transparent;
-  color: var(--ink-3);
-  border: 1px dashed var(--ink-3);
-}
+.chip.trust[data-trust="verified"] { background: var(--text-primary); color: var(--bg-canvas); border-color: var(--text-primary); font-weight: var(--weight-medium); }
+.chip.trust[data-trust="asserted"] { background: transparent; color: var(--text-muted); border: 1px dashed var(--text-muted); }
 
-/* --- Outcome vocabulary ---------------------------------------------------
+/* --- Outcome vocabulary: all EIGHT ---------------------------------------
  *
- * All EIGHT, and three of them are different kinds of "it did not run" that
- * must not be collapsed. The treatments encode which is which:
- *
- *   filled           it resolved (success, denied, cancelled)
- *   outlined solid   not in this Node's vocabulary; Policy was never asked
- *   outlined dashed  it never left the Relay (unreachable, version_refused)
- *   muted red        something ran and failed */
+ * Three of them are different kinds of "it did not run" that must not be
+ * collapsed. The treatments encode which is which:
+ *   filled          it resolved (success, denied, cancelled)
+ *   outlined solid  not in this Node's vocabulary; Policy was never asked
+ *   outlined dashed it never left the Relay (unreachable, version_refused)
+ *   red             something ran and failed */
+.chip.outcome, .oseg, .okey { --oc: var(--text-second); --ocbg: transparent; }
 
-.chip.outcome, .oseg, .okey { --oc: var(--ink-2); --ocbg: var(--surface); }
+[data-outcome="success"]          { --oc: var(--ok);        --ocbg: var(--ok-bg); }
+/* A deny is a DECISION, and the product working correctly. Never red. If a deny
+ * renders as a failure, the product is arguing against itself. */
+[data-outcome="denied_by_policy"] { --oc: var(--decision);  --ocbg: var(--decision-bg); }
+[data-outcome="cancelled"]        { --oc: var(--text-second); --ocbg: var(--bg-elevated); }
+[data-outcome="unsupported"]      { --oc: var(--inert);     --ocbg: transparent; }
+[data-outcome="unreachable"]      { --oc: var(--attention-text); --ocbg: transparent; }
+[data-outcome="version_refused"]  { --oc: var(--attention-text); --ocbg: transparent; }
+[data-outcome="failure"]          { --oc: var(--failure);   --ocbg: var(--failure-bg); }
+[data-outcome="timeout"]          { --oc: var(--failure);   --ocbg: var(--failure-bg); }
 
-[data-outcome="success"]          { --oc: var(--ok);    --ocbg: var(--ok-bg); }
-/* SLATE, and filled: a deny is a DECISION, and the product working correctly.
- * It is never red. If a deny renders as a failure, the product is arguing
- * against itself. */
-[data-outcome="denied_by_policy"] { --oc: var(--slate); --ocbg: var(--slate-bg); }
-[data-outcome="cancelled"]        { --oc: var(--ink-2); --ocbg: #e9e7e1; }
-[data-outcome="unsupported"]      { --oc: var(--grey);  --ocbg: transparent; }
-[data-outcome="unreachable"]      { --oc: var(--amber); --ocbg: transparent; }
-[data-outcome="version_refused"]  { --oc: var(--amber); --ocbg: transparent; }
-[data-outcome="failure"]          { --oc: var(--red);   --ocbg: var(--red-bg); }
-[data-outcome="timeout"]          { --oc: var(--red);   --ocbg: var(--red-bg); }
-
-.chip.outcome { background: var(--ocbg); color: var(--oc); border-color: var(--oc); font-weight: 500; }
+.chip.outcome { background: var(--ocbg); color: var(--oc); border-color: var(--oc); font-weight: var(--weight-medium); }
 .chip.outcome[data-outcome="unsupported"] { border-style: solid; }
 .chip.outcome[data-outcome="unreachable"],
 .chip.outcome[data-outcome="version_refused"] { border-style: dashed; }
 
 /* --- Segmented outcome bar ------------------------------------------------
  *
- * Minority segments carry a FLOOR WIDTH (see NewOutcomeBar). At 10,000 Nodes,
- * 14 denies are 0.14% and would vanish — and they are the entire reason
- * anyone is looking. The bar is therefore deliberately non-proportional in the
- * small; the key beneath it carries the exact counts, which are the truth. */
+ * Minority segments carry a FLOOR WIDTH. At 10,000 Nodes, 14 denies are 0.14%
+ * and would vanish — and they are the entire reason anyone is looking. The bar
+ * is deliberately non-proportional in the small; the key beneath it carries the
+ * exact counts, which are the truth. */
 .obar {
-  display: flex;
-  height: 9px;
-  border-radius: 5px;
-  overflow: hidden;
-  background: var(--line);
-  margin: 6px 0 5px;
+  display: flex; height: 10px; border-radius: 5px; overflow: hidden;
+  background: var(--bg-elevated); margin: var(--space-2) 0 var(--space-2);
   max-width: 640px;
 }
 .oseg { display: block; background: var(--oc); min-width: 3px; }
-.oseg[data-outcome="unsupported"],
-.oseg[data-outcome="unreachable"],
-.oseg[data-outcome="version_refused"] {
+.oseg[data-outcome="unsupported"], .oseg[data-outcome="unreachable"], .oseg[data-outcome="version_refused"] {
   background: repeating-linear-gradient(135deg, var(--oc) 0 2px, transparent 2px 4px);
 }
-.okeys { display: flex; flex-wrap: wrap; gap: 12px; font-size: 11px; }
+.okeys { display: flex; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-xs); }
 .okey { color: var(--oc); }
-.okey b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.okey b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
-/* --- The deny block -------------------------------------------------------
+/* --- The deny block: the showpiece ---------------------------------------
  *
- * The showpiece: the product's pitch rendered. Calm and informative, in slate,
- * never as a red failure. An operator must get from "denied" to "I know
- * exactly which file to change" without leaving the Console — and the Console
- * must be VISIBLY UNABLE to make that change for them, which is what the
- * closing note says out loud. */
+ * The product's pitch rendered. Calm and informative, never a red failure. An
+ * operator must get from "denied" to "I know exactly which file to change"
+ * without leaving the Console — and the Console must be VISIBLY UNABLE to make
+ * that change for them, which is what the closing note says out loud. */
 .deny {
-  border: 1px solid var(--slate-line);
-  border-left: 3px solid var(--slate);
-  border-radius: 4px;
-  background: var(--slate-bg);
-  padding: 11px 13px;
-  margin: 10px 0;
-  max-width: 720px;
-}
-.denyhead { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.denyop { font-family: var(--mono); font-size: 12px; color: var(--ink); }
-.denynode { color: var(--ink-2); font-size: 12px; }
-.denyrule {
-  font-family: var(--mono);
-  font-size: 12px;
-  background: var(--surface);
-  border: 1px solid var(--slate-line);
-  border-radius: 3px;
-  padding: 8px 10px;
-  margin: 9px 0 5px;
-  overflow-x: auto;
-  white-space: pre;
-}
-.denyloc { font-family: var(--mono); font-size: 11px; color: var(--slate); }
-.denylinks { display: flex; gap: 16px; margin-top: 9px; font-size: 12px; }
-.denynote { margin: 9px 0 0; font-size: 11.5px; color: var(--slate); }
-
-/* --- The Plan renderer ----------------------------------------------------
- *
- * Pinned once rendered and never reflowed: a human is reading it in order to
- * decide, and a list that moves under them is a decision made about something
- * else. The cap arithmetic is visible because a cap you can see coming is a
- * control, and one that silently trims a fan-out is a surprise at the worst
- * possible moment. */
-.plan {
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  padding: 13px 15px;
+  border: 1px solid var(--decision-line);
+  border-left: 3px solid var(--text-second);
+  border-radius: var(--radius-lg);
+  background: var(--decision-bg);
+  padding: var(--space-3) var(--space-4);
+  margin: var(--space-3) 0;
   max-width: 760px;
 }
-.planhead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
-.chip.risk { background: var(--surface); border-color: var(--line); color: var(--ink-2); font-family: var(--mono); }
-.chip.risk[data-risk="mutate"] { background: var(--amber-bg); border-color: var(--amber-line); color: var(--amber); font-weight: 500; }
-/* The plan hash is what an approval commits to — not the prose above it — so
- * it is rendered as the plan's identity rather than as a technical detail. */
-.planhash { font-family: var(--mono); font-size: 12px; color: var(--ink-2); margin-left: auto; }
-.planfan { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.selector { font-family: var(--mono); font-size: 12px; background: var(--bg); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; }
-.fanmath { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.overcap { font-size: 12px; color: var(--amber); font-weight: 500; }
-.planverdicts { margin-top: 8px; font-size: 12px; color: var(--ink-2); }
-.planverdicts b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.denyhead { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+.denyop { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-primary); }
+.denynode { color: var(--text-second); font-size: var(--text-sm); }
+.denyrule {
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  background: var(--bg-code); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); padding: var(--space-3);
+  margin: var(--space-3) 0 var(--space-1);
+  overflow-x: auto; white-space: pre; color: var(--text-primary);
+}
+.denyloc { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+.denylinks { display: flex; gap: var(--space-4); margin-top: var(--space-3); font-size: var(--text-sm); }
+.denynote { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-muted); line-height: 1.6; }
+
+/* --- The Plan renderer ---------------------------------------------------- */
+.plan {
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
+  background: var(--bg-surface); padding: var(--space-4); max-width: 780px;
+}
+.planhead { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
+.chip.risk { background: transparent; border-color: var(--border-mid); color: var(--text-second); font-family: var(--font-mono); }
+.chip.risk[data-risk="mutate"] { background: var(--attention-bg); border-color: var(--attention-line); color: var(--attention-text); font-weight: var(--weight-medium); }
+/* The plan hash is what an approval commits to — not the prose above it — so it
+ * renders as the plan's identity rather than as a technical detail. */
+.planhash { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-muted); }
+.planfan { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; }
+.selector {
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  background: var(--bg-code); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md); padding: 1px var(--space-2); color: var(--text-second);
+}
+.fanmath { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.overcap { font-size: var(--text-sm); color: var(--attention-text); font-weight: var(--weight-medium); }
+.planverdicts { margin-top: var(--space-2); font-size: var(--text-sm); color: var(--text-second); }
+.planverdicts b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 /* --- The step-up modal ----------------------------------------------------
  *
- * It NAMES WHAT IT AUTHORISES. "Confirm it is you" with no object is how
- * people are trained to type their password into anything, so the action is
- * the heading and the consequence is the line beneath it. */
+ * It NAMES WHAT IT AUTHORISES. "Confirm it is you" with no object is how people
+ * are trained to type their password into anything, so the action is the
+ * heading and the consequence is the line beneath it. */
 .stepup {
-  border: 1px solid var(--amber-line);
-  border-radius: 5px;
-  background: var(--surface);
-  padding: 15px 17px;
-  max-width: 420px;
-  display: flex;
-  flex-direction: column;
+  border: 1px solid var(--attention-line); border-radius: var(--radius-section);
+  background: var(--bg-surface); padding: var(--space-5);
+  max-width: 440px; display: flex; flex-direction: column;
 }
-.stepup h2 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
-.stepupdetail { margin: 0 0 12px; font-size: 12px; color: var(--ink-2); font-family: var(--mono); }
-.stepup label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 5px; }
-.stepup input { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); }
-.stepupwindow { margin: 9px 0 0; font-size: 11px; color: var(--ink-3); }
+.stepup h2 { margin: 0 0 var(--space-2); font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.stepupdetail { margin: 0 0 var(--space-3); font-size: var(--text-sm); color: var(--text-second); font-family: var(--font-mono); }
+.stepup label { font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-2); }
+.stepup input { font: inherit; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--bg-canvas); color: var(--text-primary); }
+.stepupwindow { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
 .stepup button {
-  font: inherit; font-weight: 500; margin-top: 12px; padding: 8px;
-  border: 0; border-radius: 4px; background: var(--amber); color: #fff; cursor: pointer;
+  font: inherit; font-weight: var(--weight-medium); margin-top: var(--space-3); padding: var(--space-3);
+  border: 0; border-radius: var(--radius-lg); background: var(--attention); color: var(--bg-canvas); cursor: pointer;
 }
+
+/* ===========================================================================
+ * Screens
+ * =========================================================================== */
+
+/* --- View bar: filter + grouping, shared by fleet and activity ------------ */
+.viewbar {
+  display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-5);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section);
+  flex-wrap: wrap;
+}
+.vlabel { font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-medium); }
+.viewbar input {
+  flex: 1; min-width: 240px; font: inherit;
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-canvas); color: var(--text-primary);
+}
+.viewbar input::placeholder { color: var(--text-muted); }
+.viewbar input:focus, .viewbar select:focus { outline: 2px solid var(--color-blue); outline-offset: -1px; }
+.viewbar select {
+  font: inherit; font-size: var(--text-sm); padding: var(--space-2) var(--space-2);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-canvas); color: var(--text-primary);
+}
+.viewbar button {
+  font: inherit; font-size: var(--text-sm); font-weight: var(--weight-medium);
+  padding: var(--space-2) var(--space-4);
+  border: 0; border-radius: var(--radius-lg); background: var(--color-blue); color: #fff; cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
+}
+.viewbar button:hover { background: var(--accent-hover); }
+.vcount { margin-left: auto; font-size: var(--text-sm); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* A rejected filter is amber, and the fleet stays on screen behind it: blanking
+ * the page would make a typo feel like an outage. */
+.filtererr {
+  padding: var(--space-3) var(--space-4); margin-bottom: var(--space-4); font-size: var(--text-sm);
+  background: var(--attention-bg); border: 1px solid var(--attention-line);
+  border-radius: var(--radius-lg); color: var(--attention-text);
+}
+.filtererr b { font-weight: var(--weight-semibold); }
+
+/* --- Rollup cards --------------------------------------------------------- */
+.group {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section);
+  margin-bottom: var(--space-4);
+  overflow: hidden;
+}
+.ghead { display: flex; align-items: baseline; gap: var(--space-3); padding: var(--space-4) var(--space-5); flex-wrap: wrap; }
+.group.open .ghead { border-bottom: 1px solid var(--border-subtle); }
+.ghead h2 { margin: 0; font-size: var(--text-base); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
+.gcount { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.gdev { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.gdev.attn  { color: var(--attention-text); }
+.gdev.quar  { color: var(--security); font-weight: var(--weight-medium); }
+.gdev.drift { color: var(--inert); }
+.gdev.calm  { color: var(--text-muted); }
+
+/* --- The pixel wall ------------------------------------------------------
+ *
+ * ONE wall, for the whole fleet, above everything else: system state before any
+ * question about a particular group. The acceptance criterion is "one segmented
+ * summary, one pixel wall, and the deviating rows" — singular — and a wall per
+ * group card is forty images nobody can compare.
+ *
+ * FOUR buckets, no more. Preattentive vision handles about four categories and
+ * then collapses, and the wall exists precisely so the one quarantined Node in
+ * four thousand pops out without anyone reading a word.
+ *
+ * The cell SCALE is a data attribute rather than a computed style, because
+ * `style-src 'self'` discards inline styles. A fixed size cannot serve both
+ * ends of this product's range: at three Nodes a 10px cell is a speck nobody
+ * notices, at ten thousand it is a wall four screens tall. */
+.systemstate {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+  margin-bottom: var(--space-4);
+}
+.sshead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.sshead h2 {
+  margin: 0; font-size: var(--text-2xs); letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
+}
+.ssline { font-size: var(--text-sm); color: var(--text-second); }
+.ssline code { font-family: var(--font-mono); font-size: var(--text-xs); }
+.asat { font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sskey { margin-left: auto; display: flex; gap: var(--space-4); flex-wrap: wrap; }
+.sskeyitem { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); color: var(--text-second); }
+.sskeyitem b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+/* The legend swatch is the same element as a wall cell, so the key can never
+ * drift from the thing it is a key to. */
+.sskeyitem .cell { width: 9px; height: 9px; }
+
+.wall { display: flex; flex-wrap: wrap; gap: var(--space-5); align-items: flex-start; }
+.wallgroup { display: flex; flex-direction: column; gap: var(--space-2); }
+.walllabel {
+  font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-muted); font-weight: var(--weight-medium);
+}
+.wallcells { display: flex; flex-wrap: wrap; gap: 3px; max-width: 620px; }
+
+.cell { width: 10px; height: 10px; border-radius: var(--radius-xs); display: block; flex: none; }
+.wall[data-size="lg"] .cell { width: 20px; height: 20px; border-radius: var(--radius-sm); }
+.wall[data-size="md"] .cell { width: 13px; height: 13px; }
+.wall[data-size="sm"] .cell { width: 9px;  height: 9px; }
+.wall[data-size="xs"] .cell { width: 6px;  height: 6px; border-radius: 1px; }
+.wall[data-size="xs"] .wallcells { gap: 2px; }
+.cell:hover { outline: 2px solid var(--color-blue); outline-offset: 1px; }
+/* Cells are tabindex="-1" and aria-hidden: clickable with a mouse, invisible to
+ * the tab order and to assistive technology, because ten thousand nameless tab
+ * stops is not access — it is an obstacle course. The wall carries one
+ * aria-label describing the whole picture, and the deviation table beneath is
+ * the real keyboard and screen-reader path: named, ordered, and complete for
+ * every Node that deviates.
+ *
+ * The focus ring stays anyway. A tabindex="-1" element still takes focus when
+ * clicked, and an element that can hold focus should be able to show it. */
+.cell:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
+/* Normal is a QUIET neutral, not a green. Most Nodes are normal, and a wall of
+ * four thousand saturated cells is a wall in which nothing pops — which is the
+ * one thing the wall has to do. */
+.cell[data-bucket="normal"]      { background: var(--border-mid); }
+.cell[data-bucket="drift"]       { background: var(--inert); }
+.cell[data-bucket="attention"]   { background: var(--attention); }
+.cell[data-bucket="fenced"]      { background: var(--security); }
+
+.gbody { display: flex; align-items: stretch; border-top: 1px solid var(--border-subtle); }
+
+/* --- Facet rail: the facets ARE the summary statistics -------------------- */
+.facets {
+  width: 220px; flex: none; padding: var(--space-4) var(--space-5);
+  border-right: 1px solid var(--border-subtle); background: var(--bg-canvas);
+}
+.facet { margin-bottom: var(--space-5); }
+.facet:last-child { margin-bottom: 0; }
+.ftitle {
+  font-size: var(--text-2xs); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--text-second); margin-bottom: var(--space-2); font-weight: var(--weight-medium);
+}
+/* The facet's one VISIBLE explanation of why its values are not links. It
+ * replaced a per-row title attribute — invisible to keyboard, unreachable by
+ * touch, and therefore an explanation nobody could read. */
+.fhint { font-size: var(--text-2xs); color: var(--text-muted); margin-top: var(--space-2); line-height: 1.5; }
+.phint { text-transform: none; letter-spacing: 0; font-weight: var(--weight-normal); opacity: 0.9; }
+.frow { display: flex; justify-content: space-between; gap: var(--space-2); align-items: center; font-size: var(--text-sm); padding: 2px 0; color: var(--text-second); }
+.frow b { font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: var(--weight-medium); }
+
+/* --- Tables --------------------------------------------------------------- */
+/* overflow-x rather than wrapping: a Node id broken across two lines is no
+ * longer a token an operator can select, copy, or compare at a glance, and
+ * comparing identifiers is most of what this table is for. */
+.devtable { flex: 1; min-width: 0; padding: var(--space-4) var(--space-5); overflow-x: auto; }
+/* A real <caption>: on a page that can carry forty tables, an unnamed table is
+ * forty identical announcements. text-align is explicit because a caption
+ * centres by default. */
+.tcap {
+  font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-second); margin-bottom: var(--space-2); text-align: left;
+}
+table { border-collapse: collapse; width: 100%; }
+/* --text-second, not --text-muted. --text-muted is 2.98:1 on the surface in
+ * dark and 3.31:1 in light — below AA at these sizes — and it was carrying half
+ * the screen's actual information: column headings, hostnames, deviation
+ * counts, and the mode line the specification calls the calmest and most-read
+ * sentence on the card. --text-muted keeps the genuinely decorative rules.
+ * Nothing gets louder: --text-second is still clearly subordinate to
+ * --text-primary. */
+th {
+  text-align: left; font-size: var(--text-2xs); letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-second); font-weight: var(--weight-medium);
+  padding: var(--space-1) var(--space-3) var(--space-2); border-bottom: 1px solid var(--border-subtle);
+}
+td { padding: var(--space-3); border-bottom: 1px solid var(--border-subtle); vertical-align: top; font-size: var(--text-sm); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+td.num.attn, .stat.attn b { color: var(--attention-text); }
+tr.attnrow td { background: var(--attention-bg); }
+.lblcell { display: flex; flex-wrap: wrap; gap: var(--space-1); }
+.nodeid { font-family: var(--font-mono); font-size: var(--text-sm); white-space: nowrap; }
+.nodeid.big { font-size: var(--text-lg); }
+.sub { font-size: var(--text-xs); color: var(--text-second); }
+.mode { margin: var(--space-3) 0 0; font-size: var(--text-xs); color: var(--text-second); }
+.dim { color: var(--text-muted); }
+
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--attention); }
+.dot[data-live="on"] { background: var(--ok); }
+
+.scopenote { margin-top: var(--space-8); font-size: var(--text-xs); color: var(--text-muted); max-width: 64em; line-height: 1.7; }
+
+/* --- Day one -------------------------------------------------------------- */
+.dayone { max-width: 48em; }
+.dayone h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); letter-spacing: -0.01em; }
+.lede { font-size: var(--text-base); color: var(--text-second); max-width: 58em; line-height: 1.65; }
+.steps { padding-left: var(--space-5); margin: var(--space-6) 0; }
+.steps li { margin-bottom: var(--space-3); color: var(--text-second); line-height: 1.65; }
+.steps b { color: var(--text-primary); font-weight: var(--weight-semibold); }
+.watching {
+  display: flex; gap: var(--space-3); align-items: center;
+  padding: var(--space-4) var(--space-5); background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin: var(--space-6) 0;
+}
+/* Hearth: interactive, never semantic. The live indicator is the one
+ * non-semantic use of the accent and it is called out in the colour budget. */
+.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--color-blue); flex: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: gPulse 2s ease-in-out infinite; }
+  @keyframes gPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
+}
+
+/* A stated gap. Deliberately NOT amber: a gap in what the product records is
+ * not an alarm about the fleet, and colouring it as one would spend attention
+ * on the wrong thing. Bordered so it cannot be mistaken for body text. */
+.gap {
+  font-size: var(--text-xs); color: var(--text-second); background: var(--bg-canvas);
+  border: 1px dashed var(--border-mid); border-radius: var(--radius-lg);
+  padding: var(--space-3) var(--space-4); margin: var(--space-4) 0; max-width: 64em; line-height: 1.65;
+}
+.gap b { color: var(--text-primary); }
+.note { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; max-width: 64em; line-height: 1.65; }
+
+/* --- Node detail ---------------------------------------------------------- */
+.nodehead { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.seen { font-size: var(--text-sm); color: var(--text-second); }
+.labelrow {
+  display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap;
+  padding: var(--space-3) var(--space-4); background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin-bottom: var(--space-5);
+}
+.labelnote { flex-basis: 100%; font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-2); line-height: 1.7; }
+.labelnote b { color: var(--text-second); font-family: var(--font-mono); font-weight: var(--weight-medium); }
+
+.panels { display: flex; gap: var(--space-4); align-items: flex-start; flex-wrap: wrap; }
+.pcol { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: var(--space-4); }
+.pcol.wide { flex: 1.9; }
+.panel {
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section); padding: var(--space-4) var(--space-5);
+}
+.panel h3 {
+  margin: 0 0 var(--space-3); font-size: var(--text-2xs); letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--text-muted); font-weight: var(--weight-semibold);
+}
+dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-5); margin: 0; font-size: var(--text-sm); }
+dt { color: var(--text-muted); font-size: var(--text-xs); }
+dd { margin: 0; color: var(--text-primary); }
+dd code, .frow code { font-family: var(--font-mono); font-size: var(--text-sm); }
+dl.kv { grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5); }
+
+.polblock { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-canvas); }
+.polrow { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
+.polrow:last-child { border-bottom: 0; }
+.pk { width: 92px; flex: none; font-size: var(--text-2xs); letter-spacing: 0.09em; text-transform: uppercase; color: var(--text-muted); padding-top: 3px; }
+.polrow pre { margin: 0; font-family: var(--font-mono); font-size: var(--text-sm); white-space: pre-wrap; word-break: break-all; color: var(--text-second); }
+.oplist { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
+.oplist code { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text-second); }
+
+.taskout {
+  margin: var(--space-1) 0 var(--space-3); padding: var(--space-3); background: var(--bg-code);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-md);
+  font-family: var(--font-mono); font-size: var(--text-sm); white-space: pre-wrap;
+  word-break: break-all; max-height: 280px; overflow: auto; color: var(--text-second);
+}
+
+/* --- Activity feed -------------------------------------------------------- */
+.kindbar { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
+.kchip {
+  font-size: var(--text-xs); padding: 3px var(--space-3); border-radius: 10px;
+  border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-second);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.kchip b { font-variant-numeric: tabular-nums; color: var(--text-primary); }
+.kchip.on { background: var(--text-primary); color: var(--bg-canvas); border-color: var(--text-primary); }
+.kchip.on b { color: var(--bg-canvas); }
+.kchip:hover { text-decoration: none; border-color: var(--color-blue); }
+
+.feed { display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-section); overflow: hidden; }
+.ev { display: flex; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-subtle); background: var(--bg-surface); }
+.ev:last-child { border-bottom: 0; }
+.evwhen { width: 180px; flex: none; display: flex; flex-direction: column; gap: 2px; }
+.evwhen time { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+/* --text-muted, NOT --text-faint. Gleipnir's --text-faint is a BORDER value
+ * (#3a4840 dark, #d4cfc4 light) and using it for type gives ~1.4:1 against the
+ * surface in either theme — the audit kind under each timestamp was effectively
+ * invisible in both. */
+.evkind { font-size: var(--text-2xs); color: var(--text-muted); font-family: var(--font-mono); }
+.evbody { flex: 1; min-width: 0; }
+.evhead { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; }
+.evop code { font-family: var(--font-mono); font-size: var(--text-sm); }
+.evsum { color: var(--text-second); font-size: var(--text-sm); }
+.evargs { font-size: var(--text-sm); color: var(--text-second); margin-top: var(--space-1); word-break: break-all; font-family: var(--font-mono); }
+.evmeta { display: flex; gap: var(--space-3); flex-wrap: wrap; align-items: baseline; margin-top: var(--space-2); font-size: var(--text-sm); }
+.evreason { font-size: var(--text-sm); color: var(--text-second); margin-top: var(--space-1); }
+.evnote { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); }
+.grant { font-size: var(--text-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+/* --- Agents --------------------------------------------------------------- */
+.agentcols { display: flex; gap: var(--space-4); align-items: flex-start; }
+.agentrail {
+  width: 252px; flex: none; background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4);
+}
+.arow { display: grid; grid-template-columns: 10px 1fr; gap: 3px var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); color: inherit; }
+.arow:hover { background: var(--bg-elevated); text-decoration: none; }
+.arow.on { background: var(--bg-elevated); box-shadow: inset 2px 0 0 var(--color-blue); }
+.arow .dot { grid-row: 1; margin-top: 5px; }
+.astats, .asub { grid-column: 2; font-size: var(--text-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.astats b { color: var(--text-primary); }
+.agentfeed { flex: 1; min-width: 0; }
+.scoped { font-size: var(--text-sm); color: var(--text-second); margin: 0 0 var(--space-3); }
+
+/* --- Read egress ---------------------------------------------------------- */
+.statrow { display: flex; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.stat {
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-section); padding: var(--space-4) var(--space-5); min-width: 140px;
+}
+.stat b { display: block; font-size: var(--text-xl); font-weight: var(--weight-semibold); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stat span { font-size: var(--text-xs); color: var(--text-muted); }
+.stat.attn { border-color: var(--attention-line); background: var(--attention-bg); }
+section.panel { margin-top: var(--space-4); }
+
+/* --- Job detail ----------------------------------------------------------- */
+.jobhead { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); }
+.jhrow { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
+.jhrow:last-child { margin-bottom: 0; }
+.jobop { font-family: var(--font-mono); font-size: var(--text-base); }
+.ogroup { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin-bottom: var(--space-3); }
+.ogroup > summary { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-5); cursor: pointer; font-size: var(--text-sm); list-style: none; }
+.ogroup > summary::-webkit-details-marker { display: none; }
+.ogroup[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+.ogroup > summary b { font-variant-numeric: tabular-nums; }
+.ogroup .denyrule, .ogroup .note, .ogroup .cluster, .ogroup .deny { margin-left: var(--space-5); margin-right: var(--space-5); }
+.cluster { padding: var(--space-3) 0; }
+.clabel { font-size: var(--text-sm); color: var(--text-second); margin-bottom: var(--space-2); }
+.trow { display: flex; gap: var(--space-3); align-items: baseline; font-size: var(--text-sm); padding: 2px 0; }
+.exit { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--failure); }
+
+/* --- Approval queue ------------------------------------------------------- */
+.queue { display: flex; flex-direction: column; gap: var(--space-2); }
+.qrow {
+  display: flex; gap: var(--space-4); align-items: flex-start; color: inherit;
+  background: var(--bg-surface); border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--border-subtle); border-radius: var(--radius-section);
+  padding: var(--space-4) var(--space-5);
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+.qrow:hover { text-decoration: none; border-color: var(--color-blue); }
+/* Expiry pressure is the one countdown in the Console that earns its keep. */
+.qrow.urgent { border-left-color: var(--attention); background: var(--attention-bg); }
+.qrow.lapsed { border-left-color: var(--inert); opacity: 0.7; }
+.qmain { flex: 1; min-width: 0; }
+.qhead { display: flex; gap: var(--space-2); align-items: baseline; flex-wrap: wrap; }
+.qhead code { font-family: var(--font-mono); font-size: var(--text-sm); }
+.qsummary { font-size: var(--text-sm); color: var(--text-primary); margin-top: var(--space-2); }
+.qrules { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); }
+.qside { width: 180px; flex: none; text-align: right; }
+.quorum { font-size: var(--text-sm); color: var(--text-second); font-variant-numeric: tabular-nums; }
+.quorum b { color: var(--text-primary); }
+.qttl { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); font-variant-numeric: tabular-nums; }
+.qrow.urgent .qttl { color: var(--attention-text); font-weight: var(--weight-medium); }
+.qshape { font-size: var(--text-xs); color: var(--security); margin-top: var(--space-1); }
+.summary { font-size: var(--text-base); margin: var(--space-3) 0 0; }
+.empty { max-width: 44em; }
+.empty h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); }
+
+/* --- Outcome-bar segment widths, as classes not inline styles -------------
+ *
+ * `style-src 'self'` blocks inline styles, so `style="width:42%"` is DISCARDED
+ * by the browser and every segment paints at zero width. That is not a
+ * hypothetical: it is what this component did until a real browser enforcing
+ * the real policy was pointed at it. The width therefore crosses into CSS as a
+ * data attribute matched here.
+ *
+ * flex-grow rather than width, so the segments always fill the bar exactly and
+ * rounding cannot leave a sliver of track showing at the end. 200 steps is half
+ * a percent per step — below the threshold anyone can see, on a bar that is
+ * already deliberately non-proportional because of the minority floor. */
+.oseg { flex-grow: 0; flex-basis: 0; }
+.oseg[data-grow="1"] { flex-grow: 1; }
+.oseg[data-grow="2"] { flex-grow: 2; }
+.oseg[data-grow="3"] { flex-grow: 3; }
+.oseg[data-grow="4"] { flex-grow: 4; }
+.oseg[data-grow="5"] { flex-grow: 5; }
+.oseg[data-grow="6"] { flex-grow: 6; }
+.oseg[data-grow="7"] { flex-grow: 7; }
+.oseg[data-grow="8"] { flex-grow: 8; }
+.oseg[data-grow="9"] { flex-grow: 9; }
+.oseg[data-grow="10"] { flex-grow: 10; }
+.oseg[data-grow="11"] { flex-grow: 11; }
+.oseg[data-grow="12"] { flex-grow: 12; }
+.oseg[data-grow="13"] { flex-grow: 13; }
+.oseg[data-grow="14"] { flex-grow: 14; }
+.oseg[data-grow="15"] { flex-grow: 15; }
+.oseg[data-grow="16"] { flex-grow: 16; }
+.oseg[data-grow="17"] { flex-grow: 17; }
+.oseg[data-grow="18"] { flex-grow: 18; }
+.oseg[data-grow="19"] { flex-grow: 19; }
+.oseg[data-grow="20"] { flex-grow: 20; }
+.oseg[data-grow="21"] { flex-grow: 21; }
+.oseg[data-grow="22"] { flex-grow: 22; }
+.oseg[data-grow="23"] { flex-grow: 23; }
+.oseg[data-grow="24"] { flex-grow: 24; }
+.oseg[data-grow="25"] { flex-grow: 25; }
+.oseg[data-grow="26"] { flex-grow: 26; }
+.oseg[data-grow="27"] { flex-grow: 27; }
+.oseg[data-grow="28"] { flex-grow: 28; }
+.oseg[data-grow="29"] { flex-grow: 29; }
+.oseg[data-grow="30"] { flex-grow: 30; }
+.oseg[data-grow="31"] { flex-grow: 31; }
+.oseg[data-grow="32"] { flex-grow: 32; }
+.oseg[data-grow="33"] { flex-grow: 33; }
+.oseg[data-grow="34"] { flex-grow: 34; }
+.oseg[data-grow="35"] { flex-grow: 35; }
+.oseg[data-grow="36"] { flex-grow: 36; }
+.oseg[data-grow="37"] { flex-grow: 37; }
+.oseg[data-grow="38"] { flex-grow: 38; }
+.oseg[data-grow="39"] { flex-grow: 39; }
+.oseg[data-grow="40"] { flex-grow: 40; }
+.oseg[data-grow="41"] { flex-grow: 41; }
+.oseg[data-grow="42"] { flex-grow: 42; }
+.oseg[data-grow="43"] { flex-grow: 43; }
+.oseg[data-grow="44"] { flex-grow: 44; }
+.oseg[data-grow="45"] { flex-grow: 45; }
+.oseg[data-grow="46"] { flex-grow: 46; }
+.oseg[data-grow="47"] { flex-grow: 47; }
+.oseg[data-grow="48"] { flex-grow: 48; }
+.oseg[data-grow="49"] { flex-grow: 49; }
+.oseg[data-grow="50"] { flex-grow: 50; }
+.oseg[data-grow="51"] { flex-grow: 51; }
+.oseg[data-grow="52"] { flex-grow: 52; }
+.oseg[data-grow="53"] { flex-grow: 53; }
+.oseg[data-grow="54"] { flex-grow: 54; }
+.oseg[data-grow="55"] { flex-grow: 55; }
+.oseg[data-grow="56"] { flex-grow: 56; }
+.oseg[data-grow="57"] { flex-grow: 57; }
+.oseg[data-grow="58"] { flex-grow: 58; }
+.oseg[data-grow="59"] { flex-grow: 59; }
+.oseg[data-grow="60"] { flex-grow: 60; }
+.oseg[data-grow="61"] { flex-grow: 61; }
+.oseg[data-grow="62"] { flex-grow: 62; }
+.oseg[data-grow="63"] { flex-grow: 63; }
+.oseg[data-grow="64"] { flex-grow: 64; }
+.oseg[data-grow="65"] { flex-grow: 65; }
+.oseg[data-grow="66"] { flex-grow: 66; }
+.oseg[data-grow="67"] { flex-grow: 67; }
+.oseg[data-grow="68"] { flex-grow: 68; }
+.oseg[data-grow="69"] { flex-grow: 69; }
+.oseg[data-grow="70"] { flex-grow: 70; }
+.oseg[data-grow="71"] { flex-grow: 71; }
+.oseg[data-grow="72"] { flex-grow: 72; }
+.oseg[data-grow="73"] { flex-grow: 73; }
+.oseg[data-grow="74"] { flex-grow: 74; }
+.oseg[data-grow="75"] { flex-grow: 75; }
+.oseg[data-grow="76"] { flex-grow: 76; }
+.oseg[data-grow="77"] { flex-grow: 77; }
+.oseg[data-grow="78"] { flex-grow: 78; }
+.oseg[data-grow="79"] { flex-grow: 79; }
+.oseg[data-grow="80"] { flex-grow: 80; }
+.oseg[data-grow="81"] { flex-grow: 81; }
+.oseg[data-grow="82"] { flex-grow: 82; }
+.oseg[data-grow="83"] { flex-grow: 83; }
+.oseg[data-grow="84"] { flex-grow: 84; }
+.oseg[data-grow="85"] { flex-grow: 85; }
+.oseg[data-grow="86"] { flex-grow: 86; }
+.oseg[data-grow="87"] { flex-grow: 87; }
+.oseg[data-grow="88"] { flex-grow: 88; }
+.oseg[data-grow="89"] { flex-grow: 89; }
+.oseg[data-grow="90"] { flex-grow: 90; }
+.oseg[data-grow="91"] { flex-grow: 91; }
+.oseg[data-grow="92"] { flex-grow: 92; }
+.oseg[data-grow="93"] { flex-grow: 93; }
+.oseg[data-grow="94"] { flex-grow: 94; }
+.oseg[data-grow="95"] { flex-grow: 95; }
+.oseg[data-grow="96"] { flex-grow: 96; }
+.oseg[data-grow="97"] { flex-grow: 97; }
+.oseg[data-grow="98"] { flex-grow: 98; }
+.oseg[data-grow="99"] { flex-grow: 99; }
+.oseg[data-grow="100"] { flex-grow: 100; }
+.oseg[data-grow="101"] { flex-grow: 101; }
+.oseg[data-grow="102"] { flex-grow: 102; }
+.oseg[data-grow="103"] { flex-grow: 103; }
+.oseg[data-grow="104"] { flex-grow: 104; }
+.oseg[data-grow="105"] { flex-grow: 105; }
+.oseg[data-grow="106"] { flex-grow: 106; }
+.oseg[data-grow="107"] { flex-grow: 107; }
+.oseg[data-grow="108"] { flex-grow: 108; }
+.oseg[data-grow="109"] { flex-grow: 109; }
+.oseg[data-grow="110"] { flex-grow: 110; }
+.oseg[data-grow="111"] { flex-grow: 111; }
+.oseg[data-grow="112"] { flex-grow: 112; }
+.oseg[data-grow="113"] { flex-grow: 113; }
+.oseg[data-grow="114"] { flex-grow: 114; }
+.oseg[data-grow="115"] { flex-grow: 115; }
+.oseg[data-grow="116"] { flex-grow: 116; }
+.oseg[data-grow="117"] { flex-grow: 117; }
+.oseg[data-grow="118"] { flex-grow: 118; }
+.oseg[data-grow="119"] { flex-grow: 119; }
+.oseg[data-grow="120"] { flex-grow: 120; }
+.oseg[data-grow="121"] { flex-grow: 121; }
+.oseg[data-grow="122"] { flex-grow: 122; }
+.oseg[data-grow="123"] { flex-grow: 123; }
+.oseg[data-grow="124"] { flex-grow: 124; }
+.oseg[data-grow="125"] { flex-grow: 125; }
+.oseg[data-grow="126"] { flex-grow: 126; }
+.oseg[data-grow="127"] { flex-grow: 127; }
+.oseg[data-grow="128"] { flex-grow: 128; }
+.oseg[data-grow="129"] { flex-grow: 129; }
+.oseg[data-grow="130"] { flex-grow: 130; }
+.oseg[data-grow="131"] { flex-grow: 131; }
+.oseg[data-grow="132"] { flex-grow: 132; }
+.oseg[data-grow="133"] { flex-grow: 133; }
+.oseg[data-grow="134"] { flex-grow: 134; }
+.oseg[data-grow="135"] { flex-grow: 135; }
+.oseg[data-grow="136"] { flex-grow: 136; }
+.oseg[data-grow="137"] { flex-grow: 137; }
+.oseg[data-grow="138"] { flex-grow: 138; }
+.oseg[data-grow="139"] { flex-grow: 139; }
+.oseg[data-grow="140"] { flex-grow: 140; }
+.oseg[data-grow="141"] { flex-grow: 141; }
+.oseg[data-grow="142"] { flex-grow: 142; }
+.oseg[data-grow="143"] { flex-grow: 143; }
+.oseg[data-grow="144"] { flex-grow: 144; }
+.oseg[data-grow="145"] { flex-grow: 145; }
+.oseg[data-grow="146"] { flex-grow: 146; }
+.oseg[data-grow="147"] { flex-grow: 147; }
+.oseg[data-grow="148"] { flex-grow: 148; }
+.oseg[data-grow="149"] { flex-grow: 149; }
+.oseg[data-grow="150"] { flex-grow: 150; }
+.oseg[data-grow="151"] { flex-grow: 151; }
+.oseg[data-grow="152"] { flex-grow: 152; }
+.oseg[data-grow="153"] { flex-grow: 153; }
+.oseg[data-grow="154"] { flex-grow: 154; }
+.oseg[data-grow="155"] { flex-grow: 155; }
+.oseg[data-grow="156"] { flex-grow: 156; }
+.oseg[data-grow="157"] { flex-grow: 157; }
+.oseg[data-grow="158"] { flex-grow: 158; }
+.oseg[data-grow="159"] { flex-grow: 159; }
+.oseg[data-grow="160"] { flex-grow: 160; }
+.oseg[data-grow="161"] { flex-grow: 161; }
+.oseg[data-grow="162"] { flex-grow: 162; }
+.oseg[data-grow="163"] { flex-grow: 163; }
+.oseg[data-grow="164"] { flex-grow: 164; }
+.oseg[data-grow="165"] { flex-grow: 165; }
+.oseg[data-grow="166"] { flex-grow: 166; }
+.oseg[data-grow="167"] { flex-grow: 167; }
+.oseg[data-grow="168"] { flex-grow: 168; }
+.oseg[data-grow="169"] { flex-grow: 169; }
+.oseg[data-grow="170"] { flex-grow: 170; }
+.oseg[data-grow="171"] { flex-grow: 171; }
+.oseg[data-grow="172"] { flex-grow: 172; }
+.oseg[data-grow="173"] { flex-grow: 173; }
+.oseg[data-grow="174"] { flex-grow: 174; }
+.oseg[data-grow="175"] { flex-grow: 175; }
+.oseg[data-grow="176"] { flex-grow: 176; }
+.oseg[data-grow="177"] { flex-grow: 177; }
+.oseg[data-grow="178"] { flex-grow: 178; }
+.oseg[data-grow="179"] { flex-grow: 179; }
+.oseg[data-grow="180"] { flex-grow: 180; }
+.oseg[data-grow="181"] { flex-grow: 181; }
+.oseg[data-grow="182"] { flex-grow: 182; }
+.oseg[data-grow="183"] { flex-grow: 183; }
+.oseg[data-grow="184"] { flex-grow: 184; }
+.oseg[data-grow="185"] { flex-grow: 185; }
+.oseg[data-grow="186"] { flex-grow: 186; }
+.oseg[data-grow="187"] { flex-grow: 187; }
+.oseg[data-grow="188"] { flex-grow: 188; }
+.oseg[data-grow="189"] { flex-grow: 189; }
+.oseg[data-grow="190"] { flex-grow: 190; }
+.oseg[data-grow="191"] { flex-grow: 191; }
+.oseg[data-grow="192"] { flex-grow: 192; }
+.oseg[data-grow="193"] { flex-grow: 193; }
+.oseg[data-grow="194"] { flex-grow: 194; }
+.oseg[data-grow="195"] { flex-grow: 195; }
+.oseg[data-grow="196"] { flex-grow: 196; }
+.oseg[data-grow="197"] { flex-grow: 197; }
+.oseg[data-grow="198"] { flex-grow: 198; }
+.oseg[data-grow="199"] { flex-grow: 199; }
+.oseg[data-grow="200"] { flex-grow: 200; }
+
+/* Outcomes that describe something which never reached a Node. They are not
+ * Task outcomes and must not borrow a Task outcome's colour — "parked" is the
+ * approval gate working, not a failure and not a success. */
+[data-outcome="parked"], [data-outcome="already parked"],
+[data-outcome="decided"], [data-outcome="planned"], [data-outcome="refused"] {
+  --oc: var(--text-second); --ocbg: transparent;
+}
+.chip.outcome[data-outcome="parked"],
+.chip.outcome[data-outcome="already parked"],
+.chip.outcome[data-outcome="decided"],
+.chip.outcome[data-outcome="planned"],
+.chip.outcome[data-outcome="refused"] { border-style: dashed; font-weight: var(--weight-normal); }
+.repeatdeny { font-size: var(--text-xs); color: var(--text-muted); padding-top: 0; }

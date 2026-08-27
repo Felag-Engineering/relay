@@ -82,6 +82,47 @@ type Node struct {
 	Outdated bool
 }
 
+// The quarantine label, pinned as constants because the Console READS it today
+// and the label-management surface will WRITE it in v0.7.0 (#430, ADR-0020) —
+// and those two must agree exactly.
+//
+// # Why the value is pinned and not just the key
+//
+// A reader that tests for the KEY treats `relay:quarantine=off` as quarantined.
+// A Selector tests key AND value (capability.Predicate), so the set the Console
+// draws and the set an operator can target would differ — on the security lane,
+// which is the one namespace quarantine, remediation and secret distribution
+// may target at all (invariant 7). "Fence these Nodes" resolving to a different
+// set than the one shown is the failure this pins shut.
+//
+// Decided 2026-08-26, before any writer exists, which is the cheap moment: after
+// a writer ships, changing the value is a fleet-wide migration of a
+// security-lane label. Recorded in docs/design/console/16-incident-ladder.md.
+//
+// They live in this package because it owns the label maps and is imported by
+// both sides; neither the reader nor the writer may spell the string itself.
+const (
+	// QuarantineKey is the bare key inside a Node's relay-space label map.
+	// Selector syntax renders it `relay:quarantine`.
+	QuarantineKey = "quarantine"
+
+	// QuarantineOn is the only value that means quarantined. Any other value —
+	// including the empty string and "off" — means the Node is not quarantined.
+	// Fail-open is deliberate here and is not a weakening: the fence is the
+	// PRESENCE of a deliberate admin act, so an ambiguous value must not be
+	// read as one having happened.
+	QuarantineOn = "on"
+)
+
+// Quarantined reports whether n carries the quarantine fence.
+//
+// The one place the test is written. A caller that inlines
+// `n.RelayLabels["quarantine"] != ""` has re-introduced the presence-versus-
+// value bug this constant pair exists to close.
+func (n Node) Quarantined() bool {
+	return n.RelayLabels[QuarantineKey] == QuarantineOn
+}
+
 // Report is the input to Upsert. It deliberately carries no relay-label field —
 // this is the structural half of the node-side immutability boundary. A relay-daemon
 // can never supply relay-space labels through this type, regardless of what it sends.

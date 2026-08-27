@@ -59,16 +59,22 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 // all, is that ABSENT BEATS FORBIDDEN. So the assertion is about what is not
 // drawn, not about what refuses.
 func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
-	h := newTestHandler(Deps{Execution: true}, accounts.RoleViewer)
-	body := get(t, h, "/console/").Body.String()
+	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleViewer)
+	// Scoped to the navigation, not the whole page. The assertion is about what
+	// is DRAWN IN THE NAV, and a screen is free to use the same words for its
+	// own purposes — the fleet view's fingerprint column is headed "Policy",
+	// which made the unscoped version of this test fail on a page that was
+	// entirely correct. A guard that fires on unrelated copy gets deleted by
+	// the third person it inconveniences, and this one is worth keeping.
+	nav := navOf(get(t, h, "/console/").Body.String())
 
 	for _, absent := range []string{">Run<", ">Policy<", ">Add Nodes<", ">Accounts<"} {
-		if strings.Contains(body, absent) {
+		if strings.Contains(nav, absent) {
 			t.Errorf("a viewer's navigation contains %s — it must be structurally smaller, not merely refusing", absent)
 		}
 	}
 	for _, present := range []string{">Fleet<", ">Agents<", ">Activity<", ">Read egress<"} {
-		if !strings.Contains(body, present) {
+		if !strings.Contains(nav, present) {
 			t.Errorf("a viewer's navigation is missing %s, which a viewer may read", present)
 		}
 	}
@@ -82,7 +88,7 @@ func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 //
 // 404 rather than 403 is the whole point. A 403 would confirm the route exists.
 func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
-	off := newTestHandler(Deps{Execution: false}, accounts.RoleAdmin)
+	off := newTestHandler(withExecution(renderableDeps(), false), accounts.RoleAdmin)
 	if got := get(t, off, "/console/run").Code; got != http.StatusNotFound {
 		t.Errorf("GET /console/run with console_execution off = %d, want 404 — the route must be unmounted, not refused", got)
 	}
@@ -90,7 +96,7 @@ func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
 		t.Error("navigation advertises Run with console_execution off")
 	}
 
-	on := newTestHandler(Deps{Execution: true}, accounts.RoleAdmin)
+	on := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
 	if got := get(t, on, "/console/run").Code; got != http.StatusOK {
 		t.Errorf("GET /console/run with console_execution on = %d, want 200", got)
 	}
@@ -104,7 +110,7 @@ func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
 // hx-on: is called out by name because it is the one HTMX attribute that IS
 // script, and it is the natural thing to reach for.
 func TestConsole_NoInlineScript(t *testing.T) {
-	h := newTestHandler(Deps{Execution: true}, accounts.RoleAdmin)
+	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
 	body := get(t, h, "/console/").Body.String()
 
 	for _, banned := range []string{"<script", "hx-on:", "javascript:", " onclick=", " onload="} {
@@ -117,7 +123,7 @@ func TestConsole_NoInlineScript(t *testing.T) {
 // TestConsole_SecurityHeaders asserts the policy actually ships. A CSP that is
 // computed and never sent is the most convincing kind of absent control.
 func TestConsole_SecurityHeaders(t *testing.T) {
-	h := newTestHandler(Deps{}, accounts.RoleAdmin)
+	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
 	res := get(t, h, "/console/").Result()
 
 	csp := res.Header.Get("Content-Security-Policy")
@@ -194,7 +200,7 @@ func TestConsole_CSRFAcceptsMatchingToken(t *testing.T) {
 // Navigation destinations are pages, so they are GET by definition; this fails
 // the day someone gives a nav entry a mutating method.
 func TestConsole_NoMutatingGet(t *testing.T) {
-	for _, r := range Routes(Deps{Execution: true}) {
+	for _, r := range Routes(withExecution(renderableDeps(), true)) {
 		if r.Nav.Label != "" && r.Method != http.MethodGet {
 			t.Errorf("navigation destination %q uses %s — a destination is a page and must be GET", r.Nav.Label, r.Method)
 		}
@@ -208,7 +214,7 @@ func TestConsole_NoMutatingGet(t *testing.T) {
 // Authenticator as every other control-plane surface, and this asserts the
 // harness has not accidentally mounted it outside one.
 func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
-	h := newTestHandler(Deps{}, accounts.RoleAdmin)
+	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
 	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -216,4 +222,65 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 	if rec.Code == http.StatusOK {
 		t.Error("an unauthenticated request rendered a Console page")
 	}
+}
+
+// navOf extracts the shell's navigation aside from a rendered page, so an
+// assertion about what the navigation advertises cannot be satisfied — or
+// broken — by a screen that happens to use the same word.
+func navOf(body string) string {
+	const open = `<aside class="nav">`
+	i := strings.Index(body, open)
+	if i < 0 {
+		return body
+	}
+	rest := body[i+len(open):]
+	if j := strings.Index(rest, "</aside>"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// TestConsole_FontsAreServedFromThisOrigin guards the pairing between the
+// stylesheet and the content security policy.
+//
+// The policy admits `font-src 'self'` and nothing else, so a webfont pulled
+// from a CDN is silently blocked: the page still renders, in a system fallback,
+// looking to whoever wrote it exactly like it worked. That failure mode is why
+// this asserts the BYTES come back rather than that the CSS mentions a URL.
+func TestConsole_FontsAreServedFromThisOrigin(t *testing.T) {
+	h := newTestHandler(renderableDeps(), accounts.RoleAdmin)
+
+	css := get(t, h, "/console/assets/console.css").Body.String()
+	for _, external := range []string{"fonts.googleapis.com", "fonts.gstatic.com", "//cdn.", "http://", "https://"} {
+		if strings.Contains(css, external) {
+			t.Errorf("the stylesheet references %q — the content security policy blocks every origin but this one, "+
+				"so an external asset fails silently and renders as a fallback", external)
+		}
+	}
+
+	for _, f := range []string{
+		"ibm-plex-sans-400.woff2", "ibm-plex-sans-500.woff2", "ibm-plex-sans-600.woff2",
+		"ibm-plex-mono-400.woff2", "ibm-plex-mono-500.woff2",
+	} {
+		if !strings.Contains(css, f) {
+			t.Errorf("the stylesheet does not reference %s", f)
+		}
+		rec := get(t, h, "/console/assets/fonts/"+f)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET /console/assets/fonts/%s = %d, want 200 — the font is not in the embedded FS", f, rec.Code)
+			continue
+		}
+		// A 404 page is also a 200-shaped thing to a careless assertion, so
+		// check it is really a woff2: the format's magic number is "wOF2".
+		if body := rec.Body.String(); len(body) < 4 || body[:4] != "wOF2" {
+			t.Errorf("/console/assets/fonts/%s did not return a woff2 (magic %q)", f, body[:min(4, len(body))])
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

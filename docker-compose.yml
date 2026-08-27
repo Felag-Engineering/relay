@@ -63,6 +63,18 @@ services:
       # fail-closed: a malformed file fails startup rather than silently
       # meaning "nothing needs approval".
       RELAY_APPROVAL_GATE_CONFIG: "/etc/relay/approval-gates.json"
+      # The Admin Console (ADR-0009), served on the SAME control-plane listener
+      # as MCP and /api/v1 — no new listener and no new auth path (invariant
+      # 10). Browser sessions are one of the authenticator's credential lanes,
+      # beside API Tokens and OAuth, rather than the Console authenticating its
+      # own requests.
+      #
+      # Its TLS is the control plane's TLS, which is the point of the hard
+      # prerequisite in the Console specs: both listeners share one server
+      # certificate (ADR-0031), so the Console's own reachability rides on that
+      # certificate rotating. #446 fixed the rotation; this fleet is where you
+      # would notice if it regressed.
+      RELAY_CONSOLE_ENABLED: "true"
     ports:
       # Distinct published host ports: node plane vs control plane. Bound to
       # 127.0.0.1 (loopback) ONLY: the control plane is an execution surface,
@@ -140,6 +152,61 @@ services:
       # Read-only, and only for the PUBLIC ca-cert.pem it pins its API calls to.
       - relay-data:/relay-data:ro
       - control-credential:/credential
+
+  # One-shot: creates the human Account that signs in to the Admin Console.
+  #
+  # A DISTINCT Account from `dev-approver` and from the founding admin, because
+  # the Console is a per-human identity (ADR-0009) and a shared "the admin
+  # account" is exactly the attribution hole the audit trail exists to close —
+  # every act in the Console is attributed to the person who did it.
+  console-admin:
+    image: curlimages/curl:8.11.1
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      relay:
+        condition: service_healthy
+      credential:
+        condition: service_completed_successfully
+    environment:
+      CONSOLE_ADMIN_NAME: "${CONSOLE_ADMIN_NAME:-admin}"
+    entrypoint: ["sh", "/console-admin.sh"]
+    volumes:
+      - ./docker/console-admin.sh:/console-admin.sh:ro
+      # Read-only, and only for the PUBLIC ca-cert.pem it pins its API calls to.
+      - relay-data:/relay-data:ro
+      - control-credential:/credential:ro
+
+  # One-shot: sets that Account's Console sign-in password.
+  #
+  # Separate from console-admin because the two acts have different authorities:
+  # creating an Account is a control-plane request carrying a bearer token, and
+  # setting the first Console password is local root on the Relay's own store
+  # (there is no API for it — reaching the Console requires a password, so the
+  # first one cannot be set through the Console). This service therefore mounts
+  # relay-data READ-WRITE and holds no credential at all, and its sibling holds
+  # the credential and no store access.
+  #
+  # The Relay refuses a password shorter than 12 bytes. The Console's throttle
+  # has no hard lockout by design (spec 12), so an attacker gets slow unlimited
+  # attempts in front of a fleet-execution surface, and length is the only thing
+  # that makes that safe.
+  console-password:
+    build:
+      context: .
+      dockerfile: docker/relay.Dockerfile
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      console-admin:
+        condition: service_completed_successfully
+    environment:
+      CONSOLE_ADMIN_NAME: "${CONSOLE_ADMIN_NAME:-admin}"
+      CONSOLE_ADMIN_PASSWORD: "${CONSOLE_ADMIN_PASSWORD:-admin1234567}"
+    entrypoint: ["sh", "/console-password.sh"]
+    volumes:
+      - ./docker/console-password.sh:/console-password.sh:ro
+      - relay-data:/var/lib/relay
 
   # One-shot: mints the Enrollment Token and exports the public CA cert, then
   # exits. Runs as root (0:0) so it can read the root-owned CA volume and write
