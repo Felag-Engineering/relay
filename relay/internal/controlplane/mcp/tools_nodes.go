@@ -10,12 +10,24 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-func nodeItemFromNode(n registry.Node) NodeItem {
+// nodeItemFromNode renders n as list_nodes/describe_node's shared base shape.
+// ev is the SAME StateEval the caller resolved its Selector against — one
+// instant, one cert-expiring window per response — so a Node's rendered
+// state_labels can never disagree with whether it matched the request's own
+// filter.
+func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
+	states := nodestate.Labels(nodestate.Input{Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin})
+	stateLabels := make([]string, 0, len(states))
+	for _, l := range states {
+		stateLabels = append(stateLabels, l.String())
+	}
+
 	item := NodeItem{
 		NodeID:      n.NodeID,
 		NodeLabels:  n.NodeLabels,
@@ -32,6 +44,7 @@ func nodeItemFromNode(n registry.Node) NodeItem {
 		Revoked:                !n.RevokedAt.IsZero(),
 		Outdated:               n.Outdated,
 		Connected:              n.Connected,
+		StateLabels:            stateLabels,
 	}
 	if !n.LastSeen.IsZero() {
 		item.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
@@ -138,11 +151,11 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 
 // listNodesInput is list_nodes' argument: an optional Selector filter,
 // parsed via capability.ParseSelector — the single source of truth for the
-// "node:key=value"/"relay:key=value" grammar every Selector-consuming
-// surface shares. Fail-closed: a term with no node:/relay: prefix is a parse
-// error, not a guess.
+// "node:key=value"/"relay:key=value"/"tag:key=value"/"state:key[=value]"
+// grammar every Selector-consuming surface shares. Fail-closed: a term with
+// no node:/relay:/tag:/state: prefix is a parse error, not a guess.
 type listNodesInput struct {
-	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on'. Every term must carry a node: or relay: prefix. Empty or omitted matches every Node."`
+	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, state:offline'. Every term must carry a node:, relay:, tag:, or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
 }
 
 // describeNodeInput is describe_node's argument: the exact Node ID.
@@ -150,14 +163,20 @@ type describeNodeInput struct {
 	NodeID string `json:"node_id" jsonschema:"exact Node ID to describe"`
 }
 
-// registerNodeTools registers list_nodes and describe_node on srv.
-func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader, reads ReadAuditor) {
+// registerNodeTools registers list_nodes and describe_node on srv. now and
+// certExpiringWithin build the capability.StateEval each tool call resolves
+// its Selector and renders state_labels against — ONE instant, ONE
+// cert-expiring window per response, so a Node's rendered labels can never
+// disagree with whether it matched the request's own filter.
+func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader, reads ReadAuditor, now func() time.Time, certExpiringWithin time.Duration) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
-			"(node:/relay: label predicates). node: and relay: labels are returned as separate " +
-			"maps, never merged. `outdated` flags Nodes below the Relay's configured " +
-			"minimum daemon version (ADR-0014); always false when no minimum is set.",
+			"(node:/relay:/tag:/state: label predicates). node: and relay: labels are returned as " +
+			"separate maps, never merged; state: labels are Relay-derived and returned as " +
+			"state_labels, in Selector syntax with the state: prefix. `outdated` flags Nodes below " +
+			"the Relay's configured minimum daemon version (ADR-0014); always false when no " +
+			"minimum is set.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listNodesInput) (*sdkmcp.CallToolResult, ListNodesOutput, error) {
 		if err := auditRead(ctx, reads, "list_nodes", ReadEvent{Selector: in.Selector}); err != nil {
 			return nil, ListNodesOutput{}, err
@@ -168,6 +187,7 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			return nil, ListNodesOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
+		ev := capability.StateEval{Now: now(), CertExpiringWithin: certExpiringWithin}
 		items := make([]NodeItem, 0)
 		// This loop reimplements capability.Selector.Resolve's match-and-collect
 		// logic (selector.go) against the narrower NodeReader (Get/List only)
@@ -176,8 +196,8 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 		// registry dependency minimal (see NodeReader's doc comment) — Matches
 		// itself (the only non-trivial part) is still reused, not reimplemented.
 		for _, n := range nodes.List() {
-			if sel.Matches(n) {
-				items = append(items, nodeItemFromNode(n))
+			if sel.Matches(n, ev) {
+				items = append(items, nodeItemFromNode(n, ev))
 			}
 		}
 		sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
@@ -199,7 +219,10 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"template_vocabulary lists the Template Operations THIS Node has loaded from its local " +
 			"root-owned template files (ADR-0021) — vocabulary is per-Node: dispatching a template a " +
 			"Node has not loaded reports the `unsupported` outcome, which is neither a failure nor a " +
-			"Policy denial.",
+			"Policy denial. state_labels are Relay-derived state: labels (ADR-0034): the boolean " +
+			"markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, " +
+			"and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint= " +
+			"— set by nobody, targetable verbatim in a list_nodes/run_operation/raw_exec selector.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
 		if err := auditRead(ctx, reads, "describe_node", ReadEvent{NodeID: in.NodeID}); err != nil {
 			return nil, DescribeNodeOutput{}, err
@@ -210,8 +233,9 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			return nil, DescribeNodeOutput{}, fmt.Errorf("node %q not found", in.NodeID)
 		}
 
+		ev := capability.StateEval{Now: now(), CertExpiringWithin: certExpiringWithin}
 		out := DescribeNodeOutput{
-			NodeItem:    nodeItemFromNode(n),
+			NodeItem:    nodeItemFromNode(n, ev),
 			Certificate: certificateFromNode(n),
 		}
 		vsnap, vok := vocab.Get(in.NodeID)

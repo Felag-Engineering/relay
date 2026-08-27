@@ -480,6 +480,57 @@ func TestMCP_ListNodes_SelectorFilter(t *testing.T) {
 			t.Fatalf("list_nodes(bare=key): IsError = false, want true (fail-closed on missing namespace prefix)")
 		}
 	})
+
+	// Neither Node in this fixture is ever connected (newTestServerWithConfig
+	// never calls SetConnected), so state:offline matches both — and does so
+	// through the same resolver list_nodes itself uses, not a second one.
+	t.Run("state: filter matches every offline Node", func(t *testing.T) {
+		res := callTool(t, session, "list_nodes", map[string]any{"selector": "state:offline"})
+		var out mcp.ListNodesOutput
+		decodeResult(t, res, &out)
+		if len(out.Nodes) != 2 {
+			t.Fatalf("list_nodes(state:offline) = %+v, want both Nodes", out.Nodes)
+		}
+	})
+
+	t.Run("state: key outside the closed vocabulary is a tool error, not an empty list", func(t *testing.T) {
+		res := callTool(t, session, "list_nodes", map[string]any{"selector": "state:bogus"})
+		if !res.IsError {
+			t.Fatalf("list_nodes(state:bogus): IsError = false, want true (closed vocabulary, fail-closed)")
+		}
+	})
+}
+
+// TestMCP_ListNodes_StateLabels covers acceptance 8: state_labels renders on
+// every Node, prefixed and never null.
+func TestMCP_ListNodes_StateLabels(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	res := callTool(t, session, "list_nodes", nil)
+	var out mcp.ListNodesOutput
+	decodeResult(t, res, &out)
+
+	if len(out.Nodes) == 0 {
+		t.Fatal("list_nodes(): no Nodes returned")
+	}
+	for _, n := range out.Nodes {
+		if n.StateLabels == nil {
+			t.Errorf("node %q: StateLabels is null, want a (possibly empty) array", n.NodeID)
+		}
+		found := false
+		for _, l := range n.StateLabels {
+			if l == "state:offline" {
+				found = true
+			}
+			if !strings.HasPrefix(l, "state:") {
+				t.Errorf("node %q: state label %q is not state:-prefixed", n.NodeID, l)
+			}
+		}
+		if !found {
+			t.Errorf("node %q: StateLabels = %v, want state:offline (never connected in this fixture)", n.NodeID, n.StateLabels)
+		}
+	}
 }
 
 func TestMCP_DescribeNode(t *testing.T) {

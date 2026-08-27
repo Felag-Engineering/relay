@@ -11,9 +11,21 @@
 // permission check: there is no method to call.
 //
 // That evaluation has two consumers — the Console's fleet view renders it, and
-// Selector resolution (#414) will match on it — and they must agree exactly, or
-// an operator will filter for `state:offline` and target a different set than
-// the one they were shown. One package, one vocabulary, both callers.
+// capability.Selector resolution matches on it (LabelSet) — and they must
+// agree exactly, or an operator will filter for `state:offline` and target a
+// different set than the one they were shown. One package, one vocabulary,
+// both callers.
+//
+// # Why this package never imports internal/ca
+//
+// MarkerCertExpiring needs a warning window, and ADR-0034 pins it to a
+// fraction of ca.LeafValidity. capability and api are both guarded by import
+// allowlists that keep internal/ca out — the capability layer must never
+// reach the CA, and admitting this package to their allowlists is only safe
+// because it does not either. So this package holds the fraction's DEFAULT
+// and CertExpiringWindow, a pure `leafValidity * fraction` conversion; the
+// composition root — which already imports ca — multiplies once at startup
+// and hands every surface the resulting time.Duration.
 //
 // # Node-local and objective
 //
@@ -38,6 +50,7 @@
 package nodestate
 
 import (
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -78,18 +91,13 @@ const (
 	// drops off the fleet when it lapses — silently, which is why it is worth
 	// a marker at all.
 	//
-	// The DATA now exists (#440): registry.Node carries CertNotAfter. What is
-	// still missing is the THRESHOLD — ADR-0034 fires this at under 25% of the
-	// leaf lifetime remaining, and that fraction is file-only configuration no
-	// API may read or set, which is a decision #414 owns along with evaluating
-	// `state:` at Selector-resolution time.
-	//
-	// So Labels still does not emit it. That is deliberate rather than
-	// forgotten: emitting it here with a threshold invented locally would put a
-	// second definition of "expiring" in the tree, and the fleet view and a
-	// Selector would then disagree about which Nodes are about to fall off.
-	// CertExpiryKnown reports truthfully, so a caller can render the expiry
-	// itself today and the marker arrives with its threshold.
+	// The window is CertExpiringWithin on Input, a file-only fraction of
+	// ca.LeafValidity the composition root computes once via
+	// CertExpiringWindow and hands to every surface (invariant 11) — this
+	// package never reads the fraction from anywhere itself, and never
+	// imports internal/ca (see the package doc's import note). An already-
+	// lapsed certificate fires too: it is an alarm that automation failed,
+	// never a countdown a caller can be early for.
 	MarkerCertExpiring Marker = "cert-expiring"
 )
 
@@ -142,14 +150,28 @@ type Input struct {
 	// registry against the Relay's configured minimum; this package does not
 	// re-derive it and must not — a second version comparison is a second place
 	// for the dispatch gate and the fleet view to disagree.
+	//
+	// Node.Connected is likewise already derived, by BOTH registry
+	// implementations, from the dispatch router's live Tunnel set — the same
+	// lifecycle fact MCP and the Control API already report. There is
+	// deliberately no separate Connected field on Input: reading it off the
+	// Node record is what makes every marker here provably "a function of one
+	// Node's record" (ADR-0034), rather than a second liveness source a
+	// caller could feed a different answer through.
 	Node registry.Node
 
-	// Connected is whether the Node has a live Tunnel right now, from the
-	// dispatch router. It is NOT read from LastSeen: a Node that reported four
-	// seconds ago and then dropped its connection is offline for dispatch
-	// purposes this instant, and "recently seen" would render it green while
-	// every Task to it resolved `unreachable`.
-	Connected bool
+	// Now is the instant this evaluation is happening at — needed to compare
+	// against Node.CertNotAfter. A caller passes its own clock (never
+	// time.Now() here) so a whole Selector resolution or a whole rendered page
+	// is evaluated against ONE instant.
+	Now time.Time
+
+	// CertExpiringWithin is the warning window for MarkerCertExpiring: the
+	// marker fires when less than this much of the certificate's remaining
+	// lifetime is left. File-only configuration (invariant 11) computed once
+	// by the composition root via CertExpiringWindow — this package never
+	// reads it from anywhere itself. Zero means the marker never fires.
+	CertExpiringWithin time.Duration
 }
 
 // Markers returns the boolean `state:` labels that hold for in, in a stable
@@ -160,19 +182,49 @@ type Input struct {
 // is the calmest and most common answer.
 func Markers(in Input) []Label {
 	var out []Label
-	if !in.Connected {
+	if !in.Node.Connected {
 		out = append(out, Label{Key: string(MarkerOffline), Attention: true})
 	}
 	if in.Node.Outdated {
 		out = append(out, Label{Key: string(MarkerOutdated), Attention: true})
+	}
+	// A zero CertExpiringWithin means the marker never fires (Input's doc
+	// comment) — the composition root always sets it, so the only way this
+	// stays quiet in production is a genuinely healthy certificate. An
+	// unrecorded provenance (CertProvenanceKnown false) must never read as an
+	// expiry in 1970, which is exactly what comparing a zero CertNotAfter
+	// against Now would do.
+	if in.CertExpiringWithin > 0 && in.Node.CertProvenanceKnown() &&
+		in.Node.CertNotAfter.Sub(in.Now) < in.CertExpiringWithin {
+		// An already-lapsed certificate (negative remaining) fires too: this is
+		// an alarm that renewal automation failed, never a countdown a caller
+		// can be early for.
+		out = append(out, Label{Key: string(MarkerCertExpiring), Attention: true})
 	}
 	if in.Node.TemplateSetFingerprint == TemplateUnloadable {
 		// Grey, not amber: an empty template vocabulary is inertness, not an
 		// alarm. The Node still takes native Operations.
 		out = append(out, Label{Key: string(MarkerTemplateUnloadable)})
 	}
-	// MarkerCertExpiring is deliberately not emitted — see its doc comment.
 	return out
+}
+
+// DefaultCertExpiringFraction is ADR-0034's warning threshold: 25% of
+// ca.LeafValidity remaining (84h at the current 336h lifetime). The daemon
+// renews at a jittered 50-75% of the lifetime (daemon/src/renew.rs), so a
+// Node under a quarter remaining has missed its entire renewal window —
+// MarkerCertExpiring is an alarm that automation failed, not a heads-up.
+const DefaultCertExpiringFraction = 0.25
+
+// CertExpiringWindow converts a fraction of a certificate's lifetime into the
+// absolute Duration Input.CertExpiringWithin wants.
+//
+// This package does not import internal/ca (see the package doc): it holds
+// the fraction's DEFAULT and this pure conversion, and the composition root —
+// which already imports ca for LeafValidity — multiplies once at startup and
+// hands every surface the same Duration (invariant 11).
+func CertExpiringWindow(leafValidity time.Duration, fraction float64) time.Duration {
+	return time.Duration(float64(leafValidity) * fraction)
 }
 
 // Facts returns the key=value `state:` labels for in.
@@ -181,23 +233,145 @@ func Markers(in Input) []Label {
 // never reported a Policy fingerprint has no such fact, and rendering
 // `state:policy-fingerprint=` would put a targetable term on screen that
 // matches nothing.
+//
+// A fact whose value fails validFactValue is likewise omitted, never
+// sanitised in place: DaemonVersion, PolicyFingerprint and
+// TemplateSetFingerprint are self-reported by the Node (tunnel.go copies
+// Hello straight into registry.Report with no validation at that ingress),
+// and String renders them unescaped into Selector grammar that every surface
+// then advertises as directly targetable. Silently truncating or escaping a
+// hostile value would still let a Node choose what gets rendered; omitting it
+// is what keeps the closed vocabulary closed on the value side, not only the
+// key side (the key side was already closed by KeyKind).
 func Facts(in Input) []Label {
 	var out []Label
-	if v := in.Node.DaemonVersion; v != "" {
+	if v := in.Node.DaemonVersion; v != "" && validFactValue(v) {
 		out = append(out, Label{Key: string(FactDaemonVersion), Value: v})
 	}
-	if v := in.Node.PolicyFingerprint; v != "" {
+	if v := in.Node.PolicyFingerprint; v != "" && validFactValue(v) {
 		out = append(out, Label{Key: string(FactPolicyFingerprint), Value: v})
 	}
-	if v := in.Node.TemplateSetFingerprint; v != "" && v != TemplateUnloadable {
+	if v := in.Node.TemplateSetFingerprint; v != "" && v != TemplateUnloadable && validFactValue(v) {
 		out = append(out, Label{Key: string(FactTemplateFingerprint), Value: v})
 	}
 	return out
 }
 
+// factNamespacePrefixes mirrors the four Selector namespace prefixes
+// (capability.NamespaceNode/Relay/Tag/State) that ParseSelector recognises.
+// nodestate cannot import capability — capability already imports nodestate,
+// and the cycle would go the wrong way — so the four literals are repeated
+// here rather than shared; grep for "node:" if the namespace set ever grows.
+var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
+
+// validFactValue reports whether v is safe to render unescaped into Selector
+// grammar (capability.ParseSelector). A Node's self-reported fact values
+// arrive with no validation at the wire ingress, so this is the vocabulary's
+// closure on the VALUE side: a Node sending
+// `Hello.daemon_version = "1.4.2, tag:x=y"` must not be able to inject a
+// second Selector term merely by being rendered as `state:daemon-version=…`.
+//
+// Rejected outright rather than escaped, because ParseSelector has no escape
+// syntax to escape INTO:
+//   - `,` is the term separator ParseSelector splits on — the injection this
+//     finding demonstrates.
+//   - leading, trailing or embedded whitespace lets a value sit next to a
+//     hand-typed comma (a Console facet href, an AI-agent's copy-pasted
+//     selector string) and still read as two terms once joined.
+//   - a value starting with one of the four namespace prefixes could pose as
+//     a second term the moment it lands beside any comma downstream, even one
+//     this package did not itself introduce.
+//
+// None of these ever appear in a legitimate semver string, hex fingerprint or
+// template-set hash, so this never rejects a well-behaved daemon's report.
+func validFactValue(v string) bool {
+	if strings.TrimSpace(v) != v {
+		return false
+	}
+	if strings.ContainsAny(v, ", \t\n\r") {
+		return false
+	}
+	for _, p := range factNamespacePrefixes {
+		if strings.HasPrefix(v, p) {
+			return false
+		}
+	}
+	return true
+}
+
 // Labels returns every `state:` label for in — markers first, then facts.
 func Labels(in Input) []Label {
 	return append(Markers(in), Facts(in)...)
+}
+
+// allMarkers and allFacts are the closed vocabulary, in the same order Labels
+// renders them. KeyKind, MarkerKeys and FactKeys are the one place that
+// vocabulary is enumerated for a caller that has not evaluated an Input yet —
+// a Selector parser, in particular, has a bare key and nothing else.
+var allMarkers = []Marker{MarkerOffline, MarkerOutdated, MarkerCertExpiring, MarkerTemplateUnloadable}
+var allFacts = []Fact{FactDaemonVersion, FactPolicyFingerprint, FactTemplateFingerprint}
+
+// Kind classifies a `state:` key by shape: a boolean marker (no value) or a
+// key=value fact. KindUnknown is the zero value and everything outside the
+// closed vocabulary — a Selector term for it is a parse error, never a term
+// that silently matches nothing (ADR-0034).
+type Kind int
+
+const (
+	KindUnknown Kind = iota
+	KindMarker
+	KindFact
+)
+
+// KeyKind classifies key against the closed vocabulary. It is the one place
+// that classification happens, so a Selector parser and this package's own
+// Labels/LabelSet can never disagree about what a `state:` key means.
+func KeyKind(key string) Kind {
+	for _, m := range allMarkers {
+		if string(m) == key {
+			return KindMarker
+		}
+	}
+	for _, f := range allFacts {
+		if string(f) == key {
+			return KindFact
+		}
+	}
+	return KindUnknown
+}
+
+// MarkerKeys returns every marker key, for error text that names the closed
+// vocabulary rather than just rejecting the term.
+func MarkerKeys() []string {
+	out := make([]string, len(allMarkers))
+	for i, m := range allMarkers {
+		out[i] = string(m)
+	}
+	return out
+}
+
+// FactKeys is MarkerKeys' sibling for facts.
+func FactKeys() []string {
+	out := make([]string, len(allFacts))
+	for i, f := range allFacts {
+		out[i] = string(f)
+	}
+	return out
+}
+
+// LabelSet reduces Labels(in) to the key->value map a `state:` Predicate
+// looks up — "" for a marker, the fact's value for a fact. It is built FROM
+// Labels, never independently, so the rendered set (fleet view, list_nodes,
+// describe_node) and the matched set (a Selector) cannot drift apart: an
+// unknown key is simply absent from the map, which is closure by
+// construction, fail closed, exactly like n.NodeLabels/n.RelayLabels.
+func LabelSet(in Input) map[string]string {
+	labels := Labels(in)
+	out := make(map[string]string, len(labels))
+	for _, l := range labels {
+		out[l.Key] = l.Value
+	}
+	return out
 }
 
 // CertExpiryKnown reports whether the Relay records enough about a Node's
