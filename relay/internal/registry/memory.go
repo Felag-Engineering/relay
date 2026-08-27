@@ -12,9 +12,14 @@ var _ Repository = (*InMemory)(nil)
 
 // InMemory is a thread-safe, in-memory implementation of Repository.
 type InMemory struct {
-	mu               sync.RWMutex
-	nodes            map[string]*Node
-	now              func() time.Time
+	mu    sync.RWMutex
+	nodes map[string]*Node
+	now   func() time.Time
+	// connected is the live Tunnel set, fed by the transport. Deliberately a
+	// separate map from nodes: it is not part of a Node's record and must not
+	// survive a restart, and keeping it beside the record would invite somebody
+	// to persist it.
+	connected        map[string]struct{}
 	maxNodes         int    // 0 = unlimited
 	minDaemonVersion string // ADR-0014 gate; empty = off. Never mutable via any API.
 }
@@ -54,8 +59,9 @@ func WithMinDaemonVersion(v string) Option {
 // the clock (defaults to time.Now).
 func NewInMemory(opts ...Option) *InMemory {
 	r := &InMemory{
-		nodes: make(map[string]*Node),
-		now:   time.Now,
+		nodes:     make(map[string]*Node),
+		connected: make(map[string]struct{}),
+		now:       time.Now,
 	}
 	for _, o := range opts {
 		o(r)
@@ -174,6 +180,52 @@ func (r *InMemory) SetRevoked(nodeID string, at time.Time) error {
 	return nil
 }
 
+// RecordEnrollment persists first-enrollment certificate provenance.
+func (r *InMemory) RecordEnrollment(nodeID string, cert Certificate, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n, ok := r.nodes[nodeID]
+	if !ok {
+		return ErrNotFound
+	}
+	n.CertNotAfter = cert.NotAfter
+	// Written only if unset. Re-enrolling an existing node_id must not rewrite
+	// the join date — the provenance chain is the point, and a Node that
+	// re-enrolls after a daemon reinstall has not joined the fleet twice.
+	if n.EnrolledAt.IsZero() {
+		n.EnrolledAt = at
+	}
+	return nil
+}
+
+// RecordRenewal persists a reissued certificate. It never writes EnrolledAt.
+func (r *InMemory) RecordRenewal(nodeID string, cert Certificate, at time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n, ok := r.nodes[nodeID]
+	if !ok {
+		return ErrNotFound
+	}
+	n.CertNotAfter = cert.NotAfter
+	n.RenewalCount++
+	n.LastRenewedAt = at
+	return nil
+}
+
+// SetConnected records a Tunnel opening or closing. Never persisted.
+func (r *InMemory) SetConnected(nodeID string, connected bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if connected {
+		r.connected[nodeID] = struct{}{}
+		return
+	}
+	delete(r.connected, nodeID)
+}
+
 // RevokedNodeIDs returns the IDs of every Node with a non-zero RevokedAt.
 func (r *InMemory) RevokedNodeIDs() ([]string, error) {
 	r.mu.RLock()
@@ -258,7 +310,22 @@ func (r *InMemory) copyNode(n *Node) Node {
 		RevokedAt:              n.RevokedAt,
 		Outdated:               Outdated(n.DaemonVersion, r.minDaemonVersion),
 		TemplateSetFingerprint: n.TemplateSetFingerprint,
+		CertNotAfter:           n.CertNotAfter,
+		EnrolledAt:             n.EnrolledAt,
+		RenewalCount:           n.RenewalCount,
+		LastRenewedAt:          n.LastRenewedAt,
+		// Derived on read from the live connection set, exactly as Outdated is
+		// derived from the configured minimum. Never read off the stored record,
+		// because there is no stored record — see Node.Connected.
+		Connected: r.isConnected(n.NodeID),
 	}
+}
+
+// isConnected reports whether nodeID currently holds a Tunnel. Callers hold at
+// least a read lock.
+func (r *InMemory) isConnected(nodeID string) bool {
+	_, ok := r.connected[nodeID]
+	return ok
 }
 
 // cloneFacts returns a value copy of f with a cloned IPAddresses slice.

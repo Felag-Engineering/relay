@@ -113,6 +113,23 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		cctx = stream.Context()
 	}
 
+	// Mark the Node connected for as long as this stream lives (#440).
+	//
+	// This is the seam that makes "connected now?" a fact the registry holds
+	// rather than a guess from LastSeen. The defer is what makes it true in the
+	// direction that matters: a stream close flips the answer immediately,
+	// however the stream ended — clean shutdown, network drop, revocation
+	// teardown, or panic — instead of leaving a Node reading green until a
+	// heartbeat timeout that nothing here enforces.
+	//
+	// Registered BEFORE the Upsert so there is no window in which a Node is in
+	// the registry but not yet marked connected; a reader landing in that gap
+	// would see a Node that is plainly here as offline.
+	if s.reg != nil {
+		s.reg.SetConnected(nodeID, true)
+		defer s.reg.SetConnected(nodeID, false)
+	}
+
 	// Record the Node's identity, facts, and node: labels in the registry.
 	// CertFingerprint is recomputed from the verified leaf so the Upsert does
 	// not blank the value that Enrollment stored (Upsert always overwrites it;

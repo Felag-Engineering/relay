@@ -49,3 +49,11 @@
 # Dev-fleet host-side state exported by scripts/dev-fleet-mcp.sh: the fleet's CA
 # cert and two LIVE control-plane credentials. Never commit.
 /.dev-fleet/
+
+# Claude Code's local workspace: agent worktrees (each an embedded git repo),
+# session scratch, and per-project settings. Local tooling state, never product.
+#
+# Listed because `git add -A` otherwise stages the worktrees as embedded
+# repositories — which git accepts with only a warning, producing a commit whose
+# clones silently lack the contents. It nearly landed in a PR twice.
+/.claude/

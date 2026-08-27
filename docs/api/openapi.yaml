@@ -559,6 +559,45 @@ paths:
               schema: { $ref: '#/components/schemas/Problem' }
         "500": { $ref: '#/components/responses/InternalError' }
 
+  /api/v1/nodes/{node_id}:
+    parameters:
+      - name: node_id
+        in: path
+        required: true
+        description: The Node's id (its client-certificate CN).
+        schema: { type: string }
+    get:
+      tags: [Enrollment]
+      operationId: getNode
+      summary: Read one Node
+      description: |
+        Everything the registry holds about one Node: its Facts, both label
+        namespaces, reported fingerprints, and the certificate provenance the
+        Relay issued.
+
+        `connected` is whether the Node holds a live Tunnel **right now**, and is
+        not inferable from `last_seen`: a Node that reported seconds ago and then
+        dropped its stream resolves `unreachable` for dispatch immediately
+        (ADR-0004).
+
+        Any authenticated Account may call this — the read floor is `viewer`.
+        **The read is audited** before any content is returned, and the call
+        fails closed if the trail cannot be written (ADR-0025): `read` means
+        "cannot change Node state", not "safe to see".
+      responses:
+        "200":
+          description: The Node.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Node' }
+        "401": { $ref: '#/components/responses/Unauthorized' }
+        "404":
+          description: No such Node.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        "500": { $ref: '#/components/responses/InternalError' }
+
   /api/v1/nodes/{node_id}/revoke:
     parameters:
       - name: node_id
@@ -1010,6 +1049,98 @@ components:
           schema: { $ref: '#/components/schemas/Problem' }
 
   schemas:
+    Node:
+      type: object
+      description: |
+        One Node's registry record. Every field is either Relay-knowledge or
+        Node-reported, never both — see the per-field notes.
+      properties:
+        node_id: { type: string }
+        node_labels:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `node:` namespace: set on the machine by config management and
+            immutable to the Relay. A compromised Node can forge its own.
+        relay_labels:
+          type: object
+          additionalProperties: { type: string }
+          description: |
+            The `relay:` namespace: Relay-set and immutable to the Node. The only
+            namespace the security lane may target.
+        facts:
+          type: object
+          description: |
+            Self-reported by the daemon. Never a targeting axis — a compromised
+            Node can report anything it likes.
+          properties:
+            hostname: { type: string }
+            os: { type: string }
+            kernel: { type: string }
+            arch: { type: string }
+            ip_addresses:
+              type: array
+              items: { type: string }
+        last_seen:
+          type: string
+          format: date-time
+        connected:
+          type: boolean
+          description: |
+            Whether the Node holds a live Tunnel right now. NOT inferable from
+            `last_seen`: a Task dispatched to a Node that is not connected
+            resolves `unreachable` without being sent.
+        enrolling_token_id: { type: string }
+        policy_fingerprint:
+          type: string
+          description: |
+            SHA-256 of the Policy the daemon reports having loaded. Report-only:
+            the Relay never sets a Node's Policy (ADR-0002).
+        template_set_fingerprint:
+          type: string
+          description: |
+            Empty means no templates installed; the literal `unloadable` means
+            the Node's template set failed to load and it has no Template
+            Operations (fail closed).
+        daemon_version: { type: string }
+        outdated:
+          type: boolean
+          description: |
+            Derived: the daemon is below the Relay's dispatch minimum, so every
+            dispatch to it returns `version_refused` (ADR-0014).
+        revoked: { type: boolean }
+        revoked_at:
+          type: string
+          format: date-time
+        certificate:
+          type: object
+          description: |
+            The identity the Relay issued. All Relay-knowledge — a daemon cannot
+            influence any value here.
+          properties:
+            recorded:
+              type: boolean
+              description: |
+                **Read this first.** False means the Relay has not recorded this
+                Node's certificate provenance, and every other field here is then
+                meaningless — NOT an expiry in the past. Nodes that enrolled
+                before provenance was stored fill in at their next renewal.
+            fingerprint: { type: string }
+            not_after:
+              type: string
+              format: date-time
+              description: When this identity stops working. Nothing else warns first.
+            enrolled_at:
+              type: string
+              format: date-time
+              description: |
+                When the Node FIRST joined. Survives every renewal, so it anchors
+                an unbroken provenance chain back to `enrolling_token_id`.
+            renewal_count: { type: integer }
+            last_renewed_at:
+              type: string
+              format: date-time
+
     Problem:
       type: object
       description: RFC 7807 problem detail. Never carries a credential or captured command output.

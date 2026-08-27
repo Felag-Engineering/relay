@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"log/slog"
 	"net"
 	"strings"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -30,6 +32,16 @@ type Signer interface {
 type Registrar interface {
 	Upsert(registry.Report) (registry.Node, error)
 	SetRelayLabels(nodeID string, labels map[string]string) error
+
+	// RecordEnrollment and RecordRenewal persist the certificate provenance the
+	// Relay itself knows (#440): what it just signed, and when.
+	//
+	// Two methods rather than one with a flag. This server is the only caller of
+	// either, and it calls one from Enroll and the other from Renew — so
+	// "renewal preserves the join date" is a property of which function each
+	// path can reach, not of a boolean somebody has to get right.
+	RecordEnrollment(nodeID string, cert registry.Certificate, at time.Time) error
+	RecordRenewal(nodeID string, cert registry.Certificate, at time.Time) error
 }
 
 // TokenRevocationChecker reports whether an Enrollment Token is revoked.
@@ -118,6 +130,45 @@ type Server struct {
 	nodeDenylister    NodeDenylister
 	limiter           RateLimiter
 	observer          EnrollmentObserver
+	now               func() time.Time
+}
+
+// WithServerClock overrides the clock used to stamp certificate provenance
+// (#440). Tests use it so an assertion about enrolled_at is not a race with the
+// wall clock. Defaults to time.Now().UTC().
+//
+// Named apart from WithClock, which already configures the token Service in this
+// package and returns a different option type.
+func WithServerClock(now func() time.Time) ServerOption {
+	return func(s *Server) {
+		if now != nil {
+			s.now = now
+		}
+	}
+}
+
+// issuedCertificate reads back what the CA actually signed: the SHA-256
+// fingerprint of the DER bytes, and the expiry.
+//
+// Reading the certificate rather than recomputing from ca.LeafValidity is the
+// point. The record then describes what a Node is holding, not what this code
+// would issue today, so changing the validity constant cannot retroactively
+// rewrite the fleet's expiries.
+//
+// A malformed certificate yields a zero NotAfter, which the domain reads as
+// "not recorded" (registry.Node.CertProvenanceKnown) — never as an expiry at
+// the epoch, which would render as catastrophically overdue.
+func issuedCertificate(certPEM []byte) registry.Certificate {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return registry.Certificate{}
+	}
+	sum := sha256.Sum256(block.Bytes)
+	c := registry.Certificate{Fingerprint: hex.EncodeToString(sum[:])}
+	if leaf, err := x509.ParseCertificate(block.Bytes); err == nil {
+		c.NotAfter = leaf.NotAfter.UTC()
+	}
+	return c
 }
 
 // NewServer creates a Server backed by the given token Service, Signer (CA), and Registrar.
@@ -128,6 +179,7 @@ func NewServer(tokens *Service, signer Signer, reg Registrar, opts ...ServerOpti
 		signer:   signer,
 		registry: reg,
 		newID:    randomNodeID,
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 	for _, o := range opts {
 		o(s)
@@ -226,13 +278,20 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
 	}
 
-	// h. Compute SHA-256 cert fingerprint (hex of DER bytes) for the registry record.
-	//    The nil-block branch is unreachable: SignCSR guarantees valid PEM on success.
-	var fp string
-	if block, _ := pem.Decode(certPEM); block != nil {
-		sum := sha256.Sum256(block.Bytes)
-		fp = hex.EncodeToString(sum[:])
-	}
+	// h. Read back what was actually signed: the SHA-256 fingerprint of the DER
+	//    bytes, and the expiry the CA set.
+	//
+	//    Read from the certificate rather than recomputed from ca.LeafValidity,
+	//    so the record says what this Node is holding rather than what the code
+	//    would issue today. If the validity constant changes, already-issued
+	//    Nodes keep their true expiry instead of being retroactively rewritten.
+	//
+	//    The nil-block branch is unreachable: SignCSR guarantees valid PEM on
+	//    success. A parse failure leaves NotAfter zero, which the domain reads as
+	//    "not recorded" (registry.Node.CertProvenanceKnown) rather than as an
+	//    expiry at the epoch.
+	issued := issuedCertificate(certPEM)
+	fp := issued.Fingerprint
 
 	// i. Map proto Facts -> registry.Facts; nil-safe.
 	facts := protoconv.FactsFromProto(req.GetFacts())
@@ -249,6 +308,16 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			return nil, status.Error(codes.ResourceExhausted, "fleet registry at capacity")
 		}
 		return nil, status.Error(codes.Internal, "enrollment failed")
+	}
+
+	// j2. Record the certificate provenance. AFTER the Upsert, because that is
+	//     what creates the row; a failure here is logged and not fatal, since the
+	//     Node is enrolled and working and refusing it would strand a machine
+	//     over a bookkeeping write. The cost of the miss is bounded: the next
+	//     renewal records the expiry, and that is at most one leaf lifetime away.
+	if err := s.registry.RecordEnrollment(nodeID, issued, s.now()); err != nil {
+		slog.Warn("recording enrollment certificate provenance failed",
+			"node_id", nodeID, "err", err)
 	}
 
 	// k. Parse the token scope into bare relay-space keys and stamp them on the Node.
@@ -365,7 +434,18 @@ func (s *Server) Renew(ctx context.Context, req *relayv1.RenewRequest) (*relayv1
 		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
 	}
 
-	// d. Audit log: node_id only — no key material, no CSR contents.
+	// d. Record the reissue: new expiry, renewal count, renewal time. Never the
+	//    join date — RecordRenewal has no path to it (#440).
+	//
+	//    Non-fatal for the same reason as at enrollment: the Node now holds a
+	//    valid certificate, and failing the RPC over a bookkeeping write would
+	//    push it toward the expiry this record exists to warn about.
+	if err := s.registry.RecordRenewal(nodeID, issuedCertificate(certPEM), s.now()); err != nil {
+		slog.Warn("recording renewal certificate provenance failed",
+			"node_id", nodeID, "err", err)
+	}
+
+	// e. Audit log: node_id only — no key material, no CSR contents.
 	slog.Info("node cert renewed", "node_id", nodeID)
 
 	return &relayv1.RenewResponse{
