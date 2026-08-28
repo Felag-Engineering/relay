@@ -43,7 +43,7 @@ covering everything shipped through v0.0.9 is `docs/testing/validate-v0.0.9-curr
 > aggregation) → **v0.9.0**. Ordering rationale: Accounts → API → Approvals → Console is
 > a strict dependency chain (`docs/design/console-backend-coverage.md`).
 
-## Status, 2026-08-18
+## Status, 2026-08-27
 
 **✅ complete · 🚧 in progress · unmarked = not started.**
 
@@ -60,6 +60,7 @@ remains before it is small and named below.
 | `v0.4.0` | ✅ code | [7/7] (#362) merged in #395. [6/7] (#361, the thin Ansible role) **closed as superseded** 2026-08-18 — the enrollment-bundle capability (ADR-0032, #405) renders the same playbook from the capability layer, so it reaches all three surfaces from one implementation. `validate-v0.4.0.md` unwritten. |
 | `v0.5.0` | ✅ code | `validate-v0.5.0.md` unwritten. |
 | `v0.5.1` | ✅ | Validation run waived, recorded — no MCP client implements Tasks yet. |
+| `v0.6.0` | 🚧 | **Current milestone.** 12 of 35 issues closed. Both gating defects (#403 cert rotation, #397 role gate) have landed, so the Console lane is unblocked. #416 (SSE event seam) merged in #485, which is what #476 was waiting on to decide the 'live' acceptance. The bulk of what is open is defects found by driving the UI, plus `validate-v0.6.0.md`. |
 
 **The one systematic gap: manual validation scripts.** This file says every milestone ships
 one, and `v0.3.0`, `v0.4.0`, and `v0.5.0` have none. Each of those milestones lists it in
@@ -756,7 +757,7 @@ capability layer, three thin surfaces).
 
 ---
 
-## `v0.6.0` — Admin Console: Monitoring (post-beta)
+## `v0.6.0` — Admin Console: Monitoring (post-beta) 🚧
 
 The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
 (ADR-0009), logging in against the v0.3.0 Account model.
@@ -765,12 +766,12 @@ The human web UI, phase one: eyes only. Server-rendered Go + HTMX, internal-only
 document, one spec per screen, and an open-decisions register that an implementer must read before
 writing code. Backend dependency map: `docs/design/console-backend-coverage.md`.
 
-> **Two defects gate every Console milestone.** #403 (the Relay's server certificate never
-> rotates — both listeners share it, so the Console's own TLS rides on the bug and breaks fourteen
-> days after the process starts) and #397 (enrollment-token mint, Node revoke and Freeze
-> engage/release have no role gate). Neither is a Console problem; both make Console work
-> unshippable. Both carry the `blocking` label and no milestone — they are landed by hand ahead of
-> the loop. #397 also makes Freeze engage human-principal only.
+> **The two defects that gated every Console milestone have landed** (both closed 2026-08).
+> #403 (the Relay's server certificate never rotated — both listeners shared it, so the Console's
+> own TLS rode on the bug and broke fourteen days after the process started) and #397
+> (enrollment-token mint, Node revoke and Freeze engage/release had no role gate). Neither was a
+> Console problem; both made Console work unshippable. Both were landed by hand ahead of the loop,
+> as `blocking` issues are. #397 also makes Freeze engage human-principal only.
 
 **Deliverables**
 - **The Console shell** (`console/11`) — layout, HTMX conventions, session and step-up state,

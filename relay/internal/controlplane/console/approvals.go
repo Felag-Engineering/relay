@@ -71,15 +71,21 @@ import (
 // urgent. This is the one place in the Console where a countdown earns its keep.
 const expiryPressure = 15 * time.Minute
 
-// maxFilterValueBytes bounds every value this screen reads off its own query
-// string.
+// maxApprovalFilterBytes bounds every value this screen reads off its own
+// query string.
+//
+// Deliberately separate from reads.go's maxFilterValueBytes, which happens to
+// carry the same number for an unrelated reason: that one bounds values BEFORE
+// they reach the read lane, and this one bounds values that reach no seam at
+// all. One constant would tie two independent policies together and make one
+// of the two doc comments false the first time either moved.
 //
 // A value longer than this is DROPPED rather than truncated: a truncated
 // filter would silently match something the operator did not type. None of
 // these values reaches a seam — they are compared in memory against rows the
 // capability layer already returned — so the bound is about what gets rendered
 // back into the page and carried through the filter links, not about a query.
-const maxFilterValueBytes = 128
+const maxApprovalFilterBytes = 128
 
 // The three answers this Console can give about whether a pending Request is
 // waiting on the caller, computed from the record and the caller alone.
@@ -523,7 +529,7 @@ func parseApprovalFilter(q url.Values) approvalFilter {
 
 func filterValue(q url.Values, key string) string {
 	v := q.Get(key)
-	if len(v) > maxFilterValueBytes {
+	if len(v) > maxApprovalFilterBytes {
 		return ""
 	}
 	return v

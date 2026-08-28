@@ -372,95 +372,6 @@ func TestApprovals_EmptyQueueSaysSoPlainly(t *testing.T) {
 	}
 }
 
-// TestReads_CountsCallsTargetsAndNodesSeparately is spec 17's headline: one
-// file.read across 4,000 Nodes is one target and four thousand exposures, and
-// which number matters depends on the question.
-func TestReads_CountsCallsTargetsAndNodesSeparately(t *testing.T) {
-	v := buildReads([]audit.Record{
-		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/hosts"}, NodeID: "n1", Timestamp: testNow},
-		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/hosts"}, NodeID: "n2", Timestamp: testNow},
-		{Kind: audit.KindDispatch, OperationName: "file.read", Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
-			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
-		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
-		// A mutate must not be counted as a read.
-		{Kind: audit.KindDispatch, OperationName: "service.restart", NodeID: "n1", Timestamp: testNow},
-	})
-
-	// Node reads and control-plane enumerations are counted apart. list_nodes
-	// touches no Node and can carry no Policy verdict, so folding it into these
-	// figures only ever moved the denominators — and it sat in the by-target
-	// table reporting "0 Nodes" beside rows with a real reach.
-	if v.Calls != 3 {
-		t.Errorf("reads from Nodes = %d, want 3 — service.restart is a mutate and "+
-			"list_nodes is an enumeration; neither is a read from a Node", v.Calls)
-	}
-	if v.Enumerations != 1 {
-		t.Errorf("control-plane enumerations = %d, want 1 (list_nodes)", v.Enumerations)
-	}
-	if v.Nodes != 2 {
-		t.Errorf("Nodes touched = %d, want 2", v.Nodes)
-	}
-	if v.Targets != 2 {
-		t.Errorf("distinct targets = %d, want 2 (the two paths read off a Node)", v.Targets)
-	}
-	if len(v.EnumTargets) != 1 || v.EnumTargets[0].Target != "list_nodes" {
-		t.Errorf("enumeration targets = %+v, want one list_nodes row", v.EnumTargets)
-	}
-	if v.Refused != 1 {
-		t.Errorf("refused reads = %d, want 1", v.Refused)
-	}
-	// The refused target sorts first: the deny-list catching something is the
-	// row worth reading.
-	if v.Targets2[0].Refused == 0 {
-		t.Errorf("the refused target did not sort first: %+v", v.Targets2)
-	}
-
-	// Per-target Node counts are DISTINCT Nodes. Counting records instead makes
-	// a repeated read report more Nodes than the fleet contains, on the one
-	// screen whose job is to say how far an agent reached.
-	// And no enumeration leaks into the by-target table, where every row is
-	// supposed to have reached a machine.
-	for _, tg := range v.Targets2 {
-		if tg.Nodes == 0 {
-			t.Errorf("%s is in the Node-read table with no Node — it is an enumeration", tg.Target)
-		}
-		if tg.Target == "file.read /etc/hosts" && tg.Nodes != 2 {
-			t.Errorf("%s reports %d Nodes, want 2 distinct", tg.Target, tg.Nodes)
-		}
-		if tg.Nodes > v.Nodes {
-			t.Errorf("%s reports %d Nodes, more than the %d the whole window touched",
-				tg.Target, tg.Nodes, v.Nodes)
-		}
-	}
-}
-
-// TestReads_RepeatedReadOfOnePathDoesNotInflateItsNodeCount is the regression
-// guard for the count the dev fleet exposed: three Nodes read five times must
-// read "3 Nodes", not "15".
-func TestReads_RepeatedReadOfOnePathDoesNotInflateItsNodeCount(t *testing.T) {
-	var recs []audit.Record
-	for i := 0; i < 5; i++ {
-		for _, n := range []string{"n1", "n2", "n3"} {
-			recs = append(recs, audit.Record{
-				Kind: audit.KindDispatch, OperationName: "file.read",
-				Args: map[string]string{"path": "/etc/shadow"}, NodeID: n,
-				Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
-			})
-		}
-	}
-	v := buildReads(recs)
-
-	if len(v.Targets2) != 1 {
-		t.Fatalf("got %d targets, want 1", len(v.Targets2))
-	}
-	if got := v.Targets2[0].Nodes; got != 3 {
-		t.Errorf("the target reports %d Nodes across a 3-Node fleet, want 3", got)
-	}
-	if v.Targets2[0].Calls != 15 {
-		t.Errorf("calls = %d, want 15 — calls and Nodes are different questions", v.Targets2[0].Calls)
-	}
-}
-
 // TestActivity_DispatchCollapsesToOneJobRow is spec 04's grain rule. One mutate
 // across 2,214 Nodes emits 2,214 records; a tail that renders them individually
 // becomes unreadable exactly when something important is happening.
@@ -2159,55 +2070,14 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 
 	// The two screens must name the same record the same way. They read the
 	// same trail, and an operator who sees "the registry" on one and
-	// "list_nodes" on the other stops trusting both.
-	for _, tg := range buildReads(recs).EnumTargets {
-		if !strings.Contains(body, "enumerated "+tg.Target) {
-			t.Errorf("Read egress calls it %q and Activity does not", tg.Target)
+	// "list_nodes" on the other stops trusting both. Read egress reads the
+	// query lane now, not this trail, so the cross-check is against the
+	// shared naming core both screens go through rather than against the
+	// other screen's view.
+	for _, rec := range recs {
+		if !strings.Contains(body, "enumerated "+readTargetOf(rec)) {
+			t.Errorf("Read egress names this record %q and Activity does not", readTargetOf(rec))
 		}
-	}
-}
-
-// TestReads_EnumerationsAreCountedApartFromNodeReads.
-//
-// list_nodes and list_operations touch no Node and can carry no Policy verdict
-// — Policy is a Node's, and there is no Node. They sat inside the headline
-// "read calls" and "distinct targets" beside file.read /etc/shadow, and in the
-// by-target table reporting "0 Nodes" next to rows with a real reach. Both are
-// exposure and both are still counted; blending them made each number mean
-// less, on the screen whose whole argument is that reading is exfiltration.
-func TestReads_EnumerationsAreCountedApartFromNodeReads(t *testing.T) {
-	v := buildReads([]audit.Record{
-		{Kind: audit.KindDispatch, OperationName: "file.read",
-			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
-			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
-		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
-		{Kind: audit.KindRead, ActionKind: "list_nodes", Timestamp: testNow},
-		{Kind: audit.KindRead, ActionKind: "list_operations", Timestamp: testNow},
-	})
-
-	if v.Calls != 1 {
-		t.Errorf("reads from Nodes = %d, want 1", v.Calls)
-	}
-	if v.Enumerations != 3 {
-		t.Errorf("enumerations = %d, want 3", v.Enumerations)
-	}
-	if len(v.Targets2) != 1 {
-		t.Errorf("by-target has %d rows, want 1 — enumerations belong in their own panel", len(v.Targets2))
-	}
-	if len(v.EnumTargets) != 2 {
-		t.Fatalf("enumeration targets = %d, want 2 distinct tools", len(v.EnumTargets))
-	}
-	// Busiest tool first.
-	if v.EnumTargets[0].Target != "list_nodes" || v.EnumTargets[0].Calls != 2 {
-		t.Errorf("enumeration targets are %+v, want list_nodes with 2 calls first", v.EnumTargets)
-	}
-
-	// Per-principal, the two families stay in their own columns.
-	if len(v.Principals) != 1 {
-		t.Fatalf("principals = %d, want 1", len(v.Principals))
-	}
-	if p := v.Principals[0]; p.Calls != 1 || p.Enum != 3 {
-		t.Errorf("principal reports %d Node reads and %d enumerations, want 1 and 3", p.Calls, p.Enum)
 	}
 }
 
@@ -3214,7 +3084,7 @@ func TestApprovals_FiltersMatchOnEveryDimension(t *testing.T) {
 // truncated, because a truncated filter would silently match something the
 // operator never typed.
 func TestApprovals_FilterValuesAreBoundedAndNeverEchoedUnbounded(t *testing.T) {
-	huge := strings.Repeat("a", maxFilterValueBytes+1)
+	huge := strings.Repeat("a", maxApprovalFilterBytes+1)
 	f := parseApprovalFilter(url.Values{"who": []string{huge}, "risk": []string{"mutate"}})
 
 	if f.Who != "" {
@@ -3227,7 +3097,7 @@ func TestApprovals_FilterValuesAreBoundedAndNeverEchoedUnbounded(t *testing.T) {
 		t.Error("the over-long value was carried into a filter link")
 	}
 
-	atLimit := strings.Repeat("b", maxFilterValueBytes)
+	atLimit := strings.Repeat("b", maxApprovalFilterBytes)
 	if got := parseApprovalFilter(url.Values{"who": []string{atLimit}}).Who; got != atLimit {
 		t.Error("a value exactly at the bound was dropped; the bound is a maximum, not an exclusive one")
 	}
