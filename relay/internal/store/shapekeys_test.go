@@ -223,10 +223,16 @@ func TestBackfill_GrantRequestsAreNotLegacyStamped(t *testing.T) {
 // Seeding at schema 21 rather than opening a fresh database is what makes this
 // the UPGRADE path: on a fresh database migrate applies every embedded file
 // regardless of numbering, so nothing there can distinguish a well-numbered
-// migration from a mis-numbered one. Here currentSchemaVersion returns 21 and
-// migrate skips anything at or below it — which is why the seed loop asserts it
-// applied exactly 21 files, so a latecomer numbered into the pre-#415 range
-// fails this test instead of being skipped silently and forever.
+// migration from a mis-numbered one. Selection is by per-version presence in
+// schema_migrations, not by comparison against the highest version recorded
+// (#492) — so what actually exercises the upgrade path here is that only
+// versions 1-21 are recorded as applied; migrate finds 22 absent and applies
+// it regardless of how it compares numerically to 21. The seed loop's
+// `applied != 21` assertion no longer guards against a silent skip (that
+// failure mode no longer exists); it now guards the test's own seeding
+// assumption — that the pre-#415 schema really is 21 files — so a stray or
+// missing migration in that range fails loudly here instead of quietly
+// changing what this test seeds.
 func TestOpen_AppliesMigration0022AndBackfills(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "schema21.db")

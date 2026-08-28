@@ -6,6 +6,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -57,12 +58,30 @@ func loadMigrations() ([]migration, error) {
 	return migrations, nil
 }
 
-// migrate applies every embedded migration whose version is greater than the
-// highest version already recorded in schema_migrations, each in its own
-// transaction, recording the applied version as it goes. schema_migrations
-// itself is created by 0001_init.sql; before that has run, maxVersion is 0.
-func migrate(ctx context.Context, db *sql.DB) error {
-	maxVersion, err := currentSchemaVersion(ctx, db)
+// migrate applies every embedded migration whose version is ABSENT from
+// schema_migrations, each in its own transaction, recording the applied
+// version as it goes. This is selection by per-version presence, not by
+// comparison against the highest version recorded: a version that is
+// missing gets applied regardless of how many higher versions already are
+// (#492). schema_migrations itself is created by 0001_init.sql, so before
+// that has run the applied set is simply empty.
+//
+// One consequence of presence-based selection: repairing a database that
+// already skipped a lower-numbered migration runs that migration AFTER the
+// higher-numbered ones that are already applied. That is inherent to
+// repairing an existing database, not a bug — the alternative is the
+// permanent silent skip this change replaces.
+//
+// Another: schema_migrations can hold a version with no corresponding
+// embedded file — a database that is newer than this binary (for example
+// after a binary rollback, since migrations here are forward-only). That is
+// logged once, at Warn, to logger — the caller's seam so a test can assert
+// it actually fired — and tolerated rather than treated as fatal: refusing
+// to start would leave an operator who just rolled back a bad deploy with no
+// in-band remedy, and there is no down-migration mechanism to undo a
+// refusal. See pendingMigrations' unknown return value.
+func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
+	applied, err := appliedVersions(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -72,10 +91,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 
-	for _, m := range migrations {
-		if m.version <= maxVersion {
-			continue
-		}
+	pending, unknown := pendingMigrations(migrations, applied)
+	if len(unknown) > 0 {
+		logger.Warn("database schema is newer than this relay binary",
+			"unknown_versions", unknown,
+			"count", len(unknown),
+		)
+	}
+
+	for _, m := range pending {
 		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
@@ -83,27 +107,91 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-// currentSchemaVersion returns the highest version recorded in
-// schema_migrations, or 0 if that table does not exist yet (a brand-new
-// database, before 0001_init.sql has run).
-func currentSchemaVersion(ctx context.Context, db *sql.DB) (int, error) {
+// schemaMigrationsExists reports whether the schema_migrations table has
+// been created yet. False, nil means a brand-new database — before
+// 0001_init.sql has run, which is what creates that table.
+func schemaMigrationsExists(ctx context.Context, db *sql.DB) (bool, error) {
 	var exists int
 	err := db.QueryRowContext(ctx,
 		`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`,
 	).Scan(&exists)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return 0, nil
+			return false, nil
 		}
-		return 0, fmt.Errorf("check schema_migrations exists: %w", err)
+		return false, fmt.Errorf("check schema_migrations exists: %w", err)
+	}
+	return true, nil
+}
+
+// appliedVersions returns every version recorded in schema_migrations. On a
+// brand-new database (schema_migrations not yet created) it returns a
+// non-nil empty map and a nil error, rather than an error — the fresh-database
+// case is not a failure, and pendingMigrations relies on this being a total
+// function with no special case for "no table yet".
+//
+// CRITICAL: this must fully scan and close its *sql.Rows before returning.
+// Open (store.go) sets db.SetMaxOpenConns(1), so a single connection serves
+// the whole Store; a Rows left open here would still be holding that one
+// connection when applyMigration's BeginTx tries to acquire it. migrate is
+// called with context.Background() (store.go), which has no deadline, and
+// PRAGMA busy_timeout only bounds SQLite's own lock contention — it does not
+// bound database/sql's pool wait. Getting the ordering wrong here hangs
+// Relay startup FOREVER, not for a few seconds.
+func appliedVersions(ctx context.Context, db *sql.DB) (map[int]struct{}, error) {
+	exists, err := schemaMigrationsExists(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return map[int]struct{}{}, nil
 	}
 
-	var maxVersion int
-	row := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`)
-	if err := row.Scan(&maxVersion); err != nil {
-		return 0, fmt.Errorf("read schema_migrations max version: %w", err)
+	rows, err := db.QueryContext(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return nil, fmt.Errorf("read schema_migrations versions: %w", err)
 	}
-	return maxVersion, nil
+	defer rows.Close() //nolint:errcheck
+
+	applied := map[int]struct{}{}
+	for rows.Next() {
+		var version int
+		if err := rows.Scan(&version); err != nil {
+			return nil, fmt.Errorf("scan schema_migrations version: %w", err)
+		}
+		applied[version] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate schema_migrations versions: %w", err)
+	}
+	return applied, nil
+}
+
+// pendingMigrations splits migrations (already in ascending version order,
+// per loadMigrations) against applied: pending is every migration whose
+// version is absent from applied, in that same ascending order; unknown is
+// every applied version with no corresponding embedded migration, sorted
+// ascending. A pure function — no ctx, no db — so the exact scenario #492
+// reported (embedded 1, 2, 22, 23 with applied {1, 2, 23}, expecting pending
+// [22]) is testable without a real database or an embedded file that does
+// not exist in this repo.
+func pendingMigrations(migrations []migration, applied map[int]struct{}) (pending []migration, unknown []int) {
+	embedded := make(map[int]struct{}, len(migrations))
+	for _, m := range migrations {
+		embedded[m.version] = struct{}{}
+		if _, ok := applied[m.version]; !ok {
+			pending = append(pending, m)
+		}
+	}
+
+	for v := range applied {
+		if _, ok := embedded[v]; !ok {
+			unknown = append(unknown, v)
+		}
+	}
+	sort.Ints(unknown)
+
+	return pending, unknown
 }
 
 // applyMigration runs one migration's SQL and records its version, in a

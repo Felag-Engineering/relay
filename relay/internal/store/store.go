@@ -15,6 +15,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,7 @@ type Store struct {
 	db               *sql.DB
 	maxNodes         int    // 0 = unlimited; see WithMaxNodes
 	minDaemonVersion string // ADR-0014 gate; empty = off; see WithMinDaemonVersion
+	logger           *slog.Logger
 
 	// regOnce/reg memoise the registry, which unlike the other repositories
 	// carries in-memory state (the live Tunnel set). See Registry().
@@ -66,6 +68,22 @@ func WithMaxNodes(n int) Option {
 func WithMinDaemonVersion(v string) Option {
 	return func(s *Store) {
 		s.minDaemonVersion = v
+	}
+}
+
+// WithLogger overrides the Store's logger seam (production default:
+// slog.Default()), used to warn once per Open when schema_migrations holds
+// a version newer than this binary ships (#492's tolerate-don't-refuse
+// decision). A nil l falls back to slog.Default(), mirroring
+// auditsink.WithLogger. Exists so a test can assert the warning actually
+// fires, with its attributes, rather than only that Open/migrate returns
+// nil.
+func WithLogger(l *slog.Logger) Option {
+	return func(s *Store) {
+		if l == nil {
+			l = slog.Default()
+		}
+		s.logger = l
 	}
 }
 
@@ -107,7 +125,15 @@ func Open(path string, opts ...Option) (*Store, error) {
 		}
 	}
 
-	if err := migrate(context.Background(), db); err != nil {
+	// Options are applied before migrate so a caller-supplied WithLogger is
+	// in effect for the schema-newer-than-binary warning; every other Option
+	// only affects behaviour that runs after Open returns.
+	s := &Store{db: db, logger: slog.Default()}
+	for _, o := range opts {
+		o(s)
+	}
+
+	if err := migrate(context.Background(), db, s.logger); err != nil {
 		db.Close() //nolint:errcheck
 		return nil, fmt.Errorf("migrate %q: %w", path, err)
 	}
@@ -123,10 +149,6 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("backfill approval shape keys %q: %w", path, err)
 	}
 
-	s := &Store{db: db}
-	for _, o := range opts {
-		o(s)
-	}
 	return s, nil
 }
 
