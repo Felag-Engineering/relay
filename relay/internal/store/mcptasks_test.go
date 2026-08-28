@@ -16,7 +16,7 @@ var handleNow = time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC)
 func handleRequest() approval.Request {
 	return approval.NewRequest("req-1", "hash-1", "acct-g", "gleipnir-prod",
 		jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate},
-		[]string{"node-a"}, []string{"prod-mutates"},
+		[]string{"node-a"}, approval.SelectorShape{}, []string{"prod-mutates"},
 		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		handleNow)
 }

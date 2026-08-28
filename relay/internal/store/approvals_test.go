@@ -30,9 +30,17 @@ var storeAction = jobs.Action{
 	RiskClass:     jobs.RiskClassMutate,
 }
 
+// storeSelector is the normalised Selector these fixtures park against, so the
+// stored shape key is a real computed one rather than the "no Selector known"
+// key the zero SelectorShape produces.
+var storeSelector = approval.SelectorShape{
+	Known: true,
+	Terms: []approval.SelectorTerm{{Namespace: "node", Key: "role", Value: "web"}},
+}
+
 func pendingRequest(id, planHash string, count int, ttl time.Duration) approval.Request {
 	return approval.NewRequest(id, planHash, "acct-g", "gleipnir-prod",
-		storeAction, []string{"node-a"}, []string{"rule-a"},
+		storeAction, []string{"node-a"}, storeSelector, []string{"rule-a"},
 		approval.Requirement{Count: count, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: ttl},
 		storeNow)
 }
@@ -52,6 +60,11 @@ func TestApprovalRoundTrip(t *testing.T) {
 	}
 	if got.PlanHash != want.PlanHash || got.RequestedBy != want.RequestedBy || got.State != approval.StatePending {
 		t.Errorf("round trip lost fields: %+v", got)
+	}
+	// A forgotten column in approvalSelect or a scan out of lockstep with it
+	// shows up here first, because shape_key sits between two other strings.
+	if got.ShapeKey != want.ShapeKey || got.ShapeKey == "" {
+		t.Errorf("ShapeKey = %q, want %q", got.ShapeKey, want.ShapeKey)
 	}
 	if got.Require.Count != 2 || got.Require.Channel != approval.ChannelOutOfBand || got.Require.TTL != time.Hour {
 		t.Errorf("requirement did not round-trip: %+v", got.Require)
@@ -269,7 +282,7 @@ func TestApprovalRoundTripPreservesTheDecisionFacts(t *testing.T) {
 		RiskClass:   jobs.RiskClassMutate,
 	}
 	want := approval.NewRequest("req-raw", "hash-raw", "acct-g", "gleipnir-prod",
-		rawExec, []string{"node-a"}, []string{"raw-exec-always-asks"},
+		rawExec, []string{"node-a"}, storeSelector, []string{"raw-exec-always-asks"},
 		approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		storeNow)
 	if err := repo.Create(ctx, want); err != nil {
@@ -311,5 +324,111 @@ func TestApprovalRoundTripPreservesTheDecisionFacts(t *testing.T) {
 	}
 	if reread.Decisions[0].Channel != approval.ChannelOutOfBand {
 		t.Errorf("Channel = %v, want out-of-band preserved", reread.Decisions[0].Channel)
+	}
+}
+
+// TestLastApprovedByShape is the store half of the anti-fatigue read: the
+// newest RESOLVED approved record with this key, excluding the one being
+// rendered, and nothing at all for a key that was never computed.
+//
+// The three approved records are separated by SECONDS, not fractions: the
+// stored timestamps are RFC3339Nano text and Format trims trailing fractional
+// zeroes, so a sub-second ordering assertion would be flaky by construction.
+func TestLastApprovedByShape(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+
+	shape := approval.HashPlanShape(storeAction, storeSelector)
+
+	approveAt := func(id string, at time.Time) approval.Request {
+		r := pendingRequest(id, "hash-"+id, 1, time.Hour)
+		if err := repo.Create(ctx, r); err != nil {
+			t.Fatalf("Create(%s): %v", id, err)
+		}
+		out, err := repo.RecordDecision(ctx, id, approval.Decision{
+			AccountID: "acct-ana", Account: "ana", Approve: true,
+			Channel: approval.ChannelOutOfBand, PlanHash: "hash-" + id, At: at,
+		}, at)
+		if err != nil {
+			t.Fatalf("RecordDecision(%s): %v", id, err)
+		}
+		return out
+	}
+
+	approveAt("req-old", storeNow.Add(10*time.Second))
+	newest := approveAt("req-new", storeNow.Add(30*time.Second))
+	rendering := approveAt("req-rendering", storeNow.Add(50*time.Second))
+
+	// A DENIED and an EXPIRED record of the same shape, both resolved AFTER
+	// req-new. They are the reason the query filters on state rather than on
+	// "resolved": a state predicate of "anything terminal" would return one of
+	// these, and the callout would render a refusal as "what you approved last
+	// time" on the one screen whose job is telling a human the truth.
+	denied := pendingRequest("req-denied", "hash-denied", 1, time.Hour)
+	if err := repo.Create(ctx, denied); err != nil {
+		t.Fatalf("Create(req-denied): %v", err)
+	}
+	if _, err := repo.RecordDecision(ctx, "req-denied", approval.Decision{
+		AccountID: "acct-bo", Account: "bo", Approve: false,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-denied", At: storeNow.Add(40 * time.Second),
+	}, storeNow.Add(40*time.Second)); err != nil {
+		t.Fatalf("deny req-denied: %v", err)
+	}
+
+	expired := pendingRequest("req-expired", "hash-expired", 1, time.Second)
+	if err := repo.Create(ctx, expired); err != nil {
+		t.Fatalf("Create(req-expired): %v", err)
+	}
+	if _, err := repo.ExpirePending(ctx, storeNow.Add(45*time.Second)); err != nil {
+		t.Fatalf("ExpirePending: %v", err)
+	}
+
+	if rendering.ShapeKey != shape {
+		t.Fatalf("stored shape key %q is not the one HashPlanShape computes (%q)", rendering.ShapeKey, shape)
+	}
+
+	got, err := repo.LastApprovedByShape(ctx, shape, "req-rendering")
+	if err != nil {
+		t.Fatalf("LastApprovedByShape: %v", err)
+	}
+	if got.ID != newest.ID {
+		t.Errorf("got %q, want the newest approved record of the same shape (%q)", got.ID, newest.ID)
+	}
+	if len(got.Decisions) != 1 {
+		t.Errorf("decisions did not load: %+v", got.Decisions)
+	}
+
+	// A pending record of the same shape is never a comparable prior either.
+	if err := repo.Create(ctx, pendingRequest("req-pending", "hash-pending", 1, time.Hour)); err != nil {
+		t.Fatalf("Create(req-pending): %v", err)
+	}
+	if got, err := repo.LastApprovedByShape(ctx, shape, "req-rendering"); err != nil || got.ID != newest.ID {
+		t.Errorf("a pending record changed the answer: %q, %v", got.ID, err)
+	}
+
+	// Every non-approved record of this shape resolved after req-new, so any
+	// weakening of the state predicate returns one of them by name.
+	for _, id := range []string{"req-denied", "req-expired", "req-pending"} {
+		if got, err := repo.LastApprovedByShape(ctx, shape, "req-rendering"); err != nil || got.ID == id {
+			t.Errorf("LastApprovedByShape returned %q, which is not approved (checking %q): %v", got.ID, id, err)
+		}
+	}
+
+	// The ordering is by resolved_at DESC: excluding nothing returns the truly
+	// newest, which is the record the assertion above proved is excluded when
+	// it is the one being rendered.
+	if got, err := repo.LastApprovedByShape(ctx, shape, ""); err != nil || got.ID != rendering.ID {
+		t.Errorf("LastApprovedByShape excluding nothing = %q, %v; want %q", got.ID, err, rendering.ID)
+	}
+	// Excluding a middle record does not disturb the ordering either.
+	if got, err := repo.LastApprovedByShape(ctx, shape, newest.ID); err != nil || got.ID != rendering.ID {
+		t.Errorf("LastApprovedByShape excluding %q = %q, %v; want %q", newest.ID, got.ID, err, rendering.ID)
+	}
+
+	// Uncomparable and unknown keys.
+	for _, key := range []string{"", approval.LegacyShapeKey("req-old"), "0000000000000000000000000000000000000000000000000000000000000000"} {
+		if _, err := repo.LastApprovedByShape(ctx, key, ""); !errors.Is(err, approval.ErrNotFound) {
+			t.Errorf("LastApprovedByShape(%q) = %v, want ErrNotFound", key, err)
+		}
 	}
 }
