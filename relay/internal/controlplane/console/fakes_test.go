@@ -9,6 +9,7 @@ package console
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -89,20 +90,88 @@ func (f fakeAudit) filter(keep func(audit.Record) bool) []audit.Record {
 	return out
 }
 
-// fakeApprovals is an approval read seam.
-type fakeApprovals struct{ pending []approval.Request }
+// fakeApprovals is the approval read seam: the queue, one record, the
+// same-shape lookup, and the two Grant reads.
+//
+// It is a POINTER type because shapeCalls has to survive the call. The
+// assertion that matters most here is a NEGATIVE one — the Console must never
+// ask about a record whose shape was never computed — and a counter on a value
+// receiver would be incremented on a copy and read as zero however the handler
+// behaved.
+type fakeApprovals struct {
+	pending []approval.Request
 
-func (f fakeApprovals) PendingApprovals(context.Context) ([]approval.Request, error) {
+	// resolved are records reachable by id but not in the queue: the prior
+	// approval a diff compares against is, by definition, no longer pending.
+	resolved []approval.Request
+
+	// grants are every Grant this Relay holds, live or not. ActiveGrants
+	// filters them exactly as the capability layer does; GrantForApproval does
+	// not, which is the whole reason that read exists.
+	grants []approval.Grant
+
+	grantsErr error
+
+	// shapeCalls counts LastApprovedOfSameShape calls.
+	shapeCalls int
+}
+
+func (f *fakeApprovals) PendingApprovals(context.Context) ([]approval.Request, error) {
 	return f.pending, nil
 }
 
-func (f fakeApprovals) Approval(_ context.Context, id string) (approval.Request, error) {
-	for _, r := range f.pending {
+func (f *fakeApprovals) Approval(_ context.Context, id string) (approval.Request, error) {
+	for _, r := range append(append([]approval.Request(nil), f.pending...), f.resolved...) {
 		if r.ID == id {
 			return r, nil
 		}
 	}
 	return approval.Request{}, errNotFound
+}
+
+// LastApprovedOfSameShape mirrors the store's own predicate rather than
+// indexing a map the test filled in: approved, same shape key, not this record.
+//
+// The distinction is not pedantry. A fixture that mapped "prior" to "current"
+// by hand would still find a prior after a change that made the two records'
+// shape keys DIFFER — which is precisely the regression the Grant diff test is
+// there to catch.
+func (f *fakeApprovals) LastApprovedOfSameShape(_ context.Context, r approval.Request) (approval.Request, error) {
+	f.shapeCalls++
+	for _, prior := range f.resolved {
+		if prior.State == approval.StateApproved && prior.ID != r.ID && prior.ShapeKey == r.ShapeKey {
+			return prior, nil
+		}
+	}
+	return approval.Request{}, approval.ErrNotFound
+}
+
+func (f *fakeApprovals) ActiveGrants(context.Context) ([]approval.Grant, error) {
+	if f.grantsErr != nil {
+		return nil, f.grantsErr
+	}
+	var out []approval.Grant
+	for _, g := range f.grants {
+		if g.Active(testNow) {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeApprovals) GrantForApproval(_ context.Context, requestID string) (approval.Grant, error) {
+	// The store is down, which is NOT ErrGrantNotFound: the two answers are
+	// what the capability layer keeps distinct by letting the sentinel travel
+	// unwrapped, and a fake that collapsed them could not test the difference.
+	if f.grantsErr != nil {
+		return approval.Grant{}, f.grantsErr
+	}
+	for _, g := range f.grants {
+		if g.RequestID == requestID {
+			return g, nil
+		}
+	}
+	return approval.Grant{}, approval.ErrGrantNotFound
 }
 
 type constErr string
@@ -152,12 +221,42 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 		if filter.JobID != "" && row.JobID != filter.JobID {
 			continue
 		}
+		// ApprovalID and GrantID are honoured for the same reason JobID is:
+		// the approval object joins the park record on approval_id and the
+		// released-Job list on grant_id, and a fake that returned every row
+		// would let a screen that dropped either filter render perfectly.
+		if filter.ApprovalID != "" && row.ApprovalID != filter.ApprovalID {
+			continue
+		}
+		if filter.GrantID != "" && row.GrantID != filter.GrantID {
+			continue
+		}
 		if len(filter.Kinds) > 0 && !containsString(filter.Kinds, row.Kind) {
 			continue
 		}
 		out = append(out, row)
 	}
-	return capability.AuditPage{Rows: limitRows(out, page.Limit), Limit: page.Limit}, nil
+
+	// Cursor paging, because the released-Job walk depends on it: the trail
+	// fans a dispatch out to one row PER NODE, so a Grant over many Nodes
+	// needs several pages before a second Job appears at all.
+	start := 0
+	if page.Cursor != "" {
+		n, err := strconv.Atoi(page.Cursor)
+		if err != nil {
+			return capability.AuditPage{}, capability.ErrInvalidCursor
+		}
+		start = n
+	}
+	if start > len(out) {
+		start = len(out)
+	}
+	out = out[start:]
+	next := ""
+	if page.Limit > 0 && len(out) > page.Limit {
+		next = strconv.Itoa(start + page.Limit)
+	}
+	return capability.AuditPage{Rows: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
 }
 
 func (f *fakeQueries) AuditCounts(context.Context, capability.Principal, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
