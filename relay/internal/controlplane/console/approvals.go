@@ -64,19 +64,26 @@ type approvalRow struct {
 	MatchedRules []string
 	PlanHash     string
 
-	// IdenticalKey groups pending approvals that are the SAME PLAN, and
-	// Identical counts how many share it. Approving three identical requests
-	// one at a time without noticing they are identical is precisely the
-	// fatigue failure the grouping exists to catch.
+	// IdenticalKey groups pending approvals of the SAME SHAPE, and Identical
+	// counts how many share it. Approving three alike requests one at a time
+	// without noticing they are alike is precisely the fatigue failure the
+	// grouping exists to catch.
 	//
-	// It is deliberately the plan hash and not the coarser "shape" of #415.
-	// The stored Request carries no Operation, so a shape could only be
-	// approximated from ActionKind and the matched rules — which grouped
-	// service.restart(sshd) with pkg.install(nginx) under one gate rule and
+	// It is the stored shape key (#415): the Action, its risk class, its shape
+	// arguments and the normalised Selector, WITHOUT the resolved fan-out. That
+	// is a real, computed identity rather than the approximation this once used
+	// — grouping by ActionKind plus the matched rules put service.restart(sshd)
+	// and pkg.install(nginx) in one bucket under a single fixture gate rule and
 	// told the approver they were the same. On the one screen whose job is
 	// telling a human what they are about to authorise, a hint that overclaims
-	// is worse than no hint. The plan hash never overclaims: equal hashes are
-	// the same plan, which is also what a decision binds to.
+	// is worse than no hint.
+	//
+	// A record with no comparable shape — pre-#415 rows carry a legacy key —
+	// groups with NOTHING rather than with every other such record.
+	//
+	// It is a rendering hint and never an authorization: a decision still binds
+	// to the plan hash, and two rows sharing this key may well cover different
+	// Node sets.
 	IdenticalKey string
 	Identical    int
 }
@@ -154,12 +161,18 @@ func handleApprovals(d Deps) http.HandlerFunc {
 func buildApprovalRows(reqs []approval.Request, now time.Time) []approvalRow {
 	identical := map[string]int{}
 	for _, req := range reqs {
-		identical[identicalKey(req)]++
+		if key := identicalKey(req); key != "" {
+			identical[key]++
+		}
 	}
 
 	rows := make([]approvalRow, 0, len(reqs))
 	for _, req := range reqs {
 		key := identicalKey(req)
+		alike := 1
+		if key != "" {
+			alike = identical[key]
+		}
 		ttl := req.ExpiresAt.Sub(now)
 		row := approvalRow{
 			ID:           req.ID,
@@ -177,7 +190,7 @@ func buildApprovalRows(reqs []approval.Request, now time.Time) []approvalRow {
 			MatchedRules: req.MatchedRules,
 			PlanHash:     req.PlanHash,
 			IdenticalKey: key,
-			Identical:    identical[key],
+			Identical:    alike,
 		}
 		rows = append(rows, row)
 	}
@@ -273,18 +286,19 @@ func approvalOperation(req approval.Request) string {
 	}
 }
 
-// identicalKey groups pending requests that are the same plan.
+// identicalKey groups pending requests of the same shape (#415, D10).
 //
-// The plan hash IS the identity of what was parked, and it is what a decision
-// is recorded against, so grouping by it cannot tell an approver two requests
-// are alike when they are not. That is the whole requirement here: a grouping
-// hint on the approval queue either narrows what a human must read or it
-// misleads them, and there is no useful middle.
-//
-// The coarser "same shape" grouping — same Operation and arguments across
-// different Node sets — needs an Operation on the stored Request, which is
-// #415. Until then this deliberately under-groups rather than over-groups.
-func identicalKey(req approval.Request) string { return req.PlanHash }
+// "" means NOT GROUPABLE, and buildApprovalRows counts such a row alone. A
+// record whose shape key is empty or legacy has a shape nobody can recompute,
+// and putting all of them in one bucket would tell an approver that a set of
+// records with nothing in common are alike — the precise "materially different
+// action reads as routine" failure the shape key exists to avoid.
+func identicalKey(req approval.Request) string {
+	if req.ShapeKey == "" || approval.IsLegacyShapeKey(req.ShapeKey) {
+		return ""
+	}
+	return req.ShapeKey
+}
 
 func countApprovals(req approval.Request) int {
 	n := 0
@@ -338,7 +352,7 @@ below the fold is a failure of this screen.</p>
     <div class="qside">
       <div class="quorum"><b>{{.Signed}}</b> of {{.Required}} signed</div>
       <div class="qttl">{{.TTL}}</div>
-      {{if gt .Identical 1}}<div class="qshape">{{.Identical}} pending with the same Plan</div>{{end}}
+      {{if gt .Identical 1}}<div class="qshape">{{.Identical}} pending of the same shape</div>{{end}}
     </div>
   </a>
 {{end}}

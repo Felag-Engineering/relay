@@ -228,6 +228,21 @@ The content address of a Plan — a hash over the Operation, its arguments, and 
 if the Plan still hashes the same, and material drift re-parks the Job for re-approval.
 _Avoid_: job hash, checksum, fingerprint (reserved for Policy and template-set fingerprints)
 
+**Shape key**:
+The content address of *what* an approval is for, as opposed to *how much of it*: a hash
+over the Operation, its risk class, its **shape arguments**, and the **normalised
+Selector** — never the resolved fan-out, never an argument declared to be scale. For
+**Raw Exec** every argv element is shape: there is nothing declared for the arbitrary-
+command path, and which element is "scale" is never guessed. For an **Approval grant** it
+hashes the **Scope** minus the window, the use limit and the fan-out ceiling. It exists so
+"the last approved action of the same shape" is a lookup, which is what the approval
+object's anti-fatigue diff needs (ADR-0027, D10). It is a grouping key and never a release
+lookup: a dispatch proceeds only on a matching **Plan hash** or a claimed **Approval
+grant**, never on a shape key. Which arguments are shape and which are scale is
+**declared per Operation** in the Relay's Operation-vocabulary mirror, never inferred from
+a value.
+_Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
+
 **Approval**:
 A verified human decision that a specific parked Job may proceed, recorded against its
 Plan hash. The Job waits in **`pending-approval`** until the Gate rule's requirement is

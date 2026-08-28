@@ -74,7 +74,7 @@ func (f *fakeApprovals) DecideApproval(_ context.Context, p capability.Principal
 
 func testApprovalRequest(id string, act jobs.Action) approval.Request {
 	return approval.NewRequest(id, "hash-"+id, "acct-g", "gleipnir-prod", act,
-		[]string{"node-a", "node-b"}, []string{"prod-mutates"},
+		[]string{"node-a", "node-b"}, approval.SelectorShape{}, []string{"prod-mutates"},
 		approval.Requirement{Count: 2, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		apiNow)
 }
