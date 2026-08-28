@@ -649,6 +649,12 @@ func TestVocab_RiskClassInference(t *testing.T) {
 			audit.Record{Kind: audit.KindRead, ActionKind: "list_nodes"}, jobs.RiskClassRead},
 		{"an unknown Operation is treated as a mutate",
 			audit.Record{Kind: audit.KindDispatch, OperationName: "customer.template.thing"}, jobs.RiskClassMutate},
+		{"file.checksum is a read (shipped read catalog, issue #461)",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "file.checksum"}, jobs.RiskClassRead},
+		{"pkg.inventory is a read (shipped read catalog, issue #461)",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "pkg.inventory"}, jobs.RiskClassRead},
+		{"file.stat is a mutate: it ships nowhere in /proto or daemon/, so it is an unknown Operation, not a read",
+			audit.Record{Kind: audit.KindDispatch, OperationName: "file.stat"}, jobs.RiskClassMutate},
 	}
 	for _, c := range cases {
 		if got := riskOf(factsOfRecord(c.rec)); got != c.want {

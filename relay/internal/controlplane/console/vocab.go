@@ -19,11 +19,15 @@ package console
 //
 // # Why the fix is here and not at each call site
 //
-// Three screens ask this question. Three answers is three chances to drift, and
-// the drift would be invisible: each screen would look right in isolation. So
-// the inference lives in one function with its limits written down, and the real
-// fix — putting the declared class on the audit record — replaces this file
-// rather than hunting for the places that guessed.
+// Three screens ask this question: the Activity trail lane, agent history, and
+// node detail's deny explanation. (Job detail and read egress used to be
+// callers too, but #490/#497 moved both onto the DECLARED class carried by
+// capability.TaskRow/JobFilter, so they no longer infer anything and are not
+// listed here.) Three answers is three chances to drift, and the drift would
+// be invisible: each screen would look right in isolation. So the inference
+// lives in one function with its limits written down, and the real fix —
+// putting the declared class on the audit record — replaces this file rather
+// than hunting for the places that guessed.
 
 import (
 	"sort"
@@ -33,6 +37,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
 
 // trailFacts is ONE recorded event, in the fields the Console's display copy
@@ -164,28 +169,67 @@ func readTargetOf(f trailFacts) string {
 	return readTargetName(f.OperationName, f.ActionKind, f.Args)
 }
 
-// readOperations is the read-class half of the shipped catalog (ADR-0021's
-// vocabulary).
+// readOperations is every Operation name this package can call read: the
+// native half DERIVED from opvocab, unioned with the shipped-template half
+// MIRRORED below. It is built once, at var-init, so isReadOperation stays a
+// single map lookup rather than a scan of opvocab.Operations() on every
+// rendered trail row.
 //
-// Named explicitly rather than inferred from a prefix: `service.status` reads
-// and `service.restart` mutates, and a prefix rule would get that exactly
-// backwards for the most consequential pair in the vocabulary.
+// The native half needs no listing of its own: it is every
+// opvocab.Operations() descriptor whose Risk is jobs.RiskClassRead. opvocab is
+// already golden-checked against the daemon's schema (ADR-0015), so a change
+// to the native vocabulary rides that chain of custody straight into this set
+// instead of requiring a second, hand-kept list to be remembered.
 //
-// A customer's Template Operation is not in this list and is therefore treated
-// as a mutate. That is the safe direction for the risk chip — it over-states
-// blast radius rather than under-stating it — and the wrong direction for the
-// read-egress screen, which under-counts exposure as a result. Both are stated
-// on the screens themselves rather than left to be discovered.
-var readOperations = map[string]bool{
-	"system.facts":   true,
-	"file.read":      true,
-	"file.stat":      true,
-	"log.tail":       true,
-	"disk.usage":     true,
+// The template half has no such source: there is no Go-reachable vocabulary
+// of "what does the daemon package ship", because the packaged catalog.toml
+// is a Node-side artifact the Relay does not read at runtime (see
+// vocab_contract_test.go's doc comment for why). shippedReadCatalog is
+// therefore a hand-kept MIRROR of exactly the seven templates
+// daemon/packaging/templates.d/relay-read/catalog.toml ships, all read-class,
+// and vocab_contract_test.go binds it to that file bidirectionally so the two
+// cannot silently diverge.
+//
+// A customer-authored Template Operation is in neither half and is therefore
+// treated as a mutate — the safe direction for the risk chip, since it
+// over-states blast radius rather than under-stating it. This is a change
+// from the literal it replaces: the old list also fed the read-egress screen,
+// where the same default under-counted exposure. That screen no longer reads
+// this set — reads.go derives its vocabulary from the Job's DECLARED
+// RiskClass — so the only residual bias this set introduces is in the chip,
+// the note, and denyExplanation's fallback sentence, and it errs safe there.
+//
+// A Node-local template that REUSES one of the seven shipped names with a
+// different declared class is still misread by this inference in the
+// dangerous direction (a local mutate template named, say, `log.tail`, would
+// chip as read). The only real fix is carrying the declared class on the
+// record itself rather than inferring it here (Option 2, escalated, #475).
+var readOperations = func() map[string]bool {
+	set := make(map[string]bool, len(shippedReadCatalog))
+	for name := range shippedReadCatalog {
+		set[name] = true
+	}
+	for _, d := range opvocab.Operations() {
+		if d.Risk == jobs.RiskClassRead {
+			set[d.Name] = true
+		}
+	}
+	return set
+}()
+
+// shippedReadCatalog names exactly the seven templates
+// daemon/packaging/templates.d/relay-read/catalog.toml ships, all read-class
+// (ADR-0021). vocab_contract_test.go hand-parses that file and asserts this
+// set against it bidirectionally, so adding, removing or reclassifying a
+// template there without updating this literal fails the Go suite.
+var shippedReadCatalog = map[string]bool{
 	"proc.list":      true,
-	"net.listening":  true,
 	"service.status": true,
-	"pkg.query":      true,
+	"disk.usage":     true,
+	"net.listening":  true,
+	"pkg.inventory":  true,
+	"log.tail":       true,
+	"file.checksum":  true,
 }
 
 func isReadOperation(name string) bool { return readOperations[name] }
