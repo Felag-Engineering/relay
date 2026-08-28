@@ -108,8 +108,9 @@ func renderDayOne(w http.ResponseWriter, p Page, d Deps) {
 		v.RetentionMinutes = int(d.Events.RetentionWindow() / time.Minute)
 		v.Attempts, v.LastEventID = dayOneWatch(d.Events)
 		// A screen with no live seam must not load a script that would sit
-		// there failing to connect.
-		p.Scripts = []string{"/console/assets/dayone.js"}
+		// there failing to connect. stream.js FIRST: it defines
+		// window.RelayLive, which dayone.js reads at load time.
+		p.Scripts = []string{"/console/assets/stream.js", "/console/assets/dayone.js"}
 	}
 
 	renderScreen(w, p, dayOneTmpl, v)
@@ -215,7 +216,8 @@ var dayOneTmpl = newScreen("dayone", `
     published with this build.</p>
   </div>
 
-  <section class="watch" id="dayone-watch" data-live="{{if .Watching}}down{{else}}off{{end}}"
+  <section class="watch" id="dayone-watch" data-live-region
+           data-live="{{if .Watching}}down{{else}}off{{end}}"
            data-events="/console/events?kinds=enrollment"
            data-last-event-id="{{.LastEventID}}">
     <div class="watchhead">

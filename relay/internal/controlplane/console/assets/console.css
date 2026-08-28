@@ -948,16 +948,28 @@ tr.attnrow td { background: var(--attention-bg); }
  * worse than one that admits it is blind. The indicator stops moving and the
  * panel says which state it is in — one message per state, all of them written
  * in Go and selected here, so the script file holds no product language. */
-.watch[data-live="down"] .pulse,
-.watch[data-live="gap"] .pulse,
-.watch[data-live="ended"] .pulse,
-.watch[data-live="off"] .pulse { background: var(--text-muted); animation: none; }
+/* Attribute-scoped, not class-scoped: [data-live-region] is what marks a live
+ * region for both the shell's script and this stylesheet, so day one's .watch
+ * and Activity's .live are styled by ONE set of rules and cannot degrade
+ * differently. .watch still matches, through the attribute it now carries. */
+[data-live-region][data-live="down"] .pulse,
+[data-live-region][data-live="gap"] .pulse,
+[data-live-region][data-live="ended"] .pulse,
+[data-live-region][data-live="off"] .pulse { background: var(--text-muted); animation: none; }
 .wmsg { display: none; font-size: var(--text-sm); color: var(--text-second); }
-.watch[data-live="on"] .wmsg[data-when="on"],
-.watch[data-live="down"] .wmsg[data-when="down"],
-.watch[data-live="gap"] .wmsg[data-when="gap"],
-.watch[data-live="ended"] .wmsg[data-when="ended"],
-.watch[data-live="off"] .wmsg[data-when="off"] { display: inline; }
+[data-live-region][data-live="on"] .wmsg[data-when="on"],
+[data-live-region][data-live="down"] .wmsg[data-when="down"],
+[data-live-region][data-live="gap"] .wmsg[data-when="gap"],
+[data-live-region][data-live="ended"] .wmsg[data-when="ended"],
+[data-live-region][data-live="off"] .wmsg[data-when="off"] { display: inline; }
+
+/* The queue control (spec 11: incoming events queue behind an explicit
+ * control). Hidden until something is queued, and blue because it is
+ * interactive — the colour budget gives blue to interaction and this is the
+ * only thing on the region a person clicks. */
+.newq { display: none; font-size: var(--text-sm); color: var(--color-blue); margin-left: auto; }
+[data-live-region][data-queued="yes"] .newq { display: inline; }
+.newq b { font-variant-numeric: tabular-nums; }
 
 .attempts { list-style: none; padding: 0; margin: var(--space-3) 0 0; }
 .attempt {
@@ -1119,6 +1131,36 @@ dl.kv { grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5); }
 .evreason { font-size: var(--text-sm); color: var(--text-second); margin-top: var(--space-1); }
 .evnote { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); }
 .grant { font-size: var(--text-xs); color: var(--text-muted); font-family: var(--font-mono); }
+
+/* Activity's live region. Same component as day one's watch panel; only the
+ * frame differs, because this one sits above a feed rather than being the
+ * screen. */
+.live {
+  display: block; margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3); background: var(--bg-surface);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
+}
+.livehead { display: flex; gap: var(--space-3); align-items: baseline; flex-wrap: wrap; }
+.livenote { margin: var(--space-1) 0 0; font-size: var(--text-xs); color: var(--text-muted); }
+
+/* The completion slot. It is RESERVED — the row keeps the line box whether or
+ * not a sentence is showing — so revealing one cannot reflow the row someone
+ * is reading (foundations rule 6, live but stable).
+ *
+ * A one-cell grid, with both sentences stacked in it and hidden by
+ * VISIBILITY rather than display: the slot is exactly one line high from the
+ * moment the row renders, whichever of the two the client later reveals. */
+.evliveslot { display: grid; margin-top: var(--space-1); }
+.evliveslot > .evlive {
+  grid-area: 1 / 1; visibility: hidden;
+  font-size: var(--text-xs); color: var(--text-second);
+}
+/* Only the dispatch row for a Job carries data-job-id, so only it can be
+ * flipped — see activityRow.LiveHandle. */
+.ev[data-jobstate="completed"] .evlive[data-when="completed"],
+.ev[data-jobstate="cancelled"] .evlive[data-when="cancelled"] { visibility: visible; }
+
+.pager { display: flex; gap: var(--space-4); align-items: baseline; margin: var(--space-4) 0; font-size: var(--text-sm); }
 
 /* --- Agents --------------------------------------------------------------- */
 .agentcols { display: flex; gap: var(--space-4); align-items: flex-start; }

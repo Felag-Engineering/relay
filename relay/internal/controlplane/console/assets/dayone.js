@@ -1,11 +1,12 @@
 // dayone.js — the live half of the Console's day-one screen (spec 10, and the
 // SSE conventions in spec 11).
 //
-// This is the Console's only client-side behaviour, and it is loaded as an
-// external file from this origin because the content security policy admits
-// `script-src 'self'` and nothing inline.
-//
-// Three rules this file must keep:
+// It loads beside stream.js, which owns the transport: connecting, resuming,
+// backing off, and the five states of a live region. This file is only day
+// one's handler. When it was written it held a copy of all of that, and #422
+// would have shipped a second copy — so the transport moved to the shell
+// (spec 11 line 113, "Build it once") and this file kept the three rules it
+// enforces:
 //
 //  1. NO innerHTML, ever. Rows are built by cloning the <template> the server
 //     rendered and setting textContent. A token id derives from a credential a
@@ -19,61 +20,36 @@
 //  3. NO configuration. The endpoint and the resume point are read from data-
 //     attributes, because no inline script means no server-injected variables.
 //
-// DEVIATION, RECORDED: spec 11 line 113 says "live but stable" is enforced in
-// the shell — incoming events for a region a user is reading queue behind an
-// explicit control, built once. This file prepends rejections immediately.
-// On day one there is arguably nothing being read yet, so the deviation is
-// defensible; but this is the first live region in the product and #422 will
-// inherit whatever shape it takes, so the queueing control belongs in the shell
-// before a second screen copies this one.
+// DEVIATION, RECORDED: spec 11 line 113 also says incoming events for a region
+// a user is reading queue behind an explicit control. This file still PREPENDS
+// rejections immediately. That is now a deliberate per-screen choice rather
+// than a copy nobody could see: the control exists in the shell and Activity
+// uses it, and on day one there is by definition nothing being read yet — the
+// screen's whole job is the first attempt arriving.
+//
+// DEPENDENCY, RECORDED: this screen now needs TWO files to load. If stream.js
+// 404s or fails to parse, window.RelayLive is undefined, this file returns
+// immediately, and the panel sits at the data-live="down" the SERVER rendered —
+// "The live watch is not connected." — with no reconnect behind it. That state
+// is honest rather than misleading, which is why it is a note and not a
+// guard: the screen degrades to saying it is not watching, which is true.
+// TestDayOne_ScriptIsActuallyServed fetches both files so a typo in p.Scripts
+// cannot ship that state to a whole fleet with every Go test green.
 (function () {
   "use strict";
 
   var panel = document.getElementById("dayone-watch");
-  if (!panel || typeof EventSource === "undefined") {
+  if (!panel || !window.RelayLive) {
     return;
   }
 
   var list = document.getElementById("dayone-attempts");
   var empty = document.getElementById("dayone-empty");
   var rowTemplate = document.getElementById("dayone-attempt-row");
-  var endpoint = panel.getAttribute("data-events");
-  var lastEventID = panel.getAttribute("data-last-event-id") || "";
 
   // maxRows caps what the page holds; the seam's own retention caps what it
   // can ever send.
   var maxRows = 50;
-
-  // maxAttempts bounds the reconnect loop. It is not a network nicety: an SSE
-  // response is ONE request, and a Console session's idle timeout is refreshed
-  // per request — so a tab parked on this screen refreshes nothing and the
-  // session can expire while the operator is actively watching. The reconnect
-  // then follows a redirect to the sign-in page and fails as an ordinary
-  // error, indistinguishable from a blip. Without a bound this backs off
-  // forever against a login page; with one, the panel ends up in a state that
-  // says so.
-  var maxAttempts = 6;
-
-  var attempts = 0;
-  var source = null;
-
-  function setState(state) {
-    panel.setAttribute("data-live", state);
-  }
-
-  function streamURL() {
-    if (!lastEventID) {
-      return endpoint;
-    }
-    // The separator is computed, not assumed. data-events carries a query
-    // string today (?kinds=enrollment) and the next screen's may not.
-    var sep = endpoint.indexOf("?") < 0 ? "?" : "&";
-    return endpoint + sep + "last_event_id=" + encodeURIComponent(lastEventID);
-  }
-
-  function backoff() {
-    return Math.min(30000, 1000 * Math.pow(2, attempts)) + Math.floor(Math.random() * 1000);
-  }
 
   function setText(row, selector, value) {
     var el = row.querySelector(selector);
@@ -100,16 +76,10 @@
     }
   }
 
-  function onEnrollment(e) {
-    lastEventID = e.lastEventId || lastEventID;
-
-    var attempt;
-    try {
-      attempt = JSON.parse(e.data);
-    } catch (err) {
-      return;
-    }
-
+  // The resume point is stream.js's, not this file's: it writes e.lastEventId
+  // back before calling here, so this handler receives the parsed payload and
+  // nothing else.
+  function onEnrollment(attempt) {
     // The registry is written inside Enroll, before the daemon opens a
     // Tunnel, so by the time this arrives the fleet view has a Node and no
     // longer renders this screen. That is the "without a reload" criterion.
@@ -120,42 +90,5 @@
     addRejection(attempt);
   }
 
-  // A gap means continuity that was not real. Reload the region rather than
-  // splicing (spec 11): the server re-renders from the seam's retained
-  // history, which is the only accurate view available.
-  function onGap() {
-    if (source) {
-      source.close();
-    }
-    setState("gap");
-    window.setTimeout(function () {
-      window.location.reload();
-    }, 1000);
-  }
-
-  function onError() {
-    if (source) {
-      source.close();
-    }
-    attempts++;
-    if (attempts > maxAttempts) {
-      setState("ended");
-      return;
-    }
-    setState("down");
-    window.setTimeout(connect, backoff());
-  }
-
-  function connect() {
-    source = new EventSource(streamURL());
-    source.onopen = function () {
-      attempts = 0;
-      setState("on");
-    };
-    source.addEventListener("enrollment", onEnrollment);
-    source.addEventListener("gap", onGap);
-    source.onerror = onError;
-  }
-
-  connect();
+  window.RelayLive.region(panel, { enrollment: onEnrollment });
 })();
