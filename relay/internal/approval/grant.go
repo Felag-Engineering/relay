@@ -383,6 +383,16 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// ShapeKey is the Grant's shape key: a hash over its Scope minus the bounds
+// that are scale (the window, the use limit, and the fan-out ceiling — see
+// HashGrantShape).
+//
+// DERIVED, not stored. Every input is already a scope_* column on
+// approval_grants, so it is always exactly recomputable and can never go stale
+// against the Scope it describes — which is why migration 0022 adds a shape_key
+// column to approval_requests and deliberately none here.
+func (g Grant) ShapeKey() string { return HashGrantShape(g.Scope) }
+
 // knownNamespaces are the label namespaces a Selector may use (ADR-0006,
 // ADR-0020, ADR-0034). RequirementForScope walks them when a Scope does not
 // pin one. Adding a namespace here only ADDS probes to RequirementForScope's
@@ -527,8 +537,12 @@ func NewGrantRequest(g Grant, requestedByID, requestedBy string, rules []string,
 	}
 
 	return Request{
-		ID:            g.RequestID,
-		PlanHash:      HashScope(g.Scope, g.StartsAt, g.ExpiresAt, g.MaxUses),
+		ID:       g.RequestID,
+		PlanHash: HashScope(g.Scope, g.StartsAt, g.ExpiresAt, g.MaxUses),
+		// The same key the Grant itself carries, so a grant's queue card groups
+		// and diffs against the Grant it authorizes rather than against a
+		// separately-derived approximation of it.
+		ShapeKey:      g.ShapeKey(),
 		RequestedByID: requestedByID,
 		RequestedBy:   requestedBy,
 		Summary:       g.Summary,

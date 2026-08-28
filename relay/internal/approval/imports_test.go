@@ -41,6 +41,14 @@ func TestApprovalImportsStayNarrow(t *testing.T) {
 		"syscall":       true,
 		"time":          true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs": true,
+		// internal/opvocab joined with #415, on exactly the terms jobs is
+		// admitted: it imports only fmt, sort, strings and internal/jobs, has
+		// no proto and no database/sql, so admitting it opens no transitive
+		// back door into the wire types. It is admitted precisely so
+		// shape-vs-scale (opvocab.ArgClass) has exactly ONE declaration site —
+		// a copy of that table in this package is a copy that can disagree with
+		// the Operation vocabulary it describes.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,
