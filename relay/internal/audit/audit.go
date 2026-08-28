@@ -115,6 +115,50 @@ const (
 	KindAPITokenRevoke = "api_token_revoke"
 )
 
+// allKinds is every Kind above, in declaration order. Kinds returns a copy of
+// it.
+var allKinds = []string{
+	KindDispatch,
+	KindRefusal,
+	KindFreezeEngage,
+	KindFreezeRelease,
+	KindJobCancel,
+	KindTokenMint,
+	KindTokenRevoke,
+	KindNodeRevoke,
+	KindPlan,
+	KindApprovalRequested,
+	KindApprovalPendingObserved,
+	KindApprovalExpired,
+	KindApprovalDecided,
+	KindRead,
+	KindAccountCreate,
+	KindAccountRole,
+	KindAccountEnable,
+	KindAccountDisable,
+	KindLoginSucceeded,
+	KindLoginFailed,
+	KindLoginThrottled,
+	KindLogout,
+	KindAPITokenMint,
+	KindAPITokenRevoke,
+}
+
+// Kinds returns every Kind this package defines, in declaration order.
+//
+// It exists so that a consumer which PARTITIONS the vocabulary can be tested
+// against the whole of it. The Console's Activity screen requests the trail by
+// naming kinds explicitly (one lane serves dispatch, another serves the rest),
+// so a Kind added above and classified nowhere would silently stop appearing
+// on the surface billed as the trail. With this, that omission fails a test
+// instead.
+//
+// The returned slice is a copy: the package's own list is not a caller's to
+// reorder or truncate.
+func Kinds() []string {
+	return append([]string(nil), allKinds...)
+}
+
 // Record is one append-only audit entry: a single Task's dispatch, a
 // refusal, or a Freeze engage/release, as issued by a principal. Fields are
 // self-contained primitives (no pointers into Job/Task state) so a Record

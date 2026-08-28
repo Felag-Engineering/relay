@@ -159,8 +159,8 @@ func fromAuditRow(r audit.Row) capability.AuditRow {
 		NodeID:        r.NodeID,
 		ActionKind:    r.ActionKind,
 		OperationName: r.OperationName,
-		Args:          r.Args,
-		RawExecArgv:   r.RawExecArgv,
+		Args:          copyStringMap(r.Args),
+		RawExecArgv:   copyStringSlice(r.RawExecArgv),
 		Outcome:       r.Outcome,
 		Reason:        r.Reason,
 		ApprovalID:    r.ApprovalID,
@@ -200,6 +200,7 @@ func toJobQuery(f capability.JobFilter) jobs.JobQuery {
 		RequesterAccountID: f.RequesterAccountID,
 		Operation:          f.Operation,
 		RiskClass:          f.RiskClass,
+		OnBehalfOf:         f.OnBehalfOf,
 		Since:              f.Since,
 		Until:              f.Until,
 	}
@@ -216,10 +217,56 @@ func fromJobSummary(s jobs.JobSummary) capability.JobSummary {
 		Selector:           s.Selector,
 		Requester:          s.Requester,
 		RequesterAccountID: s.RequesterAccountID,
+		OnBehalfOf:         s.OnBehalfOf,
+		ApprovalID:         s.ApprovalID,
+		GrantID:            s.GrantID,
+		Args:               copyStringMap(s.Args),
+		RawExecArgv:        copyStringSlice(s.RawExecArgv),
 		Total:              s.Total,
-		Counts:             s.Counts,
+		Counts:             copyOutcomeCounts(s.Counts),
 		Unresolved:         s.Unresolved,
 	}
+}
+
+// copyStringMap, copyStringSlice and copyOutcomeCounts are what make this
+// package's mapping TOTAL in the sense that matters at a seam boundary: the
+// capability-layer value shares no backing store with the internal one it was
+// built from. Handing the same map across the boundary is an alias, and an
+// alias is a caller one layer up quietly mutating the layer below's value —
+// which is exactly the kind of coupling mirroring these types was meant to
+// prevent. Applied to every reference-typed field this package maps EXCEPT
+// TaskRow's Stdout/Stderr, which are deliberately handed over as they are:
+// they are up to a megabyte per Task and the page above may hold a hundred of
+// them, so copying them would double the largest allocation on the read lane
+// to guard a value nothing else retains. That exception is stated here rather
+// than left to be inferred from the code.
+func copyStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
+func copyStringSlice(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	return append([]string(nil), s...)
+}
+
+func copyOutcomeCounts(m map[jobs.Outcome]int) map[jobs.Outcome]int {
+	if m == nil {
+		return nil
+	}
+	out := make(map[jobs.Outcome]int, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func fromJobPage(p jobs.JobPage) capability.JobPage {

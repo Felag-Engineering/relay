@@ -252,3 +252,93 @@ func TestQueries_InvalidCursor_MapsToCapabilitySentinel(t *testing.T) {
 		t.Errorf("QueryJobs: err = %v, want capability.ErrInvalidCursor", err)
 	}
 }
+
+// TestMapping_JobSummaryCarriesTheWholeDispatchAttribution pins the mapping
+// this package exists to be: TOTAL in both directions. A field added to
+// jobs.JobSummary and forgotten here is a field the capability layer's callers
+// never see, and the omission is silent — the row still renders, just without
+// the half of spec 04's acceptance criterion 2 that says FOR WHOM and WHO
+// APPROVED.
+func TestMapping_JobSummaryCarriesTheWholeDispatchAttribution(t *testing.T) {
+	args := map[string]string{"unit": "nginx"}
+	argv := []string{"/bin/systemctl", "restart", "nginx"}
+	counts := map[jobs.Outcome]int{jobs.OutcomeSuccess: 3}
+
+	got := fromJobSummary(jobs.JobSummary{
+		JobID:              "job-1",
+		OnBehalfOf:         "agent-7",
+		ApprovalID:         "appr-9",
+		GrantID:            "grant-3",
+		Args:               args,
+		RawExecArgv:        argv,
+		Counts:             counts,
+		Requester:          "gleipnir",
+		RequesterAccountID: "acct-1",
+	})
+
+	if got.OnBehalfOf != "agent-7" || got.ApprovalID != "appr-9" || got.GrantID != "grant-3" {
+		t.Errorf("attribution did not cross the seam: %+v", got)
+	}
+	if !reflect.DeepEqual(got.Args, args) || !reflect.DeepEqual(got.RawExecArgv, argv) {
+		t.Errorf("what was asked for did not cross the seam: Args=%#v Argv=%#v", got.Args, got.RawExecArgv)
+	}
+
+	// Nothing shares a backing store across the boundary. An alias is the
+	// capability layer's caller quietly mutating internal/jobs' value.
+	args["unit"] = "mutated"
+	argv[0] = "mutated"
+	counts[jobs.OutcomeSuccess] = 99
+	if got.Args["unit"] != "nginx" {
+		t.Error("JobSummary.Args is an ALIAS of the internal map, not a copy")
+	}
+	if got.RawExecArgv[0] != "/bin/systemctl" {
+		t.Error("JobSummary.RawExecArgv is an ALIAS of the internal slice, not a copy")
+	}
+	if got.Counts[jobs.OutcomeSuccess] != 3 {
+		t.Error("JobSummary.Counts is an ALIAS of the internal map, not a copy")
+	}
+}
+
+// TestMapping_AuditRowDoesNotAliasItsSource is the same property on the trail
+// side, so the two rows this package maps carry ONE contract rather than
+// whichever one was written second.
+func TestMapping_AuditRowDoesNotAliasItsSource(t *testing.T) {
+	args := map[string]string{"path": "/etc/hosts"}
+	argv := []string{"/bin/cat", "/etc/hosts"}
+
+	got := fromAuditRow(audit.Row{ID: "a1", Args: args, RawExecArgv: argv})
+
+	args["path"] = "/etc/shadow"
+	argv[1] = "/etc/shadow"
+	if got.Args["path"] != "/etc/hosts" {
+		t.Error("AuditRow.Args is an ALIAS of the internal map, not a copy")
+	}
+	if got.RawExecArgv[1] != "/etc/hosts" {
+		t.Error("AuditRow.RawExecArgv is an ALIAS of the internal slice, not a copy")
+	}
+}
+
+// TestMapping_JobFilterCarriesOnBehalfOf: a filter field the mapping drops is
+// a filter that silently matches everything.
+func TestMapping_JobFilterCarriesOnBehalfOf(t *testing.T) {
+	if got := toJobQuery(capability.JobFilter{OnBehalfOf: "agent-7"}).OnBehalfOf; got != "agent-7" {
+		t.Errorf("toJobQuery dropped OnBehalfOf (got %q) — the filter would silently match every Job", got)
+	}
+}
+
+// TestCapabilityJobSummary_HasNoOutputField mirrors the store-side guard on
+// the seam the Console actually reads. ADR-0025: a Job list is not a path to
+// captured output, at any age.
+func TestCapabilityJobSummary_HasNoOutputField(t *testing.T) {
+	rt := reflect.TypeOf(capability.JobSummary{})
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		switch f.Name {
+		case "Stdout", "Stderr", "Output", "Truncated":
+			t.Errorf("capability.JobSummary has a %s field — see AuditRow's doc comment (ADR-0025)", f.Name)
+		}
+		if f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Uint8 {
+			t.Errorf("capability.JobSummary.%s is a []byte — the only bytes a Task produces are its output", f.Name)
+		}
+	}
+}

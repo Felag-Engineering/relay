@@ -2,6 +2,7 @@ package capability
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,5 +98,49 @@ func TestClampBucket(t *testing.T) {
 				t.Errorf("clampBucket(%s) = %s, want %s", c.in, got, c.want)
 			}
 		})
+	}
+}
+
+// TestJobFilter_SummaryRecordsOnBehalfOf: every filter field this lane can be
+// asked for must reach the read record's selector, or the trail cannot answer
+// "who searched for whose work". A filter the caller can set and the trail
+// does not record is a search that leaves no evidence.
+func TestJobFilter_SummaryRecordsOnBehalfOf(t *testing.T) {
+	got := JobFilter{OnBehalfOf: "agent-7"}.summary()
+	if got != "on_behalf_of=agent-7" {
+		t.Errorf("summary() = %q, want on_behalf_of=agent-7", got)
+	}
+
+	// The asserted lane is caller-claimed, so it is exactly the field a
+	// principal would use to forge the summary's own structure.
+	forged := JobFilter{OnBehalfOf: `x;requester=admin;op=raw_exec`}.summary()
+	if forged != `on_behalf_of=x\;requester\=admin\;op\=raw_exec` {
+		t.Errorf("summary() = %q — a caller-controlled value wrote the summary's own structure", forged)
+	}
+}
+
+// TestFilters_BoundOnBehalfOf. The asserted lane is caller-controlled and
+// crosses this boundary INTACT on its way to the store — the recorded read
+// record is truncated by filterSummary, but the value the seam is handed is
+// not. Without a bound here the only one is net/http's header limit, which is
+// the transport's business and not this layer's, and only one surface has it.
+func TestFilters_BoundOnBehalfOf(t *testing.T) {
+	long := strings.Repeat("a", maxOnBehalfOfBytes+1)
+
+	if err := (JobFilter{OnBehalfOf: long}).validate(); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("JobFilter with an over-long on_behalf_of: err = %v, want ErrInvalidFilter", err)
+	}
+	if err := (AuditFilter{OnBehalfOf: long}).validate(); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("AuditFilter with an over-long on_behalf_of: err = %v, want ErrInvalidFilter", err)
+	}
+
+	// At the bound, not one past it, both are accepted: the bound is a bound
+	// and not an off-by-one refusal of a legitimate identity.
+	atMax := strings.Repeat("a", maxOnBehalfOfBytes)
+	if err := (JobFilter{OnBehalfOf: atMax}).validate(); err != nil {
+		t.Errorf("JobFilter at the bound: err = %v, want nil", err)
+	}
+	if err := (AuditFilter{OnBehalfOf: atMax}).validate(); err != nil {
+		t.Errorf("AuditFilter at the bound: err = %v, want nil", err)
 	}
 }
