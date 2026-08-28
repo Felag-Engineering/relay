@@ -64,8 +64,38 @@ should not have to find their own item in someone else's list.
 
 ## Acceptance
 
-- [ ] Default order is nearest-expiry-first.
-- [ ] No decision is possible without opening the approval object, except bulk deny with step-up.
-- [ ] A Grant occupies exactly one row.
-- [ ] Pending approvals sharing a shape key are visibly grouped.
-- [ ] "Waiting on me" is the default filter when eligibility is determinable.
+- [x] Default order is nearest-expiry-first.
+      The sort key is the `time.Duration`, never the rendered string — "10m left" sorts before
+      "5m left" lexicographically, which put the most urgent request in the middle of the queue.
+      A **lapsed** request sorts **last**, reversing what this screen first did: an undecidable
+      row at the top pushes the decidable ones under it. The spec's "then largest fan-out"
+      tiebreak is **not** implemented and cannot be — the approval record carries no fan-out and
+      a park creates no Job to count Tasks on (#462, blocked on #469). The tiebreak is creation
+      time and then id, which is arbitrary but stable.
+- [x] No decision is possible without opening the approval object, except bulk deny with step-up.
+      Stronger than asked in v0.6.0: **no control of any kind exists on either screen**, and the
+      Console's approval seam has no decision method, no `RequestGrant` and no `RevokeGrant` on
+      it — the criterion is a fact about the interface. Every filter is an anchor. Bulk deny is
+      v0.7.0.
+- [x] A Grant occupies exactly one row.
+      Structural: the queue lists Requests and there is exactly one Request per Grant. The Jobs a
+      Grant has released are listed on the card, never as rows.
+- [x] Pending approvals sharing a shape key are visibly grouped.
+      Grouped by the stored shape key (#415) and rendered as a **per-render ordinal** — "2 pending
+      of the same shape (group A)". The key itself is an unexported field, so `html/template`
+      cannot render it, and no route or query parameter accepts one: an unsalted SHA-256 over a
+      small preimage (for Raw Exec, every argv element) would be an offline-confirmation oracle.
+- [x] "Waiting on me" is the default filter when eligibility is determinable.
+      With two rules that matter. It **excludes only what is definitely not the caller's** — a
+      named audience that does not include them — so a Request with no audience is shown rather
+      than hidden, because who may decide is the capability layer's answer and this screen never
+      second-guesses it. And it is **not applied when it would empty a queue that has entries in
+      it**: the screen renders everything and says the filter was not applied, because a defaulted
+      filter that turns a full queue into "nothing is waiting" is the worst thing it could say.
+
+### Not delivered by this build
+
+**The per-row fan-out.** Spec 14 asks each row to carry it. Nothing stores it: the resolved fan-out
+is not on the approval record, and a park creates no Job, so there is no Task and no result to
+count. The row carries the Relay-authored summary, which names the node count as prose — and this
+screen never reads a number back out of prose. #469 is the change that would make it available.

@@ -426,3 +426,43 @@ func TestDeniedGrantRequestIsNeverClaimable(t *testing.T) {
 		t.Fatalf("claimed a grant whose request was DENIED: ok=%v err=%v", ok, err)
 	}
 }
+
+// TestGrantByRequestFindsARevokedGrant is why GrantByRequest is not a copy of
+// ClaimGrant's query. The approval object renders a Grant that has already been
+// closed, spent or lapsed — "what did that window cover, and who closed it" is
+// the question asked after the fact — so a `revoked_at IS NULL` or an
+// Active(now) filter here would tell a human nothing like this was ever
+// approved about a window they themselves revoked yesterday.
+func TestGrantByRequestFindsARevokedGrant(t *testing.T) {
+	ctx := context.Background()
+	repo, approvals := grantStore(t)
+	if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
+		t.Fatalf("CreateGrant: %v", err)
+	}
+	authorize(t, approvals, "req-grant-1")
+	if _, err := repo.RevokeGrant(ctx, "grant-1", "ana", "incident 41", gNow); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	got, err := repo.GrantByRequest(ctx, "req-grant-1")
+	if err != nil {
+		t.Fatalf("GrantByRequest after revocation: %v", err)
+	}
+	if got.ID != "grant-1" {
+		t.Errorf("GrantByRequest returned %q, want grant-1", got.ID)
+	}
+	if !got.Revoked() || got.RevokedBy != "ana" {
+		t.Errorf("GrantByRequest lost the revocation: %+v", got)
+	}
+}
+
+// TestGrantByRequestIsNotFoundForAPlainRequest: most approval Requests are for
+// one Plan and authorize no Grant at all, and the surface has to be able to
+// tell the two apart by the sentinel rather than by an empty struct.
+func TestGrantByRequestIsNotFoundForAPlainRequest(t *testing.T) {
+	repo, _ := grantStore(t)
+	_, err := repo.GrantByRequest(context.Background(), "req-that-is-a-plan")
+	if !errors.Is(err, approval.ErrGrantNotFound) {
+		t.Fatalf("err = %v, want ErrGrantNotFound", err)
+	}
+}

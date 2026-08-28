@@ -616,7 +616,7 @@ func TestJob_JobIdIsNotPresentedAsAPlanHash(t *testing.T) {
 		tasks: tasks,
 		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
 	})
-	d.Approvals = fakeApprovals{pending: []approval.Request{{ID: "ap-1", PlanHash: "sha256:4b18c02f9911"}}}
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", PlanHash: "sha256:4b18c02f9911"}}}
 	gated := jobBody(t, d, jobPath(""))
 
 	if !strings.Contains(gated, "sha256:4b18c02f9911") && !strings.Contains(gated, "4b18c02f9911") {

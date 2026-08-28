@@ -92,10 +92,39 @@ and Activity (spec 04) shows either.
 
 ## Acceptance
 
-- [ ] Renders legibly at 390px wide with no horizontal scroll and 44px minimum hit targets.
+- [x] Renders legibly at 390px wide with no horizontal scroll and 44px minimum hit targets.
+      The card is chromeless — no nav rail, one column — and the rules ship: a 480px breakpoint
+      that stacks the queue row and collapses the key/value grid, and a plan hash whose CONTAINER
+      scrolls so the identifier is never broken across lines (the `.tablescroll` rule).
+      **Which targets the 44px minimum covers, precisely:** the queue's rows, this card's back
+      link, and the Job links a Grant's released list renders. It does **not** cover the
+      prior-approval link inside the diff callout — that one sits mid-sentence, where a 44px inline
+      box breaks the line rhythm of the paragraph the whole card is built around. **Stated limit:**
+      all of this is asserted from the stylesheet, not from a browser. The 390px rendering and the
+      one in-sentence link both still need the manual pass.
 - [ ] Approve and Deny are visually identical in weight; neither is focused on load.
-- [ ] Neither decision submits without step-up.
+      **(v0.7.0.)** No decision control exists in v0.6.0.
+- [ ] Neither decision submits without step-up. **(v0.7.0.)**
 - [ ] A Grant cannot be approved without its Scope having been expanded.
-- [ ] The diff callout is present whenever a comparable prior approval exists, and its absence is
+      **(v0.7.0 for the enforcement.)** v0.6.0 ships the closed `<details>` disclosure carrying
+      every Scope field, the derived worst-case Requirement, and the Jobs released so far — and
+      states the rule. There is no submit control to gate, and the copy does not pretend
+      otherwise.
+- [x] The diff callout is present whenever a comparable prior approval exists, and its absence is
       stated when one does not.
+      It renders **only what is genuinely stored**: for a Grant, the real numbers (the fan-out
+      ceiling, the window, the use limit — the three `HashGrantShape` excludes, all of them
+      columns); for a Plan, shape identity plus a scale-argument diff read from each park's own
+      audit record, plus plan-hash equality. The **fan-out is named as uncomparable** rather than
+      inferred: a park creates no Job, so no Task and no result exists for the record being
+      rendered. All three absences are stated — no prior of this shape, a shape that was never
+      computed, and inputs missing from the audit trail. Nothing is ever parsed out of the
+      summary.
 - [ ] The decision is bound to the plan hash; a plan that changed is not approvable.
+      **(v0.7.0.)** v0.6.0 renders the plan hash as the thing a decision commits to.
+
+### Deviation from the card order above
+
+The **diff callout renders first**, above the requester line and the action. This spec asks for it
+third and also calls it "the most eye-catching text on the card"; those cannot both hold. Recorded
+in [99-open-decisions](99-open-decisions.md) under D10.

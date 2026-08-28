@@ -1235,6 +1235,39 @@ section.panel { margin-top: var(--space-4); }
 .qttl { font-size: var(--text-xs); color: var(--text-muted); margin-top: var(--space-1); font-variant-numeric: tabular-nums; }
 .qrow.urgent .qttl { color: var(--attention-text); font-weight: var(--weight-medium); }
 .qshape { font-size: var(--text-xs); color: var(--security); margin-top: var(--space-1); }
+.qscope { font-size: var(--text-sm); color: var(--text-second); margin-top: var(--space-1); font-family: var(--font-mono); }
+.fgroup { font-size: var(--text-2xs); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); align-self: center; }
+
+/* --- The approval object (spec 08) ---------------------------------------
+ *
+ * The diff callout is "the single most valuable element on the screen and it
+ * must be the most eye-catching text on the card". So the changed clause is the
+ * largest, heaviest type on the page — in the EXISTING amber, which already
+ * means "needs attention now". No new colour: a changed fan-out is not a new
+ * kind of thing, it is the thing this screen was always about. */
+.diff {
+  border: 1px solid var(--attention-line); border-left: 3px solid var(--attention);
+  background: var(--attention-bg); border-radius: var(--radius-section);
+  padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); max-width: 780px;
+}
+.diffhead { font-size: var(--text-sm); color: var(--text-second); }
+.diffchange {
+  margin: var(--space-2) 0 0; font-size: var(--text-lg); font-weight: 700;
+  color: var(--attention-text); letter-spacing: -0.01em;
+}
+.nodiff { margin: 0; font-size: var(--text-sm); color: var(--text-second); }
+.diff .note { margin-bottom: 0; }
+
+/* The Scope disclosure, closed by default, in the .ogroup idiom: expanding it
+ * is a deliberate cost, and v0.7.0 makes approving a Grant require it. */
+details.scope { background: var(--bg-canvas); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); margin: var(--space-3) 0; }
+details.scope > summary { padding: var(--space-3) var(--space-4); cursor: pointer; font-size: var(--text-sm); list-style: none; }
+details.scope > summary::-webkit-details-marker { display: none; }
+details.scope[open] > summary { border-bottom: 1px solid var(--border-subtle); }
+details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--space-4); margin-right: var(--space-4); }
+.joblist { list-style: none; padding: 0; margin: 0 0 var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-3); font-family: var(--font-mono); font-size: var(--text-sm); }
+.back { font-size: var(--text-sm); margin: 0 0 var(--space-3); }
+
 .summary { font-size: var(--text-base); margin: var(--space-3) 0 0; }
 .empty { max-width: 44em; }
 .empty h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); }
@@ -1466,3 +1499,48 @@ section.panel { margin-top: var(--space-4); }
 .chip.outcome[data-outcome="planned"],
 .chip.outcome[data-outcome="refused"] { border-style: dashed; font-weight: var(--weight-normal); }
 .repeatdeny { font-size: var(--text-xs); color: var(--text-muted); padding-top: 0; }
+
+/* An APPROVAL state is not a Task outcome, and it must not borrow one. A denied
+ * approval is a HUMAN's refusal, not denied_by_policy — slate stays reserved
+ * for Policy decisions, and lending it here would say the daemon refused
+ * something it was never asked. A pending approval is not "unsupported" and an
+ * approved one is not a green success: nothing has run yet either way.
+ *
+ * So the four extend the same neutral family as the outcomes that never reached
+ * a Node, and are told apart by border WEIGHT and STYLE rather than by hue.
+ * Expired takes --inert, because grey here means inertness and a lapsed
+ * approval is exactly that. No new colour. */
+.chip.state {
+  background: transparent; color: var(--text-second); border-color: var(--border-mid);
+  font-weight: var(--weight-normal);
+}
+.chip.state[data-state="pending"]  { border-style: dashed; }
+.chip.state[data-state="approved"] { border-color: var(--text-second); font-weight: var(--weight-medium); }
+.chip.state[data-state="denied"]   { border-width: 2px; border-color: var(--text-second); font-weight: var(--weight-medium); }
+.chip.state[data-state="expired"]  { color: var(--inert); border-color: var(--inert); border-style: dotted; }
+
+/* --- The approval card on a phone ----------------------------------------
+ *
+ * Spec 08: "renders legibly at 390px wide with no horizontal scroll and 44px
+ * minimum hit targets". An approver arrives from a link, on a phone, and this
+ * is the highest-stakes rendering in the system.
+ *
+ * The plan hash is the one unbreakable token on the card, and it is what a
+ * decision commits to — so the CONTAINER scrolls and the identifier is never
+ * broken across lines, the same rule .tablescroll and .devtable follow. */
+.qrow { min-height: 44px; }
+/* The card's own touch targets. A .qrow minimum covers the QUEUE and nothing on
+ * the approval object, whose targets are the back link and the Jobs a Grant
+ * released. The link inside the diff callout is deliberately NOT enlarged: it
+ * sits mid-sentence, and a 44px inline box there breaks the line rhythm of the
+ * one paragraph on the card that has to be read. That one is on the manual
+ * pass. */
+.back a, .joblist a { display: inline-flex; align-items: center; min-height: 44px; }
+dl.kv dd { min-width: 0; }
+.planhash { display: block; overflow-x: auto; }
+
+@media (max-width: 480px) {
+  .qrow { flex-direction: column; }
+  .qside { width: auto; text-align: left; }
+  dl.kv { grid-template-columns: 1fr; }
+}
