@@ -11,19 +11,45 @@ package console
 // its own projection; a second streaming route would be a second live path and
 // would have to be unbuilt (invariant 10).
 //
-// # This route carries NO role check, and that is a decision
+// # Every kind names the role that may see it
 //
 // Route.MinRole is presentation — Register never consults it, so the entry in
-// the route table places no gate anywhere. For `enrollment` that is right: an
-// attempt carries a source address, the PUBLIC half of a token ID and a
-// refusal reason, and every authenticated principal may see them.
+// the route table places no gate anywhere. Day one (#427) recorded that as a
+// deliberate absence and said the absence stops being right the moment a
+// second kind is added. Activity (#422) adds one, so the gate is here now:
+// consoleEventKinds carries a MinRole per kind and handleEvents checks it
+// against the acting Principal before a stream is opened.
 //
-// It stops being right the moment a further kind is added. events.KindToolCall
-// carries raw_exec's full argv; events.KindJob carries Selectors and Operation
-// names. ANY KIND BEYOND `enrollment` REQUIRES AN EXPLICIT IN-HANDLER ROLE
-// CHECK against the acting Principal, added in the same change that admits the
-// kind. TestConsoleEvents_HasNoRoleGateBecauseEnrollmentNeedsNone exists so
-// that the absence stays deliberate rather than becoming forgotten.
+// THE DISCLOSURE TABLE — for each admitted kind, what the PROJECTION carries
+// and why that role:
+//
+//   - enrollment (viewer): a source address, the PUBLIC half of a token ID,
+//     and a refusal reason. Unchanged from #427; every authenticated
+//     principal may see them.
+//
+//   - job (viewer): the JOB ID, a TRANSITION WORD and a TIMESTAMP, and
+//     nothing else. Deliberately NOT the Selector, NOT the Operation, NOT the
+//     Account, NOT the outcome counts, even though events.JobEvent carries
+//     all of them. Viewer-level because accounts.Role defines viewer as "may
+//     read ... Jobs and audit", and the same principal can already read the
+//     whole dispatch record — with argv — from /console/activity and from
+//     /console/jobs/{id}. THE PROJECTION IS THE PRIMARY CONTROL HERE; the
+//     role check is the second one.
+//
+// Two kinds the seam carries STAY OUT, and why:
+//
+//   - tool_call: events.ToolCallEvent carries raw_exec's full argv. Admitting
+//     it is #424's business and needs its own role decision, not a widening
+//     that inherits this one.
+//   - registry: events.RegistryEvent carries no attribution at all, so it
+//     could only ever produce the unattributed rows spec 04's "Must not
+//     appear" forbids.
+//
+// What the gate BUYS today is not a restriction — both admitted kinds are
+// viewer-level. It is (a) fail-closed refusal of an unrecognised role, and
+// (b) making the next widening impossible to do without naming a role in the
+// same edit. TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt is the
+// tripwire, and it asserts the allowlist's exact SIZE for that reason.
 //
 // # Projection, not marshalling
 //
@@ -42,6 +68,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 )
 
@@ -94,14 +121,28 @@ const (
 	// connection per Console session, so the per-principal cap can be tight;
 	// it is above one only so a reconnect overlapping its predecessor, or a
 	// second tab, is not refused.
+	//
+	// There are now TWO live screens (day one and Activity), which still fits
+	// inside a cap of four. A THIRD must revisit this number deliberately
+	// rather than discovering it: this is a lock-contention control on the
+	// path a Node enrolls and a Job dispatches, not tidiness.
 	maxConcurrentStreams   = 64
 	maxStreamsPerPrincipal = 4
 )
 
+// consoleEventKind is one admitted kind and the lowest role that may see its
+// projection.
+type consoleEventKind struct {
+	Kind    events.Kind
+	MinRole accounts.Role
+}
+
 // consoleEventKinds is the CLOSED allowlist of kinds this route will serve.
-// Adding to it is the change that requires the role check described above.
-var consoleEventKinds = map[string]events.Kind{
-	"enrollment": events.KindEnrollment,
+// Every entry names a role; see this file's disclosure table for what each
+// one's projection carries and why that role is the right one.
+var consoleEventKinds = map[string]consoleEventKind{
+	"enrollment": {events.KindEnrollment, accounts.RoleViewer},
+	"job":        {events.KindJob, accounts.RoleViewer},
 }
 
 // sseEnrollment is the projection of one enrollment attempt.
@@ -128,6 +169,28 @@ type sseEnrollment struct {
 	TokenID string `json:"token_id"`
 	Source  string `json:"source"`
 	At      string `json:"at"` // UTC, the same format screenFuncs "stamp" renders
+}
+
+// sseJob is the projection of one Job-grained transition.
+//
+// THREE STRINGS. events.JobEvent also carries the Selector, the Operation,
+// the Account, the risk class, the Node count and eight per-outcome counts,
+// and NONE of them crosses this seam: a field that never crosses cannot leak
+// through it, and the client needs only "which row, and did it finish".
+//
+// That is also what keeps the live lane from becoming a second renderer. The
+// browser cannot build an Activity row out of this, because the facts a row
+// needs are not here — so it counts and it reloads, which is what spec 11's
+// "reload the affected region rather than splicing" asks for.
+type sseJob struct {
+	JobID string `json:"job_id"`
+
+	// Transition is "created", "completed" or "cancelled" — events.JobEvent's
+	// own closed vocabulary, passed through rather than re-worded, because
+	// the client uses it as a data attribute and not as display copy.
+	Transition string `json:"transition"`
+
+	At string `json:"at"` // UTC, the same format screenFuncs "stamp" renders
 }
 
 // sseGap is the projection of the seam's own admission that it could not
@@ -180,11 +243,11 @@ func handleEvents(d Deps) http.HandlerFunc {
 	limiter := &streamLimiter{}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		kinds, ok := parseEventKinds(r.URL.Query().Get("kinds"))
+		kinds, needed, neededFor, ok := parseEventKinds(r.URL.Query().Get("kinds"))
 		if !ok {
 			http.Error(w,
-				"this Console event stream serves the kind \"enrollment\" and nothing else. "+
-					"Name it explicitly in ?kinds=.",
+				"this Console event stream serves the kinds \"enrollment\" and \"job\", and "+
+					"nothing else. Name them explicitly in ?kinds=.",
 				http.StatusBadRequest)
 			return
 		}
@@ -212,6 +275,20 @@ func handleEvents(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		// The role check, BEFORE a stream slot is taken: a refused caller must
+		// not consume one. accounts.Role.AtLeast is used rather than a switch
+		// precisely for its fail-closed direction — it ranks an unrecognised
+		// role at zero and returns false for every valid want, so an empty,
+		// corrupted or future role is REFUSED here rather than admitted.
+		if !accounts.Role(p.Role).AtLeast(needed) {
+			http.Error(w,
+				"the event kind \""+neededFor+"\" needs the role \""+string(needed)+"\" on this "+
+					"Console. The whole request is refused rather than served without that kind: "+
+					"a live region missing one of the kinds it asked for is blind and looks healthy.",
+				http.StatusForbidden)
+			return
+		}
+
 		key := p.AccountID
 		if key == "" {
 			key = p.Account
@@ -310,19 +387,50 @@ func handleEvents(d Deps) http.HandlerFunc {
 // parseEventKinds resolves a comma-separated kinds parameter against the closed
 // allowlist. An empty or unrecognised parameter is refused rather than defaulted:
 // this route must never widen by omission.
-func parseEventKinds(param string) ([]events.Kind, bool) {
+//
+// It also returns the HIGHEST MinRole across the requested kinds, and the name
+// of the kind that set it. The whole request is then admitted or refused
+// together — a client that asked for job,enrollment and silently got only one
+// of them would render a live region that is blind and looks healthy.
+func parseEventKinds(param string) ([]events.Kind, accounts.Role, string, bool) {
+	return resolveEventKinds(param, consoleEventKinds)
+}
+
+// resolveEventKinds is parseEventKinds against an explicit allowlist, so the
+// accumulation below can be tested against a table this package would never
+// ship — which is the only way to test what it does with a MinRole that is not
+// a role.
+func resolveEventKinds(param string, allow map[string]consoleEventKind) (kinds []events.Kind, needed accounts.Role, neededFor string, ok bool) {
 	if param == "" {
-		return nil, false
+		return nil, "", "", false
 	}
-	var kinds []events.Kind
-	for _, name := range strings.Split(param, ",") {
-		kind, ok := consoleEventKinds[strings.TrimSpace(name)]
-		if !ok {
-			return nil, false
+	for _, raw := range strings.Split(param, ",") {
+		name := strings.TrimSpace(raw)
+		entry, known := allow[name]
+		if !known {
+			return nil, "", "", false
 		}
-		kinds = append(kinds, kind)
+		// An entry whose MinRole is not a role AT ALL is a bug in the table,
+		// and the safe reading of a bug in an authz table is REFUSE. It is
+		// checked here, before the accumulation below, because the maximum is
+		// only well-defined over comparable values: `needed` starts as the
+		// empty role, `Role.AtLeast` is false whenever EITHER side is invalid,
+		// and an unconditional "raise on !AtLeast" therefore OVERWRITES an
+		// invalid requirement with the next valid one — making the result
+		// depend on the order the caller listed the kinds in. Refusing here is
+		// what lets the loop below be a real maximum.
+		if !entry.MinRole.Valid() {
+			return nil, "", "", false
+		}
+		kinds = append(kinds, entry.Kind)
+		// Every MinRole reaching this line is valid, so AtLeast is a total
+		// order and this is the maximum. The first entry raises `needed` from
+		// the empty role, which satisfies nothing.
+		if !needed.AtLeast(entry.MinRole) {
+			needed, neededFor = entry.MinRole, name
+		}
 	}
-	return kinds, true
+	return kinds, needed, neededFor, true
 }
 
 // frameEvent renders one event as an SSE frame, or reports that this route does
@@ -334,6 +442,12 @@ func frameEvent(ev events.Event) (string, bool) {
 			return "", false
 		}
 		return frame("id: "+ev.ID+"\n", "enrollment", projectEnrollment(*ev.Enrollment, ev.At))
+
+	case events.KindJob:
+		if ev.Job == nil {
+			return "", false
+		}
+		return frame("id: "+ev.ID+"\n", "job", projectJob(*ev.Job, ev.At))
 
 	case events.KindGap:
 		// NO id: line, not even an empty one. A gap has no position on the
@@ -347,8 +461,16 @@ func frameEvent(ev events.Event) (string, bool) {
 	}
 }
 
-// frame assembles one SSE frame. json.Marshal escapes newlines inside strings,
-// so no rendered value can break the frame's line structure.
+// frame assembles one SSE frame.
+//
+// json.Marshal escapes newlines inside strings, so no value in the PAYLOAD can
+// break the frame's line structure. That guarantee does NOT extend to idLine,
+// which is raw concatenation of events.Event.ID — a newline there would split
+// one frame into two and let a publisher forge an event on this stream. The
+// bus mints IDs as hex plus a sequence number (internal/events), so no such ID
+// exists; this is pinned by TestConsoleEvents_FrameIDsCannotBreakFrameStructure
+// HERE, where the property is relied on, rather than two packages away where
+// it happens to be true.
 func frame(idLine, name string, payload any) (string, bool) {
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -371,6 +493,20 @@ func projectEnrollment(e events.EnrollmentEvent, at time.Time) sseEnrollment {
 		p.Reason = enrollmentReasonText(e.Reason)
 	}
 	return p
+}
+
+// projectJob maps one Job transition onto what a browser is allowed to see.
+//
+// Written as an explicit three-field literal rather than a copy of the event,
+// so that a field added to events.JobEvent later cannot reach a browser by
+// arriving in a struct nobody re-read. See sseJob for what is deliberately
+// absent.
+func projectJob(e events.JobEvent, at time.Time) sseJob {
+	return sseJob{
+		JobID:      e.JobID,
+		Transition: string(e.Transition),
+		At:         at.UTC().Format("2006-01-02 15:04:05Z"),
+	}
 }
 
 // enrollmentReasonText is the ONE humanisation of a Relay-side refusal, used by
