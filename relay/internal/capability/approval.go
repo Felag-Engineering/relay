@@ -47,6 +47,10 @@ type ApprovalStore interface {
 	BindJob(ctx context.Context, id, jobID string) error
 	Get(ctx context.Context, id string) (approval.Request, error)
 	Pending(ctx context.Context) ([]approval.Request, error)
+	// LastApprovedByShape is the approval object's anti-fatigue read (#415,
+	// D10): the newest approved record of the same SHAPE. It releases nothing
+	// — see approval.Repository for why that separation is structural.
+	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error)
 	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
 
@@ -269,6 +273,11 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 
 	// An already-satisfied approval for exactly this Plan releases the
 	// dispatch. Anything else — pending, denied, expired, or absent — does not.
+	//
+	// The lookup is by PLAN HASH and nothing else. The shape key (#415) is
+	// never consulted here and must never be: it deliberately excludes the
+	// resolved fan-out, so releasing on it would release a dispatch over a Node
+	// set nobody approved.
 	existing, err := s.approvals.ByPlanHash(ctx, planHash)
 	switch {
 	case err == nil && existing.Satisfied(now):
@@ -293,7 +302,15 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	if err != nil {
 		return approvalDecision{}, err
 	}
-	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, rules, req, now)
+	// The Selector is normalised into shape terms BEFORE the Request exists,
+	// and a failure fails the dispatch rather than parking with a meaningless
+	// key: a record whose shape key means nothing is a record the approval
+	// object could later group wrongly.
+	shape, err := sel.Shape()
+	if err != nil {
+		return approvalDecision{}, fmt.Errorf("capability: normalise selector for shape key: %w", err)
+	}
+	r := approval.NewRequest(id, planHash, p.AccountID, p.Account, act, nodes, shape, rules, req, now)
 	if err := s.approvals.Create(ctx, r); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}
