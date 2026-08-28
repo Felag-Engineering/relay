@@ -49,9 +49,48 @@ type Descriptor struct {
 	// TestOperations_Legible / TestOperations_MatchesGoldenSchema in
 	// opvocab_test.go).
 	ArgConstraints map[string]string
+	// ArgClasses declares, per argument, whether it is part of an action's
+	// SHAPE or its SCALE (#415, D10). Every key in ArgConstraints must appear
+	// here — TestArgClasses_CoverEveryDocumentedArg is the mechanical check —
+	// so adding an argument without deciding which it is fails a test rather
+	// than quietly landing on a default.
+	ArgClasses map[string]ArgClass
 	// Example is a concrete, runnable-shaped usage sample for
 	// list_operations/run_operation's tool description.
 	Example string
+}
+
+// ArgClass declares whether one argument is part of an Operation's SHAPE —
+// WHAT is being done — or its SCALE — how much of it (#415, D10). It is what
+// the approval shape key filters on, so "the last approved action of the same
+// shape" can find a prior record that differs only in a value expected to vary.
+//
+// It is DECLARED here, never inferred from a value: inferring would make the
+// approval queue's grouping depend on what somebody happened to type, and the
+// failure mode is exactly the one D10 names — a materially different action
+// reading as routine.
+type ArgClass int
+
+const (
+	// ArgClassUnspecified is the zero value and is never a valid declaration.
+	// It is deliberately NOT an alias for scale: an argument nobody classified
+	// must not silently drop out of the shape key, which is why ShapeArgs
+	// treats anything that is not explicitly scale as shape, and why
+	// TestArgClasses_AreNeverUnspecified refuses the zero value outright.
+	ArgClassUnspecified ArgClass = iota
+	ArgClassShape
+	ArgClassScale
+)
+
+func (c ArgClass) String() string {
+	switch c {
+	case ArgClassShape:
+		return "shape"
+	case ArgClassScale:
+		return "scale"
+	default:
+		return "unspecified"
+	}
 }
 
 // Operations returns the fixed v1 Operation vocabulary, per
@@ -82,7 +121,10 @@ func Operations() []Descriptor {
 			// Empty ArgConstraints is INTENTIONAL: system.facts takes no
 			// arguments at all, not "not yet documented".
 			ArgConstraints: map[string]string{},
-			Example:        "run_operation operation=system.facts (no args)",
+			// Empty for the same reason ArgConstraints is: no arguments to
+			// classify, not "not yet classified".
+			ArgClasses: map[string]ArgClass{},
+			Example:    "run_operation operation=system.facts (no args)",
 		},
 		{
 			Name:    "file.read",
@@ -92,7 +134,10 @@ func Operations() []Descriptor {
 				"path": "string, required. Filesystem path to read. DATA, never a shell — the daemon opens it " +
 					"directly. Which paths are readable is decided by the Node's Policy, not this argument.",
 			},
-			Example: `run_operation operation=file.read args={"path":"/etc/os-release"}`,
+			// Reading /etc/shadow and reading /etc/motd are materially
+			// different acts, so the path is the shape of a file.read.
+			ArgClasses: map[string]ArgClass{"path": ArgClassShape},
+			Example:    `run_operation operation=file.read args={"path":"/etc/os-release"}`,
 		},
 		{
 			Name:    "service.restart",
@@ -102,7 +147,9 @@ func Operations() []Descriptor {
 				"unit": "string, required. systemd unit name; charset [A-Za-z0-9@._-], no leading '-'. A single " +
 					"validated argv element, never a shell string.",
 			},
-			Example: `run_operation operation=service.restart args={"unit":"nginx"}`,
+			// Which unit is restarted is the whole act.
+			ArgClasses: map[string]ArgClass{"unit": ArgClassShape},
+			Example:    `run_operation operation=service.restart args={"unit":"nginx"}`,
 		},
 		{
 			Name:    "pkg.install",
@@ -114,7 +161,14 @@ func Operations() []Descriptor {
 				"version": "string, optional. Charset [A-Za-z0-9+.:~_-], must start and end alphanumeric. " +
 					"Empty/absent installs the latest.",
 			},
-			Example: `run_operation operation=pkg.install args={"name":"nginx","version":"1.24.0"}`,
+			// The package is the shape. The version is D10's canonical
+			// "argument expected to vary": classifying it as shape would make
+			// every step of a rollout look novel, which is the too-strict half
+			// of the failure D10 names. Excluding it is safe because the shape
+			// key only chooses WHAT TO DIFF AGAINST — the diff then shows the
+			// version change loudly rather than hiding it.
+			ArgClasses: map[string]ArgClass{"name": ArgClassShape, "version": ArgClassScale},
+			Example:    `run_operation operation=pkg.install args={"name":"nginx","version":"1.24.0"}`,
 		},
 	}
 }
@@ -134,6 +188,29 @@ func Lookup(name string) (Descriptor, bool) {
 		}
 	}
 	return Descriptor{}, false
+}
+
+// ShapeArgs returns the subset of args that is part of the SHAPE of a call to
+// operation — what the approval shape key is computed over (#415, D10).
+//
+// The default is STRICT in both directions where a declaration is missing. An
+// Operation this package does not know is a Template Operation (ADR-0021),
+// which has declared nothing, so nothing may be dropped: every argument is
+// treated as shape. Same for a documented argument carrying no class — absence
+// is never read as "scale", because reading it that way would let a forgotten
+// declaration quietly make two different actions share a shape key.
+//
+// It returns a fresh map and never mutates args.
+func ShapeArgs(operation string, args map[string]string) map[string]string {
+	out := make(map[string]string, len(args))
+	d, known := Lookup(operation)
+	for k, v := range args {
+		if known && d.ArgClasses[k] == ArgClassScale {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // ValidateArgNames checks a caller's argument NAMES against d's published
