@@ -121,25 +121,31 @@ func squashSpace(s string) string { return strings.Join(strings.Fields(s), " ") 
 // TestReads_ReadClassComesFromTheDeclaredClassNotANameList is spec 17's fifth
 // acceptance criterion: "covers the whole read catalog, not only file.read".
 //
-// file.checksum is the case that separates the two implementations. It is a
-// real read-class Operation in the shipped template catalog
-// (daemon/packaging/templates.d/relay-read/catalog.toml) and it is NOT in
-// console/vocab.go's hardcoded readOperations map — so a screen that matched
-// on names would silently omit it, which on THIS screen is an undercount of
-// exposure.
+// file.checksum is now IN console/vocab.go's readOperations set (issue #461
+// added it to shippedReadCatalog, since it is one of the seven templates
+// daemon/packaging/templates.d/relay-read/catalog.toml actually ships), so it
+// no longer separates a name-list implementation from a declared-class one —
+// both would get it right. customer.pack.metrics is the fixture that still
+// does the separating: it is a plausible customer-authored Template Operation
+// name that the Console's shipped-catalog mirror will never contain (it ships
+// with no first-party pack), so a screen that matched on names would silently
+// omit it, which on THIS screen is an undercount of exposure. file.checksum
+// stays in the fixture too, because it is spec 17's own named criterion.
 func TestReads_ReadClassComesFromTheDeclaredClassNotANameList(t *testing.T) {
 	// The fixture only means something while this holds.
-	if isReadOperation("file.checksum") {
-		t.Fatal("file.checksum is in the hardcoded read list now — pick another Operation the list omits")
+	if isReadOperation("customer.pack.metrics") {
+		t.Fatal("customer.pack.metrics is in the read vocabulary now — pick another Operation the mirror omits")
 	}
 
 	q := &fakeQueries{
 		jobs: []capability.JobSummary{
 			readJob("file.checksum", "acct-1", jobs.RiskClassRead),
+			readJob("customer.pack.metrics", "acct-1", jobs.RiskClassRead),
 			readJob("service.restart", "acct-1", jobs.RiskClassMutate),
 		},
 		rows: []capability.AuditRow{
 			readDispatchRow("file.checksum", "/etc/shadow", "n1", "acct-1", jobs.OutcomeSuccess),
+			readDispatchRow("customer.pack.metrics", "", "n1", "acct-1", jobs.OutcomeSuccess),
 			readDispatchRow("service.restart", "", "n1", "acct-1", jobs.OutcomeSuccess),
 		},
 	}
@@ -150,6 +156,7 @@ func TestReads_ReadClassComesFromTheDeclaredClassNotANameList(t *testing.T) {
 		t.Fatal("the audit lane was never queried — the declared read-class Job produced no vocabulary")
 	}
 	sawChecksum := false
+	sawCustomer := false
 	for _, f := range filters {
 		if namesOperation(f, "service.restart") {
 			t.Errorf("an audit filter names service.restart, a mutate-class Job: %+v", f.Operations)
@@ -157,10 +164,16 @@ func TestReads_ReadClassComesFromTheDeclaredClassNotANameList(t *testing.T) {
 		if namesOperation(f, "file.checksum") {
 			sawChecksum = true
 		}
+		if namesOperation(f, "customer.pack.metrics") {
+			sawCustomer = true
+		}
 	}
 	if !sawChecksum {
-		t.Error("no audit filter names file.checksum — the read vocabulary came from a name list, " +
-			"not from the declared risk class of the Jobs that ran")
+		t.Error("no audit filter names file.checksum — spec 17's named criterion")
+	}
+	if !sawCustomer {
+		t.Error("no audit filter names customer.pack.metrics — the read vocabulary came from a name " +
+			"list, not from the declared risk class of the Jobs that ran")
 	}
 }
 
