@@ -97,6 +97,26 @@ type GrantRepository interface {
 	// GetGrant returns a Grant by ID, or ErrGrantNotFound.
 	GetGrant(ctx context.Context, id string) (Grant, error)
 
+	// GrantByRequest returns the Grant that requestID authorized, or
+	// ErrGrantNotFound when that Request is not a grant request.
+	//
+	// It exists because a Request is the only handle a surface has: a Grant's
+	// authorizing Request carries no marker saying so (NewGrantRequest sets
+	// Request.ID = g.RequestID and nothing else), so "is this Request a Grant
+	// request, and what Scope did it authorize?" is otherwise unanswerable from
+	// the Request alone.
+	//
+	// It returns the Grant IN EVERY STATE — revoked, expired, exhausted, or not
+	// yet started. That is the whole reason it is not ActiveGrants: the prior
+	// Grant an approval screen compares against is usually one of those, and a
+	// comparison that silently skipped them would show a human "nothing like
+	// this has been approved before" about a window they closed yesterday.
+	//
+	// It is a READ and a JOIN, never a claim path. Nothing about it releases a
+	// dispatch: release is ClaimGrant, and a dispatch is matched by plan hash or
+	// by a claimed Grant, by nothing else.
+	GrantByRequest(ctx context.Context, requestID string) (Grant, error)
+
 	// ActiveGrants returns every Grant that could still cover something at now,
 	// newest first. Used by the queue view; the dispatch path uses ClaimGrant.
 	ActiveGrants(ctx context.Context, now time.Time) ([]Grant, error)

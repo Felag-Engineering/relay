@@ -484,6 +484,15 @@ func (m *memGrants) GetGrant(_ context.Context, id string) (approval.Grant, erro
 	return g, nil
 }
 
+func (m *memGrants) GrantByRequest(_ context.Context, requestID string) (approval.Grant, error) {
+	for _, g := range m.byID {
+		if g.RequestID == requestID {
+			return g, nil
+		}
+	}
+	return approval.Grant{}, approval.ErrGrantNotFound
+}
+
 func (m *memGrants) ActiveGrants(_ context.Context, now time.Time) ([]approval.Grant, error) {
 	var out []approval.Grant
 	for _, g := range m.byID {

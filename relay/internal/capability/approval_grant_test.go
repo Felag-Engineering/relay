@@ -424,4 +424,44 @@ func TestGrantManagementUnavailableWithoutAStore(t *testing.T) {
 	if _, err := s.RevokeGrant(context.Background(), humanApprover("acct-ana", "ana"), "grant-1", "x"); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Errorf("RevokeGrant: err = %v, want ErrApprovalUnavailable", err)
 	}
+	if _, err := s.GrantForApproval(context.Background(), "req-1"); !errors.Is(err, ErrApprovalUnavailable) {
+		t.Errorf("GrantForApproval: err = %v, want ErrApprovalUnavailable", err)
+	}
+}
+
+// TestGrantForApprovalResolvesAGrantFromItsRequest: nothing on a Request marks
+// it as a grant request, so this join is the only way a surface can tell that
+// the thing a human is being asked to approve is a WINDOW rather than one Plan.
+func TestGrantForApprovalResolvesAGrantFromItsRequest(t *testing.T) {
+	s, _, _, _ := grantMgmtFixture(t, gateEverything(t, 1), &spyApprovalAuthorizer{})
+
+	grant, request, err := s.RequestGrant(context.Background(), machineRequester, grantRequestFixture())
+	if err != nil {
+		t.Fatalf("RequestGrant: %v", err)
+	}
+
+	got, err := s.GrantForApproval(context.Background(), request.ID)
+	if err != nil {
+		t.Fatalf("GrantForApproval: %v", err)
+	}
+	if got.ID != grant.ID {
+		t.Errorf("GrantForApproval returned grant %q, want %q", got.ID, grant.ID)
+	}
+	if got.Scope.MaxFanOut != grant.Scope.MaxFanOut || got.MaxUses != grant.MaxUses {
+		t.Errorf("GrantForApproval returned a different Scope: %+v", got.Scope)
+	}
+}
+
+// TestGrantForApprovalIsNotFoundForAPlainRequest pins the SENTINEL ITSELF
+// rather than errors.Is: the documented contract is that
+// approval.ErrGrantNotFound travels UNWRAPPED, so a surface can say "this is
+// not a Grant request" without matching on text, and errors.Is would also pass
+// on a %w wrap that broke that.
+func TestGrantForApprovalIsNotFoundForAPlainRequest(t *testing.T) {
+	s, _, _, _ := grantMgmtFixture(t, gateEverything(t, 1), &spyApprovalAuthorizer{})
+
+	_, err := s.GrantForApproval(context.Background(), "req-that-is-a-plan")
+	if err != approval.ErrGrantNotFound { //nolint:errorlint // the point is that it is UNWRAPPED
+		t.Fatalf("err = %v, want the unwrapped approval.ErrGrantNotFound", err)
+	}
 }
