@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
@@ -345,5 +346,43 @@ func TestPlanAndGrantShapesNeverCollide(t *testing.T) {
 	})
 	if planKey == grantKey {
 		t.Error("a Plan shape and a Grant shape collided; the domain tag is not doing its job")
+	}
+}
+
+// TestGrantShapeIgnoresCeilingWindowAndUses is the half of the Grant key that
+// the anti-fatigue diff callout depends on, pinned directly rather than through
+// a consumer.
+//
+// A ceiling IS fan-out, and D10 excludes fan-out from every shape key: "same
+// scope, ceiling grew 10 -> 500" is exactly the sentence the callout exists to
+// shout, and it can only be rendered if the two Grants share a key in the first
+// place. The window and the use limit are scale for the same reason. HashScope
+// — the Grant's actual approval binding — still covers all three, so none of
+// them can move without invalidating the approval itself.
+func TestGrantShapeIgnoresCeilingWindowAndUses(t *testing.T) {
+	scope := Scope{
+		Account: "gleipnir-prod", RiskClass: jobs.RiskClassMutate,
+		MaxFanOut: 10, Operations: []string{"service.restart"},
+	}
+	wider := scope
+	wider.MaxFanOut = 500
+
+	if HashGrantShape(scope) != HashGrantShape(wider) {
+		t.Error("widening the fan-out ceiling changed the Grant shape key — the callout can no longer " +
+			"find the prior Grant, which is the one comparison it exists to make")
+	}
+
+	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+	short := Grant{Scope: scope, StartsAt: now, ExpiresAt: now.Add(time.Hour), MaxUses: 5}
+	long := Grant{Scope: wider, StartsAt: now, ExpiresAt: now.Add(8 * time.Hour), MaxUses: 200}
+	if short.ShapeKey() != long.ShapeKey() {
+		t.Error("the window or the use limit reached the Grant shape key; both are scale, not shape")
+	}
+
+	// The other direction, so this does not pass by hashing nothing at all.
+	other := scope
+	other.Operations = []string{"pkg.install"}
+	if HashGrantShape(scope) == HashGrantShape(other) {
+		t.Error("two Grants over different Operations share a shape key")
 	}
 }

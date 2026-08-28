@@ -71,6 +71,7 @@ type ApprovalStore interface {
 type ApprovalGrantStore interface {
 	CreateGrant(ctx context.Context, g approval.Grant) error
 	GetGrant(ctx context.Context, id string) (approval.Grant, error)
+	GrantByRequest(ctx context.Context, requestID string) (approval.Grant, error)
 	ActiveGrants(ctx context.Context, now time.Time) ([]approval.Grant, error)
 	ClaimGrant(ctx context.Context, d approval.Dispatch, now time.Time) (approval.Grant, bool, error)
 	RevokeGrant(ctx context.Context, id, revokedBy, reason string, now time.Time) (approval.Grant, error)

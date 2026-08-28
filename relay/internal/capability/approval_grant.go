@@ -173,6 +173,31 @@ func (s *Service) Grant(ctx context.Context, id string) (approval.Grant, error) 
 	return g, nil
 }
 
+// GrantForApproval resolves "is this Request a Grant request, and what Scope
+// did it authorize?" — in every Grant state, including revoked, expired,
+// exhausted and not-yet-started.
+//
+// It is the read a surface needs to render a Grant's approval, and the read the
+// approval object's diff callout needs to compare one Grant's Scope against the
+// one it supersedes: the prior Grant is usually spent or lapsed, which is
+// exactly the set ActiveGrants cannot return.
+//
+// approval.ErrGrantNotFound travels UNWRAPPED, so a surface can render "this is
+// not a Grant request" by matching the sentinel rather than the text.
+func (s *Service) GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error) {
+	if s.grants == nil {
+		return approval.Grant{}, ErrApprovalUnavailable
+	}
+	g, err := s.grants.GrantByRequest(ctx, requestID)
+	if err != nil {
+		if errors.Is(err, approval.ErrGrantNotFound) {
+			return approval.Grant{}, err
+		}
+		return approval.Grant{}, fmt.Errorf("capability: read grant for approval request: %w", err)
+	}
+	return g, nil
+}
+
 // RevokeGrant ends a Grant early, attributed to p.
 //
 // Revocation needs the same role floor as approving the Grant would have,

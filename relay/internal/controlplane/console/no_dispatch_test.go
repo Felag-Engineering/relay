@@ -141,9 +141,29 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// name-matching guard — `d.Events.(interface{ PublishEnrollment(...) })`
 	// recovers exactly one publisher and names no banned type at all — and it
 	// is the shape that needs no import to work.
+	//
+	// The approval verbs are here because seams.go and approvals.go now claim
+	// that "zero mutating routes in the Console" is a FACT ABOUT THE INTERFACE
+	// rather than a property of the handlers. It is not, on its own:
+	// Deps.Approvals is wired to the same *capability.Service that carries
+	// DecideApproval, RequestGrant and RevokeGrant (control_surfaces.go), so an
+	// anonymous-interface assertion recovers any of them without naming a
+	// banned type or adding an import. A claim that strong has to be enforced,
+	// not asserted — this is the same hole for ApprovalReader that #427 closed
+	// for events.Bus.
 	writeSurfaceMethod := func(name string) bool {
-		return strings.HasPrefix(name, "Publish") || strings.HasPrefix(name, "Set") ||
-			name == "Upsert"
+		for _, prefix := range []string{
+			"Publish", "Set",
+			// The approval mechanism's write half (ADR-0027): deciding a
+			// Request, opening a window, closing one, spending one, and the
+			// store-level writes underneath all three.
+			"Decide", "Revoke", "Request", "Claim", "Create", "Bind",
+		} {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		}
+		return name == "Upsert" || name == "RecordDecision"
 	}
 
 	checkRecoveredWriteSurface := func(expr ast.Expr) {
@@ -191,6 +211,16 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 						violations = append(violations, fmt.Sprintf(
 							"%s references capability.New — the exported dispatch constructor must never be called from a Console file (no-dispatch structural guarantee, ADR-0026 decision 1)",
 							fileName))
+					case "ApprovalDecision", "GrantRequest":
+						// The two argument types of the approval write half.
+						// A Console file has no reason to NAME either: it
+						// cannot decide and cannot open a window, and the only
+						// use for the type is building the call. Banning the
+						// type is what makes the anonymous-interface recovery
+						// awkward to spell as well as caught above.
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.%s — the Console never decides an approval and never asks for a Grant; v0.6.0's \"zero mutating routes\" is a fact about ApprovalReader (seams.go), and naming the argument type of a write is the first half of undoing it",
+							fileName, v.Sel.Name))
 					}
 				}
 			}
@@ -336,6 +366,66 @@ import c2 ` + capImport + `
 var _ = c2.Service{}
 `,
 			wantSubstr: "capability.Service",
+		},
+		{
+			// The evasion that actually compiles against today's wiring:
+			// Deps.Approvals IS a *capability.Service, so this assertion
+			// succeeds at runtime and recovers the decision path from a seam
+			// whose whole point is not having one.
+			name: "anonymous interface recovering DecideApproval from the approval seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		DecideApproval(context.Context, capability.Principal, capability.ApprovalDecision) (approval.Request, error)
+	})
+}
+`,
+			wantSubstr: "DecideApproval",
+		},
+		{
+			name: "anonymous interface recovering RevokeGrant from the approval seam",
+			src: `package console
+import "context"
+func f(a any) {
+	_, _ = a.(interface {
+		RevokeGrant(context.Context, string, string) error
+	})
+}
+`,
+			wantSubstr: "RevokeGrant",
+		},
+		{
+			name: "naming the decision argument type at all",
+			src: `package console
+import ` + capImport + `
+var _ = capability.ApprovalDecision{}
+`,
+			wantSubstr: "capability.ApprovalDecision",
+		},
+		{
+			// The false-positive guard for the widened verb list: these are
+			// the reads ApprovalReader actually declares, and seams.go must
+			// keep being allowed to declare them.
+			name: "declaring the approval read seam produces nothing",
+			src: `package console
+import (
+	"context"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+)
+type approvals interface {
+	PendingApprovals(ctx context.Context) ([]approval.Request, error)
+	Approval(ctx context.Context, id string) (approval.Request, error)
+	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
+	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
+}
+func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
+`,
+			wantSubstr: "",
 		},
 	}
 

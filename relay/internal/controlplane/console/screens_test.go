@@ -10,6 +10,7 @@ package console
 // a helpful change six months from now.
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -276,23 +277,57 @@ func TestNode_FactsAppearHereAndPolicySaysWhenItIsUnknown(t *testing.T) {
 	}
 }
 
-// TestApprovals_OrderIsNearestExpiryFirst is spec 14's ordering rule. An
-// approval that lapses because it sat below the fold is a failure of the screen,
-// and arrival order is exactly how that happens.
-func TestApprovals_OrderIsNearestExpiryFirst(t *testing.T) {
-	rows := buildApprovalRows([]approval.Request{
-		{ID: "old-but-roomy", CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(4 * time.Hour), Require: approval.Requirement{Count: 1}},
-		{ID: "new-and-urgent", CreatedAt: testNow.Add(-1 * time.Minute), ExpiresAt: testNow.Add(3 * time.Minute), Require: approval.Requirement{Count: 2}},
-	}, testNow)
+// queueRows builds the queue's rows for a caller with no identity and no
+// Grants, which is what most ordering and grouping tests are about.
+func queueRows(reqs []approval.Request) []approvalRow {
+	return buildApprovalRows(reqs, nil, capability.Principal{}, testNow)
+}
 
-	if rows[0].ID != "new-and-urgent" {
-		t.Errorf("first row is %s, want new-and-urgent — order is by expiry, never by arrival", rows[0].ID)
+// TestApprovals_OrderIsByDurationNotTheRenderedString is spec 14's ordering
+// rule, and the bug it pins is a real one: the sort key was the RENDERED TTL,
+// so "10m left" < "12h left" < "5m left" < "9m left" lexicographically and the
+// most urgent request in the queue sorted into the middle of it.
+//
+// An approval that lapses because it sat below the fold is a failure of this
+// screen, and a sort on the display string is exactly how that happens without
+// anybody noticing.
+func TestApprovals_OrderIsByDurationNotTheRenderedString(t *testing.T) {
+	rows := queueRows([]approval.Request{
+		{ID: "twelve-hours", CreatedAt: testNow, ExpiresAt: testNow.Add(12 * time.Hour), Require: approval.Requirement{Count: 1}},
+		{ID: "five-minutes", CreatedAt: testNow, ExpiresAt: testNow.Add(5 * time.Minute), Require: approval.Requirement{Count: 1}},
+		{ID: "nine-minutes", CreatedAt: testNow, ExpiresAt: testNow.Add(9 * time.Minute), Require: approval.Requirement{Count: 1}},
+		{ID: "ten-minutes", CreatedAt: testNow, ExpiresAt: testNow.Add(10 * time.Minute), Require: approval.Requirement{Count: 1}},
+	})
+
+	want := []string{"five-minutes", "nine-minutes", "ten-minutes", "twelve-hours"}
+	for i, id := range want {
+		if rows[i].ID != id {
+			t.Fatalf("row %d is %s, want %s — the queue is ordered on the DURATION, not on the string it renders",
+				i, rows[i].ID, id)
+		}
 	}
 	if !rows[0].Urgent {
-		t.Error("a request expiring in 3 minutes is not marked urgent")
+		t.Error("a request expiring in 5 minutes is not marked urgent")
 	}
-	if rows[1].Urgent {
-		t.Error("a request with 4 hours left is marked urgent")
+	if rows[3].Urgent {
+		t.Error("a request with 12 hours left is marked urgent")
+	}
+}
+
+// TestApprovals_LapsedSortsLastAndSaysSo reverses what this screen used to do.
+// A lapsed request cannot be decided by anyone; putting it first pushes the
+// decidable ones below the fold, which is the precise failure spec 14 names.
+func TestApprovals_LapsedSortsLastAndSaysSo(t *testing.T) {
+	rows := queueRows([]approval.Request{
+		{ID: "already-lapsed", CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(-time.Minute), Require: approval.Requirement{Count: 1}},
+		{ID: "five-minutes", CreatedAt: testNow, ExpiresAt: testNow.Add(5 * time.Minute), Require: approval.Requirement{Count: 1}},
+	})
+
+	if rows[0].ID != "five-minutes" {
+		t.Errorf("first row is %s, want five-minutes — a lapsed request sorts LAST", rows[0].ID)
+	}
+	if !rows[1].Lapsed || rows[1].TTL != "expired" {
+		t.Errorf("the lapsed row does not say so: lapsed=%v ttl=%q", rows[1].Lapsed, rows[1].TTL)
 	}
 }
 
@@ -301,18 +336,25 @@ func TestApprovals_OrderIsNearestExpiryFirst(t *testing.T) {
 // entire failure the mechanism exists to prevent.
 func TestApprovals_QueueOffersNoApproveControl(t *testing.T) {
 	d := renderableDeps()
-	d.Approvals = fakeApprovals{pending: []approval.Request{{
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
 		ID: "ap-1", Summary: "restart nginx on 412 Nodes",
 		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
 		Require: approval.Requirement{Count: 2},
 	}}}
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+	h := newTestHandler(d, accounts.RoleAdmin)
+	body := get(t, h, "/console/approvals").Body.String()
 
-	// Scoped to the screen's own content. The layout carries a sign-out form,
+	// Scoped to each screen's own content. The layout carries a sign-out form,
 	// which is a mutating route and is meant to be there — the assertion is
-	// about what the QUEUE offers, not about the shell around it.
-	if content := contentOf(body); strings.Contains(content, "<form") || strings.Contains(content, "<button") {
-		t.Error("the approval queue rendered a form or button — v0.6.0 is read-only and no row may carry a decision")
+	// about what the QUEUE and the CARD offer, not about the shell around them.
+	for _, path := range []string{"/console/approvals", "/console/approvals/ap-1"} {
+		content := contentOf(get(t, h, path).Body.String())
+		for _, control := range []string{"<form", "<button", "<input"} {
+			if strings.Contains(content, control) {
+				t.Errorf("%s rendered %s — v0.6.0 is read-only on both approval screens, and every "+
+					"filter is an anchor", path, control)
+			}
+		}
 	}
 	if !strings.Contains(body, "restart nginx on 412 Nodes") {
 		t.Error("the queue did not render the Relay-authored summary")
@@ -323,7 +365,7 @@ func TestApprovals_QueueOffersNoApproveControl(t *testing.T) {
 // not a blank screen.
 func TestApprovals_EmptyQueueSaysSoPlainly(t *testing.T) {
 	d := renderableDeps()
-	d.Approvals = fakeApprovals{}
+	d.Approvals = &fakeApprovals{}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
 	if !strings.Contains(body, "Nothing is waiting") {
 		t.Error("an empty approval queue did not say so")
@@ -376,7 +418,7 @@ func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
 // than merely non-conforming.
 func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 	d := withExecution(fleetFixture(), true)
-	d.Approvals = fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses
 	// rather than rendering an empty Job when it is not wired (#423), so this
@@ -1468,7 +1510,7 @@ func consoleShapeKey(operation string, args map[string]string) string {
 // stored shape key (#415), which is computed from the Action and the normalised
 // Selector, so two different actions can never share it.
 func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
-	rows := buildApprovalRows([]approval.Request{
+	rows := queueRows([]approval.Request{
 		{
 			ID: "restart-sshd", PlanHash: "hash-restart-sshd",
 			ShapeKey:     consoleShapeKey("service.restart", map[string]string{"unit": "sshd"}),
@@ -1489,7 +1531,7 @@ func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 			CreatedAt:    testNow, ExpiresAt: testNow.Add(time.Hour),
 			Require: approval.Requirement{Count: 1},
 		},
-	}, testNow)
+	})
 
 	for _, r := range rows {
 		if r.Identical != 1 {
@@ -1497,7 +1539,7 @@ func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 				r.ID, r.Identical-1)
 		}
 	}
-	if rows[0].IdenticalKey == rows[1].IdenticalKey {
+	if rows[0].shapeKey == rows[1].shapeKey {
 		t.Error("two different actions share a grouping key")
 	}
 }
@@ -1509,7 +1551,7 @@ func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 // grouping the plan hash could not express and the shape key can.
 func TestApprovals_SameShapeTwiceIsGrouped(t *testing.T) {
 	shape := consoleShapeKey("service.restart", map[string]string{"unit": "nginx"})
-	rows := buildApprovalRows([]approval.Request{
+	rows := queueRows([]approval.Request{
 		{
 			ID: "first", PlanHash: "hash-3-nodes", ShapeKey: shape,
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
@@ -1520,11 +1562,14 @@ func TestApprovals_SameShapeTwiceIsGrouped(t *testing.T) {
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
 			Require: approval.Requirement{Count: 1},
 		},
-	}, testNow)
+	})
 
 	for _, r := range rows {
 		if r.Identical != 2 {
 			t.Errorf("%s reports %d of the same shape, want 2", r.ID, r.Identical)
+		}
+		if r.ShapeGroup == "" {
+			t.Errorf("%s is in a group of two and carries no group ordinal to render", r.ID)
 		}
 	}
 }
@@ -1534,7 +1579,7 @@ func TestApprovals_SameShapeTwiceIsGrouped(t *testing.T) {
 // together would tell an approver that records with nothing in common are
 // alike, which is the precise failure the shape key exists to prevent.
 func TestApprovals_UncomparableShapesAreNeverGrouped(t *testing.T) {
-	rows := buildApprovalRows([]approval.Request{
+	rows := queueRows([]approval.Request{
 		{
 			ID: "legacy-a", PlanHash: "hash-a", ShapeKey: approval.LegacyShapeKey("legacy-a"),
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
@@ -1556,15 +1601,15 @@ func TestApprovals_UncomparableShapesAreNeverGrouped(t *testing.T) {
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
 			Require: approval.Requirement{Count: 1},
 		},
-	}, testNow)
+	})
 
 	for _, r := range rows {
 		if r.Identical != 1 {
 			t.Errorf("%s is grouped with %d others — a record with no comparable shape groups with nothing",
 				r.ID, r.Identical-1)
 		}
-		if r.IdenticalKey != "" {
-			t.Errorf("%s carries grouping key %q, want none", r.ID, r.IdenticalKey)
+		if r.shapeKey != "" {
+			t.Errorf("%s carries grouping key %q, want none", r.ID, r.shapeKey)
 		}
 	}
 }
@@ -2208,4 +2253,958 @@ func simulateCVD(hex, vision string) string {
 		toSRGB(0.080944*l-0.130504*m+0.116721*s),
 		toSRGB(-0.0102485*l+0.0540194*m-0.113615*s),
 		toSRGB(-0.000365294*l-0.00412163*m+0.693513*s))
+}
+
+// --- The approval queue and the approval object (#426) -----------------------
+//
+// The fixtures below build REAL shape keys (consoleShapeKey, consoleGrantShape)
+// rather than stand-in strings, so a test that says two records group is
+// asserting against the same key production stores.
+
+// approvalScope is a small, fully bounded Scope, the shape a real grant request
+// has. maxFanOut varies because the ceiling is precisely what HashGrantShape
+// EXCLUDES, which is what makes the diff callout renderable at all.
+func approvalScope(maxFanOut int) approval.Scope {
+	return approval.Scope{
+		Account:    "gleipnir-prod",
+		RiskClass:  jobs.RiskClassMutate,
+		MaxFanOut:  maxFanOut,
+		Operations: []string{"service.restart"},
+	}
+}
+
+func consoleGrant(id, requestID string, maxFanOut, maxUses int) approval.Grant {
+	scope := approvalScope(maxFanOut)
+	return approval.Grant{
+		ID: id, RequestID: requestID, Scope: scope,
+		StartsAt: testNow.Add(-time.Minute), ExpiresAt: testNow.Add(2 * time.Hour),
+		MaxUses: maxUses, Uses: 1,
+		Summary:   approval.SummarizeScope(scope, testNow, testNow.Add(2*time.Hour), maxUses),
+		CreatedAt: testNow.Add(-time.Minute),
+	}
+}
+
+// grantRequest is the pending approval Request that authorizes g, exactly as
+// NewGrantRequest builds it — including the shape key, which is the Grant's own.
+func grantRequest(g approval.Grant, state approval.State) approval.Request {
+	return approval.Request{
+		ID:         g.RequestID,
+		PlanHash:   approval.HashScope(g.Scope, g.StartsAt, g.ExpiresAt, g.MaxUses),
+		ShapeKey:   g.ShapeKey(),
+		Summary:    g.Summary,
+		ActionKind: g.Scope.ActionKind(),
+		RiskClass:  g.Scope.RiskClass,
+		Require:    approval.Requirement{Count: 1},
+		State:      state,
+		CreatedAt:  testNow.Add(-time.Minute),
+		ExpiresAt:  testNow.Add(time.Hour),
+	}
+}
+
+// TestApprovals_GrantOccupiesExactlyOneRow is spec 14's hard rule: "a Grant that
+// fragments into one row per Job it could release has defeated the mechanism
+// before anyone opens it". The released Jobs belong on the card.
+func TestApprovals_GrantOccupiesExactlyOneRow(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-a"},
+		{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-b"},
+		{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-c"},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String())
+
+	if n := strings.Count(content, `class="qrow`); n != 1 {
+		t.Errorf("the queue rendered %d rows for one Grant, want exactly 1", n)
+	}
+	if !strings.Contains(content, "up to 200 Nodes per dispatch") || !strings.Contains(content, "20 dispatches") {
+		t.Error("the Grant's row does not name its Scope, so a reader cannot triage it without opening it")
+	}
+	for _, job := range []string{"job-a", "job-b", "job-c"} {
+		if strings.Contains(content, job) {
+			t.Errorf("the queue names released Job %s — released Jobs live on the card, never as queue rows", job)
+		}
+	}
+}
+
+// TestApprovals_SameShapeIsGroupedAndTheKeyIsNeverRendered.
+//
+// The grouping is the anti-fatigue hint; the key is an unsalted SHA-256 over a
+// small preimage (for Raw Exec, every argv element), so rendering it — or
+// accepting it as a lookup parameter — would be an offline-confirmation oracle.
+// The screen renders an ORDINAL instead, which says "these two are alike" and
+// identifies nothing outside the page.
+func TestApprovals_SameShapeIsGroupedAndTheKeyIsNeverRendered(t *testing.T) {
+	shape := consoleShapeKey("service.restart", map[string]string{"unit": "nginx"})
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "first", PlanHash: "hash-3", ShapeKey: shape, CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+		{ID: "second", PlanHash: "hash-9", ShapeKey: shape, CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+	}}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+
+	if !strings.Contains(body, "2 pending of the same shape") {
+		t.Error("two pending approvals of one shape are not grouped — this is the fatigue failure the hint exists for")
+	}
+	if strings.Contains(body, shape) {
+		t.Error("the queue rendered the shape key itself; it must never leave the handler")
+	}
+	if strings.Contains(body, "data-shape") {
+		t.Error("the queue put a shape key in a data attribute")
+	}
+}
+
+// TestApprovals_ShapeKeyIsNotAcceptedAsAParameter: no route or query parameter
+// on this screen takes a shape key, so it cannot become a lookup oracle.
+//
+// Compared on the CONTENT rather than the whole body: a fresh CSRF token is
+// minted per request and rendered into the <body> tag, so two GETs of the same
+// page never match byte for byte.
+func TestApprovals_ShapeKeyIsNotAcceptedAsAParameter(t *testing.T) {
+	shape := consoleShapeKey("service.restart", map[string]string{"unit": "nginx"})
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "first", ShapeKey: shape, CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+		{ID: "second", ShapeKey: shape, CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+	}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	plain := contentOf(get(t, h, "/console/approvals").Body.String())
+	probed := contentOf(get(t, h, "/console/approvals?shape="+shape).Body.String())
+
+	if plain != probed {
+		t.Error("a ?shape= parameter changed what the queue rendered — no shape lookup may exist on this surface")
+	}
+	if strings.Contains(probed, shape) {
+		t.Error("the queue echoed the shape key it was handed back into the page")
+	}
+}
+
+// TestApprovals_WaitingOnMeIsTheDefault is spec 14's filtering rule: "an
+// approver arriving from a link should not have to find their own item in
+// someone else's list".
+func TestApprovals_WaitingOnMeIsTheDefault(t *testing.T) {
+	me := testAccountName(accounts.RoleAdmin)
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "for-me", Summary: "restart nginx on 3 Nodes", CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1, Audience: []string{me}}},
+		{ID: "for-dana", Summary: "install pkg on 9 Nodes", CreatedAt: testNow, ExpiresAt: testNow.Add(30 * time.Minute),
+			Require: approval.Requirement{Count: 1, Audience: []string{"dana"}}},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String())
+
+	if !strings.Contains(content, "restart nginx on 3 Nodes") {
+		t.Error("the request naming this caller is not shown under the default filter")
+	}
+	if strings.Contains(content, "install pkg on 9 Nodes") {
+		t.Error("a request addressed to somebody else is shown under the default 'waiting on me' filter")
+	}
+	if !strings.Contains(content, "hiding 1 addressed to somebody else") {
+		t.Error("the screen hid a row without saying how many it hid")
+	}
+	if !strings.Contains(content, "Show everything") {
+		t.Error("there is no way back to the full queue")
+	}
+}
+
+// TestApprovals_WaitingOnMeKeepsTheUndeterminableOnes is the eligibility
+// default, and the direction matters: a Request with NO audience is
+// unrestricted, and who may decide it is the capability layer's answer. Hiding
+// the rows this Console cannot classify while showing the ones it can is the
+// spec's own failure with the sign flipped.
+func TestApprovals_WaitingOnMeKeepsTheUndeterminableOnes(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "named", Summary: "named audience", CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1, Audience: []string{testAccountName(accounts.RoleAdmin)}}},
+		{ID: "unrestricted", Summary: "no audience at all", CreatedAt: testNow, ExpiresAt: testNow.Add(2 * time.Hour),
+			Require: approval.Requirement{Count: 1}},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String())
+
+	if !strings.Contains(content, "no audience at all") {
+		t.Error("the default filter hid a request with an unrestricted audience — the one row this " +
+			"Console cannot classify is the one it must not hide")
+	}
+}
+
+// TestApprovals_WaitingOnMeNeverEmptiesTheQueue: a defaulted filter that turns a
+// full queue into "Nothing is waiting" is the worst lie this screen can tell.
+func TestApprovals_WaitingOnMeNeverEmptiesTheQueue(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "for-dana", Summary: "restart nginx on 3 Nodes", CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1, Audience: []string{"dana"}}},
+		{ID: "for-sam", Summary: "install pkg on 9 Nodes", CreatedAt: testNow, ExpiresAt: testNow.Add(2 * time.Hour),
+			Require: approval.Requirement{Count: 1, Audience: []string{"sam"}}},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String())
+
+	for _, summary := range []string{"restart nginx on 3 Nodes", "install pkg on 9 Nodes"} {
+		if !strings.Contains(content, summary) {
+			t.Errorf("%q is missing: the default filter emptied a queue that has entries in it", summary)
+		}
+	}
+	if strings.Contains(content, "Nothing is waiting") {
+		t.Error("a queue with two pending requests told the operator nothing is waiting")
+	}
+	if !strings.Contains(content, `"Waiting on me" was not applied`) {
+		t.Error("the screen silently dropped its own default filter instead of saying so")
+	}
+}
+
+// TestApprovals_RequesterExclusionIsExplainedNotHidden is spec 14's "requester
+// excluded" state: "the requester sees their own item and cannot act on it; say
+// why rather than hiding the control".
+func TestApprovals_RequesterExclusionIsExplainedNotHidden(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-mine", Summary: "restart nginx on 412 Nodes",
+		RequestedByID: testAccountID(accounts.RoleAdmin), RequestedBy: testAccountName(accounts.RoleAdmin),
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+		State:   approval.StatePending,
+		Require: approval.Requirement{Count: 2, RequesterAllowed: false, Audience: []string{"dana"}},
+	}
+	// A SECOND row that unambiguously names the caller, so the "waiting on me"
+	// filter is non-empty and the never-empty rule does not apply. Without it
+	// this fixture proves nothing: one row alone renders whatever mine()
+	// answers, and deleting the own-request clause would leave the test green.
+	alsoMine := approval.Request{
+		ID: "ap-theirs", Summary: "install pkg on 9 Nodes",
+		CreatedAt: testNow, ExpiresAt: testNow.Add(30 * time.Minute),
+		State:   approval.StatePending,
+		Require: approval.Requirement{Count: 1, Audience: []string{testAccountName(accounts.RoleAdmin)}},
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req, alsoMine}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	queue := contentOf(get(t, h, "/console/approvals").Body.String())
+	if !strings.Contains(queue, "install pkg on 9 Nodes") {
+		t.Fatal("the row that names the caller is missing, so this fixture cannot test anything")
+	}
+	if !strings.Contains(queue, "restart nginx on 412 Nodes") {
+		t.Error("the caller's own request was hidden from them by the default filter — spec 14: " +
+			"the requester sees their own item and cannot act on it")
+	}
+	if !strings.Contains(queue, "you asked for this one") {
+		t.Error("the queue does not explain why the caller's own row is not theirs to sign")
+	}
+
+	card := contentOf(get(t, h, "/console/approvals/ap-mine").Body.String())
+	if !strings.Contains(card, "You are that requester") {
+		t.Error("the card does not say the reader is the excluded requester — the exclusion must be " +
+			"stated, not left to look like an absence")
+	}
+}
+
+// TestApprovals_AnUnattributedRequestIsNotYourOwn.
+//
+// The exclusion rule compares identities, and both sides can legitimately be
+// empty: a Request may carry no verified requester, and a Principal may carry no
+// Account ID. Comparing "" to "" would classify EVERY unattributed record as the
+// caller's own — wrong on screen, and the kind of wrong that makes an assertion
+// pass while meaning nothing.
+func TestApprovals_AnUnattributedRequestIsNotYourOwn(t *testing.T) {
+	unattributed := approval.Request{ID: "ap-1", Require: approval.Requirement{Count: 1, Audience: []string{"dana"}}}
+
+	if st := approvalStandingFor(unattributed, capability.Principal{}); st.Own || st.ExcludedRequester {
+		t.Error("an unattributed Request read as the caller's own for a caller with no Account ID")
+	}
+	if st := approvalStandingFor(unattributed, capability.Principal{AccountID: "acct-1", Account: "ana"}); st.Own {
+		t.Error("an unattributed Request read as an identified caller's own")
+	}
+	if st := approvalStandingFor(approval.Request{RequestedByID: "acct-1"}, capability.Principal{}); st.Own {
+		t.Error("an attributed Request read as the own request of a caller with no Account ID")
+	}
+}
+
+// TestApproval_DiffNamesWhatChangedOnAGrant is the spec's headline sentence,
+// rendered from stored columns and nothing else: "same scope as what you
+// approved — except the fan-out ceiling grew".
+//
+// It also pins #415's decision from the consumer side. If HashGrantShape ever
+// included MaxFanOut, these two Grants would carry DIFFERENT shape keys, no
+// prior would be found, and this callout would silently become "nothing of this
+// shape has been approved before" — which is the failure the exclusion exists
+// to prevent.
+func TestApproval_DiffNamesWhatChangedOnAGrant(t *testing.T) {
+	prior := consoleGrant("grant-old", "ap-old", 10, 20)
+	current := consoleGrant("grant-new", "ap-new", 500, 20)
+	priorReq := grantRequest(prior, approval.StateApproved)
+	priorReq.ResolvedAt = testNow.Add(-2 * time.Hour)
+	priorReq.Decisions = []approval.Decision{{Account: "dana", Approve: true, At: testNow.Add(-2 * time.Hour)}}
+	currentReq := grantRequest(current, approval.StatePending)
+
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending:  []approval.Request{currentReq},
+		resolved: []approval.Request{priorReq},
+		grants:   []approval.Grant{prior, current},
+	}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-new").Body.String())
+
+	if !strings.Contains(content, "fan-out ceiling 10 Nodes → 500 Nodes") {
+		t.Error("the diff callout does not name the one thing that changed between two Grants of the same shape")
+	}
+	if !strings.Contains(content, "dana") {
+		t.Error("the callout does not say who approved the prior Grant")
+	}
+}
+
+// TestApprovalDiff_NeverClaimsAFanOutItDoesNotHave.
+//
+// A park creates NO JOB AT ALL, so there is no Task and no result anywhere to
+// count Nodes from for the record being rendered — only for a prior one that
+// already ran. The node count in the summary is Relay-authored prose, and
+// parsing a number back out of it is exactly the fidelity trap the summary
+// exists to prevent. So the callout names the fan-out as UNCOMPARABLE rather
+// than deriving one.
+func TestApprovalDiff_NeverClaimsAFanOutItDoesNotHave(t *testing.T) {
+	shape := consoleShapeKey("pkg.install", map[string]string{"name": "nginx"})
+	priorReq := approval.Request{
+		ID: "ap-old", PlanHash: "hash-1180", ShapeKey: shape, State: approval.StateApproved,
+		Summary: `pkg.install(name="nginx") [mutate] on 1180 node(s)`, ResolvedAt: testNow.Add(-time.Hour),
+	}
+	currentReq := approval.Request{
+		ID: "ap-new", PlanHash: "hash-2214", ShapeKey: shape, State: approval.StatePending,
+		Summary: `pkg.install(name="nginx") [mutate] on 2214 node(s)`,
+		Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour),
+	}
+
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending:  []approval.Request{currentReq},
+		resolved: []approval.Request{priorReq},
+	}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-old", ActionKind: "operation", OperationName: "pkg.install", Args: map[string]string{"name": "nginx"}},
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-new", ActionKind: "operation", OperationName: "pkg.install", Args: map[string]string{"name": "nginx"}},
+	}}
+
+	action := buildApprovalAction(context.Background(), d, capability.Principal{}, "ap-new")
+	diff := buildApprovalDiff(context.Background(), d, capability.Principal{}, currentReq, approval.Grant{}, grantIsAPlan, action, testNow)
+
+	if !containsString(diff.NotComparable, "fan-out") {
+		t.Errorf("the diff does not name the fan-out as uncomparable: %v", diff.NotComparable)
+	}
+	for _, c := range diff.Changes {
+		if strings.Contains(c.Field, "fan-out") || strings.Contains(c.To, "2214") || strings.Contains(c.To, "2,214") {
+			t.Errorf("the diff manufactured a fan-out change (%+v) — no source here carries one", c)
+		}
+	}
+}
+
+// TestApprovalDiff_ScaleArgumentChangeIsTheHeadline is the spec's other example
+// — "except 1.24.0 → 1.25.0". Both records' arguments come from their own park
+// audit records, joined on approval_id; approval_requests stores neither.
+func TestApprovalDiff_ScaleArgumentChangeIsTheHeadline(t *testing.T) {
+	shape := consoleShapeKey("pkg.install", map[string]string{"name": "nginx"})
+	priorReq := approval.Request{ID: "ap-old", ShapeKey: shape, PlanHash: "hash-old", State: approval.StateApproved, ResolvedAt: testNow.Add(-time.Hour)}
+	currentReq := approval.Request{
+		ID: "ap-new", ShapeKey: shape, PlanHash: "hash-new", State: approval.StatePending,
+		Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour),
+	}
+
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending:  []approval.Request{currentReq},
+		resolved: []approval.Request{priorReq},
+	}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-old", ActionKind: "operation", Args: map[string]string{"name": "nginx", "version": "1.24.0"}},
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-new", ActionKind: "operation", Args: map[string]string{"name": "nginx", "version": "1.25.0"}},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-new").Body.String())
+
+	if !strings.Contains(content, "version 1.24.0 → 1.25.0") {
+		t.Error("the diff callout does not name the scale argument that moved")
+	}
+	if strings.Contains(content, "name nginx → nginx") {
+		t.Error("the callout listed an argument that did not change")
+	}
+}
+
+// TestApproval_LegacyShapeIsNeverAskedAbout: a record whose shape was never
+// computed has no comparable prior BY CONSTRUCTION, so the Console does not ask.
+// Not asking is the clearer statement of intent than asking and being refused.
+func TestApproval_LegacyShapeIsNeverAskedAbout(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-legacy", ShapeKey: approval.LegacyShapeKey("ap-legacy"), State: approval.StatePending,
+		Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour),
+	}
+	approvals := &fakeApprovals{pending: []approval.Request{req}}
+	d := renderableDeps()
+	d.Approvals = approvals
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-legacy").Body.String())
+
+	if approvals.shapeCalls != 0 {
+		t.Errorf("the Console asked for a same-shape prior %d times for a record with a legacy key", approvals.shapeCalls)
+	}
+	if !strings.Contains(content, "shape was never computed") {
+		t.Error("the card does not state why nothing is compared")
+	}
+}
+
+// TestApproval_NoPriorIsStatedNotManufactured: "when there is no comparable
+// prior approval, say so plainly. Do not manufacture a diff."
+func TestApproval_NoPriorIsStatedNotManufactured(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-1", ShapeKey: consoleShapeKey("service.restart", map[string]string{"unit": "nginx"}),
+		State: approval.StatePending, Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour),
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
+
+	if !strings.Contains(content, "Nothing of this shape has been approved on this Relay before") {
+		t.Error("the card does not state the absence of a comparable prior approval")
+	}
+	callout := content[strings.Index(content, `<section class="diff">`):strings.Index(content, "</section>")]
+	if strings.Contains(callout, "→") {
+		t.Error("an empty diff rendered as a diff")
+	}
+}
+
+// TestApproval_TerminalStatesAreNotPaintedAsSuccess (#468).
+//
+// A denied approval is a HUMAN's refusal and never denied_by_policy — slate is
+// reserved for Policy decisions, and borrowing it would say a daemon refused
+// something it was never asked. An expired one is not a success either, and a
+// pending one is not "unsupported".
+func TestApproval_TerminalStatesAreNotPaintedAsSuccess(t *testing.T) {
+	denied := approval.Request{
+		ID: "ap-denied", State: approval.StateDenied, ResolvedAt: testNow.Add(-time.Hour),
+		Require: approval.Requirement{Count: 1}, CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(time.Hour),
+		Decisions: []approval.Decision{{Account: "dana", Approve: false, Reason: "not during the freeze", At: testNow.Add(-time.Hour)}},
+	}
+	lapsed := approval.Request{
+		ID: "ap-lapsed", State: approval.StatePending,
+		Require: approval.Requirement{Count: 1}, CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(-time.Minute),
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{resolved: []approval.Request{denied, lapsed}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	for _, tc := range []struct{ id, state string }{{"ap-denied", "denied"}, {"ap-lapsed", "expired"}} {
+		content := contentOf(get(t, h, "/console/approvals/"+tc.id).Body.String())
+		if !strings.Contains(content, `data-state="`+tc.state+`"`) {
+			t.Errorf("%s does not carry data-state=%q", tc.id, tc.state)
+		}
+		if strings.Contains(content, `data-outcome="success"`) {
+			t.Errorf("%s renders as a successful Task outcome; an approval is not a Task", tc.id)
+		}
+		if strings.Contains(content, `data-outcome="denied_by_policy"`) {
+			t.Errorf("%s reuses the Policy-decision colour for a human's answer", tc.id)
+		}
+		if strings.Contains(content, "Deciding is not available in this Console yet") {
+			t.Errorf("%s offers deciding on a record nobody can decide", tc.id)
+		}
+	}
+}
+
+// TestApproval_DecisionsCarryTheirTimestamps (#468): "1 of 2 approvals · mike
+// signed 2h ago" needs the when, which IS persisted and was simply never read
+// into the view.
+func TestApproval_DecisionsCarryTheirTimestamps(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-1", State: approval.StatePending, Require: approval.Requirement{Count: 2},
+		CreatedAt: testNow.Add(-3 * time.Hour), ExpiresAt: testNow.Add(time.Hour),
+		Decisions: []approval.Decision{{
+			Account: "dana", Approve: true, Channel: approval.ChannelOutOfBand,
+			DeciderHuman: true, At: testNow.Add(-2 * time.Hour),
+		}},
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
+
+	if !strings.Contains(content, "2026-08-25 10:00:00Z") {
+		t.Error("the decisions table does not carry the stamped decision time")
+	}
+	if !strings.Contains(content, "dana signed 2h ago") {
+		t.Error("the quorum line does not say when the first approver signed")
+	}
+}
+
+// TestApproval_ScopeIsAClosedDisclosure: spec 08 makes expanding a Grant's Scope
+// a deliberate cost — "it exists to buy attention, not to sell it". v0.6.0 ships
+// the closed disclosure and states the rule; the enforcement needs a submit
+// control to gate, which does not exist yet.
+func TestApproval_ScopeIsAClosedDisclosure(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
+
+	if !strings.Contains(content, `<details class="scope">`) {
+		t.Fatal("the Grant's Scope is not a disclosure")
+	}
+	if strings.Contains(content, `<details class="scope" open`) {
+		t.Error("the Scope disclosure is open by default, which gives away the attention it exists to buy")
+	}
+	if !strings.Contains(content, "Approving a Grant requires expanding this Scope at least once") {
+		t.Error("the card does not state the rule")
+	}
+	if !strings.Contains(content, "at most <b>200</b> Nodes per dispatch") {
+		t.Error("the Scope disclosure does not carry the fan-out ceiling")
+	}
+}
+
+// TestApproval_AGrantRendersNoActionBlock.
+//
+// RequestGrant records its park with NO Selector and NO Action, so a Grant's
+// audit row carries an empty Selector, an "unspecified" ActionKind and no
+// arguments. Rendering that as an action block labelled "read from the park's
+// audit record" would fabricate a fact on exactly the record type spec 08 calls
+// a Grant. The Scope is what that card has to show.
+func TestApproval_AGrantRendersNoActionBlock(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-grant", ActionKind: "unspecified"},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
+
+	if strings.Contains(content, "What was asked for") {
+		t.Error("a Grant rendered the action block — its park record carries no Selector and no Action, " +
+			"so the block would be empty and labelled as if it had been read from the trail")
+	}
+	if !strings.Contains(content, "The Scope") {
+		t.Error("a Grant did not render its Scope")
+	}
+}
+
+// TestApproval_SelectorIsNotShownWhenTheRecordCannotSayWhatItWas.
+//
+// An empty stored Selector is AMBIGUOUS: Selector.String() returns "" both for
+// "none recorded" and for a Selector with no predicates — and no predicates
+// MATCHES EVERY NODE. Rendering the second as "(none)" would tell a human the
+// widest dispatch there is targeted nothing, which is the highest-consequence
+// lie this screen can tell.
+func TestApproval_SelectorIsNotShownWhenTheRecordCannotSayWhatItWas(t *testing.T) {
+	req := approval.Request{ID: "ap-1", State: approval.StatePending, Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour)}
+
+	fleetWide := renderableDeps()
+	fleetWide.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+	fleetWide.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-1", ActionKind: "operation", Selector: ""},
+	}}
+	content := contentOf(get(t, newTestHandler(fleetWide, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
+	if !strings.Contains(content, "<b>every Node</b> (no Selector terms)") {
+		t.Error("a known Action with an empty Selector must read as every Node, not as an absent Selector")
+	}
+
+	unknown := renderableDeps()
+	unknown.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+	unknown.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-1", ActionKind: "unspecified", Selector: ""},
+	}}
+	content = contentOf(get(t, newTestHandler(unknown, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
+	if strings.Contains(content, "<dt>selector</dt>") {
+		t.Error("a record with no Action kind rendered a Selector line — an empty stored Selector is " +
+			"either 'none recorded' or 'every Node', and neither may be claimed from the other's absence")
+	}
+	if strings.Contains(content, "<b>every Node</b> (no Selector terms)") {
+		t.Error("a record with no Action kind was rendered as a fleet-wide dispatch")
+	}
+	if !strings.Contains(content, "will not guess which") {
+		t.Error("the card does not say why the Selector is absent")
+	}
+}
+
+// TestApproval_ReleasedJobsAreListedOnTheCard, and the reason it needs 120 audit
+// rows: the trail fans a dispatch out to ONE RECORD PER NODE, so a Grant over
+// many Nodes buries its second Job well past the first page. A card that read
+// one page would list one Job under a stated cap of fifty.
+func TestApproval_ReleasedJobsAreListedOnTheCard(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	var rows []capability.AuditRow
+	// 520 Node rows for the first Job, so the second one starts BEYOND the
+	// first page however large the page is. A fixture that fits in one page
+	// cannot tell a walk from a single read.
+	for i := 0; i < 520; i++ {
+		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-a", NodeID: "node-" + itoa(i)})
+	}
+	for i := 0; i < 80; i++ {
+		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-b", NodeID: "node-" + itoa(i)})
+	}
+	rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-other", JobID: "job-elsewhere", NodeID: "node-x"})
+
+	q := &fakeQueries{rows: rows}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+	d.Queries = q
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
+
+	for _, job := range []string{"job-a", "job-b"} {
+		if !strings.Contains(content, "/console/jobs/"+job) {
+			t.Errorf("the card does not link released Job %s — the list stopped at the first page of "+
+				"per-Node rows", job)
+		}
+	}
+	if strings.Contains(content, "job-elsewhere") {
+		t.Error("the card listed a Job released by a different Grant; the grant_id filter is not applied")
+	}
+	if n := strings.Count(content, "/console/jobs/"); n != 2 {
+		t.Errorf("the card rendered %d Job links for 2 distinct Jobs across 600 audit rows", n)
+	}
+
+	// Every QueryAudit writes its own read-audit record (ADR-0025), and each of
+	// those lands on the read-egress screen as this principal's own exposure.
+	// 600 rows at the maximum page size is TWO reads; at the default page size
+	// it was thirteen, and a viewer refreshing this URL was an amplifier on an
+	// append-only table and on a security screen at the same time.
+	if q.auditCalls != 2 {
+		t.Errorf("rendering one Grant card cost %d audit reads over 600 rows, want 2 — the walk must "+
+			"page at the maximum, not at the default", q.auditCalls)
+	}
+}
+
+// TestApproval_DiffIsTheFirstThingOnTheCard: spec 08 calls the callout "the
+// single most valuable element on the screen", and a reader who has approved
+// this shape before needs to see what is DIFFERENT before re-reading what is
+// the same. That is a deviation from the spec's own card order, recorded in
+// 99-open-decisions.md.
+func TestApproval_DiffIsTheFirstThingOnTheCard(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-1", PlanHash: "hash-1", State: approval.StatePending,
+		Require: approval.Requirement{Count: 2}, ExpiresAt: testNow.Add(time.Hour),
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-1").Body.String())
+
+	diff := strings.Index(content, `class="diff"`)
+	hash := strings.Index(content, "plan hash")
+	quorum := strings.Index(content, "quorum")
+	if diff < 0 || hash < 0 || quorum < 0 {
+		t.Fatalf("the card is missing a block: diff=%d hash=%d quorum=%d", diff, hash, quorum)
+	}
+	if diff > hash || diff > quorum {
+		t.Error("the diff callout is not the first thing on the card")
+	}
+}
+
+// TestApproval_ObjectIsSelfContained is spec 08's first line: "mobile-first and
+// self-contained: no nav, nothing competing, one card". An approver arrives from
+// a link, on a phone, mid-something-else.
+func TestApproval_ObjectIsSelfContained(t *testing.T) {
+	req := approval.Request{ID: "ap-1", State: approval.StatePending, Require: approval.Requirement{Count: 1}, ExpiresAt: testNow.Add(time.Hour)}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	card := get(t, h, "/console/approvals/ap-1").Body.String()
+	if strings.Contains(card, `<aside class="nav">`) {
+		t.Error("the approval object rendered the navigation rail — nothing may compete with the card")
+	}
+	if !strings.Contains(card, `href="#content"`) {
+		t.Error("the focus-mode page dropped the skip link along with the nav")
+	}
+	if !strings.Contains(contentOf(card), `href="/console/approvals"`) {
+		t.Error("the card offers no way back to the queue")
+	}
+
+	if queue := get(t, h, "/console/approvals").Body.String(); !strings.Contains(queue, `<aside class="nav">`) {
+		t.Error("the queue lost its navigation; focus mode is for the object route only")
+	}
+}
+
+// TestApprovals_MobileRulesShip is spec 08's 390px criterion, as far as Go can
+// take it: it proves the rules SHIP, not that a browser lays them out. The
+// criterion also needs the manual pass.
+func TestApprovals_MobileRulesShip(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin), "/console/assets/console.css").Body.String()
+
+	for _, rule := range []string{
+		"@media (max-width: 480px)",
+		".qrow { min-height: 44px; }",
+		// The card has no queue rows: ITS touch targets are the back link and
+		// the released-Job links, and a 44px rule on .qrow covers neither.
+		".back a, .joblist a { display: inline-flex; align-items: center; min-height: 44px; }",
+		"dl.kv dd { min-width: 0; }",
+		".planhash { display: block; overflow-x: auto; }",
+	} {
+		if !strings.Contains(css, rule) {
+			t.Errorf("the stylesheet no longer ships %q — the approval card is read on a phone", rule)
+		}
+	}
+}
+
+// TestApprovals_AGrantStoreFailureDoesNotCostTheQueue: the Grant read decorates
+// some rows with their Scope. A queue is what an operator opens when something
+// is about to lapse, so a seam that decorates it must not be able to take the
+// whole screen down.
+func TestApprovals_AGrantStoreFailureDoesNotCostTheQueue(t *testing.T) {
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending: []approval.Request{{
+			ID: "ap-1", Summary: "restart nginx on 3 Nodes", CreatedAt: testNow,
+			ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1},
+		}},
+		grantsErr: errNotFound,
+	}
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a Grant-store failure returned %d for the whole queue, want 200", rec.Code)
+	}
+	content := contentOf(rec.Body.String())
+	if !strings.Contains(content, "restart nginx on 3 Nodes") {
+		t.Error("the queue lost its rows because the Grant store failed")
+	}
+	if !strings.Contains(content, "The Grant store could not be read") {
+		t.Error("the queue degraded silently — a row that is a Grant now renders without saying its Scope is missing")
+	}
+}
+
+// TestApprovals_FiltersMatchOnEveryDimension is the filter set spec 14 asks for
+// — "by requester, Operation, risk class, quorum state, and whether this Account
+// is an eligible approver". Every value is compared IN MEMORY against rows the
+// capability layer already returned; none of them reaches a seam.
+func TestApprovals_FiltersMatchOnEveryDimension(t *testing.T) {
+	row := approvalRow{
+		Requester: "gleipnir-prod", Operation: "run_operation", Risk: "mutate",
+		Signed: 1, Required: 2,
+	}
+	unsigned := row
+	unsigned.Signed = 0
+	complete := row
+	complete.Signed = 2
+
+	for _, tc := range []struct {
+		name  string
+		f     approvalFilter
+		row   approvalRow
+		match bool
+	}{
+		{"empty filter matches everything", approvalFilter{}, row, true},
+		{"requester hit", approvalFilter{Who: "gleipnir-prod"}, row, true},
+		{"requester is case-insensitive", approvalFilter{Who: "Gleipnir-Prod"}, row, true},
+		{"requester miss", approvalFilter{Who: "dana"}, row, false},
+		{"operation hit", approvalFilter{Op: "run_operation"}, row, true},
+		{"operation miss", approvalFilter{Op: "raw_exec"}, row, false},
+		{"risk hit", approvalFilter{Risk: "mutate"}, row, true},
+		{"risk miss", approvalFilter{Risk: "read"}, row, false},
+		{"unsigned hit", approvalFilter{Quorum: "unsigned"}, unsigned, true},
+		{"unsigned miss on a partly-signed row", approvalFilter{Quorum: "unsigned"}, row, false},
+		{"partial hit", approvalFilter{Quorum: "partial"}, row, true},
+		{"partial miss on an unsigned row", approvalFilter{Quorum: "partial"}, unsigned, false},
+		{"partial miss on a complete row", approvalFilter{Quorum: "partial"}, complete, false},
+		{"an unknown quorum value narrows nothing", approvalFilter{Quorum: "nonsense"}, row, true},
+		{"every dimension at once", approvalFilter{Who: "gleipnir-prod", Op: "run_operation", Risk: "mutate", Quorum: "partial"}, row, true},
+		{"one wrong dimension refuses the row", approvalFilter{Who: "gleipnir-prod", Risk: "read"}, row, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.f.matches(tc.row); got != tc.match {
+				t.Errorf("matches() = %v, want %v", got, tc.match)
+			}
+		})
+	}
+}
+
+// TestApprovals_FilterValuesAreBoundedAndNeverEchoedUnbounded.
+//
+// The bound is a property, not hygiene: these values are rendered back into
+// every chip href on the page, and an over-long one is DROPPED rather than
+// truncated, because a truncated filter would silently match something the
+// operator never typed.
+func TestApprovals_FilterValuesAreBoundedAndNeverEchoedUnbounded(t *testing.T) {
+	huge := strings.Repeat("a", maxApprovalFilterBytes+1)
+	f := parseApprovalFilter(url.Values{"who": []string{huge}, "risk": []string{"mutate"}})
+
+	if f.Who != "" {
+		t.Errorf("a %d-byte requester filter was accepted", len(huge))
+	}
+	if f.Risk != "mutate" {
+		t.Error("dropping an over-long value dropped the other filters with it")
+	}
+	if strings.Contains(f.with("op", "raw_exec"), huge) {
+		t.Error("the over-long value was carried into a filter link")
+	}
+
+	atLimit := strings.Repeat("b", maxApprovalFilterBytes)
+	if got := parseApprovalFilter(url.Values{"who": []string{atLimit}}).Who; got != atLimit {
+		t.Error("a value exactly at the bound was dropped; the bound is a maximum, not an exclusive one")
+	}
+
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Summary: "restart nginx on 3 Nodes", RequestedBy: "gleipnir-prod",
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1},
+	}}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals?who="+huge).Body.String()
+	if strings.Contains(body, huge) {
+		t.Error("the screen echoed an over-long query value back into the page")
+	}
+	if !strings.Contains(contentOf(body), "restart nginx on 3 Nodes") {
+		t.Error("an over-long filter value silently emptied the queue instead of being ignored")
+	}
+}
+
+// TestApprovals_FilterLinksPreserveTheOtherFiltersAndToggleTheirOwn. Every
+// filter on this screen is an ANCHOR — there is no form, button or input in
+// v0.6.0 — so the URL is the whole of the interaction.
+func TestApprovals_FilterLinksPreserveTheOtherFiltersAndToggleTheirOwn(t *testing.T) {
+	f := approvalFilter{Who: "dana", Risk: "mutate"}
+
+	added := f.toggle("op", "raw_exec")
+	for _, want := range []string{"who=dana", "risk=mutate", "op=raw_exec"} {
+		if !strings.Contains(added, want) {
+			t.Errorf("%s is missing %s — a filter link must preserve the others", added, want)
+		}
+	}
+	if cleared := f.toggle("risk", "mutate"); strings.Contains(cleared, "risk=") {
+		t.Errorf("%s still carries risk= — clicking the active value must clear it", cleared)
+	} else if !strings.Contains(cleared, "who=dana") {
+		t.Errorf("%s dropped the other filters while clearing one", cleared)
+	}
+	if bare := (approvalFilter{}).with("scope", ""); bare != "/console/approvals" {
+		t.Errorf("an empty filter renders as %q, want a bare path", bare)
+	}
+	if strings.Contains(f.with("scope", scopeAll), "shape=") {
+		t.Error("a filter link carries a shape parameter")
+	}
+}
+
+// TestApprovals_FilterBarCountsAndOffersTheDimensionsThatVary. A dimension with
+// one value is not a filter — it selects everything and says nothing.
+func TestApprovals_FilterBarCountsAndOffersTheDimensionsThatVary(t *testing.T) {
+	rows := []approvalRow{
+		{Requester: "gleipnir-prod", Operation: "run_operation", Risk: "mutate", Signed: 0, Required: 1, Waiting: waitingUnknown},
+		{Requester: "gleipnir-prod", Operation: "raw_exec", Risk: "mutate", Signed: 1, Required: 2, Waiting: waitingNo},
+	}
+	groups := approvalFilterGroups(rows, approvalFilter{})
+
+	by := map[string]filterGroup{}
+	for _, g := range groups {
+		by[g.Name] = g
+	}
+	if _, offered := by["risk"]; offered {
+		t.Error("a risk filter is offered for a queue where every row is a mutate")
+	}
+	ops, offered := by["operation"]
+	if !offered || len(ops.Options) != 2 {
+		t.Fatalf("the operation filter offers %d options, want both values", len(ops.Options))
+	}
+	who := by["requester"]
+	if len(who.Options) != 1 || who.Options[0].Count != 2 {
+		t.Errorf("the requester chip counts %v, want one chip counting both rows", who.Options)
+	}
+	waiting := by["waiting"]
+	if len(waiting.Options) != 2 || waiting.Options[0].Count != 1 {
+		t.Errorf("the waiting chip counts %v, want 1 of the 2 rows waiting on this caller", waiting.Options)
+	}
+}
+
+// TestApprovals_HidingIsAttributedToTheFilterThatDidIt. "Hiding 3 addressed to
+// somebody else" beside a risk filter that hid two of them is the screen
+// explaining itself wrongly, on the screen whose job is explaining itself.
+func TestApprovals_HidingIsAttributedToTheFilterThatDidIt(t *testing.T) {
+	rows := []approvalRow{
+		{ID: "mine-mutate", Risk: "mutate", Waiting: waitingYes},
+		{ID: "mine-read", Risk: "read", Waiting: waitingYes},
+		{ID: "theirs-mutate", Risk: "mutate", Waiting: waitingNo},
+	}
+
+	v := buildApprovalsView(rows, approvalFilter{Risk: "mutate"})
+	if v.Shown != 1 {
+		t.Fatalf("shown = %d, want 1", v.Shown)
+	}
+	if v.Hidden != 2 {
+		t.Errorf("hidden = %d, want 2 — Hidden is every row not on screen", v.Hidden)
+	}
+	if v.HiddenByScope != 1 {
+		t.Errorf("hidden by audience = %d, want 1 — the risk filter's row must not be attributed "+
+			"to the audience", v.HiddenByScope)
+	}
+}
+
+// TestApproval_AnUnreadableGrantStoreIsItsOwnState (S3).
+//
+// approval.ErrGrantNotFound travels unwrapped from the capability layer
+// precisely so a surface can tell "this is not a Grant" from "the store did not
+// answer". Collapsing them renders a standing authorization as a one-off Plan —
+// no ceiling, no window, no use limit — with an action block reading "arguments:
+// none recorded". Inert while nothing can be decided, and a decision-safety bug
+// the day it can be.
+func TestApproval_AnUnreadableGrantStoreIsItsOwnState(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{
+		pending:   []approval.Request{grantRequest(g, approval.StatePending)},
+		grants:    []approval.Grant{g},
+		grantsErr: errNotFound,
+	}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindApprovalRequested, ApprovalID: "ap-grant", ActionKind: "unspecified"},
+	}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
+
+	if !strings.Contains(content, "the Grant store did not answer") {
+		t.Error("an unreadable Grant store is not stated on the card")
+	}
+	if strings.Contains(content, "none recorded") {
+		t.Error("the card fell through to the Plan action block, so a Request that may authorize a " +
+			"Scope reads as a one-off dispatch with no arguments")
+	}
+	if strings.Contains(content, "<details class=\"scope\">") {
+		t.Error("the card rendered a Scope it could not read")
+	}
+	if !strings.Contains(content, "nothing is being compared") {
+		t.Error("the diff callout compared a record whose kind is unknown")
+	}
+}
+
+// TestApprovalDiff_AnArgumentValueWithASpaceIsNotTruncated. The diff compares
+// the audit row's argument MAP; comparing the rendered "k=v k=v" string would
+// split "msg=hello world" on the space and report a truncation as a change.
+func TestApprovalDiff_AnArgumentValueWithASpaceIsNotTruncated(t *testing.T) {
+	prior := approvalAction{Known: true, args: map[string]string{"msg": "hello world"}}
+	current := approvalAction{Known: true, args: map[string]string{"msg": "hello world"}}
+	if changes := argChanges(prior, current); len(changes) != 0 {
+		t.Errorf("identical arguments diffed as %v", changes)
+	}
+
+	current.args = map[string]string{"msg": "goodbye world"}
+	changes := argChanges(prior, current)
+	if len(changes) != 1 || changes[0].From != "hello world" || changes[0].To != "goodbye world" {
+		t.Errorf("argChanges() = %+v, want the whole value on both sides", changes)
+	}
+}
+
+// TestApprovals_LapsedRowsAreOrderedMostRecentFirst. Within the lapsed group the
+// order flips: "it expired a minute ago" is a different conversation from "it
+// expired on Tuesday", and only one of them is still live.
+func TestApprovals_LapsedRowsAreOrderedMostRecentFirst(t *testing.T) {
+	rows := queueRows([]approval.Request{
+		{ID: "lapsed-tuesday", CreatedAt: testNow.Add(-72 * time.Hour), ExpiresAt: testNow.Add(-48 * time.Hour), Require: approval.Requirement{Count: 1}},
+		{ID: "lapsed-a-minute-ago", CreatedAt: testNow.Add(-2 * time.Hour), ExpiresAt: testNow.Add(-time.Minute), Require: approval.Requirement{Count: 1}},
+		{ID: "live", CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+	})
+
+	want := []string{"live", "lapsed-a-minute-ago", "lapsed-tuesday"}
+	for i, id := range want {
+		if rows[i].ID != id {
+			t.Fatalf("row %d is %s, want %s", i, rows[i].ID, id)
+		}
+	}
 }

@@ -87,6 +87,31 @@ func (g *sqliteGrants) GetGrant(ctx context.Context, id string) (approval.Grant,
 	return gr, nil
 }
 
+// GrantByRequest returns the Grant an approval Request authorized, in whatever
+// state it is in.
+//
+// NO Active(now) filter and no `revoked_at IS NULL` guard, which is the mistake
+// a copy of ClaimGrant's query would make: this read exists precisely to return
+// the revoked, expired and exhausted ones. It releases nothing — the claim path
+// is ClaimGrant, and it is the only query here that writes.
+//
+// request_id is indexed (migration 0014) but NOT unique, so the ordering is
+// load-bearing rather than tidy: without it a duplicate would make this return
+// an arbitrary row. Today RequestGrant mints one Request per Grant, so the
+// newest is the only one.
+func (g *sqliteGrants) GrantByRequest(ctx context.Context, requestID string) (approval.Grant, error) {
+	row := g.db.QueryRowContext(ctx,
+		grantSelect+` WHERE request_id = ? ORDER BY created_at DESC, grant_id DESC LIMIT 1`, requestID)
+	gr, err := scanGrant(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return approval.Grant{}, approval.ErrGrantNotFound
+	}
+	if err != nil {
+		return approval.Grant{}, err
+	}
+	return gr, nil
+}
+
 // ActiveGrants returns every Grant that could still cover something at now.
 //
 // The clock filter is applied by the DOMAIN (Grant.Active), not by the query,

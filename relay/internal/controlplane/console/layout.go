@@ -57,6 +57,21 @@ type Page struct {
 	Nav    []NavSection
 	Banner *Banner
 
+	// Focus drops the navigation rail for a screen that is one object and
+	// nothing else. The approval object (spec 08) is the only one: "mobile-
+	// first and self-contained — no nav, nothing competing, one card", because
+	// an approver arrives from a link, on a phone, mid-something-else, and
+	// anything beside the card is competing for the attention the decision
+	// needs.
+	//
+	// A conditional rather than a second document template: the login page
+	// (login.go) is the existing chromeless precedent, and two full shells
+	// drift apart on the security headers and the skip link. Both of those
+	// stay here — the skip link and #content are unconditional, so a
+	// focus-mode page is still keyboard-navigable and still the same document
+	// every layout test asserts against.
+	Focus bool
+
 	// CSRFToken is rendered into the body's hx-headers attribute so every HTMX
 	// request carries it without a line of inline script. An ATTRIBUTE is not
 	// script and the content security policy does not touch it — which is the
@@ -100,7 +115,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
 <body hx-headers='{"X-CSRF-Token": "{{.CSRFToken}}"}'>
 <a class="skiplink" href="#content">Skip to content</a>
 <div class="app">
-  <aside class="nav">
+  {{if not .Focus}}<aside class="nav">
     <div class="brand"><b>Relay</b> <span>console</span></div>
     <nav class="navgroups" aria-label="Console">
     {{range .Nav}}
@@ -118,7 +133,7 @@ var layoutTmpl = template.Must(template.New("layout").Parse(`<!doctype html>
         <button type="submit" class="linkbtn">Sign out</button>
       </form>
     </div>
-  </aside>
+  </aside>{{end}}
   <div class="col">
     {{with .Banner}}<div class="banner" data-kind="{{.Kind}}"><b>{{.Text}}</b> <span>{{.Detail}}</span></div>{{end}}
     <header class="topbar"><h1>{{.Title}}</h1></header>

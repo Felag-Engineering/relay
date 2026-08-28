@@ -422,6 +422,34 @@ record stores no arguments and no Selector — only the Relay-authored `plan_sum
 prose, which is the exact fidelity problem the summary exists to prevent. #415 makes finding the
 prior record a lookup; **#426 must decide where the diff inputs come from.**
 
+**Settled by #426: three sources and no new column.**
+
+- *A Grant's* numbers come from the `approval_grants` scope/window columns, reached from the
+  Request by `GrantByRequest` (a read and a join, never a claim path — and deliberately **not**
+  `ActiveGrants`, because the prior Grant a diff compares against is usually the expired or
+  exhausted one). `HashGrantShape` excludes exactly the fan-out ceiling, the window and `max_uses`,
+  so two Grants sharing a shape key can differ **only** in those three, and all three are stored.
+  That is the spec's headline sentence rendered from columns.
+- *A Plan's* scale arguments and its Selector come from the **park's own `approval_requested` audit
+  record**, joined on `approval_id` (`idx_audit_approval`). `auditsink.baseRecord` already persists
+  the Selector as written, the arguments and the raw-exec argv there. This is not the render-time
+  scan rejected above: the prior record is still found by shape key, and these are two exact-id
+  reads of records already identified.
+- *The fan-out comes from nowhere, and the callout says so.* A park creates **no Job at all**, so
+  there is no Task and no result anywhere for the record being rendered — only for a prior one that
+  already ran. "1,180 → 2,214" is therefore unavailable, and the card names the fan-out as
+  uncomparable rather than parsing a number back out of the summary. Making it comparable means
+  putting the resolved fan-out on the approval record, which is #469 and its own change.
+
+Two consequences worth recording as deviations rather than leaving them to be discovered:
+
+1. **The diff renders FIRST on the card**, above spec 08's card order (requester 1, action 2, diff
+   3). The spec also calls it "the most eye-catching text on the card", and those two cannot both
+   be satisfied by a callout in third place. `TestApproval_DiffIsTheFirstThingOnTheCard` pins it.
+2. **Spec 14's per-row fan-out cannot be rendered**, for the same reason as above, so neither the
+   row nor the "then largest fan-out" tiebreak carries one. #462 stays open, narrowed to the
+   tiebreak and blocked on #469.
+
 ---
 
 ## Proposed, not specified

@@ -17,14 +17,27 @@ const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //n
 // test can ask "what does a viewer see?" through the REAL authentication path
 // rather than by hand-injecting a principal. Invariant 10 is one auth path;
 // a test harness that invents a second one stops testing the thing that ships.
+//
+// The Account carries an ID as well as a name. That is not decoration: the
+// approval queue asks whether a Request is the CALLER'S OWN, and the rule
+// requires both identities to be non-empty — without an ID here, every fixture
+// would land on the empty-equals-empty branch and every such assertion would
+// pass without meaning anything.
 type roleVerifier struct{ role accounts.Role }
+
+// testAccountName and testAccountID are what roleVerifier issues, so a fixture
+// can name the caller as a requester or in an audience without re-deriving the
+// string.
+func testAccountName(role accounts.Role) string { return "test-" + string(role) }
+func testAccountID(role accounts.Role) string   { return "acct-test-" + string(role) }
 
 func (v roleVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
 	if credential != testCredential {
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
-		Name:    "test-" + string(v.role),
+		ID:      testAccountID(v.role),
+		Name:    testAccountName(v.role),
 		Kind:    accounts.KindHuman,
 		Role:    v.role,
 		Enabled: true,
