@@ -130,8 +130,11 @@ type Reach struct {
 
 // TargetArgKeys is the precedence order that names WHAT a read touched: the
 // first of these Args keys present on a Record is the read's target.
-// Mirrors console/reads.go's readTargetOf — this becomes the one definition;
-// issue #425 repoints the Console at it.
+// This is the one definition: issue #425 repointed the Console at it, so
+// console/reads.go's readTargetName iterates this slice, and
+// internal/store/auditquery.go's reachTargetExpr builds its COALESCE from
+// it. A divergence would make read egress's headline and its table disagree
+// about how many distinct things were read.
 var TargetArgKeys = []string{"path", "file", "unit", "service"}
 
 // ErrInvalidCursor is returned when a caller-supplied cursor cannot be
