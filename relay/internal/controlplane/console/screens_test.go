@@ -1597,21 +1597,38 @@ func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 	}
 }
 
+// consoleShapeKey is the real shape key for one Action over one Selector, so
+// these grouping tests exercise the same key production stores rather than a
+// stand-in string.
+func consoleShapeKey(operation string, args map[string]string) string {
+	return approval.HashPlanShape(jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: operation,
+		OperationArgs: args,
+		RiskClass:     jobs.RiskClassMutate,
+	}, approval.SelectorShape{
+		Known: true,
+		Terms: []approval.SelectorTerm{{Namespace: "node", Key: "env", Value: "dev"}},
+	})
+}
+
 // TestApprovals_DifferentPlansAreNeverCalledIdentical.
 //
-// The queue's grouping hint claimed two parked dispatches were "the same shape"
-// whenever they shared an ActionKind, a risk class and a gate rule — which one
-// fixture gate rule makes true of nearly everything it parks. A dev fleet
-// parked service.restart(unit="sshd") and pkg.install(name="nginx") and the
-// screen told the approver they were alike.
+// The queue's grouping hint once claimed two parked dispatches were "the same
+// shape" whenever they shared an ActionKind, a risk class and a gate rule —
+// which one fixture gate rule makes true of nearly everything it parks. A dev
+// fleet parked service.restart(unit="sshd") and pkg.install(name="nginx") and
+// the screen told the approver they were alike.
 //
 // On the one surface whose job is telling a human what they are about to
 // authorise, a hint that overclaims is worse than no hint. The key is now the
-// plan hash — the same thing a decision binds to — so equal means identical.
+// stored shape key (#415), which is computed from the Action and the normalised
+// Selector, so two different actions can never share it.
 func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 	rows := buildApprovalRows([]approval.Request{
 		{
 			ID: "restart-sshd", PlanHash: "hash-restart-sshd",
+			ShapeKey:     consoleShapeKey("service.restart", map[string]string{"unit": "sshd"}),
 			Summary:      `service.restart(unit="sshd") [mutate] on 3 node(s)`,
 			ActionKind:   jobs.ActionOperation,
 			RiskClass:    jobs.RiskClassMutate,
@@ -1621,6 +1638,7 @@ func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 		},
 		{
 			ID: "install-nginx", PlanHash: "hash-install-nginx",
+			ShapeKey:     consoleShapeKey("pkg.install", map[string]string{"name": "nginx"}),
 			Summary:      `pkg.install(name="nginx") [mutate] on 3 node(s)`,
 			ActionKind:   jobs.ActionOperation,
 			RiskClass:    jobs.RiskClassMutate,
@@ -1632,27 +1650,30 @@ func TestApprovals_DifferentPlansAreNeverCalledIdentical(t *testing.T) {
 
 	for _, r := range rows {
 		if r.Identical != 1 {
-			t.Errorf("%s is grouped with %d others — two different plans are not identical",
+			t.Errorf("%s is grouped with %d others — two different actions are not alike",
 				r.ID, r.Identical-1)
 		}
 	}
 	if rows[0].IdenticalKey == rows[1].IdenticalKey {
-		t.Error("two different plans share a grouping key")
+		t.Error("two different actions share a grouping key")
 	}
 }
 
-// TestApprovals_SamePlanTwiceIsGrouped is the case the hint exists for:
-// re-issuing a gated call parks it again, and approving the same plan three
-// times without noticing is the fatigue failure being caught.
-func TestApprovals_SamePlanTwiceIsGrouped(t *testing.T) {
+// TestApprovals_SameShapeTwiceIsGrouped is the case the hint exists for:
+// re-issuing a gated call parks it again, and approving the same thing three
+// times without noticing is the fatigue failure being caught. The two rows here
+// carry DIFFERENT plan hashes — a different fan-out — which is exactly the
+// grouping the plan hash could not express and the shape key can.
+func TestApprovals_SameShapeTwiceIsGrouped(t *testing.T) {
+	shape := consoleShapeKey("service.restart", map[string]string{"unit": "nginx"})
 	rows := buildApprovalRows([]approval.Request{
 		{
-			ID: "first", PlanHash: "same-hash",
+			ID: "first", PlanHash: "hash-3-nodes", ShapeKey: shape,
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
 			Require: approval.Requirement{Count: 1},
 		},
 		{
-			ID: "second", PlanHash: "same-hash",
+			ID: "second", PlanHash: "hash-9-nodes", ShapeKey: shape,
 			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
 			Require: approval.Requirement{Count: 1},
 		},
@@ -1660,7 +1681,47 @@ func TestApprovals_SamePlanTwiceIsGrouped(t *testing.T) {
 
 	for _, r := range rows {
 		if r.Identical != 2 {
-			t.Errorf("%s reports %d with the same Plan, want 2", r.ID, r.Identical)
+			t.Errorf("%s reports %d of the same shape, want 2", r.ID, r.Identical)
+		}
+	}
+}
+
+// TestApprovals_UncomparableShapesAreNeverGrouped: a pre-#415 record carries a
+// legacy key and its true shape is unknowable. Bucketing every such record
+// together would tell an approver that records with nothing in common are
+// alike, which is the precise failure the shape key exists to prevent.
+func TestApprovals_UncomparableShapesAreNeverGrouped(t *testing.T) {
+	rows := buildApprovalRows([]approval.Request{
+		{
+			ID: "legacy-a", PlanHash: "hash-a", ShapeKey: approval.LegacyShapeKey("legacy-a"),
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "legacy-b", PlanHash: "hash-b", ShapeKey: approval.LegacyShapeKey("legacy-b"),
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			// No shape key at all — a Request built as a struct literal.
+			ID: "unkeyed-a", PlanHash: "hash-c",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+		{
+			ID: "unkeyed-b", PlanHash: "hash-d",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour),
+			Require: approval.Requirement{Count: 1},
+		},
+	}, testNow)
+
+	for _, r := range rows {
+		if r.Identical != 1 {
+			t.Errorf("%s is grouped with %d others — a record with no comparable shape groups with nothing",
+				r.ID, r.Identical-1)
+		}
+		if r.IdenticalKey != "" {
+			t.Errorf("%s carries grouping key %q, want none", r.ID, r.IdenticalKey)
 		}
 	}
 }

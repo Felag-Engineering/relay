@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -360,5 +362,146 @@ func TestSelectorResolve_StateIsNodeLocal(t *testing.T) {
 		if n.NodeID == "node-healthy" {
 			t.Fatal("node-healthy started matching state:offline after an unrelated Node was added")
 		}
+	}
+}
+
+// --- shape-key normalisation (#415) ---------------------------------------
+
+// shapeKeyFor drives a real Selector string all the way through the production
+// path — ParseSelector -> Shape -> approval.HashPlanShape — against a
+// fixed Action, so what these cases compare is exactly what a parked Request
+// stores.
+func shapeKeyFor(t *testing.T, selector string) string {
+	t.Helper()
+	sel, err := ParseSelector(selector)
+	if err != nil {
+		t.Fatalf("ParseSelector(%q): %v", selector, err)
+	}
+	shape, err := sel.Shape()
+	if err != nil {
+		t.Fatalf("Shape(%q): %v", selector, err)
+	}
+	return approval.HashPlanShape(jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "service.restart",
+		OperationArgs: map[string]string{"unit": "nginx"},
+		RiskClass:     jobs.RiskClassMutate,
+	}, shape)
+}
+
+// TestShapeKey_SelectorNormalisation is the acceptance's table: which Selector
+// spellings are the SAME shape, and which are emphatically not.
+func TestShapeKey_SelectorNormalisation(t *testing.T) {
+	same := []struct {
+		name string
+		a, b string
+	}{
+		{"term order", "node:role=web, node:env=prod", "node:env=prod, node:role=web"},
+		{"whitespace around terms", "node:role=web,node:env=prod", "  node:role=web ,   node:env=prod  "},
+		{"an exactly duplicated term", "node:role=web, node:role=web", "node:role=web"},
+		{"state terms reordered", "state:offline, state:daemon-version=1.4.2", "state:daemon-version=1.4.2, state:offline"},
+		{"an empty selector two ways", "", "   "},
+	}
+	for _, tt := range same {
+		t.Run(tt.name, func(t *testing.T) {
+			if shapeKeyFor(t, tt.a) != shapeKeyFor(t, tt.b) {
+				t.Errorf("%q and %q are the same shape but hashed differently", tt.a, tt.b)
+			}
+		})
+	}
+
+	// Every one of these targets a DIFFERENT set of Nodes, so no two may share
+	// a key. The namespace trio is invariant 7's half: the security lane must
+	// never share a shape key with a routine one.
+	distinct := map[string]string{
+		"node":         "node:role=web",
+		"relay":        "relay:role=web",
+		"tag":          "tag:role=web",
+		"state marker": "state:offline",
+		"state fact":   "state:daemon-version=1.4.2",
+		"empty":        "",
+		"value case":   "node:role=Web",
+		// node:role= parses cleanly to an EMPTY value (ParseSelector rejects
+		// only an empty key), so it is a real term and its own shape.
+		"empty value": "node:role=",
+		"two terms":   "node:role=web, node:env=prod",
+		"other value": "node:role=db",
+	}
+	seen := make(map[string]string, len(distinct))
+	for name, selector := range distinct {
+		key := shapeKeyFor(t, selector)
+		if other, dup := seen[key]; dup {
+			t.Errorf("%s (%q) and %s share a shape key", name, selector, other)
+		}
+		seen[key] = name
+	}
+
+	// "Canonicalising namespace prefixes" must NOT have been implemented by
+	// loosening the parser: an upper-case prefix is still not a namespace.
+	if _, err := ParseSelector("NODE:role=web"); err == nil {
+		t.Error("ParseSelector accepted NODE: — the parser was loosened in the name of canonicalisation")
+	}
+}
+
+// TestNamespaceName_TotalAndDistinct: one mapping, used by both callers. A
+// drift that mapped relay: to "node" would let a security-lane Selector share a
+// shape key with a routine one.
+func TestNamespaceName_TotalAndDistinct(t *testing.T) {
+	want := map[Namespace]string{
+		NamespaceNode:  "node",
+		NamespaceRelay: "relay",
+		NamespaceTag:   "tag",
+		NamespaceState: "state",
+	}
+	seen := make(map[string]Namespace, len(want))
+	for ns, token := range want {
+		got := ns.Name()
+		if got != token {
+			t.Errorf("Namespace(%d).Name() = %q, want %q", ns, got, token)
+		}
+		if other, dup := seen[got]; dup {
+			t.Errorf("namespaces %d and %d share the token %q", ns, other, got)
+		}
+		seen[got] = ns
+	}
+	if got := NamespaceUnspecified.Name(); got != "" {
+		t.Errorf("NamespaceUnspecified.Name() = %q, want %q", got, "")
+	}
+
+	// NamespaceNames still returns the same tokens after the extraction.
+	sel := Selector{Predicates: []Predicate{
+		{Namespace: NamespaceNode, Key: "a", Value: "b"},
+		{Namespace: NamespaceRelay, Key: "c", Value: "d"},
+		{Namespace: NamespaceTag, Key: "e", Value: "f"},
+		{Namespace: NamespaceState, Key: "offline"},
+	}}
+	if got := strings.Join(sel.NamespaceNames(), ","); got != "node,relay,tag,state" {
+		t.Errorf("NamespaceNames() = %q, want %q", got, "node,relay,tag,state")
+	}
+}
+
+// TestShape_RefusesUnspecifiedNamespace: a struct-literal Selector with no
+// namespace fails closed rather than parking with a key that means nothing.
+func TestShape_RefusesUnspecifiedNamespace(t *testing.T) {
+	sel := Selector{Predicates: []Predicate{{Key: "role", Value: "web"}}}
+	got, err := sel.Shape()
+	if err == nil {
+		t.Fatal("Shape accepted a Predicate with no namespace")
+	}
+	if got.Known {
+		t.Error("a refused Selector came back marked Known; the error path must yield the zero value")
+	}
+
+	// The empty Selector is fine — it is a well-defined shape (the whole
+	// fleet), not an error, and it is KNOWN.
+	shape, err := Selector{}.Shape()
+	if err != nil {
+		t.Fatalf("Shape on an empty Selector: %v", err)
+	}
+	if !shape.Known {
+		t.Error("the empty Selector came back unknown; it targets every Node, which is a fact, not an absence")
+	}
+	if len(shape.Terms) != 0 {
+		t.Errorf("Shape on an empty Selector = %v, want no terms", shape.Terms)
 	}
 }

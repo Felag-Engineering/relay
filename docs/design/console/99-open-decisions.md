@@ -389,6 +389,39 @@ approval looks novel, too loose and a materially different action reads as routi
 with a fuzzy definition of "matching"); storing a resolved pointer to the prior approval at write
 time (moves comparison logic into the write path, where an error is baked into history).
 
+**Settled by #415.** Three answers, in code:
+
+*Selector normalisation.* Terms are projected from the **typed** `Predicate`, never from Selector
+text: the namespace travels as its own length-prefixed field, so a `tag:` term can never normalise
+into anything a `relay:` one could collide with (invariant 7). Terms are sorted by
+(namespace, key, value) as strings and **exact** duplicates dropped — `node:a=b, node:a=c` is not
+collapsed. Nothing is case-folded, whitespace-trimmed inside a term, or Unicode-normalised, because
+`Selector.Matches` is an exact map lookup: folding would let two Selectors that target *different*
+Nodes share a key. Whitespace-insensitivity comes from the parser, which already trims around terms.
+The only folding anywhere is `ToLower` on a Grant's account and Operation names, matching
+`Grant.Covers`' `EqualFold` — the rule is **fold where the matcher folds, and nowhere else**.
+
+*Shape versus scale.* Declared per Operation in `opvocab.Descriptor.ArgClasses` and cross-checked
+against the daemon's golden Operation schema, so an argument the daemon grows without a class fails
+a test. `pkg.install.version` is **scale** — the textbook "argument expected to vary"; classifying
+it as shape would make every step of a rollout look novel. Every other native argument is shape. A
+**Template Operation** has declared nothing, so every one of its arguments is shape, and every
+**Raw Exec** argv element is shape: "never inferred" means we do not guess which element is scale.
+A Grant's key also excludes `MaxFanOut` — a ceiling is fan-out, and "same scope, ceiling grew
+10 → 500" is the diff the callout exists to shout rather than hide behind a novel-looking key.
+
+*The retrofit.* A pre-#415 **grant** request is recomputed exactly, because its Scope is fully
+stored. A pre-#415 **Plan** record cannot be: `approval_requests` never stored the Selector or the
+arguments, and this section already rules out guessing. Each such record gets a unique
+`legacy:<request id>` key, so it is its own shape and the read seams refuse it — the callout can
+never say "you approved this Tuesday" about a record whose shape nobody knows.
+
+**Still missing, and worth naming.** The diff this enables is not yet *renderable*. The approval
+record stores no arguments and no Selector — only the Relay-authored `plan_summary` prose — so
+"same as Tuesday, except 1.24.0 → 1.25.0" cannot be produced from stored data without parsing that
+prose, which is the exact fidelity problem the summary exists to prevent. #415 makes finding the
+prior record a lookup; **#426 must decide where the diff inputs come from.**
+
 ---
 
 ## Proposed, not specified

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -258,18 +259,64 @@ func (sel Selector) NamespaceNames() []string {
 			continue
 		}
 		seen[p.Namespace] = struct{}{}
-		switch p.Namespace {
-		case NamespaceNode:
-			out = append(out, "node")
-		case NamespaceRelay:
-			out = append(out, "relay")
-		case NamespaceTag:
-			out = append(out, "tag")
-		case NamespaceState:
-			out = append(out, "state")
+		if name := p.Namespace.Name(); name != "" {
+			out = append(out, name)
 		}
 	}
 	return out
+}
+
+// Name is the lower-case token for n ("node", "relay", "tag", "state"), or ""
+// for NamespaceUnspecified.
+//
+// ONE mapping, used by NamespaceNames and by Shape. Two switches would be
+// free to drift, and a drift that mapped relay: to "node" would let a
+// security-lane Selector share an approval shape key with a routine one
+// (invariant 7).
+func (n Namespace) Name() string {
+	switch n {
+	case NamespaceNode:
+		return "node"
+	case NamespaceRelay:
+		return "relay"
+	case NamespaceTag:
+		return "tag"
+	case NamespaceState:
+		return "state"
+	default:
+		return ""
+	}
+}
+
+// Shape projects sel into the normalised form the approval shape key is
+// computed over (#415, approval.HashPlanShape).
+//
+// It is built from the TYPED Predicate, never from Selector text: the namespace
+// travels as its own length-prefixed field, so no key or value — however it is
+// spelled — can forge a namespace boundary, and a `tag:` term can never
+// normalise into anything a `relay:` term could collide with. Nothing is
+// case-folded or trimmed here; whitespace-insensitivity comes from
+// ParseSelector, which trims around terms, not from mangling a key or a value
+// that Selector.Matches compares exactly.
+//
+// A Predicate with no namespace is an ERROR rather than a blank token, so a
+// struct-literal Selector fails closed instead of parking with a key that means
+// nothing.
+//
+// This is the only place approval.SelectorShape.Known is set: a Selector this
+// method saw is a Selector that was known, INCLUDING the empty one, which
+// targets the whole fleet rather than nothing.
+func (sel Selector) Shape() (approval.SelectorShape, error) {
+	terms := make([]approval.SelectorTerm, 0, len(sel.Predicates))
+	for _, p := range sel.Predicates {
+		name := p.Namespace.Name()
+		if name == "" {
+			return approval.SelectorShape{}, fmt.Errorf(
+				"capability: selector predicate %q has no namespace; a shape key must name one of node, relay, tag, state", p.Key)
+		}
+		terms = append(terms, approval.SelectorTerm{Namespace: name, Key: p.Key, Value: p.Value})
+	}
+	return approval.SelectorShape{Known: true, Terms: terms}, nil
 }
 
 // Resolve returns every Node in reg that matches sel, evaluated at ev. A

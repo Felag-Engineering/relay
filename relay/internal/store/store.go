@@ -112,6 +112,17 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("migrate %q: %w", path, err)
 	}
 
+	// The approval shape-key backfill (#415) is Go rather than migration SQL
+	// because it must call the same approval.HashGrantShape the write path
+	// calls: two implementations of one hash is exactly the failure the
+	// property "recomputing a key yields the same key" exists to exclude. It is
+	// idempotent, so running it on every Open converges once and then costs one
+	// indexed probe.
+	if err := backfillShapeKeys(context.Background(), db); err != nil {
+		db.Close() //nolint:errcheck
+		return nil, fmt.Errorf("backfill approval shape keys %q: %w", path, err)
+	}
+
 	s := &Store{db: db}
 	for _, o := range opts {
 		o(s)

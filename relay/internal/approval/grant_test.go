@@ -349,3 +349,101 @@ func TestOperationNameWithACommaIsRefused(t *testing.T) {
 		t.Fatal("an operation name containing the encoding's separator validated")
 	}
 }
+
+// TestGrantShapeKey_IgnoresWindowUsesAndCeiling is acceptance 4: a Grant's
+// shape key covers WHAT it authorizes, not how much or for how long — while
+// HashScope, which is the Grant's actual approval binding, still covers all
+// three. "Same scope, ceiling grew 10 -> 500" is the single most valuable diff
+// the callout can render, and it only renders if the two records share a key.
+func TestGrantShapeKey_IgnoresWindowUsesAndCeiling(t *testing.T) {
+	base := validGrant()
+
+	widerCeiling := validGrant()
+	widerCeiling.Scope.MaxFanOut = 500
+
+	moreUses := validGrant()
+	moreUses.MaxUses = 200
+
+	laterWindow := validGrant()
+	laterWindow.StartsAt = grantNow.Add(24 * time.Hour)
+	laterWindow.ExpiresAt = grantNow.Add(48 * time.Hour)
+
+	for _, other := range []Grant{widerCeiling, moreUses, laterWindow} {
+		if base.ShapeKey() != other.ShapeKey() {
+			t.Errorf("a scale-only change moved the shape key (%+v)", other.Scope)
+		}
+		if HashScope(base.Scope, base.StartsAt, base.ExpiresAt, base.MaxUses) ==
+			HashScope(other.Scope, other.StartsAt, other.ExpiresAt, other.MaxUses) {
+			t.Errorf("HashScope did NOT change — the Grant's approval binding stopped covering its bounds (%+v)", other)
+		}
+	}
+}
+
+// TestGrantShapeKey_DistinguishesScopeWalls: every wall is in the key, and the
+// only folding is the folding Covers itself does (strings.EqualFold on the
+// account and on Operation names).
+func TestGrantShapeKey_DistinguishesScopeWalls(t *testing.T) {
+	base := validScope()
+
+	otherAccount := validScope()
+	otherAccount.Account = "someone-else"
+
+	otherRisk := validScope()
+	otherRisk.RiskClass = jobs.RiskClassRead
+
+	otherOps := validScope()
+	otherOps.Operations = []string{"pkg.install"}
+
+	moreOps := validScope()
+	moreOps.Operations = []string{"service.restart", "pkg.install"}
+
+	rawExec := validScope()
+	rawExec.RawExec = true
+
+	otherNamespace := validScope()
+	otherNamespace.SelectorNamespace = "relay"
+
+	distinct := map[string]Scope{
+		"base": base, "account": otherAccount, "risk": otherRisk,
+		"ops": otherOps, "more ops": moreOps, "raw exec": rawExec, "namespace": otherNamespace,
+	}
+	seen := make(map[string]string, len(distinct))
+	for name, s := range distinct {
+		key := HashGrantShape(s)
+		if other, dup := seen[key]; dup {
+			t.Errorf("scopes %q and %q share a shape key", name, other)
+		}
+		seen[key] = name
+	}
+
+	// Case-only differences where Covers folds: the same Grant, not two.
+	folded := validScope()
+	folded.Account = "GLEIPNIR-PROD"
+	folded.Operations = []string{"Service.Restart"}
+	if HashGrantShape(base) != HashGrantShape(folded) {
+		t.Error("a case-only difference in the account or an Operation name changed the shape key, but Grant.Covers folds both")
+	}
+
+	// And NOT where it does not fold: Scope.Validate accepts SelectorNamespace
+	// case-sensitively, so "Node" is not a namespace at all.
+	unfolded := validScope()
+	unfolded.SelectorNamespace = "node"
+	upper := validScope()
+	upper.SelectorNamespace = "Node"
+	if HashGrantShape(unfolded) == HashGrantShape(upper) {
+		t.Error("the selector namespace was case-folded, but nothing that matches it folds")
+	}
+}
+
+// TestGrantRequestCarriesTheGrantsShapeKey: the queue card and the Grant it
+// authorizes group on one key, so they cannot drift apart.
+func TestGrantRequestCarriesTheGrantsShapeKey(t *testing.T) {
+	g := validGrant()
+	r := NewGrantRequest(g, "acct-g", "gleipnir-prod", []string{"batch-rule"}, req(1, false), grantNow)
+	if r.ShapeKey != g.ShapeKey() {
+		t.Errorf("grant Request shape key = %q, grant's own = %q", r.ShapeKey, g.ShapeKey())
+	}
+	if IsLegacyShapeKey(r.ShapeKey) || r.ShapeKey == "" {
+		t.Errorf("grant Request shape key %q is not a computed key", r.ShapeKey)
+	}
+}

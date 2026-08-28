@@ -31,7 +31,7 @@ func authorize(t *testing.T, repo approval.Repository, requestID string) {
 	t.Helper()
 	ctx := context.Background()
 	r := approval.NewRequest(requestID, "hash-"+requestID, "acct-g", "gleipnir-prod",
-		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		storeAction, []string{"node-a"}, approval.SelectorShape{}, []string{"batch-rule"},
 		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		gNow.Add(-time.Minute))
 	if err := repo.Create(ctx, r); err != nil {
@@ -361,7 +361,7 @@ func TestGrantIsNotClaimableBeforeItsRequestIsApproved(t *testing.T) {
 
 	// A PENDING request is not authorization either.
 	pending := approval.NewRequest("req-grant-1", "hash-req-grant-1", "acct-g", "gleipnir-prod",
-		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		storeAction, []string{"node-a"}, approval.SelectorShape{}, []string{"batch-rule"},
 		approval.Requirement{Count: 2, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		gNow.Add(-time.Minute))
 	if err := approvals.Create(ctx, pending); err != nil {
@@ -408,7 +408,7 @@ func TestDeniedGrantRequestIsNeverClaimable(t *testing.T) {
 		t.Fatalf("CreateGrant: %v", err)
 	}
 	r := approval.NewRequest("req-grant-1", "hash-req-grant-1", "acct-g", "gleipnir-prod",
-		storeAction, []string{"node-a"}, []string{"batch-rule"},
+		storeAction, []string{"node-a"}, approval.SelectorShape{}, []string{"batch-rule"},
 		approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
 		gNow.Add(-time.Minute))
 	if err := approvals.Create(ctx, r); err != nil {
