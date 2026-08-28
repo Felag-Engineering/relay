@@ -419,60 +419,6 @@ func TestReads_RepeatedReadOfOnePathDoesNotInflateItsNodeCount(t *testing.T) {
 	}
 }
 
-// TestActivity_DispatchCollapsesToOneJobRow is spec 04's grain rule. One mutate
-// across 2,214 Nodes emits 2,214 records; a tail that renders them individually
-// becomes unreadable exactly when something important is happening.
-func TestActivity_DispatchCollapsesToOneJobRow(t *testing.T) {
-	var recs []audit.Record
-	for i := 0; i < 40; i++ {
-		outcome := jobs.OutcomeSuccess
-		if i == 7 {
-			outcome = jobs.OutcomeDeniedByPolicy
-		}
-		recs = append(recs, audit.Record{
-			Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n" + itoa(i),
-			OperationName: "service.restart", Outcome: outcome, Timestamp: testNow,
-		})
-	}
-	recs = append(recs, audit.Record{Kind: audit.KindFreezeEngage, Timestamp: testNow, Principal: "mike:admin"})
-
-	rows, kinds, _ := buildActivity(recs, "", "")
-
-	if len(rows) != 2 {
-		t.Fatalf("got %d rows, want 2 (one Job, one Freeze): %+v", len(rows), rows)
-	}
-	var job activityRow
-	for _, r := range rows {
-		if r.JobID == "job-1" {
-			job = r
-		}
-	}
-	if job.FanOut != 40 {
-		t.Errorf("the Job row reports fan-out %d, want 40", job.FanOut)
-	}
-	if job.Outcomes.Total != 40 {
-		t.Errorf("the Job row's outcome bar totals %d, want 40", job.Outcomes.Total)
-	}
-	// The single deny must survive into the bar with a visible segment — that
-	// is the entire reason the bar carries a floor width.
-	var denied *Segment
-	for i := range job.Outcomes.Segments {
-		if job.Outcomes.Segments[i].Outcome == jobs.OutcomeDeniedByPolicy {
-			denied = &job.Outcomes.Segments[i]
-		}
-	}
-	if denied == nil {
-		t.Fatal("the one deny in 40 did not appear in the outcome bar")
-	}
-	if denied.Width < minSegmentPercent {
-		t.Errorf("the deny segment is %.2f%% wide, below the %.1f%% floor", denied.Width, minSegmentPercent)
-	}
-
-	if len(kinds) == 0 {
-		t.Error("no kind chips were produced")
-	}
-}
-
 // TestBanner_FreezeStatesWhatIsStillTrue — an emergency stop that reads as a
 // total outage gets released in a panic by the next person to look at it.
 func TestBanner_FreezeStatesWhatIsStillTrue(t *testing.T) {
@@ -709,31 +655,17 @@ func TestOutcomeBar_SegmentsCarryAVisibleWeight(t *testing.T) {
 	}
 }
 
-// TestActivity_JobRowCarriesNoSingleNode — a Job row spans its Selector's whole
-// fan-out. Rendering the Node from whichever Task record built the row says the
-// Job targeted one machine when it targeted many.
-func TestActivity_JobRowCarriesNoSingleNode(t *testing.T) {
-	rows, _, _ := buildActivity([]audit.Record{
-		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n1", OperationName: "service.restart", Timestamp: testNow},
-		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "n2", OperationName: "service.restart", Timestamp: testNow},
-		{Kind: audit.KindNodeRevoke, NodeID: "n3", Timestamp: testNow},
-	}, "", "")
-
-	for _, row := range rows {
-		switch {
-		case row.JobID != "":
-			if row.NodeID != "" {
-				t.Errorf("the Job row names Node %q — a Job spans its whole fan-out", row.NodeID)
-			}
-			if row.FanOut != 2 {
-				t.Errorf("the Job row reports fan-out %d, want 2", row.FanOut)
-			}
-		case row.EventKind == audit.KindNodeRevoke:
-			// A revoke IS about one Node and must keep its link.
-			if row.NodeID != "n3" || row.NodeHref == "" {
-				t.Errorf("the node_revoke row lost its Node: %+v", row)
-			}
-		}
+// TestActivity_NodeRevokeKeepsItsNode is the surviving, falsifiable half of the
+// old "a Job row carries no single Node" test. A Job row cannot name a Node —
+// capability.JobSummary has no such field, so the assertion became a tautology
+// once the dispatch lane moved to QueryJobs. A node_revoke IS about one Node
+// and must keep its link, and that can still break.
+func TestActivity_NodeRevokeKeepsItsNode(t *testing.T) {
+	row := eventRowFromTrail(factsOfRow(capability.AuditRow{
+		Kind: audit.KindNodeRevoke, NodeID: "n3", Timestamp: testNow,
+	}))
+	if row.NodeID != "n3" || row.NodeHref != "/console/nodes/n3" {
+		t.Errorf("the node_revoke row lost its Node: %+v", row)
 	}
 }
 
@@ -766,7 +698,7 @@ func TestVocab_RiskClassInference(t *testing.T) {
 			audit.Record{Kind: audit.KindDispatch, OperationName: "customer.template.thing"}, jobs.RiskClassMutate},
 	}
 	for _, c := range cases {
-		if got := riskOf(c.rec); got != c.want {
+		if got := riskOf(factsOfRecord(c.rec)); got != c.want {
 			t.Errorf("%s: riskOf = %s, want %s", c.name, RiskLabel(got), RiskLabel(c.want))
 		}
 	}
@@ -2088,6 +2020,11 @@ func TestLayout_AccountFooterIsNotNavigation(t *testing.T) {
 // no Node, no outcome, on the surface billed as the audit trail. The same
 // records were meanwhile driving the Read-egress screen's enumeration panel,
 // so the trail had the fact and this screen declined to say it.
+//
+// The cross-screen half is the point and it is why this survives the move to
+// the read lane: Activity now reads capability.AuditRow and Read egress still
+// reads audit.Record, so the two would name one record two ways unless BOTH
+// went through readTargetOf on the shared trailFacts.
 func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	// Both shapes the trail actually produces. The real records carry the tool
 	// in OperationName; ActionKind is the older shape and is empty on them.
@@ -2101,6 +2038,11 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	}
 	d := renderableDeps()
 	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindRead, OperationName: "list_nodes", Timestamp: testNow},
+		{Kind: audit.KindRead, OperationName: "list_operations", Timestamp: testNow},
+		{Kind: audit.KindRead, ActionKind: "describe_node", Timestamp: testNow},
+	}}
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?kind=read").Body.String()
 	for _, want := range []string{"enumerated list_nodes", "enumerated list_operations", "enumerated describe_node"} {
@@ -2113,8 +2055,8 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 	}
 
 	// The two screens must name the same record the same way. They read the
-	// same trail, and an operator who sees "the registry" on one and
-	// "list_nodes" on the other stops trusting both.
+	// same trail through two different types, and an operator who sees "the
+	// registry" on one and "list_nodes" on the other stops trusting both.
 	for _, tg := range buildReads(recs).EnumTargets {
 		if !strings.Contains(body, "enumerated "+tg.Target) {
 			t.Errorf("Read egress calls it %q and Activity does not", tg.Target)

@@ -28,10 +28,149 @@ package console
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
+
+// trailFacts is ONE recorded event, in the fields the Console's display copy
+// reads.
+//
+// It exists because the trail now reaches this package as TWO types:
+// audit.Record, for the screens that still read the whole trail through
+// AuditReader (agent history, read egress, node detail — #424/#425), and
+// capability.AuditRow, for the ones that have migrated to the read lane. The
+// copy functions below — what an Operation is called, what it was asked to
+// do, who asked — must not fork along that seam. A second spelling of
+// "enumerated list_nodes" is exactly how two screens come to name one audit
+// record two different ways, which is the drift readTargetOf was extracted to
+// end in the first place.
+//
+// It carries NO Stdout, Stderr or Truncated field, at any age (ADR-0025).
+// That is why denyExplanation and riskOf below still take an audit.Record:
+// both read rec.Stderr, which is precisely what this type must not have.
+type trailFacts struct {
+	Kind      string
+	Principal string
+
+	VerifiedAccountName string
+	VerifiedAccountID   string
+	OnBehalfOf          string
+
+	Selector      string
+	JobID         string
+	NodeID        string
+	ActionKind    string
+	OperationName string
+	Reason        string
+	ApprovalID    string
+	GrantID       string
+
+	Args        map[string]string
+	RawExecArgv []string
+
+	Outcome   jobs.Outcome
+	Timestamp time.Time
+}
+
+// factsOfRecord projects a whole-trail audit.Record onto the shared facts.
+func factsOfRecord(rec audit.Record) trailFacts {
+	return trailFacts{
+		Kind:                rec.Kind,
+		Principal:           rec.Principal,
+		VerifiedAccountName: rec.Attribution.Verified.AccountName,
+		VerifiedAccountID:   rec.Attribution.Verified.AccountID,
+		OnBehalfOf:          rec.Attribution.Asserted.OnBehalfOf,
+		Selector:            rec.Selector,
+		JobID:               rec.JobID,
+		NodeID:              rec.NodeID,
+		ActionKind:          rec.ActionKind,
+		OperationName:       rec.OperationName,
+		Reason:              rec.Reason,
+		ApprovalID:          rec.ApprovalID,
+		GrantID:             rec.GrantID,
+		Args:                rec.Args,
+		RawExecArgv:         rec.RawExecArgv,
+		Outcome:             rec.Outcome,
+		Timestamp:           rec.Timestamp,
+	}
+}
+
+// factsOfRow projects a read-lane capability.AuditRow onto the shared facts.
+func factsOfRow(row capability.AuditRow) trailFacts {
+	return trailFacts{
+		Kind:                row.Kind,
+		Principal:           row.Principal,
+		VerifiedAccountName: row.Verified.AccountName,
+		VerifiedAccountID:   row.Verified.AccountID,
+		OnBehalfOf:          row.Asserted.OnBehalfOf,
+		Selector:            row.Selector,
+		JobID:               row.JobID,
+		NodeID:              row.NodeID,
+		ActionKind:          row.ActionKind,
+		OperationName:       row.OperationName,
+		Reason:              row.Reason,
+		ApprovalID:          row.ApprovalID,
+		GrantID:             row.GrantID,
+		Args:                row.Args,
+		RawExecArgv:         row.RawExecArgv,
+		Outcome:             row.Outcome,
+		Timestamp:           row.Timestamp,
+	}
+}
+
+// operationText names what ran: the Operation, or Raw Exec, or the bare
+// ActionKind for a record that is neither.
+func operationText(f trailFacts) string {
+	if f.OperationName != "" {
+		return f.OperationName
+	}
+	if len(f.RawExecArgv) > 0 {
+		return "raw_exec"
+	}
+	return f.ActionKind
+}
+
+// argsText renders what was asked for.
+func argsText(f trailFacts) string { return argsSummary(f.Args, f.RawExecArgv) }
+
+// principalText prefers the verified Account name.
+//
+// Record.Principal is the "name:role" string kept because it is what an
+// operator reads at a glance, but the structured Attribution is authoritative
+// — see audit's own doc. Reading the structured lane first is what keeps the
+// trust chip honest: a name that came from the verified lane is filled, and
+// one that did not is dashed.
+func principalText(f trailFacts) string {
+	if f.VerifiedAccountName != "" {
+		return f.VerifiedAccountName
+	}
+	if f.Principal != "" {
+		return f.Principal
+	}
+	return "unattributed"
+}
+
+// readTargetOf names WHAT was read, in the terms an operator would search for.
+func readTargetOf(f trailFacts) string {
+	if f.OperationName == "" {
+		if f.ActionKind != "" {
+			return f.ActionKind
+		}
+		return "registry read"
+	}
+	// The path argument is the interesting half of a file read. Where an
+	// Operation has one, the target is "operation path" so that two reads of
+	// different files do not collapse into one row.
+	for _, key := range []string{"path", "file", "unit", "service"} {
+		if v, ok := f.Args[key]; ok && v != "" {
+			return f.OperationName + " " + v
+		}
+	}
+	return f.OperationName
+}
 
 // readOperations is the read-class half of the shipped catalog (ADR-0021's
 // vocabulary).
@@ -59,23 +198,29 @@ var readOperations = map[string]bool{
 
 func isReadOperation(name string) bool { return readOperations[name] }
 
-// riskOf infers the risk class an audit record describes.
+// riskOf infers the risk class a recorded event describes.
 //
 // The order of the cases is the whole function. Raw Exec is checked FIRST and
 // unconditionally: it always takes the mutate cap regardless of what it runs
 // (ADR-0012), so no later case may soften it.
-func riskOf(rec audit.Record) jobs.RiskClass {
+//
+// It takes trailFacts rather than an audit.Record because both lanes need it
+// and neither may get its own answer — see the type's doc comment. Where the
+// DECLARED class is available (the Job lane's tasks.risk_class), that is used
+// instead and this function is not called at all: an inference is what a
+// screen falls back to, never what it prefers.
+func riskOf(f trailFacts) jobs.RiskClass {
 	// Raw Exec, however it is recorded — as argv on a dispatch, or as an
 	// ActionKind on a park where no argv survived.
-	if len(rec.RawExecArgv) > 0 || rec.ActionKind == rawExecActionKind {
+	if len(f.RawExecArgv) > 0 || f.ActionKind == rawExecActionKind {
 		return jobs.RiskClassMutate
 	}
 	// The non-dispatching read tools (list_nodes, describe_node,
 	// list_operations, get_job) are recorded as their own kind.
-	if rec.Kind == audit.KindRead {
+	if f.Kind == audit.KindRead {
 		return jobs.RiskClassRead
 	}
-	if isReadOperation(rec.OperationName) {
+	if isReadOperation(f.OperationName) {
 		return jobs.RiskClassRead
 	}
 	// An unknown Operation is treated as a mutate. Over-stating blast radius is
@@ -90,7 +235,7 @@ const rawExecActionKind = "raw_exec"
 // denyExplanation renders what the Console can honestly say about WHY an
 // audited Task was denied. The Task lane calls denyText below directly.
 func denyExplanation(rec audit.Record) string {
-	return denyText(rec.Stderr, rec.Reason, riskOf(rec) == jobs.RiskClassRead)
+	return denyText(rec.Stderr, rec.Reason, riskOf(factsOfRecord(rec)) == jobs.RiskClassRead)
 }
 
 // denyText is the one explanation both lanes share — the audit trail's

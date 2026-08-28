@@ -149,7 +149,8 @@ func buildReads(recs []audit.Record) readsView {
 			continue
 		}
 
-		name := principalText(rec)
+		f := factsOfRecord(rec)
+		name := principalText(f)
 		p, seen := byPrincipal[name]
 		if !seen {
 			p = &pAgg{
@@ -168,7 +169,7 @@ func buildReads(recs []audit.Record) readsView {
 		if isEnumeration(rec) {
 			v.Enumerations++
 			p.Enum++
-			target := readTargetOf(rec)
+			target := readTargetOf(f)
 			t, ok := byEnum[target]
 			if !ok {
 				t = &readTarget{Target: target}
@@ -181,7 +182,7 @@ func buildReads(recs []audit.Record) readsView {
 		v.Calls++
 		p.Calls++
 
-		target := readTargetOf(rec)
+		target := readTargetOf(f)
 		if target != "" {
 			p.targets[target] = true
 			allTargets[target] = true
@@ -277,26 +278,7 @@ func isRead(rec audit.Record) bool {
 	}
 	// Read-class dispatches are identified through the shared inference in
 	// vocab.go, which is the one place this package guesses a risk class.
-	return riskOf(rec) == jobs.RiskClassRead
-}
-
-// readTargetOf names WHAT was read, in the terms an operator would search for.
-func readTargetOf(rec audit.Record) string {
-	if rec.OperationName == "" {
-		if rec.ActionKind != "" {
-			return rec.ActionKind
-		}
-		return "registry read"
-	}
-	// The path argument is the interesting half of a file read. Where an
-	// Operation has one, the target is "operation path" so that two reads of
-	// different files do not collapse into one row.
-	for _, key := range []string{"path", "file", "unit", "service"} {
-		if v, ok := rec.Args[key]; ok && v != "" {
-			return rec.OperationName + " " + v
-		}
-	}
-	return rec.OperationName
+	return riskOf(factsOfRecord(rec)) == jobs.RiskClassRead
 }
 
 // addNode records nodeID in set, allocating the set on first use.

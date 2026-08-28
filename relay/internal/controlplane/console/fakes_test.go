@@ -136,6 +136,26 @@ type fakeQueries struct {
 
 	jobCalls   int
 	auditCalls int
+
+	// auditFilters and jobFilters record every filter the screens passed, in
+	// order. They are what makes "the filter reached the SEAM" assertable:
+	// a screen that applied a filter in Go after fetching an unfiltered page
+	// renders identically and paginates wrongly, and nothing but this would
+	// notice.
+	auditFilters []capability.AuditFilter
+	jobFilters   []capability.JobFilter
+
+	// auditPages and jobPages record every PageRequest, so a test can assert
+	// that "older" carried BOTH lanes' cursors.
+	auditPages []capability.PageRequest
+	jobPages   []capability.PageRequest
+
+	// auditNext and jobNext are the cursors the fake reports as "there is
+	// more". A page whose Cursor is already set returns no further one, so a
+	// test can follow "older" exactly once without looping.
+	auditNext string
+	jobNext   string
+
 	// taskLimits records the Limit of every QueryTasks call, in order, so a
 	// test can assert both how many Task queries one render costs and that
 	// none of them was unbounded.
@@ -144,6 +164,8 @@ type fakeQueries struct {
 
 func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filter capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	f.auditCalls++
+	f.auditFilters = append(f.auditFilters, filter)
+	f.auditPages = append(f.auditPages, page)
 	if f.auditErr != nil {
 		return capability.AuditPage{}, f.auditErr
 	}
@@ -157,7 +179,11 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 		}
 		out = append(out, row)
 	}
-	return capability.AuditPage{Rows: limitRows(out, page.Limit), Limit: page.Limit}, nil
+	next := f.auditNext
+	if page.Cursor != "" {
+		next = ""
+	}
+	return capability.AuditPage{Rows: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
 }
 
 func (f *fakeQueries) AuditCounts(context.Context, capability.Principal, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
@@ -170,6 +196,8 @@ func (f *fakeQueries) AuditReach(context.Context, capability.Principal, capabili
 
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
 	f.jobCalls++
+	f.jobFilters = append(f.jobFilters, filter)
+	f.jobPages = append(f.jobPages, page)
 	if f.jobsErr != nil {
 		return capability.JobPage{}, f.jobsErr
 	}
@@ -180,7 +208,11 @@ func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filte
 		}
 		out = append(out, j)
 	}
-	return capability.JobPage{Jobs: limitRows(out, page.Limit), Limit: page.Limit}, nil
+	next := f.jobNext
+	if page.Cursor != "" {
+		next = ""
+	}
+	return capability.JobPage{Jobs: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
 }
 
 func (f *fakeQueries) QueryTasks(_ context.Context, _ capability.Principal, filter capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error) {
@@ -279,6 +311,10 @@ func (f *fakeEvents) RetentionWindow() time.Duration { return f.bus.RetentionWin
 // does in production.
 func (f *fakeEvents) publish(e events.EnrollmentEvent) { f.bus.PublishEnrollment(e) }
 
+// publishJob puts one Job-grained transition on the bus, as the execution
+// path does in production.
+func (f *fakeEvents) publishJob(e events.JobEvent) { f.bus.PublishJob(e) }
+
 // subscriptions counts the Subscriptions handed out so far.
 func (f *fakeEvents) subscriptions() int {
 	f.mu.Lock()
@@ -317,7 +353,11 @@ func renderableDeps() Deps {
 	return Deps{
 		Fleet: fakeFleet{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
 		Audit: fakeAudit{},
-		Now:   func() time.Time { return testNow },
+		// Activity reads the capability layer's query lane exclusively
+		// (#422), and refuses rather than rendering an empty feed when it is
+		// not wired — so every sweep that renders every screen needs one.
+		Queries: &fakeQueries{},
+		Now:     func() time.Time { return testNow },
 	}
 }
 

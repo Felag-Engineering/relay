@@ -37,10 +37,12 @@ package console
 // first screen to migrate onto it (#423) and reads nothing else: its counts
 // are one aggregate row and its Task rows are small per-outcome pages, so
 // the screen is bounded by construction at 10,000 Nodes rather than capped
-// after the fact. AuditReader still offers whole-trail and by-Node reads for
-// the screens that have not migrated yet (Activity, agent history, read
-// egress — #422/#424/#425); until each does, it keeps capping what it
-// renders and SAYING it capped it — see auditWindow.
+// after the fact. Activity (#422) followed, reading BOTH halves of the lane:
+// its dispatch rows come from QueryJobs one row per Job at any fan-out, and
+// everything else from QueryAudit. AuditReader still offers whole-trail and
+// by-Node reads for the screens that have not migrated yet (agent history,
+// read egress, node detail — #424/#425); until each does, it keeps capping
+// what it renders and SAYING it capped it — see auditWindow.
 
 import (
 	"context"
@@ -112,10 +114,10 @@ type ApprovalReader interface {
 // above — nothing here dispatches or decides, and the narrowed method set is
 // what keeps this package's grip on the capability layer to reads only.
 //
-// Job detail (#423) is its first consumer; Activity (#422), agent history
-// (#424) and read egress (#425) follow. Landing the seam ahead of any screen
-// using it is what let all four be built against one settled contract
-// instead of four independently-guessed ones.
+// Job detail (#423) was its first consumer and Activity (#422) its second;
+// agent history (#424) and read egress (#425) follow. Landing the seam ahead
+// of any screen using it is what let all four be built against one settled
+// contract instead of four independently-guessed ones.
 type QueryReader interface {
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
 	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)

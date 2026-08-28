@@ -22,11 +22,14 @@ package console
 // regardless, and permits the byte sequence in exactly one of them.
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 )
 
 // assetPath is the only src a Console page may load: one plain file directly
@@ -156,5 +159,92 @@ func assertNoInlineScript(t *testing.T, path, body string) {
 		}
 
 		i = start + closeRel + len("</script>")
+	}
+}
+
+// TestConsole_EveryScriptAScreenLoadsIsActuallyServed closes the other half of
+// the CSP problem.
+//
+// assertNoInlineScript proves every <script> is EXTERNAL and shaped correctly.
+// It says nothing about whether the file is there. A typo in a screen's
+// p.Scripts produces a page that is perfectly conforming, renders fine, 404s
+// one request, and silently has no behaviour — with every Go test green. That
+// is the same class of failure as the stylesheet that was never mounted (#439)
+// and the inline style the CSP discarded (components.go): correct-looking
+// markup pointing at nothing.
+//
+// Derived from the route table, so a screen added later is covered without
+// anyone remembering to add it — and so is any script it loads.
+func TestConsole_EveryScriptAScreenLoadsIsActuallyServed(t *testing.T) {
+	d := withExecution(fleetFixture(), true)
+	// Both live screens mount scripts only when the event seam is wired, so
+	// an unwired sweep would walk right past the thing this test is for.
+	d.Events = newFakeEvents()
+	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
+	d.Queries = &fakeQueries{}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	paths := walkableScreens(d, fixtureIDs)
+	// Day one renders only on an empty registry, and it is one of the two
+	// screens that loads a script.
+	empty := dayOneDeps()
+	empty.Queries = &fakeQueries{}
+
+	checked := 0
+	renders := map[string]http.Handler{}
+	for _, p := range paths {
+		renders[p] = h
+	}
+	renders["/console/"+dayOneMarker] = newTestHandler(empty, accounts.RoleAdmin)
+
+	for path, handler := range renders {
+		fetch := path
+		if fetch == "/console/"+dayOneMarker {
+			fetch = "/console/"
+		}
+		body := get(t, handler, fetch).Body.String()
+		for _, src := range scriptSources(body) {
+			checked++
+			rec := get(t, handler, src)
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s loads %s, which the asset route answers %d — the page conforms to the "+
+					"content security policy and has no behaviour at all", fetch, src, rec.Code)
+				continue
+			}
+			if rec.Body.Len() == 0 {
+				t.Errorf("%s loads %s, which is served empty", fetch, src)
+			}
+		}
+	}
+
+	// The guard must be finding scripts, or it proves nothing. Day one and
+	// Activity load two each.
+	if checked < 4 {
+		t.Fatalf("the sweep fetched %d scripts — it is not finding the screens that load them", checked)
+	}
+}
+
+// dayOneMarker distinguishes the zero-Node render of "/console/" from the
+// fleet render of the same path in the map above.
+const dayOneMarker = "#dayone"
+
+// scriptSources returns every <script src> in body.
+func scriptSources(body string) []string {
+	var out []string
+	lower := strings.ToLower(body)
+	for i := 0; ; {
+		rel := strings.Index(lower[i:], "<script")
+		if rel < 0 {
+			return out
+		}
+		start := i + rel
+		gt := strings.Index(lower[start:], ">")
+		if gt < 0 {
+			return out
+		}
+		if src, ok := attrValue(lower[start:start+gt+1], "src"); ok {
+			out = append(out, src)
+		}
+		i = start + gt + 1
 	}
 }
