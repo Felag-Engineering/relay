@@ -93,17 +93,32 @@ type AuditReader interface {
 	ByNode(ctx context.Context, nodeID string) ([]audit.Record, error)
 }
 
-// ApprovalReader is the pending-approval queue, read-only (ADR-0027).
-// *capability.Service satisfies it.
+// ApprovalReader is the approval queue and the approval object, read-only
+// (ADR-0027). *capability.Service satisfies all five methods.
 //
-// DecideApproval is absent, and that absence is v0.6.0's acceptance criterion
-// "zero mutating routes in the Console". Deciding arrives in v0.7.0 (#435)
-// behind step-up — and when it does it comes through the capability layer's
-// decision method, which is the same one the Control API calls, so quorum,
-// audience, requester-exclusion and channel strength are one implementation.
+// DecideApproval is absent, and so are RequestGrant and RevokeGrant. That
+// absence is v0.6.0's acceptance criterion "zero mutating routes in the
+// Console": there is no method here a handler could call to change an approval,
+// open a window, or close one. RevokeGrant is worth naming explicitly because
+// it is the one a future editor is most likely to add — closing a window feels
+// safer than opening one — and it is still a write on the approval mechanism.
+// Deciding arrives in v0.7.0 (#435) behind step-up, and when it does it comes
+// through the capability layer's decision method, which is the same one the
+// Control API calls, so quorum, audience, requester-exclusion and channel
+// strength are one implementation.
+//
+// The three reads beyond the queue are what the approval object renders:
+// LastApprovedOfSameShape is the anti-fatigue diff's lookup (#415, D10),
+// ActiveGrants tells the queue which pending Requests are Grants, and
+// GrantForApproval resolves one Request's Grant IN EVERY STATE — the prior
+// Grant a diff compares against is usually the expired or exhausted one
+// ActiveGrants cannot return.
 type ApprovalReader interface {
 	PendingApprovals(ctx context.Context) ([]approval.Request, error)
 	Approval(ctx context.Context, id string) (approval.Request, error)
+	LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error)
+	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
+	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
 }
 
 // QueryReader is the capability layer's read lane (#441): filtered,
