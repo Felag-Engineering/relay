@@ -316,7 +316,7 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role,
 			// oldest-first, so the last match is the latest.
 			for i := len(recs) - 1; i >= 0; i-- {
 				if recs[i].Kind == audit.KindNodeRevoke {
-					v.RevokedBy = principalText(recs[i])
+					v.RevokedBy = principalText(factsOfRecord(recs[i]))
 					v.RevocationRecorded = true
 					break
 				}
@@ -389,13 +389,14 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 	default:
 		return nodeTask{}, false
 	}
+	f := factsOfRecord(rec)
 	t := nodeTask{
 		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		Operation: operationText(rec),
-		Args:      argsText(rec),
+		Operation: operationText(f),
+		Args:      argsText(f),
 		Outcome:   OutcomeLabel(rec.Outcome),
 		JobID:     rec.JobID,
-		Principal: principalText(rec),
+		Principal: principalText(f),
 		Verified:  rec.Attribution.Verified.AccountID != "",
 		ReadClass: rec.Kind == audit.KindRead,
 	}
@@ -415,35 +416,6 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		}
 	}
 	return t, true
-}
-
-func operationText(rec audit.Record) string {
-	if rec.OperationName != "" {
-		return rec.OperationName
-	}
-	if len(rec.RawExecArgv) > 0 {
-		return "raw_exec"
-	}
-	return rec.ActionKind
-}
-
-func argsText(rec audit.Record) string { return argsSummary(rec.Args, rec.RawExecArgv) }
-
-// principalText prefers the verified Account name.
-//
-// Record.Principal is the "name:role" string kept because it is what an operator
-// reads at a glance, but the structured Attribution is authoritative — see
-// audit's own doc. Reading the structured lane first is what keeps the trust
-// chip honest: a name that came from the verified lane is filled, and one that
-// did not is dashed.
-func principalText(rec audit.Record) string {
-	if n := rec.Attribution.Verified.AccountName; n != "" {
-		return n
-	}
-	if rec.Principal != "" {
-		return rec.Principal
-	}
-	return "unattributed"
 }
 
 var nodeMissingTmpl = newScreen("nodemissing", `

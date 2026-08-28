@@ -446,3 +446,137 @@ func TestJobQuery_SingleJobDoesNotScanEveryTask(t *testing.T) {
 		t.Errorf("the audit aggregate is keyed on kind alone, so it reads every dispatch row in the trail:\n%s", plan.String())
 	}
 }
+
+// dispatchAuditRecordFull appends a KindDispatch audit row carrying the whole
+// attribution the Job list joins: the verified Account, the ASSERTED
+// on-behalf-of, the approval and grant that released it, and what was asked
+// for. One record per Node, exactly as the fan-out loop writes them.
+func dispatchAuditRecordFull(t *testing.T, ctx context.Context, st *Store, id, jobID, nodeID string, outcome jobs.Outcome, ts time.Time) {
+	t.Helper()
+	if err := st.Audit().Append(ctx, audit.Record{
+		ID:        id,
+		Timestamp: ts,
+		Kind:      audit.KindDispatch,
+		Principal: "gleipnir:operator",
+		Attribution: audit.Attribution{
+			Verified: audit.Verified{AccountID: "acct-1", AccountName: "gleipnir", Role: "operator"},
+			Asserted: audit.Asserted{OnBehalfOf: "agent-7"},
+		},
+		Selector:    "role=web",
+		JobID:       jobID,
+		NodeID:      nodeID,
+		ActionKind:  "raw_exec",
+		RawExecArgv: []string{"/bin/systemctl", "restart", "nginx"},
+		Args:        map[string]string{"unit": "nginx"},
+		Outcome:     outcome,
+		ApprovalID:  "appr-9",
+		GrantID:     "grant-3",
+		Stdout:      []byte("output that must never reach a Job summary"),
+	}); err != nil {
+		t.Fatalf("append dispatch audit record %s: %v", id, err)
+	}
+}
+
+// TestJobQuery_SummaryCarriesTheDispatchRecordsAttribution is spec 04's
+// acceptance criterion 2 at the store: "who asked, FOR WHOM, WHO APPROVED,
+// what happened" out of ONE query.
+//
+// Three dispatch records for one Job, differing only in Node and outcome — the
+// shape auditsink actually writes. MIN over them must return the single base
+// value they all carry, not a sample of one of them.
+func TestJobQuery_SummaryCarriesTheDispatchRecordsAttribution(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+
+	createJobFixture(t, ctx, st, "job-1", base, []jobs.Task{
+		{ID: "job-1-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionRawExec, RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	})
+	dispatchAuditRecordFull(t, ctx, st, "audit-1", "job-1", "node-1", jobs.OutcomeSuccess, base)
+	dispatchAuditRecordFull(t, ctx, st, "audit-2", "job-1", "node-2", jobs.OutcomeDeniedByPolicy, base)
+	dispatchAuditRecordFull(t, ctx, st, "audit-3", "job-1", "node-3", jobs.OutcomeSuccess, base)
+
+	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{JobID: "job-1"}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	if len(page.Jobs) != 1 {
+		t.Fatalf("QueryJobs returned %d rows, want 1", len(page.Jobs))
+	}
+	got := page.Jobs[0]
+
+	if got.OnBehalfOf != "agent-7" {
+		t.Errorf("OnBehalfOf = %q, want agent-7 — the asserted lane is half of spec 04's acceptance 2", got.OnBehalfOf)
+	}
+	if got.ApprovalID != "appr-9" {
+		t.Errorf("ApprovalID = %q, want appr-9", got.ApprovalID)
+	}
+	if got.GrantID != "grant-3" {
+		t.Errorf("GrantID = %q, want grant-3", got.GrantID)
+	}
+	if !reflect.DeepEqual(got.Args, map[string]string{"unit": "nginx"}) {
+		t.Errorf("Args = %#v, want {unit: nginx}", got.Args)
+	}
+	if !reflect.DeepEqual(got.RawExecArgv, []string{"/bin/systemctl", "restart", "nginx"}) {
+		t.Errorf("RawExecArgv = %#v, want the dispatched argv", got.RawExecArgv)
+	}
+}
+
+// TestJobQuery_OnBehalfOfFilterSelects: the asserted lane is a real filter,
+// matched exactly, and it selects rather than merely being carried.
+func TestJobQuery_OnBehalfOfFilterSelects(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+
+	for _, c := range []struct{ jobID, onBehalfOf string }{
+		{"job-a", "agent-7"},
+		{"job-b", "agent-9"},
+	} {
+		createJobFixture(t, ctx, st, c.jobID, base, []jobs.Task{
+			{ID: c.jobID + "-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+		})
+		if err := st.Audit().Append(ctx, audit.Record{
+			ID: c.jobID + "-audit", Timestamp: base, Kind: audit.KindDispatch, JobID: c.jobID,
+			Attribution: audit.Attribution{Asserted: audit.Asserted{OnBehalfOf: c.onBehalfOf}},
+		}); err != nil {
+			t.Fatalf("append %s: %v", c.jobID, err)
+		}
+	}
+
+	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{OnBehalfOf: "agent-7"}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs(OnBehalfOf): %v", err)
+	}
+	if len(page.Jobs) != 1 || page.Jobs[0].JobID != "job-a" {
+		t.Fatalf("QueryJobs(OnBehalfOf=agent-7) = %+v, want exactly [job-a]", page.Jobs)
+	}
+
+	// Exact, never a prefix: the asserted lane is caller-claimed, and a fuzzy
+	// match over it would let one agent's claim answer a question asked about
+	// another's.
+	none, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{OnBehalfOf: "agent"}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs(prefix): %v", err)
+	}
+	if len(none.Jobs) != 0 {
+		t.Errorf("OnBehalfOf=%q matched %+v — the asserted lane is an EXACT match", "agent", none.Jobs)
+	}
+}
+
+// TestJobSummary_NoOutputField: a Job list must never become a path to
+// captured output (ADR-0025). The SELECT names no BLOB column; this pins the
+// struct so nobody adds a field for one to be scanned into.
+func TestJobSummary_NoOutputField(t *testing.T) {
+	rt := reflect.TypeOf(jobs.JobSummary{})
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		switch f.Name {
+		case "Stdout", "Stderr", "Output", "Truncated":
+			t.Errorf("jobs.JobSummary has a %s field — a Job list must not carry captured output (ADR-0025)", f.Name)
+		}
+		if f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Uint8 {
+			t.Errorf("jobs.JobSummary.%s is a []byte — the only bytes a Task produces are its output", f.Name)
+		}
+	}
+}

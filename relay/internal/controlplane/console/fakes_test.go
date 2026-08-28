@@ -241,18 +241,55 @@ type fakeQueries struct {
 	// The recorded filters. Read egress asserts on these: that no
 	// dispatch-kind filter ever carries an empty Operations list, that a
 	// scoped page scopes EVERY filter, and that an over-long caller value
-	// never reaches the lane at all.
+	// never reaches the lane at all. Activity asserts on them too: a screen
+	// that applied a filter in Go after fetching an unfiltered page renders
+	// identically and paginates wrongly, and nothing but this would notice.
 	auditFilters []capability.AuditFilter
 	jobFilters   []capability.JobFilter
 	reachFilters []capability.AuditFilter
 	countFilters []capability.AuditFilter
 	buckets      []time.Duration
 
-	// The recorded page limits, in order, so a test can assert both how many
-	// queries one render costs and that none of them was unbounded.
+	// auditPages and jobPages record every PageRequest in full, so a test can
+	// assert that "older" carried BOTH lanes' cursors. auditLimits and
+	// jobLimits keep just the Limit, which is what the "none of them was
+	// unbounded" assertions read.
+	auditPages []capability.PageRequest
+	jobPages   []capability.PageRequest
+
 	auditLimits []int
 	jobLimits   []int
 	taskLimits  []int
+
+	// auditNext and jobNext are the cursors the fake reports as "there is
+	// more", overriding the truncation rule below. A page whose Cursor is
+	// already set returns no further one, so a test can follow "older"
+	// exactly once without looping.
+	auditNext string
+	jobNext   string
+}
+
+// nextCursor is the fake's "there is more" rule for the stub protocol. The
+// Job lane always uses it; the audit lane uses it only when a test set a stub,
+// having a second, offset-based protocol of its own (see QueryAudit).
+//
+// By default it mirrors the real lane: a page that truncated reports a
+// cursor, which is what makes "this table is a sample" assertable. An
+// explicitly-set stub cursor overrides that and is one-shot — a request that
+// already carried a cursor gets no further one — so a test can follow
+// "older" exactly once instead of looping forever, which is the paging bug
+// this branch exists to fix.
+func nextCursor(stub, requested string, truncated bool) string {
+	if stub != "" {
+		if requested != "" {
+			return ""
+		}
+		return stub
+	}
+	if truncated {
+		return "cursor"
+	}
+	return ""
 }
 
 // matchRow applies the filter fields the screens actually use.
@@ -301,6 +338,7 @@ func (f *fakeQueries) matching(filter capability.AuditFilter) []capability.Audit
 func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filter capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	f.auditCalls++
 	f.auditFilters = append(f.auditFilters, filter)
+	f.auditPages = append(f.auditPages, page)
 	f.auditLimits = append(f.auditLimits, page.Limit)
 	if f.auditErr != nil {
 		return capability.AuditPage{}, f.auditErr
@@ -310,11 +348,25 @@ func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filt
 	}
 	out := f.matching(filter)
 
-	// Cursor paging, because the released-Job walk depends on it: the trail
-	// fans a dispatch out to one row PER NODE, so a Grant over many Nodes
-	// needs several pages before a second Job appears at all. The cursor is a
-	// real offset rather than a sentinel, so a page that truncated still says
-	// "this table is a sample" exactly as the real lane does.
+	// Two paging protocols, because the two screens need different things of
+	// this fake and neither can serve the other.
+	//
+	// A test that sets auditNext drives the STUB protocol: the first page
+	// reports that opaque cursor and a request already carrying one reports
+	// none, so "Older" can be followed exactly once instead of forever —
+	// the paging-termination bug this branch exists to fix. A stub is not an
+	// offset and must never be parsed as one.
+	//
+	// Otherwise the cursor is a REAL offset, which the approval object's
+	// released-Job walk depends on: the trail fans a dispatch out to one row
+	// PER NODE, so a Grant over many Nodes needs several pages before a
+	// second Job appears at all.
+	if f.auditNext != "" {
+		kept := limitRows(out, page.Limit)
+		next := nextCursor(f.auditNext, page.Cursor, len(kept) < len(out))
+		return capability.AuditPage{Rows: kept, Next: next, Limit: page.Limit}, nil
+	}
+
 	start := 0
 	if page.Cursor != "" {
 		n, err := strconv.Atoi(page.Cursor)
@@ -392,7 +444,7 @@ func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filt
 	reach := capability.Reach{}
 	for _, row := range f.matching(filter) {
 		reach.Calls++
-		targets[readTargetOfRow(row)] = true
+		targets[readTargetOf(factsOfRow(row))] = true
 		if row.NodeID != "" {
 			nodes[row.NodeID] = true
 		}
@@ -405,6 +457,7 @@ func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filt
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
 	f.jobCalls++
 	f.jobFilters = append(f.jobFilters, filter)
+	f.jobPages = append(f.jobPages, page)
 	f.jobLimits = append(f.jobLimits, page.Limit)
 	if f.jobsErr != nil {
 		return capability.JobPage{}, f.jobsErr
@@ -423,10 +476,7 @@ func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filte
 		}
 	}
 	kept := limitRows(out, page.Limit)
-	next := ""
-	if len(kept) < len(out) {
-		next = "cursor"
-	}
+	next := nextCursor(f.jobNext, page.Cursor, len(kept) < len(out))
 	return capability.JobPage{Jobs: kept, Next: next, Limit: page.Limit}, nil
 }
 
@@ -526,6 +576,10 @@ func (f *fakeEvents) RetentionWindow() time.Duration { return f.bus.RetentionWin
 // does in production.
 func (f *fakeEvents) publish(e events.EnrollmentEvent) { f.bus.PublishEnrollment(e) }
 
+// publishJob puts one Job-grained transition on the bus, as the execution
+// path does in production.
+func (f *fakeEvents) publishJob(e events.JobEvent) { f.bus.PublishJob(e) }
+
 // subscriptions counts the Subscriptions handed out so far.
 func (f *fakeEvents) subscriptions() int {
 	f.mu.Lock()
@@ -566,7 +620,9 @@ func renderableDeps() Deps {
 		Audit: fakeAudit{},
 		// Every screen that reads through the capability layer's read lane
 		// needs one wired, or its route answers 500 — a fixture route that
-		// 500s is not a fixture.
+		// 500s is not a fixture. Activity (#422) reads that lane exclusively
+		// and refuses rather than rendering an empty feed when it is missing,
+		// so every sweep that renders every screen needs one.
 		Queries: &fakeQueries{},
 		Now:     func() time.Time { return testNow },
 	}

@@ -140,7 +140,7 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		if !isAgentCall(rec) {
 			continue
 		}
-		name := principalText(rec)
+		name := principalText(factsOfRecord(rec))
 		a, seen := byAccount[name]
 		if !seen {
 			a = &acc{agentAccount: agentAccount{
@@ -225,14 +225,15 @@ func isAgentCall(rec audit.Record) bool {
 }
 
 func agentCallFrom(rec audit.Record) agentCall {
+	f := factsOfRecord(rec)
 	c := agentCall{
 		When:       rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Tool:       toolName(rec),
-		Principal:  principalText(rec),
+		Principal:  principalText(f),
 		Verified:   rec.Attribution.Verified.AccountID != "",
 		OnBehalfOf: rec.Attribution.Asserted.OnBehalfOf,
 		Selector:   rec.Selector,
-		Args:       argsText(rec),
+		Args:       argsText(f),
 		NodeID:     rec.NodeID,
 		Outcome:    OutcomeLabel(rec.Outcome),
 		JobID:      rec.JobID,
@@ -243,7 +244,7 @@ func agentCallFrom(rec audit.Record) agentCall {
 	// mutate and a parked raw_exec as a read — the second of which is the most
 	// misleading thing this Console could say, since Raw Exec always takes the
 	// mutate cap without exception.
-	c.Risk = RiskLabel(riskOf(rec))
+	c.Risk = RiskLabel(riskOf(f))
 	if rec.NodeID != "" {
 		c.NodeHref = "/console/nodes/" + rec.NodeID
 	}
@@ -253,7 +254,7 @@ func agentCallFrom(rec audit.Record) agentCall {
 	if rec.Outcome == jobs.OutcomeDeniedByPolicy {
 		c.Deny = &Deny{
 			NodeID:        rec.NodeID,
-			OperationName: operationText(rec),
+			OperationName: operationText(f),
 			Rule:          denyExplanation(rec),
 			PolicyHref:    "/console/nodes/" + rec.NodeID,
 		}

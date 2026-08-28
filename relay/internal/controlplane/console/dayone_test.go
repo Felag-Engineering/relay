@@ -372,26 +372,47 @@ func TestDayOne_ClientNavigatesOnAcceptance(t *testing.T) {
 func TestDayOne_ScriptIsActuallyServed(t *testing.T) {
 	h := newTestHandler(dayOneDeps(), accounts.RoleAdmin)
 
-	if body := get(t, h, "/console/").Body.String(); !strings.Contains(body,
-		`<script src="/console/assets/dayone.js" defer></script>`) {
-		t.Error("day one does not load its script")
+	body := get(t, h, "/console/").Body.String()
+	// BOTH files, and stream.js FIRST: it defines window.RelayLive, which
+	// dayone.js reads at load time. Deferred scripts run in document order, so
+	// the order in this list is load-bearing rather than cosmetic.
+	stream := `<script src="/console/assets/stream.js" defer></script>`
+	screen := `<script src="/console/assets/dayone.js" defer></script>`
+	if !strings.Contains(body, stream) || !strings.Contains(body, screen) {
+		t.Fatal("day one does not load the shared transport and its own handler")
+	}
+	if strings.Index(body, stream) > strings.Index(body, screen) {
+		t.Error("dayone.js is loaded before stream.js — it would run before window.RelayLive exists")
 	}
 
-	rec := get(t, h, "/console/assets/dayone.js")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /console/assets/dayone.js = %d, want 200", rec.Code)
-	}
-	// A 404 page is also a 200-shaped thing to a careless assertion.
-	if !strings.Contains(rec.Body.String(), "EventSource") {
-		t.Error("/console/assets/dayone.js did not return the script")
+	for _, asset := range []struct{ path, sentinel string }{
+		// A 404 page is also a 200-shaped thing to a careless assertion, so
+		// each check names something only that file contains.
+		{"/console/assets/stream.js", "EventSource"},
+		{"/console/assets/dayone.js", "addRejection"},
+		// Activity's handler is fetched here too. It is mounted by a
+		// different screen, but nothing else in the suite ever asks the asset
+		// route for it — so a typo in Activity's p.Scripts would 404 in
+		// production with every Go test green, which is the exact failure
+		// this test was written for.
+		{"/console/assets/activity.js", "data-jobstate"},
+	} {
+		rec := get(t, h, asset.path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", asset.path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), asset.sentinel) {
+			t.Errorf("%s did not return the script", asset.path)
+		}
 	}
 
 	// A screen with no live seam must not load a script that would sit there
 	// failing to connect.
 	d := dayOneDeps()
 	d.Events = nil
-	if body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String(); strings.Contains(body, "dayone.js") {
-		t.Error("day one loads its script with no event seam wired")
+	if body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String(); strings.Contains(body, "dayone.js") ||
+		strings.Contains(body, "stream.js") {
+		t.Error("day one loads a script with no event seam wired")
 	}
 }
 
@@ -404,18 +425,22 @@ func TestDayOne_ScriptIsActuallyServed(t *testing.T) {
 // follows a redirect to the sign-in page and fails like any other error, so an
 // unbounded backoff would spin against a login page forever, silently.
 func TestDayOne_ClientDegradesVisiblyAndGivesUp(t *testing.T) {
-	src := readAsset(t, "assets/dayone.js")
+	// The transport moved to the shell (#422): one reconnect loop for every
+	// live region, because two copies is two backoff policies and the second
+	// one is the one nobody looks at again. The PROPERTY is unchanged, so the
+	// assertion moved with it rather than being dropped.
+	src := readAsset(t, "assets/stream.js")
 
 	for _, want := range []string{"maxAttempts", `setState("down")`, `setState("ended")`} {
 		if !strings.Contains(src, want) {
-			t.Errorf("dayone.js is missing %q — the reconnect must be bounded and end in a state "+
+			t.Errorf("stream.js is missing %q — the reconnect must be bounded and end in a state "+
 				"the screen can explain", want)
 		}
 	}
 	// Jittered backoff: a fleet's worth of Consoles reconnecting in lockstep
 	// after a Relay restart is a self-inflicted thundering herd (spec 11).
 	if !strings.Contains(src, "Math.random()") {
-		t.Error("dayone.js reconnects without jitter")
+		t.Error("stream.js reconnects without jitter")
 	}
 
 	// The terminal state's words live in Go, like every other word on the
@@ -519,41 +544,148 @@ func TestConsole_EventSeamCannotPublish(t *testing.T) {
 func TestConsoleEvents_UnknownKindIsRefused(t *testing.T) {
 	h := newTestHandler(dayOneDeps(), accounts.RoleAdmin)
 
-	for _, query := range []string{"", "?kinds=", "?kinds=tool_call", "?kinds=job", "?kinds=registry",
-		"?kinds=enrollment,tool_call", "?kinds=gap"} {
+	for _, query := range []string{"", "?kinds=", "?kinds=tool_call", "?kinds=registry",
+		"?kinds=enrollment,tool_call", "?kinds=job,registry", "?kinds=gap"} {
 		rec := getBounded(t, h, "/console/events"+query)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("GET /console/events%s = %d, want 400 — this route serves enrollment and "+
-				"nothing else", query, rec.Code)
+				"job, and nothing else", query, rec.Code)
 		}
 	}
 }
 
-// TestConsoleEvents_HasNoRoleGateBecauseEnrollmentNeedsNone records a decision
-// so it stays one.
+// TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt is the successor to
+// #427's TestConsoleEvents_HasNoRoleGateBecauseEnrollmentNeedsNone, which
+// recorded the absence of a role check as deliberate and said the absence
+// stops being right the moment a second kind is added. Activity (#422) adds
+// one, so this asserts the gate instead of the absence.
 //
-// Route.MinRole is PRESENTATION — Register never consults it — so the route
-// table places no gate on this stream at all. For enrollment attempts that is
-// right: a source address, a public token id and a refusal reason are things
-// every authenticated principal may see. It stops being right the moment a
-// kind is added, because KindToolCall carries raw_exec's argv. Whoever widens
-// consoleEventKinds must add an explicit in-handler role check, and this test
-// is here so the absence is deliberate rather than forgotten.
-func TestConsoleEvents_HasNoRoleGateBecauseEnrollmentNeedsNone(t *testing.T) {
-	if len(consoleEventKinds) != 1 || consoleEventKinds["enrollment"] != events.KindEnrollment {
-		t.Fatalf("consoleEventKinds = %v. Widening this route means adding an explicit role check "+
-			"in handleEvents for the new kind, in the same change: MinRole in the route table is "+
-			"presentation and gates nothing.", consoleEventKinds)
+// The EXACT SIZE assertion is the point. A test that merely checked
+// "enrollment and job are present" would still pass after someone added
+// tool_call — which carries raw_exec's full argv — and this route's closed
+// allowlist is its only structural defence.
+func TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt(t *testing.T) {
+	if len(consoleEventKinds) != 2 {
+		t.Fatalf("consoleEventKinds has %d entries, want exactly 2 (%v). Widening this route means "+
+			"adding a ROLE and a PROJECTION for the new kind and then updating this list, in the "+
+			"same change: MinRole in the route table is presentation and gates nothing.",
+			len(consoleEventKinds), consoleEventKinds)
+	}
+	if consoleEventKinds["enrollment"].Kind != events.KindEnrollment {
+		t.Errorf("the enrollment entry maps to %v", consoleEventKinds["enrollment"].Kind)
+	}
+	if consoleEventKinds["job"].Kind != events.KindJob {
+		t.Errorf("the job entry maps to %v", consoleEventKinds["job"].Kind)
+	}
+	for name, entry := range consoleEventKinds {
+		if !entry.MinRole.Valid() {
+			t.Errorf("kind %q names the role %q, which is not a role — Role.AtLeast refuses an "+
+				"invalid want, so this kind would be unreachable rather than open, but the entry "+
+				"is still a mistake", name, entry.MinRole)
+		}
+	}
+	// Named explicitly, because these two are the ones whose admission would
+	// be a disclosure decision rather than a widening: tool_call carries
+	// raw_exec's full argv, and registry carries no attribution at all.
+	for _, absent := range []string{"tool_call", "registry"} {
+		if _, present := consoleEventKinds[absent]; present {
+			t.Errorf("%q is admitted to the Console event stream — see events.go's disclosure table", absent)
+		}
 	}
 
-	// A viewer reaches the enrollment stream today, deliberately.
+	// A viewer reaches both streams today, deliberately.
 	d := dayOneDeps()
-	s := openStreamAs(t, d, "/console/events?kinds=enrollment", accounts.RoleViewer)
+	s := openStreamAs(t, d, "/console/events?kinds=enrollment,job", accounts.RoleViewer)
 	d.Events.(*fakeEvents).publish(events.EnrollmentEvent{
 		Outcome: events.EnrollmentRejected, Reason: events.ReasonUnknown, Source: "203.0.113.1",
 	})
 	if got := decodeFrame(t, s.frame(t)); got.Outcome != "rejected" {
 		t.Errorf("a viewer did not receive the enrollment stream: %+v", got)
+	}
+}
+
+// TestConsoleEvents_UnknownRoleIsRefused is the mutation-sensitive half of the
+// gate. principalFromAccount copies an Account's role string into the
+// Principal VERBATIM and validates nothing, so a role this Relay does not
+// recognise — a corrupted store row, a role from a future version, an empty
+// string — reaches the handler intact. accounts.Role.AtLeast ranks it at zero
+// and refuses, which is why AtLeast is used here rather than a switch.
+func TestConsoleEvents_UnknownRoleIsRefused(t *testing.T) {
+	d := dayOneDeps()
+	bus := d.Events.(*fakeEvents)
+
+	for _, role := range []accounts.Role{"auditor", ""} {
+		// getBounded, not openStreamAs: openStreamAs t.Fatalf's on any
+		// non-200, so a test written through it would fail even when the gate
+		// works.
+		h := newTestHandler(d, role)
+		rec := getBounded(t, h, "/console/events?kinds=job")
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("GET /console/events?kinds=job as role %q = %d, want 403", role, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "job") {
+			t.Errorf("the refusal for role %q does not name the kind: %q", role, rec.Body.String())
+		}
+	}
+
+	// And no stream was opened for any of them: the gate sits before
+	// Subscribe, so an unrecognised role never reaches the bus.
+	if got := bus.subscriptions(); got != 0 {
+		t.Errorf("%d Subscriptions were handed out to refused requests, want 0", got)
+	}
+}
+
+// TestConsoleEvents_JobFrameCarriesOnlyIDTransitionAndTime is the single most
+// valuable test on this route. events.JobEvent carries the Selector, the
+// Operation, the Account and eight outcome counts; the projection carries
+// three strings, and the route's disclosure is bounded by that STRUCT rather
+// than by the role gate.
+func TestConsoleEvents_JobFrameCarriesOnlyIDTransitionAndTime(t *testing.T) {
+	d := dayOneDeps()
+	s := openStream(t, d, "/console/events?kinds=job")
+
+	d.Events.(*fakeEvents).publishJob(events.JobEvent{
+		Transition: events.JobCompleted,
+		JobID:      "job-1",
+		Account:    "gleipnir",
+		AccountID:  "acct-secret",
+		Selector:   "role=web,env=prod",
+		Operation:  "service.restart",
+		RiskClass:  "mutate",
+		Nodes:      4000,
+		Succeeded:  3986,
+		Denied:     14,
+	})
+
+	frame := s.frame(t)
+	data := frame[strings.Index(frame, "data: ")+len("data: "):]
+	data = strings.TrimSpace(data)
+
+	var got map[string]any
+	if err := json.Unmarshal([]byte(data), &got); err != nil {
+		t.Fatalf("decode job frame %q: %v", data, err)
+	}
+	if len(got) != 3 {
+		t.Errorf("the job frame carries %d keys (%v), want exactly job_id, transition and at", len(got), got)
+	}
+	for _, key := range []string{"job_id", "transition", "at"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("the job frame is missing %q: %v", key, got)
+		}
+	}
+	if got["job_id"] != "job-1" || got["transition"] != "completed" {
+		t.Errorf("job frame = %v, want job-1/completed", got)
+	}
+	// Substrings, not keys: a widened projection that renamed a field would
+	// still leak the value.
+	for _, forbidden := range []string{"gleipnir", "acct-secret", "role=web", "service.restart", "mutate", "3986", "4000"} {
+		if strings.Contains(data, forbidden) {
+			t.Errorf("the job frame contains %q — events.JobEvent carries it and sseJob must not: %s",
+				forbidden, data)
+		}
+	}
+	if !strings.HasPrefix(frame, "id: ") {
+		t.Errorf("the job frame carries no id: line, so a reconnect cannot resume from it: %q", frame)
 	}
 }
 
@@ -1165,4 +1297,86 @@ func readAsset(t *testing.T, name string) string {
 		t.Fatalf("read embedded asset %s: %v", name, err)
 	}
 	return string(b)
+}
+
+// TestConsoleEvents_RequiredRoleIsTheMaximumRegardlessOfOrder.
+//
+// `needed` starts as the empty role, and Role.AtLeast is false whenever EITHER
+// side is invalid — so an unconditional "raise on !AtLeast" OVERWRITES an
+// invalid requirement with the next valid one, and the answer depends on the
+// order the caller listed the kinds in. The table this package ships has two
+// valid entries, so this is only reachable through an allowlist a test
+// supplies: which is the point, because this gate's whole argument is that it
+// makes the NEXT widening safe.
+func TestConsoleEvents_RequiredRoleIsTheMaximumRegardlessOfOrder(t *testing.T) {
+	table := map[string]consoleEventKind{
+		"low":  {events.KindEnrollment, accounts.RoleViewer},
+		"high": {events.KindJob, accounts.RoleAdmin},
+	}
+	for _, param := range []string{"low,high", "high,low"} {
+		_, needed, _, ok := resolveEventKinds(param, table)
+		if !ok {
+			t.Fatalf("resolveEventKinds(%q) refused a valid table", param)
+		}
+		if needed != accounts.RoleAdmin {
+			t.Errorf("resolveEventKinds(%q) requires %q, want admin — the requirement must be the "+
+				"MAXIMUM over the requested kinds, not whichever entry was listed last", param, needed)
+		}
+	}
+
+	// An entry whose MinRole is not a role at all is a bug in the table, and
+	// the safe reading of a bug in an authz table is REFUSE — in either order,
+	// and never "whatever the next entry happened to say".
+	broken := map[string]consoleEventKind{
+		"job":        {events.KindJob, accounts.RoleViewer},
+		"superadmin": {events.KindToolCall, accounts.Role("superadmin")},
+	}
+	for _, param := range []string{"superadmin", "superadmin,job", "job,superadmin"} {
+		kinds, needed, _, ok := resolveEventKinds(param, broken)
+		if ok {
+			t.Errorf("resolveEventKinds(%q) admitted a kind whose MinRole is not a role, requiring "+
+				"%q — an unrecognised requirement must refuse, not resolve to the entry beside it",
+				param, needed)
+		}
+		if kinds != nil {
+			t.Errorf("resolveEventKinds(%q) returned kinds alongside its refusal: %v", param, kinds)
+		}
+	}
+}
+
+// TestConsoleEvents_FrameIDsCannotBreakFrameStructure pins the invariant
+// frame() relies on WHERE it is relied on.
+//
+// json.Marshal escapes newlines inside the payload, so no rendered value can
+// split a frame — but the `id:` line is raw concatenation of the event's ID. A
+// newline there would end the frame early and let the remainder be read as a
+// second, forged event. The bus mints IDs as hex plus a sequence number, so no
+// such ID exists; this fails if that ever stops being true.
+func TestConsoleEvents_FrameIDsCannotBreakFrameStructure(t *testing.T) {
+	bus := newFakeEvents()
+	bus.publishJob(events.JobEvent{Transition: events.JobCreated, JobID: "job-1"})
+	bus.publish(events.EnrollmentEvent{Outcome: events.EnrollmentRejected, Reason: events.ReasonUnknown})
+
+	recent := bus.Recent([]events.Kind{events.KindJob, events.KindEnrollment}, 10)
+	if len(recent) != 2 {
+		t.Fatalf("the bus retained %d events, want 2", len(recent))
+	}
+	for _, ev := range recent {
+		if ev.ID == "" {
+			t.Error("an event carries no ID, so a reconnect cannot resume from it")
+		}
+		if strings.ContainsAny(ev.ID, "\r\n") {
+			t.Errorf("the event ID %q contains a line break — frameEvent concatenates it into the "+
+				"`id:` line unescaped, so this would split one frame into two", ev.ID)
+		}
+		frame, ok := frameEvent(ev)
+		if !ok {
+			t.Fatalf("frameEvent declined to render %v", ev.Kind)
+		}
+		// Exactly one blank-line terminator, at the very end: the frame is one
+		// frame.
+		if n := strings.Count(frame, "\n\n"); n != 1 || !strings.HasSuffix(frame, "\n\n") {
+			t.Errorf("the frame for %v has %d terminators and does not end in one: %q", ev.Kind, n, frame)
+		}
+	}
 }

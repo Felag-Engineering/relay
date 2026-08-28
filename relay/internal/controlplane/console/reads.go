@@ -704,7 +704,7 @@ func aggregateTargets(rows []capability.AuditRow) []readTarget {
 	nodes := map[string]map[string]bool{}
 	var order []string
 	for _, row := range rows {
-		target := readTargetOfRow(row)
+		target := readTargetOf(factsOfRow(row))
 		t, seen := byTarget[target]
 		if !seen {
 			t = &readTarget{Target: target}
@@ -748,9 +748,9 @@ func refusalRowsOf(rows []capability.AuditRow) []readRefusal {
 	out := make([]readRefusal, 0, len(rows))
 	for _, row := range rows {
 		r := readRefusal{
-			Target:    readTargetOfRow(row),
+			Target:    readTargetOf(factsOfRow(row)),
 			NodeID:    row.NodeID,
-			Principal: rowPrincipalName(row),
+			Principal: principalText(factsOfRow(row)),
 			Verified:  row.Verified.AccountID != "",
 			When:      row.Timestamp,
 		}
@@ -807,7 +807,7 @@ func principalRows(reads, enums []capability.PrincipalBucket, refusals []capabil
 		at(b.AccountID, b.AccountName).Enum += b.Count
 	}
 	for _, row := range refusals {
-		at(row.Verified.AccountID, rowPrincipalName(row)).Refused++
+		at(row.Verified.AccountID, principalText(factsOfRow(row))).Refused++
 	}
 
 	out := make(principalList, 0, len(order))
@@ -927,30 +927,11 @@ func readTargetName(operationName, actionKind string, args map[string]string) st
 	return operationName
 }
 
-// readTargetOf names a trail Record's target. Activity renders the same string
-// for the same record, from this same core — two screens naming one thing two
-// ways is how an operator stops trusting either.
-func readTargetOf(rec audit.Record) string {
-	return readTargetName(rec.OperationName, rec.ActionKind, rec.Args)
-}
-
-// readTargetOfRow names a read-lane Row's target.
-func readTargetOfRow(row capability.AuditRow) string {
-	return readTargetName(row.OperationName, row.ActionKind, row.Args)
-}
-
-// rowPrincipalName prefers the verified Account name, exactly as
-// principalText does for a Record: a name from the verified lane is one the
-// Relay established, and one from anywhere else is not.
-func rowPrincipalName(row capability.AuditRow) string {
-	if n := row.Verified.AccountName; n != "" {
-		return n
-	}
-	if row.Principal != "" {
-		return row.Principal
-	}
-	return "unattributed"
-}
+// Both families of caller reach this core through vocab.go's trailFacts
+// projection — readTargetOf(factsOfRecord(rec)) for a whole-trail Record and
+// readTargetOf(factsOfRow(row)) for a read-lane Row — so the "one core" this
+// comment promises is one function reached one way, not two wrappers that
+// could drift apart.
 
 var readsTmpl = newScreen("reads", `
 <p class="lede">Reading is exfiltration by construction: a read result flows to whoever asked, and

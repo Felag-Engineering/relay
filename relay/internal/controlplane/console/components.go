@@ -502,6 +502,55 @@ type StepUp struct {
 
 // --- Rendering --------------------------------------------------------------
 
+// --- The live region --------------------------------------------------------
+
+// Live is the shell's live-region component (spec 11 line 113 — "incoming
+// events for a region a user is reading queue behind an explicit control.
+// Build it once").
+//
+// It is built once because day one built the transport half in its own script
+// file and #422 was going to inherit whatever shape that took. Two copies of a
+// reconnect loop is two backoff policies, and the second one is the one nobody
+// looks at again.
+//
+// What the client is allowed to do to this region is exactly three things:
+// set data-live, set data-queued, and write a number into the queue counter's
+// textContent. EVERY WORD HERE IS SERVER-RENDERED — the states are sibling
+// elements selected by data-live in CSS, so the script file carries behaviour
+// and no product language at all (dayone.js's rule 2).
+type Live struct {
+	// Wired is whether the event seam exists AND this view has something live
+	// to show. The component renders NOTHING when it is false, deliberately:
+	// day one's off-state sentence ("Live updates are not available on this
+	// Relay") is day one's, and it would be FALSE on a screen whose live lane
+	// is off merely because the current filter has no live kind in it. A
+	// region that explains itself wrongly is worse than an absent one.
+	Wired bool
+
+	// Endpoint is the SSE URL, including its ?kinds=. Read by the client from
+	// a data attribute, because no inline script means no server-injected
+	// variables (dayone.js's rule 3).
+	Endpoint string
+
+	// LastEventID is the resume point: the newest retained event the server
+	// already accounted for, so the stream picks up exactly where the render
+	// stopped.
+	LastEventID string
+
+	// ShowHref is where the explicit queue control leads — the current view,
+	// re-fetched. Reloading the region rather than splicing is what makes
+	// "one renderer" structural: the client cannot build a row, because
+	// building one is not something this component lets it do.
+	ShowHref string
+
+	// CountNote says what the counter actually counts. It is a parameter and
+	// not fixed copy because the honest sentence is screen-specific, and the
+	// honest sentence matters: the live lane is NOT filtered by the view's
+	// filter and one Job announces itself more than once, so a counter
+	// presented as "rows that will appear" would be wrong twice over.
+	CountNote string
+}
+
 // componentsTmpl holds every shared component as a named template. Screens
 // invoke them with {{template "..." .}} rather than reimplementing any of them.
 var componentsTmpl = template.Must(template.New("components").Funcs(template.FuncMap{
@@ -551,6 +600,21 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   {{if .Verdicts}}<div class="planverdicts"><b>{{.AllowedCount}}</b> would run &middot; <b>{{.DeniedCount}}</b> would be denied</div>{{end}}
   {{range .Verdicts}}{{if .Deny}}{{template "deny-block" .Deny}}{{end}}{{end}}
 </section>{{end}}
+
+{{define "live-region"}}{{if .Wired}}<section class="live" data-live-region data-live="down"
+         data-events="{{.Endpoint}}" data-last-event-id="{{.LastEventID}}">
+  <div class="livehead">
+    <span class="pulse" aria-hidden="true"></span>
+    <span class="wmsg" data-when="on">Live.</span>
+    <span class="wmsg" data-when="down">The live stream is not connected.</span>
+    <span class="wmsg" data-when="gap">The live stream fell behind &mdash; reloading.</span>
+    <span class="wmsg" data-when="ended">The live stream has stopped. Your session may have ended;
+    reload the page to sign in again.</span>
+    <a class="newq" href="{{.ShowHref}}" aria-live="polite">New events on the stream:
+    <b id="live-new-count">0</b> &mdash; reload</a>
+  </div>
+  {{with .CountNote}}<p class="livenote">{{.}}</p>{{end}}
+</section>{{end}}{{end}}
 
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>

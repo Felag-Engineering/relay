@@ -56,6 +56,14 @@ type JobQuery struct {
 	// RiskClass restricts to this RiskClass. nil means either.
 	RiskClass *RiskClass
 
+	// OnBehalfOf restricts to Jobs whose dispatch carried this ASSERTED
+	// on-behalf-of value. Joined from the audit trail exactly as
+	// RequesterAccountID above is, and matched EXACTLY — never a prefix and
+	// never a LIKE, mirroring audit.Query.OnBehalfOf. The asserted lane is
+	// caller-claimed and nothing checked it; a fuzzy match over it would let
+	// one agent's claim answer a question asked about another's.
+	OnBehalfOf string
+
 	// Since and Until bound CreatedAt, half-open [Since, Until). The zero
 	// value on either side is unbounded.
 	Since, Until time.Time
@@ -82,6 +90,28 @@ type JobSummary struct {
 	Selector           string
 	Requester          string
 	RequesterAccountID string
+
+	// OnBehalfOf, ApprovalID, GrantID, Args and RawExecArgv join from the
+	// SAME per-Job audit aggregate Selector and Requester above join from,
+	// and are empty for an in-flight Job for the same LEFT-JOIN reason.
+	//
+	// They are exact, not a sample. Every dispatch record within one Job is
+	// written from ONE base record — the fan-out loop that writes a record
+	// per Node result mutates only the Node, the outcome and the captured
+	// output (internal/auditsink) — so MIN() over the Job's dispatch rows
+	// returns the single value they all carry. That rests on the same
+	// assumption the three fields above already make: one dispatch Record
+	// call per Job ID.
+	//
+	// There is NO Stdout, Stderr or Truncated field here, and there never
+	// will be. A Job list must not become a path to captured output
+	// (ADR-0025); the SELECT behind this struct names no BLOB column, so
+	// there is nothing here to redact.
+	OnBehalfOf  string
+	ApprovalID  string
+	GrantID     string
+	Args        map[string]string
+	RawExecArgv []string
 
 	// Total is the Job's Task count. Counts is a per-Outcome tally over
 	// resolved Tasks (jobs.OutcomeUnspecified excluded — that is "not yet

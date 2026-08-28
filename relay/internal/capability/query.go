@@ -136,7 +136,10 @@ type JobFilter struct {
 	RequesterAccountID string
 	Operation          string
 	RiskClass          *jobs.RiskClass
-	Since, Until       time.Time
+	// OnBehalfOf is the ASSERTED lane's exact match — never a prefix and
+	// never a LIKE, mirroring AuditFilter.OnBehalfOf and jobs.JobQuery's.
+	OnBehalfOf   string
+	Since, Until time.Time
 }
 
 // JobSummary is one row of a Job list — capability's mirror of
@@ -156,6 +159,26 @@ type JobSummary struct {
 	Selector           string
 	Requester          string
 	RequesterAccountID string
+
+	// OnBehalfOf, ApprovalID, GrantID, Args and RawExecArgv join from the
+	// same per-Job dispatch aggregate as the three fields above, and are
+	// empty for the same in-flight reason — see jobs.JobSummary's doc
+	// comment for why MIN over a Job's dispatch rows is exact rather than a
+	// sample. They are here so that "who asked, FOR WHOM, WHO APPROVED, what
+	// happened" is ONE query rather than one query plus a per-row lookup:
+	// every read-lane call appends a record to the append-only trail
+	// (readlane.go), so a 25-row page enriched row by row would append 25
+	// read records to render one screen.
+	//
+	// Nothing added here is output. As with AuditRow above (see its doc
+	// comment), **JobSummary has NO Stdout/Stderr/Truncated field** and must
+	// never grow one: the SELECT behind it names no BLOB column either, so
+	// there is nothing on this seam to redact.
+	OnBehalfOf  string
+	ApprovalID  string
+	GrantID     string
+	Args        map[string]string
+	RawExecArgv []string
 
 	Total      int
 	Counts     map[jobs.Outcome]int
@@ -265,6 +288,12 @@ func (f AuditFilter) validate() error {
 	// job_id COLUMN, not merely in the summary — so bounding two of the three
 	// would leave the bound in place only where it was cheapest to add.
 	if err := validateJobID(f.JobID); err != nil {
+		return err
+	}
+	// The asserted lane is caller-controlled and reaches the store intact —
+	// see validateOnBehalfOf in readlane.go for why the recorded summary's own
+	// truncation is not enough.
+	if err := validateOnBehalfOf(f.OnBehalfOf); err != nil {
 		return err
 	}
 	if len(f.Kinds) > 32 {

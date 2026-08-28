@@ -77,6 +77,20 @@ func jobOutcomeSumColumns() []string {
 // repeatable by anyone holding down refresh. With the predicate pushed down,
 // both become an index SEARCH. TestJobQuery_SingleJobDoesNotScanEveryTask
 // asserts the query plan, because nothing else would notice the regression.
+//
+// # What the audit aggregate projects, and why MIN is exact
+//
+// The `a` derived table adds columns to a subquery that ALREADY EXISTS and
+// already groups by job_id — no new join, no new index, and no change to the
+// plan that test pins. Every dispatch record within one Job is written from
+// one base record (internal/auditsink's fan-out loop mutates only the Node,
+// the outcome and the captured output), so MIN over a Job's dispatch rows
+// returns the single value they all carry rather than an arbitrary sample.
+// See jobs.JobSummary's doc comment for the caller invariant that rests on.
+//
+// It does NOT project stdout, stderr or truncated, ever (ADR-0025): no BLOB
+// column is named here, so paginating a Job list can never become a path to
+// captured output.
 func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
 	taskWhere, auditWhere := "", "\n\tWHERE kind = 'dispatch'"
 	if filter.JobID != "" {
@@ -88,7 +102,8 @@ func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
 	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
-	a.selector, a.account_id, a.account_name
+	a.selector, a.account_id, a.account_name,
+	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
 FROM jobs j
 LEFT JOIN (
 	SELECT job_id,
@@ -102,7 +117,9 @@ LEFT JOIN (
 	GROUP BY job_id
 ) t ON t.job_id = j.job_id
 LEFT JOIN (
-	SELECT job_id, MIN(selector) AS selector, MIN(account_id) AS account_id, MIN(account_name) AS account_name
+	SELECT job_id, MIN(selector) AS selector, MIN(account_id) AS account_id, MIN(account_name) AS account_name,
+		MIN(asserted_on_behalf_of) AS on_behalf_of, MIN(approval_id) AS approval_id, MIN(grant_id) AS grant_id,
+		MIN(args) AS args, MIN(raw_exec_argv) AS raw_exec_argv
 	FROM audit` + auditWhere + `
 	GROUP BY job_id
 ) a ON a.job_id = j.job_id`
@@ -206,6 +223,19 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 		conds = append(conds, `a.account_id = ?`)
 		args = append(args, filter.RequesterAccountID)
 	}
+	if filter.OnBehalfOf != "" {
+		// The derived table's ALIAS, not the raw column: asserted_on_behalf_of
+		// is inside the aggregate, and the outer WHERE can only see what the
+		// aggregate projected.
+		//
+		// Like a.account_id above, this predicate lands in the OUTER WHERE and
+		// SQLite will not push it into the right operand of a LEFT JOIN (see
+		// jobQuerySelect's doc comment), so the aggregate still reads every
+		// dispatch row in the trail. That is the same plan the requester filter
+		// has had since it was written; it is stated here rather than implied.
+		conds = append(conds, `a.on_behalf_of = ?`)
+		args = append(args, filter.OnBehalfOf)
+	}
 	if filter.Operation != "" {
 		conds = append(conds, `t.operation_name = ?`)
 		args = append(args, filter.Operation)
@@ -234,13 +264,16 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		actionKind, operationName, riskClass sql.NullString
 		outcomeCounts                        = make([]int, len(jobOutcomeOrder))
 		selector, accountID, accountName     sql.NullString
+		onBehalfOf, approvalID, grantID      sql.NullString
+		argsJSON, argvJSON                   sql.NullString
 	)
 
 	dest := []any{&jobID, &createdAt, &total, &unresolved, &actionKind, &operationName, &riskClass}
 	for i := range outcomeCounts {
 		dest = append(dest, &outcomeCounts[i])
 	}
-	dest = append(dest, &selector, &accountID, &accountName)
+	dest = append(dest, &selector, &accountID, &accountName,
+		&onBehalfOf, &approvalID, &grantID, &argsJSON, &argvJSON)
 
 	if err := row.Scan(dest...); err != nil {
 		return jobs.JobSummary{}, "", fmt.Errorf("scan job summary row: %w", err)
@@ -263,6 +296,18 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		}
 	}
 
+	// A decode failure FAILS THE SCAN rather than yielding nil. A Job row that
+	// silently drops the argv it was dispatched with is worse than an error:
+	// the row still renders, and it renders as a Raw Exec with no command.
+	dispatchArgs, err := decodeStringMap(argsJSON)
+	if err != nil {
+		return jobs.JobSummary{}, "", fmt.Errorf("job %q: %w", jobID, err)
+	}
+	rawExecArgv, err := decodeStringSlice(argvJSON)
+	if err != nil {
+		return jobs.JobSummary{}, "", fmt.Errorf("job %q: %w", jobID, err)
+	}
+
 	counts := make(map[jobs.Outcome]int, len(jobOutcomeOrder))
 	for i, o := range jobOutcomeOrder {
 		if outcomeCounts[i] > 0 {
@@ -280,6 +325,11 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		Selector:           selector.String,
 		Requester:          accountName.String,
 		RequesterAccountID: accountID.String,
+		OnBehalfOf:         onBehalfOf.String,
+		ApprovalID:         approvalID.String,
+		GrantID:            grantID.String,
+		Args:               dispatchArgs,
+		RawExecArgv:        rawExecArgv,
 		Total:              total,
 		Counts:             counts,
 		Unresolved:         unresolved,

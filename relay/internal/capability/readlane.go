@@ -193,7 +193,7 @@ func (f JobFilter) validate() error {
 	if err := validateJobID(f.JobID); err != nil {
 		return err
 	}
-	return nil
+	return validateOnBehalfOf(f.OnBehalfOf)
 }
 
 // maxJobIDBytes bounds a caller-supplied Job ID on the read lane. A Job ID
@@ -211,6 +211,26 @@ func validateJobID(id string) error {
 	return nil
 }
 
+// maxOnBehalfOfBytes bounds a caller-supplied asserted on-behalf-of on the
+// read lane, mirroring maxJobIDBytes above and audit's own
+// MaxAssertedFieldBytes (256) — a value that could never have been RECORDED
+// longer than that is not one worth accepting as a filter for.
+//
+// The recorded read record is already safe without this: filterSummary.String
+// control-strips and truncates to maxFilterSummaryBytes. The bound is here
+// because the value crosses the capability boundary INTACT on its way to the
+// store, and net/http's roughly 1 MB header limit is not a bound this layer
+// should be relying on. Bounded here means bounded for every surface, not
+// only for the one whose transport happens to bound it.
+const maxOnBehalfOfBytes = 256
+
+func validateOnBehalfOf(v string) error {
+	if len(v) > maxOnBehalfOfBytes {
+		return fmt.Errorf("%w: on_behalf_of exceeds %d bytes", ErrInvalidFilter, maxOnBehalfOfBytes)
+	}
+	return nil
+}
+
 // summary renders f as a compact, control-character-stripped string,
 // recorded as the read record's selector — the Job-list analogue of
 // AuditFilter.summary.
@@ -222,6 +242,12 @@ func (f JobFilter) summary() string {
 		field("state", jobStateLabel(*f.State))
 	}
 	field("requester", f.RequesterAccountID)
+	// The asserted lane is recorded too, so the trail can answer "who searched
+	// for whose work". No extra validation is needed for it: the value lands
+	// only in the read record's selector, and filterSummary.String already
+	// strips control characters and truncates to maxFilterSummaryBytes, which
+	// is the whole bound this field needs.
+	field("on_behalf_of", f.OnBehalfOf)
 	field("op", f.Operation)
 	if f.RiskClass != nil {
 		field("risk_class", riskClassLabel(*f.RiskClass))

@@ -38,10 +38,12 @@ package console
 // are one aggregate row and its Task rows are small per-outcome pages, so
 // the screen is bounded by construction at 10,000 Nodes rather than capped
 // after the fact. Read egress (#425) migrated next and reads nothing else
-// either. AuditReader still offers whole-trail and by-Node reads for the
-// screens that have not migrated yet (Activity, agent history — #422/#424);
-// until each does, it keeps capping what it renders and SAYING it capped
-// it — see auditWindow.
+// either. Activity (#422) followed, reading BOTH halves of the lane: its
+// dispatch rows come from QueryJobs one row per Job at any fan-out, and
+// everything else from QueryAudit. AuditReader still offers whole-trail and
+// by-Node reads for the screens that have not migrated yet (agent history,
+// node detail — #424); until each does, it keeps capping what it renders
+// and SAYING it capped it — see auditWindow.
 
 import (
 	"context"
@@ -128,10 +130,10 @@ type ApprovalReader interface {
 // above — nothing here dispatches or decides, and the narrowed method set is
 // what keeps this package's grip on the capability layer to reads only.
 //
-// Job detail (#423) was its first consumer and read egress (#425) its
-// second; Activity (#422) and agent history (#424) follow. Landing the seam
-// ahead of any screen using it is what let all four be built against one
-// settled contract instead of four independently-guessed ones.
+// Job detail (#423) was its first consumer, read egress (#425) its second
+// and Activity (#422) its third; agent history (#424) follows. Landing the
+// seam ahead of any screen using it is what let all four be built against
+// one settled contract instead of four independently-guessed ones.
 type QueryReader interface {
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
 	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)
