@@ -154,22 +154,14 @@ func principalText(f trailFacts) string {
 }
 
 // readTargetOf names WHAT was read, in the terms an operator would search for.
+//
+// The naming itself lives in reads.go's readTargetName, which iterates
+// audit.TargetArgKeys so that this package and the store's reach aggregate
+// agree on what counts as one target — see that function for the precedence
+// order and the one residual divergence. This wrapper exists so that both
+// families of record reach that core through the same projection.
 func readTargetOf(f trailFacts) string {
-	if f.OperationName == "" {
-		if f.ActionKind != "" {
-			return f.ActionKind
-		}
-		return "registry read"
-	}
-	// The path argument is the interesting half of a file read. Where an
-	// Operation has one, the target is "operation path" so that two reads of
-	// different files do not collapse into one row.
-	for _, key := range []string{"path", "file", "unit", "service"} {
-		if v, ok := f.Args[key]; ok && v != "" {
-			return f.OperationName + " " + v
-		}
-	}
-	return f.OperationName
+	return readTargetName(f.OperationName, f.ActionKind, f.Args)
 }
 
 // readOperations is the read-class half of the shipped catalog (ADR-0021's

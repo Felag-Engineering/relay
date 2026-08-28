@@ -9,6 +9,8 @@ package console
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -111,16 +113,28 @@ func (e constErr) Error() string { return string(e) }
 
 const errNotFound = constErr("not found")
 
+// errQueryFailed is what a per-filter failure hook returns: a store that is
+// wired and running and failed this one query, which is a different page from
+// a seam that was never wired.
+const errQueryFailed = constErr("the query lane failed")
+
 // fakeQueries is the capability layer's read lane (#441) over in-memory
 // slices.
 //
-// Limit and Outcome are HONOURED, and the per-method call counts are kept: a
-// fake that ignored the page size would let a "renders no list at 10,000"
-// test pass while the real screen fetched ten thousand rows, which is the one
-// property this seam exists to make provable. Nothing here strips output
-// either — the real QueryTasks does, and a test that wants to prove the
-// Console gates on the declared risk class needs a seam that hands the bytes
-// over anyway.
+// Filters, limits and cursors are HONOURED, and every filter and page limit
+// is recorded: a fake that ignored the page size would let a "renders no list
+// at 10,000" test pass while the real screen fetched ten thousand rows, and a
+// fake that ignored Operations would let read egress's join guard rot
+// silently. Nothing here strips output either — the real QueryTasks does, and
+// a test that wants to prove the Console gates on the declared risk class
+// needs a seam that hands the bytes over anyway.
+//
+// AuditReach's DistinctTargets is computed with THE SAME key function the
+// screen uses, which makes the headline and the table agree BY CONSTRUCTION.
+// That is convenient and it is also exactly what hides the one divergence
+// worth knowing about: the store's COALESCE stops at the first target key
+// PRESENT and readTargetName stops at the first one NON-EMPTY. Only a
+// store-level test can see that; nothing here can.
 type fakeQueries struct {
 	jobs  []capability.JobSummary
 	tasks []capability.TaskRow
@@ -130,89 +144,227 @@ type fakeQueries struct {
 	// fixtures that do not care.
 	taskJobID string
 
-	jobsErr  error
-	tasksErr error
-	auditErr error
+	jobsErr   error
+	tasksErr  error
+	auditErr  error
+	reachErr  error
+	countsErr error
+
+	// reachStub and countsStub answer the two AGGREGATE methods with canned
+	// values, per filter. The aggregates are the page's exact figures and the
+	// pages below them are deliberately short, so a test that needs "the
+	// headline says 3 and the sample holds 1" cannot express itself through
+	// rows alone — the in-memory computation would make the two agree.
+	reachStub  func(capability.AuditFilter) capability.Reach
+	countsStub func(capability.AuditFilter) []capability.PrincipalBucket
+
+	// The PER-FILTER failure hooks. reachErr/auditErr/countsErr above are
+	// all-or-nothing, which cannot express the case that matters: ONE query
+	// of nine failing while the rest succeed. A screen's graceful-degradation
+	// branches are only reachable — and only assertable — through these.
+	reachErrOn  func(capability.AuditFilter) bool
+	auditErrOn  func(capability.AuditFilter) bool
+	countsErrOn func(capability.AuditFilter) bool
 
 	jobCalls   int
 	auditCalls int
 
-	// auditFilters and jobFilters record every filter the screens passed, in
-	// order. They are what makes "the filter reached the SEAM" assertable:
-	// a screen that applied a filter in Go after fetching an unfiltered page
-	// renders identically and paginates wrongly, and nothing but this would
-	// notice.
+	// The recorded filters. Read egress asserts on these: that no
+	// dispatch-kind filter ever carries an empty Operations list, that a
+	// scoped page scopes EVERY filter, and that an over-long caller value
+	// never reaches the lane at all. Activity asserts on them too: a screen
+	// that applied a filter in Go after fetching an unfiltered page renders
+	// identically and paginates wrongly, and nothing but this would notice.
 	auditFilters []capability.AuditFilter
 	jobFilters   []capability.JobFilter
+	reachFilters []capability.AuditFilter
+	countFilters []capability.AuditFilter
+	buckets      []time.Duration
 
-	// auditPages and jobPages record every PageRequest, so a test can assert
-	// that "older" carried BOTH lanes' cursors.
+	// auditPages and jobPages record every PageRequest in full, so a test can
+	// assert that "older" carried BOTH lanes' cursors. auditLimits and
+	// jobLimits keep just the Limit, which is what the "none of them was
+	// unbounded" assertions read.
 	auditPages []capability.PageRequest
 	jobPages   []capability.PageRequest
 
+	auditLimits []int
+	jobLimits   []int
+	taskLimits  []int
+
 	// auditNext and jobNext are the cursors the fake reports as "there is
-	// more". A page whose Cursor is already set returns no further one, so a
-	// test can follow "older" exactly once without looping.
+	// more", overriding the truncation rule below. A page whose Cursor is
+	// already set returns no further one, so a test can follow "older"
+	// exactly once without looping.
 	auditNext string
 	jobNext   string
+}
 
-	// taskLimits records the Limit of every QueryTasks call, in order, so a
-	// test can assert both how many Task queries one render costs and that
-	// none of them was unbounded.
-	taskLimits []int
+// nextCursor is the fake's "there is more" rule, shared by both lanes.
+//
+// By default it mirrors the real lane: a page that truncated reports a
+// cursor, which is what makes "this table is a sample" assertable. An
+// explicitly-set stub cursor overrides that and is one-shot — a request that
+// already carried a cursor gets no further one — so a test can follow
+// "older" exactly once instead of looping forever, which is the paging bug
+// this branch exists to fix.
+func nextCursor(stub, requested string, truncated bool) string {
+	if stub != "" {
+		if requested != "" {
+			return ""
+		}
+		return stub
+	}
+	if truncated {
+		return "cursor"
+	}
+	return ""
+}
+
+// matchRow applies the filter fields the screens actually use.
+func matchRow(f capability.AuditFilter, row capability.AuditRow) bool {
+	switch {
+	case f.JobID != "" && row.JobID != f.JobID:
+		return false
+	case len(f.Kinds) > 0 && !containsString(f.Kinds, row.Kind):
+		return false
+	case len(f.Operations) > 0 && !containsString(f.Operations, row.OperationName):
+		return false
+	case f.AccountID != "" && row.Verified.AccountID != f.AccountID:
+		return false
+	case f.NodeID != "" && row.NodeID != f.NodeID:
+		return false
+	case f.Outcome != nil && row.Outcome != *f.Outcome:
+		return false
+	case !f.Since.IsZero() && row.Timestamp.Before(f.Since):
+		return false
+	case !f.Until.IsZero() && row.Timestamp.After(f.Until):
+		return false
+	case f.ArgValuePrefix != "" && !strings.HasPrefix(row.Args[f.ArgKey], f.ArgValuePrefix):
+		return false
+	}
+	return true
+}
+
+func (f *fakeQueries) matching(filter capability.AuditFilter) []capability.AuditRow {
+	var out []capability.AuditRow
+	for _, row := range f.rows {
+		if matchRow(filter, row) {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 func (f *fakeQueries) QueryAudit(_ context.Context, _ capability.Principal, filter capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	f.auditCalls++
 	f.auditFilters = append(f.auditFilters, filter)
 	f.auditPages = append(f.auditPages, page)
+	f.auditLimits = append(f.auditLimits, page.Limit)
 	if f.auditErr != nil {
 		return capability.AuditPage{}, f.auditErr
 	}
-	var out []capability.AuditRow
-	for _, row := range f.rows {
-		if filter.JobID != "" && row.JobID != filter.JobID {
-			continue
-		}
-		if len(filter.Kinds) > 0 && !containsString(filter.Kinds, row.Kind) {
-			continue
-		}
-		out = append(out, row)
+	if f.auditErrOn != nil && f.auditErrOn(filter) {
+		return capability.AuditPage{}, errQueryFailed
 	}
-	next := f.auditNext
-	if page.Cursor != "" {
-		next = ""
-	}
-	return capability.AuditPage{Rows: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
+	out := f.matching(filter)
+	kept := limitRows(out, page.Limit)
+	next := nextCursor(f.auditNext, page.Cursor, len(kept) < len(out))
+	return capability.AuditPage{Rows: kept, Next: next, Limit: page.Limit}, nil
 }
 
-func (f *fakeQueries) AuditCounts(context.Context, capability.Principal, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
-	return nil, nil
+func (f *fakeQueries) AuditCounts(_ context.Context, _ capability.Principal, filter capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error) {
+	f.countFilters = append(f.countFilters, filter)
+	f.buckets = append(f.buckets, bucket)
+	if f.countsErr != nil {
+		return nil, f.countsErr
+	}
+	if f.countsErrOn != nil && f.countsErrOn(filter) {
+		return nil, errQueryFailed
+	}
+	if f.countsStub != nil {
+		return f.countsStub(filter), nil
+	}
+	type key struct {
+		accountID string
+		start     time.Time
+	}
+	counts := map[key]*capability.PrincipalBucket{}
+	var order []key
+	for _, row := range f.matching(filter) {
+		k := key{accountID: row.Verified.AccountID, start: row.Timestamp.Truncate(bucket)}
+		b, seen := counts[k]
+		if !seen {
+			b = &capability.PrincipalBucket{
+				AccountID: k.accountID, AccountName: row.Verified.AccountName, Start: k.start,
+			}
+			counts[k] = b
+			order = append(order, k)
+		}
+		b.Count++
+	}
+	out := make([]capability.PrincipalBucket, 0, len(order))
+	for _, k := range order {
+		out = append(out, *counts[k])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].AccountID != out[j].AccountID {
+			return out[i].AccountID < out[j].AccountID
+		}
+		return out[i].Start.Before(out[j].Start)
+	})
+	return out, nil
 }
 
-func (f *fakeQueries) AuditReach(context.Context, capability.Principal, capability.AuditFilter) (capability.Reach, error) {
-	return capability.Reach{}, nil
+func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filter capability.AuditFilter) (capability.Reach, error) {
+	f.reachFilters = append(f.reachFilters, filter)
+	if f.reachErr != nil {
+		return capability.Reach{}, f.reachErr
+	}
+	if f.reachErrOn != nil && f.reachErrOn(filter) {
+		return capability.Reach{}, errQueryFailed
+	}
+	if f.reachStub != nil {
+		return f.reachStub(filter), nil
+	}
+	targets, nodes := map[string]bool{}, map[string]bool{}
+	reach := capability.Reach{}
+	for _, row := range f.matching(filter) {
+		reach.Calls++
+		targets[readTargetOf(factsOfRow(row))] = true
+		if row.NodeID != "" {
+			nodes[row.NodeID] = true
+		}
+	}
+	reach.DistinctTargets = len(targets)
+	reach.DistinctNodes = len(nodes)
+	return reach, nil
 }
 
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
 	f.jobCalls++
 	f.jobFilters = append(f.jobFilters, filter)
 	f.jobPages = append(f.jobPages, page)
+	f.jobLimits = append(f.jobLimits, page.Limit)
 	if f.jobsErr != nil {
 		return capability.JobPage{}, f.jobsErr
 	}
 	var out []capability.JobSummary
 	for _, j := range f.jobs {
-		if filter.JobID != "" && j.JobID != filter.JobID {
-			continue
+		switch {
+		case filter.JobID != "" && j.JobID != filter.JobID:
+		case filter.RiskClass != nil && j.RiskClass != *filter.RiskClass:
+		case filter.RequesterAccountID != "" && j.RequesterAccountID != filter.RequesterAccountID:
+		case filter.Operation != "" && j.OperationName != filter.Operation:
+		case !filter.Since.IsZero() && j.CreatedAt.Before(filter.Since):
+		case !filter.Until.IsZero() && j.CreatedAt.After(filter.Until):
+		default:
+			out = append(out, j)
 		}
-		out = append(out, j)
 	}
-	next := f.jobNext
-	if page.Cursor != "" {
-		next = ""
-	}
-	return capability.JobPage{Jobs: limitRows(out, page.Limit), Next: next, Limit: page.Limit}, nil
+	kept := limitRows(out, page.Limit)
+	next := nextCursor(f.jobNext, page.Cursor, len(kept) < len(out))
+	return capability.JobPage{Jobs: kept, Next: next, Limit: page.Limit}, nil
 }
 
 func (f *fakeQueries) QueryTasks(_ context.Context, _ capability.Principal, filter capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error) {
@@ -353,9 +505,11 @@ func renderableDeps() Deps {
 	return Deps{
 		Fleet: fakeFleet{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
 		Audit: fakeAudit{},
-		// Activity reads the capability layer's query lane exclusively
-		// (#422), and refuses rather than rendering an empty feed when it is
-		// not wired — so every sweep that renders every screen needs one.
+		// Every screen that reads through the capability layer's read lane
+		// needs one wired, or its route answers 500 — a fixture route that
+		// 500s is not a fixture. Activity (#422) reads that lane exclusively
+		// and refuses rather than rendering an empty feed when it is missing,
+		// so every sweep that renders every screen needs one.
 		Queries: &fakeQueries{},
 		Now:     func() time.Time { return testNow },
 	}

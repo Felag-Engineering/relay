@@ -1,0 +1,75 @@
+# Routines
+
+How this repo is driven by scheduled Claude Code cloud routines while nobody is at a keyboard.
+
+## What a routine runs
+
+```
+/dev-loop-queue
+```
+
+One tick takes one `loop:ready` issue, runs the full `/dev-loop` pipeline on it unattended, and
+opens a PR. It never merges and never waits for one, which is what makes it safe to fire on a
+schedule for weeks. The wave-based `/dev-loop-drive` is **not** in this repo on purpose: it gates
+each wave on human merges and stalls when nobody is there. Keep it local, for interactive use.
+
+## Environment
+
+Cloud sessions run Ubuntu 24.04 on 4 vCPU / 16 GB RAM / 30 GB disk, with a fresh clone per run.
+**Go, Rust (rustc + cargo), Docker, and `gh` are pre-installed**; `gh` picks up `GH_TOKEN`
+automatically and its traffic bypasses the network allowlist.
+
+One thing is missing, and it matters here:
+
+```bash
+# Setup script — configured in the environment dialog at claude.ai/code
+make proto-tools
+```
+
+`buf` is not pre-installed. Without it, `verify-proto` **skips** the proto-drift and
+proto-breaking gates with a notice — so a routine touching `/proto` would report a green
+`make verify` that never checked the contract. Setup scripts run once and the filesystem is
+snapshotted, so this costs nothing per run.
+
+Network access: **Trusted** is sufficient. It covers crates.io, the Go module proxy, and GitHub.
+
+## The kill switch
+
+Label any open issue **`loop:halt`**. Every tick checks this first and stops before doing
+anything else.
+
+It is deliberately a label rather than a file: it takes five seconds from a phone, needs no
+commit, no PR, and no laptop. Removing it is a human act — the routine will never clear it.
+
+To stop permanently rather than temporarily, disable the routine at claude.ai/code.
+
+## Caps, and why
+
+- **8 open loop PRs** (`--max-open-prs`). Every branch is cut from a `main` that contains none
+  of the others, so unmerged PRs compound into conflicts. Past a point, more PRs means less
+  delivered work and a review queue nobody can face. Hitting the cap is the correct outcome.
+- **One issue per tick.** Capacity control depends on it.
+- **Plan limits.** Routines are capped per day by subscription tier and the minimum schedule
+  interval is one hour. A daily or twice-daily cadence is usually right; hourly mostly buys
+  "at capacity" messages.
+
+## Before a long absence
+
+1. **Merge the workflow to `main`.** Cloud sessions see only what is committed. A skill sitting
+   on a branch does not exist.
+2. **Run `/triage`** over the untriaged backlog. `loop:ready` is the entire queue; three issues
+   is one day, not three weeks.
+3. **Prefer independent issues** when triaging. Work that depends on an unmerged PR cannot be
+   done by a loop that never merges.
+4. **Check the environment's setup script** actually installs `buf`.
+5. **Confirm `loop:halt` is clear.**
+
+## What you come back to
+
+A stack of open PRs, each with a `make verify` result and an explicit statement of any skipped
+gate. Some will conflict — they were all cut from the same `main`. `resolving-merge-conflicts`
+is vendored for exactly that.
+
+Issues labelled `loop:needs-human` are where the pipeline stopped rather than guessed:
+underspecified work, or a change that would have touched an architecture invariant. Those are
+the interesting ones. Read them first.

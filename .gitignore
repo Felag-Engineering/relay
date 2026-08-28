@@ -50,10 +50,18 @@
 # cert and two LIVE control-plane credentials. Never commit.
 /.dev-fleet/
 
-# Claude Code's local workspace: agent worktrees (each an embedded git repo),
-# session scratch, and per-project settings. Local tooling state, never product.
+# Claude Code's local workspace. Ignore everything by default, then re-include the
+# three directories that ARE product: the agent workflow this repo is developed with.
+# Cloud routines get a fresh clone and only see what is committed, so the pipeline
+# has to live in the tree (see "Routines & merge authority" in CLAUDE.md).
 #
-# Listed because `git add -A` otherwise stages the worktrees as embedded
-# repositories — which git accepts with only a warning, producing a commit whose
-# clones silently lack the contents. It nearly landed in a PR twice.
-/.claude/
+# `/.claude/*` rather than `/.claude/` because git cannot re-include a path whose
+# parent directory is excluded.
+#
+# worktrees/ stays ignored and must: `git add -A` otherwise stages each one as an
+# embedded repository — which git accepts with only a warning, producing a commit
+# whose clones silently lack the contents. It nearly landed in a PR twice.
+/.claude/*
+!/.claude/README.md
+!/.claude/commands/
+!/.claude/agents/

@@ -676,8 +676,8 @@ func TestJob_ExpandedGroupIsBoundedToo(t *testing.T) {
 // nobody wired a seam.
 func TestJob_UnwiredQueryLaneRefusesRatherThanRenderingEmpty(t *testing.T) {
 	d := renderableDeps()
-	// Explicitly unwired: renderableDeps carries a query lane now, because
-	// Activity refuses without one and every screen sweep renders it.
+	// Explicitly unwired: renderableDeps wires the read lane, because every
+	// screen that migrated onto it 500s without one.
 	d.Queries = nil
 	rec := get(t, newTestHandler(d, accounts.RoleAdmin), jobPath(""))
 	if rec.Code != http.StatusInternalServerError {
