@@ -1485,6 +1485,24 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 			t.Errorf("unloadable count = %d, want 1: %v", got["unloadable"], got)
 		}
 	}
+
+	// The fixture assertions above only show that TODAY's prefixes ("v:" vs
+	// "s:") keep "none installed" out of the sentinel bucket. If someone later
+	// collapsed templateValuePrefix and sentinelPrefix to the same string —
+	// exactly the edit the key-space comment on the consts warns against —
+	// those assertions would still pass, because the fixture value has a space
+	// ("none installed") and the sentinel has a hyphen ("none-installed"), so
+	// the strings would still differ even with identical prefixes. Pin the
+	// structural property directly rather than relying on that coincidence.
+	if strings.HasPrefix(templateSentinelUnloadable, templateValuePrefix) {
+		t.Errorf("templateSentinelUnloadable %q carries the value prefix %q", templateSentinelUnloadable, templateValuePrefix)
+	}
+	if strings.HasPrefix(templateSentinelNoneInstalled, templateValuePrefix) {
+		t.Errorf("templateSentinelNoneInstalled %q carries the value prefix %q", templateSentinelNoneInstalled, templateValuePrefix)
+	}
+	if got := templateValueKey("none installed"); !strings.HasPrefix(got, templateValuePrefix) {
+		t.Errorf("templateValueKey(%q) = %q, want it to carry the value prefix %q", "none installed", got, templateValuePrefix)
+	}
 }
 
 // TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints: the daemon-version

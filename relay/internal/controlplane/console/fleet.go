@@ -1159,7 +1159,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	// through. The correct fix is a value gate AT INGRESS — protecting the
 	// registry, Control API and MCP too, not only this renderer — so it is
 	// deliberately out of scope here rather than forked into a second,
-	// Console-local validation path. Tracked separately, unfiled.
+	// Console-local validation path. Tracked separately as issue #504.
 	roles := map[string]int{}
 	for _, n := range nodes {
 		for _, l := range n.Labels {
