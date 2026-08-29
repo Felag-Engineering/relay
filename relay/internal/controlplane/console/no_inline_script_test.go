@@ -184,7 +184,7 @@ func TestConsole_EveryScriptAScreenLoadsIsActuallyServed(t *testing.T) {
 	d.Queries = &fakeQueries{}
 	h := newTestHandler(d, accounts.RoleAdmin)
 
-	paths := walkableScreens(d, fixtureIDs)
+	paths := walkableScreens(Routes(d), fixtureIDs)
 	// Day one renders only on an empty registry, and it is one of the two
 	// screens that loads a script.
 	empty := dayOneDeps()

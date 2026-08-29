@@ -19,6 +19,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -633,5 +634,38 @@ func renderableDeps() Deps {
 // has to repeat every seam.
 func withExecution(d Deps, on bool) Deps {
 	d.Execution = on
+	return d
+}
+
+// sweepFixture is fleetFixture (screens_test.go) wired with the objects the
+// parameterised routes name in fixtureIDs: job-1 and ap-1. Node detail already
+// resolves against fleetFixture's node-web-1.
+//
+// A route-table sweep that asserts "reachable ⇒ non-404" needs every walked
+// object to genuinely exist, or a missing fixture 404s for EVERY role — the
+// same shape as a role-gate refusal — and the sweep cannot tell "this role
+// cannot reach it" apart from "this fixture has no such object". #464's
+// per-role reachability tests use this rather than fleetFixture directly for
+// exactly that reason.
+func sweepFixture() Deps {
+	d := fleetFixture()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{
+		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+	}}
+	d.Audit = fakeAudit{records: []audit.Record{
+		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
+	}}
+	d.Queries = &fakeQueries{
+		jobs: []capability.JobSummary{{
+			JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
+			RiskClass: jobs.RiskClassMutate, Total: 1,
+			Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 1},
+		}},
+		tasks: []capability.TaskRow{{
+			TaskID: "task-1", NodeID: "node-web-1", Outcome: jobs.OutcomeSuccess,
+			RiskClass: jobs.RiskClassMutate, Stdout: []byte("restarted"),
+		}},
+		rows: []capability.AuditRow{{Kind: audit.KindDispatch, JobID: "job-1", OperationName: "service.restart"}},
+	}
 	return d
 }

@@ -205,8 +205,9 @@ var dayOneTmpl = newScreen("dayone", `
 
   <div class="firststep">
     {{if .CanMint}}
-    <a class="primary" href="/console/nodes/add">Add your first Nodes</a>
-    <p class="note">Add Nodes renders an Enrollment Token and the join artifacts together, once.</p>
+    <p><b>Add Nodes</b> is not built yet. Its specification is
+    <code>docs/design/console/09-add-nodes.md</code>. It will render an Enrollment Token and the
+    join artifacts together, once.</p>
     {{else}}
     <p>An <code>admin</code> mints the Enrollment Token. Its scope becomes the joining Node&#39;s
     <code>relay:</code> labels, which is the security lane, so it is not a viewer&#39;s to

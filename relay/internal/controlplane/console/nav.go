@@ -64,17 +64,17 @@ func (s NavSection) Slug() string { return strings.ToLower(string(s.Group)) }
 //   - A viewer's navigation is structurally smaller, because a route whose
 //     MinRole they do not meet is not projected.
 //
-// What this is NOT is an authorization decision. A link that is not drawn is
-// not a permission that was checked; the capability layer's RoleGate answers
-// that when the request arrives, for this surface exactly as for MCP and the
-// Control API. Drawing fewer links is a courtesy to the operator, not a control.
+// Nav draws no role comparison of its own: it consumes [routesFor], the same
+// projection Register's mount-time gate applies to every request. A drawn
+// link and a reachable route are one fact, computed once, not two
+// implementations that happen to agree today. Nav still decides nothing by
+// itself — the capability layer's RoleGate is what a request meets when it
+// arrives, for this surface exactly as for MCP and the Control API — but a
+// link that is not drawn is now also a route that is not there to visit.
 func Nav(d Deps, role accounts.Role, currentPath string) []NavSection {
 	byGroup := map[NavGroup][]Route{}
-	for _, r := range Routes(d) {
+	for _, r := range routesFor(d, role) {
 		if r.Nav.Label == "" {
-			continue
-		}
-		if !accounts.Role(role).AtLeast(r.MinRole) {
 			continue
 		}
 		byGroup[r.Nav.Group] = append(byGroup[r.Nav.Group], r)

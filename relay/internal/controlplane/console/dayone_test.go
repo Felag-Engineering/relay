@@ -50,7 +50,7 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 
 	// No substitutions: a parameterised route names one object, and an empty
 	// registry has none to name, so walkableScreens skips them.
-	paths := walkableScreens(d, nil)
+	paths := walkableScreens(Routes(d), nil)
 	if len(paths) == 0 {
 		t.Fatal("the sweep walked zero screens — it is not running")
 	}

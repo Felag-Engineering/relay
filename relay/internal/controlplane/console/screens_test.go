@@ -444,7 +444,7 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 		handler http.Handler
 		path    string
 	}
-	for _, path := range walkableScreens(d, fixtureIDs) {
+	for _, path := range walkableScreens(Routes(d), fixtureIDs) {
 		renders = append(renders, struct {
 			name    string
 			handler http.Handler
@@ -1936,18 +1936,28 @@ func relLuminance(hex string) float64 {
 // operators only: styled divs carry no heading semantics and a bare run of
 // anchors is not announced as a list with a length.
 func TestLayout_NavigationIsALandmark(t *testing.T) {
-	body := get(t, newTestHandler(fleetFixture(), accounts.RoleAdmin), "/console/").Body.String()
+	d := fleetFixture()
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
 
 	if !strings.Contains(body, `<nav class="navgroups" aria-label="Console">`) {
 		t.Error("the navigation is not inside a <nav> landmark")
 	}
-	for _, group := range []NavGroup{NavObserve, NavAct, NavAdminister} {
-		slug := strings.ToLower(string(group))
+
+	// Derived from what Nav actually returns for this role, not a hard-coded
+	// three-group list: since #464 removed the four v0.7.0 placeholders, the
+	// Administer heading has no route left to draw and nav.go's drop-empty-
+	// section rule means it will not appear even for an admin.
+	sections := Nav(d, accounts.RoleAdmin, "/console/")
+	if len(sections) == 0 {
+		t.Fatal("Nav returned zero sections — the sweep is not running")
+	}
+	for _, sec := range sections {
+		slug := sec.Slug()
 		if !strings.Contains(body, `<h2 class="navsec" id="navsec-`+slug+`">`) {
-			t.Errorf("the %s group is not a heading", group)
+			t.Errorf("the %s group is not a heading", sec.Group)
 		}
 		if !strings.Contains(body, `<ul class="navlist" aria-labelledby="navsec-`+slug+`">`) {
-			t.Errorf("the %s group is not a list labelled by its own heading", group)
+			t.Errorf("the %s group is not a list labelled by its own heading", sec.Group)
 		}
 	}
 	// The current destination is marked in the accessibility tree, not only by
