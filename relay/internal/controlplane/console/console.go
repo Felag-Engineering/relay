@@ -230,10 +230,18 @@ func Routes(d Deps) []Route {
 		// now falls through to handleNode with node_id="add" and renders the
 		// Console shell's ordinary "Node not found" page instead of a plain
 		// absence — not a new disclosure (any /console/nodes/<anything>
-		// unknown already renders that page), but whoever re-adds this screen
-		// should either pick a path outside /console/nodes/ (as /console/compare,
-		// above, already did for the same reason) or accept the shadow
-		// knowingly.
+		// unknown already renders that page). Whoever re-adds this screen
+		// cannot accept the shadow knowingly, though: a route that
+		// constrains reach gets a second, bare-path registration from
+		// [methodMismatch], and a bare "/console/nodes/add" would collide
+		// with the already-registered "GET /console/nodes/{node_id}" —
+		// net/http panics at Register time rather than letting the shadow
+		// through silently. That is fail-closed and loud (a startup panic,
+		// caught by any test that calls Register with this table), not a
+		// danger to guard against — it just means a route that constrains
+		// reach must own its path exclusively. Pick a path outside
+		// /console/nodes/ instead, as /console/compare, above, already did
+		// for the same reason.
 		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
@@ -376,8 +384,15 @@ func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
 // delegates to a private single-route ServeMux holding only r's own
 // method-specific pattern — the exact mux net/http would build if r were the
 // only thing ever registered for its path — so the 405 and its Allow header
-// are the real stdlib computation, not a reimplementation of it, and can
-// never drift from what an unwrapped route would have answered.
+// are the real stdlib computation, not a reimplementation of it. That holds
+// for every route sharing r.Path in this table today, because they all carry
+// the same MinRole; it is not a general guarantee. A path carrying two
+// constrained routes with DIFFERENT floors (say GET at RoleViewer and POST
+// at RoleAdmin) would break it: this probe only knows about r, so an in-role
+// admin's OPTIONS would answer "Allow: POST" instead of the real
+// "Allow: GET, HEAD, POST", and a viewer's OPTIONS would 404 on a path whose
+// GET they legitimately reach. The direction is over-hiding, not disclosure,
+// but the claim only holds because no such split exists yet.
 func methodMismatch(r Route) http.HandlerFunc {
 	probe := http.NewServeMux()
 	probe.HandleFunc(r.Pattern(), func(http.ResponseWriter, *http.Request) {
