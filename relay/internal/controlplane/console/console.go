@@ -5,11 +5,20 @@
 // # What this package is not allowed to become
 //
 // Invariant 10 says there is one capability layer and three thin surfaces.
-// This package is the third. It holds no dispatch, no authorization logic, and
-// no Relay configuration — no_dispatch_test.go enforces the first two
-// structurally, in the same shape as the Control API's and the MCP surface's
-// guards, because a new execution surface is exactly when the temptation to
-// shortcut appears (ADR-0026 decision 1).
+// This package is the third. It holds no dispatch and no Relay configuration —
+// no_dispatch_test.go enforces the first structurally, in the same shape as
+// the Control API's and the MCP surface's guards, because a new execution
+// surface is exactly when the temptation to shortcut appears (ADR-0026
+// decision 1).
+//
+// This package does hold one role comparison: [Route.ReachableBy], applied at
+// mount time by [gated]. It is SUBTRACTIVE ONLY — it can refuse to mount a
+// route below a session's role, and it can never admit a request the
+// capability layer's RoleGate would refuse, because every admitted request
+// still reaches that RoleGate unchanged when its handler dispatches. It is
+// mount-time absence, the same lever console_execution already is (ADR-0026
+// decision 5), generalised from a config flag to a role; it is not
+// authorization and not a second control path. See Route.MinRole.
 //
 // # Why this package's security middleware is not hygiene
 //
@@ -129,15 +138,19 @@ type Route struct {
 	// destination. A route with no Nav entry is reachable but not advertised.
 	Nav NavEntry
 
-	// MinRole is the lowest role for which this destination appears in the
-	// NAVIGATION. It is presentation, not authorization.
+	// MinRole is the lowest role that may REACH this route. Register refuses
+	// every request below it with a 404 ([gated]), and Nav projects the same
+	// predicate ([Route.ReachableBy]) onto the navigation, so a drawn link and
+	// a reachable route are one fact, not two that happen to agree today.
 	//
-	// Read that twice. Authorization is the capability layer's RoleGate, for
-	// this surface exactly as for MCP and the Control API (ADR-0026 decision
-	// 4); a surface that gated a role itself would be a second control path,
-	// and the first one to be forgotten. This field decides only whether a
-	// link is drawn, so that a viewer gets a structurally smaller Console
-	// rather than a wall of controls that refuse them.
+	// This gate can only REMOVE reach; it can never grant it. Authorization is
+	// still the capability layer's RoleGate, for this surface exactly as for
+	// MCP and the Control API (ADR-0026 decision 4): every route this field
+	// admits still passes RoleGate when its handler calls one. A surface that
+	// gated Raw Exec itself would be a second control path — this field never
+	// does that; it only decides whether the request arrives at all, the same
+	// mount-time-absence lever console_execution already is (ADR-0026 decision
+	// 5), generalised from a config flag to a role.
 	MinRole accounts.Role
 
 	Handler func(Deps) http.HandlerFunc
@@ -151,10 +164,19 @@ func (r Route) Pattern() string { return r.Method + " " + r.Path }
 // syntax rather than a URL.
 func (r Route) Link() string { return strings.TrimSuffix(r.Path, "{$}") }
 
-// Routes returns the route table for d — that is, the routes this process will
-// actually mount, which is not the same as every route this package can
-// describe. With d.Execution false the execution routes are absent from the
-// returned slice entirely, so they are unmounted, unreachable and (because the
+// ReachableBy reports whether role may reach r at all — the single predicate
+// both Register ([gated]) and Nav ([routesFor]) apply. Nothing else in this
+// package may re-derive this comparison.
+func (r Route) ReachableBy(role accounts.Role) bool { return role.AtLeast(r.MinRole) }
+
+// Routes returns the route table for d — that is, the routes this PROCESS will
+// mount, which is not the same as every route this package can describe, and
+// — since [Route.MinRole] became a mount-time gate — is now a SUPERSET of what
+// any one SESSION can reach. [routesFor] narrows this slice to what a given
+// role may reach; that is what Nav and Register's per-request gate consume.
+//
+// With d.Execution false the execution routes are absent from the returned
+// slice entirely, so they are unmounted, unreachable and (because the
 // navigation is a projection of this slice) unadvertised, by construction
 // rather than by three separate pieces of discipline.
 func Routes(d Deps) []Route {
@@ -182,13 +204,15 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
-		{"GET", "/console/policy", NavEntry{NavAct, "Policy", 20}, accounts.RoleOperator, placeholder("Policy Author", "06-policy-author.md")},
+		// Policy Author (spec 06), Add Nodes (spec 09), Accounts (spec 15) and
+		// Incident (spec 16) are v0.7.0 screens, not built yet (#464). They do
+		// not get a placeholder row: a v0.6.0 nav must not advertise a route
+		// that answers "not built yet", and Register no longer needs a
+		// mounted-but-refusing row to keep a session from reaching one — the
+		// route is simply absent until its screen ships, and that issue adds
+		// its own row with its own MinRole.
 		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
-
-		{"GET", "/console/nodes/add", NavEntry{NavAdminister, "Add Nodes", 10}, accounts.RoleAdmin, placeholder("Add Nodes", "09-add-nodes.md")},
-		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, placeholder("Accounts", "15-accounts-and-tokens.md")},
-		{"GET", "/console/incident", NavEntry{NavAdminister, "Incident", 30}, accounts.RoleOperator, placeholder("Incident", "16-incident-ladder.md")},
 
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing
@@ -201,8 +225,10 @@ func Routes(d Deps) []Route {
 		// short-circuit applies and no CSRF token is required, which is
 		// correct because an EventSource cannot set a header.
 		//
-		// MinRole here is presentation like every other row in this table
-		// and gates NOTHING (see Route.MinRole, and events.go's header).
+		// MinRole here is RoleViewer, so the mount gate ([gated]) passes this
+		// route through unwrapped — it refuses nothing an authenticated
+		// principal can be. The real control is the per-kind table in
+		// events.go, which can be, and is, higher than this route's floor.
 		{"GET", "/console/events", NavEntry{}, accounts.RoleViewer, handleEvents},
 
 		// The sign-in surface (#418). GET renders the form and POST accepts
@@ -219,6 +245,14 @@ func Routes(d Deps) []Route {
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 	}
 
+	// This placeholder stays mounted, unlike the four below that were removed
+	// (#464): it is only ever appended when d.Execution is true, the
+	// composition root hard-codes Execution:false (control_surfaces.go), so it
+	// is not mounted in any shipped v0.6.0 configuration and is not in a
+	// v0.6.0 nav. It is also the ONLY fixture behind
+	// TestConsole_ExecutionOffMakesTheComposerAbsent, the ADR-0026 decision-5
+	// regression guard — removing it would leave that guard with nothing to
+	// guard.
 	if d.Execution {
 		rs = append(rs, Route{
 			"GET", "/console/run",
@@ -229,18 +263,86 @@ func Routes(d Deps) []Route {
 	return rs
 }
 
+// routesFor narrows Routes(d) to the routes a session with role may reach —
+// spec 11's "routes this process mounted for this Account's role". Nav
+// consumes it to draw the navigation; the per-role reachability test iterates
+// it directly. This is the ONLY place outside [Route.ReachableBy] itself that
+// may decide reachability; nothing else in this package re-derives the
+// comparison.
+func routesFor(d Deps, role accounts.Role) []Route {
+	var rs []Route
+	for _, r := range Routes(d) {
+		if r.ReachableBy(role) {
+			rs = append(rs, r)
+		}
+	}
+	return rs
+}
+
+// gated wraps r's handler with the mount-time reachability check
+// [Route.MinRole] now names. It is SUBTRACTIVE ONLY: the only two things it
+// can do are call h unmodified or call http.NotFound instead of h. It never
+// calls h with an altered request, an elevated principal, or any other
+// changed semantics — so it has no admit-power, only not-call, and every
+// admitted request still reaches the capability layer's RoleGate unchanged
+// when its handler dispatches (ADR-0026 decision 4).
+//
+// If RoleViewer already satisfies r.MinRole, the route constrains no valid
+// role, and gated returns h UNCHANGED — it does not even look at the request.
+// This is what keeps the unauthenticated sign-in surface reachable (LoginPath
+// GET/POST, the sign-out POST, and the assets prefix all carry RoleViewer):
+// those requests arrive with no Principal in context at all, because
+// Authenticator.Middleware's public-path branch calls next.ServeHTTP before
+// authenticating (auth.go), and a gate that consulted the request would panic
+// or refuse the sign-in page itself.
+//
+// Otherwise the returned handler reads the Principal that Middleware injected
+// and calls http.NotFound — the exact function net/http's ServeMux uses on an
+// unmatched path — unless r.ReachableBy(that Principal's role). A MISSING
+// Principal on a gated route is unreachable in production (every gated route
+// sits behind Authenticator.Middleware, Register's contract) and also 404s
+// here rather than the 500 [principal] returns elsewhere, because the refusal
+// must be indistinguishable from a route that was never mounted, not merely
+// present with a different number.
+//
+// A typo'd MinRole fails closed too: RoleViewer.AtLeast(<not a role>) is
+// false, so an invalid MinRole is treated as gate-worthy, and
+// accounts.Role.AtLeast then refuses every role including admin — the route
+// 404s for everyone and Nav drops it, the same rank-zero behaviour
+// accounts.Role and resolveEventKinds (events.go) already rely on.
+func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
+	if accounts.RoleViewer.AtLeast(r.MinRole) {
+		return h
+	}
+	return func(w http.ResponseWriter, req *http.Request) {
+		p, ok := controlplane.PrincipalFromContext(req.Context())
+		if !ok || !r.ReachableBy(accounts.Role(p.Role)) {
+			http.NotFound(w, req)
+			return
+		}
+		h(w, req)
+	}
+}
+
 // Register mounts the Console route table onto mux, which is expected to be
 // already wrapped by controlplane.Authenticator.Middleware and by this
 // package's own Secure middleware. Register never constructs a listener, an
 // auth wrapper, or a TLS config of its own — the Console is served on the
 // existing internal-only control-plane listener (ADR-0009), and where it is
 // exposed is the composition root's decision, not this package's.
+//
+// Every route is mounted through [gated], the mount-time reachability check
+// [Route.MinRole] now names. This is still ONE mux: gated wraps each route's
+// own handler in place, it does not select among several muxes, and it never
+// changes which pattern ServeMux matches — so a refused request finds no
+// route registered for it, rather than falling through to a neighbour's
+// handler with a role it should not have satisfied.
 func Register(mux *http.ServeMux, d Deps) {
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }
 	}
 	for _, r := range Routes(d) {
-		mux.HandleFunc(r.Pattern(), r.Handler(d))
+		mux.HandleFunc(r.Pattern(), gated(r, r.Handler(d)))
 	}
 }
 

@@ -135,11 +135,6 @@ type nodeView struct {
 	// offline, and the snapshot refreshes on (re)connect and at no other time.
 	PolicyStale bool
 
-	// PolicyAuthorHref is the link to the Policy Author, drawn for an operator
-	// and above. Presentation, not authorization — the capability layer's
-	// RoleGate answers the second (nav.go says the same about the navigation).
-	PolicyAuthorHref string
-
 	// RunHref is the composer (/console/run, spec 05), drawn only where the
 	// Relay has execution on AND the reader is an operator or above. Absent,
 	// never disabled (ADR-0026 decision 5): a greyed-out control gives away
@@ -264,7 +259,6 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role,
 	}
 
 	if role.AtLeast(accounts.RoleOperator) {
-		v.PolicyAuthorHref = "/console/policy"
 		if d.Execution {
 			v.RunHref = "/console/run"
 		}
@@ -546,11 +540,8 @@ var nodeTmpl = newScreen("node", `
         thing its engine reported{{with .PolicyReportedAt}}, at {{.}}{{end}}, and nothing has re-asked
         it since — a snapshot is taken when a Node connects and at no other time.</p>
         {{end}}
-        {{with .PolicyAuthorHref}}
-        <p class="gap"><a href="{{.}}">Draft a Policy from this vocabulary</a> — Relay generates a
-        file for you to take to your config management. There is no path from this screen to this
-        Node's Policy: Policy is rooted on the machine and the Relay is not one of its writers.</p>
-        {{end}}
+        <p class="gap">There is no path from this screen to this Node's Policy: Policy is rooted
+        on the machine and the Relay is not one of its writers.</p>
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
         <p class="note">The Console shows nothing rather than a remembered answer: a Policy view

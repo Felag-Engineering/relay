@@ -4,12 +4,17 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 )
+
+// sessionRoles are the three roles a real signed-in session can carry — the
+// fixture the per-role gate tests sweep over.
+var sessionRoles = []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
 
 const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //nolint:gosec // test fixture, not a real credential
 
@@ -71,6 +76,14 @@ func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 // ADR-0009's insight, which ADR-0026 preserved as the reason the flag exists at
 // all, is that ABSENT BEATS FORBIDDEN. So the assertion is about what is not
 // drawn, not about what refuses.
+//
+// Three of the four items in the `absent` list (Policy, Add Nodes, Accounts)
+// now hold for EVERY role, not only a viewer, because #464 unmounted them —
+// this test still holds, but it is no longer the only thing keeping the
+// property true. When #438/#448/#475 re-add those screens with a real
+// MinRole, [Route.ReachableBy] and Register's mount-time gate are what will
+// keep a viewer's Console structurally smaller again; this test would fail
+// first if that stopped being so.
 func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleViewer)
 	// Scoped to the navigation, not the whole page. The assertion is about what
@@ -244,6 +257,155 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 	}
 }
 
+// TestConsole_ARouteAboveTheSessionRoleIsAbsent is the mount-time half of
+// #464: Register's gate must refuse a request below a route's MinRole with
+// exactly the 404 a route that was never mounted would give, and it must
+// never refuse a request that meets MinRole — this gate is subtractive only.
+//
+// Iterates Routes(withExecution(sweepFixture(), true)) rather than a
+// hand-written path list, so a route added later is swept without anyone
+// remembering to add it here. sweepFixture (not the bare renderableDeps)
+// because a parameterised route's object has to actually exist, or a missing
+// fixture 404s for every role and is indistinguishable from a role refusal.
+// Execution stays ON so /console/run (MinRole RoleOperator) is in the table as
+// a real fixture above RoleViewer — the four v0.7.0 placeholders that used to
+// supply that shape are gone as of this change
+// (TestConsole_V060MountsNoUnbuiltScreen pins their removal).
+func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+	routes := Routes(d)
+
+	checked := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		// The control for the indistinguishability assertion: a path this
+		// package never mounts at all, walked through the same session.
+		miss := get(t, h, "/console/no-such-route")
+
+		for _, r := range routes {
+			if r.Method != http.MethodGet {
+				continue
+			}
+			if r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
+				continue
+			}
+			path := r.Link()
+			for placeholder, id := range fixtureIDs {
+				path = strings.ReplaceAll(path, placeholder, id)
+			}
+			if strings.Contains(path, "{") {
+				continue
+			}
+			checked++
+
+			rec := get(t, h, path)
+			if r.ReachableBy(role) {
+				if rec.Code == http.StatusNotFound {
+					t.Errorf("role %s: GET %s = 404, want reachable (MinRole %s)", role, path, r.MinRole)
+				}
+				continue
+			}
+
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("role %s: GET %s = %d, want 404 — a role below MinRole %s must find the route absent", role, path, rec.Code, r.MinRole)
+				continue
+			}
+
+			// Absent, not forbidden: a refused route must be byte-identical to
+			// a route that was never mounted, or the 404 is a status-code
+			// coincidence rather than a tested property.
+			res, missRes := rec.Result(), miss.Result()
+			if res.Status != missRes.Status {
+				t.Errorf("role %s: GET %s status line %q, want %q (same as an unmounted path)", role, path, res.Status, missRes.Status)
+			}
+			if got, want := res.Header.Get("Content-Type"), missRes.Header.Get("Content-Type"); got != want {
+				t.Errorf("role %s: GET %s Content-Type %q, want %q", role, path, got, want)
+			}
+			if got, want := res.Header.Get("X-Content-Type-Options"), missRes.Header.Get("X-Content-Type-Options"); got != want {
+				t.Errorf("role %s: GET %s X-Content-Type-Options %q, want %q", role, path, got, want)
+			}
+			if got, want := rec.Body.String(), miss.Body.String(); got != want {
+				t.Errorf("role %s: GET %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("the sweep checked zero routes — it is not running")
+	}
+}
+
+// navHrefPattern extracts the href of every rendered navigation link, so the
+// nav-implies-reachable property can be checked against the rendered markup
+// rather than against Nav's own return value — which would only prove the
+// projection agrees with itself.
+var navHrefPattern = regexp.MustCompile(`class="navitem[^"]*" href="([^"]+)"`)
+
+// TestConsole_NavDrawsNoLinkTheSessionCannotReach is spec 11's property, in
+// both directions: every href the navigation draws for a role must resolve to
+// a route that role can reach, and every reachable, Nav-labelled route must
+// actually appear in the rendered navigation — so the projection (Nav) and the
+// gate (Register) cannot drift apart from each other.
+func TestConsole_NavDrawsNoLinkTheSessionCannotReach(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+
+	walked, navItems := 0, 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		reachable := routesFor(d, role)
+
+		byLink := map[string]Route{}
+		for _, r := range reachable {
+			byLink[r.Link()] = r
+		}
+
+		for _, path := range walkableScreens(reachable, fixtureIDs) {
+			walked++
+			nav := navOf(get(t, h, path).Body.String())
+			for _, m := range navHrefPattern.FindAllStringSubmatch(nav, -1) {
+				href := m[1]
+				if _, ok := byLink[href]; !ok {
+					t.Errorf("role %s: nav rendered on %s links to %s, which this role cannot reach", role, path, href)
+				}
+			}
+		}
+
+		nav := navOf(get(t, h, "/console/").Body.String())
+		for _, r := range reachable {
+			if r.Nav.Label == "" {
+				continue
+			}
+			navItems++
+			if want := ">" + r.Nav.Label + "<"; !strings.Contains(nav, want) {
+				t.Errorf("role %s: %s is reachable and labelled %q, but the nav does not draw it", role, r.Path, r.Nav.Label)
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("the sweep walked zero screens — it is not running")
+	}
+	if navItems == 0 {
+		t.Fatal("the sweep found zero nav items — it is not running")
+	}
+}
+
+// TestConsole_V060MountsNoUnbuiltScreen is a regression pin for the exact
+// defect #464 fixed, not a derived property: these four specific v0.7.0
+// screens (console/06, 09, 15, 16) must not be reachable in v0.6.0, however
+// the route table changes around them. A hand-written list is correct here.
+func TestConsole_V060MountsNoUnbuiltScreen(t *testing.T) {
+	h := newTestHandler(withExecution(renderableDeps(), false), accounts.RoleAdmin)
+	for _, path := range []string{
+		"/console/policy",
+		"/console/nodes/add",
+		"/console/accounts",
+		"/console/incident",
+	} {
+		if got := get(t, h, path).Code; got != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404 — this v0.7.0 screen must not be mounted in v0.6.0", path, got)
+		}
+	}
+}
+
 // fixtureIDs are the object ids the screen fixtures actually contain, so a
 // parameterised route can be walked rather than skipped.
 var fixtureIDs = map[string]string{
@@ -252,14 +414,18 @@ var fixtureIDs = map[string]string{
 	"{approval_id}": "ap-1",
 }
 
-// walkableScreens derives the GET screens a sweep should render FROM THE
-// MOUNTED ROUTE TABLE, substituting ids from subs.
+// walkableScreens derives the GET screens a sweep should render FROM A ROUTE
+// TABLE, substituting ids from subs.
 //
 // Derived rather than hand-listed because a hand-listed sweep is a list that
 // silently stops covering the package: a screen added later is simply not in
 // it, and nothing fails. The two sweeps that use this — the inline-script guard
 // and the zeroed-statistic guard — are exactly the ones whose value comes from
 // being exhaustive.
+//
+// Takes a []Route rather than a Deps so a caller can pass either every route
+// the process mounts (Routes(d)) or the routes one role may reach
+// (routesFor(d, role)) — the per-role nav sweep needs the latter.
 //
 // Three routes are never walked, with reasons:
 //   - /console/events streams until its context is cancelled;
@@ -268,9 +434,9 @@ var fixtureIDs = map[string]string{
 //
 // A parameterised route with no substitution in subs is skipped: the caller's
 // fixture has no such object to name.
-func walkableScreens(d Deps, subs map[string]string) []string {
+func walkableScreens(routes []Route, subs map[string]string) []string {
 	var paths []string
-	for _, r := range Routes(d) {
+	for _, r := range routes {
 		if r.Method != http.MethodGet {
 			continue
 		}

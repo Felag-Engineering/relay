@@ -13,12 +13,20 @@ package console
 //
 // # Every kind names the role that may see it
 //
-// Route.MinRole is presentation — Register never consults it, so the entry in
-// the route table places no gate anywhere. Day one (#427) recorded that as a
-// deliberate absence and said the absence stops being right the moment a
-// second kind is added. Activity (#422) adds one, so the gate is here now:
-// consoleEventKinds carries a MinRole per kind and handleEvents checks it
-// against the acting Principal before a stream is opened.
+// This route's own Route.MinRole is RoleViewer (#464), so Register's
+// mount-time gate places a floor at "any valid role" and refuses nothing an
+// authenticated principal can be — it is not double-gating, and the per-kind
+// table below stays the only control that discriminates between kinds. Day
+// one (#427) recorded the earlier, ungated state as a deliberate absence and
+// said the absence stops being right the moment a second kind is added.
+// Activity (#422) adds one, so the gate is here: consoleEventKinds carries a
+// MinRole per kind and handleEvents checks it against the acting Principal
+// before a stream is opened, and that per-kind MinRole can be, and for job is,
+// HIGHER than the route's floor. A valid role clears the route gate
+// unconditionally and is judged again per kind; the only thing #464 changed
+// here is that an INVALID role now 404s at the route instead of reaching this
+// per-kind check at all — strictly more fail-closed, and no reason to raise
+// this route's own MinRole.
 //
 // THE DISCLOSURE TABLE — for each admitted kind, what the PROJECTION carries
 // and why that role:
