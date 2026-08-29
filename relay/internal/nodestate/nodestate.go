@@ -52,6 +52,7 @@ package nodestate
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -275,20 +276,47 @@ var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 // syntax to escape INTO:
 //   - `,` is the term separator ParseSelector splits on — the injection this
 //     finding demonstrates.
-//   - leading, trailing or embedded whitespace lets a value sit next to a
-//     hand-typed comma (a Console facet href, an AI-agent's copy-pasted
-//     selector string) and still read as two terms once joined.
+//   - any Unicode `White_Space` rune anywhere in the value — leading,
+//     trailing or embedded — lets a value sit next to a hand-typed comma (a
+//     Console facet href, an AI-agent's copy-pasted selector string) and
+//     still read as two terms once joined. This is CONTEXT.md's "Canonical
+//     form" whitespace notion, not the ASCII one: ADR-0019's Raw Exec split
+//     (`argv.join(" ").split_whitespace()`) folds a tab or an NBSP exactly
+//     like a space, using the same `White_Space` property Rust's
+//     `char::is_whitespace` implements, and Go's `unicode.IsSpace` agrees
+//     with `unicode.Is(unicode.White_Space, r)` over every rune in Go's
+//     Unicode tables — one whitespace definition, both sides of the system.
+//     Zero-width characters (U+200B ZWSP, U+FEFF, U+180E) are category Cf,
+//     `White_Space=No`, and are deliberately NOT rejected here: they create
+//     no visible gap next to a comma, which is the hazard this bullet closes,
+//     and rejecting them would make the Relay's whitespace notion strictly
+//     wider than the daemon's — the same inconsistency this predicate exists
+//     to remove, just in the other direction.
 //   - a value starting with one of the four namespace prefixes could pose as
 //     a second term the moment it lands beside any comma downstream, even one
 //     this package did not itself introduce.
 //
-// None of these ever appear in a legitimate semver string, hex fingerprint or
-// template-set hash, so this never rejects a well-behaved daemon's report.
+// None of these ever appear in a legitimate report: DaemonVersion is semver
+// over `[0-9A-Za-z.+-]` (daemon/src/version.rs `version()`, asserted by that
+// module's tests and by registry/daemon_version_contract_test.go) stamped by
+// scripts/build-version.sh, whose header documents its three fields as
+// whitespace-free by pipeline contract — not a runtime check version()
+// itself performs, so a hand-corrupted build is the same failure class as
+// any other pipeline compromise, not a case this predicate needs to catch.
+// PolicyFingerprint and TemplateSetFingerprint are lowercase SHA-256 hex
+// (daemon/src/policy.rs `policy_fingerprint`, daemon/src/templates.rs
+// `fingerprint_files`) or the literal `unloadable`. So this never rejects a
+// well-behaved daemon's report.
 func validFactValue(v string) bool {
-	if strings.TrimSpace(v) != v {
+	if strings.Contains(v, ",") {
 		return false
 	}
-	if strings.ContainsAny(v, ", \t\n\r") {
+	// strings.TrimSpace trims exactly the runes unicode.IsSpace is true for
+	// (its ASCII fast path agrees with unicode.IsSpace on all 128 ASCII code
+	// points and falls back to unicode.IsSpace itself past ASCII), so "has a
+	// leading or trailing space rune" is a strict subset of "has a space rune
+	// anywhere" — a separate TrimSpace check here would be dead code.
+	if strings.ContainsFunc(v, unicode.IsSpace) {
 		return false
 	}
 	for _, p := range factNamespacePrefixes {
