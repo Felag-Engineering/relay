@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
@@ -48,13 +47,26 @@ import (
 //     is HashGrantShape's account and Operation names, which Grant.Covers
 //     itself compares with strings.EqualFold.
 //
-// The writer helpers below deliberately REPEAT plan.go's rather than
-// refactoring it: HashPlan and HashScope are live security bindings on stored
-// records, and even a byte-identical refactor of them is risk with no upside.
+// The writer primitives (writeField, writeCount) live in encoding.go and are
+// shared with plan.go's HashPlan and grant.go's HashScope. The primitives
+// themselves are golden-pinned (TestEncodingFormatIsPinned), HashScope's
+// output is golden-pinned separately (TestHashScopeDigestIsPinned, because it
+// must not move), and HashPlan's is instead held to the injectivity property
+// (TestHashPlanIsInjectiveOverDistinctPlans) rather than a literal digest,
+// because #494 changes its bytes on purpose. So a shared edit to either
+// primitive shows up as a failing test rather than a silent re-point of the
+// stored bindings. This file used to keep its own byte-identical copy rather
+// than share one, on the premise that even a byte-identical refactor of a
+// live binding was risk with no upside; that premise expired the moment #494
+// changed HashPlan's bytes on purpose (see plan.go), so the refactor rides on
+// a break already happening rather than causing a new one.
 //
-// KNOWN, ESCALATED, NOT FIXED HERE: HashPlan's own encoding has a real
-// collision, because it writes the argument key inside the field name. Issue
-// #494 carries it; nothing in this file shares the weakness.
+// FIXED: #494 gave HashPlan the same argument KEY/VALUE split this file
+// always used — the key and the value are now separate length-prefixed
+// fields (arg.k, arg.v) instead of the key being folded into the field name.
+// All three constructions in this package now share encoding.go's
+// primitives and none of them folds caller-controlled bytes into a field
+// name.
 
 // ShapeKeyVersion is written as the first bytes of every shape preimage, so a
 // future encoding change produces a visibly different key rather than silently
@@ -117,16 +129,6 @@ func LegacyShapeKey(requestID string) string { return LegacyShapePrefix + reques
 // IsLegacyShapeKey reports whether k is a placeholder rather than a computed
 // key. A real key is 64 hex characters and can never carry the prefix.
 func IsLegacyShapeKey(k string) bool { return strings.HasPrefix(k, LegacyShapePrefix) }
-
-// writeField writes one variable-length field as "name=<byte length>:<bytes>\n".
-func writeField(h io.Writer, field, value string) {
-	fmt.Fprintf(h, "%s=%d:%s\n", field, len(value), value)
-}
-
-// writeCount writes one framing count as "name=<n>\n".
-func writeCount(h io.Writer, field string, n int) {
-	fmt.Fprintf(h, "%s=%d\n", field, n)
-}
 
 // HashPlanShape hashes what act does over sel, excluding the resolved fan-out
 // and every argument opvocab declares to be SCALE.

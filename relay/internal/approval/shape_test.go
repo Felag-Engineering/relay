@@ -143,16 +143,20 @@ func TestPlanShape_UnknownOperationTreatsEveryArgAsShape(t *testing.T) {
 
 // TestPlanShape_ArgumentSeparatorInjection is the encoding's whole point.
 //
-// The witness is a REAL collision in the older HashPlan construction, which
-// writes the argument key inside the field name (write("arg."+k, v)):
+// The witness was a REAL collision in the OLDER HashPlan construction, which
+// used to write the argument key inside the field name (write("arg."+k, v)):
 //
 //	{"a": "1=1:x"}  ->  arg.a=5:1=1:x\n
 //	{"a=5:1": "x"}  ->  arg.a=5:1=1:x\n     byte-identical
 //
+// #494 fixed HashPlan to write the key and value as separate fields, the same
+// split HashPlanShape always used, so this witness is now the shared standard
+// BOTH constructions are held against — see plan_test.go's
+// TestHashPlanEncodingIsUnambiguous, which carries the identical witness plus
+// this file's injection table over HashPlan's own field names.
+//
 // HashPlanShape writes the key and the value as SEPARATE length-prefixed
-// fields, so no argument value can forge a key boundary. (The HashPlan
-// collision itself is live on stored records and is escalated as #494; this
-// test asserts only that the new encoding does not inherit it.)
+// fields, so no argument value can forge a key boundary.
 func TestPlanShape_ArgumentSeparatorInjection(t *testing.T) {
 	tmpl := func(args map[string]string) jobs.Action {
 		return jobs.Action{

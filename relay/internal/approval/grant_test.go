@@ -447,3 +447,33 @@ func TestGrantRequestCarriesTheGrantsShapeKey(t *testing.T) {
 		t.Errorf("grant Request shape key %q is not a computed key", r.ShapeKey)
 	}
 }
+
+// TestHashScopeDigestIsPinned pins one literal HashScope digest, unlike
+// plan_test.go which deliberately pins none (see TestHashPlanIsInjectiveOverDistinctPlans).
+// The difference is not an inconsistency: HashPlan's bytes are the thing #494
+// is changing on purpose, so pinning its old digest would only assert the bug.
+// HashScope is NOT moving — it is a live binding on approval_requests.plan_hash
+// for grant requests (grant.go:541, NewGrantRequest), and #494 only reuses its
+// two writer primitives (encoding.go) inside the same field sequence. A golden
+// digest here is what turns "the refactor moved a byte" into a red test
+// instead of a silently re-pointed stored hash: this test must be written and
+// observed green against unmodified HEAD, BEFORE grant.go is touched, so that
+// green-after actually proves byte-identical rather than merely asserting it.
+func TestHashScopeDigestIsPinned(t *testing.T) {
+	startsAt := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	expiresAt := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
+
+	s := Scope{
+		Account:           "gleipnir-prod",
+		RiskClass:         jobs.RiskClassMutate,
+		MaxFanOut:         10,
+		Operations:        []string{"service.restart", "pkg.install"},
+		RawExec:           true,
+		SelectorNamespace: "relay",
+	}
+
+	const want = "df94e374dad73de3588ba88c560909becc982393e1fd7a78282dd6ccd251d3fc"
+	if got := HashScope(s, startsAt, expiresAt, 20); got != want {
+		t.Errorf("HashScope digest moved:\n got  %s\n want %s\nHashScope is a live binding on stored grant plan_hash values and must not change", got, want)
+	}
+}
