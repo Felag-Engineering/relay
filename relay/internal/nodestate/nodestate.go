@@ -52,6 +52,7 @@ package nodestate
 import (
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -273,22 +274,68 @@ var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 //
 // Rejected outright rather than escaped, because ParseSelector has no escape
 // syntax to escape INTO:
+//
 //   - `,` is the term separator ParseSelector splits on — the injection this
 //     finding demonstrates.
-//   - leading, trailing or embedded whitespace lets a value sit next to a
-//     hand-typed comma (a Console facet href, an AI-agent's copy-pasted
-//     selector string) and still read as two terms once joined.
+//
+//   - any Unicode `White_Space` rune anywhere in the value — leading,
+//     trailing or embedded — lets a value sit next to a hand-typed comma (a
+//     Console facet href, an AI-agent's copy-pasted selector string) and
+//     still read as two terms once joined. This is CONTEXT.md's "Canonical
+//     form" whitespace notion: Go's `unicode.IsSpace` agrees with
+//     `unicode.Is(unicode.White_Space, r)` over every rune in Go's Unicode
+//     tables, and Rust's `char::is_whitespace` (ADR-0019's Raw Exec split,
+//     `argv.join(" ").split_whitespace()`) implements the same property — a
+//     fact worth knowing, but not the reason this check exists: that split is
+//     a PARSER widening a deny match over an argv projection, while this is a
+//     RENDERING gate on a string an operator reads and clicks and an
+//     AI-agent copies. The two have no obligation to agree, and this side
+//     being stricter than the daemon's costs nothing here — no Policy
+//     outcome, no argv, no daemon behaviour changes.
+//
+//     ACKNOWLEDGED GAP, NOT CLOSED BY THIS CHECK: `White_Space=No` is not the
+//     same property as "renders with no visible width". This predicate
+//     rejects exactly the Unicode `White_Space` set, and a rune outside that
+//     set can still render as a blank cell next to a comma and reproduce the
+//     same "reads as two terms" hazard — confirmed live: U+2800 BRAILLE
+//     PATTERN BLANK (category `So`) and U+3164 HANGUL FILLER / U+115F
+//     CHOSEONG FILLER (category `Lo`) are all accepted by this check, none of
+//     them is `White_Space` or category `Cf`, and all three render as a
+//     visible blank in most fonts — the same shape as this issue's own
+//     reproduction, with one substituted rune. Zero-width characters (U+200B
+//     ZWSP, U+FEFF, U+180E) are the narrower, genuinely-invisible case of the
+//     same gap, not a separately-reasoned exemption. Closing this needs an
+//     allowlist, not a wider blocklist: all three fields below have a
+//     closed alphabet (semver over `[0-9A-Za-z.+-]`, and `[0-9a-f]{64}` or
+//     `unloadable`), so rejecting anything outside ASCII plus that alphabet
+//     would close this class structurally. That is a follow-up, not this
+//     check.
+//
 //   - a value starting with one of the four namespace prefixes could pose as
 //     a second term the moment it lands beside any comma downstream, even one
 //     this package did not itself introduce.
 //
-// None of these ever appear in a legitimate semver string, hex fingerprint or
-// template-set hash, so this never rejects a well-behaved daemon's report.
+// None of these ever appear in a legitimate report: DaemonVersion is semver
+// over `[0-9A-Za-z.+-]` (daemon/src/version.rs `version()`, asserted by that
+// module's tests and by registry/daemon_version_contract_test.go) stamped by
+// scripts/build-version.sh, whose header documents its three fields as
+// whitespace-free by pipeline contract — not a runtime check version()
+// itself performs, so a hand-corrupted build is the same failure class as
+// any other pipeline compromise, not a case this predicate needs to catch.
+// PolicyFingerprint and TemplateSetFingerprint are lowercase SHA-256 hex
+// (daemon/src/policy.rs `policy_fingerprint`, daemon/src/templates.rs
+// `fingerprint_files`) or the literal `unloadable`. So this never rejects a
+// well-behaved daemon's report.
 func validFactValue(v string) bool {
-	if strings.TrimSpace(v) != v {
+	if strings.Contains(v, ",") {
 		return false
 	}
-	if strings.ContainsAny(v, ", \t\n\r") {
+	// strings.TrimSpace trims exactly the runes unicode.IsSpace is true for
+	// (its ASCII fast path agrees with unicode.IsSpace on all 128 ASCII code
+	// points and falls back to unicode.IsSpace itself past ASCII), so "has a
+	// leading or trailing space rune" is a strict subset of "has a space rune
+	// anywhere" — a separate TrimSpace check here would be dead code.
+	if strings.ContainsFunc(v, unicode.IsSpace) {
 		return false
 	}
 	for _, p := range factNamespacePrefixes {

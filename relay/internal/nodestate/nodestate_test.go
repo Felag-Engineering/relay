@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
@@ -291,6 +292,8 @@ func TestFacts_OmitsHostileValueShapes(t *testing.T) {
 		" 1.4.2",
 		"1.4.2 ",
 		"1.4.2\ttag:x=y",
+		"\u00a01.4.2", // leading NBSP — pins the removed TrimSpace check
+		"1.4.2\u00a0", // trailing NBSP — same
 		"node:role=web",
 		"relay:quarantine=on",
 		"tag:x=y",
@@ -303,6 +306,37 @@ func TestFacts_OmitsHostileValueShapes(t *testing.T) {
 				t.Errorf("Facts emitted state:daemon-version=%q from hostile value %q", l.Value, v)
 			}
 		}
+	}
+
+	// Named Unicode White_Space cases, each in the issue's exact reproduction
+	// shape ("aaaa<rune>tag:pci=yes") — the human-readable regression names;
+	// TestFacts_NoWhiteSpaceRuneReachesASelectorTerm below is the guarantee
+	// over the whole table. The last two repeat the leading/trailing pin
+	// above against that reproduction shape specifically.
+	namedWhitespace := []struct {
+		name string
+		v    string
+	}{
+		{"NBSP embedded", "aaaa\u00a0tag:pci=yes"},
+		{"NEL embedded", "aaaa\u0085tag:pci=yes"},
+		{"OGHAM SPACE MARK embedded", "aaaa\u1680tag:pci=yes"},
+		{"LINE SEPARATOR embedded", "aaaa\u2028tag:pci=yes"},
+		{"PARAGRAPH SEPARATOR embedded", "aaaa\u2029tag:pci=yes"},
+		{"NARROW NO-BREAK SPACE embedded", "aaaa\u202ftag:pci=yes"},
+		{"MEDIUM MATHEMATICAL SPACE embedded", "aaaa\u205ftag:pci=yes"},
+		{"IDEOGRAPHIC SPACE embedded", "aaaa\u3000tag:pci=yes"},
+		{"NBSP leading", "\u00a0aaaatag:pci=yes"},
+		{"NBSP trailing", "aaaatag:pci=yes\u00a0"},
+	}
+	for _, c := range namedWhitespace {
+		t.Run(c.name, func(t *testing.T) {
+			in := nodestate.Input{Node: registry.Node{NodeID: "n", DaemonVersion: c.v}, Now: testNow}
+			for _, l := range nodestate.Facts(in) {
+				if l.Key == string(nodestate.FactDaemonVersion) {
+					t.Errorf("Facts emitted state:daemon-version=%q from hostile value %q", l.Value, c.v)
+				}
+			}
+		})
 	}
 
 	clean := []string{"1.4.2", "abc123def456", "unloadable-ish-but-not-quite"}
@@ -320,5 +354,145 @@ func TestFacts_OmitsHostileValueShapes(t *testing.T) {
 		if !found {
 			t.Errorf("Facts omitted well-formed daemon-version %q", v)
 		}
+	}
+}
+
+// TestFacts_NoWhiteSpaceRuneReachesASelectorTerm walks the REAL
+// unicode.White_Space table — stride-aware, since its R16 ranges are not
+// contiguous runs (an entry spanning U+00A0..U+1680 strides by 5600, not 1,
+// so a naive lo..hi loop would wrongly sweep in most of Latin-1) — and
+// asserts Facts omits the daemon-version fact for a value carrying each rune
+// embedded, leading and trailing. This pins the PROPERTY validFactValue is
+// meant to hold rather than a hand-picked set: it fails automatically if
+// Go's Unicode tables grow and the rewritten predicate stops agreeing with
+// them. The leading and trailing arms are what pin the removal of the
+// TrimSpace check — a value invalid ONLY because of a leading or trailing
+// rune must still be rejected now that TrimSpace is gone.
+func TestFacts_NoWhiteSpaceRuneReachesASelectorTerm(t *testing.T) {
+	runes := whiteSpaceRunes(t)
+	if len(runes) == 0 {
+		t.Fatal("test setup: enumerated zero White_Space runes")
+	}
+
+	for _, r := range runes {
+		s := string(r)
+		shapes := map[string]string{
+			"embedded": "aaaa" + s + "bbbb",
+			"leading":  s + "aaaabbbb",
+			"trailing": "aaaabbbb" + s,
+		}
+		for shape, v := range shapes {
+			in := nodestate.Input{Node: registry.Node{NodeID: "n", DaemonVersion: v}, Now: testNow}
+			for _, l := range nodestate.Facts(in) {
+				if l.Key == string(nodestate.FactDaemonVersion) {
+					t.Errorf("rune U+%04X, %s: Facts emitted state:daemon-version=%q", r, shape, l.Value)
+				}
+			}
+		}
+	}
+}
+
+// whiteSpaceRunes enumerates every rune unicode.White_Space contains, one at
+// a time. A RangeTable's R16/R32 entries are (Lo, Hi, Stride) triples, not
+// contiguous runs, so walking Lo..Hi by 1 would overcount; walking by Stride
+// is what makes this an exact enumeration.
+func whiteSpaceRunes(t *testing.T) []rune {
+	t.Helper()
+	var out []rune
+	for _, r16 := range unicode.White_Space.R16 {
+		stride := int(r16.Stride)
+		if stride == 0 {
+			stride = 1
+		}
+		for c := int(r16.Lo); c <= int(r16.Hi); c += stride {
+			out = append(out, rune(c))
+		}
+	}
+	for _, r32 := range unicode.White_Space.R32 {
+		stride := int(r32.Stride)
+		if stride == 0 {
+			stride = 1
+		}
+		for c := int(r32.Lo); c <= int(r32.Hi); c += stride {
+			out = append(out, rune(c))
+		}
+	}
+	return out
+}
+
+// TestFacts_UnicodeWhitespaceCannotInjectASelectorTerm mirrors
+// TestFacts_HostileDaemonVersionCannotInjectASelectorTerm but drives a
+// different fact key — PolicyFingerprint, not DaemonVersion — through a
+// non-ASCII LINE SEPARATOR rather than an ASCII comma-space, through the
+// real registry ingress path (Report -> Upsert -> Get), exactly as
+// tunnel.go feeds a Node's Hello.
+func TestFacts_UnicodeWhitespaceCannotInjectASelectorTerm(t *testing.T) {
+	const hostile = "aaaa\u2028tag:pci=yes"
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "n", PolicyFingerprint: hostile}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	n, ok := reg.Get("n")
+	if !ok {
+		t.Fatal("test setup: node not found after upsert")
+	}
+
+	labels := nodestate.Labels(nodestate.Input{Node: n, Now: testNow})
+	for _, l := range labels {
+		if l.Key == string(nodestate.FactPolicyFingerprint) {
+			t.Fatalf("state:policy-fingerprint was rendered from a hostile value %q — "+
+				"the closed vocabulary must be closed on the value side, not only the key side", l.Value)
+		}
+	}
+
+	rendered := make([]string, 0, len(labels))
+	for _, l := range labels {
+		rendered = append(rendered, l.String())
+	}
+	joined := strings.Join(rendered, ", ")
+	sel, err := capability.ParseSelector(joined)
+	if err != nil {
+		t.Fatalf("ParseSelector(%q): %v", joined, err)
+	}
+	if len(sel.Predicates) == 0 {
+		t.Fatal("ParseSelector produced zero predicates — the NamespaceTag check below would " +
+			"pass vacuously; it needs at least one real predicate (e.g. state:offline) to be meaningful")
+	}
+	for _, p := range sel.Predicates {
+		if p.Namespace == capability.NamespaceTag {
+			t.Fatalf("a hostile policy-fingerprint injected a tag: predicate: %+v (rendered: %q)", p, joined)
+		}
+	}
+}
+
+// TestFacts_ZeroWidthSpaceIsAcceptedKnownGap pins CURRENT behaviour, not a
+// desired property. validFactValue rejects the Unicode `White_Space` set,
+// and U+200B ZWSP is not a member of it (category Cf, `White_Space=No`), so
+// it is accepted today — but that is NOT evidence the acceptance is
+// correct. It is the narrow, genuinely-invisible case of a wider,
+// ACKNOWLEDGED gap: runes outside `White_Space` can still render as a
+// visible blank next to a comma and reproduce the same "reads as two terms"
+// hazard this predicate exists to close (confirmed live for U+2800 BRAILLE
+// PATTERN BLANK and U+3164 HANGUL FILLER, neither of which is category Cf or
+// `White_Space`). See validFactValue's doc comment for the full gap and the
+// allowlist follow-up that would close it structurally. If a future change
+// tightens validFactValue to reject ZWSP too, update or delete this test —
+// its failure would not be a regression.
+func TestFacts_ZeroWidthSpaceIsAcceptedKnownGap(t *testing.T) {
+	const v = "aaaa\u200bbbbb"
+	in := nodestate.Input{Node: registry.Node{NodeID: "n", PolicyFingerprint: v}, Now: testNow}
+	found := false
+	for _, l := range nodestate.Facts(in) {
+		if l.Key == string(nodestate.FactPolicyFingerprint) {
+			found = true
+			if l.Value != v {
+				t.Errorf("Facts emitted state:policy-fingerprint=%q, want %q", l.Value, v)
+			}
+		}
+	}
+	if !found {
+		t.Error("Facts omitted a value containing only U+200B ZWSP — if validFactValue was " +
+			"tightened to close this gap, update this test rather than treating the failure as a regression")
 	}
 }
