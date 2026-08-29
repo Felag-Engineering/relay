@@ -61,7 +61,15 @@ func newTestHandler(d Deps, role accounts.Role) http.Handler {
 
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	return request(t, h, http.MethodGet, path)
+}
+
+// request is [get] with an explicit method, so a sweep can probe with
+// something other than GET — see the method-oracle sub-loop in
+// TestConsole_ARouteAboveTheSessionRoleIsAbsent.
+func request(t *testing.T, h http.Handler, method, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
 	req.Header.Set("Authorization", "Bearer "+testCredential)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -271,16 +279,26 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 // a real fixture above RoleViewer — the four v0.7.0 placeholders that used to
 // supply that shape are gone as of this change
 // (TestConsole_V060MountsNoUnbuiltScreen pins their removal).
+//
+// GET is not the only method a session can probe with, and the property has
+// to hold for all of them: net/http's ServeMux answers a method mismatch on a
+// REGISTERED pattern itself, with a 405 before any handler runs, which is a
+// method oracle if the pattern's mere registration leaks past a role that
+// 404s on GET (#464 cycle 2, F1). The second sub-loop below probes every
+// route [Route.constrainsReach] is true for — i.e. every route [gated]
+// actually wraps — with OPTIONS instead of GET, so this test fails again if
+// that oracle ever comes back.
 func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 	d := withExecution(sweepFixture(), true)
 	routes := Routes(d)
 
-	checked := 0
+	checked, methodChecked := 0, 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
 		// The control for the indistinguishability assertion: a path this
 		// package never mounts at all, walked through the same session.
 		miss := get(t, h, "/console/no-such-route")
+		missOptions := request(t, h, http.MethodOptions, "/console/no-such-route")
 
 		for _, r := range routes {
 			if r.Method != http.MethodGet {
@@ -303,34 +321,76 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 				if rec.Code == http.StatusNotFound {
 					t.Errorf("role %s: GET %s = 404, want reachable (MinRole %s)", role, path, r.MinRole)
 				}
-				continue
-			}
-
-			if rec.Code != http.StatusNotFound {
+			} else if rec.Code != http.StatusNotFound {
 				t.Errorf("role %s: GET %s = %d, want 404 — a role below MinRole %s must find the route absent", role, path, rec.Code, r.MinRole)
+			} else {
+				// Absent, not forbidden: a refused route must be byte-identical
+				// to a route that was never mounted, or the 404 is a
+				// status-code coincidence rather than a tested property.
+				res, missRes := rec.Result(), miss.Result()
+				if res.Status != missRes.Status {
+					t.Errorf("role %s: GET %s status line %q, want %q (same as an unmounted path)", role, path, res.Status, missRes.Status)
+				}
+				if got, want := res.Header.Get("Content-Type"), missRes.Header.Get("Content-Type"); got != want {
+					t.Errorf("role %s: GET %s Content-Type %q, want %q", role, path, got, want)
+				}
+				if got, want := res.Header.Get("X-Content-Type-Options"), missRes.Header.Get("X-Content-Type-Options"); got != want {
+					t.Errorf("role %s: GET %s X-Content-Type-Options %q, want %q", role, path, got, want)
+				}
+				if got, want := rec.Body.String(), miss.Body.String(); got != want {
+					t.Errorf("role %s: GET %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+				}
+			}
+
+			if !r.constrainsReach() {
+				// RoleViewer and below: no MinRole excludes anyone, so
+				// Register mounts no method-less fallback for this route
+				// ([Route.constrainsReach]) and an ordinary method mismatch on
+				// it discloses nothing a GET does not already.
+				continue
+			}
+			methodChecked++
+
+			optRec := request(t, h, http.MethodOptions, path)
+			if r.ReachableBy(role) {
+				// In role: the method-less fallback must reproduce what
+				// net/http would answer if r's method-specific pattern were
+				// the only thing registered for this path — 405 with an Allow
+				// header naming the real method — never a silent 404 (which
+				// would hide the route from its own legitimate caller) and
+				// never a 200 (which would mean OPTIONS reached the handler).
+				if optRec.Code != http.StatusMethodNotAllowed {
+					t.Errorf("role %s: OPTIONS %s = %d, want 405 (MinRole %s, method mismatch on an in-role route)", role, path, optRec.Code, r.MinRole)
+				}
+				if allow := optRec.Header().Get("Allow"); !strings.Contains(allow, r.Method) {
+					t.Errorf("role %s: OPTIONS %s Allow = %q, want it to name %s", role, path, allow, r.Method)
+				}
 				continue
 			}
 
-			// Absent, not forbidden: a refused route must be byte-identical to
-			// a route that was never mounted, or the 404 is a status-code
-			// coincidence rather than a tested property.
-			res, missRes := rec.Result(), miss.Result()
-			if res.Status != missRes.Status {
-				t.Errorf("role %s: GET %s status line %q, want %q (same as an unmounted path)", role, path, res.Status, missRes.Status)
+			// Below MinRole: OPTIONS must be just as absent as GET was above —
+			// this is the assertion that fails if the method oracle returns.
+			if optRec.Code != http.StatusNotFound {
+				t.Errorf("role %s: OPTIONS %s = %d, want 404 — a role below MinRole %s must find the route absent regardless of method", role, path, optRec.Code, r.MinRole)
+				continue
 			}
-			if got, want := res.Header.Get("Content-Type"), missRes.Header.Get("Content-Type"); got != want {
-				t.Errorf("role %s: GET %s Content-Type %q, want %q", role, path, got, want)
+			optRes, missOptRes := optRec.Result(), missOptions.Result()
+			if optRes.Status != missOptRes.Status {
+				t.Errorf("role %s: OPTIONS %s status line %q, want %q (same as an unmounted path)", role, path, optRes.Status, missOptRes.Status)
 			}
-			if got, want := res.Header.Get("X-Content-Type-Options"), missRes.Header.Get("X-Content-Type-Options"); got != want {
-				t.Errorf("role %s: GET %s X-Content-Type-Options %q, want %q", role, path, got, want)
+			if got, want := optRes.Header.Get("Content-Type"), missOptRes.Header.Get("Content-Type"); got != want {
+				t.Errorf("role %s: OPTIONS %s Content-Type %q, want %q", role, path, got, want)
 			}
-			if got, want := rec.Body.String(), miss.Body.String(); got != want {
-				t.Errorf("role %s: GET %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+			if got, want := optRec.Body.String(), missOptions.Body.String(); got != want {
+				t.Errorf("role %s: OPTIONS %s body %q, want %q (same as an unmounted path)", role, path, got, want)
 			}
 		}
 	}
 	if checked == 0 {
 		t.Fatal("the sweep checked zero routes — it is not running")
+	}
+	if methodChecked == 0 {
+		t.Fatal("the method-oracle sweep checked zero routes — it is not running")
 	}
 }
 

@@ -21,12 +21,15 @@ package console
 // said the absence stops being right the moment a second kind is added.
 // Activity (#422) adds one, so the gate is here: consoleEventKinds carries a
 // MinRole per kind and handleEvents checks it against the acting Principal
-// before a stream is opened, and that per-kind MinRole can be, and for job is,
-// HIGHER than the route's floor. A valid role clears the route gate
-// unconditionally and is judged again per kind; the only thing #464 changed
-// here is that an INVALID role now 404s at the route instead of reaching this
-// per-kind check at all — strictly more fail-closed, and no reason to raise
-// this route's own MinRole.
+// before a stream is opened. Today every admitted kind sits AT the route's
+// RoleViewer floor (consoleEventKinds below), not above it; the per-kind
+// table is the thing that must move when a kind needing more than Viewer is
+// added, not this route's MinRole. A valid role clears the route gate
+// unconditionally and is judged again per kind; an INVALID role reaches that
+// same per-kind check and is refused there with 403 (events.go, below),
+// exactly as before #464 — the route passes it through unwrapped because its
+// MinRole is RoleViewer, so #464 changed nothing about where an invalid role
+// is refused on this particular route.
 //
 // THE DISCLOSURE TABLE — for each admitted kind, what the PROJECTION carries
 // and why that role:

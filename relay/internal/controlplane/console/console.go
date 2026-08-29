@@ -20,6 +20,12 @@
 // decision 5), generalised from a config flag to a role; it is not
 // authorization and not a second control path. See Route.MinRole.
 //
+// The absence has to hold for every METHOD, not only the one a route
+// advertises: net/http's ServeMux answers a method mismatch on a registered
+// pattern with 405 (and an Allow header) before any handler runs, which would
+// let an OPTIONS probe confirm a gated route exists even though GET 404s for
+// it. [methodMismatch] closes that oracle; see its doc and gated's.
+//
 // # Why this package's security middleware is not hygiene
 //
 // ADR-0026 gave the Console an execution surface, which moved browser security
@@ -169,6 +175,13 @@ func (r Route) Link() string { return strings.TrimSuffix(r.Path, "{$}") }
 // package may re-derive this comparison.
 func (r Route) ReachableBy(role accounts.Role) bool { return role.AtLeast(r.MinRole) }
 
+// constrainsReach reports whether r's own MinRole excludes any valid role at
+// all. RoleViewer is the lowest valid role, so if RoleViewer can already
+// reach r, MinRole excludes nobody and neither [gated] nor [methodMismatch]
+// have anything to do — this is the single predicate both use to decide
+// whether they wrap a route at all.
+func (r Route) constrainsReach() bool { return !r.ReachableBy(accounts.RoleViewer) }
+
 // Routes returns the route table for d — that is, the routes this PROCESS will
 // mount, which is not the same as every route this package can describe, and
 // — since [Route.MinRole] became a mount-time gate — is now a SUPERSET of what
@@ -211,6 +224,16 @@ func Routes(d Deps) []Route {
 		// mounted-but-refusing row to keep a session from reaching one — the
 		// route is simply absent until its screen ships, and that issue adds
 		// its own row with its own MinRole.
+		//
+		// Add Nodes was /console/nodes/add — a LITERAL segment under
+		// GET /console/nodes/{node_id} (above). With that row gone, the path
+		// now falls through to handleNode with node_id="add" and renders the
+		// Console shell's ordinary "Node not found" page instead of a plain
+		// absence — not a new disclosure (any /console/nodes/<anything>
+		// unknown already renders that page), but whoever re-adds this screen
+		// should either pick a path outside /console/nodes/ (as /console/compare,
+		// above, already did for the same reason) or accept the shadow
+		// knowingly.
 		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
 
@@ -228,7 +251,9 @@ func Routes(d Deps) []Route {
 		// MinRole here is RoleViewer, so the mount gate ([gated]) passes this
 		// route through unwrapped — it refuses nothing an authenticated
 		// principal can be. The real control is the per-kind table in
-		// events.go, which can be, and is, higher than this route's floor.
+		// events.go; every kind it admits today sits AT this route's
+		// RoleViewer floor, and that table — not this route's MinRole — is
+		// what must move when a kind needing more than Viewer is added.
 		{"GET", "/console/events", NavEntry{}, accounts.RoleViewer, handleEvents},
 
 		// The sign-in surface (#418). GET renders the form and POST accepts
@@ -310,8 +335,12 @@ func routesFor(d Deps, role accounts.Role) []Route {
 // accounts.Role.AtLeast then refuses every role including admin — the route
 // 404s for everyone and Nav drops it, the same rank-zero behaviour
 // accounts.Role and resolveEventKinds (events.go) already rely on.
+//
+// gated alone only protects r's own method-specific pattern
+// ("GET /console/run"). It does not by itself make a gated route
+// method-proof — see [methodMismatch], which Register mounts alongside it.
 func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
-	if accounts.RoleViewer.AtLeast(r.MinRole) {
+	if !r.constrainsReach() {
 		return h
 	}
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -321,6 +350,48 @@ func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		h(w, req)
+	}
+}
+
+// methodMismatch answers requests to r's PATH whose METHOD does not match
+// r.Method — the case [gated]'s own registration (mounted on r.Pattern(), a
+// method-specific pattern) never sees, because net/http's ServeMux resolves a
+// method mismatch on a registered pattern itself, with a 405 and an Allow
+// header, before any handler runs. Left alone that answer fires whether or
+// not the caller may reach r at all, so a viewer's OPTIONS on an admin-only
+// path would confirm the path is mounted even though its GET 404s — the exact
+// oracle GET was gated to deny. Register mounts this on r.Path (no method) for
+// every route where [Route.constrainsReach] is true, so the method-less
+// pattern only ever receives a method OTHER than r.Method: ServeMux always
+// prefers the more specific, method-matching pattern for r.Method itself
+// (verified empirically; a method-specific pattern coexists with a
+// method-less one on the same path and always wins its own method).
+//
+// Below MinRole it answers exactly like [gated]: http.NotFound, so the method
+// used to probe cannot distinguish a gated route from one never mounted.
+//
+// At or above MinRole it must not simply invent a 405: a hand-written Allow
+// header could drift from what ServeMux would really have said, and drift
+// here is a correctness bug on a route a legitimate caller uses. Instead it
+// delegates to a private single-route ServeMux holding only r's own
+// method-specific pattern — the exact mux net/http would build if r were the
+// only thing ever registered for its path — so the 405 and its Allow header
+// are the real stdlib computation, not a reimplementation of it, and can
+// never drift from what an unwrapped route would have answered.
+func methodMismatch(r Route) http.HandlerFunc {
+	probe := http.NewServeMux()
+	probe.HandleFunc(r.Pattern(), func(http.ResponseWriter, *http.Request) {
+		panic("console: methodMismatch probe was asked to serve r's own method; " +
+			"Register only mounts this handler on r.Path, which a method-matching " +
+			"request never reaches — see methodMismatch's doc comment")
+	})
+	return func(w http.ResponseWriter, req *http.Request) {
+		p, ok := controlplane.PrincipalFromContext(req.Context())
+		if !ok || !r.ReachableBy(accounts.Role(p.Role)) {
+			http.NotFound(w, req)
+			return
+		}
+		probe.ServeHTTP(w, req)
 	}
 }
 
@@ -337,12 +408,24 @@ func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
 // changes which pattern ServeMux matches — so a refused request finds no
 // route registered for it, rather than falling through to a neighbour's
 // handler with a role it should not have satisfied.
+//
+// For every route [Route.constrainsReach] reports true for, Register ALSO
+// mounts [methodMismatch] on the route's bare path (no method): otherwise the
+// method-specific pattern gated is mounted on would be the only registration
+// for that path, and ServeMux would answer any OTHER method itself — 405
+// before gated ever runs — which reveals the route exists to a role that
+// cannot GET it. A route no MinRole constrains (RoleViewer and below) gets no
+// second registration; an ordinary method mismatch on it discloses nothing,
+// because every valid role could already reach it.
 func Register(mux *http.ServeMux, d Deps) {
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }
 	}
 	for _, r := range Routes(d) {
 		mux.HandleFunc(r.Pattern(), gated(r, r.Handler(d)))
+		if r.constrainsReach() {
+			mux.HandleFunc(r.Path, methodMismatch(r))
+		}
 	}
 }
 
