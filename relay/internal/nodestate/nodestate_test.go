@@ -455,6 +455,10 @@ func TestFacts_UnicodeWhitespaceCannotInjectASelectorTerm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseSelector(%q): %v", joined, err)
 	}
+	if len(sel.Predicates) == 0 {
+		t.Fatal("ParseSelector produced zero predicates — the NamespaceTag check below would " +
+			"pass vacuously; it needs at least one real predicate (e.g. state:offline) to be meaningful")
+	}
 	for _, p := range sel.Predicates {
 		if p.Namespace == capability.NamespaceTag {
 			t.Fatalf("a hostile policy-fingerprint injected a tag: predicate: %+v (rendered: %q)", p, joined)
@@ -462,19 +466,20 @@ func TestFacts_UnicodeWhitespaceCannotInjectASelectorTerm(t *testing.T) {
 	}
 }
 
-// TestFacts_ZeroWidthSpaceIsNotWhitespaceAndIsAccepted pins a deliberate
-// non-rejection: U+200B ZWSP is category Cf with White_Space=No, so
-// unicode.IsSpace returns false for it and Rust's split_whitespace agrees —
-// rejecting it here would make the Relay's whitespace notion strictly WIDER
-// than the daemon's, the same inconsistency this predicate exists to
-// remove, only reversed. The hazard validFactValue defends against is a
-// value that sits next to a hand-typed comma and still READS as two terms;
-// an invisible character creates no visible gap, so it is not that hazard.
-// Homograph/invisible-character rendering — covering Cf generally, plus the
-// bidi controls U+202A-U+202E — is a separate, unopened concern. This test
-// exists so a later contributor cannot silently widen the predicate to
-// close it without that being a visible, deliberate change.
-func TestFacts_ZeroWidthSpaceIsNotWhitespaceAndIsAccepted(t *testing.T) {
+// TestFacts_ZeroWidthSpaceIsAcceptedKnownGap pins CURRENT behaviour, not a
+// desired property. validFactValue rejects the Unicode `White_Space` set,
+// and U+200B ZWSP is not a member of it (category Cf, `White_Space=No`), so
+// it is accepted today — but that is NOT evidence the acceptance is
+// correct. It is the narrow, genuinely-invisible case of a wider,
+// ACKNOWLEDGED gap: runes outside `White_Space` can still render as a
+// visible blank next to a comma and reproduce the same "reads as two terms"
+// hazard this predicate exists to close (confirmed live for U+2800 BRAILLE
+// PATTERN BLANK and U+3164 HANGUL FILLER, neither of which is category Cf or
+// `White_Space`). See validFactValue's doc comment for the full gap and the
+// allowlist follow-up that would close it structurally. If a future change
+// tightens validFactValue to reject ZWSP too, update or delete this test —
+// its failure would not be a regression.
+func TestFacts_ZeroWidthSpaceIsAcceptedKnownGap(t *testing.T) {
 	const v = "aaaa\u200bbbbb"
 	in := nodestate.Input{Node: registry.Node{NodeID: "n", PolicyFingerprint: v}, Now: testNow}
 	found := false
@@ -487,6 +492,7 @@ func TestFacts_ZeroWidthSpaceIsNotWhitespaceAndIsAccepted(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("Facts omitted a value containing only U+200B ZWSP, which is not White_Space")
+		t.Error("Facts omitted a value containing only U+200B ZWSP — if validFactValue was " +
+			"tightened to close this gap, update this test rather than treating the failure as a regression")
 	}
 }

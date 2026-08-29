@@ -274,24 +274,43 @@ var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 //
 // Rejected outright rather than escaped, because ParseSelector has no escape
 // syntax to escape INTO:
+//
 //   - `,` is the term separator ParseSelector splits on — the injection this
 //     finding demonstrates.
+//
 //   - any Unicode `White_Space` rune anywhere in the value — leading,
 //     trailing or embedded — lets a value sit next to a hand-typed comma (a
 //     Console facet href, an AI-agent's copy-pasted selector string) and
 //     still read as two terms once joined. This is CONTEXT.md's "Canonical
-//     form" whitespace notion, not the ASCII one: ADR-0019's Raw Exec split
-//     (`argv.join(" ").split_whitespace()`) folds a tab or an NBSP exactly
-//     like a space, using the same `White_Space` property Rust's
-//     `char::is_whitespace` implements, and Go's `unicode.IsSpace` agrees
-//     with `unicode.Is(unicode.White_Space, r)` over every rune in Go's
-//     Unicode tables — one whitespace definition, both sides of the system.
-//     Zero-width characters (U+200B ZWSP, U+FEFF, U+180E) are category Cf,
-//     `White_Space=No`, and are deliberately NOT rejected here: they create
-//     no visible gap next to a comma, which is the hazard this bullet closes,
-//     and rejecting them would make the Relay's whitespace notion strictly
-//     wider than the daemon's — the same inconsistency this predicate exists
-//     to remove, just in the other direction.
+//     form" whitespace notion: Go's `unicode.IsSpace` agrees with
+//     `unicode.Is(unicode.White_Space, r)` over every rune in Go's Unicode
+//     tables, and Rust's `char::is_whitespace` (ADR-0019's Raw Exec split,
+//     `argv.join(" ").split_whitespace()`) implements the same property — a
+//     fact worth knowing, but not the reason this check exists: that split is
+//     a PARSER widening a deny match over an argv projection, while this is a
+//     RENDERING gate on a string an operator reads and clicks and an
+//     AI-agent copies. The two have no obligation to agree, and this side
+//     being stricter than the daemon's costs nothing here — no Policy
+//     outcome, no argv, no daemon behaviour changes.
+//
+//     ACKNOWLEDGED GAP, NOT CLOSED BY THIS CHECK: `White_Space=No` is not the
+//     same property as "renders with no visible width". This predicate
+//     rejects exactly the Unicode `White_Space` set, and a rune outside that
+//     set can still render as a blank cell next to a comma and reproduce the
+//     same "reads as two terms" hazard — confirmed live: U+2800 BRAILLE
+//     PATTERN BLANK (category `So`) and U+3164 HANGUL FILLER / U+115F
+//     CHOSEONG FILLER (category `Lo`) are all accepted by this check, none of
+//     them is `White_Space` or category `Cf`, and all three render as a
+//     visible blank in most fonts — the same shape as this issue's own
+//     reproduction, with one substituted rune. Zero-width characters (U+200B
+//     ZWSP, U+FEFF, U+180E) are the narrower, genuinely-invisible case of the
+//     same gap, not a separately-reasoned exemption. Closing this needs an
+//     allowlist, not a wider blocklist: all three fields below have a
+//     closed alphabet (semver over `[0-9A-Za-z.+-]`, and `[0-9a-f]{64}` or
+//     `unloadable`), so rejecting anything outside ASCII plus that alphabet
+//     would close this class structurally. That is a follow-up, not this
+//     check.
+//
 //   - a value starting with one of the four namespace prefixes could pose as
 //     a second term the moment it lands beside any comma downstream, even one
 //     this package did not itself introduce.
