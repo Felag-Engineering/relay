@@ -31,6 +31,19 @@ func TestEncodingFormatIsPinned(t *testing.T) {
 			value: "a=b:c\nd",
 			want:  "f=7:a=b:c\nd\n",
 		},
+		// The length prefix's contract is BYTE length, not rune length -- that
+		// is the property this whole encoding rests on, and an ASCII-only
+		// table can never see the difference between the two. "\u00fc"
+		// (U+00FC) is one rune but two UTF-8 bytes, so a "tidy-up" that swaps
+		// len(value) for utf8.RuneCountInString(value) -- a very natural
+		// instinct when someone touches a length-prefixed format -- changes
+		// the byte offset the decoder computes without changing the rune
+		// count, silently re-pointing every non-ASCII plan_hash and
+		// shape_key already on disk. An ASCII-only table cannot see this.
+		{name: "two-byte rune", field: "f", value: "\u00fc", want: "f=2:\u00fc\n"},
+		// A three-byte rune makes the byte-vs-rune distinction unmistakable:
+		// one rune, three bytes.
+		{name: "three-byte rune", field: "f", value: "\u65e5", want: "f=3:\u65e5\n"},
 	}
 	for _, c := range fieldCases {
 		t.Run("writeField/"+c.name, func(t *testing.T) {

@@ -255,18 +255,31 @@ func TestHashPlanIgnoresNilVersusEmptyOperationArgs(t *testing.T) {
 // two spaces would let an approved GRANT REQUEST release an ordinary
 // dispatch. Modeled on TestPlanAndGrantShapesNeverCollide (shape_test.go).
 //
-// Asserted STRUCTURALLY, not only by sampling: ActionKindName's switch is
-// exhaustive over every jobs.ActionKind including out-of-range values (its
-// default arm), and "grant" is never one of its return values — that string
-// appears only as HashScope's own literal "kind" field value (grant.go).
-// Since kind is the FIRST field either function writes, the two preimage
-// spaces diverge at byte zero for every ActionKind this build can produce or
-// ever read back from storage.
+// The loop below sweeps a bounded range of jobs.ActionKind values, including
+// a few out-of-range ones, but a bounded sweep can never be exhaustive over
+// every int the Go type permits — a future `case jobs.ActionKind(7): return
+// "grant"` outside this range would slip past it undetected. The real
+// guarantee this test rests on is ActionKindName's default arm (plan.go):
+// every kind this build does not explicitly recognize falls through to that
+// arm, which returns the literal "unspecified", never "grant". That is what
+// makes "grant" exclusively HashScope's own literal "kind" field value
+// (grant.go), so the two preimage spaces diverge at byte zero for every
+// ActionKind this build can produce or ever read back from storage. The
+// second assertion below pins that default-arm literal directly, using a
+// kind value chosen to be far outside any plausible named constant so it is
+// guaranteed to hit default regardless of how many named cases exist by the
+// time this test runs; the bounded sweep is defense in depth on top of it,
+// not the guarantee itself.
 func TestPlanHashAndScopeHashNeverCollide(t *testing.T) {
 	for k := jobs.ActionKind(-2); k <= 5; k++ {
 		if name := ActionKindName(k); name == "grant" {
 			t.Errorf("ActionKindName(%d) = %q, want anything but \"grant\" — HashScope reserves that kind value", int(k), name)
 		}
+	}
+
+	if name := ActionKindName(jobs.ActionKind(1 << 20)); name != "unspecified" {
+		t.Errorf("ActionKindName(1<<20) = %q, want %q — this pins the switch's default arm, "+
+			"which is the actual guarantee this test relies on, not the bounded sweep above", name, "unspecified")
 	}
 
 	// One sampled digest inequality on top of the structural proof above.
