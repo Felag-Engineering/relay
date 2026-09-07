@@ -213,6 +213,13 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // carrying a bearer header is never resolved as a session even if it also
 // carries a cookie — so a browser cannot be talked into presenting a stolen
 // session alongside a header, and a script cannot fall back to one.
+//
+// Shape picks the lane; it does not decide the lane's REACH. The cookie lane
+// is additionally bounded by where the Console is (#459): a credential binds
+// to the surface that issued it, and a session cookie the browser attaches to
+// every path — the `__Host-` prefix forces Path=/ — is a credential for the
+// Console and for nothing else on this listener. The token lanes carry no such
+// bound: an API Token is a control-plane credential by construction.
 func (a *Authenticator) authenticateRequest(r *http.Request) (capability.Principal, bool) {
 	source := sourceAddress(r)
 
@@ -225,7 +232,12 @@ func (a *Authenticator) authenticateRequest(r *http.Request) (capability.Princip
 		return p, true
 	}
 
-	if a.console != nil {
+	// The cookie is only a credential ON THE CONSOLE (#459). The `__Host-`
+	// prefix forces it to Path=/, so the browser presents it on /api/v1 and
+	// /mcp as well; the lane is the Console's, and it ends where the Console
+	// does. Off-scope the cookie is not resolved and not even read, so a
+	// request carrying one is refused exactly like a request carrying nothing.
+	if a.console != nil && a.console.scope(r) {
 		if id, ok := consoleSessionFromRequest(r); ok {
 			return a.authenticateConsole(r.Context(), id, source)
 		}
