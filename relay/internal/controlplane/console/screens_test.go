@@ -714,6 +714,152 @@ func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
 	}
 }
 
+// agentMutateFixture is one Account's calls across every shape the rail's
+// mutate count has to reason about: two mutating run_operation dispatches, a
+// read-class Operation, a non-dispatching read tool, a raw_exec dispatch, a
+// raw_exec the role gate refused, and a raw_exec still parked for approval.
+//
+// The two service.restart dispatches are the DISCRIMINATING records. The
+// predicate this fixture replaced counted `Kind == KindDispatch && ActionKind
+// != "" && OperationName == ""` — raw_exec only — so a fixture made of
+// raw_exec alone passes under both the old and the new counting and proves
+// nothing. Removing service.restart from this slice must take the guard red.
+func agentMutateFixture() []audit.Record {
+	const who = "gleipnir-prod:operator"
+	return []audit.Record{
+		// Mutating Operations: an OperationName IS set, which is exactly what
+		// the old predicate required to be empty.
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "service.restart",
+			Principal: who, NodeID: "node-a", Outcome: jobs.OutcomeSuccess, Timestamp: testNow},
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "service.restart",
+			Principal: who, NodeID: "node-b", Outcome: jobs.OutcomeSuccess, Timestamp: testNow},
+		// Read-class Operation, and a non-dispatching read tool. Neither is a
+		// mutate however it is recorded.
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "file.read",
+			Principal: who, NodeID: "node-a", Outcome: jobs.OutcomeSuccess, Timestamp: testNow},
+		{Kind: audit.KindRead, OperationName: "list_nodes", Principal: who, Timestamp: testNow},
+		// Raw Exec, which always takes the mutate cap (ADR-0012): one
+		// dispatched, one refused by the role gate, one parked for approval.
+		{Kind: audit.KindDispatch, ActionKind: "raw_exec", RawExecArgv: []string{"systemctl", "restart", "nginx"},
+			Principal: who, NodeID: "node-a", Outcome: jobs.OutcomeSuccess, Timestamp: testNow},
+		{Kind: audit.KindRefusal, ActionKind: "raw_exec", RawExecArgv: []string{"rm", "-rf", "/srv"},
+			Principal: who, Timestamp: testNow},
+		{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: who, Timestamp: testNow},
+	}
+}
+
+// TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec.
+//
+// The rail's mutate count is one of the six fields spec 03 asks the rail to
+// show, and it was computed and then thrown away: nothing rendered it, and
+// what it computed was wrong twice over.
+//
+// The predicate was `Kind == KindDispatch && ActionKind != "" &&
+// OperationName == ""`, which selects raw_exec ALONE — fifty service.restart
+// dispatches showed a mutate count of zero. And it re-derived the risk class
+// from field emptiness rather than through riskOf (vocab.go), the one
+// inference this package is allowed to make, so the rail and the per-row chip
+// could disagree about the same record — the drift class of #463.
+//
+// The count is asserted against riskOf over the same facts rather than a bare
+// literal 5, so a change to what riskOf calls a mutate moves the guard with
+// it instead of leaving a stale number to be "fixed".
+func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
+	recs := agentMutateFixture()
+
+	want := 0
+	for _, rec := range recs {
+		if riskOf(factsOfRecord(rec)) == jobs.RiskClassMutate {
+			want++
+		}
+	}
+	// Sanity on the fixture itself: it must contain more mutates than its
+	// raw_exec records alone, or it cannot discriminate the two predicates.
+	rawExecs := 0
+	for _, rec := range recs {
+		if rec.ActionKind == rawExecActionKind {
+			rawExecs++
+		}
+	}
+	if want <= rawExecs {
+		t.Fatalf("fixture has %d mutates and %d raw_exec records: a raw_exec-only fixture "+
+			"passes under the old predicate too and proves nothing", want, rawExecs)
+	}
+
+	rail, _, _ := buildAgents(recs, "", testNow)
+	if len(rail) != 1 {
+		t.Fatalf("got %d rail entries, want 1", len(rail))
+	}
+	if rail[0].Mutates != want {
+		t.Errorf("rail mutate count = %d, want %d — a mutating run_operation carries an "+
+			"OperationName, and counting only records with an EMPTY one counts raw_exec alone",
+			rail[0].Mutates, want)
+	}
+	if rail[0].Calls != len(recs) {
+		t.Errorf("rail call count = %d, want %d", rail[0].Calls, len(recs))
+	}
+}
+
+// TestAgents_RailRendersTheMutateCount.
+//
+// buildAgents computing the number is half the job: agentAccount.Mutates was
+// computed and never rendered, so a guard on the struct field alone passes
+// against a screen that shows the operator nothing. This one reads the HTML.
+//
+// It deliberately pins RENDERING only — its expected string is derived from
+// the rail entry, so it stays green against a wrong count. What the count must
+// BE is the sibling guard above; splitting them keeps each failure legible.
+func TestAgents_RailRendersTheMutateCount(t *testing.T) {
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: agentMutateFixture()}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	rail, _, _ := buildAgents(agentMutateFixture(), "", testNow)
+	want := itoa(rail[0].Mutates) + " mutate"
+	if !strings.Contains(body, want) {
+		t.Errorf("the Accounts rail does not render %q; spec 03 lists the mutate count among "+
+			"the fields the rail shows, and a computed-and-discarded field is not a rendered one", want)
+	}
+}
+
+// TestAgents_RailMutateCountAgreesWithTheRowRiskChips.
+//
+// The rail and the risk chips sit on the SAME screen, so an operator can check
+// one against the other by scrolling. They can only be checked that way if
+// they answer through one inference: the old rail counter asked "is
+// OperationName empty" while the chip asked riskOf, and two numbers on one
+// screen disagreeing about one record set is precisely what routing everything
+// through riskOf exists to prevent.
+//
+// Asserted on the RENDERED page, counting `data-risk="mutate"` chips against
+// the rail's own number, because that is the comparison the operator makes.
+func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
+	recs := agentMutateFixture()
+
+	rail, calls, _ := buildAgents(recs, "", testNow)
+	if len(rail) != 1 {
+		t.Fatalf("got %d rail entries, want 1", len(rail))
+	}
+	chipped := 0
+	for _, c := range calls {
+		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
+			chipped++
+		}
+	}
+	if rail[0].Mutates != chipped {
+		t.Errorf("the rail says %d mutate and the stream chips %d rows mutate — the rail and the "+
+			"per-row chip disagree about the same records", rail[0].Mutates, chipped)
+	}
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+	if rendered := strings.Count(body, `data-risk="mutate"`); rendered != rail[0].Mutates {
+		t.Errorf("the rendered page shows %d mutate risk chips and a rail count of %d",
+			rendered, rail[0].Mutates)
+	}
+}
+
 // TestAgents_RailLinkSurvivesAnAccountNameWithReservedCharacters — the rail's
 // href is built from a principal string this package does not constrain, so it
 // has to be ENCODED rather than concatenated.

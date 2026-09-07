@@ -49,7 +49,6 @@ type agentAccount struct {
 	Verified bool
 	Calls    int
 	Mutates  int
-	Reads    int
 	Denied   int
 	LastSeen string
 	Active   bool
@@ -141,7 +140,8 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		if !isAgentCall(rec) {
 			continue
 		}
-		name := principalText(factsOfRecord(rec))
+		f := factsOfRecord(rec)
+		name := principalText(f)
 		a, seen := byAccount[name]
 		if !seen {
 			a = &acc{agentAccount: agentAccount{
@@ -157,13 +157,51 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 			byAccount[name] = a
 		}
 		a.Calls++
-		switch {
-		case rec.Kind == audit.KindRead:
-			a.Reads++
-		case rec.Outcome == jobs.OutcomeDeniedByPolicy:
+		// Unconditional, where this used to be the second arm of a switch whose
+		// first arm counted read-class records into a Reads field. Nothing
+		// writes a KindRead record with an Outcome (auditsink.RecordRead sets
+		// none), so no record changes lane; the switch was hiding a denied read
+		// from the Denied count for no reason a reader could see.
+		if rec.Outcome == jobs.OutcomeDeniedByPolicy {
 			a.Denied++
 		}
-		if rec.Kind == audit.KindDispatch && rec.ActionKind != "" && rec.OperationName == "" {
+		// The mutate count is mutate-class CALLS, counted through the same one
+		// inference as the per-row chip (riskOf, vocab.go) — so the rail's "3
+		// mutate" is by construction the number of rows below it chipped
+		// mutate, and an operator can verify the rail by scrolling.
+		//
+		// # What the number claims, and why it counts asks rather than runs
+		//
+		// Every mutate-class call this Account made: including a raw_exec the
+		// role gate REFUSED, a dispatch still PARKED for approval, and one
+		// Policy DENIED. None of those changed a Node, and the count still
+		// includes them, because this screen is the request and never the
+		// result ("as the Relay received it", above) and the rail's other
+		// counters already read that way — Denied is a subset of Calls, not a
+		// column beside it. On a trust surface an attempted mutate is the
+		// signal: a compromised agent probing a fleet and being refused every
+		// time must not read quieter than an honest one. What actually RAN is
+		// Activity's question, at Job grain, where an outcome means something.
+		//
+		// The outcome chip on each row is what separates asked from ran, and it
+		// is on the same screen — which is the other half of why the count is
+		// derived this way rather than filtered down to executed dispatches:
+		// two numbers on one screen disagreeing about one record is the drift
+		// riskOf exists to prevent (#463).
+		//
+		// The predicate this replaces was `Kind == KindDispatch && ActionKind
+		// != "" && OperationName == ""` — raw_exec only. A mutating
+		// run_operation carries an OperationName, so fifty service.restart
+		// dispatches counted zero.
+		//
+		// There is deliberately no read counter beside it. Spec 03 does not ask
+		// the rail for one, riskOf answers read or mutate and nothing else — so
+		// reads are Calls minus Mutates — and a third number an operator has to
+		// reconcile with the other two buys nothing. The Reads field that used
+		// to be computed here was never rendered and disagreed with the chip
+		// anyway (it tested Kind == KindRead, so a read-class DISPATCH like
+		// file.read chipped read and counted as neither).
+		if riskOf(f) == jobs.RiskClassMutate {
 			a.Mutates++
 		}
 		if rec.Timestamp.After(a.last) {
@@ -361,12 +399,12 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">Accounts <span class="phint">active = a call in the last 15 minutes</span></div>
+    <div class="ftitle">Accounts <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused and parked included</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
       <span class="dot" data-live="{{if .Active}}on{{else}}off{{end}}"></span>
       <span class="aname">{{template "trust-chip" (trust .Name .Verified)}}</span>
-      <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Denied}} · {{.Denied}} denied{{end}}</span>
+      <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Mutates}} · {{.Mutates}} mutate{{end}}{{if .Denied}} · {{.Denied}} denied{{end}}</span>
       <span class="asub">{{.LastSeen}}</span>
     </a>
     {{else}}
