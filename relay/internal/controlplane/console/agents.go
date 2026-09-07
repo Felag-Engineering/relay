@@ -269,6 +269,12 @@ func agentCallFrom(rec audit.Record) agentCall {
 	// value renders as "unspecified" — which reads as "we don't know" for an
 	// event whose outcome is perfectly well known. Name what actually happened.
 	switch rec.Kind {
+	case audit.KindRead:
+		// A metadata-only read is the case this switch was written for and did
+		// not cover: no Node was asked anything, so the chip rendered
+		// "unspecified" over a record whose whole content is known (#517). The
+		// word is chosen and justified at readOutcomeAudited (vocab.go).
+		c.Outcome = readOutcomeAudited
 	case audit.KindRefusal:
 		c.Outcome = "refused"
 	case audit.KindApprovalRequested:

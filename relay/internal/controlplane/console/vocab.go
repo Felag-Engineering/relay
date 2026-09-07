@@ -169,6 +169,37 @@ func readTargetOf(f trailFacts) string {
 	return readTargetName(f.OperationName, f.ActionKind, f.Args)
 }
 
+// readOutcomeAudited is the outcome word for a metadata-only read record.
+//
+// A read record has no per-Node verdict to render: nothing was dispatched and
+// no daemon decided anything, so audit.Record.Outcome is the zero value and an
+// outcome chip built from it falls to "unspecified" — "we don't know" about the
+// one family of record whose disposition is completely known (#517).
+//
+// The word is "audited", and the three alternatives were each rejected for a
+// reason worth keeping:
+//
+//   - "read" restates the Kind. The row already names the tool through
+//     readTargetOf in the cell beside the chip, so a chip that says "read"
+//     spends the operator's attention repeating what they just read.
+//   - "succeeded" is a claim the record cannot support. The access record is
+//     written BEFORE the query runs, and fails closed so an unauditable read
+//     never happens (capability's read lane, mcp/readaudit.go). A read that
+//     failed downstream is therefore recorded exactly like one that returned,
+//     and no result ever comes back to amend the record.
+//   - "recorded" says the same thing as "audited" with none of the ADR-0025
+//     weight, and does not pair with the sentence the row already renders.
+//
+// "audited" names the one property the record does carry — and the only one it
+// is written to guarantee: the access is on the trail whatever the result was,
+// and the result itself is never retained (ADR-0025). It is the chip form of
+// the note the row already carries beneath it, "The call is audited; the
+// result is not retained."
+//
+// It lives here, beside readTargetOf, for the reason this file exists: a second
+// screen naming these records is a second chance to name them differently.
+const readOutcomeAudited = "audited"
+
 // readOperations is every Operation name this package can call read: the
 // native half DERIVED from opvocab, unioned with the shipped-template half
 // MIRRORED below. It is built once, at var-init, so isReadOperation stays a
