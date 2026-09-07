@@ -377,9 +377,37 @@ func factRows(n registry.Node) []nodeFact {
 // A refusal is Relay-side — nothing reached the machine — and belongs on
 // Activity, where it is attributed to the principal who was refused rather than
 // to the Node that never heard about it.
+//
+// # The admitting switch names the outcome, rather than a corrective one
+//
+// The outcome chip used to be built from rec.Outcome for both admitted kinds.
+// That is right for a dispatch and wrong for a read: auditsink.RecordRead
+// writes who read, which tool, what they aimed it at and when, and deliberately
+// no per-Node verdict — nothing was dispatched and no daemon decided anything.
+// The zero Outcome then rendered "unspecified", the Console saying "we don't
+// know" about the one family of record whose disposition is completely known
+// (#520; the Agents screen had the same bug, #517).
+//
+// agentCallFrom fixes its copy with a CORRECTIVE switch after the assignment,
+// because it admits eight kinds and only some of them need correcting. This
+// function admits exactly two, so a second switch would be a special case
+// bolted beside the switch that already decides what a record is. Deciding the
+// outcome inside the admitting switch is both smaller and stricter: a kind
+// added to it later cannot be admitted without someone naming what its chip
+// says, which is precisely the omission that produced this bug.
+//
+// Dispatch is the only admitted kind with a real per-Node verdict — a
+// zero-result dispatch record carries no NodeID at all, so ByNode never returns
+// one here — and the word for the other is justified at readOutcomeAudited
+// (vocab.go), taken from there rather than re-minted so that two screens naming
+// these records cannot name them two ways.
 func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
+	var outcome string
 	switch rec.Kind {
-	case audit.KindDispatch, audit.KindRead:
+	case audit.KindDispatch:
+		outcome = OutcomeLabel(rec.Outcome)
+	case audit.KindRead:
+		outcome = readOutcomeAudited
 	default:
 		return nodeTask{}, false
 	}
@@ -388,7 +416,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Operation: operationText(f),
 		Args:      argsText(f),
-		Outcome:   OutcomeLabel(rec.Outcome),
+		Outcome:   outcome,
 		JobID:     rec.JobID,
 		Principal: principalText(f),
 		Verified:  rec.Attribution.Verified.AccountID != "",

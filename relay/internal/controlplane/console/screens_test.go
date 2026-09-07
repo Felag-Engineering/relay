@@ -2544,8 +2544,18 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 // captureRepo is an audit.Repository that keeps what was appended to it.
 //
 // It exists so a test fixture can be a record the REAL sink wrote, rather than
-// a literal hand-copied from it. Only Append and List carry any behaviour: the
+// a literal hand-copied from it. Append, List and ByNode carry behaviour: the
 // rest of the interface is here because the interface is here.
+//
+// ByNode answers for real (#520) because a captureRepo is now handed to a
+// screen as its AuditReader, not only used as somewhere for the sink to write.
+// Node detail reads the trail through ByNode and through nothing else, so a
+// stub returning nothing would let a test go green having rendered an empty
+// "Recent Tasks" panel — the fixture would satisfy the assertion by never
+// exercising the code under test. The filter mirrors the store's
+// `WHERE node_id = ?`, and the slice stays in Append order, which is the
+// oldest-first ordering the real query's `ORDER BY ts` produces for records the
+// sink wrote in sequence.
 type captureRepo struct{ recs []audit.Record }
 
 func (r *captureRepo) Append(_ context.Context, rec audit.Record) error {
@@ -2556,8 +2566,14 @@ func (r *captureRepo) List(context.Context) ([]audit.Record, error) { return r.r
 func (r *captureRepo) ByJob(context.Context, string) ([]audit.Record, error) {
 	return nil, nil
 }
-func (r *captureRepo) ByNode(context.Context, string) ([]audit.Record, error) {
-	return nil, nil
+func (r *captureRepo) ByNode(_ context.Context, nodeID string) ([]audit.Record, error) {
+	var out []audit.Record
+	for _, rec := range r.recs {
+		if rec.NodeID == nodeID {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
 }
 func (r *captureRepo) ByAccount(context.Context, string) ([]audit.Record, error) {
 	return nil, nil
@@ -2587,6 +2603,30 @@ func (r *captureRepo) ByOnBehalfOf(context.Context, string) ([]audit.Record, err
 func sinkReadRecords(t *testing.T, tools ...string) []audit.Record {
 	t.Helper()
 	repo := &captureRepo{}
+	sinkReadsInto(t, repo, "", tools...)
+	if len(repo.recs) != len(tools) {
+		t.Fatalf("the sink wrote %d records for %d reads", len(repo.recs), len(tools))
+	}
+	return repo.recs
+}
+
+// sinkReadsInto is sinkReadRecords' body, writing into a caller-supplied repo
+// and aimed at a caller-supplied Node.
+//
+// It is separate for the two things sinkReadRecords cannot express. A
+// node-scoped read is a DIFFERENT record — RecordRead takes a nodeID, real
+// callers pass one (the Control API's node reads, the capability layer's read
+// lane), and it is the field the store's ByNode filters on — so a screen that
+// reads by Node needs records the sink stamped with one. And keeping the repo
+// lets a test write reads for SEVERAL Nodes into one trail, which is how an
+// assertion can show a row was fetched by ByNode rather than by reading the
+// whole trail and rendering it all.
+//
+// The Principal, clock and Job id stay here rather than becoming parameters:
+// every caller wants the same machine Account at the same instant, and a
+// fixture that varies them varies what the assertions read for no reason.
+func sinkReadsInto(t *testing.T, repo *captureRepo, nodeID string, tools ...string) {
+	t.Helper()
 	sink := auditsink.New(repo, auditsink.WithClock(func() time.Time { return testNow }))
 	p := capability.Principal{
 		AccountID: "acct-gleipnir",
@@ -2595,14 +2635,10 @@ func sinkReadRecords(t *testing.T, tools ...string) []audit.Record {
 		Kind:      "machine",
 	}
 	for _, tool := range tools {
-		if err := sink.RecordRead(context.Background(), p, tool, "", "", "job-9d41"); err != nil {
+		if err := sink.RecordRead(context.Background(), p, tool, "", nodeID, "job-9d41"); err != nil {
 			t.Fatalf("auditsink.RecordRead(%q): %v", tool, err)
 		}
 	}
-	if len(repo.recs) != len(tools) {
-		t.Fatalf("the sink wrote %d records for %d reads", len(repo.recs), len(tools))
-	}
-	return repo.recs
 }
 
 // TestAgents_ReadsRenderAsReadsNamingTheirTool.

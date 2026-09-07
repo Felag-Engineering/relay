@@ -628,3 +628,86 @@ func TestCompare_OneNodeAsksForASecondRatherThanRenderingHalfATable(t *testing.T
 		t.Error("an unknown Node id was dropped silently rather than named")
 	}
 }
+
+// tasksPanelOf slices the Recent Tasks panel out of a rendered Node page, so an
+// assertion about a chip in that table is not satisfied by the same chip in the
+// header or the effective-Policy panel above it.
+func tasksPanelOf(body string) string {
+	const open = "<h3>Recent Tasks</h3>"
+	i := strings.Index(body, open)
+	if i < 0 {
+		return ""
+	}
+	rest := body[i:]
+	if j := strings.Index(rest, "</section>"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
+}
+
+// TestNode_ReadOutcomeIsAuditedNotUnspecified.
+//
+// nodeTaskFrom admits read records — auditsink.RecordRead takes a nodeID and
+// real callers pass one — and built every row's outcome chip from
+// audit.Record.Outcome. A metadata-only read has none to build from: nothing
+// was dispatched and no daemon decided anything, so the zero value rendered
+// "unspecified" in this Node's Recent Tasks table, the Console saying "we don't
+// know" about the one family of record whose disposition it knows completely
+// (#520). Unlike agentCallFrom, which #517 fixed on the Agents screen, this
+// function had no corrective switch at all, so nothing caught it.
+//
+// Three properties, and the first two are asserted INDEPENDENTLY because either
+// alone is satisfiable by the bug. A test that only looked for "audited" would
+// still pass if the zero value came back through some other row; a test that
+// only forbade "unspecified" would pass on a blank chip.
+//
+//  1. The rows are actually there, fetched by ByNode. A read aimed at a
+//     different Node is in the same trail and must NOT appear: without that,
+//     an empty table would satisfy every remaining assertion here.
+//  2. NO row renders "unspecified".
+//  3. Every read renders "audited", the word justified at readOutcomeAudited
+//     (vocab.go) and shared with the Agents screen rather than re-minted — a
+//     second screen naming these records is a second chance to name them
+//     differently, which is what #463 was.
+//
+// The fixture goes through auditsink.RecordRead, not an audit.Record literal.
+// A literal is the wrong record shape — it is how #463, #517 and this bug all
+// survived a suite that looked like it covered reads.
+func TestNode_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
+	repo := &captureRepo{}
+	sinkReadsInto(t, repo, "node-web-1", "describe_node", "log.tail")
+	// Aimed at a different Node in the same trail: the assertions below are
+	// worthless if the screen renders the whole trail rather than this Node's.
+	sinkReadsInto(t, repo, "node-web-2", "proc.list")
+
+	d := fleetFixture()
+	d.Audit = repo
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
+	panel := tasksPanelOf(body)
+
+	if panel == "" {
+		t.Fatal("the Node page has no Recent Tasks panel")
+	}
+	for _, tool := range []string{"describe_node", "log.tail"} {
+		if !strings.Contains(panel, "<code>"+tool+"</code>") {
+			t.Fatalf("this Node's read of %q is not in Recent Tasks — the assertions below "+
+				"would pass on an empty table, so the row has to be there first", tool)
+		}
+	}
+	if strings.Contains(panel, "<code>proc.list</code>") {
+		t.Error("a read aimed at another Node is in this Node's Recent Tasks — the screen is " +
+			"not reading the trail through ByNode")
+	}
+
+	if strings.Contains(panel, `data-outcome="unspecified"`) {
+		t.Error(`a read renders the outcome chip "unspecified" — the record has no per-Node ` +
+			`verdict because nothing was dispatched, and rendering the zero value tells an ` +
+			`operator the Console does not know what happened when it does`)
+	}
+	chip := `<span class="chip outcome" data-outcome="audited">audited</span>`
+	if n := strings.Count(panel, chip); n != 2 {
+		t.Errorf("%d of 2 reads render the outcome chip %q; a read's outcome is that the "+
+			"access is on the trail (ADR-0025), which is what the row's own note says",
+			n, readOutcomeAudited)
+	}
+}
