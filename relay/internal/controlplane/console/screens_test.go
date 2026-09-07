@@ -714,6 +714,54 @@ func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
 	}
 }
 
+// TestAgents_RailLinkSurvivesAnAccountNameWithReservedCharacters — the rail's
+// href is built from a principal string this package does not constrain, so it
+// has to be ENCODED rather than concatenated.
+//
+// html/template escapes the attribute, but its URL normaliser leaves & # =
+// alone. So the old concatenation turned an Account named "bob&co" into
+// ?account=bob plus a stray parameter: a link to the wrong Account, silently,
+// with nothing on the page looking wrong (#467).
+//
+// The assertion is a ROUND TRIP through the same decoder the handler uses
+// (r.URL.Query().Get("account"), agents.go), not a literal expected string. That
+// pins the property — the link resolves to the Account it names — rather than
+// one particular spelling of the escaping, which a future change to Encode is
+// free to alter.
+func TestAgents_RailLinkSurvivesAnAccountNameWithReservedCharacters(t *testing.T) {
+	// & and # are the two that actually discriminate: under the old
+	// concatenation they truncate the value and this test goes red. "a=b" and
+	// "sp ace" survive concatenation by accident — Query().Get splits on the
+	// FIRST = and tolerates a raw space — so they are regression cover for the
+	// property, not evidence the encoding is applied. Worth naming, because a
+	// reader counting four cases would otherwise credit the guard with more
+	// than it proves.
+	for _, principal := range []string{
+		"agent:bob&co",
+		"agent:frag#ment",
+		"agent:a=b",
+		"agent:sp ace",
+	} {
+		rail, _, _ := buildAgents([]audit.Record{
+			{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: principal, Timestamp: testNow},
+		}, "", testNow)
+
+		if len(rail) != 1 {
+			t.Fatalf("%q: got %d rail entries, want 1", principal, len(rail))
+		}
+		got := rail[0]
+
+		u, err := url.Parse(got.Href)
+		if err != nil {
+			t.Fatalf("%q: href %q does not parse: %v", principal, got.Href, err)
+		}
+		if decoded := u.Query().Get("account"); decoded != got.Name {
+			t.Errorf("href %q decodes account to %q, want %q — the rail links to the wrong Account",
+				got.Href, decoded, got.Name)
+		}
+	}
+}
+
 // TestNode_RepeatedDeniesExplainThemselvesOnce — the same rule refusing the same
 // read every hour is one fact, not twenty, and twenty identical explanations
 // bury the Policy panel the operator came for.
