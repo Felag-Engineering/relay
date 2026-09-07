@@ -223,6 +223,18 @@ fn fsync_dir(dir: &Path) -> Result<()> {
 /// renames into place. The mode is applied at creation so the file is never
 /// briefly visible with wrong permissions.
 ///
+/// `mode` is a **ceiling, deliberately left umask-masked.** `OpenOptions::mode`
+/// is masked by the process umask, so a stricter umask lands a stricter file —
+/// the safe direction for all four identity files, and left alone on purpose.
+/// Do **not** add the umask-proof `set_permissions` call `dedup.rs` uses: its
+/// declared mode is `0600`, so forcing it can only tighten, whereas forcing
+/// `0644` here would hand an operator running `umask 077` a world-readable
+/// `cert.pem` — looser than what they get today, on the daemon's own identity
+/// material. The tests assert the direction (no bit beyond the declared mode,
+/// and the security-relevant bits clear), never exact equality; asserting
+/// equality is what would make the suite umask-dependent and push its "fix"
+/// in the loosening direction.
+///
 /// The fsync before the rename is the load-bearing part for durability: without
 /// it, on a crash the filesystem may make the rename durable while the file's
 /// *contents* are still only in the page cache — the classic "zero-length file
@@ -283,10 +295,54 @@ pub(crate) async fn build_channel(
 // Tests
 // ---------------------------------------------------------------------------
 
+/// Test-only permission assertions shared by `identity.rs` and `enroll.rs`.
+///
+/// `persist_identity` declares each file's mode as a **ceiling**, not an exact
+/// value (see `write_atomic`), so these check the two properties that are
+/// actually load-bearing: no bit set beyond the declared mode (a regression
+/// that *widens* a file — a forced `set_permissions`, a dropped `.mode()`, a
+/// looser constant — fails under every umask), and the security-relevant bits
+/// clear outright.
+///
+/// The second check is not redundant with the first: the declared ceiling is
+/// passed in by the caller, so it survives being edited. The forbidden-bit
+/// floor is what still fails if someone widens `persist_identity` *and* raises
+/// the ceiling here to match.
+#[cfg(test)]
+pub(crate) mod mode_assert {
+    use std::os::unix::fs::MetadataExt;
+    use std::path::Path;
+
+    /// Asserts `path` carries no permission bit beyond `declared`, and none of
+    /// `forbidden`.
+    pub(crate) fn assert_within(path: &Path, declared: u32, forbidden: u32, what: &str) {
+        let mode = std::fs::metadata(path)
+            .unwrap_or_else(|e| panic!("stat {}: {}", path.display(), e))
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode & !declared & 0o777,
+            0,
+            "{} must be no looser than {:04o} (the umask may tighten it, nothing may \
+             widen it) — got {:04o}",
+            what,
+            declared,
+            mode
+        );
+        assert_eq!(
+            mode & forbidden,
+            0,
+            "{} must have none of {:04o} set — got {:04o}",
+            what,
+            forbidden,
+            mode
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::MetadataExt;
     use std::path::PathBuf;
 
     // Compile-time Send+Sync assertion for IdentityError.
@@ -431,19 +487,17 @@ mod tests {
             assert!(dir.path().join(name).exists(), "{} must exist", name);
         }
 
-        // File permission checks (Unix mode bits).
-        assert_eq!(
-            fs::metadata(dir.path().join("key.pem")).unwrap().mode() & 0o777,
-            0o600,
-            "key.pem must be 0600"
-        );
+        // File permission checks (Unix mode bits). The declared modes are
+        // ceilings, not exact values: the process umask may tighten them and
+        // nothing may widen them (see write_atomic).
+        //
+        // key.pem — declared 0600, and never readable by group or world.
+        mode_assert::assert_within(&dir.path().join("key.pem"), 0o600, 0o077, "key.pem");
+        // cert.pem / ca_bundle.pem / node_id are public material (a
+        // certificate, a CA bundle, an identifier) — declared 0644, and never
+        // writable by group or world.
         for name in ["cert.pem", "ca_bundle.pem", "node_id"] {
-            assert_eq!(
-                fs::metadata(dir.path().join(name)).unwrap().mode() & 0o777,
-                0o644,
-                "{} must be 0644",
-                name
-            );
+            mode_assert::assert_within(&dir.path().join(name), 0o644, 0o022, name);
         }
 
         // No .tmp siblings survive a clean persist: every temp file was
