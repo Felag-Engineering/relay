@@ -1114,6 +1114,60 @@ body = "df -PT"
         }
     }
 
+    /// The accept side of the same gate, and the mirror of
+    /// `group_or_world_writable_file_is_refused`: that test pins each *refused*
+    /// bit, so the mask cannot be silently loosened; this one pins the
+    /// *accepted* modes, so it cannot be silently tightened into refusing files
+    /// the daemon must load (`0o022` widened to `0o023` or `0o222` fails closed
+    /// — loud in operation, but invisible in a suite that only tests refusal).
+    /// Shaped after `policy.rs`'s `loader_accepts_secure_modes`, and like it,
+    /// the fixture is owned by the test runner rather than root, so it also
+    /// exercises the loader's `uid == geteuid()` ownership branch.
+    ///
+    /// The two groups of modes make different claims. `0o600` and `0o644` are
+    /// what a real template file carries — the shipped read catalog and every
+    /// documented install line use `0644` (`docs/operations/template-packs.md`).
+    /// The execute-bit cases claim nothing about shipping: templates are TOML
+    /// data the daemon reads, never runs, and nothing here establishes that one
+    /// is ever legitimately executable. They pin the *shape* of the mask — it
+    /// gates write bits and only write bits, so an execute bit must never on
+    /// its own refuse a file.
+    #[test]
+    fn secure_modes_are_accepted() {
+        for (mode, why) in [
+            (0o600_u32, "owner-only, as `TempDir::write` forces"),
+            (0o644_u32, "what a shipped template file actually carries"),
+            (0o645_u32, "other-execute set, no write bit"),
+            (
+                0o755_u32,
+                "execute throughout, no group- or world-write bit",
+            ),
+        ] {
+            let dir = TempDir::new("accept-perms");
+            let path = dir.write("x.toml", DISK);
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod");
+
+            // Observe the fixture rather than assume it: `chmod(2)` is not
+            // umask-masked, but this whole family of tests exists because a
+            // fixture once carried different bits than its test claimed (#481).
+            let landed = fs::metadata(&path).expect("stat").mode() & 0o777;
+            assert_eq!(
+                landed, mode,
+                "fixture must land at {mode:#o} ({why}); got {landed:#o}"
+            );
+
+            let set = match TemplateSet::load(&dir.path) {
+                Ok(set) => set,
+                Err(err) => panic!("mode {mode:#o} ({why}) must be accepted; got {err:?}"),
+            };
+            assert_eq!(
+                set.len(),
+                1,
+                "mode {mode:#o} ({why}) must load its template"
+            );
+        }
+    }
+
     #[test]
     fn non_regular_template_file_is_refused() {
         let dir = TempDir::new("fifo");
