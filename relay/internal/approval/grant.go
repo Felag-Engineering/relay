@@ -358,27 +358,25 @@ func SummarizeScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string 
 func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 	h := sha256.New()
 
-	write := func(field, value string) {
-		fmt.Fprintf(h, "%s=%d:%s\n", field, len(value), value)
-	}
-
-	write("kind", "grant")
-	write("account", s.Account)
-	write("risk", RiskClassName(s.RiskClass))
-	write("namespace", s.SelectorNamespace)
-	fmt.Fprintf(h, "max_fan_out=%d\n", s.MaxFanOut)
+	writeField(h, "kind", "grant")
+	writeField(h, "account", s.Account)
+	writeField(h, "risk", RiskClassName(s.RiskClass))
+	writeField(h, "namespace", s.SelectorNamespace)
+	writeCount(h, "max_fan_out", s.MaxFanOut)
+	// raw_exec is a bool, not an int; writeCount takes an int and there is no
+	// bool primitive, so this stays a direct Fprintf.
 	fmt.Fprintf(h, "raw_exec=%t\n", s.RawExec)
-	fmt.Fprintf(h, "max_uses=%d\n", maxUses)
+	writeCount(h, "max_uses", maxUses)
 
 	ops := append([]string(nil), s.Operations...)
 	sort.Strings(ops)
-	fmt.Fprintf(h, "ops=%d\n", len(ops))
+	writeCount(h, "ops", len(ops))
 	for _, op := range ops {
-		write("op", op)
+		writeField(h, "op", op)
 	}
 
-	write("starts", startsAt.UTC().Format(time.RFC3339Nano))
-	write("expires", expiresAt.UTC().Format(time.RFC3339Nano))
+	writeField(h, "starts", startsAt.UTC().Format(time.RFC3339Nano))
+	writeField(h, "expires", expiresAt.UTC().Format(time.RFC3339Nano))
 
 	return hex.EncodeToString(h.Sum(nil))
 }

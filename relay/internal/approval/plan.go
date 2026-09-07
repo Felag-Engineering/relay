@@ -25,10 +25,45 @@ import (
 // separator", because a separator-joined encoding is ambiguous: an argument
 // containing the separator could make two different Plans hash identically, and
 // arguments here are caller-controlled. Every variable-length field is written
-// as its byte length, a colon, then its bytes.
+// as its byte length, a colon, then its bytes (encoding.go's writeField), and
+// every repeated block is preceded by a decimal count (writeCount).
 //
 // Node IDs and argument keys are sorted, so the hash is a property of the Plan
 // rather than of map iteration order or the registry's result ordering.
+//
+// # #494: the argument encoding used to be ambiguous
+//
+// Until #494, an Operation argument's KEY was folded into the field NAME
+// (write("arg."+k, v)) instead of being written as its own field. Because the
+// key is caller-controlled and unescaped inside the field name, the key/value
+// boundary was not unique. Witness, executed against the old encoding:
+//
+//	{"a": "1=1:x"}   ->  arg.a=5:1=1:x\n
+//	{"a=5:1": "x"}   ->  arg.a=5:1=1:x\n     byte-identical
+//
+// Two different Actions produced the same bytes and therefore the same
+// PlanHash. Every argument is now written as TWO separate length-prefixed
+// fields — its key under the literal field name "arg.k" and its value under
+// the literal field name "arg.v" — matching HashPlanShape (shape.go). No
+// caller-influenced byte occupies a field name anywhere in this function, so
+// the key/value boundary cannot be forged: the decoder always knows a field's
+// name ends at "=", because the name is a compile-time literal, and always
+// knows where its value ends, because the value is length-prefixed.
+//
+// The reachable path for this was Template Operations (ADR-0021): native
+// Operations are constrained to opvocab's declared argument names
+// (opvocab.ValidateArgNames), which cannot carry the "="/":" needed to forge
+// the split, but a Template Operation's argument keys are exactly the ones
+// opvocab has never declared. The two ValidateArgNames call sites
+// (mcp/tools_execution.go, api/execution.go) were the only thing holding the
+// boundary shut — a validator on two surfaces, not a property of the hash.
+//
+// Changing this encoding changes every Plan's hash, including every value
+// already stored in approval_requests.plan_hash. A stale row can never equal a
+// freshly computed HashPlan again, so ByPlanHash (capability/approval.go)
+// misses and the dispatch FAILS CLOSED: it re-parks for a fresh human
+// decision instead of releasing against a hash nobody can recompute. Moving
+// this encoding again is therefore a stored-record decision, not a refactor.
 //
 // What is deliberately NOT hashed: the requester, the timeout, and the Selector
 // text. The requester is bound separately on the Request (RequestedByID) and is
@@ -40,38 +75,35 @@ import (
 func HashPlan(act jobs.Action, nodeIDs []string) string {
 	h := sha256.New()
 
-	write := func(field, value string) {
-		fmt.Fprintf(h, "%s=%d:%s\n", field, len(value), value)
-	}
-
-	write("kind", ActionKindName(act.Kind))
-	write("risk", RiskClassName(act.RiskClass))
+	writeField(h, "kind", ActionKindName(act.Kind))
+	writeField(h, "risk", RiskClassName(act.RiskClass))
 
 	switch act.Kind {
 	case jobs.ActionOperation:
-		write("op", act.OperationName)
+		writeField(h, "op", act.OperationName)
 		keys := make([]string, 0, len(act.OperationArgs))
 		for k := range act.OperationArgs {
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		fmt.Fprintf(h, "args=%d\n", len(keys))
+		writeCount(h, "args", len(keys))
 		for _, k := range keys {
-			write("arg."+k, act.OperationArgs[k])
+			writeField(h, "arg.k", k)
+			writeField(h, "arg.v", act.OperationArgs[k])
 		}
 	case jobs.ActionRawExec:
 		// argv order is semantic — never sorted.
-		fmt.Fprintf(h, "argv=%d\n", len(act.RawExecArgv))
-		for i, a := range act.RawExecArgv {
-			write(fmt.Sprintf("argv.%d", i), a)
+		writeCount(h, "argv", len(act.RawExecArgv))
+		for _, a := range act.RawExecArgv {
+			writeField(h, "argv.v", a)
 		}
 	}
 
 	sorted := append([]string(nil), nodeIDs...)
 	sort.Strings(sorted)
-	fmt.Fprintf(h, "nodes=%d\n", len(sorted))
+	writeCount(h, "nodes", len(sorted))
 	for _, n := range sorted {
-		write("node", n)
+		writeField(h, "node", n)
 	}
 
 	return hex.EncodeToString(h.Sum(nil))
