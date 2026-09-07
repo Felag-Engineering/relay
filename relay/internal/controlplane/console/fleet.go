@@ -103,6 +103,19 @@ type fleetNode struct {
 	TemplateFingerprint string
 	DaemonVersion       string
 
+	// policyTerm, templateTerm and versionTerm are the Selector terms the
+	// facet rail links to for the three fields above — never the raw values
+	// themselves. Unexported because no template may render them (precedent:
+	// rarity, signature): the only writer is nodestate.Facts, in
+	// newFleetNode, mirroring buildNodeView (node.go:234-251). Empty means
+	// nodestate refused the raw value (validFactValue rejected a comma,
+	// whitespace or a namespace prefix), and buildFacets must then produce an
+	// unlinkable row rather than a term built by concatenation — the bug this
+	// change exists to close.
+	policyTerm   string
+	templateTerm string
+	versionTerm  string
+
 	Bucket wallBucket
 
 	// BucketLabel is the legend's wording for Bucket. The hover title said
@@ -159,6 +172,17 @@ type facetValue struct {
 	// link, because a filter link that produced a parse error would teach an
 	// operator that the filter box is unreliable.
 	Targetable bool
+
+	// key is the map key this value was built from — the FULL self-reported
+	// value for the fingerprint/version facets and a discriminated key for
+	// the template-set facet's sentinels, never the shortHash Label. Never
+	// rendered; it exists solely as sortFacet's final tiebreak. Two distinct
+	// full values can render the same Label (a shared 12-character prefix, or
+	// a self-reported string landing beside a sentinel's LABEL though never
+	// its key), and without a deterministic tiebreak, sort.Slice is not
+	// stable and facetFrom ranges a map — the page order would flap between
+	// renders.
+	key string
 }
 
 // facet is one distribution in the facet rail. The facets ARE the summary
@@ -545,6 +569,24 @@ func newFleetNode(d Deps, n registry.Node) fleetNode {
 
 	if fn.Revoked {
 		fn.RevokedAt = n.RevokedAt.UTC().Format("2006-01-02 15:04:05Z")
+	}
+
+	// Selector terms for the three self-reported facts, derived through
+	// nodestate.Facts rather than concatenated here — the same seam
+	// buildNodeView uses (node.go:234-242) and for the identical reason: the
+	// raw fields above arrive with no validation at the wire ingress, and
+	// nodestate.Facts is the only place permitted to turn one into a
+	// Selector-syntax string. A key nodestate refused is simply absent from
+	// the loop, leaving the matching term field at its zero value.
+	for _, l := range nodestate.Facts(in) {
+		switch l.Key {
+		case string(nodestate.FactPolicyFingerprint):
+			fn.policyTerm = l.String()
+		case string(nodestate.FactTemplateFingerprint):
+			fn.templateTerm = l.String()
+		case string(nodestate.FactDaemonVersion):
+			fn.versionTerm = l.String()
+		}
 	}
 
 	switch {
@@ -990,34 +1032,71 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 		out = append(out, stateFacet)
 	}
 
+	// Daemon version is self-reported (registry.Node.DaemonVersion, copied
+	// straight out of Hello — tunnel.go) and has the IDENTICAL bypass the
+	// fingerprint facets below had: no short hash, so the raw value went
+	// straight into the href. It is also validFactValue's own documented
+	// example of the injection (nodestate.go's doc comment uses
+	// `"1.4.2, tag:x=y"`), so leaving it out would leave the exemplar live.
+	// The map is already keyed by the full value with no sentinels, so no
+	// re-keying is needed here — only routing the term through nodestate.Facts
+	// instead of concatenating it.
 	versions := map[string]int{}
+	versionTerms := map[string]string{}
+	versionRefused := false
 	for _, n := range nodes {
-		if n.DaemonVersion != "" {
-			versions[n.DaemonVersion]++
+		if n.DaemonVersion == "" {
+			continue
+		}
+		versions[n.DaemonVersion]++
+		// Harmless last-writer-wins: every Node reporting the same version
+		// produces the same term, because nodestate.Facts is a pure function
+		// of the value.
+		versionTerms[n.DaemonVersion] = n.versionTerm
+		if n.versionTerm == "" {
+			versionRefused = true
 		}
 	}
-	if f := facetFrom("Daemon version", versions, link, func(k string) (string, bool) {
-		return "state:daemon-version=" + k, true
+	if f := facetFrom("Daemon version", versions, link, func(k string) (string, string, bool) {
+		term := versionTerms[k]
+		return k, term, term != ""
 	}); len(f.Values) > 0 {
+		if versionRefused {
+			f.Hint = facetRefusalHint
+		}
 		out = append(out, f)
 	}
 
-	// Policy fingerprint is keyed by its short hash for display (the facet's
-	// Label), but the Selector term must carry the FULL value — a short hash
-	// is a display convenience, not something ParseSelector accepts — so a
-	// short->full map rides alongside the counts.
+	// Policy fingerprint is BUCKETED by the FULL self-reported value, not the
+	// short hash — the short hash is only ever a display convenience
+	// (shortHash, in render below). Bucketing by the truncated form let a
+	// hostile value sharing twelve characters with an honest one either
+	// hijack the honest bucket's link (last-writer-wins over the nodes slice)
+	// or poison its count; keying by the full value makes both impossible,
+	// because a Node can only ever share a bucket with another Node reporting
+	// the SAME full value. This facet has no sentinel values, so — unlike the
+	// template-set facet below — the raw full value is a safe map key with no
+	// further discrimination needed.
 	policies := map[string]int{}
-	policyFull := map[string]string{}
+	policyTerms := map[string]string{}
+	policyRefused := false
 	for _, n := range nodes {
-		if n.PolicyFingerprint != "" {
-			short := shortHash(n.PolicyFingerprint)
-			policies[short]++
-			policyFull[short] = n.PolicyFingerprint
+		if n.PolicyFingerprint == "" {
+			continue
+		}
+		policies[n.PolicyFingerprint]++
+		policyTerms[n.PolicyFingerprint] = n.policyTerm
+		if n.policyTerm == "" {
+			policyRefused = true
 		}
 	}
-	if f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, bool) {
-		return "state:policy-fingerprint=" + policyFull[k], true
+	if f := facetFrom("Policy fingerprint", policies, link, func(k string) (string, string, bool) {
+		term := policyTerms[k]
+		return shortHash(k), term, term != ""
 	}); len(f.Values) > 0 {
+		if policyRefused {
+			f.Hint = facetRefusalHint
+		}
 		out = append(out, f)
 	}
 
@@ -1026,36 +1105,61 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	// template vocabulary: `state:template-unloadable` was countable, but the
 	// fingerprint that says WHICH set is installed — and therefore whether a
 	// rollout is half-landed — was nowhere.
+	//
+	// This map mixes real values with two closed-vocabulary sentinels, so —
+	// unlike the Policy fingerprint facet above — bucketing by the raw full
+	// value is NOT safe on its own: the sentinel literal "none installed" is
+	// itself a legal (if unlikely) self-reported string, and a Node reporting
+	// it verbatim would key into the genuine "no templates installed" bucket
+	// and inflate its count. templateValueKey and the two sentinel consts
+	// below give the two kinds of key disjoint PREFIXES, so that collision is
+	// structurally unreachable rather than merely unlikely.
 	templates := map[string]int{}
-	templateFull := map[string]string{}
+	templateTerms := map[string]string{}
+	templateRefused := false
 	for _, n := range nodes {
 		switch {
 		case n.TemplateFingerprint == nodestate.TemplateUnloadable:
-			templates["unloadable"]++
+			templates[templateSentinelUnloadable]++
 		case n.TemplateFingerprint != "":
-			short := shortHash(n.TemplateFingerprint)
-			templates[short]++
-			templateFull[short] = n.TemplateFingerprint
+			key := templateValueKey(n.TemplateFingerprint)
+			templates[key]++
+			templateTerms[key] = n.templateTerm
+			if n.templateTerm == "" {
+				templateRefused = true
+			}
 		default:
-			templates["none installed"]++
+			templates[templateSentinelNoneInstalled]++
 		}
 	}
-	if f := facetFrom("Template set", templates, link, func(k string) (string, bool) {
+	if f := facetFrom("Template set", templates, link, func(k string) (string, string, bool) {
 		switch k {
-		case "unloadable":
+		case templateSentinelUnloadable:
 			// "unloadable" maps to the marker term, not a fact: the fingerprint
 			// field holds the literal "unloadable" rather than a hash (ADR-0021).
-			return "state:template-unloadable", true
-		case "none installed":
+			return "unloadable", "state:template-unloadable", true
+		case templateSentinelNoneInstalled:
 			// Absence is not a label — there is nothing to target.
-			return "", false
+			return "none installed", "", false
 		default:
-			return "state:template-fingerprint=" + templateFull[k], true
+			full := strings.TrimPrefix(k, templateValuePrefix)
+			return shortHash(full), templateTerms[k], templateTerms[k] != ""
 		}
 	}); len(f.Values) > 0 {
+		if templateRefused {
+			f.Hint = facetRefusalHint
+		}
 		out = append(out, f)
 	}
 
+	// node:role is KNOWINGLY LEFT EXPOSED to the same shape of bypass this
+	// change closes for the three fact facets above: node: values are
+	// Node-forgeable by design (invariant 7) and reach the registry ungated
+	// at ingress, with no nodestate.validFactValue equivalent to route
+	// through. The correct fix is a value gate AT INGRESS — protecting the
+	// registry, Control API and MCP too, not only this renderer — so it is
+	// deliberately out of scope here rather than forked into a second,
+	// Console-local validation path. Tracked separately as issue #504.
 	roles := map[string]int{}
 	for _, n := range nodes {
 		for _, l := range n.Labels {
@@ -1064,13 +1168,48 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 			}
 		}
 	}
-	if f := facetFrom("node:role", roles, link, func(k string) (string, bool) {
-		return "node:role=" + k, true
+	if f := facetFrom("node:role", roles, link, func(k string) (string, string, bool) {
+		return k, "node:role=" + k, true
 	}); len(f.Values) > 0 {
 		out = append(out, f)
 	}
 
 	return out
+}
+
+// facetRefusalHint is the facet rail's one visible line explaining why some
+// of a facet's values render as text instead of a link (facet.Hint,
+// :195-ish, styled .fhint in assets/console.css).
+//
+// Driven by a REFUSAL bool at each of the three call sites above, never by
+// `!Targetable`: "none installed" is also unlinkable, and there is nothing
+// wrong with that value — this hint would be a lie about it. It is only ever
+// true when nodestate rejected a self-reported value outright.
+const facetRefusalHint = "One reported value is not a link: it carries a comma, whitespace or a namespace prefix, so a Selector cannot express it."
+
+// templateValuePrefix and the two sentinel consts below key the template-set
+// facet's counts map. These two key spaces are DISJOINT BY CONSTRUCTION: every
+// real key is built by templateValueKey, the ONLY place a fingerprint becomes
+// a key, and begins with templateValuePrefix; every sentinel key is one of
+// the two literals below and begins with sentinelPrefix instead. Whatever a
+// Node sends — including the literal "none installed" — it can only ever
+// reach the value space, never the sentinel space, because nothing outside
+// this file ever calls templateValueKey with anything but
+// templateValuePrefix in front of it. Both sides are prefixed, not only the
+// sentinels, so the invariant survives someone later editing one constant
+// without noticing the other.
+const (
+	templateValuePrefix = "v:"
+
+	sentinelPrefix                = "s:"
+	templateSentinelUnloadable    = sentinelPrefix + "unloadable"
+	templateSentinelNoneInstalled = sentinelPrefix + "none-installed"
+)
+
+// templateValueKey is the ONLY way a template-set fingerprint becomes a key
+// in the template-set facet's counts map — see the key-space comment above.
+func templateValueKey(fingerprint string) string {
+	return templateValuePrefix + fingerprint
 }
 
 // fencedRevoked is how the State facet names revocation. Not a label — a
@@ -1079,23 +1218,45 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 const fencedRevoked = "revoked"
 
 // sortFacet orders a facet's values, largest bucket first.
+//
+// key is the LAST tiebreak, after Count then Label. It is REQUIRED, not
+// cosmetic: the fingerprint and template-set facets now key by the full
+// self-reported value while displaying only a shortHash Label, so two
+// distinct keys can share a Label. facetFrom ranges a map to build Values, so
+// without a deterministic final tiebreak the order among same-Label rows
+// would be Go's map-iteration order — different on every render, on a screen
+// this file's own comment says exists so the operator can browse it as a
+// stable page.
 func sortFacet(f *facet) {
 	sort.Slice(f.Values, func(i, j int) bool {
 		if f.Values[i].Count != f.Values[j].Count {
 			return f.Values[i].Count > f.Values[j].Count
 		}
-		return f.Values[i].Label < f.Values[j].Label
+		if f.Values[i].Label != f.Values[j].Label {
+			return f.Values[i].Label < f.Values[j].Label
+		}
+		return f.Values[i].key < f.Values[j].key
 	})
 }
 
 // facetFrom builds one facet, largest bucket first.
-func facetFrom(title string, counts map[string]int, link linkContext, term func(string) (string, bool)) facet {
+//
+// render is keyed by the map's FULL-value key, not the display string: the
+// fingerprint and template-set facets bucket by the full self-reported value
+// while displaying a shortHash label, so label and key are no longer the
+// same string. render returns the label, the recorded Selector term, and
+// whether the value is targetable; a refused value MUST come back with an
+// empty term — facetFrom uses targetable, never term itself, to decide
+// whether to compute an Href, so a caller cannot smuggle a term through
+// without also setting targetable.
+func facetFrom(title string, counts map[string]int, link linkContext, render func(key string) (label, term string, targetable bool)) facet {
 	f := facet{Title: title}
 	for k, c := range counts {
-		t, targetable := term(k)
-		v := facetValue{Label: k, Count: c, Term: t, Targetable: targetable}
+		label, term, targetable := render(k)
+		v := facetValue{Label: label, key: k, Count: c, Targetable: targetable}
 		if targetable {
-			v.Href = link.href(t)
+			v.Term = term
+			v.Href = link.href(term)
 		}
 		f.Values = append(f.Values, v)
 	}

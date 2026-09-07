@@ -1278,6 +1278,312 @@ func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 	}
 }
 
+// TestFleet_FacetTermsAreAlwaysExactlyOneSelectorTerm is a property test over
+// every facet value buildFleetView renders: #488 was a Node injecting a
+// second Selector term into a facet link the Console advertises as
+// targetable by concatenating a raw, self-reported value. Two honest Nodes
+// share a Policy fingerprint; a third Node self-reports a hostile Policy
+// fingerprint, template fingerprint and daemon version, each carrying a
+// Selector separator.
+func TestFleet_FacetTermsAreAlwaysExactlyOneSelectorTerm(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
+		{NodeID: "node-b", Connected: true, PolicyFingerprint: "aaaa111122223333"},
+		{
+			NodeID:                 "node-hostile",
+			Connected:              true,
+			PolicyFingerprint:      "aaaa111122223333, relay:quarantine=on",
+			TemplateSetFingerprint: "bbbb4444, tag:pci=yes",
+			DaemonVersion:          "1.4.2, tag:x=y",
+		},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	checked := 0
+	for _, g := range v.Groups {
+		for _, f := range g.Facets {
+			for _, val := range f.Values {
+				if !val.Targetable {
+					if val.Term != "" || val.Href != "" {
+						t.Errorf("%s: non-targetable value %q carries Term=%q Href=%q",
+							f.Title, val.Label, val.Term, val.Href)
+					}
+					continue
+				}
+				if val.Term == "" {
+					t.Errorf("%s: targetable value %q has an empty Term", f.Title, val.Label)
+					continue
+				}
+				if !strings.HasPrefix(val.Term, "state:") {
+					// node:-prefixed terms are deliberately NOT asserted here: node:
+					// values are Node-forgeable and ungated at ingress (buildFacets'
+					// comment on the node:role facet), so this test does not claim a
+					// coverage it does not have.
+					continue
+				}
+				checked++
+				sel, err := capability.ParseSelector(val.Term)
+				if err != nil {
+					t.Errorf("%s: term %q does not parse: %s", f.Title, val.Term, err)
+					continue
+				}
+				if len(sel.Predicates) != 1 {
+					t.Errorf("%s: term %q parsed to %d predicates, want exactly 1",
+						f.Title, val.Term, len(sel.Predicates))
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no state: term was checked — the assertion is checking nothing")
+	}
+}
+
+// TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket is the crux: on
+// HEAD the Policy fingerprint facet buckets by shortHash, and the short-to-
+// full map is last-writer-wins over the nodes slice (registry/memory.go sorts
+// ascending by NodeID). A hostile Node sharing the honest bucket's first
+// twelve characters and given the lexicographically GREATEST NodeID — the
+// strongest case for the old bug — either hijacks the honest link or poisons
+// its count. Keying by the full value makes both impossible.
+func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
+	d := renderableDeps()
+	honest := "aaaa111122223333"
+	hostile := honest + ", relay:quarantine=on"
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, PolicyFingerprint: honest},
+		{NodeID: "node-b", Connected: true, PolicyFingerprint: honest},
+		{NodeID: "node-z-hostile", Connected: true, PolicyFingerprint: hostile},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	var pf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
+			pf = &v.Groups[0].Facets[i]
+		}
+	}
+	if pf == nil {
+		t.Fatal("no Policy fingerprint facet")
+	}
+
+	label := shortHash(honest)
+	var honestRow, hostileRow *facetValue
+	for i := range pf.Values {
+		if pf.Values[i].Label != label {
+			continue
+		}
+		switch pf.Values[i].Count {
+		case 2:
+			honestRow = &pf.Values[i]
+		case 1:
+			hostileRow = &pf.Values[i]
+		}
+	}
+	if honestRow == nil || hostileRow == nil {
+		t.Fatalf("want two rows sharing label %q (count 2 and count 1); got %+v", label, pf.Values)
+	}
+	if !honestRow.Targetable || honestRow.Term != "state:policy-fingerprint="+honest {
+		t.Errorf("the honest bucket's link was hijacked: Targetable=%v Term=%q",
+			honestRow.Targetable, honestRow.Term)
+	}
+	if hostileRow.Targetable || hostileRow.Href != "" {
+		t.Errorf("the colliding value's row is targetable: %+v", hostileRow)
+	}
+
+	got := buildFleetView(d, d.Fleet.List(), honestRow.Term, "-")
+	if !got.FilterOK {
+		t.Fatalf("the honest bucket's own term %q was rejected as a filter: %s", honestRow.Term, got.FilterError)
+	}
+	if got.Matched != 2 {
+		t.Fatalf("filtering on the honest term matched %d Nodes, want 2 (node-a, node-b)", got.Matched)
+	}
+}
+
+// TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket is the
+// regression guard for the sentinel key-space fix: the template-set facet's
+// counts map mixes real fingerprints with two closed-vocabulary sentinels
+// ("unloadable", "none installed"), and re-keying the real branch by the FULL
+// value — needed to close the short-hash collision above — would put a
+// self-reported string straight into the sentinel key space unless the
+// sentinel keys live somewhere a raw value structurally cannot reach.
+//
+// HEAD satisfies "a self-reported 'none installed' cannot join the sentinel
+// bucket" only INCIDENTALLY: the sentinel key on HEAD is the 14-character
+// literal "none installed", and the real branch keys by shortHash, which
+// truncates anything a Node reports over 12 characters to "none install…"
+// before it is ever compared — missing the sentinel by an accident of
+// length, not by design. This test pins the property deliberately, because
+// this change removes that accident.
+func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		// Genuine "no templates installed" — the field is simply empty.
+		{NodeID: "node-genuine", Connected: true},
+		// A Node self-reporting the sentinel's own operator-facing words as if
+		// they were a template-set fingerprint.
+		{NodeID: "node-hostile", Connected: true, TemplateSetFingerprint: "none installed"},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	var tf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "Template set" {
+			tf = &v.Groups[0].Facets[i]
+		}
+	}
+	if tf == nil {
+		t.Fatal("no Template set facet")
+	}
+
+	var sentinelRow, hostileRow *facetValue
+	sum := 0
+	for i := range tf.Values {
+		sum += tf.Values[i].Count
+		if tf.Values[i].Label == "none installed" {
+			sentinelRow = &tf.Values[i]
+			continue
+		}
+		hostileRow = &tf.Values[i]
+	}
+	if sum != len(d.Fleet.List()) {
+		t.Errorf("facet counts sum to %d, want %d (one row per Node)", sum, len(d.Fleet.List()))
+	}
+	if sentinelRow == nil || sentinelRow.Count != 1 {
+		t.Fatalf("want exactly one Node in the genuine 'none installed' bucket; got %+v", tf.Values)
+	}
+	if hostileRow == nil {
+		t.Fatal("the self-reported literal did not get its own row — it was merged into the sentinel bucket")
+	}
+	if hostileRow.Label == "none installed" {
+		t.Errorf("the self-reported literal's row shares the sentinel's exact label %q", hostileRow.Label)
+	}
+	if hostileRow.Targetable || hostileRow.Href != "" {
+		t.Errorf("the self-reported literal's row is targetable: %+v", hostileRow)
+	}
+
+	// Sibling: the protocol literal "unloadable" (ADR-0021's own vocabulary —
+	// the daemon reports it when its template set failed to load, not when it
+	// wants to name a fingerprint) is counted as unloadable, unaffected by any
+	// other value reported alongside it.
+	d2 := renderableDeps()
+	d2.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, TemplateSetFingerprint: nodestate.TemplateUnloadable},
+		{NodeID: "node-b", Connected: true, TemplateSetFingerprint: "none installed"},
+	}}
+	v2 := buildFleetView(d2, d2.Fleet.List(), "", "-")
+	for i := range v2.Groups[0].Facets {
+		if v2.Groups[0].Facets[i].Title != "Template set" {
+			continue
+		}
+		got := map[string]int{}
+		for _, val := range v2.Groups[0].Facets[i].Values {
+			got[val.Label] += val.Count
+		}
+		if got["unloadable"] != 1 {
+			t.Errorf("unloadable count = %d, want 1: %v", got["unloadable"], got)
+		}
+	}
+
+	// The fixture assertions above only show that TODAY's prefixes ("v:" vs
+	// "s:") keep "none installed" out of the sentinel bucket. If someone later
+	// collapsed templateValuePrefix and sentinelPrefix to the same string —
+	// exactly the edit the key-space comment on the consts warns against —
+	// those assertions would still pass, because the fixture value has a space
+	// ("none installed") and the sentinel has a hyphen ("none-installed"), so
+	// the strings would still differ even with identical prefixes. Pin the
+	// structural property directly rather than relying on that coincidence.
+	if strings.HasPrefix(templateSentinelUnloadable, templateValuePrefix) {
+		t.Errorf("templateSentinelUnloadable %q carries the value prefix %q", templateSentinelUnloadable, templateValuePrefix)
+	}
+	if strings.HasPrefix(templateSentinelNoneInstalled, templateValuePrefix) {
+		t.Errorf("templateSentinelNoneInstalled %q carries the value prefix %q", templateSentinelNoneInstalled, templateValuePrefix)
+	}
+	if got := templateValueKey("none installed"); !strings.HasPrefix(got, templateValuePrefix) {
+		t.Errorf("templateValueKey(%q) = %q, want it to carry the value prefix %q", "none installed", got, templateValuePrefix)
+	}
+}
+
+// TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints: the daemon-version
+// facet has the identical bypass as the fingerprint facets — no short hash,
+// so the raw value went straight into the href — and validFactValue's own
+// doc comment uses a daemon version carrying a comma as ITS example of the
+// injection. Not named by the issue, but in scope for the same reason.
+func TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, DaemonVersion: "1.4.2"},
+		{NodeID: "node-b", Connected: true, DaemonVersion: "1.4.2"},
+		{NodeID: "node-hostile", Connected: true, DaemonVersion: "1.4.2, tag:x=y"},
+	}}
+
+	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	var vf *facet
+	for i := range v.Groups[0].Facets {
+		if v.Groups[0].Facets[i].Title == "Daemon version" {
+			vf = &v.Groups[0].Facets[i]
+		}
+	}
+	if vf == nil {
+		t.Fatal("no Daemon version facet")
+	}
+
+	var honest, hostile *facetValue
+	for i := range vf.Values {
+		switch vf.Values[i].Label {
+		case "1.4.2":
+			honest = &vf.Values[i]
+		case "1.4.2, tag:x=y":
+			hostile = &vf.Values[i]
+		}
+	}
+	if honest == nil || !honest.Targetable || honest.Term != "state:daemon-version=1.4.2" {
+		t.Fatalf("the honest version is not targeted correctly: %+v", honest)
+	}
+	if hostile == nil || hostile.Count != 1 {
+		t.Fatalf("the hostile version was not counted: %+v", vf.Values)
+	}
+	if hostile.Targetable || hostile.Term != "" || hostile.Href != "" {
+		t.Errorf("the hostile version is targetable: %+v", hostile)
+	}
+}
+
+// TestFleet_FacetSaysWhyAValueIsNotALink renders /console/ end to end: a hint
+// naming the reason ("a comma, whitespace or a namespace prefix") must be
+// visible on a fleet carrying a refused value, the injected term must never
+// reach a query string anywhere on the page, and a clean fleet must render no
+// hint at all — the hint is driven by a refusal, never by !Targetable.
+func TestFleet_FacetSaysWhyAValueIsNotALink(t *testing.T) {
+	d := renderableDeps()
+	d.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
+		{NodeID: "node-hostile", Connected: true, PolicyFingerprint: "aaaa111122223333, relay:quarantine=on"},
+	}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
+
+	if !strings.Contains(body, `class="fhint"`) {
+		t.Error("no facet hint rendered on a fleet carrying a refused value")
+	}
+	// No honest Node in this fixture could produce this query string; its
+	// presence would mean the injected term reached a link the Console
+	// advertises as targetable.
+	injected := url.QueryEscape("relay:quarantine=on")
+	if strings.Contains(body, injected) {
+		t.Errorf("the injected term %q appears in a query string on the page", injected)
+	}
+
+	clean := renderableDeps()
+	clean.Fleet = fakeFleet{nodes: []registry.Node{
+		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
+		{NodeID: "node-b", Connected: true, PolicyFingerprint: "aaaa111122223333"},
+	}}
+	cleanBody := get(t, newTestHandler(clean, accounts.RoleAdmin), "/console/").Body.String()
+	if strings.Contains(cleanBody, `class="fhint"`) {
+		t.Error("a clean fixture rendered a facet hint — no value here was refused")
+	}
+}
+
 // TestFleet_StateFacetKeepsNamespacesApart — the facet once listed `offline` and
 // the literal `quarantine (relay:)` as bare strings under one heading: a derived
 // observation and a declared act, told apart by a parenthetical, on a screen
