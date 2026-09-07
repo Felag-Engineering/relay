@@ -29,6 +29,23 @@ const (
 	keyFileName  = "ca-key.pem"
 	certFileName = "ca-cert.pem"
 
+	// The CA store's on-disk modes. These are CEILINGS, deliberately left
+	// umask-masked: os.MkdirAll and os.OpenFile mask the requested mode with
+	// the process umask, so a stricter umask lands a stricter store — the safe
+	// direction for every one of these paths, and left alone on purpose.
+	//
+	// Do NOT "make the declared mode authoritative" with an os.Chmod after
+	// creation. Forcing is only safe where the declared mode is the tightest
+	// one: forcing dirPerm or keyPerm could only ever tighten, but forcing
+	// certPerm would hand an operator running `umask 077` a world-readable
+	// ca-cert.pem where they get 0600 today — looser than what they have, on
+	// the fleet's trust anchor, produced by the CA itself (#509; the daemon
+	// side reached the same conclusion for its identity files in #507).
+	//
+	// The tests therefore assert the direction — no bit beyond the declared
+	// mode, and the security-relevant bits clear outright — never exact
+	// equality, which is what made the suite fail on any developer machine not
+	// sitting at the default 0o022.
 	dirPerm  os.FileMode = 0o700
 	keyPerm  os.FileMode = 0o600
 	certPerm os.FileMode = 0o644
