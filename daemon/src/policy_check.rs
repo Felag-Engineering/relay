@@ -386,6 +386,7 @@ mod tests {
     use super::*;
     use crate::templates::TemplateSet;
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -634,6 +635,50 @@ allowed_args = []
             &["--would-allow", "operation", "disk.usage"],
         ));
         assert_eq!(code, EXIT_WOULD_DENY);
+    }
+
+    /// `TempDir::write` must force a mode `TemplateSet::load`'s hardened read
+    /// will accept, regardless of the ambient process umask. Asserting on a
+    /// freshly-created file is a vacuous guard: the umask itself clears the
+    /// group/world-write bits under 022, 027 and 077, so the assertion would
+    /// already be satisfied with no forcing at all and only goes red in the
+    /// same narrow 002/000 window that made the original bug invisible
+    /// everywhere but one machine. Instead, pre-seed the target path
+    /// group/world-writable via an explicit `set_permissions` call (not a
+    /// creation mode, which the umask masks) before writing through it.
+    /// `std::fs::write` truncates an existing file in place and never
+    /// reapplies a creation mode, so the write itself leaves the pre-seeded
+    /// bits untouched; only the helper's forced chmod can clear them. That
+    /// makes the observation deterministic under every umask.
+    #[test]
+    fn template_helper_writes_a_mode_the_loader_accepts() {
+        let root = TempDir::new("tmpl-mode-pin");
+        let target = root.path().join("pin.toml");
+
+        // Pre-seed the exact path group- and world-writable, forced by chmod so
+        // the ambient umask cannot pre-clear the bits we are about to check for.
+        std::fs::write(&target, "").expect("pre-seed template file");
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o666))
+            .expect("pre-seed template file mode");
+
+        // std::fs::write truncates in place, so the helper's forced chmod is the
+        // ONLY thing that can clear those bits.
+        let written = root.write("pin.toml", GOOD_TEMPLATE);
+        assert_eq!(written, target, "helper must write the path we pre-seeded");
+
+        let mode = std::fs::metadata(&target)
+            .expect("stat template file")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(
+            mode & 0o022,
+            0,
+            "TempDir::write must clear group/world-write: templates::read_hardened \
+             refuses any template file with mode & 0o022 != 0, so a helper that leaves \
+             the mode to the ambient umask makes every template test umask-dependent \
+             (got {mode:o})"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1047,9 +1092,14 @@ deny = ["secret"]
             self.0.to_string_lossy().into_owned()
         }
         /// Writes a template file into this directory (used as a template root).
+        /// `std::fs::write` is umask-masked, `TemplateSet::load`'s hardened read
+        /// refuses any template file with `mode & 0o022 != 0` (templates.rs:682-688),
+        /// and chmod is NOT umask-masked, so the mode is forced explicitly here.
         fn write(&self, name: &str, content: &str) -> PathBuf {
             let path = self.0.join(name);
             std::fs::write(&path, content).expect("write template file");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("set template file mode");
             path
         }
     }
