@@ -301,8 +301,8 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::gen::Facts;
+    use crate::identity::mode_assert;
     use crate::identity::{load_identity, persist_identity, Identity, IdentityError};
-    use std::os::unix::fs::MetadataExt;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -534,19 +534,18 @@ mod tests {
             "cert_pem must be a valid PEM certificate block"
         );
 
-        // Files must be persisted with correct permissions.
-        assert_eq!(
-            fs::metadata(dir.path().join("key.pem")).unwrap().mode() & 0o777,
+        // Files must be persisted with correct permissions. The modes
+        // persist_identity declares are ceilings, not exact values — the
+        // process umask may tighten them, nothing may widen them (see
+        // identity::write_atomic).
+        mode_assert::assert_within(
+            &dir.path().join("key.pem"),
             0o600,
-            "key.pem must be 0600 after fresh enroll"
+            0o077,
+            "key.pem after fresh enroll",
         );
         for name in ["cert.pem", "ca_bundle.pem", "node_id"] {
-            assert_eq!(
-                fs::metadata(dir.path().join(name)).unwrap().mode() & 0o777,
-                0o644,
-                "{} must be 0644 after fresh enroll",
-                name
-            );
+            mode_assert::assert_within(&dir.path().join(name), 0o644, 0o022, name);
         }
 
         // load_identity must see the freshly written identity (key/cert match passes).
