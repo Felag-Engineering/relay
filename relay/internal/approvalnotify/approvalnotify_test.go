@@ -3,6 +3,7 @@ package approvalnotify
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -253,19 +254,60 @@ func TestNewRejectsAnEmptyURL(t *testing.T) {
 // TestSecretFilePermissionsAreEnforced: the secret is signing key material, so
 // the bar is stricter than the gate config's — group- or world-READABLE is
 // refused, not just writable.
+//
+// The mode is forced with os.Chmod rather than passed to os.WriteFile because
+// WriteFile's perm argument is masked by the process umask: at umask 0o077
+// every mode below would land 0o600 — exactly what the production check
+// ACCEPTS — and the test would assert a refusal of an input that is no longer
+// refusable, failing on its own t.Fatal (#508). chmod(2) is not umask-masked,
+// so the fixture is loose by construction on every runner. Forcing a mode is
+// right here for the same reason it is wrong in a production writer (#507):
+// force the declared mode only where the declared mode is the tightest one, or
+// where a test fixture is deliberately widened. A fixture that must be loose to
+// be a valid input is the second case.
+//
+// The gate is `perm&0o077 != 0`: six independent bits. A single fixture that
+// trips several at once (0o644 alone, as this test once was) discriminates
+// none of them — a regression narrowing the mask to 0o007 or 0o070 would keep
+// it green — so each case below trips exactly ONE bit, with 0o644 kept as the
+// historical witness. Every bit is its own re-admission: a readable secret
+// forges approval notifications, a writable one replaces the signing key
+// outright.
 func TestSecretFilePermissionsAreEnforced(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "secret")
-	if err := os.WriteFile(path, []byte("s3cret"), 0o644); err != nil {
-		t.Fatalf("write secret: %v", err)
-	}
+	for _, tc := range []struct {
+		mode os.FileMode
+		bit  string
+	}{
+		{0o640, "group-readable, other bits clear"},
+		{0o620, "group-writable, other bits clear"},
+		{0o610, "group-executable, other bits clear"},
+		{0o604, "world-readable, group bits clear"},
+		{0o602, "world-writable, group bits clear"},
+		{0o601, "world-executable, group bits clear"},
+		{0o644, "group- and world-readable — both bits at once"},
+	} {
+		t.Run(fmt.Sprintf("%04o", uint32(tc.mode)), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "secret")
+			if err := os.WriteFile(path, []byte("s3cret"), 0o600); err != nil {
+				t.Fatalf("write secret: %v", err)
+			}
+			if err := os.Chmod(path, tc.mode); err != nil {
+				t.Fatalf("chmod: %v", err)
+			}
 
-	_, err := New(Config{URL: "https://notify.example.com/hook", SecretPath: path})
-	if err == nil {
-		t.Fatal("a world-readable signing secret must refuse startup")
-	}
-	if !strings.Contains(err.Error(), "0600") {
-		t.Errorf("err = %q, want it to say how to fix the permissions", err)
+			_, err := New(Config{URL: "https://notify.example.com/hook", SecretPath: path})
+			if err == nil {
+				t.Fatalf("mode %04o (%s): a group- or world-accessible signing secret must refuse startup", uint32(tc.mode), tc.bit)
+			}
+			// Pin the refusal to THIS file's mode, so a rejection arriving from
+			// some other check cannot stand in for the permission gate.
+			if want := fmt.Sprintf("%04o", uint32(tc.mode)); !strings.Contains(err.Error(), want) {
+				t.Errorf("mode %s (%s): err = %q, want it to name the offending mode", want, tc.bit, err)
+			}
+			if !strings.Contains(err.Error(), "0600") {
+				t.Errorf("err = %q, want it to say how to fix the permissions", err)
+			}
+		})
 	}
 }
 
