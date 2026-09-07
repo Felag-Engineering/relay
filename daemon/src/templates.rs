@@ -1219,15 +1219,3 @@ body = "df -PT"
         );
     }
 }
-
-#[cfg(test)]
-mod adhoc {
-    #[test]
-    fn adhoc_load() {
-        let set = super::TemplateSet::load(std::path::Path::new("/tmp/tmpltest/templates.d"));
-        match set {
-            Ok(s) => println!("OK len={} fp={}", s.len(), s.fingerprint()),
-            Err(e) => println!("ERR {e}"),
-        }
-    }
-}
