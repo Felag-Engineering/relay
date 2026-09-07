@@ -2656,6 +2656,79 @@ func TestAgents_ReadsRenderAsReadsNamingTheirTool(t *testing.T) {
 	}
 }
 
+// TestAgents_ReadOutcomeIsAuditedNotUnspecified.
+//
+// agentCallFrom builds every row's outcome chip from audit.Record.Outcome, and
+// a metadata-only read record has none to build from: auditsink.RecordRead
+// writes who read, which tool, what they aimed it at and when, and deliberately
+// no per-Node verdict, because nothing was dispatched and no daemon decided
+// anything. The zero outcome renders as "unspecified" — the Console saying "we
+// don't know" about the one family of record whose disposition it knows
+// completely (#517).
+//
+// The corrective switch immediately below that assignment exists for exactly
+// this class of record and named four kinds without naming reads, so a read
+// fell straight through the guard written to prevent it.
+//
+// Two properties, and the first is what keeps this from being a fixture pin:
+//
+//  1. NO read renders "unspecified". That is the bug, and it stays failed
+//     however the zero value gets back in — a lost switch arm, a new field, a
+//     second projection.
+//  2. Every read renders "audited", the word justified at readOutcomeAudited
+//     (vocab.go): the record cannot claim the read succeeded, since it is
+//     written before the query runs, but it can claim the access is on the
+//     trail — and that is precisely the sentence the row already carries
+//     beneath it.
+//
+// The fixture goes through auditsink.RecordRead rather than an audit.Record
+// literal. A literal here would let the test assert about a record shape the
+// product does not write, which is how #463 survived a suite that looked like
+// it covered reads.
+func TestAgents_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
+	recs := sinkReadRecords(t, "get_job", "list_nodes", "describe_node")
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+	h := newTestHandler(d, accounts.RoleAdmin)
+	body := get(t, h, "/console/agents").Body.String()
+
+	if strings.Contains(body, `data-outcome="unspecified"`) {
+		t.Error(`a read renders the outcome chip "unspecified" — the record has no per-Node ` +
+			`verdict because nothing was dispatched, and rendering the zero value tells an ` +
+			`operator the Console does not know what happened when it does`)
+	}
+	chip := `<span class="chip outcome" data-outcome="audited">audited</span>`
+	if n := strings.Count(body, chip); n != len(recs) {
+		t.Errorf("%d of %d reads render the outcome chip %q; a read's outcome is that the "+
+			"access is on the trail (ADR-0025), which is what the row's own note says",
+			n, len(recs), readOutcomeAudited)
+	}
+
+	// The chip needs a treatment of its own, or it inherits the bare default
+	// and reads as a Task outcome. It belongs with the other outcomes that
+	// never reached a Node: neutral, never the --failure red and never the
+	// green of a success nothing here can claim.
+	css := get(t, h, "/console/assets/console.css").Body.String()
+	for _, sel := range []string{`[data-outcome="audited"]`, `.chip.outcome[data-outcome="audited"]`} {
+		i := strings.Index(css, sel)
+		if i < 0 {
+			t.Fatalf("the stylesheet has no rule for %s — the chip falls back to the default "+
+				"outcome treatment", sel)
+		}
+		rule := css[i:]
+		if j := strings.Index(rule, "}"); j >= 0 {
+			rule = rule[:j]
+		}
+		for _, borrowed := range []string{"var(--failure)", "var(--ok)", "var(--failure-bg)", "var(--ok-bg)"} {
+			if strings.Contains(rule, borrowed) {
+				t.Errorf("%s borrows %s — a read is neither a failure nor a success, and the "+
+					"colour budget gives those two hues one meaning each", sel, borrowed)
+			}
+		}
+	}
+}
+
 // TestAgents_NarrowViewportsStackRatherThanOverflow.
 //
 // A 64-character node id is the widest unbreakable token the Console renders,
