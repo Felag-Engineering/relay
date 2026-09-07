@@ -1082,16 +1082,36 @@ body = "df -PT"
         );
     }
 
+    /// The gate is `mode & 0o022`: two independent bits, group-write (`0o020`)
+    /// and other-write (`0o002`). Either one alone re-admits a template file
+    /// that an unprivileged local user can rewrite, which is exactly what the
+    /// filesystem trust root has to hold against (ADR-0021 on ADR-0002). So
+    /// each case here trips **one** named bit; a mode that trips both at once
+    /// (`0o666` on its own, as this test once was) proves nothing about either,
+    /// and a mask narrowed to `0o002` or `0o020` would still pass it.
     #[test]
     fn group_or_world_writable_file_is_refused() {
-        let dir = TempDir::new("perms");
-        let path = dir.write("x.toml", DISK);
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).expect("chmod");
-        let err = TemplateSet::load(&dir.path).expect_err("must refuse a writable template");
-        assert!(
-            matches!(err, TemplateLoadError::InsecurePermissions { .. }),
-            "got {err:?}"
-        );
+        for (mode, bit) in [
+            (0o664_u32, "group-writable, other-write clear"),
+            (0o646_u32, "world-writable, group-write clear"),
+            (0o666_u32, "both write bits"),
+        ] {
+            let dir = TempDir::new("perms");
+            let path = dir.write("x.toml", DISK);
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod");
+            let err = match TemplateSet::load(&dir.path) {
+                Err(err) => err,
+                Ok(_) => panic!("mode {mode:#o} ({bit}) must be refused"),
+            };
+            assert!(
+                matches!(
+                    err,
+                    TemplateLoadError::InsecurePermissions { mode: reported, .. }
+                        if reported == mode
+                ),
+                "mode {mode:#o} ({bit}); got {err:?}"
+            );
+        }
     }
 
     #[test]
