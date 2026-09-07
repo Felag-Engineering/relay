@@ -936,7 +936,10 @@ components:
 
   responses:
     BadRequest:
-      description: Malformed request — bad JSON, an unknown field, an invalid Selector, or an invalid Operation argument name.
+      description: |
+        Malformed request — a body not declared `Content-Type: application/json`,
+        bad JSON, an unknown field, an invalid Selector, or an invalid Operation
+        argument name.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }

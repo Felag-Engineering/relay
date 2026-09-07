@@ -75,6 +75,15 @@ capability parity is a review rule, not a runtime dependency between surfaces.
   redesigning auth.
 - The Relay stores password hashes (Console local login) and token hashes; it still
   never stores plaintext secrets at rest.
+- **A credential binds to the surface that issued it.** One Account model and one
+  authentication boundary behind all three surfaces does *not* make every credential
+  portable between them: an API Token is a control-plane credential by construction,
+  while a Console session cookie authenticates the Console and nothing else — the
+  browser attaches it to `/api/v1` and `/mcp` too (the `__Host-` prefix forces
+  `Path=/`), so the boundary bounds the lane by path rather than inheriting the
+  browser's reach. What is scoped is one credential *form*; the Account, its role, and
+  the audit attribution behind it are unchanged, so this is not the per-surface auth
+  this ADR rejected above (#459).
 - An OpenAPI document must be maintained and published; it doubles as the
   extension-builder documentation.
 - Roles are coarse in v1. The pressure valve for finer grain is more Accounts, not

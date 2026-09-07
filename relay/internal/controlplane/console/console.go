@@ -296,6 +296,40 @@ func Routes(d Deps) []Route {
 	return rs
 }
 
+// SessionScope reports whether r targets the Console — the surface a Console
+// session cookie is a credential FOR, and the only surface the authentication
+// boundary will resolve one on (#459).
+//
+// # Why this predicate has to exist
+//
+// The Console session cookie carries the `__Host-` prefix, which the browser
+// enforces as Path=/ (consoleauth.SessionCookieName). That is the right
+// trade — host-only beats path-scoped, because a sibling subdomain cannot
+// plant a `__Host-` cookie — but it means the browser attaches the session to
+// EVERY path on this listener, `/api/v1` and `/mcp` included. The
+// authentication boundary picks its lane by request shape (no Authorization
+// header + a Console mounted = the browser lane), so without a path predicate
+// an operator's Console cookie authenticated the Control API's dispatch
+// routes: a fleet-wide Raw Exec credential presented as a cookie. A credential
+// binds to the surface that issued it; this is where that is said in code.
+//
+// Consulted by controlplane.Authenticator (ConsoleSessionOptions.Scope) and
+// supplied from here for the same reason [Unauthenticated] is: the package
+// that owns the routes owns the statement about their extent, and asserts it
+// against the route table in a test rather than describing it and hoping.
+//
+// It matches on the CLEANED path, exactly as [Unauthenticated] does, so
+// `/api/v1/../console/` cannot smuggle an API route into scope — and, in the
+// same direction, `/console/../api/v1/operations` cannot smuggle one out of
+// the refusal. The bare `/console` is in scope too: only `/console/` is
+// registered, so net/http answers `/console` with a redirect to it, and
+// refusing there would bounce a signed-in operator to the sign-in page, back
+// to `/console`, and around again.
+func SessionScope(r *http.Request) bool {
+	p := cleanPath(r.URL.Path)
+	return p == strings.TrimSuffix(PathPrefix, "/") || strings.HasPrefix(p, PathPrefix)
+}
+
 // routesFor narrows Routes(d) to the routes a session with role may reach —
 // spec 11's "routes this process mounted for this Account's role". Nav
 // consumes it to draw the navigation; the per-role reachability test iterates

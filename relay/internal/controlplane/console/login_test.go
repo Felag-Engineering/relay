@@ -33,6 +33,12 @@ type loginFixture struct {
 	accounts accounts.Repository
 	mike     accounts.Account
 	clk      *testClock
+
+	// svc is the same real sign-in service the handler above authenticates
+	// against, exposed so a test can build a SECOND boundary over it — see
+	// sessionscope_test.go, which needs the real Authenticator and the real
+	// SessionScope in front of a route that is not the Console's.
+	svc *consoleauth.Service
 }
 
 type testClock struct{ t time.Time }
@@ -73,6 +79,7 @@ func newLoginFixture(t *testing.T) *loginFixture {
 		roleVerifier{role: accounts.RoleAdmin},
 		controlplane.WithConsoleSessions(svc, controlplane.ConsoleSessionOptions{
 			Public:       Unauthenticated,
+			Scope:        SessionScope,
 			Unauthorized: UnauthorizedHandler(),
 		}),
 	)
@@ -88,6 +95,7 @@ func newLoginFixture(t *testing.T) *loginFixture {
 
 	return &loginFixture{
 		handler:  authn.Middleware(Secure(mux)),
+		svc:      svc,
 		sessions: sessions,
 		accounts: st.Accounts(),
 		mike:     mike,

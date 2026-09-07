@@ -60,6 +60,21 @@ type consoleLane struct {
 	// test.
 	public func(*http.Request) bool
 
+	// scope reports whether a request targets the Console at all — the
+	// surface this credential is FOR (#459).
+	//
+	// Without it the lane is chosen by request shape alone, and the shape of
+	// a Console request ("no Authorization header, and a Console is
+	// mounted") is also the shape of a cross-origin form POST to
+	// /api/v1/raw-exec. The `__Host-` prefix forces the cookie to Path=/, so
+	// the browser attaches it to every path on this listener; this is what
+	// makes it authenticate only the surface that issued it.
+	//
+	// Supplied by the package that owns the routes, exactly like public
+	// above, and for the same reason: their extent is one fact, asserted
+	// there against the route table, not two descriptions that agree today.
+	scope func(*http.Request) bool
+
 	// unauthorized renders the refusal for a browser: a redirect to the
 	// sign-in page rather than a bare 401 with a WWW-Authenticate challenge no
 	// browser can satisfy.
@@ -72,6 +87,15 @@ type ConsoleSessionOptions struct {
 	// Required: a nil predicate would make the sign-in page itself
 	// unreachable, so WithConsoleSessions refuses one.
 	Public func(*http.Request) bool
+
+	// Scope reports whether a request targets the Console, and so whether a
+	// session cookie is a credential for it at all (#459).
+	//
+	// Required, and deliberately not defaulted to "everything": a nil
+	// predicate would silently restore the control-plane-wide cookie this
+	// exists to prevent, and a default that admits every path is the one
+	// default a security predicate must never have.
+	Scope func(*http.Request) bool
 
 	// Unauthorized renders the refusal for an unauthenticated Console request.
 	// Required for the same reason: the fallback would be a 401 the browser
@@ -91,6 +115,8 @@ func WithConsoleSessions(resolver ConsoleSessionResolver, opts ConsoleSessionOpt
 		panic("controlplane: WithConsoleSessions requires a ConsoleSessionResolver")
 	case opts.Public == nil:
 		panic("controlplane: WithConsoleSessions requires a Public predicate; without one the sign-in page sits behind the authentication it establishes")
+	case opts.Scope == nil:
+		panic("controlplane: WithConsoleSessions requires a Scope predicate; without one a Console session cookie authenticates every surface on this listener, including /api/v1/raw-exec")
 	case opts.Unauthorized == nil:
 		panic("controlplane: WithConsoleSessions requires an Unauthorized handler")
 	}
@@ -98,6 +124,7 @@ func WithConsoleSessions(resolver ConsoleSessionResolver, opts ConsoleSessionOpt
 		a.console = &consoleLane{
 			resolver:     resolver,
 			public:       opts.Public,
+			scope:        opts.Scope,
 			unauthorized: opts.Unauthorized,
 		}
 	}

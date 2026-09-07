@@ -54,6 +54,14 @@ const (
 
 	// HomePath is where a signed-in operator lands.
 	HomePath = "/console/"
+
+	// PathPrefix is the subtree this surface occupies on the control-plane
+	// listener: the composition root mounts the whole route table at
+	// "/console/" and every row in [Routes] lives beneath it. It reads the
+	// same as HomePath and means something different — HomePath is a
+	// destination, this is the Console's extent — so [SessionScope] names
+	// this one.
+	PathPrefix = "/console/"
 )
 
 // Authenticator is the Console's view of the sign-in service: it can start a

@@ -857,7 +857,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 					// sign-in page and its stylesheet. The predicate is owned
 					// by the package that owns those routes, and its exact
 					// extent is asserted there.
-					Public:       console.Unauthenticated,
+					Public: console.Unauthenticated,
+					// And the reach of the credential this lane resolves
+					// (#459): a Console session authenticates the Console,
+					// not /api/v1 and not /mcp. Owned by the same package for
+					// the same reason — it is a statement about which routes
+					// exist, and consoleSurface below mounts every one of
+					// them under this prefix.
+					Scope:        console.SessionScope,
 					Unauthorized: console.UnauthorizedHandler(),
 				},
 			))
