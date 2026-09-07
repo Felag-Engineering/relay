@@ -31,6 +31,7 @@ package console
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"time"
 
@@ -146,7 +147,12 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 			a = &acc{agentAccount: agentAccount{
 				Name:     name,
 				Verified: rec.Attribution.Verified.AccountID != "",
-				Href:     "/console/agents?account=" + name,
+				// url.Values, not concatenation: an Account name is a principal
+				// string this package does not constrain, and html/template's URL
+				// normaliser leaves & # = alone. "bob&co:operator" concatenated
+				// yields ?account=bob plus a stray parameter, so the rail links
+				// to the wrong Account (#467). Same idiom as compare.go.
+				Href: "/console/agents?" + url.Values{"account": {name}}.Encode(),
 			}}
 			byAccount[name] = a
 		}
