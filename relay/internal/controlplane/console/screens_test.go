@@ -24,6 +24,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
@@ -2343,6 +2344,121 @@ func TestActivity_ControlPlaneReadsSayWhatWasRead(t *testing.T) {
 		if !strings.Contains(body, "enumerated "+want) {
 			t.Errorf("Read egress names this record %q and Activity does not", want)
 		}
+	}
+}
+
+// captureRepo is an audit.Repository that keeps what was appended to it.
+//
+// It exists so a test fixture can be a record the REAL sink wrote, rather than
+// a literal hand-copied from it. Only Append and List carry any behaviour: the
+// rest of the interface is here because the interface is here.
+type captureRepo struct{ recs []audit.Record }
+
+func (r *captureRepo) Append(_ context.Context, rec audit.Record) error {
+	r.recs = append(r.recs, rec)
+	return nil
+}
+func (r *captureRepo) List(context.Context) ([]audit.Record, error) { return r.recs, nil }
+func (r *captureRepo) ByJob(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+func (r *captureRepo) ByNode(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+func (r *captureRepo) ByAccount(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+func (r *captureRepo) ByApproval(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+func (r *captureRepo) ByGrant(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+func (r *captureRepo) ByOnBehalfOf(context.Context, string) ([]audit.Record, error) {
+	return nil, nil
+}
+
+// sinkReadRecords builds read records THROUGH auditsink.RecordRead — the one
+// function in the product that writes a KindRead record — instead of writing
+// audit.Record literals here.
+//
+// The shape is the entire point of the exercise. A read record carries its
+// tool name in OperationName and leaves ActionKind EMPTY; the older shape,
+// which several console tests still model, put the tool in ActionKind. A guard
+// written against that older shape asserts about a record the sink has not
+// produced for some time, which is exactly how #463 survived a suite that
+// looked like it covered this: the mislabelling only happens on the field the
+// sink actually fills. Going through the real sink means this test cannot
+// drift from the writer without the writer's own compilation failing.
+func sinkReadRecords(t *testing.T, tools ...string) []audit.Record {
+	t.Helper()
+	repo := &captureRepo{}
+	sink := auditsink.New(repo, auditsink.WithClock(func() time.Time { return testNow }))
+	p := capability.Principal{
+		AccountID: "acct-gleipnir",
+		Account:   "gleipnir-prod",
+		Role:      "operator",
+		Kind:      "machine",
+	}
+	for _, tool := range tools {
+		if err := sink.RecordRead(context.Background(), p, tool, "", "", "job-9d41"); err != nil {
+			t.Fatalf("auditsink.RecordRead(%q): %v", tool, err)
+		}
+	}
+	if len(repo.recs) != len(tools) {
+		t.Fatalf("the sink wrote %d records for %d reads", len(repo.recs), len(tools))
+	}
+	return repo.recs
+}
+
+// TestAgents_ReadsRenderAsReadsNamingTheirTool.
+//
+// The Agents screen is the trust surface: it must show what the AI-agent
+// actually asked for. toolName tested OperationName before it tested Kind, and
+// a read record carries its tool name in OperationName — the same field a
+// dispatch carries its Operation in — so every `get_job` rendered as
+// `run_operation · get_job`. A read relabelled as a dispatch of an Operation
+// no Node has, on the screen an operator reads to decide whether to worry
+// (#463).
+//
+// Two properties, and the second is why this is not a one-line fix:
+//
+//  1. A read is not announced as a dispatch.
+//  2. The row still NAMES the tool. The unreachable arm this replaces returned
+//     the bare word "read", so merely reordering the branches would have
+//     traded a wrong name for no name — on a trust surface, WHICH read
+//     happened is the useful half.
+//
+// The name is asserted against readTargetOf, not against a literal, because
+// this is the THIRD screen to name these records: Activity says "enumerated
+// list_nodes" and Read egress says "list_nodes", both through readTargetOf on
+// the shared trailFacts. TestActivity_ControlPlaneReadsSayWhatWasRead above
+// exists because those two once disagreed; a literal here would let this
+// screen become the third answer without anything failing.
+func TestAgents_ReadsRenderAsReadsNamingTheirTool(t *testing.T) {
+	recs := sinkReadRecords(t, "get_job", "list_nodes")
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	for _, rec := range recs {
+		if got := "run_operation · " + rec.OperationName; strings.Contains(body, got) {
+			t.Errorf("the Agents screen renders a read as %q — a read is not a dispatch, "+
+				"and no Node has an Operation by that name", got)
+		}
+		// The shared naming, reached the same way Activity and Read egress
+		// reach it. For these records it is the tool name.
+		want := readTargetOf(factsOfRecord(rec))
+		if !strings.Contains(body, ">"+want+"<") {
+			t.Errorf("the Agents screen does not name the tool %q that was read; "+
+				"Activity and Read egress name this record %q", rec.OperationName, want)
+		}
+	}
+	// The bare word this used to fall back to says who called nothing in
+	// particular. Nothing on this screen should be reduced to it.
+	if strings.Contains(body, "<code>read</code>") {
+		t.Error("a read renders as the bare word \"read\" — the record names its tool and the screen discarded it")
 	}
 }
 

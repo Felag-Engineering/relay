@@ -228,7 +228,7 @@ func agentCallFrom(rec audit.Record) agentCall {
 	f := factsOfRecord(rec)
 	c := agentCall{
 		When:       rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		Tool:       toolName(rec),
+		Tool:       toolName(f),
 		Principal:  principalText(f),
 		Verified:   rec.Attribution.Verified.AccountID != "",
 		OnBehalfOf: rec.Attribution.Asserted.OnBehalfOf,
@@ -279,16 +279,41 @@ func agentCallFrom(rec audit.Record) agentCall {
 
 // toolName renders what was called, in the vocabulary an operator sees on the
 // MCP surface rather than in audit's internal kinds.
-func toolName(rec audit.Record) string {
-	if rec.OperationName != "" {
-		return "run_operation · " + rec.OperationName
+//
+// # The read case is first, and the order is the whole function
+//
+// A read record carries its tool name in OperationName — the SAME field a
+// dispatch carries its Operation in (auditsink.RecordRead) — so testing
+// OperationName before the Kind rendered every non-dispatching read as
+// `run_operation · get_job`. That is a read relabelled as a dispatch on the
+// one screen billed as what the AI-agent actually asked for, and it left the
+// KindRead arm this replaces unreachable for every record the sink writes
+// (#463).
+//
+// # What a read renders as is not this screen's invention
+//
+// readTargetOf is the shared naming core Activity ("enumerated list_nodes")
+// and Read egress both already go through (vocab.go). A third spelling here
+// would recreate precisely the drift
+// TestActivity_ControlPlaneReadsSayWhatWasRead was written to end — two
+// screens naming one audit record two ways, each looking right in isolation.
+// It also keeps the tool NAME, which the bare word "read" it replaces threw
+// away: on a trust surface, WHICH read happened is the useful half.
+//
+// It takes trailFacts rather than an audit.Record because every field it reads
+// is on the shared projection, and its caller has already built one — a second
+// projection per row is a second place the two could disagree.
+func toolName(f trailFacts) string {
+	if f.Kind == audit.KindRead {
+		return readTargetOf(f)
 	}
-	if len(rec.RawExecArgv) > 0 {
+	if f.OperationName != "" {
+		return "run_operation · " + f.OperationName
+	}
+	if len(f.RawExecArgv) > 0 {
 		return "raw_exec"
 	}
-	switch rec.Kind {
-	case audit.KindRead:
-		return "read"
+	switch f.Kind {
 	case audit.KindApprovalRequested, audit.KindApprovalPendingObserved:
 		return "parked for approval"
 	case audit.KindApprovalDecided:
@@ -296,10 +321,10 @@ func toolName(rec audit.Record) string {
 	case audit.KindRefusal:
 		return "refused"
 	}
-	if rec.ActionKind != "" {
-		return rec.ActionKind
+	if f.ActionKind != "" {
+		return f.ActionKind
 	}
-	return rec.Kind
+	return f.Kind
 }
 
 func timeSince(t, now time.Time) string {
