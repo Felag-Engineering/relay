@@ -7,7 +7,8 @@
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
 .PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
-        test-relay test-relay-race test-daemon lint-relay lint-daemon clean test-integration \
+        test-relay test-relay-race test-daemon test-strict-umask lint-relay lint-daemon \
+        clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
@@ -18,8 +19,9 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
-# absence check, and both cross-binary suites. Work can pass the inner loop and
-# fail CI on a class of problem the author never looked at.
+# absence check, the strict-umask test lane, and both cross-binary suites. Work
+# can pass the inner loop and fail CI on a class of problem the author never
+# looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
 # job for job, so "it passes locally" means the same thing it means in CI.
@@ -31,7 +33,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # is absent they are SKIPPED WITH A NOTICE rather than silently passed over or
 # hard-failed: a check you did not run must not look like a check that passed.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
-        test-relay-race test-daemon opschema-check openapi-check apiclient-check verify-proto \
+        test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
+        apiclient-check verify-proto \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -194,6 +197,44 @@ build-daemon-release:
 
 test-daemon:
 	cd daemon && cargo test
+
+## --- strict-umask test lane (ci.yml: strict-umask) — issue #528 ---
+# Everything else in the gate runs at ONE umask: 0022 on a GitHub runner, and
+# in practice the same on a dev box. That made a whole defect class
+# structurally invisible — a fixture that quietly stops being a valid input, or
+# an assertion pinning a mode the code never actually guarantees. #481, #507,
+# #508, #509, #510, #513 and #514 were every one of them found by a scan, never
+# by a red build.
+#
+# 077 rather than 027: 027 is the realistic hardened-host setting, but 077 is
+# strictly stronger and one lane is cheaper than two.
+#
+# Scope matches `make test` — the same two hermetic lanes, on BOTH toolchains,
+# where this class lives (Go: #508/#509; Rust fixtures: #481/#507/#513/#514).
+# They are inlined rather than delegated to `make test` because each line needs
+# to carry the umask itself, and the Go half needs -count=1. The race detector
+# and the e2e suites would mostly buy runtime: nothing about this class is
+# concurrency- or cross-binary-shaped.
+#
+# Two things this recipe gets right on purpose, both of which would silently
+# make the lane worthless:
+#
+#  1. `-count=1` is load-bearing, not habit. The Go test cache keys on the test
+#     binary and its inputs, NOT on the ambient umask, so a cached `ok` from
+#     the default-umask lane is a false pass for exactly the tests this lane
+#     exists to re-run. `cargo test` caches compilation but never test results,
+#     so the Rust half needs no equivalent.
+#  2. Each recipe line is its OWN shell, so `umask 077` has to lead each one —
+#     it must apply to the process that actually runs the tests. The echo makes
+#     that visible in the log rather than merely asserted here.
+#
+# Individual tests must never set the umask themselves: umask(2) is
+# process-global and Go tests run in parallel, so a test that sets it corrupts
+# its neighbours (ruled out on those grounds in #481). Setting it once, around
+# the whole lane, is the safe shape.
+test-strict-umask:
+	umask 077 && echo "test-strict-umask: umask is $$(umask)" && cd relay && go test -count=1 ./...
+	umask 077 && cd daemon && cargo test
 
 ## --- End-to-end integration tests ---
 # test-integration is NOT part of the make test gate (hermetic suites only).
