@@ -1568,24 +1568,37 @@ deny = ["restart nginx"]
     // 5. Loader permission checks
     // -----------------------------------------------------------------------
 
+    /// The gate is `mode & 0o022`: two independent bits, group-write (`0o020`)
+    /// and other-write (`0o002`). Either one alone re-admits a Policy file that
+    /// an unprivileged local user can rewrite, and a rewritable Policy file is
+    /// a Policy bypass — the locally-rooted, remotely-immutable trust root and
+    /// deny-by-default both rest on this file (ADR-0002). So each case here
+    /// trips **one** named bit; a mode that trips both at once (`0o666` on its
+    /// own, as the world-writable case once was) proves nothing about either,
+    /// and a mask narrowed to `0o002` or `0o020` would still pass it. Asserting
+    /// the *reported* mode is what pins the fixture: `TempFile::new` chmods
+    /// after open because `OpenOptions::mode` is umask-masked, and this
+    /// assertion fails loudly if the file ever lands short of the bits asked
+    /// for. Mirrors `templates::tests::group_or_world_writable_file_is_refused`
+    /// — the two loaders share a trust root and must not drift apart again.
     #[test]
-    fn loader_rejects_group_writable() {
-        let tmp = TempFile::new("group-writable", FIXTURE.as_bytes(), 0o664);
-        let result = load_policy(tmp.path());
-        assert!(
-            matches!(result, Err(PolicyError::InsecurePermissions { .. })),
-            "group-writable policy file must be rejected; got {result:?}"
-        );
-    }
-
-    #[test]
-    fn loader_rejects_world_writable() {
-        let tmp = TempFile::new("world-writable", FIXTURE.as_bytes(), 0o666);
-        let result = load_policy(tmp.path());
-        assert!(
-            matches!(result, Err(PolicyError::InsecurePermissions { .. })),
-            "world-writable policy file must be rejected; got {result:?}"
-        );
+    fn loader_rejects_group_or_world_writable() {
+        for (mode, bit) in [
+            (0o664_u32, "group-writable, other-write clear"),
+            (0o646_u32, "world-writable, group-write clear"),
+            (0o666_u32, "both write bits"),
+        ] {
+            let tmp = TempFile::new("writable", FIXTURE.as_bytes(), mode);
+            let result = load_policy(tmp.path());
+            assert!(
+                matches!(
+                    result,
+                    Err(PolicyError::InsecurePermissions { mode: reported })
+                        if reported == mode
+                ),
+                "mode {mode:#o} ({bit}) must be refused, reporting the mode it was set to; got {result:?}"
+            );
+        }
     }
 
     #[test]
