@@ -67,6 +67,37 @@ func corruptCSRSig(t *testing.T, csrPEM []byte) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
 }
 
+// assertModeWithin asserts that path carries no permission bit beyond declared,
+// and none of the forbidden bits.
+//
+// The CA's declared modes are ceilings rather than exact values (see the perm
+// constants in ca.go): the process umask may tighten what MkdirAll and
+// OpenFile produce, and nothing may widen it. So these are the two properties
+// that are actually load-bearing — a regression that WIDENS the store (a forced
+// chmod, a dropped perm argument, a looser constant) fails under every umask,
+// and the security-relevant bits are pinned clear outright.
+//
+// The second check is not redundant with the first: the ceiling is a caller
+// argument and survives being edited, so the forbidden-bit floor is what still
+// fails if someone widens the writer AND raises the ceiling here to match.
+func assertModeWithin(t *testing.T, path string, declared, forbidden os.FileMode, what string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", what, err)
+	}
+	mode := info.Mode().Perm()
+
+	if extra := mode &^ declared; extra != 0 {
+		t.Errorf("%s perm = %04o, want no looser than %04o (the umask may tighten it, nothing may widen it); extra bits %04o",
+			what, mode, declared, extra)
+	}
+	if bad := mode & forbidden; bad != 0 {
+		t.Errorf("%s perm = %04o, want none of %04o set; got %04o", what, mode, forbidden, bad)
+	}
+}
+
 func TestOpen_CreatesOnFirstRun(t *testing.T) {
 	// Use a non-existent subdirectory so Open/MkdirAll creates it fresh with
 	// the expected 0700 mode. t.TempDir() itself is created by the test runner
@@ -84,28 +115,27 @@ func TestOpen_CreatesOnFirstRun(t *testing.T) {
 	keyPath := filepath.Join(dir, keyFileName)
 	certPath := filepath.Join(dir, certFileName)
 
-	keyInfo, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatalf("stat key file: %v", err)
-	}
-	certInfo, err := os.Stat(certPath)
-	if err != nil {
-		t.Fatalf("stat cert file: %v", err)
-	}
-	dirInfo, err := os.Stat(dir)
-	if err != nil {
-		t.Fatalf("stat dir: %v", err)
-	}
-
-	if got := keyInfo.Mode().Perm(); got != keyPerm {
-		t.Errorf("key file perm = %04o, want %04o", got, keyPerm)
-	}
-	if got := certInfo.Mode().Perm(); got != certPerm {
-		t.Errorf("cert file perm = %04o, want %04o", got, certPerm)
-	}
-	if got := dirInfo.Mode().Perm(); got != dirPerm {
-		t.Errorf("dir perm = %04o, want %04o", got, dirPerm)
-	}
+	// The declared modes are written out as literals rather than read back
+	// from ca.go's constants ON PURPOSE: a test that borrows the writer's own
+	// constant as its ceiling raises that ceiling in lockstep with any change
+	// to it, so the ceiling check could never fail. Stating the number here
+	// makes it an independent claim about the CA store.
+	//
+	// ca-key.pem — the crown jewel: declared 0600, and never readable by group
+	// or world under any umask.
+	assertModeWithin(t, keyPath, 0o600, 0o077, "ca-key.pem")
+	// ca-cert.pem — public material (the trust anchor Nodes pin), so the claim
+	// is integrity rather than secrecy: declared 0644, and never writable by
+	// group or world.
+	assertModeWithin(t, certPath, 0o644, 0o022, "ca-cert.pem")
+	// The store directory carries the strongest claim of the three — a CA
+	// store is owner-only — and a umask cannot loosen 0700. Here the ceiling
+	// and the floor meet: "no bit beyond 0700" and "none of 0077" say the same
+	// thing from both sides, which is precisely the claim being made. Exact
+	// equality would add only the ability to fail when a umask TIGHTENED the
+	// directory, which is neither a regression nor reachable — a umask that
+	// clears an owner bit makes Open itself fail before this line.
+	assertModeWithin(t, dir, 0o700, 0o077, "ca store directory")
 
 	// Bundle must decode to a CA certificate.
 	bundle := ca.Bundle()
