@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -469,6 +470,33 @@ func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
 				t.Errorf("audit records = %d, want 0 — nothing happened to record", n)
 			}
 		})
+	}
+}
+
+// TestHandleRevokeNode_RefusesWhenItCannotBeAudited pins the fail-closed half
+// of #487: the reason is worthless if the record carrying it can be dropped
+// silently, so an audit-write failure refuses the revocation rather than
+// performing it and returning 204.
+//
+// This deliberately inverts recordLifecycle's best-effort contract, which the
+// other lifecycle actions keep — see recordLifecycleErr for why revoke can and
+// they cannot.
+func TestHandleRevokeNode_RefusesWhenItCannotBeAudited(t *testing.T) {
+	nr := &fakeNodeRevoker{}
+	auditor := &fakeAuditor{err: errors.New("audit store unavailable")}
+	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+		map[string]string{"reason": "compromised host"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", rec.Code, rec.Body.String())
+	}
+	if len(nr.calledWith) != 0 {
+		t.Errorf("the Node was revoked despite an unwritable trail: %v", nr.calledWith)
+	}
+	// The detail must not leak the store's error to the caller.
+	if strings.Contains(rec.Body.String(), "audit store unavailable") {
+		t.Errorf("the audit backend error leaked into the response: %s", rec.Body.String())
 	}
 }
 

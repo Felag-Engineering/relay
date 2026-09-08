@@ -1416,13 +1416,24 @@ components:
       properties:
         reason:
           type: string
-          minLength: 1
-          maxLength: 512
           description: |
-            Why this Node is being revoked. Recorded in the audit trail, and
-            shown on the Node's detail screen. Trimmed of surrounding
-            whitespace; must be valid UTF-8 with no control characters, and at
-            most 512 bytes after trimming.
+            Why this Node is being revoked. Recorded in the audit trail and
+            shown on the Node's detail screen.
+
+            Trimmed of surrounding whitespace, then required to be non-empty,
+            at most 512 **bytes**, valid UTF-8, and free of control, bidi and
+            zero-width characters. Anything else is a 400.
+
+            `minLength`/`maxLength` are deliberately NOT declared here: the
+            server bounds bytes while JSON Schema counts characters, so a
+            machine-readable `maxLength: 512` would call a 200-character CJK
+            reason valid and then be refused, and a `minLength: 1` would do the
+            same for `"   "`. An approximate constraint a generated client
+            enforces is worse than none, because it disagrees with the server
+            in the direction that says yes.
+
+            The reason is readable by any `viewer` on the Activity screen and in
+            its CSV export: do not put a credential, token or private key in it.
 
     ReleaseFreezeRequest:
       type: object

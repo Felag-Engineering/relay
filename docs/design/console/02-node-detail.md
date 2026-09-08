@@ -111,10 +111,12 @@ is a link and this screen has no mutating route.
   last-seen. The effective-Policy panel cannot be refreshed and must say so rather than showing a
   stale answer as if it were live.
 - **Revoked Node** — reachable by link from audit; renders its final state and the revocation
-  record. The trail attributes the revoke; it records no REASON, because
-  `POST /api/v1/nodes/{id}/revoke` does not accept one (`api/nodes.go` passes `""`). The page says
-  that rather than showing an empty field — follow-up: give the endpoint a reason, as ADR-0020's
-  incident ladder arguably requires for its middle and irreversible rung.
+  record, including the REASON the operator gave. The endpoint requires one as of #487, which is
+  what ADR-0020's incident ladder wanted for its middle and irreversible rung. A record predating
+  that change has an attribution and a blank reason because there was nowhere to put one; the page
+  says so explicitly rather than showing an empty field, because "no reason was given" and "this
+  Relay could not ask for one" are different facts. The CAUSATIVE record is shown, not the latest:
+  revoke is idempotent, so a later re-revoke must not relabel why the Node was revoked.
 - **`viewer`** — no label actions, no "Run here".
 - **`console_execution = off`** — "Run here" is absent.
 

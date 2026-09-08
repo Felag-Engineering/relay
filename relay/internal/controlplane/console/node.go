@@ -399,9 +399,17 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 		if recs, err := d.Audit.ByNode(r.Context(), n.NodeID); err == nil {
 			// The revocation record is read from the WHOLE trail, not from the
 			// windowed rows below: a Node with forty later records would
-			// otherwise lose the one act that explains its state. The trail is
-			// oldest-first, so the last match is the latest.
-			for i := len(recs) - 1; i >= 0; i-- {
+			// otherwise lose the one act that explains its state.
+			//
+			// The trail is oldest-first and this takes the FIRST match, which is
+			// the causative revocation. Taking the latest would let the reason
+			// be relabelled: revoke is idempotent-204, so an admin can re-POST
+			// an already-revoked Node with an innocuous reason, and this screen
+			// — now the place an operator reads "why" — would show that one
+			// instead of the act that actually revoked the Node. Both records
+			// survive in the Activity trail either way; what is protected here
+			// is which one this summary attributes.
+			for i := range recs {
 				if recs[i].Kind == audit.KindNodeRevoke {
 					v.RevokedBy = principalText(factsOfRecord(recs[i]))
 					v.RevocationReason = recs[i].Reason
@@ -581,7 +589,7 @@ var nodeTmpl = newScreen("node", `
       {{if .Revoked}}
       <p class="gap"><b>This Node was revoked at {{.RevokedAt}}.</b>
       {{if .RevocationRecorded}}The trail attributes it to <b>{{.RevokedBy}}</b>{{if .RevocationReason}},
-      who gave the reason <q class="rreason">{{.RevocationReason}}</q>.
+      who gave the reason <q>{{.RevocationReason}}</q>.
       {{else}} and records no reason: this Node was revoked before the endpoint accepted one.
       {{end}}
       {{else}}No revocation record is in the trail: the registry keeps the timestamp whether or not

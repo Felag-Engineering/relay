@@ -325,6 +325,25 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 		t.Error("a record that HAS a reason still claims the endpoint could not accept one")
 	}
 
+	// The CAUSATIVE revocation is the one shown, not the latest. Revoke is
+	// idempotent-204, so re-POSTing an already-revoked Node appends a second
+	// record; showing that one would let the reason be relabelled after the
+	// fact by the same principal.
+	relabelled := append([]audit.Record(nil), withReason...)
+	relabelled = append(relabelled, audit.Record{
+		Kind: audit.KindNodeRevoke, NodeID: "node-gone",
+		Principal: "alice:admin", Reason: "routine decommission",
+		Timestamp: testNow,
+	})
+	d.Audit = fakeAudit{records: relabelled}
+	page := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
+	if !strings.Contains(page, "compromised host, INC-4471") {
+		t.Error("a later revoke record relabelled the reason shown for the causative one")
+	}
+	if strings.Contains(page, "routine decommission") {
+		t.Error("the summary shows a later revoke record instead of the causative one")
+	}
+
 	// And a revoked Node whose trail holds nothing says so.
 	d.Audit = fakeAudit{}
 	quiet := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()

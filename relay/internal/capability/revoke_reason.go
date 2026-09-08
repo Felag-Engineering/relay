@@ -69,11 +69,25 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // to release the Freeze at all. Node revocation has no such method — the
 // Control API calls revocation.Service.RevokeNode directly, and only
 // authorization routes through the capability layer — so this is a validator a
-// surface must remember to call, not a gate it cannot get past. Today that is
-// safe because the Control API is the only surface that revokes: the Console
-// reads revocation records and has no revoke path. It stops being safe the day
-// a second one appears, and closing that properly means giving revocation a
-// capability-layer method, which is a larger change than #487 asked for.
+// surface must remember to call, not a gate it cannot get past.
+//
+// What that buys, precisely: POST /api/v1/nodes/{node_id}/revoke cannot revoke
+// unattributed. It does NOT make revocation attributable, and the difference is
+// not academic. revocation.Service.RevokeToken cascade-revokes every Node an
+// Enrollment Token enrolled, reached by DELETE /api/v1/enrollment-tokens/{id};
+// that path writes one KindTokenRevoke record and NO KindNodeRevoke record for
+// any cascaded Node, so an admin who wants an unattributed Node revocation can
+// simply revoke the enrolling token instead — same irreversible outcome, no
+// reason demanded, and Node detail then renders its weaker "no revocation
+// record is in the trail" branch. Same role throughout, so this is an
+// attribution gap and not a privilege escalation. Closing it means giving
+// revocation.Service an audit sink, which it does not have today and which is a
+// larger change than #487 asked for; it is filed separately.
+//
+// enroll.Service also revokes a just-minted identity when enrollment fails
+// partway (its own nodeDenylister, never this validator). That one is correct
+// as it stands: it is the Relay cleaning up after itself, not an operator act,
+// and there is no human whose reason could be demanded.
 func ValidateRevokeReason(raw string) (string, error) {
 	reason := strings.TrimSpace(raw)
 	if reason == "" {
@@ -98,6 +112,38 @@ func ValidateRevokeReason(raw string) (string, error) {
 		if r == '\uFFFD' || r < 0x20 || r == 0x7f {
 			return "", ErrRevokeReasonMalformed
 		}
+		// Bidi overrides and zero-width characters are refused for the same
+		// reason #504 refused them in node labels: they make the rendered
+		// string differ from the stored one. Here the stakes are a trust
+		// screen — a U+202E inside the reason on Node detail visually reorders
+		// the attribution text around it, so the next human reading the trail
+		// sees something other than what was recorded. Not injection (the
+		// Console escapes, the CSV export quotes), just a rendering the
+		// operator did not write.
+		if isBidiOrZeroWidth(r) {
+			return "", ErrRevokeReasonMalformed
+		}
 	}
 	return reason, nil
+}
+
+// isBidiOrZeroWidth reports whether r reorders or hides surrounding text: the
+// explicit bidirectional formatting and isolate controls, the zero-width
+// space/joiners, and the byte-order mark in its U+FEFF word-joiner role.
+//
+// Listed explicitly rather than derived from a unicode range table, because
+// package capability's import allowlist does not carry unicode and because an
+// explicit list is the one a reader can check against the code points named in
+// the comment above.
+func isBidiOrZeroWidth(r rune) bool {
+	switch r {
+	case '\u200b', '\u200c', '\u200d', // zero-width space, non-joiner, joiner
+		'\u200e', '\u200f', // LTR/RTL marks
+		'\u202a', '\u202b', '\u202c', '\u202d', '\u202e', // embeddings and overrides
+		'\u2060',                               // word joiner
+		'\u2066', '\u2067', '\u2068', '\u2069', // isolates
+		'\ufeff': // BOM / zero-width no-break space
+		return true
+	}
+	return false
 }

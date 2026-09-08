@@ -355,10 +355,34 @@ func defaultAuditID() (string, error) {
 // write must not be papered over by rolling it back, nor may it block the
 // caller from returning success for a mutation that already took effect.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
+	if err := recordLifecycleErr(ctx, d, p, kind, nodeID, reason); err != nil {
+		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
+	}
+}
+
+// recordLifecycleErr is recordLifecycle's fail-closed half: it RETURNS the
+// audit-write error instead of logging it, for the one caller that must not
+// proceed without a record.
+//
+// handleRevokeNode calls this BEFORE revoking, and 500s if it fails, because
+// #487's whole premise is that an irreversible act must be attributable — a
+// revocation whose record was silently dropped is exactly the state the issue
+// set out to end, and "the trail failed to write" is not a better excuse for it
+// than "the endpoint accepted no reason". That inverts recordLifecycle's
+// documented best-effort contract, which is right for the actions that keep it:
+// they have already happened by the time it is called, and rolling them back is
+// not on offer. Revoke can invert it precisely because RevokeNode has no error
+// return and cannot fail once entered, so recording first cannot produce a
+// record for an act that did not happen.
+//
+// This mirrors the read lane's posture (ADR-0025: record before the seam, fail
+// closed) and handleGetNode's, which already 500s when its read audit cannot be
+// written — the same surface disagreeing with itself about whether an
+// unrecorded act may proceed was the inconsistency worth removing.
+func recordLifecycleErr(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) error {
 	id, err := newAuditID()
 	if err != nil {
-		slog.Error("control api: generate lifecycle audit record id", "kind", kind, "error", err)
-		return
+		return fmt.Errorf("api: generate lifecycle audit record id: %w", err)
 	}
 	asserted := capability.AssertionsFromContext(ctx)
 	rec := audit.Record{
@@ -385,6 +409,7 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 		Reason: reason,
 	}
 	if err := d.Audit.Append(ctx, rec); err != nil {
-		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
+		return fmt.Errorf("api: append lifecycle audit record: %w", err)
 	}
+	return nil
 }
