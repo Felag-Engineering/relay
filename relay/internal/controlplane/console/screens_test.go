@@ -839,8 +839,16 @@ func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 // screen disagreeing about one record set is precisely what routing everything
 // through riskOf exists to prevent.
 //
-// Asserted on the RENDERED page, counting `data-risk="mutate"` chips against
-// the rail's own number, because that is the comparison the operator makes.
+// Asserted on the RENDERED page, summing the Calls each `data-risk="mutate"`
+// row stands for against the rail's own number, because that is the
+// comparison the operator makes NOW that #541 lets a mutate row collapse:
+// the property is no longer "one chip per call" but "the call counts on the
+// mutate rows add up to the rail's number". This fixture (agentMutateFixture)
+// happens to collapse nothing — no two adjacent rows are identical — so the
+// summed form and a bare chip count agree here, which is exactly why this
+// rewrite is provably behaviour-preserving on this fixture and why the
+// fixture built to DISCRIMINATE the two forms lives in its own file:
+// TestAgents_TheRailCountsCallsNotCollapsedRows (agents_collapse_test.go).
 //
 // This equality holds here ONLY because agentMutateFixture is ONE Account
 // with every row at testNow — i.e. every row is inside the 15-minute window
@@ -860,12 +868,12 @@ func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
 	chipped := 0
 	for _, c := range calls {
 		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
-			chipped++
+			chipped += c.Calls
 		}
 	}
 	if rail[0].Mutates != chipped {
-		t.Errorf("the rail says %d mutate and the stream chips %d rows mutate — the rail and the "+
-			"per-row chip disagree about the same records", rail[0].Mutates, chipped)
+		t.Errorf("the rail says %d mutate and the mutate rows' call counts sum to %d — the rail "+
+			"and the per-row chips disagree about the same records", rail[0].Mutates, chipped)
 	}
 
 	d := renderableDeps()
@@ -4436,7 +4444,12 @@ func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Recor
 // fixture records carry different Principals for exactly this purpose.
 func agentRowContaining(t *testing.T, body, needle string) string {
 	t.Helper()
-	const marker = `<article class="ev" data-kind="call">`
+	// A PREFIX, not the whole opening tag: #541 added data-calls="{{.Calls}}"
+	// to the article tag, so the literal marker with a trailing ">" no longer
+	// matches any row and this helper fails as "no agent row contains X" —
+	// naming nothing about the real cause. Splitting on the prefix survives
+	// whatever attributes the tag gains after data-kind.
+	const marker = `<article class="ev" data-kind="call"`
 	for _, block := range strings.Split(body, marker)[1:] {
 		if strings.Contains(block, needle) {
 			return block

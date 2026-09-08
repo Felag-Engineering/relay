@@ -231,6 +231,11 @@ func TestAgents_ThePageNeverSaysCallsAreInTheWindow(t *testing.T) {
 	freshRow := capability.AuditRow{Kind: audit.KindDispatch, ActionKind: "operation",
 		OperationName: "service.restart", Principal: "agent:operator", NodeID: "node-a",
 		Outcome: jobs.OutcomeSuccess, Timestamp: testNow}
+	// Two rows that collapseRuns folds into one (#541): they render
+	// identically apart from timestamp, so pageNote's collapse clause fires
+	// too, and the word rule must hold over that new copy as much as the
+	// position clauses it already covered.
+	collapsingRows := []capability.AuditRow{freshRow, freshRow}
 
 	for _, c := range []struct {
 		name string
@@ -243,6 +248,8 @@ func TestAgents_ThePageNeverSaysCallsAreInTheWindow(t *testing.T) {
 		{"stale, scrolled", []capability.AuditRow{staleRow}, "/console/agents?cursor=0"},
 		{"populated, page one", []capability.AuditRow{freshRow}, "/console/agents"},
 		{"populated, scrolled", []capability.AuditRow{freshRow}, "/console/agents?cursor=0"},
+		{"collapsing, page one", collapsingRows, "/console/agents"},
+		{"collapsing, scrolled", collapsingRows, "/console/agents?cursor=0"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			d := renderableDeps()
@@ -297,6 +304,14 @@ func TestAgents_TheWindowIsNeverPushedIntoTheLane(t *testing.T) {
 //	(ii) the page's total mutate chips is strictly greater than the sum of
 //	     rail Mutates — red under M4 (filtering the feed removes both mutate
 //	     rows, collapsing both sides to 0).
+//
+// Both counting loops sum c.Calls rather than counting rows (+= 1): #541 lets
+// a mutate row collapse and stand for more than one call, and the rail's
+// Mutates counts CALLS, never rendered rows — see buildAgents' "rail counts
+// CALLS" doc. This fixture's rows collapse nothing (no two are adjacent and
+// identical), so the rewrite is provably behaviour-preserving here; the
+// fixture built to discriminate the two forms is
+// TestAgents_TheRailCountsCallsNotCollapsedRows (agents_collapse_test.go).
 func TestAgents_TheRailAgreesPerAccountWhenAnAccountDropsOff(t *testing.T) {
 	const fresh = "gleipnir-prod:operator"
 	const stale = "legacy-agent:operator"
@@ -325,7 +340,7 @@ func TestAgents_TheRailAgreesPerAccountWhenAnAccountDropsOff(t *testing.T) {
 	freshChipped := 0
 	for _, c := range calls {
 		if c.Principal == fresh && c.Risk == RiskLabel(jobs.RiskClassMutate) {
-			freshChipped++
+			freshChipped += c.Calls
 		}
 	}
 	if rail[0].Mutates != freshChipped {
@@ -340,7 +355,7 @@ func TestAgents_TheRailAgreesPerAccountWhenAnAccountDropsOff(t *testing.T) {
 	totalChipped := 0
 	for _, c := range calls {
 		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
-			totalChipped++
+			totalChipped += c.Calls
 		}
 	}
 	sumRail := 0

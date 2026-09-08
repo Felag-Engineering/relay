@@ -83,8 +83,18 @@ Card contents by kind:
   informative. The capability layer decided; this screen renders it.
 - **Read** — the arguments and a metadata-only result line, explicitly saying the result is not
   retained.
-- **Polling** — consecutive `get_job` calls collapse to one row with a count. Do not let polling
-  drown the lane.
+- **Polling** — consecutive calls that would render IDENTICALLY apart from their timestamp
+  collapse into one row carrying the count of calls it stands for (#541). Equivalence is the
+  WHOLE rendered row, not just Account+tool: a poll of a different Job, a different outcome or a
+  different risk class never joins a run — a `raw_exec` that happened between two runs of
+  `get_job` polls stays its own row, never swallowed into either. Runs must be CONSECUTIVE:
+  collapsing non-adjacent calls would reorder the trail, which on an audit-facing screen is worse
+  than the crowding it fixes. The rail keeps counting CALLS, never rendered rows, and a collapsed
+  row carries its own count — so a rail entry stays verifiable by scrolling and adding up. The
+  page note says how much was collapsed in every position, including the one where it would
+  otherwise say nothing at all. This is presentation over the fetched PAGE only: it does not reach
+  back past the page boundary, so 200 `get_job` calls spread across two pages still crowd out
+  whatever the second page's Older link has to offer.
 
 ## Filtering
 

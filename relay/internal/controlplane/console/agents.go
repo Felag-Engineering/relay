@@ -129,6 +129,159 @@ type agentCall struct {
 	Reason string
 
 	ReadClass bool
+
+	// Calls is how many CALLS this row stands for — 1 for an ordinary row,
+	// more when collapseRuns folded a run of consecutive identical calls
+	// into it. Named to echo agentAccount.Calls DELIBERATELY: the sum of
+	// Calls over an Account's rendered rows IS its rail Calls, and that
+	// identity is the rail's verifiability property stated in the type —
+	// see buildAgents for where the identity is protected by ordering.
+	//
+	// NOT "Repeat" — RepeatDeny already means something else on this
+	// struct (deny-prose collapse, not row collapse).
+	Calls int
+
+	// FirstWhen is the When of the OLDEST call in the run this row stands
+	// for, formatted identically to When. Empty unless Calls > 1: a row
+	// nothing collapsed into has one timestamp, not a span. ABSOLUTE UTC,
+	// never timeSince — the feed has no relative times anywhere else, and
+	// TheRailShowsTheFirstCallOnThePage counts the substring "ago" on the
+	// whole body, which a relative FirstWhen would break.
+	FirstWhen string
+}
+
+// collapsible reports whether c may be folded into an adjacent identical row.
+//
+// A denial is the highest-information row on a trust surface, so a run of
+// denies is never folded — the deny-prose collapse (buildAgents' seenDeny
+// pass) already de-duplicates ITS bulk while keeping every row, and
+// compounding two collapse mechanisms on one row is where the arithmetic
+// stops being readable.
+//
+// The first row of a deny run is unfoldable anyway because Deny is a
+// POINTER and two rows never share one — sameCall's == would already see
+// them as different values. That protection does NOT reach the RepeatDeny
+// rows behind the first: after the deny-prose pass, a second and third deny
+// of the same Operation and rule both carry {Deny: nil, RepeatDeny: true}
+// and would otherwise compare equal to each other. This predicate makes the
+// no-collapse rule legible and extends it to those rows explicitly.
+func collapsible(c agentCall) bool {
+	return c.Deny == nil && !c.RepeatDeny
+}
+
+// sameCall reports whether a and b would render identically apart from the
+// span they cover.
+//
+// The key is the WHOLE rendered row minus When/Calls/FirstWhen — copied and
+// zeroed on both sides, then compared with Go's ==. Risk cannot be dropped
+// from the key because there is no per-field check to forget one from; the
+// compiler enforces the same discipline on every future field. If agentCall
+// ever gains a slice or map field, this stops compiling — that is the
+// INTENDED failure. Do not "fix" it by hand-writing a partial key; add the
+// field to the exclusion list above only if it is provably render-irrelevant,
+// and say why in a comment when you do.
+func sameCall(a, b agentCall) bool {
+	a.When, a.Calls, a.FirstWhen = "", 0, ""
+	b.When, b.Calls, b.FirstWhen = "", 0, ""
+	return a == b
+}
+
+// collapseRuns folds each run of CONSECUTIVE, collapsible, identical calls
+// into a single row carrying the run's count, preserving newest-first order.
+//
+// It compares each incoming row ONLY against out[len(out)-1] — no
+// map[key]index, so a non-adjacent match is UNREACHABLE, not merely
+// un-done. Contrast the deny-prose collapse in buildAgents, which DOES keep
+// a page-wide seenDeny map: it can afford to, because it drops duplicated
+// PROSE and leaves every row where it was. This collapse folds ROWS, so
+// reaching past an adjacent row would either move the merged row (reordering
+// the trail) or leave it in place while silently claiming calls that
+// happened after rows rendered below it — both of which stop a row's
+// position from meaning "when", the one thing this stream has to be honest
+// about.
+//
+// The merge gates on three conditions, all required: collapsible(prev),
+// collapsible(cur), and sameCall(prev, cur). sameCall alone is not enough —
+// it would rely on Deny's pointer identity, which only tells the FIRST deny
+// row in a run apart from a would-be twin; the RepeatDeny rows behind it
+// carry no pointer at all and would compare equal to each other without the
+// collapsible guard on both sides.
+//
+// rows arrive newest-first (buildAgents' row loop preserves query order), so
+// on a match the incoming row c is OLDER than the run accumulated so far:
+// Calls increments and FirstWhen becomes c.When, the last (oldest) member to
+// join.
+//
+// Builds into a fresh slice (calls[:0:0]) rather than appending in place, so
+// the caller's backing array is never aliased by a shorter result.
+func collapseRuns(calls []agentCall) []agentCall {
+	out := calls[:0:0]
+	for _, c := range calls {
+		if len(out) > 0 {
+			prev := &out[len(out)-1]
+			if collapsible(*prev) && collapsible(c) && sameCall(*prev, c) {
+				prev.Calls++
+				prev.FirstWhen = c.When
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// collapseSummary reports how much of the rendered stream collapseRuns
+// folded: foldedCalls is the sum of Calls over every row that stands for
+// more than one, and foldedRows is how many such rows there are. A row that
+// collapsed nothing (Calls == 1, the common case) contributes to neither —
+// so foldedCalls is always 0 or >= 2, never 1, which pageNote's grammar
+// ("are collapsed") depends on.
+func collapseSummary(calls []agentCall) (foldedCalls, foldedRows int) {
+	for _, c := range calls {
+		if c.Calls > 1 {
+			foldedCalls += c.Calls
+			foldedRows++
+		}
+	}
+	return foldedCalls, foldedRows
+}
+
+// pageNote is the feed's ONE sentence explaining the page's position (older
+// exists / this is not the newest page) and what the collapse did to it —
+// the railNote shape, for the feed.
+//
+// CONTRACT, enforced by TestAgents_ThePageNoteAlwaysSpeaksWhenThereIsSomethingToSay:
+// pageNote returns "" iff foldedRows == 0 && !older && !scrolled. Older and
+// Scrolled keep their EXACT existing wording (agents_paging_test.go's three
+// assertions stay green unchanged); the collapse clause is ADDITIVE and never
+// restates a total another sentence already gives — #542's position clause
+// names PageSize (the fetched page), never the rows the feed renders, which
+// ?account= narrows further, so a bare row/rows count here would read as a
+// contradiction beside it.
+//
+// The verb is always "are": a collapsed row stands for at least two calls, so
+// foldedCalls is never 1 when foldedRows > 0 (collapseSummary's guarantee).
+//
+// Word rule (#540): "this page", never "window"; "in the window" nowhere.
+func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) string {
+	var clause string
+	switch {
+	case scrolled:
+		clause = "These are NOT the most recent calls — this page was reached by following Older."
+	case older:
+		clause = "Showing the most recent " + itoa(pageSize) + " calls. There are older calls."
+	}
+	if foldedRows > 0 {
+		collapse := plural(foldedCalls, "call", "calls") + " on this page are collapsed into " +
+			plural(foldedRows, "row", "rows") + ", each saying how many calls it stands for. " +
+			"The rail still counts every call."
+		if clause == "" {
+			clause = collapse
+		} else {
+			clause += " " + collapse
+		}
+	}
+	return clause
 }
 
 type agentsView struct {
@@ -143,8 +296,12 @@ type agentsView struct {
 	// deliberately does not know.
 	RailNote string
 
-	// PageSize is agentsPageSize, rendered in the position-aware note below.
-	PageSize int
+	// PageNote is the feed's position-and-collapse sentence, computed by the
+	// handler (pageNote, above) exactly as RailNote is: it depends on Older
+	// and Scrolled, and folding it into buildAgents would teach that function
+	// facts about paging it deliberately does not know. "" renders nothing —
+	// see pageNote's CONTRACT comment for when that is and is not the case.
+	PageNote string
 
 	// Older says there is a further, older page beyond this one (pg.Next !=
 	// ""). OlderHref is drawn only when this is true (1h) — an unconditional
@@ -211,7 +368,6 @@ func handleAgents(d Deps) http.HandlerFunc {
 
 		v := agentsView{
 			Account:  account,
-			PageSize: agentsPageSize,
 			Scrolled: cursor != "",
 		}
 		var dropped int
@@ -227,6 +383,11 @@ func handleAgents(d Deps) http.HandlerFunc {
 		// page was reached by following Older, which buildAgents does not
 		// know and must not be taught — see agentsView.RailNote.
 		v.RailNote = railNote(len(v.Accounts), dropped, v.Scrolled)
+		// Beside railNote, for the same reason: pageNote's copy depends on
+		// Older and Scrolled too, so it is computed here rather than inside
+		// buildAgents.
+		fc, fr := collapseSummary(v.Calls)
+		v.PageNote = pageNote(fc, fr, agentsPageSize, v.Older, v.Scrolled)
 		renderScreen(w, p, agentsTmpl, v)
 	}
 }
@@ -283,6 +444,26 @@ func agentsHref(account, cursor string) string {
 // narrowing is intentional and stated here so nobody "fixes" it by filtering
 // the feed by the window — see TheRailAgreesPerAccountWhenAnAccountDropsOff
 // (agents_window_test.go).
+//
+// # The rail counts CALLS; the collapse folds ROWS, later, and never the reverse
+//
+// Every per-Account counter (Calls, Mutates, Denied, first, last) is
+// incremented in the loop below, over the LANE's rows — before the collapse
+// even exists. collapseRuns runs afterward, over the already-built calls
+// slice, and folds RENDERED ROWS together without touching a counter that
+// has already been incremented. A collapsed group of N identical calls still
+// counts N in every rail field it touches.
+//
+// What changes is the arithmetic an operator does to verify it: it used to
+// be "count the mutate chips below" and is now "add up the call counts (the
+// xN chips / data-calls attributes) on the mutate rows below" — the rail's
+// Mutates equals the SUM of Calls over the rendered mutate rows, not their
+// count. See TestAgents_TheRailCountsCallsNotCollapsedRows
+// (agents_collapse_test.go), which is the fixture built to tell the two
+// forms apart, and the two rewritten assertions in
+// TestAgents_RailMutateCountAgreesWithTheRowRiskChips /
+// TheRailAgreesPerAccountWhenAnAccountDropsOff, whose existing fixtures
+// collapse nothing and so cannot tell the two forms apart themselves.
 func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]agentAccount, []agentCall, int) {
 	type acc struct {
 		agentAccount
@@ -402,6 +583,18 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		}
 		seenDeny[key] = true
 	}
+
+	// Collapse runs of consecutive identical calls (#541), AFTER the deny
+	// pass above and BEFORE the rail-assembly loop below. Ordering matters
+	// both ways: after, so RepeatDeny is already set when collapsible reads
+	// it; before rail assembly, because the rail's counters were already
+	// incremented in the row loop above and must never be recomputed from
+	// the folded calls — see this function's "rail counts CALLS" doc.
+	//
+	// Runs AFTER the account filter (calls already holds only the scoped
+	// Account's rows when ?account= narrows it), so the collapse folds
+	// exactly the rows the feed renders.
+	calls = collapseRuns(calls)
 
 	var dropped int
 	out := make([]agentAccount, 0, len(byAccount))
@@ -577,6 +770,8 @@ func agentCallFrom(f trailFacts) agentCall {
 		Outcome:    OutcomeLabel(f.Outcome),
 		JobID:      f.JobID,
 		ReadClass:  f.Kind == audit.KindRead,
+		// Every row stands for itself until collapseRuns says otherwise.
+		Calls: 1,
 	}
 	// The risk class comes from ONE inference (vocab.go), not from the record
 	// kind. Deriving it here from `Kind == KindDispatch` labelled file.read as a
@@ -806,7 +1001,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page</span></div>
+    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page · a collapsed row counts all the calls it stands for</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
       <span class="dot" data-live="on"></span>
@@ -824,7 +1019,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
   <div class="agentfeed">
     {{if .Account}}<p class="scoped">Showing <b>{{.Account}}</b> only. <a href="/console/agents">Show every Account</a>.</p>{{end}}
     {{range .Calls}}
-    <article class="ev" data-kind="call">
+    <article class="ev" data-kind="call" data-calls="{{.Calls}}">
       <div class="evwhen"><time>{{.When}}</time></div>
       <div class="evbody">
         <div class="evhead">
@@ -833,6 +1028,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
           <span class="evop"><code>{{.Tool}}</code></span>
           <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
           <span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span>
+          {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail and each counts on the rail.">x{{.Calls}}</span>{{end}}
         </div>
         {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
         <div class="evmeta">
@@ -844,17 +1040,14 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
         {{if .RepeatDeny}}<div class="repeatdeny">Same Operation and rule as above.</div>{{end}}
         {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
         {{if .ReadClass}}<div class="evnote">The call is audited; the result is not retained.</div>{{end}}
+        {{if gt .Calls 1}}<div class="evnote">{{.Calls}} consecutive identical calls, {{.FirstWhen}} to {{.When}}. Each one is on the audit trail and each counts on the rail; only the display is collapsed.</div>{{end}}
       </div>
     </article>
     {{else}}
     <p class="dim">No calls on this page.</p>
     {{end}}
-    {{if .Scrolled}}
-    <p class="gap">These are NOT the most recent calls — this page was reached by following
-    Older. <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.</p>
-    {{else if .Older}}
-    <p class="gap">Showing the most recent {{.PageSize}} calls. There are older calls.
-    <a href="{{.OlderHref}}">Older</a>.</p>
+    {{if .PageNote}}
+    <p class="gap">{{.PageNote}}{{if .Scrolled}} <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.{{else if .Older}} <a href="{{.OlderHref}}">Older</a>.{{end}}</p>
     {{end}}
   </div>
 </div>
