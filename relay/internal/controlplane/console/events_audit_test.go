@@ -188,15 +188,82 @@ func TestConsoleEvents_B3_OrderAndRepetitionDoNotChangeTheRecord(t *testing.T) {
 	}
 }
 
+// B3b closes the exact vacuity a security review found in B3's own MUT line
+// (#539 fix round, Finding 1): B3's cases never exercise a query string whose
+// RAW split differs from its TRIMMED, validated form, so a mutation that
+// replaced wanted.Names with strings.Split(r.URL.Query().Get("kinds"), ",")
+// in the RecordEventSubscription call — never touching what gets
+// Subscribed — passed B1 through B7 and both read_audit_test.go sweeps: for
+// every query string this file used, the raw split and wanted.Names happened
+// to be equal.
+//
+// %20job,job%20,enrollment decodes to " job,job ,enrollment", which
+// resolveEventKinds accepts (it trims each token before the allowlist
+// lookup) but strings.Split alone would not: it would leave " job", "job "
+// and "enrollment" as three distinct, un-trimmed strings. If anything ever
+// re-derives what RecordEventSubscription is called with instead of reusing
+// wanted.Names, this selector stops being "kinds=enrollment,job" — either
+// because canonicalEventKinds records the un-trimmed text verbatim, or
+// because kindsFromNames (events.go) cannot resolve an un-trimmed name
+// against consoleEventKinds and the request 500s instead of 200. Both
+// outcomes fail this test; neither is possible to observe by comparing
+// wanted.Kinds against wanted.Names the way the ORIGINAL (pre-fix) shape of
+// this route did, which is exactly why that shape shipped with this gap.
+//
+// MUT (the one the security review used) replace wanted.Names with
+// strings.Split(r.URL.Query().Get("kinds"), ",") in handleEvents' call to
+// RecordEventSubscription -> this test goes red, on the Selector assertion.
+func TestConsoleEvents_B3b_WhitespaceInTheQueryDoesNotSurviveIntoTheRecord(t *testing.T) {
+	trail := &recordingTrail{}
+	rec := driveStream(t, realLaneDeps(trail), "/console/events?kinds=%20job,job%20,enrollment")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/events?kinds=%%20job,job%%20,enrollment = %d, want 200: %s",
+			rec.Code, rec.Body.String())
+	}
+	reads := trail.ofKind(audit.KindRead)
+	if len(reads) != 1 {
+		t.Fatalf("wrote %d read records, want exactly 1", len(reads))
+	}
+	if got := reads[0].Selector; got != "kinds=enrollment,job" {
+		t.Errorf("Selector = %q, want %q — whitespace around a valid kind name must be trimmed "+
+			"before it reaches the trail, exactly as it is before it reaches the allowlist", got,
+			"kinds=enrollment,job")
+	}
+}
+
 // B4: a resume, asserted either through the Last-Event-ID header or through
 // ?last_event_id, records resume=yes and NEVER the cursor value itself
 // (capability.RecordEventSubscription's doc comment: caller-asserted,
 // unverified, unbounded, and uninterpretable after a restart).
 //
-// MUT pass the cursor as the selector (or append it) -> this test's "must
-// not contain the cursor" half goes red.
+// cursor is deliberately kept UNDER maxEventKindBytes (64) — #539 fix round,
+// Finding 4. A longer cursor here (66 bytes, in an earlier version of this
+// test) tripped canonicalEventKinds' own per-name length bound if a mutation
+// fed the cursor through the kinds path, so "resume via header = %d, want
+// 200" failed FIRST and the test never got as far as the "must not contain
+// the cursor" assertion this comment used to claim was the one catching it.
+//
+// Shortening the cursor does NOT hand that assertion the win either,
+// though, and this comment says so rather than repeat the earlier mistake:
+// this file's Finding 1 fix means d.Events.Subscribe's kind list is now
+// built from kindsFromNames(recorded, ...), so a mutation that appends the
+// cursor to what gets recorded — the only realistic way to "pass the cursor
+// as the selector" given RecordEventSubscription's signature never accepts
+// one — makes kindsFromNames refuse an unrecognised "kind" and 500, at ANY
+// cursor length, before Subscribe or the record's shape ever come into it.
+// The "want 200" check is still what fires first; it is just a STRONGER
+// reason now than a length bound that happened to be in the way. The "must
+// not contain the cursor" assertion below stays as defense in depth for a
+// mutation that could put the cursor into the selector WITHOUT going
+// through the shared kinds/names channel — nothing in this file's current
+// structure has such a path, but nothing guarantees a future one will not.
+//
+// MUT append the cursor to what gets recorded (the only channel
+// RecordEventSubscription's signature offers to "pass the cursor as the
+// selector") -> "resume via header = %d, want 200" goes red, on EVERY
+// cursor length, via kindsFromNames' refusal.
 func TestConsoleEvents_B4_ResumeRecordsTheBooleanNeverTheCursor(t *testing.T) {
-	const cursor = "0000000000000001-47-a-cursor-value-nobody-should-ever-see-recorded"
+	const cursor = "0000000000000001-47-should-not-be-recorded"
 
 	trail := &recordingTrail{}
 	header := http.Header{"Last-Event-ID": []string{cursor}}
@@ -305,23 +372,21 @@ func TestConsoleEvents_B6_RoleRefusalRecordsNothing(t *testing.T) {
 }
 
 // B7: the per-principal limiter refuses before the record is written too —
-// same reasoning as B6, and the one place this ticket touches a CONTROL
-// rather than adding one: maxStreamsPerPrincipal (events.go) is shrunk to 1
-// for this test only and restored by t.Cleanup, on sseKeepalive's exact
-// documented precedent (events.go). The scenario needs a single
-// *streamLimiter, which handleEvents' closure creates once per
-// newTestHandler call — so both requests below go through the SAME handler.
+// same reasoning as B6. maxStreamsPerPrincipal (events.go) is a const; the
+// per-principal cap this test needs at 1 lives on a *streamLimiter built
+// directly for this test (#539 fix round, Finding 3 — this used to shrink a
+// package-wide var and restore it with t.Cleanup, which nothing stopped a
+// concurrent test in this package from observing). The scenario still needs
+// a SINGLE *streamLimiter shared by both requests, which
+// newTestHandlerWithEventsLimiter's one construction gives it — both
+// requests below go through the SAME handler.
 //
 // MUT move the RecordEventSubscription call above limiter.acquire -> the
 // second request would ALSO record, making the final count 2 instead of 1.
 func TestConsoleEvents_B7_LimiterRefusalRecordsNothing(t *testing.T) {
-	orig := maxStreamsPerPrincipal
-	maxStreamsPerPrincipal = 1
-	t.Cleanup(func() { maxStreamsPerPrincipal = orig })
-
 	trail := &recordingTrail{}
 	d := realLaneDeps(trail)
-	h := newTestHandler(d, accounts.RoleAdmin)
+	h := newTestHandlerWithEventsLimiter(d, accounts.RoleAdmin, &streamLimiter{perCap: 1})
 
 	srv := httptest.NewServer(h)
 	defer srv.Close()

@@ -60,6 +60,31 @@ func newTestHandler(d Deps, role accounts.Role) http.Handler {
 	return authn.Middleware(Secure(mux))
 }
 
+// newTestHandlerWithEventsLimiter is newTestHandler with GET /console/events'
+// own handler substituted for one built over a caller-chosen *streamLimiter —
+// the per-principal-cap test seam events_audit_test.go's B7 needs now that
+// maxStreamsPerPrincipal is a const again and perCap lives on the limiter
+// instance instead (#539 fix round, Finding 3). It walks the real route
+// table exactly as Register does, rather than hardcoding the route's method,
+// path or MinRole a second time, so it cannot drift from what Register
+// actually mounts.
+func newTestHandlerWithEventsLimiter(d Deps, role accounts.Role, limiter *streamLimiter) http.Handler {
+	d = mirrorFleetIntoLane(d)
+	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
+	mux := http.NewServeMux()
+	for _, r := range Routes(d) {
+		h := r.Handler(d)
+		if r.Path == "/console/events" {
+			h = newEventsHandler(d, limiter)
+		}
+		mux.HandleFunc(r.Pattern(), gated(r, h))
+		if r.constrainsReach() {
+			mux.HandleFunc(r.Path, methodMismatch(r))
+		}
+	}
+	return authn.Middleware(Secure(mux))
+}
+
 // mirrorFleetIntoLane makes a fixture's fleet visible through BOTH doors the
 // Console reads the registry through.
 //

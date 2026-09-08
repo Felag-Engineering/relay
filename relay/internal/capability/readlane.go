@@ -218,6 +218,24 @@ func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, select
 // Console's live event stream (#539, ADR-0025): who opened it, over which
 // kinds, and whether it asked to resume — never the rows that later cross it.
 //
+// It returns the CANONICALISED names it just recorded, and this is not a
+// convenience — it is the fix for a vacuity a security review found in the
+// #539 fix round. The original shape asked console/events.go to build both
+// Subscribe's kind list and this call's argument from "the same loop" over
+// the query string, and relied on that sentence, unenforced, to keep them
+// from drifting; a mutation that re-derived only the RECORDED argument from
+// the raw query string passed the entire suite, because for a clean query
+// string the re-derivation happened to equal the original. Returning the
+// names this method actually validated and wrote removes the possibility
+// structurally rather than rhetorically: the caller has no OTHER kind list
+// available after a successful call, because handleEvents now builds
+// Subscribe's argument from this return value, not from anything computed
+// earlier. A caller that still tried to feed Subscribe a different set would
+// have to ignore the return value and reintroduce a second, independent
+// source of kinds — a much louder change than swapping one function
+// argument, and one console/events.go's own doc comment now names as the
+// thing never to do.
+//
 // # Why this method records without delegating to a seam
 //
 // Every other method in this file follows "validate -> record -> delegate to
@@ -259,15 +277,18 @@ func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, select
 // memory-only and epoch-scoped, so a cursor recorded today names nothing
 // after a restart. "This stream may have covered up to one retention window
 // before its own timestamp" is fully carried by the boolean.
-func (s *Service) RecordEventSubscription(ctx context.Context, p Principal, kinds []string, resumed bool) error {
+func (s *Service) RecordEventSubscription(ctx context.Context, p Principal, kinds []string, resumed bool) ([]string, error) {
 	if err := s.auditSinkPresent(); err != nil {
-		return err
+		return nil, err
 	}
 	names, err := canonicalEventKinds(kinds)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return s.recordQueryRead(ctx, p, toolWatchEvents, eventSubscriptionSummary(names, resumed), "", "")
+	if err := s.recordQueryRead(ctx, p, toolWatchEvents, eventSubscriptionSummary(names, resumed), "", ""); err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 // canonicalEventKinds sorts and dedups kinds before RecordEventSubscription
@@ -290,6 +311,29 @@ func (s *Service) RecordEventSubscription(ctx context.Context, p Principal, kind
 // Injection is already impossible without this — filterSummary escapes ';'
 // and '=' and strips control characters — canonical form is not a safety
 // property, it is what keeps the trail legible.
+//
+// THE BOUNDS DO NOT COMPOSE ON THEIR OWN, and this function is where that
+// gets fixed (#539 fix round, Finding 2). maxEventKinds (32) times
+// maxEventKindBytes (64) is a joined value of roughly 2,079 bytes, and
+// eventSubscriptionSummary's filterSummary.String truncates silently at
+// maxFilterSummaryBytes (256) with no marker — and because names are SORTED
+// here, whatever gets dropped is whatever sorts LAST, which is exactly where
+// a name like "tool_call" lands relative to "enrollment" and "job". A
+// validated input could therefore be recorded UNDERSTATED, in precisely the
+// failure mode this ticket exists to prevent. Not reachable through
+// console/events.go's two-name (soon three) allowlist today, but this
+// function's own doc says the bound belongs here because "the lane must not
+// trust its caller" — the same reason applies to a future caller with a
+// bigger allowlist.
+//
+// REFUSE rather than truncate-and-mark: every other bound in this function
+// already refuses (count, per-name length) rather than accepting a
+// caller-supplied value in some shortened form, and a marker would only
+// paper over a selector an auditor still could not read completely. Checked
+// against the RESUMED form of the summary, because "resume=yes" only makes
+// the recorded value longer — a kind set whose resumed selector fits always
+// has its non-resumed selector fit too, so this is the one check that covers
+// both.
 func canonicalEventKinds(kinds []string) ([]string, error) {
 	seen := make(map[string]bool, len(kinds))
 	var names []string
@@ -311,6 +355,13 @@ func canonicalEventKinds(kinds []string) ([]string, error) {
 		if len(name) > maxEventKindBytes {
 			return nil, fmt.Errorf("%w: kind %q exceeds %d bytes", ErrInvalidFilter, name, maxEventKindBytes)
 		}
+	}
+	var probe filterSummary
+	probe.field("kinds", strings.Join(names, ","))
+	probe.field("resume", "yes")
+	if probe.wouldTruncate() {
+		return nil, fmt.Errorf("%w: the recorded selector for %d kinds would exceed %d bytes and be "+
+			"silently shortened", ErrInvalidFilter, len(names), maxFilterSummaryBytes)
 	}
 	return names, nil
 }

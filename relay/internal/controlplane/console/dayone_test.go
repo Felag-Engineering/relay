@@ -884,7 +884,7 @@ func TestConsoleEvents_ConcurrentStreamsAreBounded(t *testing.T) {
 // HTTP and the property is about the counter, not the transport. The test above
 // is what proves the counter is actually wired to the route.
 func TestConsoleEvents_LimiterBoundsBothWays(t *testing.T) {
-	l := &streamLimiter{}
+	l := newStreamLimiter()
 
 	// Per principal.
 	for i := 0; i < maxStreamsPerPrincipal; i++ {
@@ -911,7 +911,7 @@ func TestConsoleEvents_LimiterBoundsBothWays(t *testing.T) {
 
 	// Global. Distinct principals, each within its own cap, until the
 	// process-wide bound refuses one that has no streams at all.
-	l = &streamLimiter{}
+	l = newStreamLimiter()
 	for i := 0; i < maxConcurrentStreams; i++ {
 		key := fmt.Sprintf("acct-%d", i)
 		if ok, why := l.acquire(key); !ok {

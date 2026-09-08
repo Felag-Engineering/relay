@@ -109,6 +109,23 @@ package console
 // stream. Decide that separately, deliberately, if it ever comes up; #543
 // admitting tool_call does not, because the kind set stays fixed at Subscribe.
 //
+// THE STREAM SUBSCRIBES TO WHAT THE TRAIL RECORDED, NEVER TO A SEPARATELY
+// COMPUTED SET (#539 fix round, Finding 1). The earlier shape of this file
+// built wanted.Kinds and wanted.Names in the same loop and argued from that
+// sentence alone that they could not drift. A security review defeated the
+// argument with one line: replace the wanted.Names argument to
+// RecordEventSubscription with strings.Split(r.URL.Query().Get("kinds"), ",")
+// — re-deriving what gets RECORDED from the raw query string instead of
+// reusing what the loop built — and the entire suite still passed, because
+// for a clean query string the re-derivation happens to equal the original.
+// The comment was true and the property was still unenforced.
+// capability.Service.RecordEventSubscription now returns the canonicalised
+// names it actually recorded, and THAT return value — not wanted.Kinds, not
+// a second parse of the query string — is the only thing kindsFromNames
+// below ever turns into d.Events.Subscribe's argument. A caller cannot
+// subscribe to a kind set the trail does not hold a record of, because after
+// a successful call there is no other kind set in scope to subscribe with.
+//
 // # Projection, not marshalling
 //
 // Nothing here marshals an events.Event. Each kind is projected field by field
@@ -185,17 +202,19 @@ const (
 	// rather than discovering it: this is a lock-contention control on the
 	// path a Node enrolls and a Job dispatches, not tidiness.
 	maxConcurrentStreams = 64
-)
 
-// maxStreamsPerPrincipal is a var rather than a const, for exactly the
-// reason sseKeepalive and sseWriteTimeout above are: events_audit_test.go's
-// B7 needs the per-principal cap reachable without actually holding four
-// concurrent streams open, and shrinking it to 1 for one test is the
-// deterministic way to do that. It is unexported, unreachable from any
-// surface, and never read from configuration (invariant 11) — the same
-// property those two vars carry, restored by t.Cleanup exactly as
-// sseKeepalive's callers restore it.
-var maxStreamsPerPrincipal = 4
+	// maxStreamsPerPrincipal is a CONST (#539 fix round, Finding 3 — it was a
+	// mutable package var for one release, restored here): its correctness
+	// as a var depended on this package never calling t.Parallel, and
+	// nothing enforced that. It is still unexported, unreachable from any
+	// surface, and never read from configuration (invariant 11); the test
+	// seam events_audit_test.go's B7 needs is now streamLimiter.perCap
+	// below, a FIELD initialised from this const rather than the const
+	// itself, so shrinking the cap for one test mutates one *streamLimiter
+	// instance instead of a value every concurrent test in this package
+	// shares.
+	maxStreamsPerPrincipal = 4
+)
 
 // consoleEventKind is one admitted kind and the lowest role that may see its
 // projection.
@@ -270,10 +289,25 @@ type sseGap struct {
 // streamLimiter bounds concurrent streams, in total and per principal. One
 // instance per route table (handleEvents closes over it), so the bound is
 // process-wide and not per-request.
+//
+// perCap holds the per-principal bound as a FIELD, initialised from the
+// maxStreamsPerPrincipal const by newStreamLimiter, rather than reading the
+// const directly in acquire (#539 fix round, Finding 3). That is the whole
+// fix: the const stays a const — nothing in production code needs it to
+// vary — and events_audit_test.go's B7 shrinks ONE *streamLimiter instance's
+// field instead of a package-wide var every concurrent test in this package
+// would otherwise share.
 type streamLimiter struct {
-	mu    sync.Mutex
-	total int
-	per   map[string]int
+	mu     sync.Mutex
+	total  int
+	per    map[string]int
+	perCap int
+}
+
+// newStreamLimiter builds the limiter handleEvents uses in production, with
+// the per-principal cap at its shipped default.
+func newStreamLimiter() *streamLimiter {
+	return &streamLimiter{perCap: maxStreamsPerPrincipal}
 }
 
 // acquire takes a slot for key, or reports which bound refused it.
@@ -283,7 +317,7 @@ func (l *streamLimiter) acquire(key string) (ok bool, reason string) {
 	if l.total >= maxConcurrentStreams {
 		return false, "this Relay is already holding as many live Console streams as it will"
 	}
-	if l.per[key] >= maxStreamsPerPrincipal {
+	if l.per[key] >= l.perCap {
 		return false, "this Account already has as many live Console streams open as it may"
 	}
 	if l.per == nil {
@@ -307,8 +341,19 @@ func (l *streamLimiter) release(key string) {
 
 // handleEvents streams the kinds named in ?kinds= until the client goes away.
 func handleEvents(d Deps) http.HandlerFunc {
-	limiter := &streamLimiter{}
+	return newEventsHandler(d, newStreamLimiter())
+}
 
+// newEventsHandler is handleEvents parameterised by an explicit
+// *streamLimiter. Production has exactly one caller, handleEvents above,
+// which supplies the shipped default (newStreamLimiter). The parameter
+// exists for events_audit_test.go's B7 (#539 fix round, Finding 3): it
+// needs a per-principal cap of 1 to reach the limiter's refusal without
+// holding maxConcurrentStreams-many streams open, and does it by
+// constructing a *streamLimiter with perCap set directly, rather than by
+// mutating a package-wide value every concurrent test in this package would
+// otherwise share.
+func newEventsHandler(d Deps, limiter *streamLimiter) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		wanted, ok := parseEventKinds(r.URL.Query().Get("kinds"))
 		if !ok {
@@ -400,17 +445,42 @@ func handleEvents(d Deps) http.HandlerFunc {
 		// Subscribe, non-negotiable. Subscribe registers this request with
 		// the bus, and a resume replays the retained backlog immediately —
 		// a record written after Subscribe could not honestly claim that
-		// nothing was disclosed. wanted.Names is built by the SAME LOOP that
-		// built wanted.Kinds (resolveEventKinds below), never by re-parsing the
-		// query string, so the record and the stream cannot drift: a record
-		// saying "job" while the stream carries tool_call is this ticket's
-		// worst possible failure.
-		if err := d.Queries.RecordEventSubscription(r.Context(), p, wanted.Names, lastEventID != ""); err != nil {
+		// nothing was disclosed.
+		//
+		// recorded is what actually gets subscribed to, below — never
+		// wanted.Kinds (#539 fix round, Finding 1). wanted.Names and
+		// wanted.Kinds being built by the same loop was the ORIGINAL
+		// argument for why the record and the stream could not drift; a
+		// security review showed it was unenforced, because nothing stopped
+		// a future edit from re-deriving the RecordEventSubscription
+		// argument from somewhere else while leaving the Subscribe argument
+		// alone. Building Subscribe's kind set from RecordEventSubscription's
+		// own return value removes that possibility structurally: after a
+		// successful call, this handler has no OTHER kind list to give
+		// Subscribe.
+		recorded, err := d.Queries.RecordEventSubscription(r.Context(), p, wanted.Names, lastEventID != "")
+		if err != nil {
 			readFailed(w, err, "this live event watch")
 			return
 		}
+		kinds, known := kindsFromNames(recorded, consoleEventKinds)
+		if !known {
+			// Defensive, and should not be reachable for a request that
+			// already passed parseEventKinds above: canonicalEventKinds
+			// (capability/readlane.go) only sorts and dedups the names this
+			// handler validated against consoleEventKinds, so its return
+			// should always resolve here too. If it ever does not — a
+			// future divergence between the two allowlists, say — refusing
+			// is the only safe response: the read has ALREADY been
+			// recorded, so opening a stream with a guessed-at kind set
+			// would let the record and the stream disagree, which is
+			// exactly the failure this whole mechanism exists to prevent.
+			http.Error(w, "the Console could not resolve its own recorded kind set to a live stream",
+				http.StatusInternalServerError)
+			return
+		}
 
-		sub := d.Events.Subscribe(wanted.Kinds, lastEventID)
+		sub := d.Events.Subscribe(kinds, lastEventID)
 		// Mandatory. Bus.Close is the only thing that deletes a
 		// Subscription from the bus, and every publish fans out to every
 		// registered one — a leaked Subscription is a permanent map entry
@@ -483,17 +553,22 @@ func handleEvents(d Deps) http.HandlerFunc {
 	}
 }
 
-// eventSubscription is one parsed ?kinds= request: the events.Kind values
-// Subscribe needs, the exact allowlist names that produced them, and the
-// role gate they impose together.
+// eventSubscription is one parsed ?kinds= request: the events.Kind values,
+// the exact allowlist names that produced them, and the role gate they
+// impose together.
 //
-// Names exists ONLY so RecordEventSubscription can be told what to record
-// without re-parsing the query string a second time — see resolveEventKinds
-// below for why that matters. It is left un-deduped and in request order:
-// events.Bus.Subscribe already folds Kinds to a set internally, and the read
-// lane's canonicalEventKinds sorts and dedups Names before it lands in the
-// trail, so doing either job here would be duplicated work with no
-// consumer.
+// Kinds is NOT what handleEvents hands to d.Events.Subscribe (#539 fix
+// round, Finding 1) — that argument is built by kindsFromNames from
+// RecordEventSubscription's own return value, so the record and the stream
+// cannot drift even under a future edit. Kinds still exists here because
+// resolveEventKinds' own tests (dayone_test.go) assert on it directly — most
+// usefully, that a refusal returns it nil — and because computing it beside
+// Names, from the same allowlist lookup, is what keeps this function honest
+// about the fact that every admitted name has both. Names is left
+// un-deduped and in request order: events.Bus.Subscribe already folds Kinds
+// to a set internally, and the read lane's canonicalEventKinds sorts and
+// dedups Names before it lands in the trail, so doing either job here would
+// be duplicated work with no consumer.
 type eventSubscription struct {
 	Kinds     []events.Kind
 	Names     []string
@@ -519,11 +594,15 @@ func parseEventKinds(param string) (eventSubscription, bool) {
 // a role.
 //
 // sub.Names is appended in the SAME LOOP, from the SAME `name` variable, that
-// appends sub.Kinds — never reconstructed later by re-splitting param. That
-// is what makes it impossible for the read record RecordEventSubscription
-// writes to name a kind the stream does not actually carry: the two slices
-// are built from one pass over one set of allowlist lookups, so they can only
-// ever describe the same subscription.
+// appends sub.Kinds, never reconstructed later by re-splitting param — that
+// is still true and still worth keeping, because it means sub.Names is a
+// faithful record of what this handler actually validated. It is NOT, on its
+// own, what keeps the trail and the stream from drifting (#539 fix round,
+// Finding 1 corrected the doc comment that used to claim otherwise): nothing
+// stopped a later edit from handing something OTHER than sub.Names to
+// RecordEventSubscription while still handing sub.Kinds to Subscribe. That
+// guarantee now lives in handleEvents building Subscribe's argument from
+// RecordEventSubscription's own return value via kindsFromNames, not here.
 func resolveEventKinds(param string, allow map[string]consoleEventKind) (sub eventSubscription, ok bool) {
 	if param == "" {
 		return eventSubscription{}, false
@@ -556,6 +635,35 @@ func resolveEventKinds(param string, allow map[string]consoleEventKind) (sub eve
 		}
 	}
 	return sub, true
+}
+
+// kindsFromNames maps names — the CANONICAL names RecordEventSubscription
+// just recorded, always, never a set computed independently — back onto the
+// events.Kind values d.Events.Subscribe needs, against the same allowlist
+// resolveEventKinds validated them against in the first place.
+//
+// This is the structural half of #539's Finding 1 fix: handleEvents calls
+// this on RecordEventSubscription's return value and nothing else, so the
+// kind set a stream is opened with is always the one the trail already holds
+// a record of — there is no code path left that lets the two disagree,
+// because there is no second kind list in scope to disagree with.
+//
+// A name RecordEventSubscription returns that this map does not recognise
+// reports ok=false rather than silently dropping it or guessing: every name
+// reaching this function passed resolveEventKinds' own lookup against the
+// same allow map moments earlier, so this should be unreachable in
+// production, and treating it as anything other than a refusal would be
+// exactly the kind of "probably fine" this ticket exists to rule out.
+func kindsFromNames(names []string, allow map[string]consoleEventKind) (kinds []events.Kind, ok bool) {
+	kinds = make([]events.Kind, 0, len(names))
+	for _, name := range names {
+		entry, known := allow[name]
+		if !known {
+			return nil, false
+		}
+		kinds = append(kinds, entry.Kind)
+	}
+	return kinds, true
 }
 
 // frameEvent renders one event as an SSE frame, or reports that this route does

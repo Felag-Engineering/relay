@@ -527,10 +527,20 @@ func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, no
 // use realLaneDeps instead. This fake exists only to (a) let screen tests
 // that do not care about auditing render at all, and (b) let a test assert
 // what handleEvents PASSED, via subscriptionKinds/subscriptionResumed.
-func (f *fakeQueries) RecordEventSubscription(_ context.Context, _ capability.Principal, kinds []string, resumed bool) error {
+//
+// It echoes kinds back UNCHANGED rather than canonicalising them the way the
+// real lane does: handleEvents now builds Subscribe's argument from this
+// return value (#539 fix round, Finding 1), and a fake that "helpfully"
+// sorted/deduped here would hide a handler bug that skipped canonical
+// resolution. Screen tests using this fake pass an already-valid kind name
+// (e.g. "job"), so the pass-through is transparent for them.
+func (f *fakeQueries) RecordEventSubscription(_ context.Context, _ capability.Principal, kinds []string, resumed bool) ([]string, error) {
 	f.subscriptionKinds = append(f.subscriptionKinds, kinds)
 	f.subscriptionResumed = append(f.subscriptionResumed, resumed)
-	return f.subscriptionErr
+	if f.subscriptionErr != nil {
+		return nil, f.subscriptionErr
+	}
+	return kinds, nil
 }
 
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {

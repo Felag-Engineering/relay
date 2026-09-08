@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -524,8 +525,13 @@ func TestReadLane_AuditFilterJobIDIsBoundedToo(t *testing.T) {
 func TestRecordEventSubscription_NamesToolSelectorAndEmptyAim(t *testing.T) {
 	svc, _, _, sink := readLaneFixture(t)
 
-	if err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false); err != nil {
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	if err != nil {
 		t.Fatalf("RecordEventSubscription: %v", err)
+	}
+	if len(names) != 1 || names[0] != "job" {
+		t.Errorf("returned names = %v, want [\"job\"] — the caller (console/events.go) builds "+
+			"Subscribe's argument from exactly this return value", names)
 	}
 	if len(sink.readCalls) != 1 {
 		t.Fatalf("wrote %d read calls, want 1", len(sink.readCalls))
@@ -561,11 +567,17 @@ func TestRecordEventSubscription_CanonicalFormIsOrderAndDuplicateInsensitive(t *
 		{"job", "job", "enrollment", "job"},
 	} {
 		svc, _, _, sink := readLaneFixture(t)
-		if err := svc.RecordEventSubscription(context.Background(), testPrincipal, kinds, false); err != nil {
+		names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, kinds, false)
+		if err != nil {
 			t.Fatalf("RecordEventSubscription(%v): %v", kinds, err)
 		}
 		if got := sink.readCalls[0].Selector; got != "kinds=enrollment,job" {
 			t.Errorf("RecordEventSubscription(%v) recorded %q, want %q", kinds, got, "kinds=enrollment,job")
+		}
+		if want := []string{"enrollment", "job"}; !slices.Equal(names, want) {
+			t.Errorf("RecordEventSubscription(%v) returned %v, want %v — the canonical form, so a "+
+				"caller building Subscribe's argument from it cannot see the caller's own order or "+
+				"duplicates", kinds, names, want)
 		}
 	}
 }
@@ -578,7 +590,7 @@ func TestRecordEventSubscription_CanonicalFormIsOrderAndDuplicateInsensitive(t *
 func TestRecordEventSubscription_ResumedRecordsTheResumeField(t *testing.T) {
 	svc, _, _, sink := readLaneFixture(t)
 
-	if err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, true); err != nil {
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, true); err != nil {
 		t.Fatalf("RecordEventSubscription: %v", err)
 	}
 	if got := sink.readCalls[0].Selector; got != "kinds=job;resume=yes" {
@@ -604,12 +616,12 @@ func TestRecordEventSubscription_BoundsTheCanonicalSetNotTheRawSlice(t *testing.
 	for i := 0; i <= maxEventKinds; i++ {
 		tooManyDistinct = append(tooManyDistinct, "kind-"+strconv.Itoa(i))
 	}
-	if err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooManyDistinct, false); !errors.Is(err, ErrInvalidFilter) {
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooManyDistinct, false); !errors.Is(err, ErrInvalidFilter) {
 		t.Errorf("%d distinct kinds = %v, want ErrInvalidFilter", len(tooManyDistinct), err)
 	}
 
 	tooLong := []string{strings.Repeat("k", maxEventKindBytes+1)}
-	if err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooLong, false); !errors.Is(err, ErrInvalidFilter) {
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooLong, false); !errors.Is(err, ErrInvalidFilter) {
 		t.Errorf("a %d-byte kind name = %v, want ErrInvalidFilter", len(tooLong[0]), err)
 	}
 	if len(sink.readCalls) != 0 {
@@ -620,12 +632,43 @@ func TestRecordEventSubscription_BoundsTheCanonicalSetNotTheRawSlice(t *testing.
 	for i := range repeated {
 		repeated[i] = "job"
 	}
-	if err := svc.RecordEventSubscription(context.Background(), testPrincipal, repeated, false); err != nil {
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, repeated, false)
+	if err != nil {
 		t.Fatalf("5,000 copies of one legal kind = %v, want it accepted — the allowlist bounds the "+
 			"ALPHABET, not repetition of a legal name", err)
 	}
 	if len(sink.readCalls) != 1 || sink.readCalls[0].Selector != "kinds=job" {
 		t.Fatalf("5,000 copies of \"job\" recorded %+v, want one record of kinds=job", sink.readCalls)
+	}
+	if !slices.Equal(names, []string{"job"}) {
+		t.Errorf("5,000 copies of \"job\" returned %v, want [\"job\"]", names)
+	}
+}
+
+// A4b: bounds that are each individually legal do not compose into a
+// selector filterSummary.String would silently truncate — #539 fix round,
+// Finding 2. canonicalEventKinds sorts, so a silent truncation would drop
+// whatever sorts LAST, which is exactly where a name like "tool_call" would
+// land relative to "enrollment" and "job".
+//
+// MUT delete the wouldTruncate check in canonicalEventKinds -> this test
+// goes red, because the call would then succeed and record a selector
+// filterSummary.String had already shortened without saying so.
+func TestRecordEventSubscription_RefusesASelectorThatWouldTruncate(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+
+	// Five names, each individually legal (<= maxEventKindBytes), five
+	// distinct names (<= maxEventKinds) — but joined, comfortably over
+	// maxFilterSummaryBytes (256).
+	kinds := make([]string, 5)
+	for i := range kinds {
+		kinds[i] = strings.Repeat(string(rune('a'+i)), maxEventKindBytes)
+	}
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, kinds, false); !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("a selector that would exceed %d bytes = %v, want ErrInvalidFilter", maxFilterSummaryBytes, err)
+	}
+	if len(sink.readCalls) != 0 {
+		t.Fatalf("a refused subscription still wrote %d read records, want 0", len(sink.readCalls))
 	}
 }
 
@@ -640,12 +683,16 @@ func TestRecordEventSubscription_FailsClosedOnASinkError(t *testing.T) {
 	sink := &spyAuditSink{err: sinkErr}
 	svc := New(reg, WithQueries(&spyAuditQuery{}, &spyJobQuery{}), WithAuditSink(sink))
 
-	err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
 	if !errors.Is(err, ErrReadUnaudited) {
 		t.Fatalf("err = %v, want ErrReadUnaudited", err)
 	}
 	if !errors.Is(err, sinkErr) {
 		t.Errorf("err = %v, want the sink's own error still reachable underneath it", err)
+	}
+	if names != nil {
+		t.Errorf("names = %v on a failed call, want nil — a caller must not have a kind list to "+
+			"subscribe with when the record it goes with was never written", names)
 	}
 }
 
@@ -665,7 +712,7 @@ func TestRecordEventSubscription_RefusesOnTheNoopSink(t *testing.T) {
 	reg := registry.NewInMemory()
 	svc := New(reg)
 
-	err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	_, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
 	if !errors.Is(err, ErrReadUnaudited) {
 		t.Fatalf("err = %v, want ErrReadUnaudited — a Service on the no-op sink must refuse rather "+
 			"than silently open an unaudited stream", err)

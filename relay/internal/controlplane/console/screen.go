@@ -261,8 +261,9 @@ func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f c
 // because it must see the error itself and refuse before writing the 200
 // rather than deferring to a page-render-time latch check. Added for
 // totality, not because this route uses it.
-func (l *auditLatch) RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) error {
-	return l.latch(l.QueryReader.RecordEventSubscription(ctx, p, kinds, resumed))
+func (l *auditLatch) RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) ([]string, error) {
+	names, err := l.QueryReader.RecordEventSubscription(ctx, p, kinds, resumed)
+	return names, l.latch(err)
 }
 
 // latched returns d with its read lane wrapped for one request, and the latch

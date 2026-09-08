@@ -779,8 +779,8 @@ func (q *endlessQueries) QueryTasks(context.Context, capability.Principal, capab
 
 // RecordEventSubscription is unused by Activity, which never opens the
 // events route: present only to satisfy QueryReader (#539).
-func (q *endlessQueries) RecordEventSubscription(context.Context, capability.Principal, []string, bool) error {
-	return nil
+func (q *endlessQueries) RecordEventSubscription(_ context.Context, _ capability.Principal, kinds []string, _ bool) ([]string, error) {
+	return kinds, nil
 }
 
 // TestActivity_TheRiskChipIsOnlyOnRowsThatRan. riskOf answers "mutate" for
@@ -925,8 +925,8 @@ func (q *scriptedQueries) QueryTasks(context.Context, capability.Principal, capa
 
 // RecordEventSubscription is unused by Activity, which never opens the
 // events route: present only to satisfy QueryReader (#539).
-func (q *scriptedQueries) RecordEventSubscription(context.Context, capability.Principal, []string, bool) error {
-	return nil
+func (q *scriptedQueries) RecordEventSubscription(_ context.Context, _ capability.Principal, kinds []string, _ bool) ([]string, error) {
+	return kinds, nil
 }
 
 // TestActivity_AnExhaustedLaneStaysExhausted is the bug an empty cursor hides.

@@ -177,14 +177,23 @@ type QueryReader interface {
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
 
 	// RecordEventSubscription is the odd one out (#539): the only method here
-	// that records a read without returning any data. What it covers is read
-	// through EventReader below, not through this interface — a subscription
-	// to the live event stream is a read of the fleet's activity exactly as
-	// QueryJobs is, and ADR-0025 audits it the same way, but the ROWS cross a
-	// different seam (Subscribe), never this one. handleEvents calls this
-	// BEFORE d.Events.Subscribe; the two must stay adjacent, because a record
+	// that records a read and returns the canonical form of what it recorded
+	// rather than a page of rows. What it covers is read through EventReader
+	// below, not through this interface — a subscription to the live event
+	// stream is a read of the fleet's activity exactly as QueryJobs is, and
+	// ADR-0025 audits it the same way, but the ROWS cross a different seam
+	// (Subscribe), never this one. handleEvents calls this BEFORE
+	// d.Events.Subscribe; the two must stay adjacent, because a record
 	// written after Subscribe could not honestly claim nothing was disclosed.
-	RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) error
+	//
+	// The returned []string is load-bearing, not a convenience (#539 fix
+	// round, Finding 1): handleEvents MUST build d.Events.Subscribe's kind
+	// list from this return value, never from a kind list it computed
+	// earlier or re-derived from the request — that is what makes it
+	// structurally impossible for the stream to carry a kind set the record
+	// does not name. See capability.Service.RecordEventSubscription's doc
+	// comment for the mutation this closes.
+	RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) ([]string, error)
 }
 
 // TrustReader is the two numbers a machine needs in order to decide whether
