@@ -127,7 +127,10 @@ never a valid security-lane target — ADR-0020), or **state-space** (`state:…
 from the registry, set by nobody — not the Node, not an operator, not an `admin` — evaluated at
 Selector-resolution time, closed vocabulary, for routine targeting only and never a valid
 security-lane target — ADR-0034). Remediation/quarantine and secret-distribution
-Selectors target `relay:` labels only.
+Selectors target `relay:` labels only. A node-space Label the Relay cannot render as a
+single Selector term (a comma, whitespace, a `:`, or `=` in the key) is refused at
+ingress, never sanitised — sanitising would let the Relay itself manufacture a value
+that matches a Selector nobody wrote (#504).
 _Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
 annotation
 

@@ -381,7 +381,7 @@ func shapeFixture(t *testing.T, labelled map[string]map[string]string, gate Appr
 	t.Helper()
 	reg := registry.NewInMemory()
 	for id, labels := range labelled {
-		if _, err := reg.Upsert(registry.Report{NodeID: id, NodeLabels: labels}); err != nil {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}.WithNodeLabels(labels)); err != nil {
 			t.Fatalf("seed registry: %v", err)
 		}
 	}
@@ -459,7 +459,7 @@ func TestSameShapeDifferentPlanStillParks(t *testing.T) {
 	store.approve(t, first.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
 
 	// The fleet grows underneath the approval.
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}}); err != nil {
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-b"}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("grow registry: %v", err)
 	}
 

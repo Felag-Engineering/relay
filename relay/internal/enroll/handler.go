@@ -349,15 +349,32 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		return nil, status.Error(codes.InvalidArgument, "enrollment_token and csr are required")
 	}
 
-	// c. Parse self_labels (no side effects). Require "node:" prefix and a non-empty
-	//    bare key to enforce the structural boundary: a daemon can never inject relay-space
-	//    labels (ADR-0006 two-namespace invariant).
+	// c. Parse self_labels (no side effects). Require a "node:" prefix, a
+	//    non-empty bare key, AND a well-formed (bare key, value) pair
+	//    (registry.WellFormedNodeLabel, #504) to enforce the structural
+	//    boundary: a daemon can never inject relay-space labels (ADR-0006
+	//    two-namespace invariant), and it can never enroll a label that
+	//    would render as more than one Selector term.
+	//
+	//    WHY enrollment REJECTS where Hello (tunnel.go) DROPS: enrollment is
+	//    one-shot, pre-identity and supervised — a human is watching the
+	//    install, and a rejection here leaves no certificate and no registry
+	//    row at all (fail-closed on the whole request, not just the label).
+	//    Softening this to a per-label drop would let a Node join with
+	//    silently fewer labels than it asked for, which is the same
+	//    silent-targeting-drift this issue exists to close, just moved to a
+	//    different moment. Hello is long-lived, unattended and
+	//    reconnect-driven, where a hard refusal costs reachability instead —
+	//    a cost enrollment does not pay, because failing here does not tear
+	//    down anything that was already up.
 	nodeLabels := make(map[string]string, len(req.GetSelfLabels()))
 	for _, l := range req.GetSelfLabels() {
-		bare, ok := protoconv.ParseNodeLabel(l.GetKey())
+		bare, ok := protoconv.ParseNodeLabel(l.GetKey(), l.GetValue())
 		if !ok {
 			s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
-			return nil, status.Error(codes.InvalidArgument, "self_labels must be node:-prefixed")
+			return nil, status.Errorf(codes.InvalidArgument,
+				"self_labels must be node:-prefixed with a key and value matching [A-Za-z0-9._-]+ (offending key: %q)",
+				l.GetKey())
 		}
 		nodeLabels[bare] = l.GetValue()
 	}
@@ -435,9 +452,8 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		NodeID:           nodeID,
 		CertFingerprint:  fp,
 		Facts:            facts,
-		NodeLabels:       nodeLabels,
 		EnrollingTokenID: tokenID,
-	}); err != nil {
+	}.WithNodeLabels(nodeLabels)); err != nil {
 		if errors.Is(err, registry.ErrAtCapacity) {
 			s.attempt(ctx, AttemptEvent{Reason: AttemptAtCapacity, TokenID: tokenID, NodeID: nodeID, Source: source})
 			return nil, status.Error(codes.ResourceExhausted, "fleet registry at capacity")

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"google.golang.org/protobuf/proto"
@@ -43,8 +45,13 @@ func FuzzSnapshotFromProto(f *testing.F) {
 
 // FuzzNodeLabelsFromHello drives nodeLabelsFromHello with wire bytes: a
 // relayv1.Hello's Labels field, exercising the node:/relay:/empty-key
-// namespace edges (ADR-0006). Property: no panic, no hang; a relay:-prefixed
-// key must never surface in the returned map.
+// namespace edges (ADR-0006) AND the well-formedness gate (#504). Properties:
+//   - no panic, no hang;
+//   - a relay:-prefixed key must never surface in the returned map;
+//   - every entry the map DOES contain renders, alone, to exactly one
+//     capability.Selector Predicate in NamespaceNode with the same key and
+//     value — the wire-level twin of protoconv's FuzzParseNodeLabel property,
+//     driven from real Hello bytes instead of a direct (key, value) pair.
 func FuzzNodeLabelsFromHello(f *testing.F) {
 	seed, err := proto.Marshal(&relayv1.Hello{
 		Labels: []*relayv1.Label{
@@ -57,13 +64,39 @@ func FuzzNodeLabelsFromHello(f *testing.F) {
 		f.Fatalf("marshal seed Hello: %v", err)
 	}
 	f.Add(seed)
+	// The measured payload (#504's evidence).
+	seedMalformed, err := proto.Marshal(&relayv1.Hello{
+		Labels: []*relayv1.Label{
+			{Key: "node:role", Value: "web, relay:quarantine=on"},
+		},
+	})
+	if err != nil {
+		f.Fatalf("marshal seed malformed Hello: %v", err)
+	}
+	f.Add(seedMalformed)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
 		var h relayv1.Hello
 		if proto.Unmarshal(data, &h) != nil {
 			return // rejected non-proto input, not a crash
 		}
-		_ = nodeLabelsFromHello(h.GetLabels())
+		labels, _ := nodeLabelsFromHello(h.GetLabels())
+		for k, v := range labels {
+			term := fmt.Sprintf("node:%s=%s", k, v)
+			sel, err := capability.ParseSelector(term)
+			if err != nil {
+				t.Fatalf("nodeLabelsFromHello returned (%q, %q), but rendering it as %q failed to parse: %v", k, v, term, err)
+			}
+			if len(sel.Predicates) != 1 {
+				t.Fatalf("nodeLabelsFromHello returned (%q, %q), but rendering it as %q produced %d predicates, want exactly 1",
+					k, v, term, len(sel.Predicates))
+			}
+			p := sel.Predicates[0]
+			if p.Namespace != capability.NamespaceNode || p.Key != k || p.Value != v {
+				t.Fatalf("nodeLabelsFromHello returned (%q, %q), but rendering it as %q parsed to %+v",
+					k, v, term, p)
+			}
+		}
 	})
 }
 
@@ -101,7 +134,7 @@ func FuzzDaemonMessageUnmarshal(f *testing.F) {
 			return // rejected non-proto input, not a crash
 		}
 		if h := m.GetHello(); h != nil {
-			_ = nodeLabelsFromHello(h.GetLabels())
+			_, _ = nodeLabelsFromHello(h.GetLabels())
 			_ = protoconv.FactsFromProto(h.GetFacts())
 		}
 		if ps := m.GetPolicy(); ps != nil {

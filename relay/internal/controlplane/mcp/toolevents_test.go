@@ -60,10 +60,9 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	}
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     nodeID,
-		Facts:      registry.Facts{Hostname: hostname, OS: "linux"},
-		NodeLabels: map[string]string{"role": "web"},
-	}); err != nil {
+		NodeID: nodeID,
+		Facts:  registry.Facts{Hostname: hostname, OS: "linux"},
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("seed node: %v", err)
 	}
 

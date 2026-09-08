@@ -1,25 +1,59 @@
 package protoconv_test
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/protoconv"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"google.golang.org/protobuf/proto"
 )
 
 // FuzzParseNodeLabel fuzzes the two-namespace label-authority parser
-// (ADR-0006). Property: ParseNodeLabel must never panic or hang on any key,
-// and must never accept a "relay:"-prefixed key as node-space.
+// (ADR-0006) AND the well-formedness gate (#504). Properties:
+//   - ParseNodeLabel must never panic or hang on any (key, value);
+//   - it must never accept a "relay:"-prefixed key as node-space;
+//   - whenever it accepts, capability.ParseSelector("node:"+bare+"="+value)
+//     must parse to EXACTLY ONE Predicate, in NamespaceNode, with the same
+//     Key and Value — the property that closes the issue's whole class: an
+//     accepted label can never render as more (or fewer, or differently
+//     namespaced) than the one Selector term it came from. This is a
+//     property assertion, not just a no-panic check, so any future widening
+//     of the allowlist that reopens a term-splitting or split-shifting byte
+//     is caught here without a new hand-written case.
+//
+// protoconv_test is an external test package (protoconv_test) and capability
+// does not import protoconv, so importing capability here creates no cycle.
 func FuzzParseNodeLabel(f *testing.F) {
-	f.Add("node:role")
-	f.Add("relay:secret")
-	f.Add("node:")
-	f.Add("")
-	f.Add("plainkey")
+	f.Add("node:role", "web")
+	f.Add("relay:secret", "x")
+	f.Add("node:", "x")
+	f.Add("", "")
+	f.Add("plainkey", "x")
+	// The measured payload (#504's evidence): before the fix this rendered as
+	// two Selector predicates, the second spelled relay:.
+	f.Add("node:role", "web, relay:quarantine=on")
 
-	f.Fuzz(func(t *testing.T, key string) {
-		_, _ = protoconv.ParseNodeLabel(key)
+	f.Fuzz(func(t *testing.T, key, value string) {
+		bare, ok := protoconv.ParseNodeLabel(key, value)
+		if !ok {
+			return
+		}
+		sel, err := capability.ParseSelector(fmt.Sprintf("node:%s=%s", bare, value))
+		if err != nil {
+			t.Fatalf("ParseNodeLabel(%q, %q) accepted (bare=%q), but the rendered term %q failed to parse: %v",
+				key, value, bare, fmt.Sprintf("node:%s=%s", bare, value), err)
+		}
+		if len(sel.Predicates) != 1 {
+			t.Fatalf("ParseNodeLabel(%q, %q) accepted (bare=%q), but rendered to %d Selector predicates, want exactly 1",
+				key, value, bare, len(sel.Predicates))
+		}
+		p := sel.Predicates[0]
+		if p.Namespace != capability.NamespaceNode || p.Key != bare || p.Value != value {
+			t.Fatalf("ParseNodeLabel(%q, %q) accepted (bare=%q), but rendered predicate = %+v, want {NamespaceNode %q %q}",
+				key, value, bare, p, bare, value)
+		}
 	})
 }
 

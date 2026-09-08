@@ -1184,14 +1184,15 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 		out = append(out, f)
 	}
 
-	// node:role is KNOWINGLY LEFT EXPOSED to the same shape of bypass this
-	// change closes for the three fact facets above: node: values are
-	// Node-forgeable by design (invariant 7) and reach the registry ungated
-	// at ingress, with no nodestate.validFactValue equivalent to route
-	// through. The correct fix is a value gate AT INGRESS — protecting the
-	// registry, Control API and MCP too, not only this renderer — so it is
-	// deliberately out of scope here rather than forked into a second,
-	// Console-local validation path. Tracked separately as issue #504.
+	// node:role's value is now well-formed BY CONSTRUCTION at ingress
+	// (registry.WellFormedNodeLabel, applied by protoconv.ParseNodeLabel —
+	// #504): every node: label stored in the registry has already been
+	// refused if it could render as more than one Selector term, so
+	// "node:role=" + k below is safe for exactly that reason, at the one
+	// gate that protects the registry, the Control API and MCP too, not just
+	// this renderer. Naming the predicate here rather than re-deriving the
+	// argument is deliberate — a second, Console-local validation path is
+	// precisely the fork #488 exists to remove.
 	roles := map[string]int{}
 	for _, n := range nodes {
 		for _, l := range n.Labels {

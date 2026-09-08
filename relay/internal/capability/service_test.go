@@ -142,9 +142,8 @@ func seedOneNode(t *testing.T) registry.Repository {
 	t.Helper()
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     "node-1",
-		NodeLabels: map[string]string{"role": "web"},
-	}); err != nil {
+		NodeID: "node-1",
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("Upsert(node-1): %v", err)
 	}
 	return reg

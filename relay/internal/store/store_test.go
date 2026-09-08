@@ -44,10 +44,9 @@ func TestRestartRoundTrip(t *testing.T) {
 		NodeID:            "node-a",
 		CertFingerprint:   "fp-a",
 		Facts:             registry.Facts{Hostname: "host-a", OS: "linux", Kernel: "6.1", Arch: "amd64", IPAddresses: []string{"10.0.0.1", "10.0.0.2"}},
-		NodeLabels:        map[string]string{"role": "web"},
 		EnrollingTokenID:  "tok-a",
 		PolicyFingerprint: "fp-policy-a",
-	})
+	}.WithNodeLabels(map[string]string{"role": "web"}))
 	if err != nil {
 		t.Fatalf("Upsert node-a: %v", err)
 	}
