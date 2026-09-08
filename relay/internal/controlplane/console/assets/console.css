@@ -1534,10 +1534,12 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
  * the same family: a metadata-only read was answered from the Relay's own
  * state, so it is neither a success (nothing ran on a Node, and the record is
  * written before the query is) nor a failure — it is the access being on the
- * trail while its result is not (ADR-0025). */
+ * trail while its result is not (ADR-0025). "revoked" belongs here too: a
+ * revoked Approval grant is a human closing a window early, neither a Task
+ * failure nor a success. */
 [data-outcome="parked"], [data-outcome="already parked"],
 [data-outcome="decided"], [data-outcome="planned"], [data-outcome="refused"],
-[data-outcome="audited"] {
+[data-outcome="audited"], [data-outcome="revoked"] {
   --oc: var(--text-second); --ocbg: transparent;
 }
 .chip.outcome[data-outcome="parked"],
@@ -1545,7 +1547,8 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
 .chip.outcome[data-outcome="decided"],
 .chip.outcome[data-outcome="planned"],
 .chip.outcome[data-outcome="refused"],
-.chip.outcome[data-outcome="audited"] { border-style: dashed; font-weight: var(--weight-normal); }
+.chip.outcome[data-outcome="audited"],
+.chip.outcome[data-outcome="revoked"] { border-style: dashed; font-weight: var(--weight-normal); }
 .repeatdeny { font-size: var(--text-xs); color: var(--text-muted); padding-top: 0; }
 
 /* An APPROVAL state is not a Task outcome, and it must not borrow one. A denied
