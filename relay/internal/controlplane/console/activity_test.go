@@ -22,6 +22,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // activityDeps is renderableDeps with a query lane the test controls.
@@ -738,6 +739,16 @@ type endlessQueries struct {
 	auditCalls int
 }
 
+// The registry half of the lane, unused by this fixture: Activity reads the
+// trail, never the fleet. Present only to satisfy QueryReader.
+func (q *endlessQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
+	return nil, nil
+}
+
+func (q *endlessQueries) DescribeNode(context.Context, capability.Principal, string) (capability.NodeDetail, error) {
+	return capability.NodeDetail{}, capability.ErrNodeNotFound
+}
+
 func (q *endlessQueries) QueryAudit(_ context.Context, _ capability.Principal, _ capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
 	q.auditCalls++
 	return capability.AuditPage{
@@ -830,6 +841,15 @@ type scriptedQueries struct {
 
 	jobCursors   []string
 	auditCursors []string
+}
+
+// The registry half of the lane, unused by this fixture (see endlessQueries).
+func (q *scriptedQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
+	return nil, nil
+}
+
+func (q *scriptedQueries) DescribeNode(context.Context, capability.Principal, string) (capability.NodeDetail, error) {
+	return capability.NodeDetail{}, capability.ErrNodeNotFound
 }
 
 // pageIndex reads the page number back out of a cursor this fake minted.

@@ -40,10 +40,17 @@ package console
 // after the fact. Read egress (#425) migrated next and reads nothing else
 // either. Activity (#422) followed, reading BOTH halves of the lane: its
 // dispatch rows come from QueryJobs one row per Job at any fan-out, and
-// everything else from QueryAudit. AuditReader still offers whole-trail and
-// by-Node reads for the screens that have not migrated yet (agent history,
-// node detail — #424); until each does, it keeps capping what it renders
-// and SAYING it capped it — see auditWindow.
+// everything else from QueryAudit. #450 then added the lane's REGISTRY half
+// and moved the fleet listing and node detail onto it, which is what made
+// those two screens audited (ADR-0025) rather than merely bounded.
+//
+// AuditReader still offers whole-trail and by-Node reads for what has not
+// migrated: agent history in full (#424), and node detail's Recent Tasks
+// panel, whose Task rows are still read by Node through ByNode. That panel is
+// covered by the describe_node record node detail already writes for the Node
+// it is about; migrating the panel itself onto the lane's paging is #424's
+// reshaping work, not #450's. Until each does, AuditReader keeps capping what
+// it renders and SAYING it capped it — see auditWindow.
 
 import (
 	"context"
@@ -63,6 +70,14 @@ import (
 // management issue (#430) adds writes through the capability layer, NOT by
 // widening this interface — a Console that could write a label directly would
 // be a second control path, and `relay:` is the security-lane namespace.
+//
+// ALSO NOTE WHAT IS ABSENT ON THE OTHER SIDE: a read through here leaves no
+// trace. ADR-0025 audits reads because `read` means "cannot change Node
+// state", not "safe to see", and the fleet's shape is exactly the disclosure
+// it names first. #450 moved the fleet listing and node detail onto
+// QueryReader below, which records before it answers; the comparison screen is
+// the one caller left here, and read_audit_test.go carries that exemption in
+// writing. A new screen reads through QueryReader.
 type FleetReader interface {
 	List() []registry.Node
 	Get(nodeID string) (registry.Node, bool)
@@ -134,7 +149,27 @@ type ApprovalReader interface {
 // and Activity (#422) its third; agent history (#424) follows. Landing the
 // seam ahead of any screen using it is what let all four be built against
 // one settled contract instead of four independently-guessed ones.
+//
+// #450 added the REGISTRY half — ListNodes and DescribeNode. They are on this
+// seam rather than on FleetReader for the reason the whole issue exists: a
+// read that goes through the capability layer is audited by construction
+// (ADR-0025), and a read that goes through FleetReader is not audited at all.
+// The fleet listing and node detail were the two screens whose reads
+// disclosed the most and recorded the least; they now ask here.
+//
+// Note the asymmetry with FleetReader, which is deliberate rather than
+// leftover: FleetReader still exists, still carries List and Get, and the
+// comparison screen still uses it. What a future editor must not do is reach
+// for it on a NEW screen because it is one line shorter — read_audit_test.go
+// is the guard that makes that choice visible instead of silent.
 type QueryReader interface {
+	// The registry half (#450). ListNodes is the fleet enumeration;
+	// DescribeNode is one Node plus its fingerprint peer counts, which the
+	// lane computes so a single-Node screen never has to enumerate the fleet
+	// to render two integers.
+	ListNodes(ctx context.Context, p capability.Principal) ([]registry.Node, error)
+	DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error)
+
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)
 	AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error)
 	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)

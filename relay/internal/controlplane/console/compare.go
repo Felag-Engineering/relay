@@ -174,12 +174,20 @@ func parsePins(raw string) (ids []string, overflow bool) {
 // carries its pin in — "pin" everywhere except the comparison itself, whose
 // pin set IS its ?nodes=.
 //
-// Every id is resolved through FleetReader.Get, because a pinned id is
-// whatever the link carried and nothing else. An unresolvable one renders as a
-// dead chip that says so: the alternative is a crafted URL drawing
-// `node-prod-7` in a bar that otherwise only ever holds real machines, which is
-// a screen telling an operator a Node exists.
-func buildPinState(d Deps, ids []string, selfPath, selfParam string) pinState {
+// Every id is resolved through known, because a pinned id is whatever the
+// link carried and nothing else. An unresolvable one renders as a dead chip
+// that says so: the alternative is a crafted URL drawing `node-prod-7` in a
+// bar that otherwise only ever holds real machines, which is a screen telling
+// an operator a Node exists.
+//
+// known is a PARAMETER rather than a read off Deps because the answer is a
+// registry disclosure and #450 made where a screen gets one matter. The two
+// screens on the audited read lane resolve pins from what that lane already
+// gave them — the fleet listing from its own audited page, node detail from
+// an audited describe per pinned id — so the pin bar never becomes a second,
+// unaudited door into the registry. A nil known resolves nothing, which draws
+// every chip dead rather than drawing a claim the screen cannot support.
+func buildPinState(known func(string) bool, ids []string, selfPath, selfParam string) pinState {
 	p := pinState{Raw: strings.Join(ids, ","), Full: len(ids) >= maxPins}
 	for _, id := range ids {
 		unpin := selfPath
@@ -187,8 +195,8 @@ func buildPinState(d Deps, ids []string, selfPath, selfParam string) pinState {
 			unpin += "?" + url.Values{selfParam: {strings.Join(rest, ",")}}.Encode()
 		}
 		pin := nodePin{ID: id, UnpinHref: unpin}
-		if d.Fleet != nil {
-			_, pin.Known = d.Fleet.Get(id)
+		if known != nil {
+			pin.Known = known(id)
 		}
 		if pin.Known {
 			pin.Href = "/console/nodes/" + id + p.Query()
@@ -296,7 +304,11 @@ func handleCompare(d Deps) http.HandlerFunc {
 // URL. Pure, so the "never enumerates the fleet" guard can be asserted without
 // HTTP (buildFleetView precedent).
 func buildCompareView(d Deps, ids []string) compareView {
-	v := compareView{Pin: buildPinState(d, ids, comparePath, "nodes")}
+	// The comparison screen has NOT migrated to the audited read lane (#450
+	// left it, and #424 owns the screens work): it still resolves its columns
+	// through FleetReader, so its pin bar resolves through the same door
+	// rather than inventing a second answer on one page.
+	v := compareView{Pin: buildPinState(fleetKnown(d), ids, comparePath, "nodes")}
 
 	var snaps []*policyview.Snapshot
 	for _, id := range ids {
@@ -578,3 +590,19 @@ is — the same use a fleet row makes of it — and it is self-reported too: rec
 never trust it.</p>
 {{end}}
 `)
+
+// fleetKnown is the pin resolver backed by the unaudited FleetReader seam.
+//
+// It exists so the ONE screen still on that seam has a named, greppable use
+// of it rather than an inline closure that reads like every other pin
+// resolver. read_audit_test.go names the comparison screen as the exemption
+// this represents; when #424 migrates it, this function goes with it.
+func fleetKnown(d Deps) func(string) bool {
+	if d.Fleet == nil {
+		return nil
+	}
+	return func(id string) bool {
+		_, ok := d.Fleet.Get(id)
+		return ok
+	}
+}

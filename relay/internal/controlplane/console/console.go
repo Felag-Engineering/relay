@@ -85,6 +85,15 @@ type Deps struct {
 	// rather than render an empty one. An empty fleet view is a claim about the
 	// fleet ("you have no Nodes"), and a Console that makes it because nobody
 	// wired the registry has lied about something an operator will act on.
+	//
+	// Fleet and Policy are the UNAUDITED registry doors, and they are down to
+	// one screen: #450 moved the fleet listing and node detail onto Queries,
+	// whose reads are audited by construction (ADR-0025), and the comparison
+	// screen is what still reads these. A NEW screen must not reach for them —
+	// read through Queries — and read_audit_test.go is what makes that choice
+	// visible rather than silent. Node detail still reads Policy for its
+	// reported-Policy panel, which is covered by the describe_node record it
+	// already wrote for that Node.
 	Fleet     FleetReader
 	Policy    PolicyReader
 	Audit     AuditReader
@@ -105,9 +114,14 @@ type Deps struct {
 	// Now timestamps rendered pages. Defaults to time.Now().UTC() when nil.
 	Now func() time.Time
 
-	// Queries is the capability layer's read lane (#441): filtered,
-	// paginated queries over the audit trail and over Jobs/Tasks (seams.go).
-	// Job detail (#423) reads through it exclusively; #422/#424/#425 follow.
+	// Queries is the capability layer's read lane (#441/#450): filtered,
+	// paginated queries over the audit trail and over Jobs/Tasks, plus the
+	// registry reads the fleet listing and node detail make (seams.go).
+	//
+	// It is THE audited door. Every method on it writes the read's own access
+	// record before it answers and fails closed when it cannot (ADR-0025),
+	// which is why a screen that reads fleet or trail data asks here and never
+	// through Fleet/Policy/Audit above.
 	Queries QueryReader
 
 	// CertExpiringWithin is the state:cert-expiring warning window

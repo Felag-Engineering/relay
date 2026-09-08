@@ -262,6 +262,21 @@ type fakeQueries struct {
 	jobLimits   []int
 	taskLimits  []int
 
+	// nodes is the registry half of the lane (#450). A screen test that
+	// renders the fleet or a Node puts them HERE rather than on fakeFleet:
+	// the audited lane is the door those screens now use, and a fixture that
+	// filled only fakeFleet would render an empty fleet and quietly assert
+	// nothing.
+	nodes    []registry.Node
+	nodesErr error
+
+	// listNodeCalls and describedNodes record the registry half's traffic.
+	// describedNodes is what proves the pin bar resolves through the lane
+	// rather than through a second door, and what a "does this screen
+	// enumerate the fleet" assertion reads.
+	listNodeCalls  int
+	describedNodes []string
+
 	// auditNext and jobNext are the cursors the fake reports as "there is
 	// more", overriding the truncation rule below. A page whose Cursor is
 	// already set returns no further one, so a test can follow "older"
@@ -453,6 +468,48 @@ func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filt
 	reach.DistinctTargets = len(targets)
 	reach.DistinctNodes = len(nodes)
 	return reach, nil
+}
+
+// ListNodes and DescribeNode are the lane's registry half (#450).
+//
+// They do NOT audit — nothing in this file does. That is deliberate and it is
+// also the limit of what any screen test built on this fake can prove: it can
+// assert that a screen asks the LANE, and it cannot assert that the lane
+// records anything. The record itself is proved in read_audit_test.go against
+// a real *capability.Service over a real *auditsink.Sink, because a fake that
+// answered "yes, audited" would be asserting its own implementation.
+func (f *fakeQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
+	f.listNodeCalls++
+	if f.nodesErr != nil {
+		return nil, f.nodesErr
+	}
+	return f.nodes, nil
+}
+
+func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, nodeID string) (capability.NodeDetail, error) {
+	f.describedNodes = append(f.describedNodes, nodeID)
+	if f.nodesErr != nil {
+		return capability.NodeDetail{}, f.nodesErr
+	}
+	for _, n := range f.nodes {
+		if n.NodeID != nodeID {
+			continue
+		}
+		d := capability.NodeDetail{Node: n}
+		// The peer counts are computed the way the real lane computes them,
+		// not stubbed: a screen asserting "3 Nodes share this fingerprint"
+		// must be asserting the same arithmetic production runs.
+		for _, other := range f.nodes {
+			if n.PolicyFingerprint != "" && other.PolicyFingerprint == n.PolicyFingerprint {
+				d.PolicyPeers++
+			}
+			if n.TemplateSetFingerprint != "" && other.TemplateSetFingerprint == n.TemplateSetFingerprint {
+				d.TemplatePeers++
+			}
+		}
+		return d, nil
+	}
+	return capability.NodeDetail{}, capability.ErrNodeNotFound
 }
 
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {

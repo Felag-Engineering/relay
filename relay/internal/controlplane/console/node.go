@@ -27,11 +27,14 @@ package console
 // when they cannot find it.
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -167,13 +170,41 @@ type nodeView struct {
 
 func handleNode(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if d.Fleet == nil {
-			unavailable(w, "the Node registry")
+		// The read lane takes a capability.Principal, so this screen reads
+		// the one the Authenticator injected as well as the Page the shell
+		// needs. Both are context reads; page() resolves the same principal
+		// itself.
+		caller, ok := principal(w, r)
+		if !ok {
 			return
 		}
+		if d.Queries == nil {
+			unavailable(w, "the audited read lane")
+			return
+		}
+		d, lane := latched(d)
+		ctx := r.Context()
 		nodeID := r.PathValue("node_id")
-		n, ok := d.Fleet.Get(nodeID)
-		if !ok {
+
+		// THIS READ IS AUDITED (#450, ADR-0025). Node detail is the widest
+		// single-Node disclosure the Console makes — every Label namespace,
+		// every Fact, the certificate provenance and the Node's own reported
+		// Policy — and ADR-0025 names describe_node explicitly. The
+		// capability layer writes the access record BEFORE it consults the
+		// registry, so the record covers the ATTEMPT: a probe for an id that
+		// does not exist is on the trail exactly like a read of one that
+		// does, which is what makes enumeration-by-guessing visible.
+		//
+		// Fail closed, with no exception for this screen or any other: a
+		// Console page whose read cannot be audited refuses to render.
+		detail, err := d.Queries.DescribeNode(ctx, caller, nodeID)
+		switch {
+		case errors.Is(err, capability.ErrNodeNotFound), errors.Is(err, capability.ErrInvalidFilter):
+			// Both render the same page on purpose. An id the registry does
+			// not hold and an id too long to be one are the same answer to
+			// the operator — there is no such Node — and telling the two
+			// apart on screen would only tell a prober which of their guesses
+			// was well-formed.
 			p, ok := page(d, w, r, "Node not found")
 			if !ok {
 				return
@@ -182,7 +213,11 @@ func handleNode(d Deps) http.HandlerFunc {
 			w.WriteHeader(http.StatusNotFound)
 			renderScreen(w, p, nodeMissingTmpl, nodeID)
 			return
+		case err != nil:
+			readFailed(w, err, "this Node's registry record")
+			return
 		}
+		n := detail.Node
 
 		p, ok := page(d, w, r, shortHash(n.NodeID))
 		if !ok {
@@ -190,11 +225,55 @@ func handleNode(d Deps) http.HandlerFunc {
 		}
 		p.Banner = banner(d, r)
 		pins, _ := parsePins(r.URL.Query().Get("pin"))
-		renderScreen(w, p, nodeTmpl, buildNodeView(d, r, n, p.Role, pins))
+		known, err := pinsKnown(ctx, d, caller, n.NodeID, pins)
+		if err != nil {
+			readFailed(w, err, "the pinned Nodes' registry records")
+			return
+		}
+		v := buildNodeView(d, r, detail, p.Role, pins, known)
+		if refusedUnaudited(w, lane, "this Node's registry record") {
+			return
+		}
+		renderScreen(w, p, nodeTmpl, v)
 	}
 }
 
-func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role, pins []string) nodeView {
+// pinsKnown resolves the pin bar's ids through the AUDITED lane, one
+// describe_node per id, and returns the resolver buildPinState draws with.
+//
+// One record per pinned Node, not per page view of the fleet: the set is
+// bounded at maxPins (3), the current Node is already resolved by the read
+// above and is never asked for twice, and every id in it is one an operator
+// deliberately pinned. That is the honest accounting — a pin bar telling you
+// whether `node-prod-7` exists IS a registry disclosure, and the alternative
+// designs were a second unaudited door (FleetReader.Get, which is what this
+// replaced) or enumerating the whole fleet to check three ids.
+//
+// An unknown or malformed id resolves to a dead chip rather than an error:
+// that is the answer, and the read that produced it is already recorded. Any
+// OTHER error — including an unauditable one — is returned, so the page fails
+// closed as a whole rather than silently drawing a bar it could not resolve.
+func pinsKnown(ctx context.Context, d Deps, caller capability.Principal, self string, ids []string) (func(string) bool, error) {
+	set := map[string]bool{self: true}
+	for _, id := range ids {
+		if _, seen := set[id]; seen {
+			continue
+		}
+		_, err := d.Queries.DescribeNode(ctx, caller, id)
+		switch {
+		case err == nil:
+			set[id] = true
+		case errors.Is(err, capability.ErrNodeNotFound), errors.Is(err, capability.ErrInvalidFilter):
+			set[id] = false
+		default:
+			return nil, err
+		}
+	}
+	return func(id string) bool { return set[id] }, nil
+}
+
+func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role accounts.Role, pins []string, known func(string) bool) nodeView {
+	n := detail.Node
 	in := nodestate.Input{Node: n, Now: d.now(), CertExpiringWithin: d.CertExpiringWithin}
 
 	v := nodeView{
@@ -266,7 +345,7 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role,
 
 	// The pin set travels in the query string, which is what keeps this screen
 	// free of a mutating route: pinning is a link, not a write.
-	v.Pin = buildPinState(d, pins, "/console/nodes/"+n.NodeID, "pin")
+	v.Pin = buildPinState(known, pins, "/console/nodes/"+n.NodeID, "pin")
 	for _, id := range pins {
 		if id == n.NodeID {
 			v.Pinned = true
@@ -276,16 +355,21 @@ func buildNodeView(d Deps, r *http.Request, n registry.Node, role accounts.Role,
 		v.PinHref = "/console/nodes/" + n.NodeID + pinQuery(append(append([]string(nil), pins...), n.NodeID))
 	}
 
-	// Fingerprint sharing counts, computed over the fleet the Console can see.
-	for _, other := range d.Fleet.List() {
-		if n.PolicyFingerprint != "" && other.PolicyFingerprint == n.PolicyFingerprint {
-			v.PolicyShared++
-		}
-		if n.TemplateSetFingerprint != "" && other.TemplateSetFingerprint == n.TemplateSetFingerprint {
-			v.TemplateShared++
-		}
-	}
+	// Fingerprint sharing counts. Computed by the read lane, behind the same
+	// describe_node record (capability.NodeDetail): this screen must not
+	// enumerate the whole registry to render two integers about one Node —
+	// that would be a far wider disclosure than the read it actually made,
+	// and one that would then have to be audited as an enumeration to stay
+	// honest.
+	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
 
+	// The reported-Policy panel reads the display-only policyview cache
+	// directly, and that is NOT a second unaudited door: this whole screen is
+	// one describe_node read, recorded above against this Node id, and
+	// ADR-0025 names a Node's Policy as part of exactly what describe_node
+	// discloses. The cache is a Relay-side mirror of what the daemon
+	// reported, keyed by the id already on the record — there is nothing here
+	// the record does not already say was read.
 	if d.Policy != nil {
 		if snap, ok := d.Policy.Get(n.NodeID); ok {
 			v.Policy = &snap

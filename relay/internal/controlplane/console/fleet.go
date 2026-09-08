@@ -373,8 +373,12 @@ const legibleGroup = 50
 
 func handleFleet(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if d.Fleet == nil {
-			unavailable(w, "the Node registry")
+		// The read lane takes a capability.Principal, so this screen reads
+		// the one the Authenticator injected as well as the Page the shell
+		// needs. Both are context reads; page() resolves the same principal
+		// itself.
+		caller, ok := principal(w, r)
+		if !ok {
 			return
 		}
 		p, ok := page(d, w, r, "Fleet")
@@ -383,7 +387,32 @@ func handleFleet(d Deps) http.HandlerFunc {
 		}
 		p.Banner = banner(d, r)
 
-		nodes := d.Fleet.List()
+		if d.Queries == nil {
+			unavailable(w, "the audited read lane")
+			return
+		}
+		// Every read this page makes goes through the latch, so the "a page
+		// whose read cannot be audited is not served" rule is one call at the
+		// end rather than a branch per read (screen.go).
+		d, lane := latched(d)
+
+		// THE FLEET ENUMERATION IS AN AUDITED READ (#450, ADR-0025). This
+		// screen discloses every Node's name, Labels, Facts and certificate
+		// provenance in one page, which is the disclosure ADR-0025 names
+		// first — so it asks the capability layer, which writes the
+		// list_nodes access record BEFORE it touches the registry and returns
+		// the failure instead of the fleet when it cannot.
+		//
+		// Fail closed, with no exception for this screen or any other: a
+		// Console page whose read cannot be audited refuses to render.
+		nodes, err := d.Queries.ListNodes(r.Context(), caller)
+		if err != nil {
+			readFailed(w, err, "this Relay's Node registry")
+			return
+		}
+		if refusedUnaudited(w, lane, "this Relay's Node registry") {
+			return
+		}
 
 		// An empty registry is not an empty table. Spec 10: a Console with zero
 		// Nodes is a distinct screen with a distinct job — it is watching for
@@ -401,7 +430,10 @@ func handleFleet(d Deps) http.HandlerFunc {
 		// that dropped the pin on the way through would make pinning one Node
 		// the only thing possible.
 		pins, _ := parsePins(r.URL.Query().Get("pin"))
-		v.Pin = buildPinState(d, pins, fleetPath, "pin")
+		// Pins resolve against the page this screen ALREADY read and already
+		// audited, not through a second door into the registry: one screen,
+		// one disclosure, one record.
+		v.Pin = buildPinState(knownIn(nodes), pins, fleetPath, "pin")
 		renderScreen(w, p, fleetTmpl, v)
 	}
 }
@@ -1407,3 +1439,16 @@ it is reachable, whether it will take work, what it will permit, and who vouched
 no host metrics here and there will not be — reads are pulled as Jobs with a Plan and a blast cap,
 never collected on a schedule.</p>
 `)
+
+// knownIn is the pin resolver over a Node page a screen has already read.
+//
+// It closes over the slice rather than re-querying, which is the whole point:
+// the ids in a pin bar are whatever a link carried, and resolving them must
+// not be a fresh, unrecorded look at the registry.
+func knownIn(nodes []registry.Node) func(string) bool {
+	set := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		set[n.NodeID] = true
+	}
+	return func(id string) bool { return set[id] }
+}

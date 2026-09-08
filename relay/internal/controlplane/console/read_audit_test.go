@@ -1,0 +1,613 @@
+package console
+
+// read_audit_test.go is the Console's guard for ADR-0025 decision 1: a
+// Console screen that reads the fleet leaves a record of having read it, and
+// a screen whose read cannot be recorded is not served.
+//
+// # Why this file exists at all
+//
+// The audit trail was dispatch-only until #288, and the Console arrived after
+// it. Four screens migrated onto the capability layer's read lane during #441
+// and #422/#423/#425 and inherited its auditing for free; the rest kept
+// reading FleetReader, PolicyReader and AuditReader directly, which is a door
+// with no record on the other side of it. #450 moved the fleet listing and
+// node detail through that door and closed it behind them.
+//
+// The thing that stops this recurring is not the migration, it is this file.
+// A Console screen is cheap to add — it is a row in [Routes] and a handler —
+// and the cheapest handler reads a seam off Deps. Nothing about writing one
+// would tell its author that a read is a thing this system records, and a
+// reviewer reading a 200-line screen diff is not reliably going to notice an
+// absence.
+//
+// # What it does
+//
+// It walks the ROUTE TABLE, which is exported as data for exactly this class
+// of question (see [Routes]' doc comment), and requires every route to be
+// classified in [consoleReadAudit] — audited, or exempt with a written
+// reason. A new route is in neither, so adding one fails this file until its
+// author has decided which it is. That decision is then in a test file, in
+// review, in words.
+//
+// For an audited route it does not take the classification's word for it: it
+// drives the route through a REAL *capability.Service over a REAL
+// *auditsink.Sink and asserts a KindRead record came out the other end,
+// attributed to the signed-in Account. The fakes in fakes_test.go cannot
+// prove this — fakeQueries does not audit, because nothing that is not the
+// production sink should be allowed to claim it did. Building the fixture out
+// of an audit.Record literal would be worse still: #463, #517 and #520 were
+// each a case of these records being RENDERED wrongly, and all three survived
+// tests whose fixture was a literal somebody wrote to match the renderer.
+//
+// # What it catches, and what it does not
+//
+// It catches: a new Console route added without a decision about its read
+// auditing; an audited route that stops writing a record (a screen migrated
+// back onto a raw seam, a lane method that stops recording, a sink wired to a
+// no-op); a read record that renders as something other than the tool that
+// produced it.
+//
+// It does not catch: a screen that audits ONE of its reads and not another,
+// as long as some record is produced — the assertion is "this route records
+// the read it is classified for", not "every byte on this page was recorded";
+// a read that happens outside the route table entirely (there is none today —
+// every handler is reached through [Routes]); or an exemption somebody adds
+// with a reason that is not true. That last one is the honest limit of every
+// guard of this shape, no_dispatch_test.go's included: it forces the decision
+// into the diff, it cannot make the decision.
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+)
+
+// readAuditRule is one route's classification.
+type readAuditRule struct {
+	// path is the concrete URL to drive. Route.Path carries ServeMux wildcards
+	// ("{node_id}"), which are not a URL; this is the same route with the
+	// fixture's own ids substituted.
+	path string
+
+	// tool is the read-lane tool name this route must record, empty for an
+	// exempt route. It is asserted on the RECORD, not merely counted, because
+	// "a record was written" and "the right record was written" have come
+	// apart before (#463, #517, #520).
+	tool string
+
+	// why states, for an exempt route, what it reads and why that read is not
+	// on the audited lane. Required: an exemption with no reason is a hole
+	// nobody has to argue for.
+	why string
+}
+
+// audited reports whether this route must produce a read record.
+func (r readAuditRule) audited() bool { return r.tool != "" }
+
+// consoleReadAudit classifies every route in [Routes]. Keyed by
+// Route.Pattern(), which is method + path and is what makes two routes on one
+// path distinguishable.
+//
+// EXEMPTIONS ARE NOT PERMANENT. Each one names the issue that closes it. What
+// an exemption must never become is a place to put a screen because auditing
+// it was inconvenient — read the entry above it before adding one, and if the
+// reason you are about to write is "it is only a small read", that is the
+// argument ADR-0025 was written to reject: `read` means "cannot change Node
+// state", not "safe to see".
+var consoleReadAudit = map[string]readAuditRule{
+	// ── The audited fleet reads (#450) ───────────────────────────────────
+	"GET /console/{$}": {
+		path: "/console/",
+		tool: "list_nodes",
+	},
+	"GET /console/nodes/{node_id}": {
+		path: "/console/nodes/" + auditFixtureNode,
+		tool: "describe_node",
+	},
+
+	// ── Audited by the trail/Job half of the lane (#441, #422/#423/#425) ──
+	"GET /console/jobs/{job_id}": {
+		path: "/console/jobs/" + auditFixtureJob,
+		tool: "query_jobs",
+	},
+	"GET /console/activity": {
+		path: "/console/activity",
+		tool: "query_jobs",
+	},
+	"GET /console/reads": {
+		path: "/console/reads",
+		tool: "query_jobs",
+	},
+	"GET /console/approvals": {
+		path: "/console/approvals",
+		// The queue reads the approval seam first and the trail only for a
+		// Request it found. With an empty queue it records nothing, which is
+		// correct — it read no fleet or trail data — so this route is
+		// classified by what it CAN read rather than by this fixture.
+		why: "reads ApprovalReader; its trail reads go through the audited " +
+			"lane (approvals.go) and are recorded when there is a Request to read for",
+	},
+	"GET /console/approvals/{approval_id}": {
+		path: "/console/approvals/" + auditFixtureApproval,
+		tool: "query_audit",
+	},
+
+	// ── Not yet on the lane ──────────────────────────────────────────────
+	"GET /console/agents": {
+		path: "/console/agents",
+		why: "agent history still reads the whole trail through AuditReader.List. " +
+			"Migrating it is #424, which reshapes the screen around the lane's paging; " +
+			"#450 deliberately did not widen into that work",
+	},
+	"GET /console/compare": {
+		path: "/console/compare?nodes=" + auditFixtureNode,
+		why: "the comparison screen still resolves its columns through FleetReader " +
+			"and PolicyReader. It is the last registry read off the lane; it was left " +
+			"out of #450's slice to keep one migration provable rather than three rushed",
+	},
+
+	// ── Not data reads ───────────────────────────────────────────────────
+	"GET /console/events": {
+		path: "", // a streaming route; driving it in this sweep would block
+		why: "the live-read seam. It carries event-seam kinds, not fleet or trail " +
+			"queries, and its per-kind allowlist (events.go) is what governs it",
+	},
+	"GET /console/assets/{path...}": {
+		path: "/console/assets/console.css",
+		why:  "static assets — the stylesheet and script the CSP forces out of the layout",
+	},
+	"GET " + LoginPath:  {path: LoginPath, why: "the sign-in form; reads no fleet or trail data"},
+	"POST " + LoginPath: {path: "", why: "sign-in; consoleauth records its own audit event"},
+	"POST " + LogoutPath: {
+		path: "",
+		why:  "sign-out; consoleauth records its own audit event",
+	},
+	"GET /console/run": {
+		path: "",
+		why: "the v0.7.0 composer placeholder (#438). It renders no data at all today; " +
+			"the screen that replaces it dispatches, and dispatch is audited by Service.Run",
+	},
+}
+
+const (
+	auditFixtureNode     = "node-web-1"
+	auditFixtureJob      = "job-1"
+	auditFixtureApproval = "ap-1"
+)
+
+// TestConsole_EveryRouteIsClassifiedForReadAuditing is the guard proper: the
+// route table and the classification table must name the same routes.
+//
+// Both directions matter. An unclassified route is a screen whose read
+// auditing nobody decided about; a classification with no route is a stale
+// entry, and a table full of those is one nobody trusts enough to read.
+func TestConsole_EveryRouteIsClassifiedForReadAuditing(t *testing.T) {
+	// Execution on, so the route only a flagged Relay mounts is classified
+	// too — the guard must not have a blind spot exactly where the execution
+	// surface appears.
+	routes := Routes(withExecution(renderableDeps(), true))
+	if len(routes) == 0 {
+		t.Fatal("the route table is empty — this guard is inspecting nothing")
+	}
+
+	seen := map[string]bool{}
+	for _, r := range routes {
+		pattern := r.Pattern()
+		seen[pattern] = true
+		rule, ok := consoleReadAudit[pattern]
+		if !ok {
+			t.Errorf("route %q is not classified in consoleReadAudit.\n"+
+				"Every Console route must declare whether it is an AUDITED read (ADR-0025: who "+
+				"read, which tool, what they aimed it at, when) or is exempt WITH A REASON.\n"+
+				"If it reads the fleet or the trail, read through Deps.Queries — the capability "+
+				"layer's read lane writes the access record before it answers, and fails closed "+
+				"when it cannot. Do not add a RecordRead call inside this package (invariant 10).",
+				pattern)
+			continue
+		}
+		if !rule.audited() && strings.TrimSpace(rule.why) == "" {
+			t.Errorf("route %q is exempt from read auditing with no stated reason", pattern)
+		}
+		if rule.audited() && rule.path == "" {
+			t.Errorf("route %q is classified audited but has no drivable path to prove it with", pattern)
+		}
+	}
+	for pattern := range consoleReadAudit {
+		if !seen[pattern] {
+			t.Errorf("consoleReadAudit classifies %q, which is not in the route table — "+
+				"a stale entry makes the guard read as covering more than it does", pattern)
+		}
+	}
+}
+
+// TestConsole_AuditedRoutesRecordTheirReadThroughTheRealLane drives every
+// audited route through a real capability.Service over a real auditsink.Sink
+// and asserts the record that came out.
+//
+// The whole chain is production code: the handler, the read lane, the sink's
+// projection onto audit.Record, and the attribution lanes. The only fixture is
+// the repository the sink appends into and the registry the lane reads.
+func TestConsole_AuditedRoutesRecordTheirReadThroughTheRealLane(t *testing.T) {
+	for pattern, rule := range consoleReadAudit {
+		if !rule.audited() {
+			continue
+		}
+		t.Run(pattern, func(t *testing.T) {
+			trail := &recordingTrail{}
+			d := realLaneDeps(trail)
+
+			rec := get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("GET %s = %d, want 200 — an audited route must still render", rule.path, rec.Code)
+			}
+
+			reads := trail.ofKind(audit.KindRead)
+			if len(reads) == 0 {
+				t.Fatalf("GET %s wrote no %s record. The screen read this Relay's fleet or trail "+
+					"and left nothing behind (ADR-0025 decision 1).", rule.path, audit.KindRead)
+			}
+
+			var got *audit.Record
+			for i := range reads {
+				if reads[i].OperationName == rule.tool {
+					got = &reads[i]
+					break
+				}
+			}
+			if got == nil {
+				var names []string
+				for _, r := range reads {
+					names = append(names, r.OperationName)
+				}
+				t.Fatalf("GET %s recorded %v, want a record for %q", rule.path, names, rule.tool)
+			}
+
+			// Attributed to the SIGNED-IN HUMAN, in the verified lane — not to
+			// the Relay, not to a service identity, and not only as a display
+			// string. The Account ID is what a later query joins on.
+			if got.Attribution.Verified.AccountID != testAccountID(accounts.RoleAdmin) {
+				t.Errorf("read record's verified AccountID = %q, want %q — a Console read must be "+
+					"attributed to the human who was signed in",
+					got.Attribution.Verified.AccountID, testAccountID(accounts.RoleAdmin))
+			}
+			if got.Attribution.Verified.AccountName != testAccountName(accounts.RoleAdmin) {
+				t.Errorf("read record's verified AccountName = %q, want %q",
+					got.Attribution.Verified.AccountName, testAccountName(accounts.RoleAdmin))
+			}
+
+			// METADATA ONLY (ADR-0025 decision 2). Asserted on the record the
+			// production sink actually built, which is the only place this can
+			// be asserted honestly — capability.AuditSink.RecordRead has no
+			// result parameter to pass, so there is no way to write one from
+			// the lane, and this is the check that the sink did not add one
+			// from somewhere else.
+			if len(got.Stdout) != 0 || len(got.Stderr) != 0 || got.Truncated {
+				t.Errorf("read record carries output (stdout %d bytes, stderr %d bytes, truncated %v) — "+
+					"a read record records WHAT WAS READ and never WHAT CAME BACK (ADR-0025)",
+					len(got.Stdout), len(got.Stderr), got.Truncated)
+			}
+		})
+	}
+}
+
+// TestConsole_NodeDetailAimsItsRecordAtTheNode is the "what it was aimed at"
+// half of ADR-0025's record, which the sweep above cannot check generically:
+// a node-scoped read must carry the Node id, or the trail can say a Node was
+// read and not which one.
+func TestConsole_NodeDetailAimsItsRecordAtTheNode(t *testing.T) {
+	trail := &recordingTrail{}
+	d := realLaneDeps(trail)
+
+	get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/"+auditFixtureNode)
+
+	reads := trail.ofKind(audit.KindRead)
+	if len(reads) != 1 {
+		t.Fatalf("node detail wrote %d read records, want exactly 1", len(reads))
+	}
+	if reads[0].NodeID != auditFixtureNode {
+		t.Errorf("read record's NodeID = %q, want %q", reads[0].NodeID, auditFixtureNode)
+	}
+}
+
+// TestConsole_ProbingForAMissingNodeIsStillRecorded is why the lane records
+// BEFORE it looks: enumeration by guessing ids is exactly what an audited read
+// surface exists to make visible, and a trail that recorded only the guesses
+// that found something would record only the successful half of a scan.
+func TestConsole_ProbingForAMissingNodeIsStillRecorded(t *testing.T) {
+	trail := &recordingTrail{}
+	d := realLaneDeps(trail)
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-does-not-exist")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET a missing Node = %d, want 404", rec.Code)
+	}
+
+	reads := trail.ofKind(audit.KindRead)
+	if len(reads) != 1 || reads[0].NodeID != "node-does-not-exist" {
+		t.Fatalf("a probe for a Node that does not exist left %d records (%+v); "+
+			"want one, aimed at the id that was probed for", len(reads), reads)
+	}
+}
+
+// TestConsole_AnUnauditableReadRefusesTheScreen is decision 4, demonstrated
+// rather than asserted: with the trail refusing writes, every audited route
+// must refuse to render.
+//
+// ONE RULE, NO PER-SCREEN EXCEPTION. The four screens that migrated during
+// #441 inherited this from the lane; #450's two inherit the same thing from
+// the same place, and this test is what makes "everywhere" checkable rather
+// than a claim in a comment.
+func TestConsole_AnUnauditableReadRefusesTheScreen(t *testing.T) {
+	for pattern, rule := range consoleReadAudit {
+		if !rule.audited() {
+			continue
+		}
+		t.Run(pattern, func(t *testing.T) {
+			trail := &recordingTrail{appendErr: errTrailDown}
+			d := realLaneDeps(trail)
+
+			rec := get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			if rec.Code == http.StatusOK {
+				t.Fatalf("GET %s = 200 with an unwritable audit trail. A read this Relay cannot "+
+					"record must be REFUSED, not served unrecorded (ADR-0025 decision 4).", rule.path)
+			}
+			body := rec.Body.String()
+			// Legible, not a blank 500: the operator has to be able to tell
+			// this from "the registry is down", because the two send them to
+			// different components and only one of them means nothing leaked.
+			for _, want := range []string{"audit trail", "refused"} {
+				if !strings.Contains(body, want) {
+					t.Errorf("the refusal page does not say %q — it reads as a generic failure:\n%s",
+						want, body)
+				}
+			}
+		})
+	}
+}
+
+// TestConsole_ReadEgressCountsAConsoleRead is the third acceptance line: a
+// Console read is counted beside an agent's, not in a lane of its own.
+//
+// The record is REAL — produced by driving the fleet listing through the real
+// lane and sink — and is then projected onto the read lane's row type and fed
+// to the read-egress screen. That is the join this test exists to prove: the
+// filter read egress uses for enumerations (Kinds: [KindRead]) matches what a
+// Console read writes, and the name it renders is the tool that wrote it.
+//
+// This is also the check #463/#517/#520 each wanted and did not have. All
+// three were records rendering wrongly, and all three survived a fixture built
+// as an audit.Record literal — a literal agrees with the renderer by
+// construction, because the same person wrote both.
+func TestConsole_ReadEgressCountsAConsoleRead(t *testing.T) {
+	trail := &recordingTrail{}
+	get(t, newTestHandler(realLaneDeps(trail), accounts.RoleAdmin), "/console/")
+
+	reads := trail.ofKind(audit.KindRead)
+	if len(reads) != 1 {
+		t.Fatalf("the fleet listing wrote %d read records, want exactly 1", len(reads))
+	}
+	real := reads[0]
+
+	// The vocabulary check, on the real record: read egress buckets a
+	// KindRead record as a control-plane enumeration, and names it through
+	// readTargetName.
+	if real.Kind != audit.KindRead {
+		t.Fatalf("record Kind = %q, want %q — read egress's enumeration filter selects on Kind",
+			real.Kind, audit.KindRead)
+	}
+	if got := readTargetOf(factsOfRecord(real)); got != "list_nodes" {
+		t.Errorf("the record renders as %q, want %q — a read record that names itself wrongly "+
+			"is what #463/#517/#520 each were", got, "list_nodes")
+	}
+
+	// And through the screen. The row is the real record, projected the way
+	// the store's query lane projects it.
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{rowOfRecord(real)}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/reads").Body.String()
+
+	if !strings.Contains(body, "list_nodes") {
+		t.Errorf("read egress does not name the Console's own read:\n%s", body)
+	}
+	if !strings.Contains(body, testAccountName(accounts.RoleAdmin)) {
+		t.Error("read egress does not attribute the Console's read to the human who made it")
+	}
+}
+
+// rowOfRecord projects a real audit.Record onto the read lane's row type, the
+// way internal/store/auditquery.go's SELECT does — minus Stdout/Stderr/
+// Truncated, which capability.AuditRow has no field for at all (#441).
+func rowOfRecord(r audit.Record) capability.AuditRow {
+	return capability.AuditRow{
+		ID:        r.ID,
+		Timestamp: r.Timestamp,
+		Kind:      r.Kind,
+		Principal: r.Principal,
+		Verified: capability.VerifiedIdentity{
+			AccountID:   r.Attribution.Verified.AccountID,
+			AccountName: r.Attribution.Verified.AccountName,
+			Role:        r.Attribution.Verified.Role,
+			TokenID:     r.Attribution.Verified.TokenID,
+			Method:      r.Attribution.Verified.Method,
+			Source:      r.Attribution.Verified.Source,
+		},
+		Asserted:      capability.Assertions{OnBehalfOf: r.Attribution.Asserted.OnBehalfOf},
+		Selector:      r.Selector,
+		JobID:         r.JobID,
+		NodeID:        r.NodeID,
+		ActionKind:    r.ActionKind,
+		OperationName: r.OperationName,
+		Args:          r.Args,
+		RawExecArgv:   r.RawExecArgv,
+		Outcome:       r.Outcome,
+		Reason:        r.Reason,
+		ApprovalID:    r.ApprovalID,
+		GrantID:       r.GrantID,
+	}
+}
+
+// realLaneDeps is a Console wired to a REAL *capability.Service over a REAL
+// *auditsink.Sink appending into trail.
+//
+// Everything on the audited path is production code. The registry is
+// registry.NewInMemory, which is the same implementation a dev fleet runs
+// against; the trail is the only fixture, and it is a fixture because the
+// production one is SQLite and this package may not import the store.
+func realLaneDeps(trail *recordingTrail) Deps {
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{
+		NodeID:            auditFixtureNode,
+		NodeLabels:        map[string]string{"role": "web"},
+		PolicyFingerprint: "sha256:aaaa",
+	}); err != nil {
+		panic("read_audit_test: seed registry: " + err.Error())
+	}
+
+	sink := auditsink.New(trail, auditsink.WithClock(func() time.Time { return testNow }))
+	svc := capability.New(reg,
+		capability.WithAuditSink(sink),
+		capability.WithQueries(emptyAuditQuery{}, emptyJobQuery{}),
+	)
+
+	d := renderableDeps()
+	d.Queries = svc
+	d.Approvals = &fakeApprovals{resolved: []approval.Request{{ID: auditFixtureApproval}}}
+	return d
+}
+
+// recordingTrail is an in-memory audit.Repository: it keeps what was appended
+// and can be made to refuse.
+//
+// The by-key reads are unused — the Console reads the trail through the
+// capability layer's query lane, never through Repository — so they answer
+// from the same slice rather than pretending to index it.
+type recordingTrail struct {
+	records   []audit.Record
+	appendErr error
+}
+
+const errTrailDown = constErr("the audit trail cannot be written")
+
+func (t *recordingTrail) Append(_ context.Context, r audit.Record) error {
+	if t.appendErr != nil {
+		return t.appendErr
+	}
+	t.records = append(t.records, r)
+	return nil
+}
+
+func (t *recordingTrail) List(context.Context) ([]audit.Record, error) { return t.records, nil }
+
+func (t *recordingTrail) ByJob(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+func (t *recordingTrail) ByNode(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+func (t *recordingTrail) ByAccount(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+func (t *recordingTrail) ByApproval(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+func (t *recordingTrail) ByGrant(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+func (t *recordingTrail) ByOnBehalfOf(context.Context, string) ([]audit.Record, error) {
+	return t.records, nil
+}
+
+// ofKind returns the appended records of one Kind.
+func (t *recordingTrail) ofKind(kind string) []audit.Record {
+	var out []audit.Record
+	for _, r := range t.records {
+		if r.Kind == kind {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// emptyAuditQuery and emptyJobQuery satisfy capability.WithQueries with an
+// empty trail and no Jobs.
+//
+// They are here so a REAL Service can be constructed: WithQueries is what the
+// trail/Job half of the read lane needs, and New refuses a Service that has
+// it without a real AuditSink. Their answers are empty because this file is
+// about the RECORD a screen writes, not about the rows it renders — the
+// screens' own tests cover those against fakeQueries.
+type emptyAuditQuery struct{}
+
+func (emptyAuditQuery) QueryAudit(context.Context, capability.AuditFilter, capability.PageRequest) (capability.AuditPage, error) {
+	return capability.AuditPage{}, nil
+}
+
+func (emptyAuditQuery) AuditCounts(context.Context, capability.AuditFilter, time.Duration) ([]capability.PrincipalBucket, error) {
+	return nil, nil
+}
+
+func (emptyAuditQuery) AuditReach(context.Context, capability.AuditFilter) (capability.Reach, error) {
+	return capability.Reach{}, nil
+}
+
+type emptyJobQuery struct{}
+
+// QueryJobs answers with the one fixture Job, so the Job-detail route renders
+// rather than 404ing. It is the only row this file needs: what is being
+// asserted is the RECORD the screen wrote, not the rows it drew.
+func (emptyJobQuery) QueryJobs(_ context.Context, f capability.JobFilter, _ capability.PageRequest) (capability.JobPage, error) {
+	if f.JobID != "" && f.JobID != auditFixtureJob {
+		return capability.JobPage{}, nil
+	}
+	return capability.JobPage{Jobs: []capability.JobSummary{{
+		JobID:     auditFixtureJob,
+		CreatedAt: testNow,
+		State:     jobs.JobStateComplete,
+	}}}, nil
+}
+
+func (emptyJobQuery) QueryTasks(context.Context, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {
+	return capability.TaskPage{}, nil
+}
+
+// TestConsole_UnauditableReadIsDistinguishableFromAFailedOne pins the
+// distinction screen.go's three refusals exist to draw. The two errors send an
+// operator to different components, and one of them additionally says nothing
+// was disclosed — which a generic 500 cannot.
+func TestConsole_UnauditableReadIsDistinguishableFromAFailedOne(t *testing.T) {
+	unauditable := errors.Join(capability.ErrReadUnaudited, errTrailDown)
+
+	var got, other strings.Builder
+	readFailed(&stringWriter{&got}, unauditable, "the fleet")
+	readFailed(&stringWriter{&other}, errTrailDown, "the fleet")
+
+	if got.String() == other.String() {
+		t.Fatal("an unauditable read and a failed read render identically — the operator " +
+			"cannot tell an audit-trail outage from a registry one")
+	}
+	if !strings.Contains(got.String(), "audit trail") {
+		t.Errorf("the unauditable refusal does not name the audit trail:\n%s", got.String())
+	}
+	if strings.Contains(other.String(), "audit trail") {
+		t.Errorf("an ordinary read failure blames the audit trail:\n%s", other.String())
+	}
+}
+
+// stringWriter adapts a strings.Builder to http.ResponseWriter so the two
+// refusal helpers can be compared as text without an HTTP round trip.
+type stringWriter struct{ b *strings.Builder }
+
+func (w *stringWriter) Header() http.Header         { return http.Header{} }
+func (w *stringWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
+func (w *stringWriter) WriteHeader(int)             {}

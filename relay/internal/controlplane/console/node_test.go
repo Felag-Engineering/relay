@@ -475,14 +475,15 @@ func TestParsePins_CapsAsItReadsRatherThanAfterwards(t *testing.T) {
 // asks the registry for the fleet.
 func TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet(t *testing.T) {
 	lists := 0
-	d := renderableDeps()
-	d.Fleet = countingFleet{
-		fakeFleet: fakeFleet{nodes: []registry.Node{
-			{NodeID: "n1", Connected: true}, {NodeID: "n2", Connected: true},
-			{NodeID: "n-unasked", Connected: true},
-		}},
-		lists: &lists,
+	nodes := []registry.Node{
+		{NodeID: "n1", Connected: true}, {NodeID: "n2", Connected: true},
+		{NodeID: "n-unasked", Connected: true},
 	}
+	d := renderableDeps()
+	d.Fleet = countingFleet{fakeFleet: fakeFleet{nodes: nodes}, lists: &lists}
+	// Seeded explicitly so mirrorFleetIntoLane does not enumerate on the
+	// fixture's behalf and spend the very call this test counts.
+	d.Queries = &fakeQueries{nodes: nodes}
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
 
