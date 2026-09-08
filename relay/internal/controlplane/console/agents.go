@@ -272,8 +272,8 @@ func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) strin
 		clause = "Showing the most recent " + itoa(pageSize) + " calls. There are older calls."
 	}
 	if foldedRows > 0 {
-		collapse := plural(foldedCalls, "call", "calls") + " on this page are collapsed into " +
-			plural(foldedRows, "row", "rows") + ", each saying how many calls it stands for. " +
+		collapse := countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
+			countOf(foldedRows, "row", "rows") + ", each saying how many calls it stands for. " +
 			"The rail still counts every call."
 		if clause == "" {
 			clause = collapse
@@ -657,15 +657,15 @@ func railNote(listed, dropped int, scrolled bool) string {
 		return "This page holds no calls."
 	case listed == 0 && !scrolled:
 		return "No Account has called in the last 15 minutes. " +
-			plural(dropped, "Account", "Accounts") +
+			countOf(dropped, "Account", "Accounts") +
 			" called earlier — their calls are below."
 	case listed == 0 && scrolled:
 		return "No Account has called in the last 15 minutes, which is expected on a page " +
 			"reached by following Older — these are historical calls. " +
-			plural(dropped, "Account", "Accounts") +
+			countOf(dropped, "Account", "Accounts") +
 			" called on this page; their calls are below."
 	default:
-		return plural(dropped, "Account", "Accounts") +
+		return countOf(dropped, "Account", "Accounts") +
 			" called on this page but not in the last 15 minutes, so the rail does not " +
 			"list them — their calls are below."
 	}

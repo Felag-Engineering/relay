@@ -61,8 +61,14 @@ var screenFuncs = template.FuncMap{
 	// join renders a string slice for display.
 	"join": func(sep string, xs []string) string { return strings.Join(xs, sep) },
 
-	// plural picks a suffix. Fleet screens count things constantly and "1
-	// Nodes" reads as a bug in the product.
+	// plural picks a suffix and NOTHING ELSE — the number is supplied by the
+	// template right beside it ({{.Count}} {{plural .Count "Node" "Nodes"}}).
+	// Fleet screens count things constantly and "1 Nodes" reads as a bug in
+	// the product.
+	//
+	// Its Go-side counterpart is countOf (fleet.go), which returns the number
+	// AND the word. See countOf's comment for what the two of them sharing a
+	// name once cost (#550).
 	"plural": func(n int, one, many string) string {
 		if n == 1 {
 			return one
