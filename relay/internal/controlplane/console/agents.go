@@ -86,6 +86,11 @@ type agentCall struct {
 	// already collapses these the same way.
 	RepeatDeny bool
 
+	// Reason is the Relay-AUTHORED sentence an approval-family record
+	// carries. It is set for the approval family and for nothing else —
+	// see agentCallFrom.
+	Reason string
+
 	ReadClass bool
 }
 
@@ -336,6 +341,15 @@ func agentCallFrom(rec audit.Record) agentCall {
 			PolicyHref:    "/console/nodes/" + rec.NodeID,
 		}
 	}
+	// Reason is rendered ONLY for the approval family: every other kind's
+	// Args/Selector/NodeID/JobID already carries its content, and
+	// denyText/denyExplanation (vocab.go) already falls back to rec.Reason
+	// when the daemon's stderr is empty — an unconditional render here would
+	// print the same sentence twice on a denied_by_policy row. The approval
+	// family is exactly the set of rows that render nothing else at all.
+	if kindOf(f.Kind) == rowApproval {
+		c.Reason = f.Reason
+	}
 	// A record with no per-Node outcome renders the zero value as
 	// "unspecified" — which reads as "we don't know" for an event whose
 	// disposition is perfectly well known. Name what actually happened.
@@ -358,7 +372,16 @@ func agentCallFrom(rec audit.Record) agentCall {
 	case audit.KindApprovalPendingObserved:
 		c.Outcome = "already parked"
 	case audit.KindApprovalDecided:
+		// Only RevokeGrant writes a decided record carrying a GrantID
+		// (capability/approval_grant.go). DecideApproval never sets one, so
+		// this is a STRUCTURAL discriminator, not a guess. A revocation is
+		// not a Decision at all in the glossary's sense — nobody answered a
+		// parked Job — so "decided" over it is a category error the record
+		// itself disproves.
 		c.Outcome = "decided"
+		if rec.GrantID != "" {
+			c.Outcome = "revoked"
+		}
 	case audit.KindJobCancel:
 		// A cancel has no per-Node verdict either: RecordCancel records who
 		// asked and which Job, and the per-Task truth is on the Job's own
@@ -441,6 +464,30 @@ func agentCallFrom(rec audit.Record) agentCall {
 // It takes trailFacts rather than an audit.Record because every field it reads
 // is on the shared projection, and its caller has already built one — a second
 // projection per row is a second place the two could disagree.
+//
+// # A decision row cannot be named "approve_request", and this is not an oversight
+//
+// audit.KindApprovalDecided covers THREE acts, not one: the MCP tool
+// `approve_request` (mcp/tools_approval.go, ChannelInBand), the Control API's
+// `POST /api/v1/approvals/{id}/decision` (api/approvals.go, ChannelOutOfBand),
+// and `POST /api/v1/approval-grants/{id}/revoke` (capability/approval_grant.go).
+// ADR-0027's whole point is that the Control API decision is the primary,
+// stronger channel and the MCP tool is ADR-0029's weaker in-band shim — yet
+// the first two write the IDENTICAL AuditKindApprovalDecided entry through the
+// same capability.Service.DecideApproval, with no structured field
+// distinguishing them. The Channel that tells them apart lives only inside the
+// prose Reason ("… over out-of-band …"); it is on neither capability.AuditEntry
+// nor audit.Record nor the audit table. Attribution.Verified.Method is the
+// credential type and .Source is a peer address — neither names the surface.
+//
+// So returning "approve_request" here — for either DecideApproval channel —
+// would label a Control API decision as an MCP tool that was never called,
+// the same class of error #463/#517 already fixed elsewhere on this screen,
+// committed fresh in this one. GrantID IS a reliable, structural discriminator
+// (only RevokeGrant sets it), which is why that arm below returns a different
+// string and this one does not. A decision row therefore names the ACT —
+// "approval decision", CONTEXT.md's Decision — and never the MCP tool name.
+// Do not "fix" this to `approve_request`.
 func toolName(f trailFacts) string {
 	if f.Kind == audit.KindRead {
 		return readTargetOf(f)
@@ -455,6 +502,13 @@ func toolName(f trailFacts) string {
 	case audit.KindApprovalRequested, audit.KindApprovalPendingObserved:
 		return "parked for approval"
 	case audit.KindApprovalDecided:
+		// GrantID is set ONLY by RevokeGrant (capability/approval_grant.go) —
+		// a structural discriminator, not a guess. See the doc comment above
+		// for why the other branch stays "approval decision" and must never
+		// become "approve_request".
+		if f.GrantID != "" {
+			return "revoke approval grant"
+		}
 		return "approval decision"
 	case audit.KindJobCancel:
 		return "cancel_job"
@@ -532,6 +586,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
         </div>
         {{with .Deny}}{{template "deny-block" .}}{{end}}
         {{if .RepeatDeny}}<div class="repeatdeny">Same Operation and rule as above.</div>{{end}}
+        {{with .Reason}}<div class="evreason">{{.}}</div>{{end}}
         {{if .ReadClass}}<div class="evnote">The call is audited; the result is not retained.</div>{{end}}
       </div>
     </article>
