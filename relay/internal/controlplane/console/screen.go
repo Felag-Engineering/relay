@@ -13,11 +13,16 @@ package console
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // screenFuncs are the template helpers every screen may use.
@@ -134,4 +139,143 @@ func unreadable(w http.ResponseWriter, what string) {
 			"This is a runtime failure of a seam that IS wired — not a configuration problem, "+
 			"and not an empty result.",
 		http.StatusInternalServerError)
+}
+
+// unaudited renders a screen REFUSED because the read it needed could not be
+// written to the audit trail (ADR-0025 decision 4, capability's
+// ErrReadUnaudited).
+//
+// A third sentence beside unavailable's and unreadable's, for the same reason
+// there are two of those: the three send an operator to three different
+// places. A wiring fault is a composition-root problem; a query failure is the
+// store this Relay is running on; and this one is the AUDIT TRAIL, which is
+// the component an operator is least likely to guess at from a generic 500 and
+// the one whose failure is most worth knowing about on its own.
+//
+// It also says the thing the operator most needs to hear, which no generic
+// error page can: nothing was disclosed. The refusal happened BEFORE the read,
+// because the record is written first (capability's read lane) — so this page
+// is the whole event, not the visible half of a read that already happened.
+func unaudited(w http.ResponseWriter, what string) {
+	http.Error(w,
+		"the Console did not serve this screen: "+what+" could not be recorded on the audit trail, "+
+			"and a read this Relay cannot audit is refused rather than served unrecorded (ADR-0025). "+
+			"Nothing was read and nothing was disclosed. The audit trail is the component to check, "+
+			"not the one you were trying to look at.",
+		http.StatusInternalServerError)
+}
+
+// readFailed renders whichever of the two runtime refusals err actually is.
+//
+// Every screen on the capability read lane calls this rather than unreadable
+// directly, so "an unauditable read says so" is one decision in one place
+// instead of a sentence each screen has to remember. what names the read in
+// the operator's terms and is used by both branches.
+func readFailed(w http.ResponseWriter, err error, what string) {
+	if errors.Is(err, capability.ErrReadUnaudited) {
+		unaudited(w, what)
+		return
+	}
+	unreadable(w, what)
+}
+
+// auditLatch wraps a [QueryReader] and remembers whether ANY read through it
+// was refused because it could not be audited (capability.ErrReadUnaudited,
+// ADR-0025 decision 4).
+//
+// # Why a latch and not an error return
+//
+// The rule is one rule with no per-screen exception: a Console page whose read
+// cannot be audited refuses to render. Several screens cannot express that
+// through their return values, and deliberately so — read egress runs nine
+// queries and marks the sections it could not fill, the approval object
+// renders "the trail could not be read" beside a card it CAN render. That
+// graceful degradation is right for a store that failed and wrong for a trail
+// that cannot record: the first is a partial page, the second is a page the
+// Relay was not willing to serve at all.
+//
+// Threading a distinguishable error out of every one of those builders would
+// restructure four screens to state one property. The latch asks the question
+// at the seam every one of those reads already goes through, which is both
+// smaller and stricter: a NEW read added to any of those screens is latched
+// without its author doing anything.
+//
+// The latch never changes what a read returns. It observes and re-raises
+// nothing — the refusal already happened, in the capability layer, BEFORE the
+// data was read, which is why a latched page can honestly say nothing was
+// disclosed.
+type auditLatch struct {
+	QueryReader
+	unaudited bool
+}
+
+// latch records err and returns it unchanged, so a call site reads as a
+// pass-through.
+func (l *auditLatch) latch(err error) error {
+	if errors.Is(err, capability.ErrReadUnaudited) {
+		l.unaudited = true
+	}
+	return err
+}
+
+func (l *auditLatch) ListNodes(ctx context.Context, p capability.Principal) ([]registry.Node, error) {
+	ns, err := l.QueryReader.ListNodes(ctx, p)
+	return ns, l.latch(err)
+}
+
+func (l *auditLatch) DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error) {
+	d, err := l.QueryReader.DescribeNode(ctx, p, nodeID)
+	return d, l.latch(err)
+}
+
+func (l *auditLatch) QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error) {
+	res, err := l.QueryReader.QueryAudit(ctx, p, f, page)
+	return res, l.latch(err)
+}
+
+func (l *auditLatch) AuditCounts(ctx context.Context, p capability.Principal, f capability.AuditFilter, bucket time.Duration) ([]capability.PrincipalBucket, error) {
+	res, err := l.QueryReader.AuditCounts(ctx, p, f, bucket)
+	return res, l.latch(err)
+}
+
+func (l *auditLatch) AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error) {
+	res, err := l.QueryReader.AuditReach(ctx, p, f)
+	return res, l.latch(err)
+}
+
+func (l *auditLatch) QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
+	res, err := l.QueryReader.QueryJobs(ctx, p, f, page)
+	return res, l.latch(err)
+}
+
+func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error) {
+	res, err := l.QueryReader.QueryTasks(ctx, p, f, page)
+	return res, l.latch(err)
+}
+
+// latched returns d with its read lane wrapped for one request, and the latch
+// to consult before rendering.
+//
+// A nil lane is left nil: an unwired seam must keep reading as unwired
+// (Deps.Queries's contract, and several screens branch on it), and wrapping
+// nothing in a non-nil wrapper would turn "not configured" into "configured
+// and empty" — the exact lie seams.go says an empty page must never tell.
+func latched(d Deps) (Deps, *auditLatch) {
+	if d.Queries == nil {
+		return d, &auditLatch{}
+	}
+	l := &auditLatch{QueryReader: d.Queries}
+	d.Queries = l
+	return d, l
+}
+
+// refusedUnaudited renders the refusal and reports true when any read on this
+// page could not be audited. Every screen on the read lane calls it before it
+// renders — that call is the "no per-screen exception" part of the rule.
+func refusedUnaudited(w http.ResponseWriter, l *auditLatch, what string) bool {
+	if !l.unaudited {
+		return false
+	}
+	unaudited(w, what)
+	return true
 }

@@ -632,6 +632,10 @@ func handleActivity(d Deps) http.HandlerFunc {
 			unavailable(w, "the audit and Job query lane")
 			return
 		}
+		// Every read this page and its CSV export make goes through the
+		// latch: the "a page whose read cannot be audited is not served" rule
+		// is one call rather than a branch per read (screen.go).
+		d, lane := latched(d)
 
 		f, note := parseActivityFilter(r, d.now())
 
@@ -647,7 +651,7 @@ func handleActivity(d Deps) http.HandlerFunc {
 			// The export always starts from page one of both lanes: a file
 			// an auditor keeps must not silently begin where some link
 			// happened to leave off.
-			writeActivityCSV(r.Context(), w, d, caller, f, jobLane, activityLaneKinds(f))
+			writeActivityCSV(r.Context(), w, lane, d, caller, f, jobLane, activityLaneKinds(f))
 			return
 		}
 
@@ -680,7 +684,10 @@ func handleActivity(d Deps) http.HandlerFunc {
 			capability.PageRequest{Limit: jobPageSize, Cursor: f.Job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: f.Audit.Cursor})
 		if err != nil {
-			unreadable(w, "the audit and Job query lane")
+			readFailed(w, err, "the audit and Job query lane")
+			return
+		}
+		if refusedUnaudited(w, lane, "the audit and Job query lane") {
 			return
 		}
 		v.Rows = rows
@@ -1094,7 +1101,7 @@ var activityCSVHeader = []string{
 // involved — it mutates nothing. It does append two read records per page it
 // walks, exactly as rendering the screen does; the trail records the export as
 // the reads it actually is.
-func writeActivityCSV(ctx context.Context, w http.ResponseWriter, d Deps, caller capability.Principal,
+func writeActivityCSV(ctx context.Context, w http.ResponseWriter, lane *auditLatch, d Deps, caller capability.Principal,
 	f activityFilter, jobLane bool, trailKinds []string,
 ) {
 	var rows []activityRow
@@ -1123,7 +1130,7 @@ func writeActivityCSV(ctx context.Context, w http.ResponseWriter, d Deps, caller
 			capability.PageRequest{Limit: jobPageSize, Cursor: job.Cursor},
 			capability.PageRequest{Limit: auditPageSize, Cursor: aud.Cursor})
 		if err != nil {
-			unreadable(w, "the audit and Job query lane")
+			readFailed(w, err, "the audit and Job query lane")
 			return
 		}
 		rows = append(rows, page...)
@@ -1133,6 +1140,12 @@ func writeActivityCSV(ctx context.Context, w http.ResponseWriter, d Deps, caller
 		if runTrail {
 			aud = lanePos{Cursor: auditNext, Done: auditNext == ""}
 		}
+	}
+
+	// The export is checked before a single byte of it is written: a file an
+	// auditor keeps must never be half a download plus an error.
+	if refusedUnaudited(w, lane, "the audit and Job query lane") {
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")

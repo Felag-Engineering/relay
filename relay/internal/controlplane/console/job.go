@@ -305,6 +305,7 @@ func handleJob(d Deps) http.HandlerFunc {
 			unavailable(w, "the Job and Task query lane")
 			return
 		}
+		d, lane := latched(d)
 		// Refused before it reaches the read lane rather than after: the value
 		// is caller-controlled and the lane records it in the append-only
 		// trail as the read's own selector.
@@ -319,7 +320,7 @@ func handleJob(d Deps) http.HandlerFunc {
 		found, err := d.Queries.QueryJobs(ctx, caller,
 			capability.JobFilter{JobID: jobID}, capability.PageRequest{Limit: 1})
 		if err != nil {
-			unreadable(w, "this Job's record")
+			readFailed(w, err, "this Job's record")
 			return
 		}
 		if len(found.Jobs) == 0 {
@@ -327,7 +328,11 @@ func handleJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		renderScreen(w, pg, jobTmpl, buildJobView(ctx, d, r, caller, found.Jobs[0]))
+		v := buildJobView(ctx, d, r, caller, found.Jobs[0])
+		if refusedUnaudited(w, lane, "this Job's record") {
+			return
+		}
+		renderScreen(w, pg, jobTmpl, v)
 	}
 }
 

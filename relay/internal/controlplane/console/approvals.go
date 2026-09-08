@@ -262,6 +262,10 @@ func handleApprovals(d Deps) http.HandlerFunc {
 			renderScreen(w, p, approvalsTmpl, approvalsView{})
 			return
 		}
+		// The queue's trail reads (the Scope lines a Grant row carries) go
+		// through the latch, so a queue whose reads cannot be audited is not
+		// served — one rule, no per-screen exception (screen.go).
+		d, lane := latched(d)
 		ctx := r.Context()
 		reqs, err := d.Approvals.PendingApprovals(ctx)
 		if err != nil {
@@ -276,6 +280,9 @@ func handleApprovals(d Deps) http.HandlerFunc {
 		rows := buildApprovalRows(reqs, grants, caller, d.now())
 		v := buildApprovalsView(rows, parseApprovalFilter(r.URL.Query()))
 		v.GrantsUnreadable = grantsErr != nil
+		if refusedUnaudited(w, lane, "the approval queue's audit trail") {
+			return
+		}
 		renderScreen(w, p, approvalsTmpl, v)
 	}
 }
@@ -1009,7 +1016,17 @@ func handleApproval(d Deps) http.HandlerFunc {
 			renderScreen(w, p, approvalTmpl, approvalView{ID: id})
 			return
 		}
-		renderScreen(w, p, approvalTmpl, buildApprovalView(r.Context(), d, caller, req, d.now()))
+		// This card's trail reads — the park record, the anti-fatigue diff,
+		// and a Grant's released Jobs — each flatten their failure into a
+		// display flag, which is right for a store that failed and wrong for
+		// a trail that cannot record. The latch keeps the second case a
+		// refusal without restructuring the builders (screen.go).
+		d, lane := latched(d)
+		v := buildApprovalView(r.Context(), d, caller, req, d.now())
+		if refusedUnaudited(w, lane, "this approval's audit trail") {
+			return
+		}
+		renderScreen(w, p, approvalTmpl, v)
 	}
 }
 

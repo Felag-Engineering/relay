@@ -454,8 +454,12 @@ func handleReads(d Deps) http.HandlerFunc {
 			unavailable(w, "the audit and Job query lane")
 			return
 		}
+		d, lane := latched(d)
 
 		v, ok := buildReadsView(r.Context(), d, caller, parseReadsFilter(r.URL.Query(), d.now()))
+		if refusedUnaudited(w, lane, "the read-egress figures") {
+			return
+		}
 		if !ok {
 			unreadable(w, "the read-egress figures")
 			return

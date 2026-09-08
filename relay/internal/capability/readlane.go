@@ -8,9 +8,11 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// readlane.go is the five read-lane methods on *Service (#441): the
-// capability layer's seam over the audit trail's and Jobs/Tasks' filtered,
-// paginated queries.
+// readlane.go is the TRAIL AND JOB half of the read lane on *Service (#441):
+// the capability layer's seam over the audit trail's and Jobs/Tasks'
+// filtered, paginated queries. Its registry half — the fleet enumeration and
+// the single-Node read — is readlane_registry.go (#450); both obey the order
+// below without exception.
 //
 // Every method follows the same order: validate the filter -> record the
 // read, FAIL CLOSED -> delegate to the seam. Recording first mirrors
@@ -177,9 +179,16 @@ func (s *Service) QueryTasks(ctx context.Context, p Principal, f TaskFilter, pag
 // mirroring mcp/readaudit.go's auditRead). Called BEFORE the seam runs, on
 // the same precedent — readlane_test.go's spy proves the seam is never
 // reached when this write fails.
+//
+// The returned error wraps BOTH ErrReadUnaudited (readlane_registry.go) and
+// the sink's own error. The sentinel is what lets a surface distinguish "this
+// Relay could not record your read, so it did not serve it" from "the thing
+// you asked to read could not be read" — two failures that send an operator
+// to opposite components, and one of which is the audit trail itself. The
+// underlying error is still wrapped, so a log or a test can say why.
 func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error {
 	if err := s.audit.RecordRead(ctx, p, tool, selector, nodeID, jobID); err != nil {
-		return fmt.Errorf("capability: record read audit for %s: %w", tool, err)
+		return fmt.Errorf("%w: recording %s: %w", ErrReadUnaudited, tool, err)
 	}
 	return nil
 }
