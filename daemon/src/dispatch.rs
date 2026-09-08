@@ -713,7 +713,7 @@ pub(crate) fn overloaded_result(task_id: String) -> TaskResult {
 mod tests {
     use std::fs;
     use std::io::Write;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::OpenOptionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -765,7 +765,14 @@ mod tests {
         }
     }
 
-    /// Temp file with explicit mode (set_permissions, not umask-masked OpenOptions::mode).
+    /// Temp file created at a **requested** mode of 0600 (a ceiling the umask may
+    /// tighten), not a forced one.
+    ///
+    /// These fixtures are inputs to `file.read` dispatch tests; nothing here asserts an
+    /// exact mode, so there is no reason to chmod past the operator's umask — and doing
+    /// it in a shape copied into production code is how the pattern spread in the first
+    /// place (ADR-0036). A tighter umask simply yields a tighter fixture, which every
+    /// test using one still reads as its own owner.
     struct TempFile(PathBuf);
 
     impl TempFile {
@@ -780,12 +787,13 @@ mod tests {
                 std::process::id(),
                 nanos
             ));
-            let mut f = fs::File::create(&path).expect("create temp file");
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&path)
+                .expect("create temp file");
             f.write_all(content).expect("write temp file");
-            // Explicit set_permissions: OpenOptions::mode is umask-masked;
-            // this call is umask-proof (matches policy.rs pattern).
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .expect("set temp file permissions");
             TempFile(path)
         }
         fn path_str(&self) -> String {

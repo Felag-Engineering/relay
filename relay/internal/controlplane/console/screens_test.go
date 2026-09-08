@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -2630,17 +2631,126 @@ func sinkReadRecords(t *testing.T, tools ...string) []audit.Record {
 func sinkReadsInto(t *testing.T, repo *captureRepo, nodeID string, tools ...string) {
 	t.Helper()
 	sink := auditsink.New(repo, auditsink.WithClock(func() time.Time { return testNow }))
-	p := capability.Principal{
-		AccountID: "acct-gleipnir",
-		Account:   "gleipnir-prod",
-		Role:      "operator",
-		Kind:      "machine",
-	}
+	p := agentFixturePrincipal()
 	for _, tool := range tools {
 		if err := sink.RecordRead(context.Background(), p, tool, "", nodeID, "job-9d41"); err != nil {
 			t.Fatalf("auditsink.RecordRead(%q): %v", tool, err)
 		}
 	}
+}
+
+// slicesContain is strings-only membership, spelled out rather than pulled in
+// so this file keeps the import set it has.
+func slicesContain(hay []string, needle string) bool {
+	for _, s := range hay {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// agentFixturePrincipal is the machine Account every sink-written fixture in
+// this file attributes its records to. One value, because a fixture that varies
+// the caller varies what the assertions read for no reason — and because the
+// Accounts rail groups by principal, so two spellings would silently split one
+// Account's calls across two rail entries.
+func agentFixturePrincipal() capability.Principal {
+	return capability.Principal{
+		AccountID: "acct-gleipnir",
+		Account:   "gleipnir-prod",
+		Role:      "operator",
+		Kind:      "machine",
+	}
+}
+
+// sinkCancelRecords builds job_cancel records THROUGH auditsink.RecordCancel —
+// the one function in the product that writes one — for the same reason
+// sinkReadRecords goes through RecordRead: the SHAPE is the whole exercise.
+//
+// A cancel record is unlike every other record this screen renders. It carries
+// a Principal and a JobID and NOTHING else: no Selector, no ActionKind, no
+// OperationName, no argv, no Outcome (auditsink.go, mirroring RecordFreeze's
+// Relay-wide shape). Every one of those absences is what the renderer has to
+// cope with, so a hand-written literal that happened to set an ActionKind
+// would prove the screen renders a record the product does not write — which
+// is precisely how #463, #517 and #520 each survived a suite that looked like
+// it covered them.
+func sinkCancelRecords(t *testing.T, jobIDs ...string) []audit.Record {
+	t.Helper()
+	repo := &captureRepo{}
+	sink := auditsink.New(repo, auditsink.WithClock(func() time.Time { return testNow }))
+	for _, jobID := range jobIDs {
+		if err := sink.RecordCancel(context.Background(), agentFixturePrincipal(), jobID); err != nil {
+			t.Fatalf("auditsink.RecordCancel(%q): %v", jobID, err)
+		}
+	}
+	if len(repo.recs) != len(jobIDs) {
+		t.Fatalf("the sink wrote %d records for %d cancels", len(repo.recs), len(jobIDs))
+	}
+	return repo.recs
+}
+
+// sinkPlanRecords builds plan records through the real writer: auditsink's
+// Record with capability.AuditKindPlan, which is what the capability layer's
+// Plan path hands it (capability/plan.go) and the only source of a KindPlan
+// record in the product.
+//
+// Both shapes a Plan comes in are here, because they exercise different
+// branches of toolName: plan mode is `plan: true` on run_operation OR raw_exec
+// (spec 03), so one record carries an OperationName and the other carries
+// argv. A fixture with only the first would let a raw_exec Plan render as the
+// bare word "raw_exec"'s alternative — or as the audit kind — with nothing
+// failing.
+//
+// The entry is built the way plan.go builds it: Principal, Selector and Action
+// set, and JobID/Results/Reason deliberately empty, because a Plan creates no
+// Job and no Task (ADR-0011).
+func sinkPlanRecords(t *testing.T) []audit.Record {
+	t.Helper()
+	sel, err := capability.ParseSelector("node:role=web")
+	if err != nil {
+		t.Fatalf("capability.ParseSelector: %v", err)
+	}
+	repo := &captureRepo{}
+	sink := auditsink.New(repo, auditsink.WithClock(func() time.Time { return testNow }))
+	entries := []capability.AuditEntry{
+		{
+			Kind:      capability.AuditKindPlan,
+			Principal: agentFixturePrincipal(),
+			Selector:  sel,
+			Action: jobs.Action{
+				Kind:          jobs.ActionOperation,
+				OperationName: "service.restart",
+				OperationArgs: map[string]string{"unit": "nginx"},
+				RiskClass:     jobs.RiskClassMutate,
+			},
+		},
+		{
+			Kind:      capability.AuditKindPlan,
+			Principal: agentFixturePrincipal(),
+			Selector:  sel,
+			Action: jobs.Action{
+				Kind:        jobs.ActionRawExec,
+				RawExecArgv: []string{"systemctl", "restart", "nginx"},
+				RiskClass:   jobs.RiskClassMutate,
+			},
+		},
+	}
+	for i, e := range entries {
+		if err := sink.Record(context.Background(), e); err != nil {
+			t.Fatalf("auditsink.Record(plan %d): %v", i, err)
+		}
+	}
+	if len(repo.recs) != len(entries) {
+		t.Fatalf("the sink wrote %d records for %d Plans", len(repo.recs), len(entries))
+	}
+	for _, rec := range repo.recs {
+		if rec.Kind != audit.KindPlan {
+			t.Fatalf("the sink wrote kind %q for a Plan entry", rec.Kind)
+		}
+	}
+	return repo.recs
 }
 
 // TestAgents_ReadsRenderAsReadsNamingTheirTool.
@@ -2767,206 +2877,118 @@ func TestAgents_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
 	}
 }
 
-// sinkApprovalDecisionRecords builds one Decision record and one grant-
-// revocation record THROUGH the real sink — auditsink.Sink.Record, the one
-// function the product calls to write AuditKindApprovalDecided — rather than
-// two hand-built audit.Record literals. Both capability.Service.DecideApproval
-// (reached from the MCP tool AND the Control API's decision route) and
-// Service.RevokeGrant write this same Kind through this same method; going
-// through it is what pins the shape the sink actually produces rather than a
-// shape this test imagines, which is the #463 lesson sinkReadRecords records
-// above.
+// TestAgents_CancelJobRendersAsACallNamingItsTool.
 //
-// Reason prose is deliberately free of & < > " ' so the assertions below can
-// compare rendered HTML against rec.Reason directly, without re-implementing
-// html/template's escaping.
+// Spec 03's first acceptance criterion is that every one of the eight tools
+// renders with a request line and a result line. `cancel_job` rendered on no
+// line at all: the record is written (capability's CancelJob →
+// auditsink.RecordCancel) and Activity renders it, and this screen alone
+// dropped it, because isAgentCall admitted four ROW FAMILIES and kindOf files
+// job_cancel under `other` (#537).
 //
-// The two records are decided by DIFFERENT Accounts on purpose — a decider
-// and a separate operator who later closes the grant's window are both
-// realistic, and doing it this way gives agentRowContaining a discriminator
-// (the Principal's own rendered name) that survives every mutation in #538's
-// matrix, including the ones that erase Reason or the tool name. Locating the
-// row by the very text a mutation deletes would make the helper fail closed
-// for the wrong reason instead of the one under test.
-func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Record) {
-	t.Helper()
-	repo := &captureRepo{}
-	// WithLogger keeps Record's "audit decision" log line out of test output;
-	// RecordRead (sinkReadsInto, above) does not log, which is why that helper
-	// needs no such option.
-	sink := auditsink.New(repo,
-		auditsink.WithClock(func() time.Time { return testNow }),
-		auditsink.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
-	decider := capability.Principal{
-		AccountID: "acct-admin", Account: "alice", Role: "admin", Kind: "human",
-	}
-	revoker := capability.Principal{
-		AccountID: "acct-ops", Account: "ops-console", Role: "admin", Kind: "machine",
-	}
-	ctx := context.Background()
-	if err := sink.Record(ctx, capability.AuditEntry{
-		Kind:       capability.AuditKindApprovalDecided,
-		Principal:  decider,
-		ApprovalID: "appr-1",
-		Reason: "approval request appr-1 approved by alice over out-of-band " +
-			"(1 of 1, request now approved): restart the web fleet",
-	}); err != nil {
-		t.Fatalf("sink.Record(decision): %v", err)
-	}
-	if err := sink.Record(ctx, capability.AuditEntry{
-		Kind:       capability.AuditKindApprovalDecided,
-		Principal:  revoker,
-		ApprovalID: "appr-2",
-		GrantID:    "grant-1",
-		Reason:     "approval grant grant-1 revoked by ops-console: closing the maintenance window early",
-	}); err != nil {
-		t.Fatalf("sink.Record(revocation): %v", err)
-	}
-	if len(repo.recs) != 2 {
-		t.Fatalf("the sink wrote %d records for 2 entries, want 2", len(repo.recs))
-	}
-	decision, revocation = repo.recs[0], repo.recs[1]
+// Two properties, and the second is why admitting the kind is only half:
+//
+//  1. The row appears at all.
+//  2. It names the TOOL. A cancel record carries no Action of any kind, so it
+//     falls to toolName's last resort and rendered `job_cancel` — audit's
+//     internal spelling of the record, which is not a thing an operator can
+//     call. The tool is `cancel_job`, the same vocabulary the read rows get
+//     from readTargetOf and the dispatch rows get from run_operation.
+//
+// The Job link is asserted with them, because it is load-bearing rather than
+// decorative: the outcome chip below deliberately declines to claim the Job's
+// fate, on the grounds that what each Task did is one click away. If the link
+// were absent, the chip would owe the operator a claim it cannot make.
+func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
+	recs := sinkCancelRecords(t, "job-9d41")
 
-	// Pin the shape the product actually writes rather than one this test
-	// imagines.
-	for _, rec := range []audit.Record{decision, revocation} {
-		if rec.Kind != audit.KindApprovalDecided {
-			t.Fatalf("the sink wrote Kind %q, want %q", rec.Kind, audit.KindApprovalDecided)
-		}
-		if rec.Selector != "" || rec.OperationName != "" || rec.JobID != "" || rec.NodeID != "" {
-			t.Fatalf("a decision record carries Selector/OperationName/JobID/NodeID it should not: %+v", rec)
-		}
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != len(recs) {
+		t.Fatalf("the stream has %d rows for %d cancel records — cancel_job is one of the "+
+			"eight tools spec 03 requires this screen to render, and the trail has the record",
+			len(calls), len(recs))
 	}
-	if decision.GrantID != "" {
-		t.Fatalf("the decision record carries a GrantID (%q) it should not", decision.GrantID)
+	if got := calls[0].Tool; got != "cancel_job" {
+		t.Errorf("a cancel renders as %q; the tool called was cancel_job, and %q is audit's "+
+			"internal kind rather than anything on the tool surface", got, audit.KindJobCancel)
 	}
-	if revocation.GrantID == "" {
-		t.Fatal("the revocation record carries no GrantID — RevokeGrant is the only writer that sets one")
-	}
-	return decision, revocation
-}
-
-// agentRowContaining returns the single <article class="ev" data-kind="call">
-// block on the Agents page whose markup contains needle, so an assertion can
-// be scoped to ONE row rather than the whole page.
-//
-// It exists because the decision row legitimately still renders the literal
-// string "approval decision" — a page-wide `!strings.Contains(body, "approval
-// decision")` can therefore never pass, and would be a vacuous test masquerading
-// as a regression guard for the revocation row specifically. Callers must pick
-// a needle that is NOT one of the fields under test (Reason, the tool name, the
-// outcome chip) — see sinkApprovalDecisionRecords's doc comment for why its two
-// fixture records carry different Principals for exactly this purpose.
-func agentRowContaining(t *testing.T, body, needle string) string {
-	t.Helper()
-	const marker = `<article class="ev" data-kind="call">`
-	for _, block := range strings.Split(body, marker)[1:] {
-		if strings.Contains(block, needle) {
-			return block
-		}
-	}
-	t.Fatalf("no agent row contains %q", needle)
-	return ""
-}
-
-// TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry.
-//
-// Before #538 an approval decision rendered the principal, the words
-// "approval decision" and "decided", and nothing else — the record's entire
-// content (the answer, the decider, the channel, the quorum progress, the
-// resulting request state, and the decider's note) sat unrendered in Reason.
-// It also collapsed a grant REVOCATION under the same name and outcome as an
-// approve/deny Decision, which is a different act by a different route
-// (capability/approval_grant.go's RevokeGrant, a Control API call, never an
-// MCP tool).
-//
-// Four independent properties, verified by the mutation matrix in #538's
-// plan: A1/A4 fail if either half of rendering Reason regresses, A2 fails if
-// the revocation stops being named correctly, A3 fails if the outcome chips
-// stop diverging.
-func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
-	decision, revocation := sinkApprovalDecisionRecords(t)
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
+	d.Audit = fakeAudit{records: recs}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	// A1 — the decision row renders the record's OWN Reason, read off the
-	// fixture rather than a literal, so the format may change without this
-	// test lying about what it checks.
-	if !strings.Contains(body, `<div class="evreason">`+decision.Reason+`</div>`) {
-		t.Errorf("the decision row does not render its Reason %q", decision.Reason)
+	if strings.Contains(body, "No calls in the window.") {
+		t.Error("the Agents screen says there were no calls while the trail holds a cancel")
 	}
-
-	// A2 — the revocation row is named "revoke approval grant", scoped to its
-	// OWN markup (see agentRowContaining's doc comment for why a page-wide
-	// check cannot work here: the decision row legitimately keeps saying
-	// "approval decision"). Located by its decider's name rather than by
-	// Reason or the tool name, both of which are fields this very test also
-	// exercises.
-	row := agentRowContaining(t, body, "ops-console")
-	if !strings.Contains(row, "revoke approval grant") {
-		t.Errorf("the revocation row does not name itself \"revoke approval grant\":\n%s", row)
+	if !strings.Contains(body, "<code>cancel_job</code>") {
+		t.Error("the rendered stream does not name cancel_job")
 	}
-	if strings.Contains(row, "approval decision") {
-		t.Errorf("the revocation row still says \"approval decision\":\n%s", row)
+	if strings.Contains(body, audit.KindJobCancel) {
+		t.Errorf("the stream renders the audit kind %q; this screen speaks the tool surface's "+
+			"vocabulary, not the trail's", audit.KindJobCancel)
 	}
-	if strings.Contains(row, "approve_request") {
-		t.Errorf("the revocation row names an MCP tool that was never called:\n%s", row)
-	}
-
-	// A3 — the outcome chips diverge: exactly one "revoked", and the decision
-	// row still carries "decided".
-	chip := `<span class="chip outcome" data-outcome="revoked">revoked</span>`
-	if n := strings.Count(body, chip); n != 1 {
-		t.Errorf("expected exactly one %q outcome chip, got %d", chip, n)
-	}
-	if !strings.Contains(body, `data-outcome="decided"`) {
-		t.Error("the decision row lost its \"decided\" outcome chip")
-	}
-
-	// A4 — the family rule, not a per-kind special case: the revocation's own
-	// Reason renders too.
-	if !strings.Contains(body, `<div class="evreason">`+revocation.Reason+`</div>`) {
-		t.Errorf("the revocation row does not render its Reason %q", revocation.Reason)
+	if !strings.Contains(body, "/console/jobs/job-9d41") {
+		t.Error("a cancel row does not link the Job it cancelled — the per-Task outcomes it " +
+			"deliberately does not claim live there")
 	}
 }
 
-// TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool is the regression guard for
-// #538's central finding: audit.KindApprovalDecided covers THREE acts — the
-// MCP tool approve_request, the Control API's out-of-band decision route
-// (the primary, stronger channel per ADR-0027/ADR-0029), and grant revocation
-// — all through capability.Service.DecideApproval or RevokeGrant writing the
-// identical audit kind. The Channel that would distinguish the MCP tool from
-// the Control API decision exists only inside the prose Reason, never as a
-// structured field, so a decision row can never honestly say "approve_request"
-// — doing so for the Control API's decision route would label it a tool call
-// that was never made. This is the test that stops the next reader from
-// "finishing" this ticket by hard-coding the MCP tool name over a decision.
-func TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool(t *testing.T) {
-	decision, revocation := sinkApprovalDecisionRecords(t)
+// TestAgents_CancelOutcomeIsRequestedNotUnspecified.
+//
+// The sibling of the naming guard above, kept apart from it on purpose: with
+// one test asserting both, a fix that got the tool name right and the chip
+// wrong (or the reverse) would go green on half a screen. #519's mutation run
+// is the evidence — the pair only discriminates if either can fail alone.
+//
+// RecordCancel writes no Outcome, because a cancel has no per-Node verdict to
+// write: it targets a Job by ID, and each affected Task records its own
+// OutcomeCancelled (ADR-0013). The zero value renders "unspecified", which is
+// the Console saying "we don't know" about a record whose disposition it knows
+// (#517, #520).
+//
+// The word is "requested", and the assertion is as much about what it is NOT.
+// "cancelled" is a Task outcome word, and on a row that names a Job it would
+// claim that Job's fate — which best-effort cancellation cannot promise, since
+// a Task that already finished keeps its real outcome and is never
+// retroactively cancelled.
+func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
+	recs := sinkCancelRecords(t, "job-9d41", "job-7c02")
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != len(recs) {
+		t.Fatalf("the stream has %d rows for %d cancel records", len(calls), len(recs))
+	}
+	for _, c := range calls {
+		if c.Outcome != "requested" {
+			t.Errorf("a cancel renders the outcome chip %q, want \"requested\"", c.Outcome)
+		}
+	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
-	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+	d.Audit = fakeAudit{records: recs}
+	h := newTestHandler(d, accounts.RoleAdmin)
+	body := get(t, h, "/console/agents").Body.String()
 
-	if strings.Contains(body, "approve_request") {
-		t.Error(`the Agents screen names a decision "approve_request" — DecideApproval is ` +
-			"reached from both the MCP tool and the Control API's out-of-band decision route " +
-			"through the identical audit kind, with no structured field distinguishing them, " +
-			"so this mislabels a Control API decision as an MCP tool call that was never made")
+	if strings.Contains(body, `data-outcome="unspecified"`) {
+		t.Error(`a cancel renders the outcome chip "unspecified" — the record has no per-Node ` +
+			`verdict because a cancel targets a Job, and rendering the zero value tells an ` +
+			`operator the Console does not know what happened when it does`)
 	}
-}
+	if strings.Contains(body, `data-outcome="cancelled"`) {
+		t.Error(`a cancel row wears the Task outcome "cancelled", which claims the Job's fate: ` +
+			`cancellation is best-effort, and a Task that already finished reports its real ` +
+			`outcome rather than a retroactive cancel (ADR-0013)`)
+	}
+	chip := `<span class="chip outcome" data-outcome="requested">requested</span>`
+	if n := strings.Count(body, chip); n != len(recs) {
+		t.Errorf("%d of %d cancels render the outcome chip %q", n, len(recs), "requested")
+	}
 
-// TestAgents_RevokedOutcomeHasItsOwnTreatment mirrors #517's CSS half (see
-// TestAgents_ReadOutcomeIsAuditedNotUnspecified above): a revoked Approval
-// grant is a human closing a window early, neither a Task failure nor a
-// success, and the chip must not inherit --failure's red or --ok's green.
-func TestAgents_RevokedOutcomeHasItsOwnTreatment(t *testing.T) {
-	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
-		"/console/assets/console.css").Body.String()
-
-	for _, sel := range []string{`[data-outcome="revoked"]`, `.chip.outcome[data-outcome="revoked"]`} {
+	// The chip needs a treatment of its own or it inherits the bare default,
+	// and it must not borrow either of the two hues that carry a meaning: a
+	// cancel is neither a failure nor a success.
+	css := get(t, h, "/console/assets/console.css").Body.String()
+	for _, sel := range []string{`[data-outcome="requested"]`, `.chip.outcome[data-outcome="requested"]`} {
 		i := strings.Index(css, sel)
 		if i < 0 {
 			t.Fatalf("the stylesheet has no rule for %s — the chip falls back to the default "+
@@ -2978,9 +3000,130 @@ func TestAgents_RevokedOutcomeHasItsOwnTreatment(t *testing.T) {
 		}
 		for _, borrowed := range []string{"var(--failure)", "var(--ok)", "var(--failure-bg)", "var(--ok-bg)"} {
 			if strings.Contains(rule, borrowed) {
-				t.Errorf("%s borrows %s — a revoked grant is neither a failure nor a success", sel, borrowed)
+				t.Errorf("%s borrows %s — a requested cancel is neither a failure nor a "+
+					"success, and the colour budget gives those two hues one meaning each",
+					sel, borrowed)
 			}
 		}
+	}
+}
+
+// TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned.
+//
+// The other half of #537: KindPlan reached this screen through no arm of
+// isAgentCall, so a Plan — an agent stating what it WOULD run, which is the
+// trust-critical case spec 03 singles out — appeared nowhere on the trust
+// surface. It also left agentCallFrom's `case audit.KindPlan` arm unreachable
+// from buildAgents: a corrective switch naming a case nothing could enter.
+//
+// The naming property is that a Plan is NOT a ninth tool. Plan mode is
+// `plan: true` on run_operation / raw_exec (spec 03), and the record carries
+// the same Action fields a dispatch does, so it renders as the tool that was
+// called — `run_operation · service.restart`, `raw_exec` — and never as the
+// audit kind. Both shapes are in the fixture because they take different
+// branches of toolName.
+func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
+	recs := sinkPlanRecords(t)
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != len(recs) {
+		t.Fatalf("the stream has %d rows for %d Plan records — plan mode is the trust-critical "+
+			"case spec 03 asks this screen to badge, and it rendered nowhere",
+			len(calls), len(recs))
+	}
+	// Compared as SETS, because the stream is newest-first and the fixture is
+	// written oldest-first (windowed, seams.go) — an index-aligned assertion
+	// would be asserting the sort order, not the naming.
+	//
+	// The expected names come from toolName over the same facts rather than
+	// from literals: the point is that a Plan is named by the SAME function
+	// that names the dispatch of the same Operation, so a Plan cannot grow a
+	// spelling of its own without the dispatch growing it too. The two
+	// literals below then pin what that function must say, so the pair cannot
+	// agree on a wrong answer.
+	var got, want []string
+	for _, c := range calls {
+		got = append(got, c.Tool)
+	}
+	for _, rec := range recs {
+		want = append(want, toolName(factsOfRecord(rec)))
+	}
+	sort.Strings(got)
+	sort.Strings(want)
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the stream names the Plans %v, and toolName over the same records says %v",
+			got, want)
+	}
+	for _, name := range []string{"run_operation · service.restart", "raw_exec"} {
+		if !slicesContain(got, name) {
+			t.Errorf("no Plan row renders as %q; plan mode is a flag on run_operation and "+
+				"raw_exec, not a tool of its own — the rows name %v", name, got)
+		}
+	}
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	if strings.Contains(body, "No calls in the window.") {
+		t.Error("the Agents screen says there were no calls while the trail holds two Plans")
+	}
+	if strings.Contains(body, "<code>plan</code>") {
+		t.Errorf("a Plan renders as the audit kind %q rather than as the tool it planned",
+			audit.KindPlan)
+	}
+	// The request line: a Plan says what it WOULD have run, arguments and all.
+	if !strings.Contains(body, "unit=nginx") {
+		t.Error("a Plan row does not render the arguments the agent proposed — the request " +
+			"line is the whole reason plan mode is on this screen")
+	}
+	// Risk is inferred by riskOf like every other row, and a planned mutate is
+	// still a mutate: what the agent asked for is the signal, and the outcome
+	// chip is what says it did not run.
+	for _, c := range calls {
+		if c.Risk != RiskLabel(jobs.RiskClassMutate) {
+			t.Errorf("a planned mutate chips risk %q — a Plan that never ran is still a "+
+				"mutate-class ask, and Raw Exec always takes the mutate cap", c.Risk)
+		}
+	}
+}
+
+// TestAgents_PlanOutcomeIsPlannedNotUnspecified.
+//
+// The Plan half's outcome guard, split from its naming guard for the reason
+// the cancel pair is split: either must be able to fail alone.
+//
+// A Plan record carries no Outcome — it creates no Job and no Task, and the
+// per-Node verdicts it returned to the caller are deliberately not audited
+// (ADR-0011, capability's AuditKindPlan). "planned" is the word already in the
+// corrective switch, and this is what makes it reachable.
+func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
+	recs := sinkPlanRecords(t)
+
+	_, calls, _ := buildAgents(recs, "", testNow)
+	if len(calls) != len(recs) {
+		t.Fatalf("the stream has %d rows for %d Plan records", len(calls), len(recs))
+	}
+	for _, c := range calls {
+		if c.Outcome != "planned" {
+			t.Errorf("a Plan renders the outcome chip %q, want \"planned\"", c.Outcome)
+		}
+	}
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: recs}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	if strings.Contains(body, `data-outcome="unspecified"`) {
+		t.Error(`a Plan renders the outcome chip "unspecified" — nothing executed and the ` +
+			`Console knows it, which is the badge spec 03 asks for on the trust-critical case`)
+	}
+	if strings.Contains(body, `data-outcome="success"`) {
+		t.Error("a Plan renders as a success; nothing ran (ADR-0011)")
+	}
+	chip := `<span class="chip outcome" data-outcome="planned">planned</span>`
+	if n := strings.Count(body, chip); n != len(recs) {
+		t.Errorf("%d of %d Plans render the outcome chip %q", n, len(recs), "planned")
 	}
 }
 
@@ -4165,6 +4308,223 @@ func TestApprovals_LapsedRowsAreOrderedMostRecentFirst(t *testing.T) {
 	for i, id := range want {
 		if rows[i].ID != id {
 			t.Fatalf("row %d is %s, want %s", i, rows[i].ID, id)
+		}
+	}
+}
+
+// sinkApprovalDecisionRecords builds one Decision record and one grant-
+// revocation record THROUGH the real sink — auditsink.Sink.Record, the one
+// function the product calls to write AuditKindApprovalDecided — rather than
+// two hand-built audit.Record literals. Both capability.Service.DecideApproval
+// (reached from the MCP tool AND the Control API's decision route) and
+// Service.RevokeGrant write this same Kind through this same method; going
+// through it is what pins the shape the sink actually produces rather than a
+// shape this test imagines, which is the #463 lesson sinkReadRecords records
+// above.
+//
+// Reason prose is deliberately free of & < > " ' so the assertions below can
+// compare rendered HTML against rec.Reason directly, without re-implementing
+// html/template's escaping.
+//
+// The two records are decided by DIFFERENT Accounts on purpose — a decider
+// and a separate operator who later closes the grant's window are both
+// realistic, and doing it this way gives agentRowContaining a discriminator
+// (the Principal's own rendered name) that survives every mutation in #538's
+// matrix, including the ones that erase Reason or the tool name. Locating the
+// row by the very text a mutation deletes would make the helper fail closed
+// for the wrong reason instead of the one under test.
+func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Record) {
+	t.Helper()
+	repo := &captureRepo{}
+	// WithLogger keeps Record's "audit decision" log line out of test output;
+	// RecordRead (sinkReadsInto, above) does not log, which is why that helper
+	// needs no such option.
+	sink := auditsink.New(repo,
+		auditsink.WithClock(func() time.Time { return testNow }),
+		auditsink.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	decider := capability.Principal{
+		AccountID: "acct-admin", Account: "alice", Role: "admin", Kind: "human",
+	}
+	revoker := capability.Principal{
+		AccountID: "acct-ops", Account: "ops-console", Role: "admin", Kind: "machine",
+	}
+	ctx := context.Background()
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  decider,
+		ApprovalID: "appr-1",
+		Reason: "approval request appr-1 approved by alice over out-of-band " +
+			"(1 of 1, request now approved): restart the web fleet",
+	}); err != nil {
+		t.Fatalf("sink.Record(decision): %v", err)
+	}
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  revoker,
+		ApprovalID: "appr-2",
+		GrantID:    "grant-1",
+		Reason:     "approval grant grant-1 revoked by ops-console: closing the maintenance window early",
+	}); err != nil {
+		t.Fatalf("sink.Record(revocation): %v", err)
+	}
+	if len(repo.recs) != 2 {
+		t.Fatalf("the sink wrote %d records for 2 entries, want 2", len(repo.recs))
+	}
+	decision, revocation = repo.recs[0], repo.recs[1]
+
+	// Pin the shape the product actually writes rather than one this test
+	// imagines.
+	for _, rec := range []audit.Record{decision, revocation} {
+		if rec.Kind != audit.KindApprovalDecided {
+			t.Fatalf("the sink wrote Kind %q, want %q", rec.Kind, audit.KindApprovalDecided)
+		}
+		if rec.Selector != "" || rec.OperationName != "" || rec.JobID != "" || rec.NodeID != "" {
+			t.Fatalf("a decision record carries Selector/OperationName/JobID/NodeID it should not: %+v", rec)
+		}
+	}
+	if decision.GrantID != "" {
+		t.Fatalf("the decision record carries a GrantID (%q) it should not", decision.GrantID)
+	}
+	if revocation.GrantID == "" {
+		t.Fatal("the revocation record carries no GrantID — RevokeGrant is the only writer that sets one")
+	}
+	return decision, revocation
+}
+
+// agentRowContaining returns the single <article class="ev" data-kind="call">
+// block on the Agents page whose markup contains needle, so an assertion can
+// be scoped to ONE row rather than the whole page.
+//
+// It exists because the decision row legitimately still renders the literal
+// string "approval decision" — a page-wide `!strings.Contains(body, "approval
+// decision")` can therefore never pass, and would be a vacuous test masquerading
+// as a regression guard for the revocation row specifically. Callers must pick
+// a needle that is NOT one of the fields under test (Reason, the tool name, the
+// outcome chip) — see sinkApprovalDecisionRecords's doc comment for why its two
+// fixture records carry different Principals for exactly this purpose.
+func agentRowContaining(t *testing.T, body, needle string) string {
+	t.Helper()
+	const marker = `<article class="ev" data-kind="call">`
+	for _, block := range strings.Split(body, marker)[1:] {
+		if strings.Contains(block, needle) {
+			return block
+		}
+	}
+	t.Fatalf("no agent row contains %q", needle)
+	return ""
+}
+
+// TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry.
+//
+// Before #538 an approval decision rendered the principal, the words
+// "approval decision" and "decided", and nothing else — the record's entire
+// content (the answer, the decider, the channel, the quorum progress, the
+// resulting request state, and the decider's note) sat unrendered in Reason.
+// It also collapsed a grant REVOCATION under the same name and outcome as an
+// approve/deny Decision, which is a different act by a different route
+// (capability/approval_grant.go's RevokeGrant, a Control API call, never an
+// MCP tool).
+//
+// Four independent properties, verified by the mutation matrix in #538's
+// plan: A1/A4 fail if either half of rendering Reason regresses, A2 fails if
+// the revocation stops being named correctly, A3 fails if the outcome chips
+// stop diverging.
+func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
+	decision, revocation := sinkApprovalDecisionRecords(t)
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	// A1 — the decision row renders the record's OWN Reason, read off the
+	// fixture rather than a literal, so the format may change without this
+	// test lying about what it checks.
+	if !strings.Contains(body, `<div class="evreason">`+decision.Reason+`</div>`) {
+		t.Errorf("the decision row does not render its Reason %q", decision.Reason)
+	}
+
+	// A2 — the revocation row is named "revoke approval grant", scoped to its
+	// OWN markup (see agentRowContaining's doc comment for why a page-wide
+	// check cannot work here: the decision row legitimately keeps saying
+	// "approval decision"). Located by its decider's name rather than by
+	// Reason or the tool name, both of which are fields this very test also
+	// exercises.
+	row := agentRowContaining(t, body, "ops-console")
+	if !strings.Contains(row, "revoke approval grant") {
+		t.Errorf("the revocation row does not name itself \"revoke approval grant\":\n%s", row)
+	}
+	if strings.Contains(row, "approval decision") {
+		t.Errorf("the revocation row still says \"approval decision\":\n%s", row)
+	}
+	if strings.Contains(row, "approve_request") {
+		t.Errorf("the revocation row names an MCP tool that was never called:\n%s", row)
+	}
+
+	// A3 — the outcome chips diverge: exactly one "revoked", and the decision
+	// row still carries "decided".
+	chip := `<span class="chip outcome" data-outcome="revoked">revoked</span>`
+	if n := strings.Count(body, chip); n != 1 {
+		t.Errorf("expected exactly one %q outcome chip, got %d", chip, n)
+	}
+	if !strings.Contains(body, `data-outcome="decided"`) {
+		t.Error("the decision row lost its \"decided\" outcome chip")
+	}
+
+	// A4 — the family rule, not a per-kind special case: the revocation's own
+	// Reason renders too.
+	if !strings.Contains(body, `<div class="evreason">`+revocation.Reason+`</div>`) {
+		t.Errorf("the revocation row does not render its Reason %q", revocation.Reason)
+	}
+}
+
+// TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool is the regression guard for
+// #538's central finding: audit.KindApprovalDecided covers THREE acts — the
+// MCP tool approve_request, the Control API's out-of-band decision route
+// (the primary, stronger channel per ADR-0027/ADR-0029), and grant revocation
+// — all through capability.Service.DecideApproval or RevokeGrant writing the
+// identical audit kind. The Channel that would distinguish the MCP tool from
+// the Control API decision exists only inside the prose Reason, never as a
+// structured field, so a decision row can never honestly say "approve_request"
+// — doing so for the Control API's decision route would label it a tool call
+// that was never made. This is the test that stops the next reader from
+// "finishing" this ticket by hard-coding the MCP tool name over a decision.
+func TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool(t *testing.T) {
+	decision, revocation := sinkApprovalDecisionRecords(t)
+
+	d := renderableDeps()
+	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	if strings.Contains(body, "approve_request") {
+		t.Error(`the Agents screen names a decision "approve_request" — DecideApproval is ` +
+			"reached from both the MCP tool and the Control API's out-of-band decision route " +
+			"through the identical audit kind, with no structured field distinguishing them, " +
+			"so this mislabels a Control API decision as an MCP tool call that was never made")
+	}
+}
+
+// TestAgents_RevokedOutcomeHasItsOwnTreatment mirrors #517's CSS half (see
+// TestAgents_ReadOutcomeIsAuditedNotUnspecified above): a revoked Approval
+// grant is a human closing a window early, neither a Task failure nor a
+// success, and the chip must not inherit --failure's red or --ok's green.
+func TestAgents_RevokedOutcomeHasItsOwnTreatment(t *testing.T) {
+	css := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin),
+		"/console/assets/console.css").Body.String()
+
+	for _, sel := range []string{`[data-outcome="revoked"]`, `.chip.outcome[data-outcome="revoked"]`} {
+		i := strings.Index(css, sel)
+		if i < 0 {
+			t.Fatalf("the stylesheet has no rule for %s — the chip falls back to the default "+
+				"outcome treatment", sel)
+		}
+		rule := css[i:]
+		if j := strings.Index(rule, "}"); j >= 0 {
+			rule = rule[:j]
+		}
+		for _, borrowed := range []string{"var(--failure)", "var(--ok)", "var(--failure-bg)", "var(--ok-bg)"} {
+			if strings.Contains(rule, borrowed) {
+				t.Errorf("%s borrows %s — a revoked grant is neither a failure nor a success", sel, borrowed)
+			}
 		}
 	}
 }

@@ -178,8 +178,9 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		// # What the number claims, and why it counts asks rather than runs
 		//
 		// Every mutate-class call this Account made: including a raw_exec the
-		// role gate REFUSED, a dispatch still PARKED for approval, and one
-		// Policy DENIED. None of those changed a Node, and the count still
+		// role gate REFUSED, a dispatch still PARKED for approval, one Policy
+		// DENIED, and — since #537 — a mutate-shaped call PLANNED and never
+		// run. None of those changed a Node, and the count still
 		// includes them, because this screen is the request and never the
 		// result ("as the Relay received it", above) and the rail's other
 		// counters already read that way — Denied is a subset of Calls, not a
@@ -206,6 +207,14 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		// to be computed here was never rendered and disagreed with the chip
 		// anyway (it tested Kind == KindRead, so a read-class DISPATCH like
 		// file.read chipped read and counted as neither).
+		//
+		// A cancel counts here too, through the same one inference: riskOf
+		// finds no argv, no read tool and no read Operation on the record and
+		// answers mutate. That is the right answer for the right reason — a
+		// cancel kills a process group on a Node (ADR-0013) and is nobody's
+		// idea of a read — rather than the safe-direction default falling the
+		// convenient way, which is worth saying out loud because the two are
+		// indistinguishable in the code.
 		if riskOf(f) == jobs.RiskClassMutate {
 			a.Mutates++
 		}
@@ -264,7 +273,31 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 //
 // Sign-ins, Freeze transitions and Account changes are control-plane events and
 // belong on Activity. An approval expiring is the clock, not a caller.
+//
+// # Why two of the eight tools are admitted by KIND rather than by family
+//
+// `cancel_job` and plan mode matched neither arm and so rendered NOWHERE,
+// against spec 03's first acceptance criterion — every one of the eight tools
+// renders with a request line and a result line (#537). Both are calls in
+// exactly the sense this function means: an Account asked a control surface for
+// something and the Relay recorded the ask. A cancel is the one act spec 03
+// puts a CONTROL for on this very screen, so its record belonging here is not a
+// stretch; and plan mode is the trust-critical case spec 03 asks to be badged —
+// an agent saying what it would run is the request an operator most wants read.
+//
+// They are named as KINDS because kindOf (activity.go) maps both to rowOther,
+// and rowOther is not theirs to take: it is Activity's catch-all, the family
+// every audit kind nobody has classified yet falls into, so admitting it
+// wholesale would put a kind added to internal/audit next month on the trust
+// surface with nobody having decided it belonged. Promoting the two to
+// families of their own is the other way to spell this, and it reaches past
+// this screen — the row kind drives Activity's filter chips and decides which
+// rows Activity draws a risk chip on. Narrower change, same result here.
 func isAgentCall(rec audit.Record) bool {
+	switch rec.Kind {
+	case audit.KindJobCancel, audit.KindPlan:
+		return true
+	}
 	switch kindOf(rec.Kind) {
 	case rowDispatch, rowRead, rowRefusal, rowApproval:
 		return rec.Kind != audit.KindApprovalExpired
@@ -317,9 +350,14 @@ func agentCallFrom(rec audit.Record) agentCall {
 	if kindOf(f.Kind) == rowApproval {
 		c.Reason = f.Reason
 	}
-	// A record that never reached a Node has no per-Node outcome, and the zero
-	// value renders as "unspecified" — which reads as "we don't know" for an
-	// event whose outcome is perfectly well known. Name what actually happened.
+	// A record with no per-Node outcome renders the zero value as
+	// "unspecified" — which reads as "we don't know" for an event whose
+	// disposition is perfectly well known. Name what actually happened.
+	//
+	// Two families arrive here, not one. Most never reached a Node at all (a
+	// park, a refusal, a metadata-only read). A cancel is the other: it does
+	// reach Nodes, but it is not a per-NODE act — it targets a Job by ID, so
+	// there is no verdict to render however far it travelled.
 	switch rec.Kind {
 	case audit.KindRead:
 		// A metadata-only read is the case this switch was written for and did
@@ -344,7 +382,33 @@ func agentCallFrom(rec audit.Record) agentCall {
 		if rec.GrantID != "" {
 			c.Outcome = "revoked"
 		}
+	case audit.KindJobCancel:
+		// A cancel has no per-Node verdict either: RecordCancel records who
+		// asked and which Job, and the per-Task truth is on the Job's own
+		// Tasks (OutcomeCancelled, ADR-0013) — which this row already links
+		// to, so the chip does not have to carry it.
+		//
+		// The word is "requested", and the obvious alternative is the trap.
+		// "cancelled" is a TASK outcome word (OutcomeLabel) and, on a row that
+		// names a Job, it claims that Job's fate. Cancellation is best-effort
+		// and honest: a Task that already finished reports its real outcome
+		// and is never retroactively cancelled (ADR-0013, CONTEXT.md), so a
+		// mostly-finished Job would render as cancelled on the one screen
+		// billed as what the agent actually asked for. "stopped", "aborted"
+		// and "killed" are CONTEXT.md's rejected synonyms for Cancellation and
+		// are not available at any price.
+		//
+		// "requested" says the one thing the record does carry, and carries
+		// honestly: the stop was asked for. It is not a hedge — CancelJob
+		// writes this row only AFTER the cancel itself succeeded, and records
+		// nothing at all when it fails (capability/service.go) — so an ask
+		// that reached the trail is an ask that landed. What each Task then
+		// did is one click away.
+		c.Outcome = "requested"
 	case audit.KindPlan:
+		// Live since #537. Plan records were filtered out of this screen by
+		// isAgentCall, which left this arm unreachable from buildAgents: the
+		// corrective switch named the case and nothing could enter it.
 		c.Outcome = "planned"
 	}
 	return c
@@ -372,6 +436,30 @@ func agentCallFrom(rec audit.Record) agentCall {
 // screens naming one audit record two ways, each looking right in isolation.
 // It also keeps the tool NAME, which the bare word "read" it replaces threw
 // away: on a trust surface, WHICH read happened is the useful half.
+//
+// # A cancel names its tool; a Plan names the tool it planned
+//
+// RecordCancel writes no Action at all — no Operation, no argv, not even an
+// ActionKind (auditsink.go) — so a cancel reaches the Kind switch at the
+// bottom, where it used to fall past every arm and render as the bare audit
+// kind `job_cancel`. That is audit's internal spelling of the record, not
+// something an operator can find on the tool surface, and it is the reason
+// this screen was billed as showing eight tools while showing seven. It
+// renders as `cancel_job`: the tool that was called, in the same vocabulary
+// the read rows get from readTargetOf (`get_job`, `list_nodes`) and the
+// dispatch rows get from `run_operation`. Activity calls the same record
+// "cancelled Job 9d41" in prose and carries no Operation for it, so this is
+// that sentence's tool-cell spelling rather than a second name for one record.
+//
+// A Plan needs NO arm here, and that is a decision rather than an omission.
+// Plan mode is `plan: true` on run_operation / raw_exec and not a ninth tool
+// (spec 03), and its record carries the same Action fields a dispatch does
+// (auditsink's baseRecord), so it falls through the two branches above and
+// renders `run_operation · service.restart` or `raw_exec` — which is what was
+// called. That it never ran is the OUTCOME chip's job ("planned",
+// agentCallFrom), which is exactly how Activity keeps the same two facts
+// apart: `operationText` names the Operation and the summary says nothing
+// executed.
 //
 // It takes trailFacts rather than an audit.Record because every field it reads
 // is on the shared projection, and its caller has already built one — a second
@@ -422,6 +510,8 @@ func toolName(f trailFacts) string {
 			return "revoke approval grant"
 		}
 		return "approval decision"
+	case audit.KindJobCancel:
+		return "cancel_job"
 	case audit.KindRefusal:
 		return "refused"
 	}
@@ -459,7 +549,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">Accounts <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused and parked included</span></div>
+    <div class="ftitle">Accounts <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
       <span class="dot" data-live="{{if .Active}}on{{else}}off{{end}}"></span>
