@@ -53,10 +53,10 @@ import (
 // activeWindow is the rail's MEMBERSHIP rule (#540): an Account with no call
 // in the last 15 minutes drops off the rail entirely. It used to color a dot
 // and nothing else, so the header's "active" claim was never enforced — a
-// page of nothing but stale calls rendered every Account grey rather than
-// none. Fifteen minutes, per spec 03 — long enough that an agent thinking
-// between calls does not blink out, short enough that "active" means
-// something.
+// page of nothing but stale calls listed every Account with an inactive dot
+// rather than listing none. Fifteen minutes, per spec 03 — long enough that
+// an agent thinking between calls does not blink out, short enough that
+// "active" means something.
 const activeWindow = 15 * time.Minute
 
 // agentsPageSize is this screen's page size, replacing auditWindow at the
