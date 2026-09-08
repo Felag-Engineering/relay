@@ -704,8 +704,10 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 	// 10: one capability layer, one Principal source), and that the
 	// successful freeze_release carries the reason this run supplied.
 	t.Run("audit_attribution", func(t *testing.T) {
+		const revokeReason = "e2e: node beta retired"
 		revokeResp := controlAPIRequest(t, authed, http.MethodPost,
-			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", credential, nil)
+			controlBase+"/api/v1/nodes/"+nodeBetaID+"/revoke", credential,
+			map[string]string{"reason": revokeReason})
 		defer revokeResp.Body.Close() //nolint:errcheck
 		if revokeResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)
@@ -725,7 +727,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			audit.KindNodeRevoke, audit.KindFreezeEngage, audit.KindFreezeRelease,
 		}
 		seenKind := make(map[string]bool, len(wantKinds))
-		var sawFreezeRelease bool
+		var sawFreezeRelease, sawNodeRevoke bool
 		for _, r := range records {
 			seenKind[r.Kind] = true
 			if r.Principal != wantPrincipal {
@@ -737,6 +739,14 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 					t.Errorf("freeze_release Reason = %q, want %q", r.Reason, "e2e resolved")
 				}
 			}
+			// #487: the irreversible rung says WHY, end to end and through the
+			// real store — not just in the handler's unit test.
+			if r.Kind == audit.KindNodeRevoke {
+				sawNodeRevoke = true
+				if r.Reason != revokeReason {
+					t.Errorf("node_revoke Reason = %q, want %q", r.Reason, revokeReason)
+				}
+			}
 		}
 		for _, k := range wantKinds {
 			if !seenKind[k] {
@@ -745,6 +755,9 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 		if !sawFreezeRelease {
 			t.Error("no KindFreezeRelease record found to check Reason on")
+		}
+		if !sawNodeRevoke {
+			t.Error("no KindNodeRevoke record found to check Reason on")
 		}
 
 		if factsJobID == "" {

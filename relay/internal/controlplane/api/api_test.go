@@ -402,7 +402,8 @@ func TestHandleRevokeNode(t *testing.T) {
 	d := Deps{Nodes: nr, Audit: auditor, Now: fixedNow}
 	h := newTestHandler(d)
 
-	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil)
+	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+		map[string]string{"reason": "compromised host, INC-4471"})
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
@@ -424,6 +425,86 @@ func TestHandleRevokeNode(t *testing.T) {
 	if got.Principal != controlplane.FoundingAdmin().Attribution() {
 		t.Errorf("audit Principal = %q, want %q", got.Principal, controlplane.FoundingAdmin().Attribution())
 	}
+	// The point of #487: the record answers WHY, not just who and when.
+	if got.Reason != "compromised host, INC-4471" {
+		t.Errorf("audit Reason = %q, want the reason the caller supplied", got.Reason)
+	}
+}
+
+// TestHandleRevokeNode_RefusesWithoutAUsableReason covers #487's requirement
+// half. Each case asserts BOTH that the request is refused AND that the Node
+// was NOT revoked: an irreversible act that happened behind a 400 would be
+// strictly worse than the unattributed revoke this ticket set out to fix, so
+// the ordering (validate, then revoke) is the property under test, not the
+// status code.
+func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
+	tooLong := strings.Repeat("x", capability.MaxRevokeReasonBytes+1)
+	cases := []struct {
+		name string
+		body any
+	}{
+		{"no body at all — the pre-#487 caller", nil},
+		{"absent reason field", map[string]string{}},
+		{"empty reason", map[string]string{"reason": ""}},
+		{"whitespace-only reason", map[string]string{"reason": "   \t  "}},
+		{"one byte over the cap", map[string]string{"reason": tooLong}},
+		{"embedded newline", map[string]string{"reason": "revoked\nrevoked by nobody"}},
+		{"embedded NUL", map[string]string{"reason": "revoked\x00"}},
+		{"invalid UTF-8", map[string]string{"reason": "revoked \xff\xfe"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			nr := &fakeNodeRevoker{}
+			auditor := &fakeAuditor{}
+			h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+			rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", tc.body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+			}
+			if len(nr.calledWith) != 0 {
+				t.Errorf("the Node was revoked anyway: RevokeNode called with %v", nr.calledWith)
+			}
+			if n := len(auditor.all()); n != 0 {
+				t.Errorf("audit records = %d, want 0 — nothing happened to record", n)
+			}
+		})
+	}
+}
+
+// TestHandleRevokeNode_ReasonIsTrimmedAndBounded pins the two edges of the
+// accepted range, so a later change to the bound has to move this test too.
+func TestHandleRevokeNode_ReasonIsTrimmedAndBounded(t *testing.T) {
+	t.Run("surrounding whitespace is trimmed before recording", func(t *testing.T) {
+		nr := &fakeNodeRevoker{}
+		auditor := &fakeAuditor{}
+		h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+			map[string]string{"reason": "   decommissioned   "})
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+		}
+		if got := auditor.all()[0].Reason; got != "decommissioned" {
+			t.Errorf("audit Reason = %q, want it trimmed", got)
+		}
+	})
+
+	t.Run("exactly at the cap is accepted", func(t *testing.T) {
+		nr := &fakeNodeRevoker{}
+		auditor := &fakeAuditor{}
+		h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+		atCap := strings.Repeat("x", capability.MaxRevokeReasonBytes)
+		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+			map[string]string{"reason": atCap})
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("status = %d, want 204 at exactly the cap; body = %s", rec.Code, rec.Body.String())
+		}
+		if got := auditor.all()[0].Reason; got != atCap {
+			t.Errorf("audit Reason was altered at the cap boundary")
+		}
+	})
 }
 
 // -----------------------------------------------------------------------

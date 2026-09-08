@@ -153,7 +153,16 @@ type nodeView struct {
 	// RevocationRecorded distinguishes "the trail has no record" from "the
 	// record says nothing", because the registry retains RevokedAt whether or
 	// not the trail was ever wired.
+	//
+	// RevocationReason is why, and is EMPTY FOR EVERY REVOCATION PREDATING
+	// #487, when the endpoint accepted no reason to record. That is a third
+	// state, not a variant of the other two: the trail has a record, the
+	// record names an Account, and the reason field is blank because there was
+	// nowhere to put one. The template says so rather than rendering an empty
+	// space, because "no reason given" and "this Relay could not ask for one"
+	// are different facts about the operator who revoked.
 	RevokedBy          string
+	RevocationReason   string
 	RevocationRecorded bool
 
 	// Pin is the pinned set and the bar that draws it (the shared "pin-bar"
@@ -395,6 +404,7 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			for i := len(recs) - 1; i >= 0; i-- {
 				if recs[i].Kind == audit.KindNodeRevoke {
 					v.RevokedBy = principalText(factsOfRecord(recs[i]))
+					v.RevocationReason = recs[i].Reason
 					v.RevocationRecorded = true
 					break
 				}
@@ -570,8 +580,10 @@ var nodeTmpl = newScreen("node", `
       </dl>
       {{if .Revoked}}
       <p class="gap"><b>This Node was revoked at {{.RevokedAt}}.</b>
-      {{if .RevocationRecorded}}The trail attributes it to <b>{{.RevokedBy}}</b>, and records no
-      reason — the revoke endpoint does not accept one.
+      {{if .RevocationRecorded}}The trail attributes it to <b>{{.RevokedBy}}</b>{{if .RevocationReason}},
+      who gave the reason <q class="rreason">{{.RevocationReason}}</q>.
+      {{else}} and records no reason: this Node was revoked before the endpoint accepted one.
+      {{end}}
       {{else}}No revocation record is in the trail: the registry keeps the timestamp whether or not
       the trail was wired when it happened, so who did it cannot be answered from here.{{end}}
       The record is retained deliberately, so the machine stays investigable and its history stays

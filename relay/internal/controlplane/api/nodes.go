@@ -12,6 +12,14 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
+// revokeNodeRequest is the POST /api/v1/nodes/{node_id}/revoke request body.
+//
+// Shaped like freezeReleaseRequest deliberately: both are irreversible-ish
+// security acts whose whole body is the reason they happened.
+type revokeNodeRequest struct {
+	Reason string `json:"reason"`
+}
+
 // handleRevokeNode implements POST /api/v1/nodes/{node_id}/revoke: revoke
 // the Node via NodeRevoker.RevokeNode (denylist + immediate live Tunnel
 // teardown, ADR-0006), audit the revoke (KindNodeRevoke), and return 204.
@@ -26,6 +34,19 @@ import (
 // Step-up re-authentication, which ADR-0020 also asks for on this rung, is
 // NOT implemented here — there is no step-up mechanism on the Control API
 // yet. This closes the role hole; the step-up half remains owed.
+//
+// **A non-empty `reason` is REQUIRED** (#487) and is a deliberate breaking
+// change: this route took no body at all before, so a caller that sends none
+// now gets 400. The trail could already say who revoked and when; an
+// irreversible rung that cannot say WHY is the half of attribution that
+// matters least. The rule itself lives in capability.ValidateRevokeReason so
+// a second surface records the same thing — see its doc for why that is a
+// weaker guarantee here than ReleaseFreeze's.
+//
+// ORDER MATTERS: the reason is validated BEFORE RevokeNode is called. Revoking
+// first and rejecting after would leave a Node revoked by a request that
+// returned 400, which is the worst of both — an irreversible act whose caller
+// was told it did not happen, and no audit record explaining it.
 func handleRevokeNode(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -42,9 +63,20 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 			return
 		}
 
+		var req revokeNodeRequest
+		if err := decodeJSON(w, r, &req); err != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+		reason, err := capability.ValidateRevokeReason(req.Reason)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "reason required", err.Error())
+			return
+		}
+
 		d.Nodes.RevokeNode(nodeID)
 
-		recordLifecycle(r.Context(), d, p, audit.KindNodeRevoke, nodeID, "")
+		recordLifecycle(r.Context(), d, p, audit.KindNodeRevoke, nodeID, reason)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
