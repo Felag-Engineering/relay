@@ -24,9 +24,12 @@
 //!
 //! # Persistence format
 //!
-//! `<state_dir>/seen-tasks/` — directory, mode 0700.
+//! `<state_dir>/seen-tasks/` — directory, mode 0700 **requested**.
 //! `<state_dir>/seen-tasks/<hex(task_id.as_bytes())>` — one empty marker file per seen
-//! Task, mode 0600. The filename is the lowercase-hex encoding of the task_id's UTF-8
+//! Task, mode 0600 **requested**. Both modes are ceilings the process umask may tighten
+//! and this code never forces back (ADR-0036); a umask that tightens the directory out
+//! of usability is refused loudly by the fail-closed path below, never worked around.
+//! The filename is the lowercase-hex encoding of the task_id's UTF-8
 //! bytes: safe [0-9a-f] charset, reversible, no collisions, no hash dependency. A
 //! UUID-length task_id (36 bytes) → 72-character filename, well within NAME_MAX (255).
 //! The record timestamp is the file mtime; the body is empty.
@@ -77,7 +80,7 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::future::Future;
 use std::io;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -162,11 +165,20 @@ impl DedupStore {
     /// then evicts anything past the 24-hour retention window and any excess beyond the
     /// 100,000-entry capacity cap.
     ///
-    /// The `seen-tasks/` directory is created at mode 0700, and its permission bits are
-    /// set explicitly with `set_permissions` after creation. `DirBuilder::mode()` is
-    /// masked by the process umask, which is fine for common configurations but silently
-    /// fails under pathological umasks (e.g. 0o100 strips the user-execute bit from a
-    /// 0o700 dir). The explicit `set_permissions` call is umask-proof.
+    /// The `seen-tasks/` directory is **requested** at mode 0700 via `DirBuilder::mode()`,
+    /// which the process umask may tighten. That is deliberate and load-bearing: a declared
+    /// mode is a ceiling — the most this code asks for — and the operator's umask is theirs
+    /// to tighten (ADR-0036). Node code never calls `set_permissions` to win that argument
+    /// back; what is created and enforced on the Node is enforced on the Node.
+    ///
+    /// The consequence is accepted, not engineered around. A pathological umask (0o100
+    /// strips user-execute from a 0o700 dir) leaves a directory in which no marker file can
+    /// be created — and a marker is what makes at-most-once execution durable (ADR-0004,
+    /// invariant #4). `run_once` then **fails closed**: every Task is refused with a
+    /// durable-record error and nothing executes. That is the correct outcome. Breaking
+    /// loudly, attributably, and on the safe side of at-most-once is better than a daemon
+    /// that quietly re-widens permissions the operator deliberately removed. See
+    /// `umask_tightened_dedup_directory_never_executes_unrecorded` for the demonstration.
     pub fn open(state_dir: &Path) -> io::Result<Self> {
         Self::open_with(
             state_dir,
@@ -262,15 +274,16 @@ impl DedupStore {
     ) -> io::Result<Self> {
         let dir = state_dir.join(SEEN_SUBDIR);
 
-        // Create the seen-tasks directory (and any missing parents) at mode 0700.
+        // Request the seen-tasks directory (and any missing parents) at mode 0700.
+        // DIR_MODE is a ceiling, deliberately left umask-masked (ADR-0036): the operator's
+        // umask may tighten it and nothing here may widen it back. No `set_permissions`
+        // follow-up — that call is not umask-masked, so it would override the operator on
+        // their own host. If a umask tightens this directory into unusability, `run_once`
+        // fails closed and refuses every Task (ADR-0004); see [`DedupStore::open`]'s doc.
         fs::DirBuilder::new()
             .recursive(true)
             .mode(DIR_MODE)
             .create(&dir)?;
-        // Explicit set_permissions is umask-proof. DirBuilder::mode() is masked by the
-        // process umask; pathological umasks (e.g. 0o100 strips the user-execute bit from
-        // a 0o700 dir) would silently produce wrong permissions. This call is not masked.
-        fs::set_permissions(&dir, fs::Permissions::from_mode(DIR_MODE))?;
 
         // Load persisted markers into the in-memory index.
         let mut map = HashMap::new();
@@ -397,14 +410,17 @@ fn record_marker(
     // O_CREAT|O_EXCL: fail if the marker already exists.  The in-memory check in
     // run_once guards against this in normal operation, but O_EXCL is a safe net for
     // concurrent calls and logic bugs.
+    //
+    // FILE_MODE is a ceiling requested through `OpenOptions::mode()`, which the process
+    // umask may tighten (ADR-0036). No `set_permissions` follow-up: that call is not
+    // umask-masked, and re-adding a bit the operator stripped would override them on
+    // their own Node. A marker the umask tightens is still a marker; a directory the
+    // umask makes unusable surfaces here as a record error, and `run_once` fails closed.
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(FILE_MODE)
         .open(&path)?;
-    // Explicit set_permissions: OpenOptions::mode() is masked by the process umask.
-    // Pathological umasks silently strip bits; this call is umask-proof.
-    file.set_permissions(fs::Permissions::from_mode(FILE_MODE))?;
     // Flush the file's inode (including mtime) to durable storage.
     file.sync_all()?;
     drop(file);
@@ -545,8 +561,11 @@ fn hex_nibble(c: u8) -> Option<u8> {
 mod tests {
     use super::*;
     use crate::gen::{Outcome, TaskResult};
+    // Shared ceiling assertion (ADR-0036) — one helper for the whole daemon, so a
+    // third mode-assertion shape is never invented.
+    use crate::identity::mode_assert;
     use std::fs;
-    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -834,8 +853,19 @@ mod tests {
         );
     }
 
-    /// Marker files and the seen-tasks directory must have restrictive Unix permissions,
-    /// regardless of the process umask (set explicitly via `set_permissions`).
+    /// Marker files and the seen-tasks directory carry restrictive Unix permissions.
+    ///
+    /// The declared modes are **ceilings**, not exact values (ADR-0036): the process
+    /// umask may tighten what `DirBuilder::mode()` and `OpenOptions::mode()` produce, and
+    /// nothing here may widen them back. So this asserts the two properties that are
+    /// actually load-bearing — no bit beyond the declared mode (a regression that widens
+    /// the store, such as a re-added `set_permissions` or a looser constant, fails under
+    /// every umask), and the group/world bits clear outright — via the shared
+    /// `mode_assert::assert_within` helper rather than a third assertion shape.
+    ///
+    /// The ceilings below are **literals, not `DIR_MODE`/`FILE_MODE`**. Deriving them
+    /// from the production constants would make the ceiling rise in lockstep with any
+    /// edit to those constants, so the check could never fail on a widened one (#509).
     #[test]
     fn marker_permissions_are_restrictive() {
         let state_dir = TempDir::new("perms");
@@ -860,23 +890,124 @@ mod tests {
             .expect("record_marker");
         }
 
-        let dir_mode = fs::metadata(&store.dir)
-            .expect("seen-tasks dir metadata")
-            .mode();
-        assert_eq!(
-            dir_mode & 0o777,
-            0o700,
-            "seen-tasks dir must be mode 0700, got {:o}",
-            dir_mode & 0o777
-        );
+        mode_assert::assert_within(&store.dir, 0o700, 0o077, "seen-tasks dir");
 
         let marker = marker_path(&store.dir, "perm-test-task");
-        let file_mode = fs::metadata(&marker).expect("marker file metadata").mode();
+        mode_assert::assert_within(&marker, 0o600, 0o177, "marker file");
+    }
+
+    /// Probes whether this process's privileges bypass Unix permission checks.
+    ///
+    /// Creates a directory the caller could not write into under ordinary DAC (0600 —
+    /// no search bit) and tries to create a file in it. Success means the caller holds
+    /// `CAP_DAC_OVERRIDE` (unconfined root, which is what a dev container and some CI
+    /// images give you); failure means DAC applies. This probes the *capability*, not
+    /// the uid, because the capability is what actually decides the outcome below.
+    fn dac_is_bypassed() -> bool {
+        let probe = TempDir::new("dac-probe");
+        let dir = probe.path().join("no-search");
+        // TempDir only names a path; DedupStore::open normally creates it.
+        fs::create_dir_all(&dir).expect("probe dir");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o600)).expect("probe chmod");
+        let bypassed = fs::File::create(dir.join("x")).is_ok();
+        let _ = fs::set_permissions(&dir, fs::Permissions::from_mode(0o700));
+        bypassed
+    }
+
+    /// The umask boundary's accepted consequence, demonstrated (ADR-0036, ADR-0004).
+    ///
+    /// A umask of `0o100` strips user-execute from the `0o700` directory this store
+    /// requests, and a directory without user-execute cannot have files created in it.
+    /// The store no longer forces the mode back, so that state is now reachable on a
+    /// Node — and the claim that it is *safe* has to be demonstrated, not asserted.
+    ///
+    /// The directory is chmod'd here rather than by setting the umask: `umask(2)` is
+    /// process-global, so a test that set it would corrupt every test running beside it
+    /// (the strict-umask lane carries an ambient umask instead — see the Makefile). The
+    /// resulting on-disk state is identical to what `umask 0100` leaves.
+    ///
+    /// Both privilege levels are asserted, because both are real and neither is a skip:
+    ///
+    /// - **DAC applies** (any unprivileged process; a root daemon whenever the umask
+    ///   removes a bit its remaining capabilities do not restore — the shipped unit
+    ///   bounds the daemon to `CAP_DAC_READ_SEARCH`, so it has no `CAP_DAC_OVERRIDE`):
+    ///   the marker cannot be written, `run_once` **fails closed**, and `exec` never
+    ///   runs. At-most-once (invariant #4) holds, and the failure is loud and
+    ///   attributable to the operator's own setting.
+    /// - **DAC is bypassed** (`CAP_DAC_OVERRIDE`): the tightened directory is still
+    ///   usable, so the Task runs — exactly once, with its marker durably recorded.
+    ///   At-most-once holds here too.
+    ///
+    /// There is no third outcome, and in particular no outcome where a Task executes
+    /// without a marker behind it. That is the whole safety argument for removing the
+    /// forced `set_permissions`.
+    #[tokio::test]
+    async fn umask_tightened_dedup_directory_never_executes_unrecorded() {
+        let state_dir = TempDir::new("no-exec-bit");
+        let store = DedupStore::open_with(
+            state_dir.path(),
+            RETENTION.as_millis() as i64,
+            MIN_RETENTION.as_millis() as i64,
+            MAX_ENTRIES,
+        )
+        .expect("open_with");
+
+        // Exactly what `umask 0100` would have left: 0700 & !0100 == 0600.
+        fs::set_permissions(&store.dir, fs::Permissions::from_mode(0o600))
+            .expect("drop the directory's user-execute bit");
+
+        let task_id = "task-under-pathological-umask";
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&ran);
+        let result = store
+            .run_once(task_id, move || async move {
+                flag.store(true, Ordering::SeqCst);
+                make_task_result(task_id)
+            })
+            .await;
+
+        // Restore the bit first: every assertion below may panic, and TempDir's
+        // recursive remove needs a traversable directory to clean up.
+        let _ = fs::set_permissions(&store.dir, fs::Permissions::from_mode(0o700));
+
+        if dac_is_bypassed() {
+            assert!(
+                ran.load(Ordering::SeqCst),
+                "with CAP_DAC_OVERRIDE the tightened directory is still writable, so \
+                 the Task must run"
+            );
+            assert_eq!(
+                result.outcome,
+                Outcome::Success as i32,
+                "a Task that ran must report its own outcome"
+            );
+            assert!(
+                marker_path(&store.dir, task_id).exists(),
+                "a Task that ran must have left a durable marker behind it — executing \
+                 without one is the at-least-once failure ADR-0004 forbids"
+            );
+            return;
+        }
+
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "exec must NOT run when the durable marker cannot be written — executing \
+             here would be at-least-once (ADR-0004)"
+        );
         assert_eq!(
-            file_mode & 0o777,
-            0o600,
-            "marker file must be mode 0600, got {:o}",
-            file_mode & 0o777
+            result.outcome,
+            Outcome::Failure as i32,
+            "an unrecordable Task must be refused as FAILURE, not silently succeed"
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("failed to record task id before execute"),
+            "the refusal must name the durable-record failure so it is attributable to \
+             the umask; got {stderr:?}"
+        );
+        assert!(
+            !marker_path(&store.dir, task_id).exists(),
+            "no marker may exist for a refused Task"
         );
     }
 

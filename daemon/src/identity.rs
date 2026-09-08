@@ -226,11 +226,14 @@ fn fsync_dir(dir: &Path) -> Result<()> {
 /// `mode` is a **ceiling, deliberately left umask-masked.** `OpenOptions::mode`
 /// is masked by the process umask, so a stricter umask lands a stricter file —
 /// the safe direction for all four identity files, and left alone on purpose.
-/// Do **not** add the umask-proof `set_permissions` call `dedup.rs` uses: its
-/// declared mode is `0600`, so forcing it can only tighten, whereas forcing
-/// `0644` here would hand an operator running `umask 077` a world-readable
-/// `cert.pem` — looser than what they get today, on the daemon's own identity
-/// material. The tests assert the direction (no bit beyond the declared mode,
+/// Do **not** add a umask-proof `set_permissions` call after it. That is the
+/// flat prohibition of ADR-0036: `chmod` is not umask-masked, so it overrides
+/// the operator on their own Node, and node code never does that — not even
+/// where the declared mode is tight enough that forcing it could only tighten
+/// (the narrower rule this file used to cite, superseded with the three sites
+/// that relied on it). Here the looser direction is immediate anyway: forcing
+/// `0644` would hand an operator running `umask 077` a world-readable
+/// `cert.pem`. The tests assert the direction (no bit beyond the declared mode,
 /// and the security-relevant bits clear), never exact equality; asserting
 /// equality is what would make the suite umask-dependent and push its "fix"
 /// in the loosening direction.
@@ -295,10 +298,12 @@ pub(crate) async fn build_channel(
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Test-only permission assertions shared by `identity.rs` and `enroll.rs`.
+/// Test-only permission assertions shared by `identity.rs`, `enroll.rs` and
+/// `dedup.rs` — the one Rust shape for this check, so a third is not invented
+/// (ADR-0036; its Go counterpart is `assertModeWithin` in `relay/internal/ca`).
 ///
-/// `persist_identity` declares each file's mode as a **ceiling**, not an exact
-/// value (see `write_atomic`), so these check the two properties that are
+/// Every declared mode in node code is a **ceiling**, not an exact value (see
+/// `write_atomic`), so these check the two properties that are
 /// actually load-bearing: no bit set beyond the declared mode (a regression
 /// that *widens* a file — a forced `set_permissions`, a dropped `.mode()`, a
 /// looser constant — fails under every umask), and the security-relevant bits
@@ -308,6 +313,10 @@ pub(crate) async fn build_channel(
 /// passed in by the caller, so it survives being edited. The forbidden-bit
 /// floor is what still fails if someone widens `persist_identity` *and* raises
 /// the ceiling here to match.
+///
+/// Callers pass the ceiling as a **literal, never the production constant**:
+/// derived from the constant it rises in lockstep with any edit to it, and the
+/// check can then never fail on a widened one (#509, ADR-0036).
 #[cfg(test)]
 pub(crate) mod mode_assert {
     use std::os::unix::fs::MetadataExt;
