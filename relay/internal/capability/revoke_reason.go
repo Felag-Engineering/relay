@@ -109,7 +109,11 @@ func ValidateRevokeReason(raw string) (string, error) {
 	// Trimming already removed the surrounding whitespace, so any control
 	// character still here is interior and deliberate.
 	for _, r := range reason {
-		if r == '\uFFFD' || r < 0x20 || r == 0x7f {
+		// C0 (below 0x20), DEL, and C1 (0x80-0x9f). C1 matters and is easy to
+		// forget: U+0085 NEL is a line break in every plaintext rendering, so
+		// omitting the range would let exactly the multi-line reason the
+		// comment below rules out through under a different encoding.
+		if r == '\uFFFD' || r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
 			return "", ErrRevokeReasonMalformed
 		}
 		// Bidi overrides and zero-width characters are refused for the same

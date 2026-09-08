@@ -356,7 +356,9 @@ func defaultAuditID() (string, error) {
 // caller from returning success for a mutation that already took effect.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
 	if err := recordLifecycleErr(ctx, d, p, kind, nodeID, reason); err != nil {
-		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
+		// Neutral message: this covers both the id-generation and the append
+		// failure, and the wrapped error says which.
+		slog.Error("control api: record lifecycle audit record", "kind", kind, "error", err)
 	}
 }
 
@@ -371,9 +373,20 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 // than "the endpoint accepted no reason". That inverts recordLifecycle's
 // documented best-effort contract, which is right for the actions that keep it:
 // they have already happened by the time it is called, and rolling them back is
-// not on offer. Revoke can invert it precisely because RevokeNode has no error
-// return and cannot fail once entered, so recording first cannot produce a
-// record for an act that did not happen.
+// Revoke can invert it because RevokeNode has no error return: it cannot report
+// failure to this handler, so there is no "the act failed after we recorded it"
+// branch to get wrong.
+//
+// The honest limit of that, since a stronger claim is tempting and would be
+// false: RevokeNode's DURABLE half can still fail quietly. It adds to the
+// in-process denylist first and disconnects reliably, but reg.SetRevoked is
+// best-effort and only logged (revocation/service.go). So a persist failure
+// leaves a permanent, attributed node_revoke record beside a registry that did
+// not record the revocation, and a later restart — which rehydrates the
+// denylist from the registry (#133) — could let the Node reconnect. That is
+// pre-existing and not this change's to fix; what this ordering guarantees is
+// narrower and still worth having: no revocation is ATTEMPTED without a
+// durable record of who ordered it and why.
 //
 // This mirrors the read lane's posture (ADR-0025: record before the seam, fail
 // closed) and handleGetNode's, which already 500s when its read audit cannot be

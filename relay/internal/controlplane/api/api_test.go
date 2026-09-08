@@ -444,6 +444,11 @@ func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
 		name string
 		body any
 	}{
+		// This one refuses at decodeJSON's Content-Type check, BEFORE the reason
+		// gate runs, so it is not a regression guard for this change — it would
+		// pass with the validation deleted. It is here to document what a
+		// pre-#487 caller now experiences. The case below it, an empty JSON
+		// object, is the one that reaches and exercises the gate.
 		{"no body at all — the pre-#487 caller", nil},
 		{"absent reason field", map[string]string{}},
 		{"empty reason", map[string]string{"reason": ""}},

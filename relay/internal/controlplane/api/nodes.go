@@ -79,9 +79,9 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 		// revocation whose record was silently dropped is exactly the
 		// unattributed irreversible act #487 exists to end, and a failing audit
 		// store is no better an excuse for it than an endpoint that accepted no
-		// reason. Safe in this direction only because RevokeNode has no error
-		// return and cannot fail once entered, so this cannot record an act
-		// that then does not happen. See recordLifecycleErr.
+		// reason. Safe in this direction because RevokeNode has no error return
+		// to strand — see recordLifecycleErr for the honest limit, which is
+		// that its durable half can still fail quietly.
 		if err := recordLifecycleErr(r.Context(), d, p, audit.KindNodeRevoke, nodeID, reason); err != nil {
 			slog.Error("control api: append node revoke audit record", "node_id", nodeID, "error", err)
 			writeProblem(w, http.StatusInternalServerError, "revoke not recorded",
