@@ -253,6 +253,19 @@ func (l *auditLatch) QueryTasks(ctx context.Context, p capability.Principal, f c
 	return res, l.latch(err)
 }
 
+// RecordEventSubscription is here for the same reason every other method on
+// this type is: an un-overridden QueryReader method would bypass the latch
+// silently, which is precisely the hole this type's doc comment claims not
+// to have. It is NOT exercised by #539's own code path — handleEvents calls
+// d.Queries.RecordEventSubscription directly, never through latched(d),
+// because it must see the error itself and refuse before writing the 200
+// rather than deferring to a page-render-time latch check. Added for
+// totality, not because this route uses it.
+func (l *auditLatch) RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) ([]string, error) {
+	names, err := l.QueryReader.RecordEventSubscription(ctx, p, kinds, resumed)
+	return names, l.latch(err)
+}
+
 // latched returns d with its read lane wrapped for one request, and the latch
 // to consult before rendering.
 //

@@ -175,6 +175,25 @@ type QueryReader interface {
 	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
+
+	// RecordEventSubscription is the odd one out (#539): the only method here
+	// that records a read and returns the canonical form of what it recorded
+	// rather than a page of rows. What it covers is read through EventReader
+	// below, not through this interface — a subscription to the live event
+	// stream is a read of the fleet's activity exactly as QueryJobs is, and
+	// ADR-0025 audits it the same way, but the ROWS cross a different seam
+	// (Subscribe), never this one. handleEvents calls this BEFORE
+	// d.Events.Subscribe; the two must stay adjacent, because a record
+	// written after Subscribe could not honestly claim nothing was disclosed.
+	//
+	// The returned []string is load-bearing, not a convenience (#539 fix
+	// round, Finding 1): handleEvents MUST build d.Events.Subscribe's kind
+	// list from this return value, never from a kind list it computed
+	// earlier or re-derived from the request — that is what makes it
+	// structurally impossible for the stream to carry a kind set the record
+	// does not name. See capability.Service.RecordEventSubscription's doc
+	// comment for the mutation this closes.
+	RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) ([]string, error)
 }
 
 // TrustReader is the two numbers a machine needs in order to decide whether
@@ -227,6 +246,13 @@ type TrustReader interface {
 //
 // RetentionWindow is here so a screen can state the window it can actually
 // see, read off the bus it is actually reading (events.Bus.RetentionWindow).
+//
+// A Subscription through here is a read the trail must know about (#539,
+// ADR-0025): handleEvents calls QueryReader.RecordEventSubscription
+// immediately before Subscribe, naming the same kinds this call is about to
+// carry. The two calls must stay adjacent in handleEvents — this interface
+// has no way to enforce that itself, since Subscribe and the record it
+// requires live on two different seams.
 type EventReader interface {
 	Subscribe(kinds []events.Kind, lastEventID string) *events.Subscription
 	Recent(kinds []events.Kind, n int) []events.Event

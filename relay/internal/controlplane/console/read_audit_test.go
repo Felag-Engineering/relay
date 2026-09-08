@@ -60,7 +60,9 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +92,14 @@ type readAuditRule struct {
 	// on the audited lane. Required: an exemption with no reason is a hole
 	// nobody has to argue for.
 	why string
+
+	// stream marks a route that never returns on its own — GET
+	// /console/events, today. Both sweeps below drive it with driveStream
+	// instead of get: driveStream cancels the request's own context the
+	// moment the fixture's fakeEvents hands out a Subscription, which is the
+	// deterministic equivalent of a client disconnecting right after the
+	// handler committed to serving it (#539).
+	stream bool
 }
 
 // audited reports whether this route must produce a read record.
@@ -157,12 +167,14 @@ var consoleReadAudit = map[string]readAuditRule{
 			"out of #450's slice to keep one migration provable rather than three rushed",
 	},
 
-	// ── Not data reads ───────────────────────────────────────────────────
+	// ── The live-read seam (#539) ─────────────────────────────────────────
 	"GET /console/events": {
-		path: "", // a streaming route; driving it in this sweep would block
-		why: "the live-read seam. It carries event-seam kinds, not fleet or trail " +
-			"queries, and its per-kind allowlist (events.go) is what governs it",
+		path:   "/console/events?kinds=enrollment,job",
+		tool:   "watch_events",
+		stream: true,
 	},
+
+	// ── Not data reads ───────────────────────────────────────────────────
 	"GET /console/assets/{path...}": {
 		path: "/console/assets/console.css",
 		why:  "static assets — the stylesheet and script the CSP forces out of the layout",
@@ -247,7 +259,12 @@ func TestConsole_AuditedRoutesRecordTheirReadThroughTheRealLane(t *testing.T) {
 			trail := &recordingTrail{}
 			d := realLaneDeps(trail)
 
-			rec := get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			var rec *httptest.ResponseRecorder
+			if rule.stream {
+				rec = driveStream(t, d, rule.path)
+			} else {
+				rec = get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			}
 			if rec.Code != http.StatusOK {
 				t.Fatalf("GET %s = %d, want 200 — an audited route must still render", rule.path, rec.Code)
 			}
@@ -357,7 +374,12 @@ func TestConsole_AnUnauditableReadRefusesTheScreen(t *testing.T) {
 			trail := &recordingTrail{appendErr: errTrailDown}
 			d := realLaneDeps(trail)
 
-			rec := get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			var rec *httptest.ResponseRecorder
+			if rule.stream {
+				rec = driveStream(t, d, rule.path)
+			} else {
+				rec = get(t, newTestHandler(d, accounts.RoleAdmin), rule.path)
+			}
 			if rec.Code == http.StatusOK {
 				t.Fatalf("GET %s = 200 with an unwritable audit trail. A read this Relay cannot "+
 					"record must be REFUSED, not served unrecorded (ADR-0025 decision 4).", rule.path)
@@ -483,7 +505,56 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	d := renderableDeps()
 	d.Queries = svc
 	d.Approvals = &fakeApprovals{resolved: []approval.Request{{ID: auditFixtureApproval}}}
+	// Without this, GET /console/events 503s before RecordEventSubscription
+	// is ever reached — d.Events == nil is checked first — which would make
+	// this file's sweeps prove nothing about the one route this is the
+	// fixture change for. newFakeEvents wraps a real *events.Bus, exactly as
+	// every other events.go test uses it; Recent() through it writes no
+	// record, so its presence does not change what any OTHER route records.
+	d.Events = newFakeEvents()
 	return d
+}
+
+// driveStream drives a streaming route (GET /console/events) through the
+// real handler without hanging the suite and without sleeping.
+//
+// The mechanism is a deterministic cancel, not a timeout race: fakeEvents'
+// onSubscribe hook is wired to the request's own cancel func, so the moment
+// handleEvents calls d.Events.Subscribe, this test cancels the very context
+// that call is running under. The pump loop's first select then takes the
+// r.Context().Done() branch and returns — no sleep, no goroutine, and the
+// handler runs its ENTIRE real path first: parse, principal, role, limiter,
+// the read record, Subscribe, then 200 and headers flushed.
+//
+// getBounded's plain timeout (dayone_test.go) is deliberately not what this
+// uses: a route that ever stopped calling Subscribe would make a
+// timeout-based drive merely SLOW, not fail, and this file needs to
+// distinguish "recorded and streamed" from "hung" on every run, not only
+// when someone is watching the clock. WithTimeout is kept anyway, as a
+// backstop: a handler that neither subscribes nor returns cannot hang this
+// suite either.
+//
+// It proves: the route can render 200 while being driven synchronously by
+// this sweep, with the read record and the Subscribe call both having
+// already happened by the time it returns. It does NOT prove anything about
+// frames crossing the stream afterward — the request is cancelled before
+// any would be written, which is dayone_test.go's openStream's job, not
+// this file's.
+func driveStream(t *testing.T, d Deps, path string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), streamTestTimeout)
+	defer cancel()
+
+	if fe, ok := d.Events.(*fakeEvents); ok {
+		fe.onSubscribe = cancel
+	}
+
+	req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	rec := httptest.NewRecorder()
+	newTestHandler(d, accounts.RoleAdmin).ServeHTTP(rec, req)
+	return rec
 }
 
 // recordingTrail is an in-memory audit.Repository: it keeps what was appended
@@ -492,7 +563,13 @@ func realLaneDeps(trail *recordingTrail) Deps {
 // The by-key reads are unused — the Console reads the trail through the
 // capability layer's query lane, never through Repository — so they answer
 // from the same slice rather than pretending to index it.
+//
+// mu guards records: events_audit_test.go's B7 holds one stream open in a
+// goroutine while the test's own goroutine drives a second request, and CI
+// runs this package under -race — a bare slice would be a real data race,
+// not a theoretical one.
 type recordingTrail struct {
+	mu        sync.Mutex
 	records   []audit.Record
 	appendErr error
 }
@@ -500,6 +577,8 @@ type recordingTrail struct {
 const errTrailDown = constErr("the audit trail cannot be written")
 
 func (t *recordingTrail) Append(_ context.Context, r audit.Record) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.appendErr != nil {
 		return t.appendErr
 	}
@@ -507,7 +586,13 @@ func (t *recordingTrail) Append(_ context.Context, r audit.Record) error {
 	return nil
 }
 
-func (t *recordingTrail) List(context.Context) ([]audit.Record, error) { return t.records, nil }
+func (t *recordingTrail) List(context.Context) ([]audit.Record, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]audit.Record, len(t.records))
+	copy(out, t.records)
+	return out, nil
+}
 
 func (t *recordingTrail) ByJob(context.Context, string) ([]audit.Record, error) {
 	return t.records, nil
@@ -530,6 +615,8 @@ func (t *recordingTrail) ByOnBehalfOf(context.Context, string) ([]audit.Record, 
 
 // ofKind returns the appended records of one Kind.
 func (t *recordingTrail) ofKind(kind string) []audit.Record {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	var out []audit.Record
 	for _, r := range t.records {
 		if r.Kind == kind {

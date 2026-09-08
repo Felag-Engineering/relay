@@ -426,6 +426,19 @@ func (s *filterSummary) String() string {
 	return truncateBytes(stripControl(s.b.String()), maxFilterSummaryBytes)
 }
 
+// wouldTruncate reports whether String() would shorten the accumulated
+// summary — that is, whether the caller needs to ask the question BEFORE
+// writing, rather than discover it only after a record already understates
+// the filter. String() itself cannot answer this after the fact: a
+// pre-truncation length of exactly maxFilterSummaryBytes and one well over
+// it both render as a maxFilterSummaryBytes-byte string, so the check has to
+// run on the untruncated length. canonicalEventKinds (readlane.go) is the
+// first caller that needs to REFUSE rather than silently accept a
+// truncation (#539 fix round, Finding 2).
+func (s *filterSummary) wouldTruncate() bool {
+	return len(stripControl(s.b.String())) > maxFilterSummaryBytes
+}
+
 // escapeFilterValue backslash-escapes the two characters that carry structure
 // in a summary, and the backslash itself so the escaping is reversible.
 func escapeFilterValue(v string) string {

@@ -3,6 +3,8 @@ package capability
 import (
 	"context"
 	"errors"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -506,5 +508,213 @@ func TestReadLane_AuditFilterJobIDIsBoundedToo(t *testing.T) {
 	}
 	if auditQ.queryCalled {
 		t.Error("a refused filter still reached the trail seam")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// RecordEventSubscription (#539). A1-A6 below, over readLaneFixture's real
+// *Service and spyAuditSink — the lane half of the mutation matrix;
+// console/events_audit_test.go's B1-B7 are the route half.
+// ---------------------------------------------------------------------------
+
+// A1: the record names the right tool, the right selector, and an EMPTY
+// aim — a subscription targets no Node and no Job.
+//
+// MUT change toolWatchEvents's value -> the tool assertion goes red.
+// MUT pass a nodeID through to recordQueryRead -> the aim assertion goes red.
+func TestRecordEventSubscription_NamesToolSelectorAndEmptyAim(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	if err != nil {
+		t.Fatalf("RecordEventSubscription: %v", err)
+	}
+	if len(names) != 1 || names[0] != "job" {
+		t.Errorf("returned names = %v, want [\"job\"] — the caller (console/events.go) builds "+
+			"Subscribe's argument from exactly this return value", names)
+	}
+	if len(sink.readCalls) != 1 {
+		t.Fatalf("wrote %d read calls, want 1", len(sink.readCalls))
+	}
+	got := sink.readCalls[0]
+	// A literal, not toolWatchEvents: the tool name lands in the append-only
+	// trail forever, so this test pins the STRING, not whatever the constant
+	// happens to hold — comparing against the constant would make a
+	// mutation of its value invisible to this test.
+	if got.Tool != "watch_events" {
+		t.Errorf("Tool = %q, want %q", got.Tool, "watch_events")
+	}
+	if got.Selector != "kinds=job" {
+		t.Errorf("Selector = %q, want %q", got.Selector, "kinds=job")
+	}
+	if got.NodeID != "" || got.JobID != "" {
+		t.Errorf("NodeID = %q, JobID = %q, want both empty — a subscription targets no Node and "+
+			"no Job", got.NodeID, got.JobID)
+	}
+}
+
+// A2: three orderings and a duplicate all record the identical selector —
+// canonicalisation (sort + dedup) is what makes the trail groupable by
+// subscription shape.
+//
+// MUT delete the sort in canonicalEventKinds -> this test goes red for the
+// reordered cases. MUT delete the dedup -> it goes red for the duplicated
+// one, and its selector would additionally exceed what a deduped one should.
+func TestRecordEventSubscription_CanonicalFormIsOrderAndDuplicateInsensitive(t *testing.T) {
+	for _, kinds := range [][]string{
+		{"job", "enrollment"},
+		{"enrollment", "job"},
+		{"job", "job", "enrollment", "job"},
+	} {
+		svc, _, _, sink := readLaneFixture(t)
+		names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, kinds, false)
+		if err != nil {
+			t.Fatalf("RecordEventSubscription(%v): %v", kinds, err)
+		}
+		if got := sink.readCalls[0].Selector; got != "kinds=enrollment,job" {
+			t.Errorf("RecordEventSubscription(%v) recorded %q, want %q", kinds, got, "kinds=enrollment,job")
+		}
+		if want := []string{"enrollment", "job"}; !slices.Equal(names, want) {
+			t.Errorf("RecordEventSubscription(%v) returned %v, want %v — the canonical form, so a "+
+				"caller building Subscribe's argument from it cannot see the caller's own order or "+
+				"duplicates", kinds, names, want)
+		}
+	}
+}
+
+// A3: a resumed subscription's selector carries resume=yes, and ONLY a
+// resumed one does.
+//
+// MUT drop the resume field from eventSubscriptionSummary -> this test goes
+// red; no other A-test asserts on the resume field.
+func TestRecordEventSubscription_ResumedRecordsTheResumeField(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, true); err != nil {
+		t.Fatalf("RecordEventSubscription: %v", err)
+	}
+	if got := sink.readCalls[0].Selector; got != "kinds=job;resume=yes" {
+		t.Errorf("Selector = %q, want %q", got, "kinds=job;resume=yes")
+	}
+}
+
+// A4: the bound is on the DISTINCT, canonicalised set, not on the raw
+// caller-supplied slice — bounding the raw slice first would turn
+// ?kinds=job,job,... into a refusal for a request this route accepts today.
+//
+// MUT remove the count/length bound entirely -> the first half (33 names,
+// a 65-byte name) goes red, because both would now be accepted and
+// recorded.
+// MUT bound the raw slice's LENGTH before dedup, instead of the deduped
+// count -> the second half (5,000 copies of "job") goes red, because a
+// pre-dedup bound of 32 would refuse 5,000 raw entries that canonicalise to
+// exactly one distinct name.
+func TestRecordEventSubscription_BoundsTheCanonicalSetNotTheRawSlice(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+
+	tooManyDistinct := make([]string, 0, maxEventKinds+1)
+	for i := 0; i <= maxEventKinds; i++ {
+		tooManyDistinct = append(tooManyDistinct, "kind-"+strconv.Itoa(i))
+	}
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooManyDistinct, false); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("%d distinct kinds = %v, want ErrInvalidFilter", len(tooManyDistinct), err)
+	}
+
+	tooLong := []string{strings.Repeat("k", maxEventKindBytes+1)}
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, tooLong, false); !errors.Is(err, ErrInvalidFilter) {
+		t.Errorf("a %d-byte kind name = %v, want ErrInvalidFilter", len(tooLong[0]), err)
+	}
+	if len(sink.readCalls) != 0 {
+		t.Fatalf("a refused subscription still wrote %d read records, want 0", len(sink.readCalls))
+	}
+
+	repeated := make([]string, 5000)
+	for i := range repeated {
+		repeated[i] = "job"
+	}
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, repeated, false)
+	if err != nil {
+		t.Fatalf("5,000 copies of one legal kind = %v, want it accepted — the allowlist bounds the "+
+			"ALPHABET, not repetition of a legal name", err)
+	}
+	if len(sink.readCalls) != 1 || sink.readCalls[0].Selector != "kinds=job" {
+		t.Fatalf("5,000 copies of \"job\" recorded %+v, want one record of kinds=job", sink.readCalls)
+	}
+	if !slices.Equal(names, []string{"job"}) {
+		t.Errorf("5,000 copies of \"job\" returned %v, want [\"job\"]", names)
+	}
+}
+
+// A4b: bounds that are each individually legal do not compose into a
+// selector filterSummary.String would silently truncate — #539 fix round,
+// Finding 2. canonicalEventKinds sorts, so a silent truncation would drop
+// whatever sorts LAST, which is exactly where a name like "tool_call" would
+// land relative to "enrollment" and "job".
+//
+// MUT delete the wouldTruncate check in canonicalEventKinds -> this test
+// goes red, because the call would then succeed and record a selector
+// filterSummary.String had already shortened without saying so.
+func TestRecordEventSubscription_RefusesASelectorThatWouldTruncate(t *testing.T) {
+	svc, _, _, sink := readLaneFixture(t)
+
+	// Five names, each individually legal (<= maxEventKindBytes), five
+	// distinct names (<= maxEventKinds) — but joined, comfortably over
+	// maxFilterSummaryBytes (256).
+	kinds := make([]string, 5)
+	for i := range kinds {
+		kinds[i] = strings.Repeat(string(rune('a'+i)), maxEventKindBytes)
+	}
+	if _, err := svc.RecordEventSubscription(context.Background(), testPrincipal, kinds, false); !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("a selector that would exceed %d bytes = %v, want ErrInvalidFilter", maxFilterSummaryBytes, err)
+	}
+	if len(sink.readCalls) != 0 {
+		t.Fatalf("a refused subscription still wrote %d read records, want 0", len(sink.readCalls))
+	}
+}
+
+// A5: a sink that refuses to write refuses the subscription, and the
+// original cause is still reachable underneath ErrReadUnaudited — the same
+// two-sentinel shape every other read-lane method uses.
+//
+// MUT swallow the sink's error and return nil -> this test goes red.
+func TestRecordEventSubscription_FailsClosedOnASinkError(t *testing.T) {
+	reg := registry.NewInMemory()
+	sinkErr := errors.New("trail is down")
+	sink := &spyAuditSink{err: sinkErr}
+	svc := New(reg, WithQueries(&spyAuditQuery{}, &spyJobQuery{}), WithAuditSink(sink))
+
+	names, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	if !errors.Is(err, ErrReadUnaudited) {
+		t.Fatalf("err = %v, want ErrReadUnaudited", err)
+	}
+	if !errors.Is(err, sinkErr) {
+		t.Errorf("err = %v, want the sink's own error still reachable underneath it", err)
+	}
+	if names != nil {
+		t.Errorf("names = %v on a failed call, want nil — a caller must not have a kind list to "+
+			"subscribe with when the record it goes with was never written", names)
+	}
+}
+
+// A6: a Service with no real audit sink refuses rather than "recording"
+// through noopAuditSink, which unconditionally returns nil — the exact
+// unaudited-stream state this ticket exists to prevent. New(reg) alone (no
+// WithQueries, no WithAuditSink) is the shape a caller could reach this
+// method on: New's own fail-open guards trip on WithExecution or
+// WithQueries, not on a bare event-subscription lane.
+//
+// MUT delete auditSinkPresent() from RecordEventSubscription -> this test
+// goes red, because canonicalEventKinds would then run to completion and
+// recordQueryRead would call noopAuditSink.RecordRead, which returns nil —
+// RecordEventSubscription would report success on a Service that recorded
+// nothing at all.
+func TestRecordEventSubscription_RefusesOnTheNoopSink(t *testing.T) {
+	reg := registry.NewInMemory()
+	svc := New(reg)
+
+	_, err := svc.RecordEventSubscription(context.Background(), testPrincipal, []string{"job"}, false)
+	if !errors.Is(err, ErrReadUnaudited) {
+		t.Fatalf("err = %v, want ErrReadUnaudited — a Service on the no-op sink must refuse rather "+
+			"than silently open an unaudited stream", err)
 	}
 }

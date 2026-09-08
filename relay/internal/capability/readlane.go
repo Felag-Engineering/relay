@@ -3,6 +3,8 @@ package capability
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -31,6 +33,25 @@ const (
 	toolQueryTasks  = "query_tasks"
 	toolAuditCounts = "audit_counts"
 	toolAuditReach  = "audit_reach"
+
+	// toolWatchEvents names the read RecordEventSubscription records (#539).
+	// "watch" rather than "stream_events": CONTEXT.md lists "event stream"
+	// among the Event seam's rejected synonyms, and this name lands in the
+	// append-only trail forever — verb_noun, in this const block's own
+	// register, surface-neutral rather than screen-named, exactly like
+	// toolQueryAudit and toolListNodes beside it.
+	toolWatchEvents = "watch_events"
+)
+
+// maxEventKinds and maxEventKindBytes bound the DISTINCT kind names
+// RecordEventSubscription will record, mirroring AuditFilter.validate's
+// Kinds bounds (32 entries, 64 bytes each) for the same reason: a
+// caller-controlled list lands in the append-only trail as this read
+// record's own selector, and console/events.go's closed allowlist bounds
+// which NAMES are legal, not how many of them a query string may repeat.
+const (
+	maxEventKinds     = 32
+	maxEventKindBytes = 64
 )
 
 // clampPage applies DefaultPageSize/MaxPageSize to a caller's PageRequest,
@@ -191,6 +212,175 @@ func (s *Service) recordQueryRead(ctx context.Context, p Principal, tool, select
 		return fmt.Errorf("%w: recording %s: %w", ErrReadUnaudited, tool, err)
 	}
 	return nil
+}
+
+// RecordEventSubscription writes the read record for one subscription to the
+// Console's live event stream (#539, ADR-0025): who opened it, over which
+// kinds, and whether it asked to resume — never the rows that later cross it.
+//
+// It returns the CANONICALISED names it just recorded, and this is not a
+// convenience — it is the fix for a vacuity a security review found in the
+// #539 fix round. The original shape asked console/events.go to build both
+// Subscribe's kind list and this call's argument from "the same loop" over
+// the query string, and relied on that sentence, unenforced, to keep them
+// from drifting; a mutation that re-derived only the RECORDED argument from
+// the raw query string passed the entire suite, because for a clean query
+// string the re-derivation happened to equal the original. Returning the
+// names this method actually validated and wrote removes the possibility
+// structurally rather than rhetorically: the caller has no OTHER kind list
+// available after a successful call, because handleEvents now builds
+// Subscribe's argument from this return value, not from anything computed
+// earlier. A caller that still tried to feed Subscribe a different set would
+// have to ignore the return value and reintroduce a second, independent
+// source of kinds — a much louder change than swapping one function
+// argument, and one console/events.go's own doc comment now names as the
+// thing never to do.
+//
+// # Why this method records without delegating to a seam
+//
+// Every other method in this file follows "validate -> record -> delegate to
+// the seam". This one does not delegate to anything, which is a genuine
+// departure from that shape: the event bus is not on the capability layer,
+// and putting Subscribe there is #543's work, not this one's. The cost is
+// that nothing HERE forces a caller to subscribe at all, or to subscribe only
+// after this returns successfully — that obligation is enforced by
+// console/read_audit_test.go's sweep driving the real handler, not by this
+// function's control flow. Named RecordEventSubscription, not
+// RecordSubscribe or Subscribe, precisely so no reader mistakes it for a
+// method that opens the stream.
+//
+// # Why per subscription, not per event
+//
+// A subscription is one query with an open-ended page; ?kinds= is its
+// filter, and the kind set is fixed for the stream's whole life
+// (events.Bus.Subscribe builds it once and never widens it) — so ONE record
+// at open completely describes what could ever cross the stream, including,
+// after #543, whether raw_exec argv could. Recording per EVENT would be the
+// first place the trail recorded a read's RESULT SET, which ADR-0025
+// decision 2 forbids, and would couple the trail's write rate to fleet
+// activity times open tabs, synchronously, fail-closed, on the pump path —
+// the volume argument ADR-0025 already rejected.
+//
+// What this loses, plainly: the trail can say who opened a live watch, when,
+// over which kinds, whether it asked to resume, and how many times — never
+// which events actually crossed, how many, or when the stream closed. There
+// is no end record, so the trail carries an open interval; exposure duration
+// must be inferred from other evidence. Nothing may come to depend on this
+// trail answering "did this session see Job X's argv".
+//
+// resumed's true value records "resume=yes" in the selector, never the
+// caller's cursor. Three reasons, not one: the cursor is caller-ASSERTED and
+// unverified (the bus may answer any cursor with a gap), so recording it
+// verbatim would put an asserted value in a field the trail reads as fact;
+// it is caller-controlled and unbounded (an HTTP header, roughly 1 MB); and
+// it is uninterpretable later, since the bus's retention ring is
+// memory-only and epoch-scoped, so a cursor recorded today names nothing
+// after a restart. "This stream may have covered up to one retention window
+// before its own timestamp" is fully carried by the boolean.
+func (s *Service) RecordEventSubscription(ctx context.Context, p Principal, kinds []string, resumed bool) ([]string, error) {
+	if err := s.auditSinkPresent(); err != nil {
+		return nil, err
+	}
+	names, err := canonicalEventKinds(kinds)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.recordQueryRead(ctx, p, toolWatchEvents, eventSubscriptionSummary(names, resumed), "", ""); err != nil {
+		return nil, err
+	}
+	return names, nil
+}
+
+// canonicalEventKinds sorts and dedups kinds before RecordEventSubscription
+// records them, and only THEN bounds the distinct count and each name's
+// length.
+//
+// DEDUP BEFORE THE COUNT BOUND, not after — and the order matters more than
+// it looks. console/events.go's closed allowlist bounds which NAMES are
+// legal, not how many times a caller may repeat one:
+// resolveEventKinds has no dedup and no count cap, so ?kinds=job,job,...
+// times 100,000 is a request this route accepts and opens a stream for
+// TODAY. Bounding the raw, un-deduped slice here would turn that working
+// URL into a 500 the moment this ticket's auditing landed — auditing a read
+// must never break a request that worked before it existed. The bound
+// belongs on what actually gets RECORDED: the distinct set.
+//
+// Canonicalising also makes the trail GROUPABLE, which is separate from and
+// beyond mere safety: job,enrollment / enrollment,job / job,job,enrollment
+// all record identically, so an auditor can group by subscription shape.
+// Injection is already impossible without this — filterSummary escapes ';'
+// and '=' and strips control characters — canonical form is not a safety
+// property, it is what keeps the trail legible.
+//
+// THE BOUNDS DO NOT COMPOSE ON THEIR OWN, and this function is where that
+// gets fixed (#539 fix round, Finding 2). maxEventKinds (32) times
+// maxEventKindBytes (64) is a joined value of roughly 2,079 bytes, and
+// eventSubscriptionSummary's filterSummary.String truncates silently at
+// maxFilterSummaryBytes (256) with no marker — and because names are SORTED
+// here, whatever gets dropped is whatever sorts LAST, which is exactly where
+// a name like "tool_call" lands relative to "enrollment" and "job". A
+// validated input could therefore be recorded UNDERSTATED, in precisely the
+// failure mode this ticket exists to prevent. Not reachable through
+// console/events.go's two-name (soon three) allowlist today, but this
+// function's own doc says the bound belongs here because "the lane must not
+// trust its caller" — the same reason applies to a future caller with a
+// bigger allowlist.
+//
+// REFUSE rather than truncate-and-mark: every other bound in this function
+// already refuses (count, per-name length) rather than accepting a
+// caller-supplied value in some shortened form, and a marker would only
+// paper over a selector an auditor still could not read completely. Checked
+// against the RESUMED form of the summary, because "resume=yes" only makes
+// the recorded value longer — a kind set whose resumed selector fits always
+// has its non-resumed selector fit too, so this is the one check that covers
+// both.
+func canonicalEventKinds(kinds []string) ([]string, error) {
+	seen := make(map[string]bool, len(kinds))
+	var names []string
+	for _, k := range kinds {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return nil, fmt.Errorf("%w: a subscription names no kinds", ErrInvalidFilter)
+	}
+	if len(names) > maxEventKinds {
+		return nil, fmt.Errorf("%w: %d distinct kinds requested, max %d", ErrInvalidFilter, len(names), maxEventKinds)
+	}
+	for _, name := range names {
+		if len(name) > maxEventKindBytes {
+			return nil, fmt.Errorf("%w: kind %q exceeds %d bytes", ErrInvalidFilter, name, maxEventKindBytes)
+		}
+	}
+	var probe filterSummary
+	probe.field("kinds", strings.Join(names, ","))
+	probe.field("resume", "yes")
+	if probe.wouldTruncate() {
+		return nil, fmt.Errorf("%w: the recorded selector for %d kinds would exceed %d bytes and be "+
+			"silently shortened", ErrInvalidFilter, len(names), maxFilterSummaryBytes)
+	}
+	return names, nil
+}
+
+// eventSubscriptionSummary renders the canonicalised kind names — and,
+// when resumed, that the request asked to resume — as
+// RecordEventSubscription's selector, using the same filterSummary and the
+// same field name AuditFilter.summary already uses for a kind list
+// ("kinds=..."), so an auditor reads one vocabulary across both.
+//
+// See RecordEventSubscription's doc comment for why the cursor itself is
+// never a field here: only the boolean that a resume was asked for is.
+func eventSubscriptionSummary(names []string, resumed bool) string {
+	var s filterSummary
+	s.field("kinds", strings.Join(names, ","))
+	if resumed {
+		s.field("resume", "yes")
+	}
+	return s.String()
 }
 
 // validate checks f before it reaches any seam — the same reasoning
