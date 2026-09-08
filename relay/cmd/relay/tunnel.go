@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -146,14 +147,23 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		// One bounded warning per connect, never one per refused label: a
 		// hostile or misconfigured Node can send an unbounded number of
 		// labels, and this is the one place that count would otherwise be
-		// attacker-controlled log volume. %q bounds control characters and
-		// newlines in the key — the same posture enroll/handler.go already
-		// takes for attacker-controlled TokenID — and the VALUE is never
-		// logged (#504): it is exactly the self-reported string this check
-		// just decided not to trust.
+		// attacker-controlled log volume.
+		//
+		// The key is BOUNDED BEFORE IT IS QUOTED, and the two do different
+		// jobs: %q bounds control characters and newlines, and the
+		// truncation bounds LENGTH. Quoting alone does not — a wire key is
+		// attacker-controlled up to gRPC's 4 MiB message limit, so a
+		// reconnect-looping Node could write megabytes per connect.
+		// enroll/handler.go reached the same conclusion for its
+		// attacker-controlled TokenID and fixed it with looksLikeTokenID,
+		// exact shape validation, rather than with quoting.
+		//
+		// The VALUE is never logged (#504): it is exactly the self-reported
+		// string this check just decided not to trust.
 		if len(refused) > 0 {
 			slog.Warn("refused malformed node labels", "node_id", nodeID,
-				"refused_count", len(refused), "first_refused_key", fmt.Sprintf("%q", refused[0]))
+				"refused_count", len(refused),
+				"first_refused_key", fmt.Sprintf("%q", boundLogKey(refused[0])))
 		}
 		if _, err := s.reg.Upsert(registry.Report{
 			NodeID:            nodeID,
@@ -296,6 +306,30 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 // DATA rather than the connection means an unreachable Node — one that could
 // never be inspected, quarantined or remediated — is never the outcome of a
 // typo in one label's value.
+// maxLoggedLabelKeyBytes bounds a refused label key before it reaches the log.
+//
+// A wire key is attacker-controlled up to gRPC's message limit, so quoting it
+// is not enough: %q escapes control characters but preserves length, and a
+// reconnect-looping Node could otherwise write megabytes per connect. 128
+// bytes is far more than any legitimate key (the allowlist alphabet is
+// [A-Za-z0-9._-], and the shipped examples are under twenty characters) and
+// still leaves a truncated key recognisable to the operator reading the line.
+const maxLoggedLabelKeyBytes = 128
+
+// boundLogKey truncates k on a rune boundary, so a multi-byte sequence is
+// never cut in half into a lone continuation byte. A refused key is by
+// definition outside the ASCII allowlist, so it may well contain one.
+func boundLogKey(k string) string {
+	if len(k) <= maxLoggedLabelKeyBytes {
+		return k
+	}
+	cut := maxLoggedLabelKeyBytes
+	for cut > 0 && !utf8.RuneStart(k[cut]) {
+		cut--
+	}
+	return k[:cut]
+}
+
 func nodeLabelsFromHello(labels []*relayv1.Label) (result map[string]string, refused []string) {
 	result = make(map[string]string)
 	for _, l := range labels {

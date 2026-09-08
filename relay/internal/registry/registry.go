@@ -11,6 +11,7 @@ package registry
 
 import (
 	"errors"
+	"maps"
 	"time"
 )
 
@@ -222,12 +223,19 @@ func (r Report) WithNodeLabels(labels map[string]string) Report {
 	return r
 }
 
-// NodeLabels returns the node-space label map r carries. Exported as a
-// read-only accessor (rather than the field itself) so internal/store, which
-// is outside this package, can read what Upsert is about to persist without
-// being able to write it.
+// NodeLabels returns a COPY of the node-space label map r carries. Exported
+// as a read-only accessor (rather than the field itself) so internal/store,
+// which is outside this package, can read what Upsert is about to persist
+// without being able to write it.
+//
+// It copies because unexporting the field bounds who may SET the map, not who
+// may MUTATE it: handing out the live map would let any holder of a Report do
+// `rep.NodeLabels()["role"] = "web, relay:quarantine=on"` and put back exactly
+// the value #504's ingress gate exists to reject, with neither the compiler
+// nor the ingress guard able to see it. The two writers are the only writers
+// by construction only if this is a copy.
 func (r Report) NodeLabels() map[string]string {
-	return r.nodeLabels
+	return maps.Clone(r.nodeLabels)
 }
 
 // Repository is the interface for the Node registry.
