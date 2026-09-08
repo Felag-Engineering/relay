@@ -448,5 +448,7 @@ and enrollment attempts — with monotonic IDs over per-publisher bounded ring b
 (1,000 events or 10 minutes, whichever first), `Last-Event-ID` resume, and a `gap` event
 the seam emits rather than fabricate continuity. It carries tool-call ARGUMENTS and never
 read RESULTS (ADR-0025) — enforced structurally, not by convention: the package imports
-nothing but the standard library. Memory-only; nothing here is persisted.
+nothing but the standard library. Memory-only; nothing here is persisted. Subscribing to it
+is itself an audited read (`watch_events`, one `KindRead` record per subscription, naming
+the kinds asked for — ADR-0025).
 _Avoid_: event stream, notifications, the firehose, pubsub

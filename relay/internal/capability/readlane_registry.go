@@ -192,6 +192,21 @@ func (s *Service) registryReadable() error {
 	if s.reg == nil {
 		return fmt.Errorf("%w: no registry is configured on this Relay", ErrQueriesUnavailable)
 	}
+	return s.auditSinkPresent()
+}
+
+// auditSinkPresent is registryReadable's sink guard, extracted (#539) so a
+// read-lane method with no registry coupling of its own — RecordEventSubscription,
+// readlane.go — can still refuse a Service built on the no-op sink.
+// registryReadable keeps its own s.reg == nil check and then calls this.
+//
+// Without it, a Service constructed with New(reg) alone (no WithAuditSink)
+// would "record" a subscription successfully through noopAuditSink.RecordRead,
+// which unconditionally returns nil, and open an UNAUDITED live stream — the
+// exact "unauditable read succeeded" state ADR-0025 forbids. New's own
+// fail-open guards do not cover this: they trip on WithExecution or
+// WithQueries, and a bare event-subscription lane needs neither.
+func (s *Service) auditSinkPresent() error {
 	if _, noop := s.audit.(noopAuditSink); noop {
 		return fmt.Errorf("%w: no audit sink is configured on this Relay", ErrReadUnaudited)
 	}

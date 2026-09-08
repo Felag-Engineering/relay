@@ -667,8 +667,15 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		"encoding/hex": true,
 		"errors":       true,
 		"fmt":          true,
-		"strings":      true,
-		"time":         true,
+		// sort joined with #539: RecordEventSubscription canonicalises its
+		// caller-supplied kind list (sort + dedup) before it is bounded and
+		// recorded, so a subscription's read record is grouped by shape
+		// rather than by the order a query string happened to list kinds
+		// in. Stdlib, no proto, no database/sql — the same admission bar
+		// every other entry here clears.
+		"sort":    true,
+		"strings": true,
+		"time":    true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs":     true,
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry": true,
 		// internal/approval joined the allowlist with #269 (ADR-0027). It is

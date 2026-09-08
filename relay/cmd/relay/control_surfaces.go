@@ -264,9 +264,10 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// here.
 		Events: consoleEventsOrNil(d.events),
 		// The read lane (#441). d.capability (*capability.Service) already
-		// implements console.QueryReader's five methods. Job detail (#423)
-		// reads Jobs and Tasks through it and through nothing else, which is
-		// why the Console is handed no Job repository of its own.
+		// implements console.QueryReader's eight methods (#450 added the
+		// registry half; #539 added RecordEventSubscription). Job detail
+		// (#423) reads Jobs and Tasks through it and through nothing else,
+		// which is why the Console is handed no Job repository of its own.
 		Queries: d.capability,
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.

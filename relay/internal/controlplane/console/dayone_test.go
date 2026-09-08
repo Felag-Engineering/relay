@@ -1314,13 +1314,13 @@ func TestConsoleEvents_RequiredRoleIsTheMaximumRegardlessOfOrder(t *testing.T) {
 		"high": {events.KindJob, accounts.RoleAdmin},
 	}
 	for _, param := range []string{"low,high", "high,low"} {
-		_, needed, _, ok := resolveEventKinds(param, table)
+		sub, ok := resolveEventKinds(param, table)
 		if !ok {
 			t.Fatalf("resolveEventKinds(%q) refused a valid table", param)
 		}
-		if needed != accounts.RoleAdmin {
+		if sub.Needed != accounts.RoleAdmin {
 			t.Errorf("resolveEventKinds(%q) requires %q, want admin — the requirement must be the "+
-				"MAXIMUM over the requested kinds, not whichever entry was listed last", param, needed)
+				"MAXIMUM over the requested kinds, not whichever entry was listed last", param, sub.Needed)
 		}
 	}
 
@@ -1332,14 +1332,14 @@ func TestConsoleEvents_RequiredRoleIsTheMaximumRegardlessOfOrder(t *testing.T) {
 		"superadmin": {events.KindToolCall, accounts.Role("superadmin")},
 	}
 	for _, param := range []string{"superadmin", "superadmin,job", "job,superadmin"} {
-		kinds, needed, _, ok := resolveEventKinds(param, broken)
+		sub, ok := resolveEventKinds(param, broken)
 		if ok {
 			t.Errorf("resolveEventKinds(%q) admitted a kind whose MinRole is not a role, requiring "+
 				"%q — an unrecognised requirement must refuse, not resolve to the entry beside it",
-				param, needed)
+				param, sub.Needed)
 		}
-		if kinds != nil {
-			t.Errorf("resolveEventKinds(%q) returned kinds alongside its refusal: %v", param, kinds)
+		if sub.Kinds != nil {
+			t.Errorf("resolveEventKinds(%q) returned kinds alongside its refusal: %v", param, sub.Kinds)
 		}
 	}
 }

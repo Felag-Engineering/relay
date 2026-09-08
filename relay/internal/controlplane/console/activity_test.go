@@ -777,6 +777,12 @@ func (q *endlessQueries) QueryTasks(context.Context, capability.Principal, capab
 	return capability.TaskPage{}, nil
 }
 
+// RecordEventSubscription is unused by Activity, which never opens the
+// events route: present only to satisfy QueryReader (#539).
+func (q *endlessQueries) RecordEventSubscription(context.Context, capability.Principal, []string, bool) error {
+	return nil
+}
+
 // TestActivity_TheRiskChipIsOnlyOnRowsThatRan. riskOf answers "mutate" for
 // anything it does not recognise, because mutate is the safe direction for an
 // unrecognised OPERATION. A Freeze engage is not an unrecognised Operation, it
@@ -915,6 +921,12 @@ func (q *scriptedQueries) AuditReach(context.Context, capability.Principal, capa
 
 func (q *scriptedQueries) QueryTasks(context.Context, capability.Principal, capability.TaskFilter, capability.PageRequest) (capability.TaskPage, error) {
 	return capability.TaskPage{}, nil
+}
+
+// RecordEventSubscription is unused by Activity, which never opens the
+// events route: present only to satisfy QueryReader (#539).
+func (q *scriptedQueries) RecordEventSubscription(context.Context, capability.Principal, []string, bool) error {
+	return nil
 }
 
 // TestActivity_AnExhaustedLaneStaysExhausted is the bug an empty cursor hides.

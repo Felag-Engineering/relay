@@ -175,6 +175,16 @@ type QueryReader interface {
 	AuditReach(ctx context.Context, p capability.Principal, f capability.AuditFilter) (capability.Reach, error)
 	QueryJobs(ctx context.Context, p capability.Principal, f capability.JobFilter, page capability.PageRequest) (capability.JobPage, error)
 	QueryTasks(ctx context.Context, p capability.Principal, f capability.TaskFilter, page capability.PageRequest) (capability.TaskPage, error)
+
+	// RecordEventSubscription is the odd one out (#539): the only method here
+	// that records a read without returning any data. What it covers is read
+	// through EventReader below, not through this interface — a subscription
+	// to the live event stream is a read of the fleet's activity exactly as
+	// QueryJobs is, and ADR-0025 audits it the same way, but the ROWS cross a
+	// different seam (Subscribe), never this one. handleEvents calls this
+	// BEFORE d.Events.Subscribe; the two must stay adjacent, because a record
+	// written after Subscribe could not honestly claim nothing was disclosed.
+	RecordEventSubscription(ctx context.Context, p capability.Principal, kinds []string, resumed bool) error
 }
 
 // TrustReader is the two numbers a machine needs in order to decide whether
@@ -227,6 +237,13 @@ type TrustReader interface {
 //
 // RetentionWindow is here so a screen can state the window it can actually
 // see, read off the bus it is actually reading (events.Bus.RetentionWindow).
+//
+// A Subscription through here is a read the trail must know about (#539,
+// ADR-0025): handleEvents calls QueryReader.RecordEventSubscription
+// immediately before Subscribe, naming the same kinds this call is about to
+// carry. The two calls must stay adjacent in handleEvents — this interface
+// has no way to enforce that itself, since Subscribe and the record it
+// requires live on two different seams.
 type EventReader interface {
 	Subscribe(kinds []events.Kind, lastEventID string) *events.Subscription
 	Recent(kinds []events.Kind, n int) []events.Event

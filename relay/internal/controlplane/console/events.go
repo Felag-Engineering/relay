@@ -62,6 +62,53 @@ package console
 // same edit. TestConsoleEvents_EveryKindNamesTheRoleThatMaySeeIt is the
 // tripwire, and it asserts the allowlist's exact SIZE for that reason.
 //
+// # THE SUBSCRIPTION IS A RECORDED READ (#539)
+//
+// A subscription to this route is a read of the fleet's live activity, and
+// ADR-0025 audits it exactly as it audits QueryJobs or ListNodes: one
+// KindRead record, written through capability.Service.RecordEventSubscription
+// (the read lane, never a RecordRead call in this package — invariant 10),
+// BEFORE d.Events.Subscribe runs.
+//
+// PER SUBSCRIPTION, NOT PER EVENT. events.Bus.Subscribe builds its kind set
+// once, at open, and exposes no method that widens a live Subscription — so
+// one record, naming the kinds asked for, completely describes what could
+// ever cross the stream for its whole life, including, once #543 admits
+// tool_call, whether raw_exec argv could. Recording per event would be the
+// first read on this Relay whose trail entry described a RESULT rather than
+// a FILTER (ADR-0025 decision 2 forbids exactly that), and would tie the
+// trail's write rate to fleet activity times open Console tabs, synchronously
+// and fail-closed, on the pump path below — a trail hiccup would kill every
+// open Console. What this trades away, plainly: the trail can say who opened
+// a watch, over which kinds, and whether it resumed, never which events
+// actually crossed or when the stream closed. There is no close record, so
+// exposure duration is an open interval an auditor infers from elsewhere.
+// Nothing in this codebase may come to depend on the trail answering "did
+// this session see Job X's argv" — it does not, and per RecordEventSubscription's
+// own doc comment, it will not without a deliberate, separate decision.
+//
+// A RECONNECT IS ITS OWN RECORD, for free: recording is per HTTP REQUEST, not
+// per logical session, so a resume writes a second record naming resume=yes.
+// This matters because a resume replays the bus's retained backlog
+// immediately on Subscribe — the reconnecting request's exposure window
+// starts BEFORE its own timestamp, up to the bus's retention bound. A record
+// that did not say "this resumed" would understate exactly the subscriptions
+// most likely to be interesting.
+//
+// FAIL CLOSED, on #450's reasoning verbatim: the record is written before
+// Subscribe, so a failure to record means no Subscription was ever created,
+// nothing was buffered and nothing replayed — the refusal can honestly say
+// nothing was disclosed. There is deliberately no mid-stream audit write and
+// therefore no mid-stream failure to decide: that is the direct consequence
+// of recording being per-subscription (above), not a separate dodge. Should
+// anything ever reintroduce a write during or at the end of an open stream —
+// per-event/per-batch recording, a periodic "still open" record, or a
+// close/duration record — fail-closed stops being available for it: the
+// disclosure will already have happened by the time such a write could fail,
+// and a refused close-record could only be logged, never used to undo the
+// stream. Decide that separately, deliberately, if it ever comes up; #543
+// admitting tool_call does not, because the kind set stays fixed at Subscribe.
+//
 // # Projection, not marshalling
 //
 // Nothing here marshals an events.Event. Each kind is projected field by field
@@ -137,9 +184,18 @@ const (
 	// inside a cap of four. A THIRD must revisit this number deliberately
 	// rather than discovering it: this is a lock-contention control on the
 	// path a Node enrolls and a Job dispatches, not tidiness.
-	maxConcurrentStreams   = 64
-	maxStreamsPerPrincipal = 4
+	maxConcurrentStreams = 64
 )
+
+// maxStreamsPerPrincipal is a var rather than a const, for exactly the
+// reason sseKeepalive and sseWriteTimeout above are: events_audit_test.go's
+// B7 needs the per-principal cap reachable without actually holding four
+// concurrent streams open, and shrinking it to 1 for one test is the
+// deterministic way to do that. It is unexported, unreachable from any
+// surface, and never read from configuration (invariant 11) — the same
+// property those two vars carry, restored by t.Cleanup exactly as
+// sseKeepalive's callers restore it.
+var maxStreamsPerPrincipal = 4
 
 // consoleEventKind is one admitted kind and the lowest role that may see its
 // projection.
@@ -254,7 +310,7 @@ func handleEvents(d Deps) http.HandlerFunc {
 	limiter := &streamLimiter{}
 
 	return func(w http.ResponseWriter, r *http.Request) {
-		kinds, needed, neededFor, ok := parseEventKinds(r.URL.Query().Get("kinds"))
+		wanted, ok := parseEventKinds(r.URL.Query().Get("kinds"))
 		if !ok {
 			http.Error(w,
 				"this Console event stream serves the kinds \"enrollment\" and \"job\", and "+
@@ -291,9 +347,16 @@ func handleEvents(d Deps) http.HandlerFunc {
 		// precisely for its fail-closed direction — it ranks an unrecognised
 		// role at zero and returns false for every valid want, so an empty,
 		// corrupted or future role is REFUSED here rather than admitted.
-		if !accounts.Role(p.Role).AtLeast(needed) {
+		//
+		// POSITION (1 of 4, #539): the read record below must come AFTER
+		// this check, never before it. A refused caller disclosed nothing,
+		// and recording a 403 as a read would put non-accesses into read
+		// egress's enumeration count — the same reasoning DescribeNode's
+		// "record the probe" precedent does NOT extend to a role refusal,
+		// because a 403 is not a probe for the existence of anything.
+		if !accounts.Role(p.Role).AtLeast(wanted.Needed) {
 			http.Error(w,
-				"the event kind \""+neededFor+"\" needs the role \""+string(needed)+"\" on this "+
+				"the event kind \""+wanted.NeededFor+"\" needs the role \""+string(wanted.Needed)+"\" on this "+
 					"Console. The whole request is refused rather than served without that kind: "+
 					"a live region missing one of the kinds it asked for is blind and looks healthy.",
 				http.StatusForbidden)
@@ -304,6 +367,13 @@ func handleEvents(d Deps) http.HandlerFunc {
 		if key == "" {
 			key = p.Account
 		}
+		// POSITION (2 of 4, #539): the read record below must come AFTER
+		// this acquire, not before it. The 429 is the cheap refusal this
+		// code already orders first; an audit-store write in front of it
+		// would let any viewer already at their cap make this Relay perform
+		// a durable write per attempt — unbounded work behind a bounded
+		// check. DescribeNode's "record the probe" precedent does not apply
+		// here either: a 429 is not a probe for the existence of anything.
 		if allowed, why := limiter.acquire(key); !allowed {
 			// 429 with an explanation, and a Retry-After, because the
 			// client's own backoff is what will act on it.
@@ -322,7 +392,25 @@ func handleEvents(d Deps) http.HandlerFunc {
 			lastEventID = r.URL.Query().Get("last_event_id")
 		}
 
-		sub := d.Events.Subscribe(kinds, lastEventID)
+		if d.Queries == nil {
+			unavailable(w, "the audit and Job query lane")
+			return
+		}
+		// POSITION (3 of 4, #539): the read record MUST be written before
+		// Subscribe, non-negotiable. Subscribe registers this request with
+		// the bus, and a resume replays the retained backlog immediately —
+		// a record written after Subscribe could not honestly claim that
+		// nothing was disclosed. wanted.Names is built by the SAME LOOP that
+		// built wanted.Kinds (resolveEventKinds below), never by re-parsing the
+		// query string, so the record and the stream cannot drift: a record
+		// saying "job" while the stream carries tool_call is this ticket's
+		// worst possible failure.
+		if err := d.Queries.RecordEventSubscription(r.Context(), p, wanted.Names, lastEventID != ""); err != nil {
+			readFailed(w, err, "this live event watch")
+			return
+		}
+
+		sub := d.Events.Subscribe(wanted.Kinds, lastEventID)
 		// Mandatory. Bus.Close is the only thing that deletes a
 		// Subscription from the bus, and every publish fans out to every
 		// registered one — a leaked Subscription is a permanent map entry
@@ -395,6 +483,24 @@ func handleEvents(d Deps) http.HandlerFunc {
 	}
 }
 
+// eventSubscription is one parsed ?kinds= request: the events.Kind values
+// Subscribe needs, the exact allowlist names that produced them, and the
+// role gate they impose together.
+//
+// Names exists ONLY so RecordEventSubscription can be told what to record
+// without re-parsing the query string a second time — see resolveEventKinds
+// below for why that matters. It is left un-deduped and in request order:
+// events.Bus.Subscribe already folds Kinds to a set internally, and the read
+// lane's canonicalEventKinds sorts and dedups Names before it lands in the
+// trail, so doing either job here would be duplicated work with no
+// consumer.
+type eventSubscription struct {
+	Kinds     []events.Kind
+	Names     []string
+	Needed    accounts.Role
+	NeededFor string
+}
+
 // parseEventKinds resolves a comma-separated kinds parameter against the closed
 // allowlist. An empty or unrecognised parameter is refused rather than defaulted:
 // this route must never widen by omission.
@@ -403,7 +509,7 @@ func handleEvents(d Deps) http.HandlerFunc {
 // of the kind that set it. The whole request is then admitted or refused
 // together — a client that asked for job,enrollment and silently got only one
 // of them would render a live region that is blind and looks healthy.
-func parseEventKinds(param string) ([]events.Kind, accounts.Role, string, bool) {
+func parseEventKinds(param string) (eventSubscription, bool) {
 	return resolveEventKinds(param, consoleEventKinds)
 }
 
@@ -411,15 +517,22 @@ func parseEventKinds(param string) ([]events.Kind, accounts.Role, string, bool) 
 // accumulation below can be tested against a table this package would never
 // ship — which is the only way to test what it does with a MinRole that is not
 // a role.
-func resolveEventKinds(param string, allow map[string]consoleEventKind) (kinds []events.Kind, needed accounts.Role, neededFor string, ok bool) {
+//
+// sub.Names is appended in the SAME LOOP, from the SAME `name` variable, that
+// appends sub.Kinds — never reconstructed later by re-splitting param. That
+// is what makes it impossible for the read record RecordEventSubscription
+// writes to name a kind the stream does not actually carry: the two slices
+// are built from one pass over one set of allowlist lookups, so they can only
+// ever describe the same subscription.
+func resolveEventKinds(param string, allow map[string]consoleEventKind) (sub eventSubscription, ok bool) {
 	if param == "" {
-		return nil, "", "", false
+		return eventSubscription{}, false
 	}
 	for _, raw := range strings.Split(param, ",") {
 		name := strings.TrimSpace(raw)
 		entry, known := allow[name]
 		if !known {
-			return nil, "", "", false
+			return eventSubscription{}, false
 		}
 		// An entry whose MinRole is not a role AT ALL is a bug in the table,
 		// and the safe reading of a bug in an authz table is REFUSE. It is
@@ -431,17 +544,18 @@ func resolveEventKinds(param string, allow map[string]consoleEventKind) (kinds [
 		// depend on the order the caller listed the kinds in. Refusing here is
 		// what lets the loop below be a real maximum.
 		if !entry.MinRole.Valid() {
-			return nil, "", "", false
+			return eventSubscription{}, false
 		}
-		kinds = append(kinds, entry.Kind)
+		sub.Kinds = append(sub.Kinds, entry.Kind)
+		sub.Names = append(sub.Names, name)
 		// Every MinRole reaching this line is valid, so AtLeast is a total
 		// order and this is the maximum. The first entry raises `needed` from
 		// the empty role, which satisfies nothing.
-		if !needed.AtLeast(entry.MinRole) {
-			needed, neededFor = entry.MinRole, name
+		if !sub.Needed.AtLeast(entry.MinRole) {
+			sub.Needed, sub.NeededFor = entry.MinRole, name
 		}
 	}
-	return kinds, needed, neededFor, true
+	return sub, true
 }
 
 // frameEvent renders one event as an SSE frame, or reports that this route does

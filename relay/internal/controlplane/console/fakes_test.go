@@ -262,6 +262,14 @@ type fakeQueries struct {
 	jobLimits   []int
 	taskLimits  []int
 
+	// subscriptionKinds and subscriptionResumed record every
+	// RecordEventSubscription call (#539), in order — the events-route
+	// equivalent of auditFilters/jobFilters above. subscriptionErr makes the
+	// call fail, for the fail-closed refusal path.
+	subscriptionKinds   [][]string
+	subscriptionResumed []bool
+	subscriptionErr     error
+
 	// nodes is the registry half of the lane (#450). A screen test that
 	// renders the fleet or a Node puts them HERE rather than on fakeFleet:
 	// the audited lane is the door those screens now use, and a fixture that
@@ -512,6 +520,19 @@ func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, no
 	return capability.NodeDetail{}, capability.ErrNodeNotFound
 }
 
+// RecordEventSubscription is the events route's half of the read lane
+// (#539). It never builds a real audit.Record — nothing that is not the
+// production sink should be able to claim it audited anything
+// (read_audit_test.go's own doc comment) — so tests that need a REAL record
+// use realLaneDeps instead. This fake exists only to (a) let screen tests
+// that do not care about auditing render at all, and (b) let a test assert
+// what handleEvents PASSED, via subscriptionKinds/subscriptionResumed.
+func (f *fakeQueries) RecordEventSubscription(_ context.Context, _ capability.Principal, kinds []string, resumed bool) error {
+	f.subscriptionKinds = append(f.subscriptionKinds, kinds)
+	f.subscriptionResumed = append(f.subscriptionResumed, resumed)
+	return f.subscriptionErr
+}
+
 func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filter capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
 	f.jobCalls++
 	f.jobFilters = append(f.jobFilters, filter)
@@ -608,6 +629,14 @@ const (
 type fakeEvents struct {
 	bus *events.Bus
 
+	// onSubscribe, when set, is called synchronously from Subscribe AFTER
+	// the real bus has handed out a Subscription. read_audit_test.go's
+	// driveStream uses it to cancel the request's own context at exactly
+	// the point a real disconnecting client would — deterministically,
+	// with no sleep and no goroutine, which is what lets a streaming route
+	// be driven by the classification sweep at all (#539).
+	onSubscribe func()
+
 	mu   sync.Mutex
 	subs []*events.Subscription
 }
@@ -619,8 +648,11 @@ func newFakeEvents(opts ...events.Option) *fakeEvents {
 func (f *fakeEvents) Subscribe(kinds []events.Kind, lastEventID string) *events.Subscription {
 	sub := f.bus.Subscribe(kinds, lastEventID)
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.subs = append(f.subs, sub)
+	f.mu.Unlock()
+	if f.onSubscribe != nil {
+		f.onSubscribe()
+	}
 	return sub
 }
 
