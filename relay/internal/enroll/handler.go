@@ -373,7 +373,8 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 		if !ok {
 			s.attempt(ctx, AttemptEvent{Reason: AttemptMalformed, Source: source})
 			return nil, status.Errorf(codes.InvalidArgument,
-				"self_labels must be node:-prefixed with a key and value matching [A-Za-z0-9._-]+ (offending key: %q)",
+				"self_labels must be node:-prefixed, with a non-empty bare key and a "+
+					"(possibly empty) value whose every byte is in [A-Za-z0-9._-] (offending key: %q)",
 				l.GetKey())
 		}
 		nodeLabels[bare] = l.GetValue()

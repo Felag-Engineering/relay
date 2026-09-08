@@ -283,29 +283,6 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	}
 }
 
-// nodeLabelsFromHello extracts node-space labels from Hello labels, returning
-// a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
-// of every label that ParseNodeLabel refused. Only keys with a "node:"
-// prefix, a non-empty bare key, and a well-formed (bare key, value) pair
-// (registry.WellFormedNodeLabel, #504) are accepted; everything else is
-// omitted from the map, never sanitised into it.
-//
-// WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,
-// the Relay is the sole authority for relay: labels. A relay-daemon can never set
-// relay-space labels, regardless of what it sends on the wire. Dropping (rather
-// than rejecting with an error) keeps the tunnel resilient — a stray relay: label
-// never tears down a long-lived connection.
-//
-// WHY a malformed node: label is dropped rather than sanitised (#504, ADR-0017):
-// sanitising "role=web x" to "role=webx" would make the Node match a Selector
-// NOBODY WROTE — the Relay itself manufacturing the attracting value, ADR-0017's
-// forge-to-attract cell — while omission can only produce forge-to-evade, which
-// ADR-0017 already accepts as a residual a compromised Node has for free by
-// reporting a well-formed lie instead. Omission is per-label: one malformed
-// site does not cost a Node every other label it reported, and refusing the
-// DATA rather than the connection means an unreachable Node — one that could
-// never be inspected, quarantined or remediated — is never the outcome of a
-// typo in one label's value.
 // maxLoggedLabelKeyBytes bounds a refused label key before it reaches the log.
 //
 // A wire key is attacker-controlled up to gRPC's message limit, so quoting it
@@ -330,6 +307,29 @@ func boundLogKey(k string) string {
 	return k[:cut]
 }
 
+// nodeLabelsFromHello extracts node-space labels from Hello labels, returning
+// a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
+// of every label that ParseNodeLabel refused. Only keys with a "node:"
+// prefix, a non-empty bare key, and a well-formed (bare key, value) pair
+// (registry.WellFormedNodeLabel, #504) are accepted; everything else is
+// omitted from the map, never sanitised into it.
+//
+// WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,
+// the Relay is the sole authority for relay: labels. A relay-daemon can never set
+// relay-space labels, regardless of what it sends on the wire. Dropping (rather
+// than rejecting with an error) keeps the tunnel resilient — a stray relay: label
+// never tears down a long-lived connection.
+//
+// WHY a malformed node: label is dropped rather than sanitised (#504, ADR-0017):
+// sanitising "role=web x" to "role=webx" would make the Node match a Selector
+// NOBODY WROTE — the Relay itself manufacturing the attracting value, ADR-0017's
+// forge-to-attract cell — while omission can only produce forge-to-evade, which
+// ADR-0017 already accepts as a residual a compromised Node has for free by
+// reporting a well-formed lie instead. Omission is per-label: one malformed
+// site does not cost a Node every other label it reported, and refusing the
+// DATA rather than the connection means an unreachable Node — one that could
+// never be inspected, quarantined or remediated — is never the outcome of a
+// typo in one label's value.
 func nodeLabelsFromHello(labels []*relayv1.Label) (result map[string]string, refused []string) {
 	result = make(map[string]string)
 	for _, l := range labels {
