@@ -11,7 +11,10 @@ package console
 // and #422/#423/#425 and inherited its auditing for free; the rest kept
 // reading FleetReader, PolicyReader and AuditReader directly, which is a door
 // with no record on the other side of it. #450 moved the fleet listing and
-// node detail through that door and closed it behind them.
+// node detail through that door and closed it behind them, and #542 moved
+// agent history's whole-trail read onto QueryAudit. The comparison screen is
+// what remains: it still resolves its columns through FleetReader and
+// PolicyReader, and it is the last data-read exemption in the table below.
 //
 // The thing that stops this recurring is not the migration, it is this file.
 // A Console screen is cheap to add — it is a row in [Routes] and a handler —
@@ -152,19 +155,19 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "/console/approvals/" + auditFixtureApproval,
 		tool: "query_audit",
 	},
-
-	// ── Not yet on the lane ──────────────────────────────────────────────
 	"GET /console/agents": {
 		path: "/console/agents",
-		why: "agent history still reads the whole trail through AuditReader.List. " +
-			"Migrating it is #424, which reshapes the screen around the lane's paging; " +
-			"#450 deliberately did not widen into that work",
+		tool: "query_audit",
 	},
+
+	// ── Not yet on the lane ──────────────────────────────────────────────
 	"GET /console/compare": {
 		path: "/console/compare?nodes=" + auditFixtureNode,
 		why: "the comparison screen still resolves its columns through FleetReader " +
-			"and PolicyReader. It is the last registry read off the lane; it was left " +
-			"out of #450's slice to keep one migration provable rather than three rushed",
+			"and PolicyReader. It is the last registry read off the lane, and the last " +
+			"data-read exemption in this table — agent history moved onto query_audit " +
+			"in #542; compare.go was left out of #450's slice to keep one migration " +
+			"provable rather than three rushed and follows in its own ticket",
 	},
 
 	// ── The live-read seam (#539) ─────────────────────────────────────────

@@ -699,7 +699,7 @@ func TestVocab_DenyExplanationDoesNotBlameTheDaemonForADeliberateOmission(t *tes
 // has a perfectly well known outcome, and "unspecified" reads as "we don't
 // know".
 func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
-	_, calls, _ := buildAgents([]audit.Record{
+	_, calls := buildAgents([]capability.AuditRow{
 		{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: "agent:operator", Timestamp: testNow},
 	}, "", testNow)
 
@@ -722,14 +722,19 @@ func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
 // read-class Operation, a non-dispatching read tool, a raw_exec dispatch, a
 // raw_exec the role gate refused, and a raw_exec still parked for approval.
 //
+// Rows, not audit.Record — the read lane's own type, since #542. This is the
+// helper the buildAgents call sites in this file build their pages out of; it
+// is NOT rowOfRecord (read_audit_test.go), which projects a REAL sink-built
+// record and would have its meaning diluted by fixture use.
+//
 // The two service.restart dispatches are the DISCRIMINATING records. The
 // predicate this fixture replaced counted `Kind == KindDispatch && ActionKind
 // != "" && OperationName == ""` — raw_exec only — so a fixture made of
 // raw_exec alone passes under both the old and the new counting and proves
 // nothing. Removing service.restart from this slice must take the guard red.
-func agentMutateFixture() []audit.Record {
+func agentMutateFixture() []capability.AuditRow {
 	const who = "gleipnir-prod:operator"
-	return []audit.Record{
+	return []capability.AuditRow{
 		// Mutating Operations: an OperationName IS set, which is exactly what
 		// the old predicate required to be empty.
 		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "service.restart",
@@ -768,19 +773,19 @@ func agentMutateFixture() []audit.Record {
 // literal 5, so a change to what riskOf calls a mutate moves the guard with
 // it instead of leaving a stale number to be "fixed".
 func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
-	recs := agentMutateFixture()
+	rows := agentMutateFixture()
 
 	want := 0
-	for _, rec := range recs {
-		if riskOf(factsOfRecord(rec)) == jobs.RiskClassMutate {
+	for _, row := range rows {
+		if riskOf(factsOfRow(row)) == jobs.RiskClassMutate {
 			want++
 		}
 	}
 	// Sanity on the fixture itself: it must contain more mutates than its
 	// raw_exec records alone, or it cannot discriminate the two predicates.
 	rawExecs := 0
-	for _, rec := range recs {
-		if rec.ActionKind == rawExecActionKind {
+	for _, row := range rows {
+		if row.ActionKind == rawExecActionKind {
 			rawExecs++
 		}
 	}
@@ -789,7 +794,7 @@ func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
 			"passes under the old predicate too and proves nothing", want, rawExecs)
 	}
 
-	rail, _, _ := buildAgents(recs, "", testNow)
+	rail, _ := buildAgents(rows, "", testNow)
 	if len(rail) != 1 {
 		t.Fatalf("got %d rail entries, want 1", len(rail))
 	}
@@ -798,8 +803,8 @@ func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
 			"OperationName, and counting only records with an EMPTY one counts raw_exec alone",
 			rail[0].Mutates, want)
 	}
-	if rail[0].Calls != len(recs) {
-		t.Errorf("rail call count = %d, want %d", rail[0].Calls, len(recs))
+	if rail[0].Calls != len(rows) {
+		t.Errorf("rail call count = %d, want %d", rail[0].Calls, len(rows))
 	}
 }
 
@@ -814,10 +819,10 @@ func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
 // BE is the sibling guard above; splitting them keeps each failure legible.
 func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: agentMutateFixture()}
+	d.Queries = &fakeQueries{rows: agentMutateFixture()}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	rail, _, _ := buildAgents(agentMutateFixture(), "", testNow)
+	rail, _ := buildAgents(agentMutateFixture(), "", testNow)
 	want := itoa(rail[0].Mutates) + " mutate"
 	if !strings.Contains(body, want) {
 		t.Errorf("the Accounts rail does not render %q; spec 03 lists the mutate count among "+
@@ -837,9 +842,9 @@ func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 // Asserted on the RENDERED page, counting `data-risk="mutate"` chips against
 // the rail's own number, because that is the comparison the operator makes.
 func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
-	recs := agentMutateFixture()
+	rows := agentMutateFixture()
 
-	rail, calls, _ := buildAgents(recs, "", testNow)
+	rail, calls := buildAgents(rows, "", testNow)
 	if len(rail) != 1 {
 		t.Fatalf("got %d rail entries, want 1", len(rail))
 	}
@@ -855,7 +860,7 @@ func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
 	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rows}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 	if rendered := strings.Count(body, `data-risk="mutate"`); rendered != rail[0].Mutates {
 		t.Errorf("the rendered page shows %d mutate risk chips and a rail count of %d",
@@ -891,7 +896,7 @@ func TestAgents_RailLinkSurvivesAnAccountNameWithReservedCharacters(t *testing.T
 		"agent:a=b",
 		"agent:sp ace",
 	} {
-		rail, _, _ := buildAgents([]audit.Record{
+		rail, _ := buildAgents([]capability.AuditRow{
 			{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: principal, Timestamp: testNow},
 		}, "", testNow)
 
@@ -2223,16 +2228,16 @@ func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
 // The first keeps the prose; the rest keep their outcome chip, their Node and a
 // one-line marker. Node detail has collapsed these the same way all along.
 func TestAgents_RepeatedDenyProseIsCollapsed(t *testing.T) {
-	var recs []audit.Record
+	var rows []capability.AuditRow
 	for _, n := range []string{"n1", "n2", "n3"} {
-		recs = append(recs, audit.Record{
+		rows = append(rows, capability.AuditRow{
 			Kind: audit.KindDispatch, OperationName: "file.read",
 			Args: map[string]string{"path": "/etc/shadow"}, NodeID: n,
 			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow,
 		})
 	}
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rows, "", testNow)
 	if len(calls) != 3 {
 		t.Fatalf("got %d calls, want 3 — collapsing prose must never drop a row", len(calls))
 	}
@@ -2261,7 +2266,7 @@ func TestAgents_RepeatedDenyProseIsCollapsed(t *testing.T) {
 // a read-class Task"), so keying on the text would silently collapse refusals
 // of DIFFERENT Operations into one — hiding the second refusal entirely.
 func TestAgents_DifferentOperationsKeepTheirOwnDenyProse(t *testing.T) {
-	recs := []audit.Record{
+	rows := []capability.AuditRow{
 		{
 			Kind: audit.KindDispatch, OperationName: "file.read",
 			Args: map[string]string{"path": "/etc/shadow"}, NodeID: "n1",
@@ -2274,7 +2279,7 @@ func TestAgents_DifferentOperationsKeepTheirOwnDenyProse(t *testing.T) {
 		},
 	}
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rows, "", testNow)
 	for _, c := range calls {
 		if c.Deny == nil {
 			t.Errorf("the refusal of %s was collapsed into another Operation's explanation", c.Args)
@@ -2591,6 +2596,23 @@ func (r *captureRepo) ByOnBehalfOf(context.Context, string) ([]audit.Record, err
 	return nil, nil
 }
 
+// rowsOfRecords projects real, sink-written audit.Record values onto the
+// read lane's row type, through rowOfRecord (read_audit_test.go) — one
+// call per record, for the sinkReadRecords/sinkCancelRecords/sinkPlanRecords/
+// sinkApprovalDecisionRecords fixtures below. Reusing rowOfRecord here is the
+// legitimate case its own doc comment describes: these ARE real records the
+// production sink wrote, not hand-typed literals, so projecting them is
+// exactly the thing that helper exists for. agentMutateFixture and the other
+// hand-written []capability.AuditRow literals in this file are the opposite
+// case and build rows directly instead.
+func rowsOfRecords(recs []audit.Record) []capability.AuditRow {
+	out := make([]capability.AuditRow, 0, len(recs))
+	for _, rec := range recs {
+		out = append(out, rowOfRecord(rec))
+	}
+	return out
+}
+
 // sinkReadRecords builds read records THROUGH auditsink.RecordRead — the one
 // function in the product that writes a KindRead record — instead of writing
 // audit.Record literals here.
@@ -2781,7 +2803,7 @@ func TestAgents_ReadsRenderAsReadsNamingTheirTool(t *testing.T) {
 	recs := sinkReadRecords(t, "get_job", "list_nodes")
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	for _, rec := range recs {
@@ -2837,7 +2859,7 @@ func TestAgents_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
 	recs := sinkReadRecords(t, "get_job", "list_nodes", "describe_node")
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	h := newTestHandler(d, accounts.RoleAdmin)
 	body := get(t, h, "/console/agents").Body.String()
 
@@ -2902,7 +2924,7 @@ func TestAgents_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
 func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
 	recs := sinkCancelRecords(t, "job-9d41")
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d cancel records — cancel_job is one of the "+
 			"eight tools spec 03 requires this screen to render, and the trail has the record",
@@ -2914,10 +2936,10 @@ func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
 	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	if strings.Contains(body, "No calls in the window.") {
+	if strings.Contains(body, "No calls on this page.") {
 		t.Error("the Agents screen says there were no calls while the trail holds a cancel")
 	}
 	if !strings.Contains(body, "<code>cancel_job</code>") {
@@ -2954,7 +2976,7 @@ func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
 func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 	recs := sinkCancelRecords(t, "job-9d41", "job-7c02")
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d cancel records", len(calls), len(recs))
 	}
@@ -2965,7 +2987,7 @@ func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	h := newTestHandler(d, accounts.RoleAdmin)
 	body := get(t, h, "/console/agents").Body.String()
 
@@ -3025,15 +3047,16 @@ func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	recs := sinkPlanRecords(t)
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d Plan records — plan mode is the trust-critical "+
 			"case spec 03 asks this screen to badge, and it rendered nowhere",
 			len(calls), len(recs))
 	}
-	// Compared as SETS, because the stream is newest-first and the fixture is
-	// written oldest-first (windowed, seams.go) — an index-aligned assertion
-	// would be asserting the sort order, not the naming.
+	// Compared as SETS, because the stream renders rows in the order the lane
+	// returned them and the fixture is written oldest-first — an
+	// index-aligned assertion would be asserting the sort order, not the
+	// naming.
 	//
 	// The expected names come from toolName over the same facts rather than
 	// from literals: the point is that a Plan is named by the SAME function
@@ -3062,10 +3085,10 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	if strings.Contains(body, "No calls in the window.") {
+	if strings.Contains(body, "No calls on this page.") {
 		t.Error("the Agents screen says there were no calls while the trail holds two Plans")
 	}
 	if strings.Contains(body, "<code>plan</code>") {
@@ -3100,7 +3123,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
 	recs := sinkPlanRecords(t)
 
-	_, calls, _ := buildAgents(recs, "", testNow)
+	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d Plan records", len(calls), len(recs))
 	}
@@ -3111,7 +3134,7 @@ func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
 	}
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: recs}
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	if strings.Contains(body, `data-outcome="unspecified"`) {
@@ -4433,7 +4456,7 @@ func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
 	decision, revocation := sinkApprovalDecisionRecords(t)
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
+	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation})}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	// A1 — the decision row renders the record's OWN Reason, read off the
@@ -4492,7 +4515,7 @@ func TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool(t *testing.T) {
 	decision, revocation := sinkApprovalDecisionRecords(t)
 
 	d := renderableDeps()
-	d.Audit = fakeAudit{records: []audit.Record{decision, revocation}}
+	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation})}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	if strings.Contains(body, "approve_request") {

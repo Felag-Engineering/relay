@@ -28,6 +28,16 @@ package console
 // flight. Keeping them apart is what lets each be honest about retention —
 // a `list_nodes` call belongs here and never on Activity, and read OUTPUT
 // belongs on neither, at any age (ADR-0025).
+//
+// # This screen now reads the audited lane (#542)
+//
+// It used to read the whole trail through AuditReader.List, capped at a
+// 200-record WINDOW (auditWindow) and filtered in Go by isAgentCall. Both are
+// gone: the lane's Kinds filter (agentCallKinds) does the filtering in SQL, so
+// what comes back is exactly this screen's rows rather than a window spent
+// partly on login/token/freeze records this screen was going to discard
+// anyway, and a 200-row PAGE with an Older link replaces a 200-record window
+// with none. See handleAgents and buildAgents below.
 
 import (
 	"net/http"
@@ -36,6 +46,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -43,6 +54,14 @@ import (
 // Fifteen minutes, per spec 03 — long enough that an agent thinking between
 // calls does not blink out, short enough that "active" means something.
 const activeWindow = 15 * time.Minute
+
+// agentsPageSize is this screen's page size, replacing auditWindow at the
+// same number (200) deliberately: the only change an operator sees is that
+// the note becomes true and an Older link exists where the trail has more.
+// A 200-row PAGE is strictly more content than the old 200-record window —
+// the kind filter now runs in SQL, so no row is spent on a login, a token
+// mint or a Freeze transition only to be discarded by isAgentCallKind.
+const agentsPageSize = 200
 
 type agentAccount struct {
 	Name     string
@@ -95,45 +114,130 @@ type agentCall struct {
 }
 
 type agentsView struct {
-	Accounts  []agentAccount
-	Calls     []agentCall
-	Account   string
-	Wired     bool
-	Truncated bool
-	Window    int
+	Accounts []agentAccount
+	Calls    []agentCall
+	Account  string
+
+	// PageSize is agentsPageSize, rendered in the position-aware note below.
+	PageSize int
+
+	// Older says there is a further, older page beyond this one (pg.Next !=
+	// ""). OlderHref is drawn only when this is true (1h) — an unconditional
+	// link would loop forever the moment a page ran out, the bug lanePos was
+	// introduced for on Activity.
+	Older     bool
+	OlderHref string
+
+	// Scrolled says THIS page was reached by following Older — i.e. the
+	// request carried a cursor. It is a different question from Older above
+	// (whether there is somewhere further to go) and drives the sentence that
+	// makes the note honest under paging: a scrolled page must never claim to
+	// hold the most recent calls, and its rail counts only the Accounts on
+	// it, not the fleet's.
+	Scrolled   bool
+	NewestHref string
 }
 
 func handleAgents(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The read lane takes a capability.Principal, exactly as Activity and
+		// node detail do. Both are context reads; page() resolves the same
+		// principal itself for the shell.
+		caller, ok := principal(w, r)
+		if !ok {
+			return
+		}
 		p, ok := page(d, w, r, "Agents")
 		if !ok {
 			return
 		}
 		p.Banner = banner(d, r)
 
-		v := agentsView{
-			Account: r.URL.Query().Get("account"),
-			Wired:   d.Audit != nil,
-			Window:  auditWindow,
-		}
-		if d.Audit == nil {
-			renderScreen(w, p, agentsTmpl, v)
+		if d.Queries == nil {
+			unavailable(w, "the audit and Job query lane")
 			return
 		}
-		recs, err := d.Audit.List(r.Context())
+		// Every read this page makes goes through the latch: the "a page
+		// whose read cannot be audited is not served" rule is one call rather
+		// than a branch per read (screen.go).
+		d, lane := latched(d)
+
+		account := r.URL.Query().Get("account")
+		// An unparseable cursor is NOT reset to page one — that would be a
+		// silent "start over" for a caller who asked to go further, which is
+		// the same class of lie a truncated trail would tell. It is instead
+		// capability.ErrInvalidCursor from the lane, which readFailed below
+		// renders as a legible refusal.
+		cursor := r.URL.Query().Get("cursor")
+
+		// ONE call. The rail below and the stream both derive from this SAME
+		// page — see buildAgents' doc comment for why that is a stated
+		// property of the screen and not an implementation convenience.
+		pg, err := d.Queries.QueryAudit(r.Context(), caller,
+			capability.AuditFilter{Kinds: agentCallKinds},
+			capability.PageRequest{Limit: agentsPageSize, Cursor: cursor})
 		if err != nil {
-			unavailable(w, "the audit trail (it returned an error)")
+			readFailed(w, err, "the agent call trail")
 			return
 		}
-		v.Accounts, v.Calls, v.Truncated = buildAgents(recs, v.Account, d.now())
+		if refusedUnaudited(w, lane, "the agent call trail") {
+			return
+		}
+
+		v := agentsView{
+			Account:  account,
+			PageSize: agentsPageSize,
+			Scrolled: cursor != "",
+		}
+		v.Accounts, v.Calls = buildAgents(pg.Rows, account, d.now())
+		if pg.Next != "" {
+			v.Older = true
+			v.OlderHref = agentsHref(account, pg.Next)
+		}
+		if v.Scrolled {
+			v.NewestHref = agentsHref(account, "")
+		}
 		renderScreen(w, p, agentsTmpl, v)
 	}
 }
 
-// buildAgents rolls the trail up per Account and renders the call stream.
-func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAccount, []agentCall, bool) {
-	window, truncated := windowed(recs, auditWindow)
+// agentsHref builds a /console/agents link preserving ?account=, the same
+// url.Values idiom the rail's own Href uses (#467): html/template's URL
+// normaliser leaves & # = alone, so concatenating an Account name with
+// reserved characters into a query string silently links to the wrong
+// Account or drops the cursor.
+func agentsHref(account, cursor string) string {
+	v := url.Values{}
+	if account != "" {
+		v.Set("account", account)
+	}
+	if cursor != "" {
+		v.Set("cursor", cursor)
+	}
+	if len(v) == 0 {
+		return "/console/agents"
+	}
+	return "/console/agents?" + v.Encode()
+}
 
+// buildAgents rolls one fetched page up per Account and renders the call
+// stream.
+//
+// rows arrive NEWEST FIRST and PRE-FILTERED by the lane's Kinds filter
+// (agentCallKinds, handleAgents) — there is deliberately no per-row
+// isAgentCallKind test and no re-filter by kind here. A defensive re-filter
+// would silently mask a mutation that dropped the Kinds filter from the
+// query: the filtering is the lane's job now, done once in SQL, and this
+// function trusts what it was handed rather than checking it twice.
+//
+// ONE QueryAudit call feeds both what this function returns: the rail's
+// counts are computed over exactly the rows the stream below renders, so the
+// rail's "3 mutate" is by construction the number of rows below it chipped
+// mutate, and an operator can verify the rail by scrolling THIS page. A
+// design that sourced the rail from a separate aggregate and the stream from
+// a page would make that sentence false the first time the two queries ran
+// at different moments.
+func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]agentAccount, []agentCall) {
 	type acc struct {
 		agentAccount
 		last time.Time
@@ -141,17 +245,14 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 	byAccount := map[string]*acc{}
 	var calls []agentCall
 
-	for _, rec := range window {
-		if !isAgentCall(rec) {
-			continue
-		}
-		f := factsOfRecord(rec)
+	for _, row := range rows {
+		f := factsOfRow(row)
 		name := principalText(f)
 		a, seen := byAccount[name]
 		if !seen {
 			a = &acc{agentAccount: agentAccount{
 				Name:     name,
-				Verified: rec.Attribution.Verified.AccountID != "",
+				Verified: row.Verified.AccountID != "",
 				// url.Values, not concatenation: an Account name is a principal
 				// string this package does not constrain, and html/template's URL
 				// normaliser leaves & # = alone. "bob&co:operator" concatenated
@@ -167,7 +268,7 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		// writes a KindRead record with an Outcome (auditsink.RecordRead sets
 		// none), so no record changes lane; the switch was hiding a denied read
 		// from the Denied count for no reason a reader could see.
-		if rec.Outcome == jobs.OutcomeDeniedByPolicy {
+		if row.Outcome == jobs.OutcomeDeniedByPolicy {
 			a.Denied++
 		}
 		// The mutate count is mutate-class CALLS, counted through the same one
@@ -179,15 +280,15 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		//
 		// Every mutate-class call this Account made: including a raw_exec the
 		// role gate REFUSED, a dispatch still PARKED for approval, one Policy
-		// DENIED, and — since #537 — a mutate-shaped call PLANNED and never
-		// run. None of those changed a Node, and the count still
-		// includes them, because this screen is the request and never the
-		// result ("as the Relay received it", above) and the rail's other
-		// counters already read that way — Denied is a subset of Calls, not a
-		// column beside it. On a trust surface an attempted mutate is the
-		// signal: a compromised agent probing a fleet and being refused every
-		// time must not read quieter than an honest one. What actually RAN is
-		// Activity's question, at Job grain, where an outcome means something.
+		// DENIED, and a mutate-shaped call PLANNED and never run. None of those
+		// changed a Node, and the count still includes them, because this
+		// screen is the request and never the result ("as the Relay received
+		// it", above) and the rail's other counters already read that way —
+		// Denied is a subset of Calls, not a column beside it. On a trust
+		// surface an attempted mutate is the signal: a compromised agent
+		// probing a fleet and being refused every time must not read quieter
+		// than an honest one. What actually RAN is Activity's question, at Job
+		// grain, where an outcome means something.
 		//
 		// The outcome chip on each row is what separates asked from ran, and it
 		// is on the same screen — which is the other half of why the count is
@@ -195,18 +296,10 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		// two numbers on one screen disagreeing about one record is the drift
 		// riskOf exists to prevent (#463).
 		//
-		// The predicate this replaces was `Kind == KindDispatch && ActionKind
-		// != "" && OperationName == ""` — raw_exec only. A mutating
-		// run_operation carries an OperationName, so fifty service.restart
-		// dispatches counted zero.
-		//
 		// There is deliberately no read counter beside it. Spec 03 does not ask
 		// the rail for one, riskOf answers read or mutate and nothing else — so
 		// reads are Calls minus Mutates — and a third number an operator has to
-		// reconcile with the other two buys nothing. The Reads field that used
-		// to be computed here was never rendered and disagreed with the chip
-		// anyway (it tested Kind == KindRead, so a read-class DISPATCH like
-		// file.read chipped read and counted as neither).
+		// reconcile with the other two buys nothing.
 		//
 		// A cancel counts here too, through the same one inference: riskOf
 		// finds no argv, no read tool and no read Operation on the record and
@@ -218,12 +311,12 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		if riskOf(f) == jobs.RiskClassMutate {
 			a.Mutates++
 		}
-		if rec.Timestamp.After(a.last) {
-			a.last = rec.Timestamp
+		if f.Timestamp.After(a.last) {
+			a.last = f.Timestamp
 		}
 
 		if account == "" || account == name {
-			calls = append(calls, agentCallFrom(rec))
+			calls = append(calls, agentCallFrom(f))
 		}
 	}
 
@@ -265,14 +358,21 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out, calls, truncated
+	return out, calls
 }
 
-// isAgentCall reports whether a record describes a call somebody made THROUGH a
-// control surface, as opposed to something the Relay did.
+// isAgentCallKind reports whether an audit Kind describes a call somebody
+// made THROUGH a control surface, as opposed to something the Relay did.
 //
-// Sign-ins, Freeze transitions and Account changes are control-plane events and
-// belong on Activity. An approval expiring is the clock, not a caller.
+// It is the SOURCE of this screen's lane filter (agentCallKinds below), not a
+// per-row test any more: #542 moved this screen onto the read lane, whose
+// Kinds filter does the selecting in SQL, so isAgentCallKind now runs once
+// per audit Kind at var-init instead of once per row at render time. A kind
+// added to internal/audit is classified by this predicate exactly as before;
+// what changed is WHEN it runs, not what it decides.
+//
+// Sign-ins, Freeze transitions and Account changes are control-plane events
+// and belong on Activity. An approval expiring is the clock, not a caller.
 //
 // # Why two of the eight tools are admitted by KIND rather than by family
 //
@@ -293,33 +393,73 @@ func buildAgents(recs []audit.Record, account string, now time.Time) ([]agentAcc
 // families of their own is the other way to spell this, and it reaches past
 // this screen — the row kind drives Activity's filter chips and decides which
 // rows Activity draws a risk chip on. Narrower change, same result here.
-func isAgentCall(rec audit.Record) bool {
-	switch rec.Kind {
+func isAgentCallKind(kind string) bool {
+	switch kind {
 	case audit.KindJobCancel, audit.KindPlan:
 		return true
 	}
-	switch kindOf(rec.Kind) {
+	switch kindOf(kind) {
 	case rowDispatch, rowRead, rowRefusal, rowApproval:
-		return rec.Kind != audit.KindApprovalExpired
+		return kind != audit.KindApprovalExpired
 	default:
 		return false
 	}
 }
 
-func agentCallFrom(rec audit.Record) agentCall {
-	f := factsOfRecord(rec)
+// agentCallKinds is this screen's lane filter, DERIVED from audit.Kinds()
+// through isAgentCallKind rather than hand-listed — the same derived-not-
+// enumerated shape buildKindsByFamily (activity.go) uses. Deriving it means
+// the filter and the predicate cannot drift, and a kind added to
+// internal/audit is classified by isAgentCallKind rather than by a second
+// hand-kept list nobody remembers to update.
+//
+// Eight kinds today, against AuditFilter.validate's cap of 32.
+// approval_expired stays excluded exactly as isAgentCallKind decides.
+var agentCallKinds = buildAgentCallKinds()
+
+// buildAgentCallKinds panics if isAgentCallKind admits nothing.
+//
+// This is not a defensive nicety. capability.AuditFilter's documented
+// zero-value semantics are that an EMPTY Kinds slice matches EVERY ROW, not
+// none — the same trap noSuchAuditKind (activity.go) exists to prevent for
+// row families. An empty agentCallKinds would therefore not narrow the lane
+// to nothing, it would silently WIDEN it to the whole trail: login, token
+// mint, Account and Freeze records — including login_failed's asserted
+// submitted usernames — would land on this screen's trust surface under the
+// "every call an AI-agent makes" heading. A future refactor of kindOf that
+// renamed a row family and left isAgentCallKind's switch matching nothing
+// would produce exactly that, silently, with every existing test still
+// green. A Relay that cannot derive its own agent-call kind set must not
+// start serving this screen with a filter that means "everything".
+func buildAgentCallKinds() []string {
+	var out []string
+	for _, k := range audit.Kinds() {
+		if isAgentCallKind(k) {
+			out = append(out, k)
+		}
+	}
+	if len(out) == 0 {
+		panic("console: isAgentCallKind admits no audit kind at all — an empty " +
+			"agentCallKinds would match EVERY row (capability.AuditFilter's " +
+			"empty-Kinds-matches-all semantics), putting login, token, Account " +
+			"and Freeze records on the agent trust surface")
+	}
+	return out
+}
+
+func agentCallFrom(f trailFacts) agentCall {
 	c := agentCall{
-		When:       rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
+		When:       f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Tool:       toolName(f),
 		Principal:  principalText(f),
-		Verified:   rec.Attribution.Verified.AccountID != "",
-		OnBehalfOf: rec.Attribution.Asserted.OnBehalfOf,
-		Selector:   rec.Selector,
+		Verified:   f.VerifiedAccountID != "",
+		OnBehalfOf: f.OnBehalfOf,
+		Selector:   f.Selector,
 		Args:       argsText(f),
-		NodeID:     rec.NodeID,
-		Outcome:    OutcomeLabel(rec.Outcome),
-		JobID:      rec.JobID,
-		ReadClass:  rec.Kind == audit.KindRead,
+		NodeID:     f.NodeID,
+		Outcome:    OutcomeLabel(f.Outcome),
+		JobID:      f.JobID,
+		ReadClass:  f.Kind == audit.KindRead,
 	}
 	// The risk class comes from ONE inference (vocab.go), not from the record
 	// kind. Deriving it here from `Kind == KindDispatch` labelled file.read as a
@@ -327,26 +467,30 @@ func agentCallFrom(rec audit.Record) agentCall {
 	// misleading thing this Console could say, since Raw Exec always takes the
 	// mutate cap without exception.
 	c.Risk = RiskLabel(riskOf(f))
-	if rec.NodeID != "" {
-		c.NodeHref = "/console/nodes/" + rec.NodeID
+	if f.NodeID != "" {
+		c.NodeHref = "/console/nodes/" + f.NodeID
 	}
-	if rec.JobID != "" {
-		c.JobHref = "/console/jobs/" + rec.JobID
+	if f.JobID != "" {
+		c.JobHref = "/console/jobs/" + f.JobID
 	}
-	if rec.Outcome == jobs.OutcomeDeniedByPolicy {
+	if f.Outcome == jobs.OutcomeDeniedByPolicy {
 		c.Deny = &Deny{
-			NodeID:        rec.NodeID,
+			NodeID:        f.NodeID,
 			OperationName: operationText(f),
-			Rule:          denyExplanation(rec),
-			PolicyHref:    "/console/nodes/" + rec.NodeID,
+			// denyRuleOffLane, not denyExplanation: this screen's rows are
+			// capability.AuditRow, which carries no Stderr (vocab.go) — see
+			// its doc comment for why that is deliberate and permanent.
+			Rule:       denyRuleOffLane(f),
+			PolicyHref: "/console/nodes/" + f.NodeID,
 		}
 	}
 	// Reason is rendered ONLY for the approval family: every other kind's
 	// Args/Selector/NodeID/JobID already carries its content, and
-	// denyText/denyExplanation (vocab.go) already falls back to rec.Reason
-	// when the daemon's stderr is empty — an unconditional render here would
-	// print the same sentence twice on a denied_by_policy row. The approval
-	// family is exactly the set of rows that render nothing else at all.
+	// denyRuleOffLane (vocab.go) already falls back to f.Reason when the
+	// daemon's verdict is not on this lane — an unconditional render here
+	// would print the same sentence twice on a denied_by_policy row. The
+	// approval family is exactly the set of rows that render nothing else at
+	// all.
 	if kindOf(f.Kind) == rowApproval {
 		c.Reason = f.Reason
 	}
@@ -358,7 +502,7 @@ func agentCallFrom(rec audit.Record) agentCall {
 	// park, a refusal, a metadata-only read). A cancel is the other: it does
 	// reach Nodes, but it is not a per-NODE act — it targets a Job by ID, so
 	// there is no verdict to render however far it travelled.
-	switch rec.Kind {
+	switch f.Kind {
 	case audit.KindRead:
 		// A metadata-only read is the case this switch was written for and did
 		// not cover: no Node was asked anything, so the chip rendered
@@ -379,7 +523,7 @@ func agentCallFrom(rec audit.Record) agentCall {
 		// parked Job — so "decided" over it is a category error the record
 		// itself disproves.
 		c.Outcome = "decided"
-		if rec.GrantID != "" {
+		if f.GrantID != "" {
 			c.Outcome = "revoked"
 		}
 	case audit.KindJobCancel:
@@ -543,13 +687,9 @@ var agentsTmpl = newScreen("agents", `
 <b>request</b> and never the reasoning — the Relay sees tool calls, not intent, and a narrated
 account of <em>why</em> is exactly what an agent under prompt injection would fabricate.</p>
 
-{{if not .Wired}}
-<p class="dim">The audit trail is not wired into this Console.</p>
-{{else}}
-
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">Accounts <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included</span></div>
+    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
       <span class="dot" data-live="{{if .Active}}on{{else}}off{{end}}"></span>
@@ -591,11 +731,15 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
       </div>
     </article>
     {{else}}
-    <p class="dim">No calls in the window.</p>
+    <p class="dim">No calls on this page.</p>
     {{end}}
-    {{if .Truncated}}<p class="gap">Showing the most recent {{.Window}} records of the trail.
-    Older calls are not rendered.</p>{{end}}
+    {{if .Scrolled}}
+    <p class="gap">These are NOT the most recent calls — this page was reached by following
+    Older. <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.</p>
+    {{else if .Older}}
+    <p class="gap">Showing the most recent {{.PageSize}} calls. There are older calls.
+    <a href="{{.OlderHref}}">Older</a>.</p>
+    {{end}}
   </div>
 </div>
-{{end}}
 `)
