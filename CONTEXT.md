@@ -330,7 +330,8 @@ Relay serves the extension itself, as a shim, because its SDK does not implement
 (ADR-0028). The shim is temporary by design and has a written removal condition.
 _Avoid_: task (unqualified), MCP task, job handle, task id (when a Relay **Task** is also in
 play)
-_Avoid_: task (unqualified), MCP task, job handle
+
+**Relay-side authorization**:
 The central rules deciding which Account may send which Operations to which Nodes.
 Distinct from Policy: authorization governs *who may ask*, Policy governs *what a Node
 will ever do*.
