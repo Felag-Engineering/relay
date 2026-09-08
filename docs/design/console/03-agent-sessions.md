@@ -94,9 +94,28 @@ history (through #441) identically.
 
 ## Accounts rail
 
-Each Account active in the window: name, kind (machine or human), role, first and last call in
-the window, call count, mutate count. Selecting one scopes the stream. An Account outside the
-window drops off the rail; its history stays reachable through the filter and through spec 15.
+Each Account with a call in the last 15 minutes: name, role, first and last call, call count,
+mutate count. Selecting one scopes the stream. An Account whose most recent call on the page is
+older than 15 minutes drops off the rail and the rail says how many dropped; its calls stay in
+the stream below, and its history stays reachable through the filter and through spec 15.
+
+**The rail is scoped twice, and says so.** Membership is the 15 minutes: an Account not seen in
+that long is not listed, full stop. The numbers beside a listed Account — call count, mutate
+count, first and last call — are counted over the fetched PAGE, the same page the stream renders,
+so any rail entry is verifiable by scrolling to its rows. The stream is never filtered by the
+window: it is the history, and a page reached by following Older will USUALLY list no active
+Account — usually, not always, since an Account making enough calls fast enough (200 `get_job`
+polling calls, for instance) can fill a whole page from inside the window. On this screen "window"
+means the 15 minutes and nothing else; the page is called the page, never the window.
+
+**Kind (machine or human) is not on the rail.** Considered and dropped (owner decision, 2026-09-08,
+#540) because the audited record does not carry it: an Account-registry reader would report the
+Account's CURRENT kind, so a machine Account later converted to human would retroactively relabel
+its own history — the rail would lie about the past — and it would widen what this screen can see,
+against #542's direction of narrowing this screen to the audited lane's own rows. Carrying kind on
+the verified attribution lane instead is an append-only schema change with a store migration, for a
+descriptive rail label. The security-relevant distinction — verified authentication versus a claimed
+identity — is already on the rail, as the trust chip beside the name.
 
 **No controls live here.** Cancel sits on the in-flight dispatch card (v0.7.0); token revocation
 is spec 15; Freeze is spec 16.

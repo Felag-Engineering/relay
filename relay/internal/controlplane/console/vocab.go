@@ -66,7 +66,13 @@ type trailFacts struct {
 
 	VerifiedAccountName string
 	VerifiedAccountID   string
-	OnBehalfOf          string
+	// Role is the authority the Account held AT THAT MOMENT, VERIFIED lane
+	// only (CONTEXT.md's Attribution). Empty means the Relay authenticated no
+	// role for this record, and nothing may substitute one — see agents.go's
+	// buildAgents for why the asserted lane's "account:role" principal string
+	// must never fill this field.
+	Role       string
+	OnBehalfOf string
 
 	Selector      string
 	JobID         string
@@ -91,6 +97,7 @@ func factsOfRecord(rec audit.Record) trailFacts {
 		Principal:           rec.Principal,
 		VerifiedAccountName: rec.Attribution.Verified.AccountName,
 		VerifiedAccountID:   rec.Attribution.Verified.AccountID,
+		Role:                rec.Attribution.Verified.Role,
 		OnBehalfOf:          rec.Attribution.Asserted.OnBehalfOf,
 		Selector:            rec.Selector,
 		JobID:               rec.JobID,
@@ -114,6 +121,7 @@ func factsOfRow(row capability.AuditRow) trailFacts {
 		Principal:           row.Principal,
 		VerifiedAccountName: row.Verified.AccountName,
 		VerifiedAccountID:   row.Verified.AccountID,
+		Role:                row.Verified.Role,
 		OnBehalfOf:          row.Asserted.OnBehalfOf,
 		Selector:            row.Selector,
 		JobID:               row.JobID,

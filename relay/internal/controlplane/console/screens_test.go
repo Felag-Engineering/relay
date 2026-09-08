@@ -699,7 +699,7 @@ func TestVocab_DenyExplanationDoesNotBlameTheDaemonForADeliberateOmission(t *tes
 // has a perfectly well known outcome, and "unspecified" reads as "we don't
 // know".
 func TestAgents_ParkedCallsDoNotRenderAsAnUnspecifiedOutcome(t *testing.T) {
-	_, calls := buildAgents([]capability.AuditRow{
+	_, calls, _ := buildAgents([]capability.AuditRow{
 		{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: "agent:operator", Timestamp: testNow},
 	}, "", testNow)
 
@@ -794,7 +794,7 @@ func TestAgents_RailCountsMutatingOperationsAndNotOnlyRawExec(t *testing.T) {
 			"passes under the old predicate too and proves nothing", want, rawExecs)
 	}
 
-	rail, _ := buildAgents(rows, "", testNow)
+	rail, _, _ := buildAgents(rows, "", testNow)
 	if len(rail) != 1 {
 		t.Fatalf("got %d rail entries, want 1", len(rail))
 	}
@@ -822,7 +822,7 @@ func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 	d.Queries = &fakeQueries{rows: agentMutateFixture()}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	rail, _ := buildAgents(agentMutateFixture(), "", testNow)
+	rail, _, _ := buildAgents(agentMutateFixture(), "", testNow)
 	want := itoa(rail[0].Mutates) + " mutate"
 	if !strings.Contains(body, want) {
 		t.Errorf("the Accounts rail does not render %q; spec 03 lists the mutate count among "+
@@ -841,10 +841,19 @@ func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 //
 // Asserted on the RENDERED page, counting `data-risk="mutate"` chips against
 // the rail's own number, because that is the comparison the operator makes.
+//
+// This equality holds here ONLY because agentMutateFixture is ONE Account
+// with every row at testNow — i.e. every row is inside the 15-minute window
+// as well as on the page, so page-scoped and window-scoped counts cannot be
+// told apart by this fixture. It is not a page-level invariant: #540's
+// TheRailAgreesPerAccountWhenAnAccountDropsOff (agents_window_test.go) is the
+// one that pins the per-Account property on a fixture built to discriminate
+// the two scopes, and covers the aggregate inequality once an Account drops
+// off the rail.
 func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
 	rows := agentMutateFixture()
 
-	rail, calls := buildAgents(rows, "", testNow)
+	rail, calls, _ := buildAgents(rows, "", testNow)
 	if len(rail) != 1 {
 		t.Fatalf("got %d rail entries, want 1", len(rail))
 	}
@@ -896,7 +905,7 @@ func TestAgents_RailLinkSurvivesAnAccountNameWithReservedCharacters(t *testing.T
 		"agent:a=b",
 		"agent:sp ace",
 	} {
-		rail, _ := buildAgents([]capability.AuditRow{
+		rail, _, _ := buildAgents([]capability.AuditRow{
 			{Kind: audit.KindApprovalRequested, ActionKind: "raw_exec", Principal: principal, Timestamp: testNow},
 		}, "", testNow)
 
@@ -2237,7 +2246,7 @@ func TestAgents_RepeatedDenyProseIsCollapsed(t *testing.T) {
 		})
 	}
 
-	_, calls := buildAgents(rows, "", testNow)
+	_, calls, _ := buildAgents(rows, "", testNow)
 	if len(calls) != 3 {
 		t.Fatalf("got %d calls, want 3 — collapsing prose must never drop a row", len(calls))
 	}
@@ -2279,7 +2288,7 @@ func TestAgents_DifferentOperationsKeepTheirOwnDenyProse(t *testing.T) {
 		},
 	}
 
-	_, calls := buildAgents(rows, "", testNow)
+	_, calls, _ := buildAgents(rows, "", testNow)
 	for _, c := range calls {
 		if c.Deny == nil {
 			t.Errorf("the refusal of %s was collapsed into another Operation's explanation", c.Args)
@@ -2924,7 +2933,7 @@ func TestAgents_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
 func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
 	recs := sinkCancelRecords(t, "job-9d41")
 
-	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
+	_, calls, _ := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d cancel records — cancel_job is one of the "+
 			"eight tools spec 03 requires this screen to render, and the trail has the record",
@@ -2976,7 +2985,7 @@ func TestAgents_CancelJobRendersAsACallNamingItsTool(t *testing.T) {
 func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 	recs := sinkCancelRecords(t, "job-9d41", "job-7c02")
 
-	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
+	_, calls, _ := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d cancel records", len(calls), len(recs))
 	}
@@ -3047,7 +3056,7 @@ func TestAgents_CancelOutcomeIsRequestedNotUnspecified(t *testing.T) {
 func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	recs := sinkPlanRecords(t)
 
-	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
+	_, calls, _ := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d Plan records — plan mode is the trust-critical "+
 			"case spec 03 asks this screen to badge, and it rendered nowhere",
@@ -3123,7 +3132,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
 	recs := sinkPlanRecords(t)
 
-	_, calls := buildAgents(rowsOfRecords(recs), "", testNow)
+	_, calls, _ := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
 		t.Fatalf("the stream has %d rows for %d Plan records", len(calls), len(recs))
 	}

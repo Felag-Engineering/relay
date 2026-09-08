@@ -50,9 +50,13 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// activeWindow is how recently an Account must have acted to count as active.
-// Fifteen minutes, per spec 03 — long enough that an agent thinking between
-// calls does not blink out, short enough that "active" means something.
+// activeWindow is the rail's MEMBERSHIP rule (#540): an Account with no call
+// in the last 15 minutes drops off the rail entirely. It used to color a dot
+// and nothing else, so the header's "active" claim was never enforced — a
+// page of nothing but stale calls rendered every Account grey rather than
+// none. Fifteen minutes, per spec 03 — long enough that an agent thinking
+// between calls does not blink out, short enough that "active" means
+// something.
 const activeWindow = 15 * time.Minute
 
 // agentsPageSize is this screen's page size, replacing auditWindow at the
@@ -66,13 +70,27 @@ const agentsPageSize = 200
 type agentAccount struct {
 	Name     string
 	Verified bool
-	Calls    int
-	Mutates  int
-	Denied   int
-	LastSeen string
-	Active   bool
-	Current  bool
-	Href     string
+	// Role is the verified role at the Account's most recent role-carrying
+	// call ON THIS PAGE — empty renders nothing (see buildAgents). Sourced
+	// ONLY from the verified lane and cleared unless Verified is true: an
+	// asserted-lane role must never occupy this position beside the trust
+	// chip (#540).
+	Role    string
+	Calls   int
+	Mutates int
+	Denied  int
+	// FirstSeen is the earliest call on this page, EMPTY when it would
+	// render the identical TEXT as LastSeen (timeSince buckets by whole
+	// minutes, so two calls 20s apart both read "12m ago" and showing both
+	// reads as a bug rather than as two calls).
+	FirstSeen string
+	LastSeen  string
+	// Active is gone (#540): every listed entry is active by construction
+	// now that activeWindow is a membership filter rather than a dot
+	// colour, and a field that is always true is the same shape of false
+	// claim this ticket removes.
+	Current bool
+	Href    string
 }
 
 type agentCall struct {
@@ -117,6 +135,13 @@ type agentsView struct {
 	Accounts []agentAccount
 	Calls    []agentCall
 	Account  string
+
+	// RailNote explains the rail: why it is empty, or why it lists fewer
+	// Accounts than the page holds calls for. Computed by the handler
+	// (railNote, below) rather than by buildAgents, because it is the one
+	// rail-related fact that depends on Scrolled, which buildAgents
+	// deliberately does not know.
+	RailNote string
 
 	// PageSize is agentsPageSize, rendered in the position-aware note below.
 	PageSize int
@@ -189,7 +214,8 @@ func handleAgents(d Deps) http.HandlerFunc {
 			PageSize: agentsPageSize,
 			Scrolled: cursor != "",
 		}
-		v.Accounts, v.Calls = buildAgents(pg.Rows, account, d.now())
+		var dropped int
+		v.Accounts, v.Calls, dropped = buildAgents(pg.Rows, account, d.now())
 		if pg.Next != "" {
 			v.Older = true
 			v.OlderHref = agentsHref(account, pg.Next)
@@ -197,6 +223,10 @@ func handleAgents(d Deps) http.HandlerFunc {
 		if v.Scrolled {
 			v.NewestHref = agentsHref(account, "")
 		}
+		// AFTER v.Scrolled is set: railNote's copy depends on whether this
+		// page was reached by following Older, which buildAgents does not
+		// know and must not be taught — see agentsView.RailNote.
+		v.RailNote = railNote(len(v.Accounts), dropped, v.Scrolled)
 		renderScreen(w, p, agentsTmpl, v)
 	}
 }
@@ -230,17 +260,35 @@ func agentsHref(account, cursor string) string {
 // query: the filtering is the lane's job now, done once in SQL, and this
 // function trusts what it was handed rather than checking it twice.
 //
-// ONE QueryAudit call feeds both what this function returns: the rail's
-// counts are computed over exactly the rows the stream below renders, so the
-// rail's "3 mutate" is by construction the number of rows below it chipped
-// mutate, and an operator can verify the rail by scrolling THIS page. A
-// design that sourced the rail from a separate aggregate and the stream from
-// a page would make that sentence false the first time the two queries ran
-// at different moments.
-func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]agentAccount, []agentCall) {
+// ONE QueryAudit call feeds both what this function returns, and the feed is
+// NEVER time-filtered — it is spec 03's history, and a page reached by
+// following Older must not silently lose rows the lane returned (#540). The
+// 15-minute window is a MEMBERSHIP rule on the RAIL alone: an Account with no
+// call in the window drops off the rail entirely (the fix this ticket makes),
+// while every rail arithmetic field (Calls, Mutates, Denied, first, last)
+// stays scoped to the fetched PAGE, same as before. Counting a listed
+// Account's Calls/Mutates over the window instead would report a number that
+// agrees with nothing else on the row — the page rows between it and that
+// Account's oldest call are still rendered below it — and would stop being
+// verifiable by scrolling, the property #542 shipped this rail with.
+//
+// # What "agrees with the rows" still means, and what it no longer means
+//
+// The PER-ACCOUNT property is exactly what it always was: for every Account
+// the rail lists, its numbers are precisely its rows below, because both are
+// counted over the one page this function was handed. What changed is the
+// AGGREGATE reading: sum(rail Mutates) can now be strictly LESS than the
+// page's total mutate chips, because a dropped Account's rows are still
+// rendered in the stream below while its entry is gone from the rail. That
+// narrowing is intentional and stated here so nobody "fixes" it by filtering
+// the feed by the window — see TheRailAgreesPerAccountWhenAnAccountDropsOff
+// (agents_window_test.go).
+func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]agentAccount, []agentCall, int) {
 	type acc struct {
 		agentAccount
-		last time.Time
+		first  time.Time
+		last   time.Time
+		roleAt time.Time
 	}
 	byAccount := map[string]*acc{}
 	var calls []agentCall
@@ -251,8 +299,12 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		a, seen := byAccount[name]
 		if !seen {
 			a = &acc{agentAccount: agentAccount{
-				Name:     name,
-				Verified: row.Verified.AccountID != "",
+				Name: name,
+				// f.VerifiedAccountID, not row.Verified.AccountID: the
+				// projection is the lane's single reading, and reading the row
+				// directly here is the same fork the Role read below must not
+				// introduce (agentCallFrom already reads it this way).
+				Verified: f.VerifiedAccountID != "",
 				// url.Values, not concatenation: an Account name is a principal
 				// string this package does not constrain, and html/template's URL
 				// normaliser leaves & # = alone. "bob&co:operator" concatenated
@@ -311,8 +363,19 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		if riskOf(f) == jobs.RiskClassMutate {
 			a.Mutates++
 		}
+		if a.first.IsZero() || f.Timestamp.Before(a.first) {
+			a.first = f.Timestamp
+		}
 		if f.Timestamp.After(a.last) {
 			a.last = f.Timestamp
+		}
+		// Role is taken from the NEWEST row that carries a verified role:
+		// Verified.Role is "the authority the Account held at that moment"
+		// (vocab.go), so a role change mid-page must show the later
+		// authority, and a single unverified row later in the page must not
+		// blank a role a verified one already established.
+		if f.Role != "" && f.Timestamp.After(a.roleAt) {
+			a.Role, a.roleAt = f.Role, f.Timestamp
 		}
 
 		if account == "" || account == name {
@@ -340,25 +403,79 @@ func buildAgents(rows []capability.AuditRow, account string, now time.Time) ([]a
 		seenDeny[key] = true
 	}
 
+	var dropped int
 	out := make([]agentAccount, 0, len(byAccount))
 	for _, a := range byAccount {
+		// THE FIX: membership, not a dot colour. An Account whose most
+		// recent call on this page is older than 15 minutes drops off the
+		// rail before its entry is even built — every field below is
+		// computed only for an Account that survives this.
+		if now.Sub(a.last) > activeWindow {
+			dropped++
+			continue
+		}
 		a.LastSeen = timeSince(a.last, now)
-		a.Active = now.Sub(a.last) <= activeWindow
+		if first := timeSince(a.first, now); first != a.LastSeen {
+			a.FirstSeen = first
+		}
+		// Belt-and-braces: a row carrying a verified role with no verified
+		// name cannot put a role on an asserted entry. Role is sourced only
+		// from the verified lane (vocab.go) and this is the second guard on
+		// that rule, not the only one.
+		if !a.Verified {
+			a.Role = ""
+		}
 		a.Current = a.Name == account
 		out = append(out, a.agentAccount)
 	}
-	// Active first, then busiest. An operator opens this screen because
-	// something is happening now.
+	// Busiest first, then name. "Active first" used to be the sort's job;
+	// now every listed entry is active by construction, so the filter above
+	// does that work instead.
 	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Active != out[j].Active {
-			return out[i].Active
-		}
 		if out[i].Calls != out[j].Calls {
 			return out[i].Calls > out[j].Calls
 		}
 		return out[i].Name < out[j].Name
 	})
-	return out, calls
+	return out, calls, dropped
+}
+
+// railNote is the rail's ONE sentence explaining an empty or partially
+// filtered rail, spelled from listed and dropped Accounts and whether this
+// page was reached by following Older.
+//
+// CONTRACT, enforced by TheRailNoteAlwaysExplainsAnEmptyRail
+// (agents_window_test.go): returns "" ONLY when listed > 0 && dropped == 0.
+// `listed == 0 && dropped == 0` is exactly "the page held no rows" — every
+// row produces an Account, so a page with rows and no dropped Accounts but an
+// empty rail cannot happen — which is what lets (a)/(b) below be separate
+// sentences from (c)/(d).
+//
+// On this screen "window" always means the 15 minutes and is spelled "the
+// last 15 minutes"; the cursor page is always "this page"; the phrase "in the
+// window" appears NOWHERE in any of the five sentences below.
+func railNote(listed, dropped int, scrolled bool) string {
+	switch {
+	case listed > 0 && dropped == 0:
+		return ""
+	case listed == 0 && dropped == 0 && !scrolled:
+		return "No Account has called a control surface yet."
+	case listed == 0 && dropped == 0 && scrolled:
+		return "This page holds no calls."
+	case listed == 0 && !scrolled:
+		return "No Account has called in the last 15 minutes. " +
+			plural(dropped, "Account", "Accounts") +
+			" called earlier — their calls are below."
+	case listed == 0 && scrolled:
+		return "No Account has called in the last 15 minutes, which is expected on a page " +
+			"reached by following Older — these are historical calls. " +
+			plural(dropped, "Account", "Accounts") +
+			" called on this page; their calls are below."
+	default:
+		return plural(dropped, "Account", "Accounts") +
+			" called on this page but not in the last 15 minutes, so the rail does not " +
+			"list them — their calls are below."
+	}
 }
 
 // isAgentCallKind reports whether an audit Kind describes a call somebody
@@ -689,17 +806,16 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">active = a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page</span></div>
+    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
-      <span class="dot" data-live="{{if .Active}}on{{else}}off{{end}}"></span>
-      <span class="aname">{{template "trust-chip" (trust .Name .Verified)}}</span>
+      <span class="dot" data-live="on"></span>
+      <span class="aname">{{template "trust-chip" (trust .Name .Verified)}}{{with .Role}}<span class="arole" title="The role the Relay authenticated this Account with at its most recent call on this page.">{{.}}</span>{{end}}</span>
       <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Mutates}} · {{.Mutates}} mutate{{end}}{{if .Denied}} · {{.Denied}} denied{{end}}</span>
-      <span class="asub">{{.LastSeen}}</span>
+      <span class="asub">{{with .FirstSeen}}first {{.}} · {{end}}last {{.LastSeen}}</span>
     </a>
-    {{else}}
-    <p class="dim">No Account has called a control surface yet.</p>
     {{end}}
+    {{with .RailNote}}<p class="dim">{{.}}</p>{{end}}
     <p class="note">There are no sessions. The MCP transport is stateless, so every call is an
     independent authenticated request — there is no connection to show and nothing to disconnect.
     Stopping one actor is revoking its API Tokens, or the Freeze.</p>
