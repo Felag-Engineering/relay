@@ -43,19 +43,23 @@ import (
 // trailFacts is ONE recorded event, in the fields the Console's display copy
 // reads.
 //
-// It exists because the trail now reaches this package as TWO types:
-// audit.Record, for the screens that still read the whole trail through
-// AuditReader (agent history, read egress, node detail — #424/#425), and
-// capability.AuditRow, for the ones that have migrated to the read lane. The
-// copy functions below — what an Operation is called, what it was asked to
-// do, who asked — must not fork along that seam. A second spelling of
-// "enumerated list_nodes" is exactly how two screens come to name one audit
-// record two different ways, which is the drift readTargetOf was extracted to
-// end in the first place.
+// It exists because the trail reaches this package as TWO types: audit.Record,
+// for what has not migrated onto the read lane — after #542, that is node
+// detail's Recent Tasks panel and its node_revoke lookup, and nothing else —
+// and capability.AuditRow, for every screen that has (Activity, read egress,
+// agent history). The copy functions below — what an Operation is called,
+// what it was asked to do, who asked — must not fork along that seam. A
+// second spelling of "enumerated list_nodes" is exactly how two screens come
+// to name one audit record two different ways, which is the drift
+// readTargetOf was extracted to end in the first place.
 //
 // It carries NO Stdout, Stderr or Truncated field, at any age (ADR-0025).
-// That is why denyExplanation and riskOf below still take an audit.Record:
-// both read rec.Stderr, which is precisely what this type must not have.
+// That is why denyExplanation below still takes an audit.Record: it reads
+// rec.Stderr, which is precisely what this type must not have, and node
+// detail's Recent Tasks is the one caller left. Agent history's own deny
+// prose reads off trailFacts alone (denyRuleOffLane, below) for exactly that
+// reason — capability.AuditRow has no Stderr to read, and riskOf works from
+// trailFacts already because both lanes need it.
 type trailFacts struct {
 	Kind      string
 	Principal string
@@ -328,6 +332,58 @@ func denyExplanation(rec audit.Record) string {
 // It exists as its own function because a second call site re-spelling the
 // last two answers is how the same refusal comes to be explained two
 // different ways on two screens.
+// denyRuleOffLane renders Deny.Rule for a row that reached this package
+// through the read lane (capability.AuditRow) rather than through
+// audit.Record — agent history, since #542.
+//
+// It cannot call denyText the way denyExplanation does, because denyText's
+// last resort — "The daemon refused this Operation and did not report the
+// deciding rule" — is FALSE on this lane for a denied MUTATE-class row. That
+// sentence is only true when the trail genuinely has nothing: on the WHOLE
+// trail a mutate-class denial's verdict lives in Stderr, and denyText's
+// fallback fires only once that is checked and empty. capability.AuditRow
+// never carries Stderr AT ALL (query.go's own doc comment; adding it back is
+// the acceptance criterion #441 exists to forbid), so calling denyText here
+// would report "not recorded" over a rule the trail IS holding — on the
+// Job's own Tasks, which this row already links to via JobHref. That is the
+// exact failure family #463/#517/#520 were each about: a screen asserting a
+// negative the record does not support.
+//
+// So this function answers the same question a different way, in the same
+// three-case shape as denyText but never reaching for Stderr at all:
+//
+//   - f.Reason, when the row carries one. This is the SAME first check
+//     denyText makes, just spelled without the stderr argument the lane has
+//     nothing to pass.
+//   - The existing read-class sentence, unchanged, when riskOf(f) says this
+//     was a read: the audit trail never retains read output at any age
+//     (ADR-0025) regardless of which type is asking, so this half of
+//     denyText's answer is exactly as true on this lane as on the whole
+//     trail.
+//   - A NEW sentence for the mutate-class remainder, naming WHERE the rule
+//     actually is rather than claiming it is nowhere: this lane's rows carry
+//     no daemon output at any age, but the Task the row's JobHref points at
+//     still does, until the Job is collected (job.go).
+//
+// THE LOSS IS REAL: an operator reading agent history sees a pointer to the
+// rule instead of the rule itself, where node detail (still on
+// denyExplanation, still reading the whole trail) shows it verbatim. That
+// asymmetry is deliberate and stays until node detail's own Recent Tasks
+// panel migrates onto this same lane, at which point the same trade recurs
+// there rather than being solved by growing AuditRow a field #441 named as
+// the thing it must never have.
+func denyRuleOffLane(f trailFacts) string {
+	if f.Reason != "" {
+		return f.Reason
+	}
+	if riskOf(f) == jobs.RiskClassRead {
+		return denyText(nil, "", true)
+	}
+	return "The daemon's verdict is not on this lane's rows: this screen carries no\n" +
+		"daemon output at any age (ADR-0025). It is on the Job this row links to, on that\n" +
+		"Job's own Tasks, retained until the Job is collected — open the Job to see it."
+}
+
 func denyText(stderr []byte, reason string, readClass bool) string {
 	if r := trimmed(stderr); r != "" {
 		return r

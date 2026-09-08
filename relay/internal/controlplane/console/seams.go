@@ -42,15 +42,17 @@ package console
 // dispatch rows come from QueryJobs one row per Job at any fan-out, and
 // everything else from QueryAudit. #450 then added the lane's REGISTRY half
 // and moved the fleet listing and node detail onto it, which is what made
-// those two screens audited (ADR-0025) rather than merely bounded.
+// those two screens audited (ADR-0025) rather than merely bounded. #542
+// moved agent history onto QueryAudit too, reshaping its 200-record WINDOW
+// into a 200-row PAGE with an Older link — the last of #450's writing-time
+// exemptions to close.
 //
-// AuditReader still offers whole-trail and by-Node reads for what has not
-// migrated: agent history in full (#424), and node detail's Recent Tasks
-// panel, whose Task rows are still read by Node through ByNode. That panel is
+// AuditReader now serves exactly ONE thing: node detail's Recent Tasks panel
+// and its node_revoke lookup, both read BY NODE through ByNode. That panel is
 // covered by the describe_node record node detail already writes for the Node
-// it is about; migrating the panel itself onto the lane's paging is #424's
-// reshaping work, not #450's. Until each does, AuditReader keeps capping what
-// it renders and SAYING it capped it — see auditWindow.
+// it is about; migrating it onto the lane's paging is its own reshaping work,
+// not #542's, and until it does AuditReader keeps capping what it renders
+// and SAYING it capped it — see nodeTaskRows (node.go).
 
 import (
 	"context"
@@ -106,8 +108,15 @@ type PolicyReader interface {
 // every Node's captured output — to render one screen, and that screen (Job
 // detail) now reads one bounded page through QueryReader instead. Nothing
 // else asked for it, so the seam does not keep offering it.
+//
+// List is deliberately absent too, since #542: it was agent history's own
+// whole-trail read, and agent history is the last screen that reasoned about
+// the trail as one unbounded slice. Deleting the method rather than merely
+// leaving it unused is the cheap half of a structural win — a future screen
+// physically cannot re-acquire the whole trail through Deps, because there is
+// no method here to call. ByNode is what remains, for node detail's Recent
+// Tasks panel and its node_revoke lookup.
 type AuditReader interface {
-	List(ctx context.Context) ([]audit.Record, error)
 	ByNode(ctx context.Context, nodeID string) ([]audit.Record, error)
 }
 
@@ -145,8 +154,8 @@ type ApprovalReader interface {
 // above — nothing here dispatches or decides, and the narrowed method set is
 // what keeps this package's grip on the capability layer to reads only.
 //
-// Job detail (#423) was its first consumer, read egress (#425) its second
-// and Activity (#422) its third; agent history (#424) follows. Landing the
+// Job detail (#423) was its first consumer, read egress (#425) its second,
+// Activity (#422) its third, and agent history (#542) its fourth. Landing the
 // seam ahead of any screen using it is what let all four be built against
 // one settled contract instead of four independently-guessed ones.
 //
@@ -269,18 +278,6 @@ type EventReader interface {
 type FreezeReader interface {
 	Frozen(ctx context.Context) (bool, error)
 }
-
-// auditWindow caps how many trail records any one screen renders.
-//
-// The store's only read is "all of it, ordered by timestamp", so a fleet with a
-// year of history would have the Console materialise the year and render the
-// tail. That is a real limit and this is a real cap, not a page size: there is
-// no cursor to follow it with until #441 lands the query lane.
-//
-// Every screen that hits this cap SAYS SO on the page. A truncated list that
-// looks complete is worse than a short one — an operator scanning for a refusal
-// that happened yesterday would conclude it never happened.
-const auditWindow = 200
 
 // windowed returns the last n records of rs, newest first, and whether the
 // window elided anything.

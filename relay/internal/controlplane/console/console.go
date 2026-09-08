@@ -94,6 +94,10 @@ type Deps struct {
 	// visible rather than silent. Node detail still reads Policy for its
 	// reported-Policy panel, which is covered by the describe_node record it
 	// already wrote for that Node.
+	//
+	// Audit is down to one screen too: #542 moved agent history onto Queries,
+	// leaving node detail's Recent Tasks panel and its node_revoke lookup as
+	// the only reader of the whole trail through this seam.
 	Fleet     FleetReader
 	Policy    PolicyReader
 	Audit     AuditReader
