@@ -417,12 +417,32 @@ func isAgentCallKind(kind string) bool {
 // approval_expired stays excluded exactly as isAgentCallKind decides.
 var agentCallKinds = buildAgentCallKinds()
 
+// buildAgentCallKinds panics if isAgentCallKind admits nothing.
+//
+// This is not a defensive nicety. capability.AuditFilter's documented
+// zero-value semantics are that an EMPTY Kinds slice matches EVERY ROW, not
+// none — the same trap noSuchAuditKind (activity.go) exists to prevent for
+// row families. An empty agentCallKinds would therefore not narrow the lane
+// to nothing, it would silently WIDEN it to the whole trail: login, token
+// mint, Account and Freeze records — including login_failed's asserted
+// submitted usernames — would land on this screen's trust surface under the
+// "every call an AI-agent makes" heading. A future refactor of kindOf that
+// renamed a row family and left isAgentCallKind's switch matching nothing
+// would produce exactly that, silently, with every existing test still
+// green. A Relay that cannot derive its own agent-call kind set must not
+// start serving this screen with a filter that means "everything".
 func buildAgentCallKinds() []string {
 	var out []string
 	for _, k := range audit.Kinds() {
 		if isAgentCallKind(k) {
 			out = append(out, k)
 		}
+	}
+	if len(out) == 0 {
+		panic("console: isAgentCallKind admits no audit kind at all — an empty " +
+			"agentCallKinds would match EVERY row (capability.AuditFilter's " +
+			"empty-Kinds-matches-all semantics), putting login, token, Account " +
+			"and Freeze records on the agent trust surface")
 	}
 	return out
 }

@@ -332,6 +332,23 @@ func denyExplanation(rec audit.Record) string {
 // It exists as its own function because a second call site re-spelling the
 // last two answers is how the same refusal comes to be explained two
 // different ways on two screens.
+func denyText(stderr []byte, reason string, readClass bool) string {
+	if r := trimmed(stderr); r != "" {
+		return r
+	}
+	if reason != "" {
+		return reason
+	}
+	if readClass {
+		return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
+			"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
+			"retains read output — reading is exfiltration, so what left the Node is audited\n" +
+			"and what it said is not (ADR-0025). Query this Node's effective Policy to see\n" +
+			"the rule."
+	}
+	return "The daemon refused this Operation and did not report the deciding rule."
+}
+
 // denyRuleOffLane renders Deny.Rule for a row that reached this package
 // through the read lane (capability.AuditRow) rather than through
 // audit.Record — agent history, since #542.
@@ -350,20 +367,28 @@ func denyExplanation(rec audit.Record) string {
 // negative the record does not support.
 //
 // So this function answers the same question a different way, in the same
-// three-case shape as denyText but never reaching for Stderr at all:
+// three-case shape as denyText but never reaching for Stderr at all, and
+// never calling denyText itself:
 //
 //   - f.Reason, when the row carries one. This is the SAME first check
 //     denyText makes, just spelled without the stderr argument the lane has
 //     nothing to pass.
-//   - The existing read-class sentence, unchanged, when riskOf(f) says this
-//     was a read: the audit trail never retains read output at any age
-//     (ADR-0025) regardless of which type is asking, so this half of
-//     denyText's answer is exactly as true on this lane as on the whole
-//     trail.
-//   - A NEW sentence for the mutate-class remainder, naming WHERE the rule
-//     actually is rather than claiming it is nowhere: this lane's rows carry
-//     no daemon output at any age, but the Task the row's JobHref points at
-//     still does, until the Job is collected (job.go).
+//   - A read-class sentence SCOPED TO THIS LANE, when riskOf(f) says this was
+//     a read. It does NOT call denyText(nil, "", true): that sentence asserts
+//     what the TRAIL holds ("not recorded in the trail"), and that assertion
+//     is an inference away from being false. riskOf is documented as fallible
+//     in exactly one direction (above) — a Node-local Template Operation that
+//     reuses a shipped read name at mutate class (#475) — and in that case the
+//     daemon's verdict IS on the trail, in Stderr, which the pre-migration
+//     code self-corrected for by checking stderr before ever reaching this
+//     sentence (denyText's own case order). This lane has no stderr to check,
+//     so it must not assert a negative about the trail at all; it says only
+//     what THIS SCREEN's rows carry — nothing, ever, for a read-class Task
+//     (ADR-0025) — and where to look if anything was reported.
+//   - A parallel sentence for the mutate-class remainder, naming WHERE the
+//     rule actually is rather than claiming it is nowhere: this lane's rows
+//     carry no daemon output at any age, but the Task the row's JobHref
+//     points at still does, until the Job is collected (job.go).
 //
 // THE LOSS IS REAL: an operator reading agent history sees a pointer to the
 // rule instead of the rule itself, where node detail (still on
@@ -377,28 +402,15 @@ func denyRuleOffLane(f trailFacts) string {
 		return f.Reason
 	}
 	if riskOf(f) == jobs.RiskClassRead {
-		return denyText(nil, "", true)
+		return "This screen's rows carry no daemon output for a read-class Task, at any\n" +
+			"age (ADR-0025) — reading is exfiltration, so what left the Node is audited and\n" +
+			"what it said is not. If the daemon reported a rule, it is on the Job this row\n" +
+			"links to, on that Job's own Tasks, retained until the Job is collected — open\n" +
+			"the Job to see it."
 	}
 	return "The daemon's verdict is not on this lane's rows: this screen carries no\n" +
 		"daemon output at any age (ADR-0025). It is on the Job this row links to, on that\n" +
 		"Job's own Tasks, retained until the Job is collected — open the Job to see it."
-}
-
-func denyText(stderr []byte, reason string, readClass bool) string {
-	if r := trimmed(stderr); r != "" {
-		return r
-	}
-	if reason != "" {
-		return reason
-	}
-	if readClass {
-		return "The deciding rule is not recorded in the trail for a read-class Task.\n\n" +
-			"The daemon explains a refusal in the Task's output, and the audit trail never\n" +
-			"retains read output — reading is exfiltration, so what left the Node is audited\n" +
-			"and what it said is not (ADR-0025). Query this Node's effective Policy to see\n" +
-			"the rule."
-	}
-	return "The daemon refused this Operation and did not report the deciding rule."
 }
 
 // argsSummary renders what was asked for: Raw Exec's argv, or an Operation's

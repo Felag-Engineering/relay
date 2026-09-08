@@ -55,6 +55,17 @@ func TestAgents_TheLaneFilterNamesEveryAgentCallKind(t *testing.T) {
 			want = append(want, k)
 		}
 	}
+	// Comparing against the SAME derivation the test names would make this
+	// test satisfiable by nil == nil, which is exactly the fail-open finding
+	// buildAgentCallKinds' own panic guards against. Pin non-emptiness here
+	// too, independently of the equality check below, so a mutation that
+	// makes isAgentCallKind fall through for everything cannot pass this
+	// test by having both sides agree on empty.
+	if len(agentCallKinds) == 0 {
+		t.Fatal("agentCallKinds is empty — an empty Kinds filter matches EVERY " +
+			"row (capability.AuditFilter's zero-value semantics), which would put " +
+			"login, token, Account and Freeze records on the agent trust surface")
+	}
 	if !reflect.DeepEqual(agentCallKinds, want) {
 		t.Fatalf("agentCallKinds = %v, want the kinds isAgentCallKind admits, %v", agentCallKinds, want)
 	}
@@ -224,6 +235,36 @@ func TestAgents_ADenyWithoutTheDaemonsRuleSaysWhereToFindIt(t *testing.T) {
 	}
 	if !strings.Contains(body, "/console/jobs/job-1") {
 		t.Errorf("the deny prose does not point at the Job holding the daemon's verdict:\n%s", body)
+	}
+}
+
+// TestAgents_AReadClassDenyDoesNotAssertTheTrailHoldsNothing pins the fix to
+// finding 2 of the adversarial review: a denied read-class row's prose must
+// say what THIS SCREEN's rows carry (nothing, ever, for a read-class Task)
+// and point at the Job's own Tasks, rather than asserting the whole-trail
+// negative denyText's read-class sentence makes ("not recorded in the
+// trail") — an assertion riskOf's one documented failure direction (#475)
+// can make false, since a mutate-class denial's verdict can in fact be on
+// the trail in Stderr, which this lane cannot see to self-correct for.
+func TestAgents_AReadClassDenyDoesNotAssertTheTrailHoldsNothing(t *testing.T) {
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "log.tail",
+			Principal: "agent:op", NodeID: "node-a", JobID: "job-1",
+			Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow},
+	}}
+
+	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
+
+	if strings.Contains(body, "not recorded in the trail") {
+		t.Errorf("a read-class deny asserts the whole-trail negative denyText makes, which an "+
+			"inference away (#475) can be false:\n%s", body)
+	}
+	if !strings.Contains(body, "rows carry no daemon output") {
+		t.Errorf("a read-class deny does not scope its sentence to this screen's rows:\n%s", body)
+	}
+	if !strings.Contains(body, "/console/jobs/job-1") {
+		t.Errorf("a read-class deny does not point at the Job holding any daemon output there is:\n%s", body)
 	}
 }
 
