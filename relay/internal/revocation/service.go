@@ -60,6 +60,32 @@ type RevocationRecorder func(nodeID string) error
 // posture (#397) — loud and closed, never quiet and open.
 var ErrRecorderRequired = errors.New("revocation: RevokeToken requires a recorder; refusing to run an unattributed cascade")
 
+// CascadeShortfall reports how much of a cascade went unrecorded. It wraps
+// ErrCascadeNotRecorded, so errors.Is keeps working for callers that only need
+// to know THAT the trail is incomplete.
+//
+// The counts are a typed field rather than text inside an error string because
+// they are the number an on-call operator reads to size the audit gap -- the
+// threat model's R12 entry rests on "notes any failure" being an honest count.
+// Baked into a format string, that number is unassertable without parsing prose,
+// and a corruption of it (double-counting, or setting it to the cascade length
+// on the first failure) reddens nothing. A code review found exactly that: the
+// entire suite stayed green with unrecorded incremented by two.
+type CascadeShortfall struct {
+	Unrecorded int
+	Total      int
+}
+
+func (e *CascadeShortfall) Error() string {
+	return fmt.Sprintf("revocation: %d of %d cascaded Node revocations were not recorded",
+		e.Unrecorded, e.Total)
+}
+
+// Unwrap lets errors.Is(err, ErrCascadeNotRecorded) hold, which is what the
+// Control API route keys on to tell a completed-but-unrecorded cascade from an
+// outright failure.
+func (e *CascadeShortfall) Unwrap() error { return ErrCascadeNotRecorded }
+
 // ErrCascadeNotRecorded is returned by RevokeToken when every cascaded Node
 // was revoked but one or more of their revocation records could not be
 // written. See RevokeToken's cascade loop for why the revoke proceeds anyway.
@@ -206,7 +232,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 	}
 	slog.Info("token revoked", "token_id", tokenID, "nodes_revoked", total, "nodes_unrecorded", unrecorded)
 	if unrecorded > 0 {
-		return fmt.Errorf("revocation: %d of %d cascaded Node revocations were not recorded: %w", unrecorded, total, ErrCascadeNotRecorded)
+		return &CascadeShortfall{Unrecorded: unrecorded, Total: total}
 	}
 	return nil
 }

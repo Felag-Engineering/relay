@@ -586,10 +586,16 @@ func TestHandleRevokeToken_RejectsUnrenderableTokenID(t *testing.T) {
 }
 
 // TestRevokeTokenCascade_PersistsOneRowPerNode mirrors
-// TestMintThenRevokeToken_BothProduceAuditRows: it uses the REAL SQLite-backed
-// audit.Repository so the audit_id PRIMARY KEY constraint is genuinely
-// exercised over a 5-Node cascade — a fake Auditor cannot catch a reused
-// Record.ID (mutation 11).
+// TestMintThenRevokeToken_BothProduceAuditRows: it drives a 5-Node cascade
+// through the REAL SQLite-backed audit.Repository.
+//
+// The justification is narrower than it first looks, and a code review was right
+// to press on it: the reused-ID check below runs in Go over the returned rows,
+// so a fake Auditor would catch a duplicated Record.ID just as well. What the
+// real store adds is that the writes GO THROUGH the schema at all — N rows for
+// one request actually INSERT and read back, against the live audit table and
+// its audit_id PRIMARY KEY, rather than accumulating in a slice. That is a
+// weaker claim than "only SQLite can catch this", and it is the true one.
 func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {

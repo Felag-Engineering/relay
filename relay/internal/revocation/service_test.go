@@ -45,12 +45,24 @@ type recorder struct {
 	mu     sync.Mutex
 	got    []string
 	failOn map[string]error
+
+	// revokedAtRecordTime, when set, is consulted INSIDE record() to observe
+	// whether the Node was already denylisted at the moment the record was
+	// written. It is the only way to see the record-BEFORE-revoke ordering the
+	// cascade's comment calls load-bearing: post-hoc assertions cannot tell the
+	// two orders apart, so swapping those two calls would otherwise be a silent
+	// refactor. A code review pointed out the gap.
+	revokedAtRecordTime func(nodeID string) bool
+	recordedAfterRevoke []string
 }
 
 func (r *recorder) record(nodeID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.got = append(r.got, nodeID)
+	if r.revokedAtRecordTime != nil && r.revokedAtRecordTime(nodeID) {
+		r.recordedAfterRevoke = append(r.recordedAfterRevoke, nodeID)
+	}
 	return r.failOn[nodeID]
 }
 
@@ -283,10 +295,41 @@ func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 		}
 	}
 
-	rec := &recorder{failOn: map[string]error{"node-07": errors.New("audit store unavailable")}}
+	// TWO failures on distinct Nodes, not one. With a single failure the
+	// shortfall count is indistinguishable from "any non-zero number", and a
+	// code review found that corrupting it -- incrementing by two, or setting it
+	// to the cascade length on the first failure -- reddened nothing in the
+	// entire suite. That number is what an on-call operator reads to size the
+	// audit gap, and the threat model's R12 entry rests on it being honest.
+	rec := &recorder{
+		failOn: map[string]error{
+			"node-07": errors.New("audit store unavailable"),
+			"node-13": errors.New("audit store unavailable"),
+		},
+		revokedAtRecordTime: d.IsRevoked,
+	}
 	err = svc.RevokeToken(ctx, tokenID, rec.record)
 	if !errors.Is(err, revocation.ErrCascadeNotRecorded) {
 		t.Fatalf("RevokeToken error = %v, want errors.Is(err, ErrCascadeNotRecorded)", err)
+	}
+	var shortfall *revocation.CascadeShortfall
+	if !errors.As(err, &shortfall) {
+		t.Fatalf("RevokeToken error = %v, want it to carry a *CascadeShortfall", err)
+	}
+	if shortfall.Unrecorded != 2 {
+		t.Errorf("shortfall.Unrecorded = %d, want exactly 2 — the count an operator reads "+
+			"to size the audit gap must be the number that actually failed", shortfall.Unrecorded)
+	}
+	if shortfall.Total != nodeCount {
+		t.Errorf("shortfall.Total = %d, want %d", shortfall.Total, nodeCount)
+	}
+
+	// The record is written BEFORE the revoke, which the cascade's comment calls
+	// load-bearing: recording after would mean a crash between the two leaves a
+	// Node revoked with no record -- the exact state this issue closes.
+	if len(rec.recordedAfterRevoke) != 0 {
+		t.Errorf("these Nodes were recorded AFTER being denylisted: %v — the cascade must "+
+			"record first, so a crash between the two cannot lose the record", rec.recordedAfterRevoke)
 	}
 
 	for _, id := range nodeIDs {
