@@ -67,6 +67,10 @@ const (
 	//
 	// Recorded for denials and for partial approvals too, not only for the
 	// decision that releases a Job.
+	//
+	// The answer itself (#545) is the ApprovalAnswer column, not prose in
+	// Reason: Reason remains the human sentence, but a query or a renderer
+	// must never parse it to learn which way the decision went.
 	KindApprovalDecided = "approval_decided"
 
 	// KindRead is a non-dispatching read-tool call — list_nodes,
@@ -113,6 +117,19 @@ const (
 
 	KindAPITokenMint   = "api_token_mint"
 	KindAPITokenRevoke = "api_token_revoke"
+)
+
+// ApprovalAnswer values name the structured answer a KindApprovalDecided
+// Record carries (#545, ADR-0027 decision 10). EMPTY means "this row records
+// no approve/deny answer" — a grant revocation, or a row written before
+// #545 — and NEVER "denied": conflating "no value" with "a value that means
+// no" is the #487 bug. Values are byte-identical to
+// approval.StateApproved/StateDenied.String() (#498's vocabulary); this
+// package does not import internal/approval to get them, so a test pins the
+// equality instead.
+const (
+	ApprovalAnswerApproved = "approved"
+	ApprovalAnswerDenied   = "denied"
 )
 
 // allKinds is every Kind above, in declaration order. Kinds returns a copy of
@@ -227,6 +244,17 @@ type Record struct {
 	// cannot recover from ApprovalID alone.
 	ApprovalID string
 	GrantID    string
+
+	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
+	// counterpart to a KindApprovalDecided row's prose Reason (#545,
+	// ADR-0027 decision 10: "approved_by (verified, WITH CHANNEL AND
+	// PLAN-HASH)"). Empty for the overwhelming majority of rows, and empty
+	// means "not applicable / not recorded" — never a value. ApprovalAnswer
+	// is one of the ApprovalAnswer* constants above, or empty (see their
+	// doc for why empty is a third state, not "denied").
+	ApprovalAnswer  string
+	DecisionChannel string
+	PlanHash        string
 }
 
 // Repository is the interface for the audit trail. Append-only: there is no

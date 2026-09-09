@@ -224,12 +224,14 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 	// its failure is joined to the (real, already-persisted) result rather than
 	// pretending the decision did not happen — the same posture Run takes.
 	entry := AuditEntry{
-		Kind:       AuditKindApprovalDecided,
-		Principal:  p,
-		ApprovalID: updated.ID,
-		PlanHash:   updated.PlanHash,
-		Reason:     approvalDecisionReason(updated, d),
-		Asserted:   AssertionsFromContext(ctx),
+		Kind:            AuditKindApprovalDecided,
+		Principal:       p,
+		ApprovalID:      updated.ID,
+		PlanHash:        updated.PlanHash,
+		Reason:          approvalDecisionReason(updated, d),
+		Asserted:        AssertionsFromContext(ctx),
+		ApprovalAnswer:  approvalAnswerOf(d.Approve),
+		DecisionChannel: d.Channel,
 	}
 	if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
 		return updated, fmt.Errorf("capability: record audit entry: %w", auditErr)
@@ -258,12 +260,28 @@ func isApprovalDomainError(err error) bool {
 	return false
 }
 
+// approvalAnswerOf maps a Decision's boolean Approve onto the structured
+// ApprovalAnswer vocabulary (#545). There is no third case: DecideApproval
+// only ever calls this with a real decider's answer, so
+// ApprovalAnswerUnrecorded is reserved for entries that never went through
+// here at all (RevokeGrant's revocation).
+func approvalAnswerOf(approve bool) ApprovalAnswer {
+	if approve {
+		return ApprovalAnswerApproved
+	}
+	return ApprovalAnswerDenied
+}
+
 // approvalDecisionReason renders the audit Reason for one decision: the answer,
 // the resulting state, the quorum progress, and the decider's own note.
 //
 // The decider's note is included because it is the only part of the record that
 // says WHY; it is caller-supplied text, bounded by the surface, and it goes into
 // the same Reason column every other refusal's text does.
+//
+// Reason is no longer the only copy of the answer (#545: see AuditEntry.
+// ApprovalAnswer) — it remains the human sentence a reader wants, and its
+// prose format is unchanged by that split.
 func approvalDecisionReason(r approval.Request, d approval.Decision) string {
 	answer := "denied"
 	if d.Approve {

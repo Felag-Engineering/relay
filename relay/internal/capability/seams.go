@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -198,7 +199,30 @@ const (
 	// "one approver signed and then it expired" is answerable. A partial
 	// approval that leaves no trace is how an audit trail loses the interesting
 	// half of the story.
+	//
+	// ApprovalAnswer and DecisionChannel (#545) are set by DecideApproval on
+	// this kind only, and are deliberately empty on the grant-revocation entry
+	// RevokeGrant writes — a revocation is not a Decision, so nobody answered
+	// a parked Job.
 	AuditKindApprovalDecided
+)
+
+// ApprovalAnswer is the structured answer a Decision carries (#545). package
+// capability may not import internal/audit (TestCapabilityImportsOnlyRegistryAndJobs),
+// so this mirrors — rather than shares — audit.ApprovalAnswer*; auditsink,
+// the one package that imports capability, audit, AND approval, pins the two
+// vocabularies equal.
+//
+// ApprovalAnswerUnrecorded (the zero value) means "no answer" — a grant
+// revocation, or an AuditEntry a future kind writes without one — and NEVER
+// "denied". Conflating "no value" with "a value that means no" is the #487
+// bug.
+type ApprovalAnswer string
+
+const (
+	ApprovalAnswerUnrecorded ApprovalAnswer = ""
+	ApprovalAnswerApproved   ApprovalAnswer = "approved"
+	ApprovalAnswerDenied     ApprovalAnswer = "denied"
 )
 
 // AuditEntry is everything the pipeline knows about one Run call, passed to
@@ -238,6 +262,17 @@ type AuditEntry struct {
 	// request context by Service.Run/Plan. Recorded, never consulted — see
 	// assertions.go.
 	Asserted Assertions
+
+	// ApprovalAnswer and DecisionChannel are the structured counterpart to a
+	// KindApprovalDecided entry's prose Reason (#545, ADR-0027 decision 10).
+	// Set by DecideApproval, and deliberately EMPTY on the grant-revocation
+	// entry RevokeGrant writes — a revocation is not a Decision; nobody
+	// answered a parked Job.
+	//
+	// DecisionChannel is approval.Channel, not a string, so the value cannot
+	// be forged into a channel the surface did not stamp.
+	ApprovalAnswer  ApprovalAnswer
+	DecisionChannel approval.Channel
 }
 
 // FreezeEvent is a Freeze engage/release, passed to AuditSink.RecordFreeze

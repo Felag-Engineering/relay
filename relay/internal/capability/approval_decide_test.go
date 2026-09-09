@@ -742,3 +742,122 @@ func TestGrantDoesNotBindItsRequestToOneJob(t *testing.T) {
 		t.Errorf("approval IDs = %v, want the grant's own authorizing request", approvalIDs)
 	}
 }
+
+// TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel (#545): DecideApproval's
+// audit entry carries the structured answer and the Channel it arrived on —
+// not just the prose Reason those facts used to live inside exclusively.
+//
+// The gate here requires only ChannelInBand (weaker than decideFixture's
+// ChannelOutOfBand) so both an OutOfBand approval and an InBand denial are
+// accepted in the same test — DISTINCT Channels on the approve and deny
+// cases is the point (#545's plan).
+func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+	gate, err := approval.NewGate([]approval.Rule{{
+		Name:    "everything",
+		Match:   approval.Match{},
+		Require: approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+	}})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	store := newMemApprovals()
+	auditSink := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(auditSink),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+
+	// Two distinct Actions so the two dispatches park as two distinct
+	// requests (checkApproval hashes the Plan; identical Actions would bounce
+	// the second dispatch off the first's pending Request instead of parking
+	// a second one).
+	approveAct := jobs.Action{
+		Kind: jobs.ActionOperation, OperationName: "service.restart",
+		OperationArgs: map[string]string{"service": "nginx"}, RiskClass: jobs.RiskClassMutate,
+	}
+	denyAct := jobs.Action{
+		Kind: jobs.ActionOperation, OperationName: "service.restart",
+		OperationArgs: map[string]string{"service": "redis"}, RiskClass: jobs.RiskClassMutate,
+	}
+
+	parkOne := func(act jobs.Action) *ParkedError {
+		t.Helper()
+		_, err := s.Run(context.Background(), machineRequester, Selector{}, act)
+		var parked *ParkedError
+		if !errors.As(err, &parked) {
+			t.Fatalf("Run: err = %v, want a park", err)
+		}
+		return parked
+	}
+
+	approveParked := parkOne(approveAct)
+	denyParked := parkOne(denyAct)
+	if approveParked.RequestID == denyParked.RequestID {
+		t.Fatal("the two dispatches parked as the SAME request — they must be distinct plans " +
+			"for this test to isolate the approve case from the deny case")
+	}
+
+	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+		RequestID: approveParked.RequestID, PlanHash: approveParked.PlanHash, Approve: true,
+		Channel: approval.ChannelOutOfBand,
+	}); err != nil {
+		t.Fatalf("DecideApproval(approve): %v", err)
+	}
+	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-bo", "bo"), ApprovalDecision{
+		RequestID: denyParked.RequestID, PlanHash: denyParked.PlanHash, Approve: false,
+		Channel: approval.ChannelInBand,
+	}); err != nil {
+		t.Fatalf("DecideApproval(deny): %v", err)
+	}
+
+	var approveEntry, denyEntry *AuditEntry
+	for i := range auditSink.entries {
+		e := &auditSink.entries[i]
+		if e.Kind != AuditKindApprovalDecided {
+			continue
+		}
+		switch e.ApprovalID {
+		case approveParked.RequestID:
+			approveEntry = e
+		case denyParked.RequestID:
+			denyEntry = e
+		}
+	}
+	if approveEntry == nil || denyEntry == nil {
+		t.Fatalf("missing decision audit entries: approve=%v deny=%v", approveEntry, denyEntry)
+	}
+
+	if approveEntry.ApprovalAnswer != ApprovalAnswerApproved {
+		t.Errorf("approve entry ApprovalAnswer = %q, want %q", approveEntry.ApprovalAnswer, ApprovalAnswerApproved)
+	}
+	if approveEntry.DecisionChannel != approval.ChannelOutOfBand {
+		t.Errorf("approve entry DecisionChannel = %v, want %v", approveEntry.DecisionChannel, approval.ChannelOutOfBand)
+	}
+	if approveEntry.PlanHash != approveParked.PlanHash {
+		t.Errorf("approve entry PlanHash = %q, want %q", approveEntry.PlanHash, approveParked.PlanHash)
+	}
+
+	// The denial case must not be left at the zero value: setting the answer
+	// only on the happy path is exactly the bug this test guards against.
+	if denyEntry.ApprovalAnswer == ApprovalAnswerUnrecorded {
+		t.Fatal("deny entry ApprovalAnswer is Unrecorded — the answer is being set only on the approve path")
+	}
+	if denyEntry.ApprovalAnswer != ApprovalAnswerDenied {
+		t.Errorf("deny entry ApprovalAnswer = %q, want %q", denyEntry.ApprovalAnswer, ApprovalAnswerDenied)
+	}
+	if denyEntry.DecisionChannel != approval.ChannelInBand {
+		t.Errorf("deny entry DecisionChannel = %v, want %v", denyEntry.DecisionChannel, approval.ChannelInBand)
+	}
+	if denyEntry.PlanHash != denyParked.PlanHash {
+		t.Errorf("deny entry PlanHash = %q, want %q", denyEntry.PlanHash, denyParked.PlanHash)
+	}
+}

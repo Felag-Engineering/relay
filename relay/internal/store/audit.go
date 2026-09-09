@@ -36,13 +36,13 @@ func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
 		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		                   account_id, account_name, account_role, token_id, auth_method, verified_source,
 		                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
-		                   approval_id, grant_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   approval_id, grant_id, approval_answer, decision_channel, plan_hash)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method), nullIfEmpty(v.Source),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
-		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID),
+		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID), nullIfEmpty(r.ApprovalAnswer), nullIfEmpty(r.DecisionChannel), nullIfEmpty(r.PlanHash),
 	)
 	if err != nil {
 		return fmt.Errorf("insert audit record: %w", err)
@@ -96,7 +96,7 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		       account_id, account_name, account_role, token_id, auth_method, verified_source,
 		       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
-		       approval_id, grant_id
+		       approval_id, grant_id, approval_answer, decision_channel, plan_hash
 		FROM audit `+whereClause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query audit records: %w", err)
@@ -118,12 +118,13 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 			authMethod, verifiedSource                           sql.NullString
 			onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
 			approvalID, grantID                                  sql.NullString
+			approvalAnswer, decisionChannel, planHash            sql.NullString
 		)
 		if err := rows.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 			&operationName, &argsJSON, &argvJSON, &outcome, &reason, &stdout, &stderr, &truncated,
 			&accountID, &accountName, &accountRole, &tokenID, &authMethod, &verifiedSource,
 			&onBehalfOf, &traceparent, &sessionRef, &changeRef,
-			&approvalID, &grantID); err != nil {
+			&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash); err != nil {
 			return nil, fmt.Errorf("scan audit row: %w", err)
 		}
 		tsTime, err := parseTime(sql.NullString{String: ts, Valid: true})
@@ -159,20 +160,23 @@ func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any
 					ChangeRef:   changeRef.String,
 				},
 			},
-			Selector:      selector,
-			JobID:         jobID,
-			NodeID:        nodeID.String,
-			ActionKind:    actionKind,
-			OperationName: operationName.String,
-			Args:          args,
-			RawExecArgv:   argv,
-			Outcome:       jobs.Outcome(outcome),
-			Reason:        reason.String,
-			Stdout:        stdout,
-			Stderr:        stderr,
-			Truncated:     truncated != 0,
-			ApprovalID:    approvalID.String,
-			GrantID:       grantID.String,
+			Selector:        selector,
+			JobID:           jobID,
+			NodeID:          nodeID.String,
+			ActionKind:      actionKind,
+			OperationName:   operationName.String,
+			Args:            args,
+			RawExecArgv:     argv,
+			Outcome:         jobs.Outcome(outcome),
+			Reason:          reason.String,
+			Stdout:          stdout,
+			Stderr:          stderr,
+			Truncated:       truncated != 0,
+			ApprovalID:      approvalID.String,
+			GrantID:         grantID.String,
+			ApprovalAnswer:  approvalAnswer.String,
+			DecisionChannel: decisionChannel.String,
+			PlanHash:        planHash.String,
 		})
 	}
 	return out, rows.Err()

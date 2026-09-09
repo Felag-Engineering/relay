@@ -98,6 +98,10 @@ type Row struct {
 
 	ApprovalID string
 	GrantID    string
+
+	ApprovalAnswer  string
+	DecisionChannel string
+	PlanHash        string
 }
 
 // Page is one page of Rows, cursor-paginated newest first.

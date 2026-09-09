@@ -479,6 +479,10 @@ func rowOfRecord(r audit.Record) capability.AuditRow {
 		Reason:        r.Reason,
 		ApprovalID:    r.ApprovalID,
 		GrantID:       r.GrantID,
+
+		ApprovalAnswer:  capability.ApprovalAnswer(r.ApprovalAnswer),
+		DecisionChannel: r.DecisionChannel,
+		PlanHash:        r.PlanHash,
 	}
 }
 

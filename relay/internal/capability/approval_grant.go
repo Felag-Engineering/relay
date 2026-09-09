@@ -235,6 +235,10 @@ func (s *Service) RevokeGrant(ctx context.Context, p Principal, id, reason strin
 		Reason: fmt.Sprintf("batch/window grant %s revoked by %s after %s: %s — %s",
 			revoked.ID, p.Account, revoked.Progress(), revoked.Summary, reason),
 		Asserted: AssertionsFromContext(ctx),
+		// ApprovalAnswer and DecisionChannel are deliberately left zero
+		// (#545): a revocation is not a Decision — nobody answered a parked
+		// Job — and GrantID above is already this entry's structural
+		// discriminator from a real answer.
 	}
 	if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
 		return revoked, fmt.Errorf("capability: record audit entry: %w", auditErr)

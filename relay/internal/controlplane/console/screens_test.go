@@ -4352,28 +4352,29 @@ func TestApprovals_LapsedRowsAreOrderedMostRecentFirst(t *testing.T) {
 	}
 }
 
-// sinkApprovalDecisionRecords builds one Decision record and one grant-
-// revocation record THROUGH the real sink — auditsink.Sink.Record, the one
-// function the product calls to write AuditKindApprovalDecided — rather than
-// two hand-built audit.Record literals. Both capability.Service.DecideApproval
-// (reached from the MCP tool AND the Control API's decision route) and
-// Service.RevokeGrant write this same Kind through this same method; going
-// through it is what pins the shape the sink actually produces rather than a
-// shape this test imagines, which is the #463 lesson sinkReadRecords records
-// above.
+// sinkApprovalDecisionRecords builds one answered Decision record, one grant-
+// revocation record, and one answerless (pre-#545) Decision record THROUGH
+// the real sink — auditsink.Sink.Record, the one function the product calls
+// to write AuditKindApprovalDecided — rather than hand-built audit.Record
+// literals. Both capability.Service.DecideApproval (reached from the MCP
+// tool AND the Control API's decision route) and Service.RevokeGrant write
+// this same Kind through this same method; going through it is what pins
+// the shape the sink actually produces rather than a shape this test
+// imagines, which is the #463 lesson sinkReadRecords records above.
 //
 // Reason prose is deliberately free of & < > " ' so the assertions below can
 // compare rendered HTML against rec.Reason directly, without re-implementing
 // html/template's escaping.
 //
-// The two records are decided by DIFFERENT Accounts on purpose — a decider
-// and a separate operator who later closes the grant's window are both
-// realistic, and doing it this way gives agentRowContaining a discriminator
-// (the Principal's own rendered name) that survives every mutation in #538's
-// matrix, including the ones that erase Reason or the tool name. Locating the
-// row by the very text a mutation deletes would make the helper fail closed
-// for the wrong reason instead of the one under test.
-func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Record) {
+// The three records are decided by DIFFERENT Accounts on purpose — a
+// decider, a separate operator who later closes the grant's window, and a
+// third "legacy" account, are all realistic, and doing it this way gives
+// agentRowContaining a discriminator (the Principal's own rendered name)
+// that survives every mutation in #538's matrix, including the ones that
+// erase Reason or the tool name. Locating the row by the very text a
+// mutation deletes would make the helper fail closed for the wrong reason
+// instead of the one under test.
+func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation, legacy audit.Record) {
 	t.Helper()
 	repo := &captureRepo{}
 	// WithLogger keeps Record's "audit decision" log line out of test output;
@@ -4388,6 +4389,9 @@ func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Recor
 	revoker := capability.Principal{
 		AccountID: "acct-ops", Account: "ops-console", Role: "admin", Kind: "machine",
 	}
+	priorDecider := capability.Principal{
+		AccountID: "acct-legacy", Account: "legacy-op", Role: "admin", Kind: "human",
+	}
 	ctx := context.Background()
 	if err := sink.Record(ctx, capability.AuditEntry{
 		Kind:       capability.AuditKindApprovalDecided,
@@ -4395,6 +4399,8 @@ func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Recor
 		ApprovalID: "appr-1",
 		Reason: "approval request appr-1 approved by alice over out-of-band " +
 			"(1 of 1, request now approved): restart the web fleet",
+		ApprovalAnswer:  capability.ApprovalAnswerApproved,
+		DecisionChannel: approval.ChannelOutOfBand,
 	}); err != nil {
 		t.Fatalf("sink.Record(decision): %v", err)
 	}
@@ -4407,14 +4413,27 @@ func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Recor
 	}); err != nil {
 		t.Fatalf("sink.Record(revocation): %v", err)
 	}
-	if len(repo.recs) != 2 {
-		t.Fatalf("the sink wrote %d records for 2 entries, want 2", len(repo.recs))
+	// The pre-#545 shape: a decision recorded with no structured answer at
+	// all (the shape of every row this migration does not backfill). The
+	// renderer's "decided" fallback has to keep a fixture that actually
+	// exercises it, or the fallback branch goes untested.
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  priorDecider,
+		ApprovalID: "appr-3",
+		Reason: "approval request appr-3 approved by legacy-op over out-of-band " +
+			"(1 of 1, request now approved): roll the cache fleet",
+	}); err != nil {
+		t.Fatalf("sink.Record(legacy): %v", err)
 	}
-	decision, revocation = repo.recs[0], repo.recs[1]
+	if len(repo.recs) != 3 {
+		t.Fatalf("the sink wrote %d records for 3 entries, want 3", len(repo.recs))
+	}
+	decision, revocation, legacy = repo.recs[0], repo.recs[1], repo.recs[2]
 
 	// Pin the shape the product actually writes rather than one this test
 	// imagines.
-	for _, rec := range []audit.Record{decision, revocation} {
+	for _, rec := range []audit.Record{decision, revocation, legacy} {
 		if rec.Kind != audit.KindApprovalDecided {
 			t.Fatalf("the sink wrote Kind %q, want %q", rec.Kind, audit.KindApprovalDecided)
 		}
@@ -4428,7 +4447,13 @@ func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation audit.Recor
 	if revocation.GrantID == "" {
 		t.Fatal("the revocation record carries no GrantID — RevokeGrant is the only writer that sets one")
 	}
-	return decision, revocation
+	if decision.ApprovalAnswer == "" {
+		t.Fatal("the decision record carries no ApprovalAnswer — the sink dropped it")
+	}
+	if legacy.ApprovalAnswer != "" {
+		t.Fatalf("the legacy record carries an ApprovalAnswer (%q) it should not — it stands in for a pre-#545 row", legacy.ApprovalAnswer)
+	}
+	return decision, revocation, legacy
 }
 
 // agentRowContaining returns the single <article class="ev" data-kind="call">
@@ -4475,10 +4500,10 @@ func agentRowContaining(t *testing.T, body, needle string) string {
 // the revocation stops being named correctly, A3 fails if the outcome chips
 // stop diverging.
 func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
-	decision, revocation := sinkApprovalDecisionRecords(t)
+	decision, revocation, legacy := sinkApprovalDecisionRecords(t)
 
 	d := renderableDeps()
-	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation})}
+	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation, legacy})}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	// A1 — the decision row renders the record's OWN Reason, read off the
@@ -4505,14 +4530,20 @@ func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
 		t.Errorf("the revocation row names an MCP tool that was never called:\n%s", row)
 	}
 
-	// A3 — the outcome chips diverge: exactly one "revoked", and the decision
-	// row still carries "decided".
+	// A3 — the outcome chips diverge: exactly one "revoked", the decision row
+	// carries the structured "approved" STATE chip (#545), and the answerless
+	// legacy record keeps the pre-#545 "decided" OUTCOME chip — moved here
+	// from asserting "decided" on the answered decision, which is exactly
+	// the behaviour #545 replaces.
 	chip := `<span class="chip outcome" data-outcome="revoked">revoked</span>`
 	if n := strings.Count(body, chip); n != 1 {
 		t.Errorf("expected exactly one %q outcome chip, got %d", chip, n)
 	}
+	if !strings.Contains(body, `<span class="chip state" data-state="approved">approved</span>`) {
+		t.Error("the decision row does not carry the structured \"approved\" state chip")
+	}
 	if !strings.Contains(body, `data-outcome="decided"`) {
-		t.Error("the decision row lost its \"decided\" outcome chip")
+		t.Error("the answerless legacy record lost its \"decided\" outcome chip")
 	}
 
 	// A4 — the family rule, not a per-kind special case: the revocation's own
@@ -4534,10 +4565,10 @@ func TestAgents_ApprovalDecisionsShowTheAnswerTheyCarry(t *testing.T) {
 // that was never made. This is the test that stops the next reader from
 // "finishing" this ticket by hard-coding the MCP tool name over a decision.
 func TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool(t *testing.T) {
-	decision, revocation := sinkApprovalDecisionRecords(t)
+	decision, revocation, legacy := sinkApprovalDecisionRecords(t)
 
 	d := renderableDeps()
-	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation})}
+	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{decision, revocation, legacy})}
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	if strings.Contains(body, "approve_request") {
@@ -4545,6 +4576,183 @@ func TestAgents_ApprovalDecisionIsNotNamedAsAnMCPTool(t *testing.T) {
 			"reached from both the MCP tool and the Control API's out-of-band decision route " +
 			"through the identical audit kind, with no structured field distinguishing them, " +
 			"so this mislabels a Control API decision as an MCP tool call that was never made")
+	}
+}
+
+// fourApprovalDecisionRecords builds one approved Decision, one denied
+// Decision, one grant revocation, and one answerless (pre-#545) Decision
+// record THROUGH the real sink — the same reasoning as
+// sinkApprovalDecisionRecords above. Each carries a DIFFERENT verified
+// Account so a row-scoped assertion can locate exactly one by a needle that
+// is not itself a field under test (#538's reasoning, reused here for
+// #545's approved/denied pair).
+func fourApprovalDecisionRecords(t *testing.T) (approved, denied, revoked, legacy audit.Record) {
+	t.Helper()
+	repo := &captureRepo{}
+	sink := auditsink.New(repo,
+		auditsink.WithClock(func() time.Time { return testNow }),
+		auditsink.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	ctx := context.Background()
+
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  capability.Principal{AccountID: "acct-alice", Account: "alice", Role: "admin", Kind: "human"},
+		ApprovalID: "appr-alice",
+		Reason: "approval request appr-alice approved by alice over out-of-band " +
+			"(1 of 1, request now approved): restart the web fleet",
+		ApprovalAnswer:  capability.ApprovalAnswerApproved,
+		DecisionChannel: approval.ChannelOutOfBand,
+	}); err != nil {
+		t.Fatalf("sink.Record(approved): %v", err)
+	}
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  capability.Principal{AccountID: "acct-bruno", Account: "bruno", Role: "admin", Kind: "human"},
+		ApprovalID: "appr-bruno",
+		Reason: "approval request appr-bruno denied by bruno over in-band " +
+			"(1 of 1, request now denied): reboot the db fleet",
+		ApprovalAnswer:  capability.ApprovalAnswerDenied,
+		DecisionChannel: approval.ChannelInBand,
+	}); err != nil {
+		t.Fatalf("sink.Record(denied): %v", err)
+	}
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  capability.Principal{AccountID: "acct-ops", Account: "ops-console", Role: "admin", Kind: "machine"},
+		ApprovalID: "appr-ops", GrantID: "grant-ops",
+		Reason: "approval grant grant-ops revoked by ops-console: closing the maintenance window early",
+	}); err != nil {
+		t.Fatalf("sink.Record(revoked): %v", err)
+	}
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalDecided,
+		Principal:  capability.Principal{AccountID: "acct-legacy", Account: "legacy", Role: "admin", Kind: "human"},
+		ApprovalID: "appr-legacy",
+		Reason: "approval request appr-legacy approved by legacy over out-of-band " +
+			"(1 of 1, request now approved): roll the cache fleet",
+		// ApprovalAnswer/DecisionChannel deliberately left zero: this record
+		// stands in for a decision written before #545.
+	}); err != nil {
+		t.Fatalf("sink.Record(legacy): %v", err)
+	}
+
+	if len(repo.recs) != 4 {
+		t.Fatalf("the sink wrote %d records for 4 entries, want 4", len(repo.recs))
+	}
+	return repo.recs[0], repo.recs[1], repo.recs[2], repo.recs[3]
+}
+
+// activityRowContaining is activity's counterpart to agentRowContaining
+// above: the single <article class="ev" data-kind="..."> block on the
+// Activity page whose markup contains needle, so an assertion can be scoped
+// to ONE row rather than the whole page.
+func activityRowContaining(t *testing.T, body, needle string) string {
+	t.Helper()
+	const marker = `<article class="ev" data-kind="`
+	for _, block := range strings.Split(body, marker)[1:] {
+		if strings.Contains(block, needle) {
+			return block
+		}
+	}
+	t.Fatalf("no activity row contains %q", needle)
+	return ""
+}
+
+// TestApprovalDecisionChipSaysApprovedOrDenied (#545): the Agents and
+// Activity screens both render the STRUCTURED answer, never the bare word
+// "decided", and never collapse "no answer" into "denied" (#487).
+//
+// Every assertion below is ROW-SCOPED (agentRowContaining/
+// activityRowContaining), not a page-wide strings.Contains: a page-wide
+// check would still pass if alice's and bruno's chips were swapped, because
+// both values would still appear SOMEWHERE on the page. Scoping to each
+// Account's own row is what makes the two independent by construction.
+func TestApprovalDecisionChipSaysApprovedOrDenied(t *testing.T) {
+	approved, denied, revoked, legacy := fourApprovalDecisionRecords(t)
+	recs := []audit.Record{approved, denied, revoked, legacy}
+
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: rowsOfRecords(recs)}
+	handler := newTestHandler(d, accounts.RoleAdmin)
+
+	for _, page := range []string{"/console/agents", "/console/activity"} {
+		body := get(t, handler, page).Body.String()
+
+		rowContaining := agentRowContaining
+		if page == "/console/activity" {
+			rowContaining = activityRowContaining
+		}
+
+		aliceRow := rowContaining(t, body, "alice")
+		if !strings.Contains(aliceRow, `data-state="approved"`) {
+			t.Errorf("[%s] alice's row does not carry data-state=\"approved\":\n%s", page, aliceRow)
+		}
+		if strings.Contains(aliceRow, `data-state="denied"`) {
+			t.Errorf("[%s] alice's row carries data-state=\"denied\" — she was approved:\n%s", page, aliceRow)
+		}
+
+		brunoRow := rowContaining(t, body, "bruno")
+		if !strings.Contains(brunoRow, `data-state="denied"`) {
+			t.Errorf("[%s] bruno's row does not carry data-state=\"denied\":\n%s", page, brunoRow)
+		}
+		if strings.Contains(brunoRow, `data-state="approved"`) {
+			t.Errorf("[%s] bruno's row carries data-state=\"approved\" — he was denied:\n%s", page, brunoRow)
+		}
+
+		if strings.Contains(body, `data-outcome="approved"`) || strings.Contains(body, `data-outcome="denied"`) {
+			t.Errorf("[%s] the structured answer leaked into the OUTCOME vocabulary — a fifth spelling of the answer", page)
+		}
+	}
+
+	// The OUTCOME chip (data-outcome=...) is an Agents-only vocabulary —
+	// Activity names the same facts in prose (summarize) rather than a chip —
+	// so the revoked/decided fallback assertions are Agents-only.
+	agentsBody := get(t, handler, "/console/agents").Body.String()
+	opsRow := agentRowContaining(t, agentsBody, "ops-console")
+	if n := strings.Count(opsRow, `data-outcome="revoked"`); n != 1 {
+		t.Errorf("ops-console's Agents row carries %d \"revoked\" outcome chips, want exactly 1:\n%s", n, opsRow)
+	}
+	if strings.Contains(opsRow, "chip state") {
+		t.Errorf("ops-console's Agents row (a revocation, not a Decision) carries a state chip:\n%s", opsRow)
+	}
+
+	legacyRow := agentRowContaining(t, agentsBody, "legacy")
+	if !strings.Contains(legacyRow, `data-outcome="decided"`) {
+		t.Errorf("the answerless legacy Agents row lost its pre-#545 \"decided\" outcome chip — "+
+			"the #487 guard: empty must never render as a value:\n%s", legacyRow)
+	}
+
+	css := get(t, handler, "/console/assets/console.css").Body.String()
+	for _, sel := range []string{`.chip.state[data-state="approved"]`, `.chip.state[data-state="denied"]`} {
+		if !strings.Contains(css, sel) {
+			t.Errorf("the stylesheet has no %s rule — #545 must reuse #498's existing group, not add a new one", sel)
+		}
+	}
+}
+
+// TestActivity_ApprovalAnswerIsNamedTheSameOnBothScreens (#545): the value
+// approvalStateChip returns is the exact value BOTH screens render — the
+// point of it being the ONE naming function (vocab.go).
+func TestActivity_ApprovalAnswerIsNamedTheSameOnBothScreens(t *testing.T) {
+	approved, _, _, _ := fourApprovalDecisionRecords(t)
+	want := approvalStateChip(factsOfRecord(approved))
+	if want == "" {
+		t.Fatal("approvalStateChip returned empty for an answered decision — the fixture is broken")
+	}
+
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: rowsOfRecords([]audit.Record{approved})}
+	handler := newTestHandler(d, accounts.RoleAdmin)
+
+	agentsBody := get(t, handler, "/console/agents").Body.String()
+	activityBody := get(t, handler, "/console/activity").Body.String()
+
+	chip := `data-state="` + want + `"`
+	if !strings.Contains(agentsBody, chip) {
+		t.Errorf("Agents does not render %q for the record approvalStateChip named %q", chip, want)
+	}
+	if !strings.Contains(activityBody, chip) {
+		t.Errorf("Activity does not render %q for the record approvalStateChip named %q", chip, want)
 	}
 }
 

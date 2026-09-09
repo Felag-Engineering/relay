@@ -83,6 +83,15 @@ type trailFacts struct {
 	ApprovalID    string
 	GrantID       string
 
+	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
+	// counterpart to a decision's prose Reason (#545). Empty on every record
+	// that is not a KindApprovalDecided decision, and empty on a decision
+	// written before #545 or on a grant revocation — see approvalStateChip
+	// for why empty is never read as "denied".
+	ApprovalAnswer  string
+	DecisionChannel string
+	PlanHash        string
+
 	Args        map[string]string
 	RawExecArgv []string
 
@@ -107,6 +116,9 @@ func factsOfRecord(rec audit.Record) trailFacts {
 		Reason:              rec.Reason,
 		ApprovalID:          rec.ApprovalID,
 		GrantID:             rec.GrantID,
+		ApprovalAnswer:      rec.ApprovalAnswer,
+		DecisionChannel:     rec.DecisionChannel,
+		PlanHash:            rec.PlanHash,
 		Args:                rec.Args,
 		RawExecArgv:         rec.RawExecArgv,
 		Outcome:             rec.Outcome,
@@ -131,6 +143,9 @@ func factsOfRow(row capability.AuditRow) trailFacts {
 		Reason:              row.Reason,
 		ApprovalID:          row.ApprovalID,
 		GrantID:             row.GrantID,
+		ApprovalAnswer:      string(row.ApprovalAnswer),
+		DecisionChannel:     row.DecisionChannel,
+		PlanHash:            row.PlanHash,
 		Args:                row.Args,
 		RawExecArgv:         row.RawExecArgv,
 		Outcome:             row.Outcome,
@@ -211,6 +226,34 @@ func readTargetOf(f trailFacts) string {
 // It lives here, beside readTargetOf, for the reason this file exists: a second
 // screen naming these records is a second chance to name them differently.
 const readOutcomeAudited = "audited"
+
+// approvalStateChip names the outcome of a KindApprovalDecided record in
+// #498's four-value `.chip.state` vocabulary ("approved"/"denied"), the ONE
+// naming function so Agents and Activity cannot spell the answer two
+// different ways.
+//
+// Three-way, in this order:
+//
+//   - f.GrantID != "" -> "" (a revocation, not a Decision — #538's own
+//     structural discriminator; the caller renders its own "revoked").
+//   - f.ApprovalAnswer set -> "approved" or "denied", verbatim (#545: the
+//     structured answer, byte-identical to audit.ApprovalAnswer*).
+//   - otherwise -> "" (a decision recorded before #545, with no structured
+//     answer). Empty is NEVER "denied" here: the #487 lesson is that
+//     conflating "no value" with "a value that means no" is the worst way
+//     an audit surface can be wrong. The caller keeps its own pre-#545
+//     "decided" fallback for this case.
+func approvalStateChip(f trailFacts) string {
+	if f.GrantID != "" {
+		return ""
+	}
+	switch f.ApprovalAnswer {
+	case audit.ApprovalAnswerApproved, audit.ApprovalAnswerDenied:
+		return f.ApprovalAnswer
+	default:
+		return ""
+	}
+}
 
 // readOperations is every Operation name this package can call read: the
 // native half DERIVED from opvocab, unioned with the shipped-template half

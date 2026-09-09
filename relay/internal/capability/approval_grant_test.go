@@ -465,3 +465,37 @@ func TestGrantForApprovalIsNotFoundForAPlainRequest(t *testing.T) {
 		t.Fatalf("err = %v, want the unwrapped approval.ErrGrantNotFound", err)
 	}
 }
+
+// TestRevokeGrantAuditEntryRecordsNoAnswer (#545): a revocation is not a
+// Decision — nobody answered a parked Job — so its audit entry must carry an
+// Unrecorded answer and ChannelUnspecified, never something that reads as a
+// denial. GrantID (already asserted by TestRevokeGrantAttributesAndAudits) is
+// this entry's structural discriminator; this test pins that a revocation is
+// not silently filed as a denial alongside it.
+func TestRevokeGrantAuditEntryRecordsNoAnswer(t *testing.T) {
+	s, _, _, audit := grantMgmtFixture(t, gateEverything(t, 1), &spyApprovalAuthorizer{})
+
+	grant, _, err := s.RequestGrant(context.Background(), machineRequester, grantRequestFixture())
+	if err != nil {
+		t.Fatalf("RequestGrant: %v", err)
+	}
+	if _, err := s.RevokeGrant(context.Background(), humanApprover("acct-ana", "ana"), grant.ID, "incident 42"); err != nil {
+		t.Fatalf("RevokeGrant: %v", err)
+	}
+
+	var revocation *AuditEntry
+	for i := range audit.entries {
+		if audit.entries[i].Kind == AuditKindApprovalDecided && audit.entries[i].GrantID == grant.ID {
+			revocation = &audit.entries[i]
+		}
+	}
+	if revocation == nil {
+		t.Fatal("no audit entry for the revocation")
+	}
+	if revocation.ApprovalAnswer != ApprovalAnswerUnrecorded {
+		t.Errorf("revocation ApprovalAnswer = %q, want Unrecorded — a revocation is not a Decision", revocation.ApprovalAnswer)
+	}
+	if revocation.DecisionChannel != approval.ChannelUnspecified {
+		t.Errorf("revocation DecisionChannel = %v, want Unspecified — nobody answered a parked Job", revocation.DecisionChannel)
+	}
+}
