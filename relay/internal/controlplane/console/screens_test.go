@@ -223,6 +223,16 @@ func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 	if !strings.Contains(v.FilterError, "#") {
 		t.Errorf("the refusal for %q does not name the issue that will fix it: %q", term, v.FilterError)
 	}
+	// The refusal must NOT carry the generic lead sentence. Since #560 the rule
+	// lives in capability.ParseSelector and this screen only RECOGNISES the
+	// sentinel; if that recognition is lost, the term falls through to the
+	// generic arm, which prepends "every term needs a namespace prefix" and
+	// appends the capability error verbatim. That reads as a missing prefix on
+	// a term that plainly has one — and because the appended text still
+	// contains "#430", the assertion above alone cannot see the difference.
+	if strings.Contains(v.FilterError, "needs a namespace prefix") {
+		t.Errorf("the refusal for %q names the wrong problem — the term HAS a prefix: %q", term, v.FilterError)
+	}
 }
 
 // TestFleet_StateFilterResolvesLikeAnyOtherNamespace is #414's acceptance 1

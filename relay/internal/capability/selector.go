@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -64,7 +65,10 @@ type Selector struct {
 // belongs to (mirrors protoconv.ParseNodeLabel's prefix-stripping style,
 // extended here to all four namespaces).
 //
-// node:, relay: and tag: keep the same "key=value, value required" grammar.
+// node: and relay: keep the same "key=value, value required" grammar. tag: is
+// REFUSED outright (ErrSelectorTagUnsupported, #560): the namespace exists in
+// the model (invariant 7) but has no storage until #430, so parsing one would
+// hand the caller a Selector that matches nothing for a reason it cannot see.
 // state: is different because it is closed-vocabulary and typed (ADR-0034):
 // a boolean marker term carries no value ("state:offline") and a fact term
 // requires a non-empty one ("state:daemon-version=1.4.2"). Both directions
@@ -74,6 +78,17 @@ type Selector struct {
 //
 // An empty (or all-whitespace) string parses to an empty Selector, which
 // Resolve treats as matching every Node (see Resolve).
+// ErrSelectorTagUnsupported is returned by ParseSelector for any tag: term.
+//
+// A sentinel rather than a bare error so a surface can RECOGNISE it and
+// render it in its own register without re-deciding the rule — the same
+// pattern writeFreezeError uses for capability.ErrFreezeReasonRequired. The
+// Console says "filter on node:, relay: or state: for now"; a tool surface
+// says something else; neither gets to disagree about whether the term is
+// allowed.
+var ErrSelectorTagUnsupported = errors.New(
+	"capability: tag: selectors are not resolvable yet — operator-set grouping lands with label management (#430)")
+
 func ParseSelector(s string) (Selector, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -98,8 +113,25 @@ func ParseSelector(s string) (Selector, error) {
 			ns = NamespaceRelay
 			rest = strings.TrimPrefix(term, "relay:")
 		case strings.HasPrefix(term, "tag:"):
-			ns = NamespaceTag
-			rest = strings.TrimPrefix(term, "tag:")
+			// REFUSED, not parsed. tag-space has no storage on registry.Node
+			// until label management lands (#430), so a tag: predicate would
+			// resolve to false for every Node and the caller would read
+			// "matched nothing" where the truth is "not implemented".
+			//
+			// The refusal lives HERE rather than on a surface because every
+			// surface parses through this function: MCP's list_nodes,
+			// run_operation, raw_exec and plan; the Control API's execution
+			// routes; the Console's fleet filter; and the devharness. Before
+			// #560 only the Console guarded it, so the same term was refused
+			// on one surface and answered 200-with-an-empty-list on another
+			// — one capability layer deciding one question is what invariant
+			// 10 asks for, and a surface-local guard is how the two drifted.
+			//
+			// Deliberately a parse error rather than a silent drop: an
+			// AI-agent handed an empty Node list cannot tell it from a real
+			// empty match, and that is the caller least equipped to notice.
+			// #430 deletes this arm and restores the two lines below it.
+			return Selector{}, fmt.Errorf("%w: %q", ErrSelectorTagUnsupported, term)
 		case strings.HasPrefix(term, "state:"):
 			p, err := parseStateTerm(term, strings.TrimPrefix(term, "state:"))
 			if err != nil {
@@ -190,9 +222,12 @@ func (sel Selector) Matches(n registry.Node, ev StateEval) bool {
 		case NamespaceState:
 			labels = states
 		case NamespaceTag:
-			// tag-space has no storage on registry.Node until the label-
-			// management write path lands (#430), so no Node carries one —
-			// "matches nothing" is the true answer today, not a placeholder.
+			// Unreachable through ParseSelector since #560, which refuses a
+			// tag: term outright rather than letting it resolve to nothing.
+			// Kept because a Selector can also be built as a struct literal
+			// (tests, and any future in-process caller), and for those this
+			// is still the true answer: tag-space has no storage on
+			// registry.Node until #430 gives it one, so no Node carries one.
 			return false
 		default:
 			return false

@@ -1,6 +1,7 @@
 package capability
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -66,9 +67,19 @@ func TestParseSelector(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:  "single tag term",
-			input: "tag:team=payments",
-			want:  Selector{Predicates: []Predicate{{Namespace: NamespaceTag, Key: "team", Value: "payments"}}},
+			// #560: tag: is refused, not parsed. The namespace is in the model
+			// (invariant 7) but has no storage until #430, so parsing one would
+			// hand back a Selector that matches nothing for an invisible
+			// reason. TestParseSelectorTagRefusalIsASentinel pins the error
+			// IDENTITY; these two cases only pin that it is refused at all.
+			name:    "single tag term is refused until #430",
+			input:   "tag:team=payments",
+			wantErr: true,
+		},
+		{
+			name:    "a tag term poisons an otherwise valid selector",
+			input:   "node:role=web, tag:team=payments",
+			wantErr: true,
 		},
 		{
 			name:  "state marker term",
@@ -125,6 +136,43 @@ func TestParseSelector(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestParseSelectorTagRefusalIsASentinel pins the error's IDENTITY, not just
+// its existence.
+//
+// It matters because surfaces RECOGNISE this error rather than re-deciding the
+// rule: the Console's parseFleetFilter renders its own sentence for it and the
+// generic "every term needs a namespace prefix" lead for everything else. If
+// the refusal stopped wrapping the sentinel, that errors.Is would silently
+// fall through and the fleet filter would tell an operator their prefixed term
+// has no prefix.
+func TestParseSelectorTagRefusalIsASentinel(t *testing.T) {
+	for _, in := range []string{
+		"tag:team=payments",
+		"node:role=web, tag:team=payments",
+		"tag:team=payments, node:role=web",
+	} {
+		_, err := ParseSelector(in)
+		if !errors.Is(err, ErrSelectorTagUnsupported) {
+			t.Errorf("ParseSelector(%q) error = %v, want it to wrap ErrSelectorTagUnsupported", in, err)
+		}
+		// The offending term is named, so an operator can see WHICH term was
+		// refused in a multi-term filter.
+		if err != nil && !strings.Contains(err.Error(), "tag:team=payments") {
+			t.Errorf("ParseSelector(%q) error does not name the offending term: %v", in, err)
+		}
+	}
+
+	// A selector with no tag: term must NOT wrap it — otherwise the Console
+	// would render the tag: sentence for an ordinary typo.
+	_, err := ParseSelector("node:role")
+	if err == nil {
+		t.Fatal("ParseSelector(\"node:role\") = nil error, want a parse error")
+	}
+	if errors.Is(err, ErrSelectorTagUnsupported) {
+		t.Errorf("a malformed node: term wrapped ErrSelectorTagUnsupported: %v", err)
 	}
 }
 
@@ -385,6 +433,29 @@ func shapeKeyFor(t *testing.T, selector string) string {
 	}, shape)
 }
 
+// shapeKeyForSelector is shapeKeyFor for a Selector built as a STRUCT rather
+// than parsed from a string.
+//
+// It exists because #560 made tag: unparseable, and the distinct-shapes table
+// below needs tag: to stay covered: invariant 7's point is that the four
+// namespaces target different Nodes, so a tag: predicate must not collide with
+// a node: one carrying the same key and value. Losing that assertion because
+// the parser stopped accepting the spelling would quietly narrow what this
+// test proves.
+func shapeKeyForSelector(t *testing.T, sel Selector) string {
+	t.Helper()
+	shape, err := sel.Shape()
+	if err != nil {
+		t.Fatalf("Shape(%+v): %v", sel, err)
+	}
+	return approval.HashPlanShape(jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "service.restart",
+		OperationArgs: map[string]string{"unit": "nginx"},
+		RiskClass:     jobs.RiskClassMutate,
+	}, shape)
+}
+
 // TestShapeKey_SelectorNormalisation is the acceptance's table: which Selector
 // spellings are the SAME shape, and which are emphatically not.
 func TestShapeKey_SelectorNormalisation(t *testing.T) {
@@ -410,9 +481,9 @@ func TestShapeKey_SelectorNormalisation(t *testing.T) {
 	// a key. The namespace trio is invariant 7's half: the security lane must
 	// never share a shape key with a routine one.
 	distinct := map[string]string{
-		"node":         "node:role=web",
-		"relay":        "relay:role=web",
-		"tag":          "tag:role=web",
+		"node":  "node:role=web",
+		"relay": "relay:role=web",
+
 		"state marker": "state:offline",
 		"state fact":   "state:daemon-version=1.4.2",
 		"empty":        "",
@@ -430,6 +501,18 @@ func TestShapeKey_SelectorNormalisation(t *testing.T) {
 			t.Errorf("%s (%q) and %s share a shape key", name, selector, other)
 		}
 		seen[key] = name
+	}
+
+	// tag: cannot be spelled any more (#560 refuses it at the parser), so it is
+	// built as a struct to keep invariant 7's namespace separation asserted: a
+	// tag: predicate must not share a shape key with the node: or relay: one
+	// carrying the same key and value.
+	tagKey := shapeKeyForSelector(t, Selector{Predicates: []Predicate{
+		{Namespace: NamespaceTag, Key: "role", Value: "web"},
+	}})
+	if other, dup := seen[tagKey]; dup {
+		t.Errorf("a tag: predicate shares a shape key with %s — the namespace "+
+			"is not part of the shape", other)
 	}
 
 	// "Canonicalising namespace prefixes" must NOT have been implemented by

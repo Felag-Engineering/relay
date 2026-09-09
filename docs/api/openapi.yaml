@@ -1222,7 +1222,10 @@ components:
           type: string
           description: |
             Selector filter, e.g. `node:role=web` or `relay:env=prod`. Every term
-            must carry a `node:`, `relay:`, `tag:`, or `state:` prefix. `state:`
+            must carry a `node:`, `relay:`, or `state:` prefix. `tag:` is a valid
+            namespace in the model but is **not resolvable yet** — it has no
+            storage until label management lands (#430) — so a `tag:` term is
+            refused with 400 rather than matching nothing. `state:`
             is a closed, Relay-derived vocabulary (ADR-0034): the boolean
             markers `state:offline`, `state:outdated`, `state:template-unloadable`,
             `state:cert-expiring`, and the facts `state:daemon-version=`,

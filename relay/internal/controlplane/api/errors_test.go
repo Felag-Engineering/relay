@@ -31,7 +31,7 @@ import (
 func TestDecodeJSON_AFormPostNeverReachesAMutatingHandler(t *testing.T) {
 	// The body is valid JSON *and* a valid form field name — the case
 	// DisallowUnknownFields does not catch.
-	const formBody = `{"selector":"tag:env=prod","argv":["/bin/sh","-c","id"]}=`
+	const formBody = `{"selector":"node:env=prod","argv":["/bin/sh","-c","id"]}=`
 
 	for _, contentType := range []string{
 		"text/plain",
@@ -82,7 +82,7 @@ func TestDecodeJSON_AcceptsApplicationJSON(t *testing.T) {
 			h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/raw-exec",
-				strings.NewReader(`{"selector":"tag:env=prod","argv":["/bin/echo","hi"]}`))
+				strings.NewReader(`{"selector":"node:env=prod","argv":["/bin/echo","hi"]}`))
 			req.Header.Set("Authorization", "Bearer "+testCredential)
 			req.Header.Set("Content-Type", contentType)
 			rec := httptest.NewRecorder()

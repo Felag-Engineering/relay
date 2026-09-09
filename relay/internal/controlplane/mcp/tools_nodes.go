@@ -151,11 +151,16 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 
 // listNodesInput is list_nodes' argument: an optional Selector filter,
 // parsed via capability.ParseSelector — the single source of truth for the
-// "node:key=value"/"relay:key=value"/"tag:key=value"/"state:key[=value]"
-// grammar every Selector-consuming surface shares. Fail-closed: a term with
-// no node:/relay:/tag:/state: prefix is a parse error, not a guess.
+// "node:key=value"/"relay:key=value"/"state:key[=value]" grammar every
+// Selector-consuming surface shares. Fail-closed: a term with no
+// node:/relay:/state: prefix is a parse error, not a guess.
+//
+// tag: parses as an error too, and the schema below says so (#560). It used
+// to be advertised without a caveat while resolving to nothing, which handed
+// an agent HTTP 200 and an empty list for a namespace that is simply not
+// implemented — a false negative given to the caller least able to notice it.
 type listNodesInput struct {
-	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, state:offline'. Every term must carry a node:, relay:, tag:, or state: prefix. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
+	Selector string `json:"selector,omitempty" jsonschema:"Selector filter, e.g. 'node:role=web, relay:quarantine=on, state:offline'. Every term must carry a node:, relay:, or state: prefix. tag: is a valid namespace in the model but is NOT resolvable yet — it has no storage until label management lands (#430) — so a tag: term is refused outright rather than matching nothing; do not filter on it. state: is a closed, Relay-derived vocabulary (ADR-0034): the boolean markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint=. Empty or omitted matches every Node."`
 }
 
 // describeNodeInput is describe_node's argument: the exact Node ID.
@@ -172,7 +177,7 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
-			"(node:/relay:/tag:/state: label predicates). node: and relay: labels are returned as " +
+			"(node:/relay:/state: label predicates; tag: is refused until #430). node: and relay: labels are returned as " +
 			"separate maps, never merged; state: labels are Relay-derived and returned as " +
 			"state_labels, in Selector syntax with the state: prefix. `outdated` flags Nodes below " +
 			"the Relay's configured minimum daemon version (ADR-0014); always false when no " +
