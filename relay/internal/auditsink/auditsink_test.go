@@ -1044,6 +1044,32 @@ func TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash(t *testing.T) 
 // one package that imports all three, so this is the one place the mirrored
 // vocabulary (capability may not import internal/audit) can be checked
 // against its source rather than trusted by convention.
+// TestApprovalAnswerFailsClosedOnAnUnknownValue pins the whitelist added after
+// the #545 security review. No caller can produce an unknown answer today --
+// approvalAnswerOf is total over a bool -- so this guards the direction a
+// future producer would break: the audit column has no CHECK constraint, and
+// an unrecognised value would reach the Activity CSV export verbatim while the
+// Console's approvalStateChip refused to render it, putting a value on the
+// evidence export that the screen denies. Empty is the third state and the
+// safe landing place.
+func TestApprovalAnswerFailsClosedOnAnUnknownValue(t *testing.T) {
+	for _, unknown := range []capability.ApprovalAnswer{"yes", "no", "APPROVED", "refused", "denied "} {
+		if got := approvalAnswer(unknown); got != "" {
+			t.Errorf("approvalAnswer(%q) = %q, want %q — an unrecognised answer must fail "+
+				"closed onto the unrecorded third state, not reach the trail verbatim",
+				unknown, got, "")
+		}
+	}
+	// And the two real values still pass through, so the whitelist did not
+	// close over everything.
+	if got := approvalAnswer(capability.ApprovalAnswerApproved); got != audit.ApprovalAnswerApproved {
+		t.Errorf("approvalAnswer(Approved) = %q, want %q", got, audit.ApprovalAnswerApproved)
+	}
+	if got := approvalAnswer(capability.ApprovalAnswerDenied); got != audit.ApprovalAnswerDenied {
+		t.Errorf("approvalAnswer(Denied) = %q, want %q", got, audit.ApprovalAnswerDenied)
+	}
+}
+
 func TestApprovalAnswerVocabularyMatchesTheDomain(t *testing.T) {
 	if string(capability.ApprovalAnswerApproved) != audit.ApprovalAnswerApproved {
 		t.Errorf("capability.ApprovalAnswerApproved = %q, audit.ApprovalAnswerApproved = %q — the mirrored vocabularies disagree",

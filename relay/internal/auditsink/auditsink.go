@@ -336,8 +336,25 @@ func actionKindString(k jobs.ActionKind) string {
 // audit.Record stores. The empty capability.ApprovalAnswerUnrecorded maps
 // to audit's own empty — both mean the same third state, "no answer was
 // recorded" (#487: never collapsed into "denied").
+//
+// It WHITELISTS rather than casting, and the difference is not theoretical
+// even though no caller can trip it today. The column has no CHECK
+// constraint, and the two readers of it disagree about unknown values: the
+// Console's approvalStateChip whitelists and renders no chip, while the
+// Activity CSV export writes the stored string verbatim. A cast would let a
+// future producer put a value on the evidence export that the screen denies
+// exists — one record named two ways, which is the family of bug #545 set out
+// to end. Whitelisting here fails closed onto the well-tested third state, so
+// the two surfaces agree by construction rather than by both remembering.
 func approvalAnswer(a capability.ApprovalAnswer) string {
-	return string(a)
+	switch a {
+	case capability.ApprovalAnswerApproved:
+		return audit.ApprovalAnswerApproved
+	case capability.ApprovalAnswerDenied:
+		return audit.ApprovalAnswerDenied
+	default:
+		return ""
+	}
 }
 
 // decisionChannel renders an approval.Channel as the string audit.Record

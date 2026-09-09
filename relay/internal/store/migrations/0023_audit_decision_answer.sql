@@ -36,9 +36,13 @@
 -- here is not a release lookup -- a dispatch proceeds on
 -- approval_requests.plan_hash, never on an audit row.
 --
--- NOTE: keep semicolons out of these comments. splitStatements
--- (store/migrate.go) splits the file on that character without stripping
--- comments first, so one inside a comment is executed as SQL.
+-- NOTE on semicolons, corrected: a WHOLE-LINE "--" comment may contain one.
+-- splitStatements (store/migrate.go) calls stripLineComments first, which
+-- drops every line whose first non-space characters are "--" -- including the
+-- one above with a semicolon in it. What still splits a statement in half is a
+-- semicolon in a TRAILING comment on a line that also carries SQL (that line
+-- does not start with "--", so it survives stripping), or one inside a string
+-- literal. Keep those out.
 
 ALTER TABLE audit ADD COLUMN approval_answer TEXT;
 ALTER TABLE audit ADD COLUMN decision_channel TEXT;
