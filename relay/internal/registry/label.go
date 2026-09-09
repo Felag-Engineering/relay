@@ -5,15 +5,21 @@ package registry
 // term, forever" (capability.ParseSelector). The rule is Selector grammar,
 // which does not know or care which namespace it is parsing, so it is the
 // ONE predicate for the question, owned here rather than in protoconv, enroll
-// or the renderer. It currently governs FIVE seams:
+// or the renderer. It currently governs FIVE seams — counted as one per
+// place a value can be REFUSED or DECLINED, which is why the relay-space
+// write side is two of them and the node-space write side is one:
 //
-//   - node-space write ingress: protoconv.ParseNodeLabel, called from both
-//     Hello (cmd/relay/tunnel.go) and Enroll's self_labels (enroll/handler.go).
+//   - node-space write ingress: protoconv.ParseNodeLabel. One seam, two
+//     callers — Hello (cmd/relay/tunnel.go) and Enroll's self_labels
+//     (enroll/handler.go) — because both reach the same refusal.
 //   - node-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(nodeLabels) — closes rows a pre-#504 Relay wrote.
-//   - relay-space write ingress: enroll.validateScope, called from both token
-//     mint (Service.Create) and enrollment's use of an already-stored scope
-//     (Service.Validate) — see "Two write seams, one namespace" below.
+//   - relay-space mint: enroll.validateScope from Service.Create, refusing a
+//     fresh scope before a token carrying it can exist.
+//   - relay-space enrollment: enroll.validateScope from Service.Validate,
+//     refusing an ALREADY-STORED scope that predates this gate. A separate
+//     seam, not a second caller of the first one: it refuses a value Create
+//     never saw — see "Two write seams, one namespace" below.
 //   - relay-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(relayLabels) — closes rows a pre-#555 Relay wrote.
 //
