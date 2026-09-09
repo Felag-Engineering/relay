@@ -10,6 +10,7 @@ package console
 
 import (
 	"context"
+	"encoding/csv"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -599,44 +600,71 @@ func TestActivity_ExportCarriesNoOutputColumn(t *testing.T) {
 func TestActivity_ExportCarriesTheDecisionAnswer(t *testing.T) {
 	q := &fakeQueries{rows: []capability.AuditRow{
 		{
-			Kind: audit.KindApprovalDecided, Timestamp: testNow, ApprovalID: "appr-approved",
-			ApprovalAnswer: capability.ApprovalAnswerApproved, DecisionChannel: "out_of_band", PlanHash: "hash-approved",
+			Kind: audit.KindApprovalDecided, Timestamp: testNow, ApprovalID: "appr-one",
+			ApprovalAnswer: capability.ApprovalAnswerApproved, DecisionChannel: "out_of_band", PlanHash: "hash-one",
 		},
 		{
-			Kind: audit.KindApprovalDecided, Timestamp: testNow.Add(time.Minute), ApprovalID: "appr-denied",
-			ApprovalAnswer: capability.ApprovalAnswerDenied, DecisionChannel: "in_band", PlanHash: "hash-denied",
+			Kind: audit.KindApprovalDecided, Timestamp: testNow.Add(time.Minute), ApprovalID: "appr-two",
+			ApprovalAnswer: capability.ApprovalAnswerDenied, DecisionChannel: "in_band", PlanHash: "hash-two",
 		},
 	}}
 	rec := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?format=csv")
 
-	body := rec.Body.String()
-	header := strings.SplitN(body, "\n", 2)[0]
+	// Parsed as CSV and addressed BY COLUMN NAME, not searched as text.
+	//
+	// The first version of this test asserted strings.Contains(line, "approved")
+	// and was vacuous twice over: the approval id "appr-approved" contains the
+	// substring "approved", so the assertion was satisfied by its own needle and
+	// passed with the answer column written empty; and a value landing in the
+	// WRONG column still appears somewhere on the line. activityCSVHeader and
+	// activityCSVRecord are two independent positional lists, and a shuffle
+	// between them is exactly the silent failure this has to catch — so the ids
+	// here are deliberately "appr-one"/"appr-two", carrying no answer word.
+	r := csv.NewReader(strings.NewReader(rec.Body.String()))
+	// The export ends with a "#" note line explaining what the file holds; it is
+	// not a table row, and encoding/csv skips it natively rather than us
+	// trimming lines by hand.
+	r.Comment = '#'
+	records, err := r.ReadAll()
+	if err != nil {
+		t.Fatalf("the export is not valid CSV: %v", err)
+	}
+	if len(records) < 3 {
+		t.Fatalf("want a header and two rows, got %d records", len(records))
+	}
+	col := map[string]int{}
+	for i, name := range records[0] {
+		col[name] = i
+	}
 	for _, want := range []string{"approval_answer", "decision_channel", "plan_hash"} {
-		if !strings.Contains(header, want) {
-			t.Errorf("the export header is missing %q: %s", want, header)
+		if _, ok := col[want]; !ok {
+			t.Fatalf("the export header is missing %q: %v", want, records[0])
 		}
 	}
 
-	var approvedLine, deniedLine string
-	for _, line := range strings.Split(body, "\n") {
-		switch {
-		case strings.Contains(line, "appr-approved"):
-			approvedLine = line
-		case strings.Contains(line, "appr-denied"):
-			deniedLine = line
+	byApprovalID := map[string][]string{}
+	for _, r := range records[1:] {
+		byApprovalID[r[col["approval_id"]]] = r
+	}
+	for _, tc := range []struct {
+		id, answer, channel, hash string
+	}{
+		{"appr-one", "approved", "out_of_band", "hash-one"},
+		{"appr-two", "denied", "in_band", "hash-two"},
+	} {
+		r, ok := byApprovalID[tc.id]
+		if !ok {
+			t.Fatalf("no exported row for approval id %q", tc.id)
 		}
-	}
-	if approvedLine == "" {
-		t.Fatalf("no CSV line names the approved record's approval id:\n%s", body)
-	}
-	if !strings.Contains(approvedLine, "approved") {
-		t.Errorf("the approved row's CSV line does not contain \"approved\": %q", approvedLine)
-	}
-	if deniedLine == "" {
-		t.Fatalf("no CSV line names the denied record's approval id:\n%s", body)
-	}
-	if !strings.Contains(deniedLine, "denied") {
-		t.Errorf("the denied row's CSV line does not contain \"denied\": %q", deniedLine)
+		if got := r[col["approval_answer"]]; got != tc.answer {
+			t.Errorf("%s approval_answer = %q, want %q", tc.id, got, tc.answer)
+		}
+		if got := r[col["decision_channel"]]; got != tc.channel {
+			t.Errorf("%s decision_channel = %q, want %q", tc.id, got, tc.channel)
+		}
+		if got := r[col["plan_hash"]]; got != tc.hash {
+			t.Errorf("%s plan_hash = %q, want %q", tc.id, got, tc.hash)
+		}
 	}
 }
 
@@ -1151,4 +1179,68 @@ func olderHref(t *testing.T, body string) string {
 		t.Fatal("the pager is never closed")
 	}
 	return hrefContaining(t, body[start:start+end], "/console/activity")
+}
+
+// TestSummarize_ApprovalDecisionNamesWhichWayItWent covers the Activity
+// sentence, which the chip tests do not reach.
+//
+// It exists because a code review found this branch had NO coverage at all:
+// swapping "approved" and "denied" in summarize left every test in the suite
+// green. The chip and the prose are two independent renderings of one fact, so
+// asserting the chip proves nothing about the sentence beside it — and the
+// sentence is what an operator reads on a screen whose whole job is saying what
+// happened. Verified by mutation: the swap reddens the approved and denied
+// cases below.
+//
+// The four cases are the four the record can actually be in, and each names a
+// DIFFERENT sentence, so no two can be satisfied by the same output.
+func TestSummarize_ApprovalDecisionNamesWhichWayItWent(t *testing.T) {
+	cases := []struct {
+		name string
+		f    trailFacts
+		want string
+	}{
+		{
+			name: "a revocation is not a Decision",
+			f:    trailFacts{Kind: audit.KindApprovalDecided, GrantID: "grant-1"},
+			want: "revoked an Approval grant",
+		},
+		{
+			name: "approved",
+			f:    trailFacts{Kind: audit.KindApprovalDecided, ApprovalAnswer: audit.ApprovalAnswerApproved},
+			want: "approved a parked dispatch",
+		},
+		{
+			name: "denied",
+			f:    trailFacts{Kind: audit.KindApprovalDecided, ApprovalAnswer: audit.ApprovalAnswerDenied},
+			want: "denied a parked dispatch",
+		},
+		{
+			// The #487 guard, in prose rather than in a chip: a pre-#545 row
+			// records no answer, and the sentence must not invent one.
+			name: "answerless pre-#545 row keeps the original sentence",
+			f:    trailFacts{Kind: audit.KindApprovalDecided},
+			want: "answered an approval request",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summarize(tc.f); got != tc.want {
+				t.Errorf("summarize() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+
+	// A revocation that ALSO carries an answer must still read as a revocation:
+	// GrantID is the structural discriminator and is checked first. Without
+	// this, reordering the switch is a behaviour-preserving edit no test can
+	// see, because a real revocation carries no answer.
+	both := trailFacts{
+		Kind: audit.KindApprovalDecided, GrantID: "grant-1",
+		ApprovalAnswer: audit.ApprovalAnswerApproved,
+	}
+	if got, want := summarize(both), "revoked an Approval grant"; got != want {
+		t.Errorf("summarize(revocation carrying an answer) = %q, want %q — GrantID is "+
+			"the structural discriminator and must be checked before the answer", got, want)
+	}
 }
