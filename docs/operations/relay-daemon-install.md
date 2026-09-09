@@ -145,5 +145,5 @@ for the full verification loop.
   daemon renews over its existing mTLS connection at a jittered 50–75% of cert
   lifetime, with retries; no operator action (ADR-0006).
 - **Decommissioning:** revoke the Node on the Relay
-  (`POST /api/v1/nodes/{node_id}/revoke`) and remove the daemon + state dir via
-  config management.
+  (`POST /api/v1/nodes/{node_id}/revoke`, with a JSON body `{"reason": "..."}` —
+  required as of #487) and remove the daemon + state dir via config management.

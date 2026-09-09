@@ -355,10 +355,47 @@ func defaultAuditID() (string, error) {
 // write must not be papered over by rolling it back, nor may it block the
 // caller from returning success for a mutation that already took effect.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
+	if err := recordLifecycleErr(ctx, d, p, kind, nodeID, reason); err != nil {
+		// Neutral message: this covers both the id-generation and the append
+		// failure, and the wrapped error says which.
+		slog.Error("control api: record lifecycle audit record", "kind", kind, "error", err)
+	}
+}
+
+// recordLifecycleErr is recordLifecycle's fail-closed half: it RETURNS the
+// audit-write error instead of logging it, for the one caller that must not
+// proceed without a record.
+//
+// handleRevokeNode calls this BEFORE revoking, and 500s if it fails, because
+// #487's whole premise is that an irreversible act must be attributable — a
+// revocation whose record was silently dropped is exactly the state the issue
+// set out to end, and "the trail failed to write" is not a better excuse for it
+// than "the endpoint accepted no reason". That inverts recordLifecycle's
+// documented best-effort contract, which is right for the actions that keep it:
+// they have already happened by the time it is called, and rolling them back is
+// Revoke can invert it because RevokeNode has no error return: it cannot report
+// failure to this handler, so there is no "the act failed after we recorded it"
+// branch to get wrong.
+//
+// The honest limit of that, since a stronger claim is tempting and would be
+// false: RevokeNode's DURABLE half can still fail quietly. It adds to the
+// in-process denylist first and disconnects reliably, but reg.SetRevoked is
+// best-effort and only logged (revocation/service.go). So a persist failure
+// leaves a permanent, attributed node_revoke record beside a registry that did
+// not record the revocation, and a later restart — which rehydrates the
+// denylist from the registry (#133) — could let the Node reconnect. That is
+// pre-existing and not this change's to fix; what this ordering guarantees is
+// narrower and still worth having: no revocation is ATTEMPTED without a
+// durable record of who ordered it and why.
+//
+// This mirrors the read lane's posture (ADR-0025: record before the seam, fail
+// closed) and handleGetNode's, which already 500s when its read audit cannot be
+// written — the same surface disagreeing with itself about whether an
+// unrecorded act may proceed was the inconsistency worth removing.
+func recordLifecycleErr(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) error {
 	id, err := newAuditID()
 	if err != nil {
-		slog.Error("control api: generate lifecycle audit record id", "kind", kind, "error", err)
-		return
+		return fmt.Errorf("api: generate lifecycle audit record id: %w", err)
 	}
 	asserted := capability.AssertionsFromContext(ctx)
 	rec := audit.Record{
@@ -385,6 +422,7 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 		Reason: reason,
 	}
 	if err := d.Audit.Append(ctx, rec); err != nil {
-		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
+		return fmt.Errorf("api: append lifecycle audit record: %w", err)
 	}
+	return nil
 }

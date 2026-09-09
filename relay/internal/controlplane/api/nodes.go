@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -11,6 +12,14 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
+
+// revokeNodeRequest is the POST /api/v1/nodes/{node_id}/revoke request body.
+//
+// Shaped like freezeReleaseRequest deliberately: both are irreversible-ish
+// security acts whose whole body is the reason they happened.
+type revokeNodeRequest struct {
+	Reason string `json:"reason"`
+}
 
 // handleRevokeNode implements POST /api/v1/nodes/{node_id}/revoke: revoke
 // the Node via NodeRevoker.RevokeNode (denylist + immediate live Tunnel
@@ -26,6 +35,19 @@ import (
 // Step-up re-authentication, which ADR-0020 also asks for on this rung, is
 // NOT implemented here — there is no step-up mechanism on the Control API
 // yet. This closes the role hole; the step-up half remains owed.
+//
+// **A non-empty `reason` is REQUIRED** (#487) and is a deliberate breaking
+// change: this route took no body at all before, so a caller that sends none
+// now gets 400. The trail could already say who revoked and when; an
+// irreversible rung that cannot say WHY is the half of attribution that
+// matters least. The rule itself lives in capability.ValidateRevokeReason so
+// a second surface records the same thing — see its doc for why that is a
+// weaker guarantee here than ReleaseFreeze's.
+//
+// ORDER MATTERS: the reason is validated BEFORE RevokeNode is called. Revoking
+// first and rejecting after would leave a Node revoked by a request that
+// returned 400, which is the worst of both — an irreversible act whose caller
+// was told it did not happen, and no audit record explaining it.
 func handleRevokeNode(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -42,9 +64,32 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 			return
 		}
 
-		d.Nodes.RevokeNode(nodeID)
+		var req revokeNodeRequest
+		if err := decodeJSON(w, r, &req); err != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid request body", err.Error())
+			return
+		}
+		reason, err := capability.ValidateRevokeReason(req.Reason)
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "reason required", err.Error())
+			return
+		}
 
-		recordLifecycle(r.Context(), d, p, audit.KindNodeRevoke, nodeID, "")
+		// RECORD BEFORE THE ACT, and refuse if it cannot be recorded. A
+		// revocation whose record was silently dropped is exactly the
+		// unattributed irreversible act #487 exists to end, and a failing audit
+		// store is no better an excuse for it than an endpoint that accepted no
+		// reason. Safe in this direction because RevokeNode has no error return
+		// to strand — see recordLifecycleErr for the honest limit, which is
+		// that its durable half can still fail quietly.
+		if err := recordLifecycleErr(r.Context(), d, p, audit.KindNodeRevoke, nodeID, reason); err != nil {
+			slog.Error("control api: append node revoke audit record", "node_id", nodeID, "error", err)
+			writeProblem(w, http.StatusInternalServerError, "revoke not recorded",
+				"the revocation was not performed because it could not be audited")
+			return
+		}
+
+		d.Nodes.RevokeNode(nodeID)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

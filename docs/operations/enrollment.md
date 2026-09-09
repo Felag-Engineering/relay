@@ -214,4 +214,6 @@ The mint and every enrollment are in the audit trail, attributed to the token id
   "that token/batch should not exist", not routine cleanup.
 - Rotate the Vault entry; nothing on the Nodes needs it again.
 - Single-Node removal is `POST /api/v1/nodes/{node_id}/revoke` — instant refusal
-  at the Relay, independent of certificate expiry.
+  at the Relay, independent of certificate expiry. It requires a JSON body
+  `{"reason": "..."}` saying why (#487); without one it answers 400 and revokes
+  nothing.

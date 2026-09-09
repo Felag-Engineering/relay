@@ -188,7 +188,8 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 		auditor := &fakeAuditor{}
 		h := newRoleFixture(t, accounts.RoleAdmin, accounts.KindMachine, Deps{Nodes: nr, Audit: auditor})
 
-		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil)
+		rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+			map[string]string{"reason": "role gate fixture"})
 		if rec.Code != http.StatusNoContent {
 			t.Fatalf("admin revoke: status = %d, want 204; body = %s", rec.Code, rec.Body.String())
 		}

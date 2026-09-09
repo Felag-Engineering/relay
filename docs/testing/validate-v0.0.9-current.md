@@ -606,6 +606,7 @@ gate" (ADR-0014, invariant 14).
 ```sh
 # node_id of daemon-2 from list_nodes
 curl -fsS --cacert ca/ca-cert.pem -H "Authorization: Bearer $CRED" \
+  -H "Content-Type: application/json" -d '{"reason":"v0.0.9 validation: revoking daemon-2"}' \
   -X POST "https://localhost:9443/api/v1/nodes/<node_id>/revoke" -w '%{http_code}\n'
 sleep 4 && tail -2 d2.log
 mcp '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"list_nodes","arguments":{}}}'

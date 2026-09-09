@@ -202,7 +202,8 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	}
 
 	revokeResp := controlAPIRequest(t, client, http.MethodPost,
-		base+"/api/v1/nodes/"+nodeID+"/revoke", credential, nil)
+		base+"/api/v1/nodes/"+nodeID+"/revoke", credential,
+		map[string]string{"reason": "e2e: revoking a live Node to prove the Tunnel tears down"})
 	defer revokeResp.Body.Close() //nolint:errcheck
 	if revokeResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("node revoke status = %d, want %d", revokeResp.StatusCode, http.StatusNoContent)

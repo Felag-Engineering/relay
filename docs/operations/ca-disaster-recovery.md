@@ -23,8 +23,9 @@ Facts that bound the blast radius, useful when reasoning about incidents:
 
 - **Node identity certificates are short-lived** (~14 days, auto-renewed over
   mTLS with jitter). A leaked *Node* key ages out fast — revoke the Node
-  (`POST /api/v1/nodes/{node_id}/revoke`, instant Relay-side refusal) and move
-  on. Only a leaked *CA* key calls for the full runbook below.
+  (`POST /api/v1/nodes/{node_id}/revoke` with a JSON body `{"reason": "..."}`,
+  required as of #487; instant Relay-side refusal) and move on. Only a leaked
+  *CA* key calls for the full runbook below.
 - **A stolen CA key alone does not grant execution.** A forged Node cert lets an
   attacker *be a Node* (receive what that Node would receive, feed false
   results), and a forged server cert plus a network position lets them

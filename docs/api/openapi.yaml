@@ -615,9 +615,19 @@ paths:
 
         **Requires the `admin` role** (ADR-0020's incident ladder:
         quarantine < revoke < Freeze).
+
+        **Requires a non-empty `reason`**, which is recorded in the audit
+        trail. Revocation is irreversible, and a trail that can say who and
+        when but not why leaves the irreversible rung unattributed (#487).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RevokeNodeRequest' }
       responses:
         "204":
           description: Revoked.
+        "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "500": { $ref: '#/components/responses/InternalError' }
@@ -1399,6 +1409,31 @@ components:
           items: { type: string }
         expires_at: { type: string, format: date-time }
         max_uses: { type: integer }
+
+    RevokeNodeRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          description: |
+            Why this Node is being revoked. Recorded in the audit trail and
+            shown on the Node's detail screen.
+
+            Trimmed of surrounding whitespace, then required to be non-empty,
+            at most 512 **bytes**, valid UTF-8, and free of control, bidi and
+            zero-width characters. Anything else is a 400.
+
+            `minLength`/`maxLength` are deliberately NOT declared here: the
+            server bounds bytes while JSON Schema counts characters, so a
+            machine-readable `maxLength: 512` would call a 200-character CJK
+            reason valid and then be refused, and a `minLength: 1` would do the
+            same for `"   "`. An approximate constraint a generated client
+            enforces is worse than none, because it disagrees with the server
+            in the direction that says yes.
+
+            The reason is readable by any `viewer` on the Activity screen and in
+            its CSV export: do not put a credential, token or private key in it.
 
     ReleaseFreezeRequest:
       type: object

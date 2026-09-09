@@ -305,10 +305,43 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 		t.Error("the revocation record's principal is not rendered — the middle rung of the " +
 			"incident ladder is the irreversible one and must be attributable")
 	}
-	// The revoke route accepts no reason today (api/nodes.go passes ""), so
-	// the page says that rather than rendering an empty field.
-	if !strings.Contains(body, "does not accept one") {
-		t.Error("the page does not say why no reason is shown")
+	// This record predates #487, when the route accepted no reason to record.
+	// The page must say THAT rather than render an empty field: "the operator
+	// gave no reason" and "this Relay could not ask for one" are different
+	// facts, and only the second is true here.
+	if !strings.Contains(body, "revoked before the endpoint accepted one") {
+		t.Error("the page does not explain why a pre-#487 record shows no reason")
+	}
+
+	// And a post-#487 record renders the reason the operator actually gave.
+	withReason := append([]audit.Record(nil), recs...)
+	withReason[0].Reason = "compromised host, INC-4471"
+	d.Audit = fakeAudit{records: withReason}
+	reasoned := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
+	if !strings.Contains(reasoned, "compromised host, INC-4471") {
+		t.Error("the recorded revocation reason is not rendered (#487)")
+	}
+	if strings.Contains(reasoned, "revoked before the endpoint accepted one") {
+		t.Error("a record that HAS a reason still claims the endpoint could not accept one")
+	}
+
+	// The CAUSATIVE revocation is the one shown, not the latest. Revoke is
+	// idempotent-204, so re-POSTing an already-revoked Node appends a second
+	// record; showing that one would let the reason be relabelled after the
+	// fact by the same principal.
+	relabelled := append([]audit.Record(nil), withReason...)
+	relabelled = append(relabelled, audit.Record{
+		Kind: audit.KindNodeRevoke, NodeID: "node-gone",
+		Principal: "alice:admin", Reason: "routine decommission",
+		Timestamp: testNow,
+	})
+	d.Audit = fakeAudit{records: relabelled}
+	page := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
+	if !strings.Contains(page, "compromised host, INC-4471") {
+		t.Error("a later revoke record relabelled the reason shown for the causative one")
+	}
+	if strings.Contains(page, "routine decommission") {
+		t.Error("the summary shows a later revoke record instead of the causative one")
 	}
 
 	// And a revoked Node whose trail holds nothing says so.
