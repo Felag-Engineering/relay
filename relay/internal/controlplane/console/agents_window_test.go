@@ -539,6 +539,10 @@ func TestVocab_BothProjectionsCarryTheSameFacts(t *testing.T) {
 		Reason:        "because",
 		ApprovalID:    "appr-1",
 		GrantID:       "grant-1",
+
+		ApprovalAnswer:  audit.ApprovalAnswerApproved,
+		DecisionChannel: "out_of_band",
+		PlanHash:        "hash-1",
 	}
 
 	f := factsOfRecord(rec)

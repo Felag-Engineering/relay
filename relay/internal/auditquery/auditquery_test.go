@@ -61,6 +61,10 @@ func TestQueries_QueryAudit_RoundTrips(t *testing.T) {
 		Reason:        "",
 		ApprovalID:    "appr-1",
 		GrantID:       "grant-1",
+
+		ApprovalAnswer:  audit.ApprovalAnswerApproved,
+		DecisionChannel: "out_of_band",
+		PlanHash:        "hash-1",
 	}
 	if err := st.Audit().Append(ctx, rec); err != nil {
 		t.Fatalf("append: %v", err)
@@ -109,6 +113,10 @@ func TestQueries_QueryAudit_RoundTrips(t *testing.T) {
 		Outcome:       jobs.OutcomeSuccess,
 		ApprovalID:    "appr-1",
 		GrantID:       "grant-1",
+
+		ApprovalAnswer:  capability.ApprovalAnswerApproved,
+		DecisionChannel: "out_of_band",
+		PlanHash:        "hash-1",
 	}
 	if !got.Timestamp.Equal(want.Timestamp) {
 		t.Errorf("Timestamp = %v, want %v", got.Timestamp, want.Timestamp)

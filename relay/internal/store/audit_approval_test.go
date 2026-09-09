@@ -125,3 +125,54 @@ func TestAudit_ByApprovalAnswersTheWholeStory(t *testing.T) {
 		t.Errorf("ByGrant(unknown) returned %d records, want 0", len(none))
 	}
 }
+
+// TestAudit_DecisionAnswerRoundTrips (#545): approval_answer, decision_channel,
+// and plan_hash survive a write and a read, and an answerless row — a grant
+// revocation, or a row written before this migration — reads back "" on all
+// three, never something that reads as a denial (the #487 lesson).
+func TestAudit_DecisionAnswerRoundTrips(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	repo := st.Audit()
+
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	approved := audit.Record{
+		ID: "d1", Timestamp: at, Kind: audit.KindApprovalDecided,
+		Principal: "ana:operator", ApprovalID: "appr-1",
+		ApprovalAnswer: audit.ApprovalAnswerApproved, DecisionChannel: "out_of_band", PlanHash: "hash-1",
+	}
+	denied := audit.Record{
+		ID: "d2", Timestamp: at.Add(time.Minute), Kind: audit.KindApprovalDecided,
+		Principal: "bo:operator", ApprovalID: "appr-2",
+		ApprovalAnswer: audit.ApprovalAnswerDenied, DecisionChannel: "in_band", PlanHash: "hash-2",
+	}
+	answerless := audit.Record{
+		ID: "d3", Timestamp: at.Add(2 * time.Minute), Kind: audit.KindApprovalDecided,
+		Principal: "ops-console:admin", ApprovalID: "appr-3", GrantID: "grant-1",
+	}
+
+	for _, r := range []audit.Record{approved, denied, answerless} {
+		if err := repo.Append(ctx, r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+
+	got, err := repo.List(ctx)
+	if err != nil || len(got) != 3 {
+		t.Fatalf("list: %v (%d records)", err, len(got))
+	}
+	byID := map[string]audit.Record{}
+	for _, r := range got {
+		byID[r.ID] = r
+	}
+
+	if got := byID["d1"]; got.ApprovalAnswer != audit.ApprovalAnswerApproved || got.DecisionChannel != "out_of_band" || got.PlanHash != "hash-1" {
+		t.Errorf("approved record = %+v, want answer/channel/hash from the write", got)
+	}
+	if got := byID["d2"]; got.ApprovalAnswer != audit.ApprovalAnswerDenied || got.DecisionChannel != "in_band" || got.PlanHash != "hash-2" {
+		t.Errorf("denied record = %+v, want answer/channel/hash from the write", got)
+	}
+	if got := byID["d3"]; got.ApprovalAnswer != "" || got.DecisionChannel != "" || got.PlanHash != "" {
+		t.Errorf("answerless record = %+v, want all three empty — a NULL row must never read back as denied", got)
+	}
+}

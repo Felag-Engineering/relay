@@ -444,6 +444,54 @@ func TestAuditRow_NoOutputFields(t *testing.T) {
 	}
 }
 
+// TestAuditQuery_DecisionAnswerRoundTrips (#545): the QUERY lane's own column
+// list (auditQueryColumns / scanAuditQueryRow) is independent of audit.go's
+// INSERT/SELECT — Repository.List() exercises one, QueryRepository.Query()
+// the other — so the answer, Channel, and PlanHash have to round-trip through
+// THIS lane too, or a column dropped from auditQueryColumns would pass
+// TestAudit_DecisionAnswerRoundTrips while silently breaking every read
+// surface built on Query (Activity, agent history).
+func TestAuditQuery_DecisionAnswerRoundTrips(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	repo := st.Audit()
+	queries := st.AuditQueries()
+
+	at := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	approved := audit.Record{
+		ID: "q1", Timestamp: at, Kind: audit.KindApprovalDecided,
+		Principal: "ana:operator", ApprovalID: "appr-1",
+		ApprovalAnswer: audit.ApprovalAnswerApproved, DecisionChannel: "out_of_band", PlanHash: "hash-1",
+	}
+	answerless := audit.Record{
+		ID: "q2", Timestamp: at.Add(time.Minute), Kind: audit.KindApprovalDecided,
+		Principal: "ops-console:admin", ApprovalID: "appr-2", GrantID: "grant-1",
+	}
+	for _, r := range []audit.Record{approved, answerless} {
+		if err := repo.Append(ctx, r); err != nil {
+			t.Fatalf("append %s: %v", r.ID, err)
+		}
+	}
+
+	page, err := queries.Query(ctx, audit.Query{}, 0, "")
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(page.Rows) != 2 {
+		t.Fatalf("Query returned %d rows, want 2", len(page.Rows))
+	}
+	byID := map[string]audit.Row{}
+	for _, r := range page.Rows {
+		byID[r.ID] = r
+	}
+	if got := byID["q1"]; got.ApprovalAnswer != audit.ApprovalAnswerApproved || got.DecisionChannel != "out_of_band" || got.PlanHash != "hash-1" {
+		t.Errorf("approved row = %+v, want answer/channel/hash from the write", got)
+	}
+	if got := byID["q2"]; got.ApprovalAnswer != "" || got.DecisionChannel != "" || got.PlanHash != "" {
+		t.Errorf("answerless row = %+v, want all three empty", got)
+	}
+}
+
 // TestCheckBucketCount is F1's bucket-count guard (#441 cycle-2 security
 // review), tested against a synthetic groupCount rather than materialising
 // audit.MaxCountBuckets+1 rows in a real database.

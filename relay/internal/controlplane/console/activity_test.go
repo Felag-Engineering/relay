@@ -592,6 +592,54 @@ func TestActivity_ExportCarriesNoOutputColumn(t *testing.T) {
 	}
 }
 
+// TestActivity_ExportCarriesTheDecisionAnswer (#545) extends
+// TestActivity_ExportCarriesNoOutputColumn's header list with the three
+// structured decision columns, plus body assertions that an approved row's
+// CSV line names "approved" and a denied row's names "denied".
+func TestActivity_ExportCarriesTheDecisionAnswer(t *testing.T) {
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{
+			Kind: audit.KindApprovalDecided, Timestamp: testNow, ApprovalID: "appr-approved",
+			ApprovalAnswer: capability.ApprovalAnswerApproved, DecisionChannel: "out_of_band", PlanHash: "hash-approved",
+		},
+		{
+			Kind: audit.KindApprovalDecided, Timestamp: testNow.Add(time.Minute), ApprovalID: "appr-denied",
+			ApprovalAnswer: capability.ApprovalAnswerDenied, DecisionChannel: "in_band", PlanHash: "hash-denied",
+		},
+	}}
+	rec := get(t, newTestHandler(activityDeps(q), accounts.RoleAdmin), "/console/activity?format=csv")
+
+	body := rec.Body.String()
+	header := strings.SplitN(body, "\n", 2)[0]
+	for _, want := range []string{"approval_answer", "decision_channel", "plan_hash"} {
+		if !strings.Contains(header, want) {
+			t.Errorf("the export header is missing %q: %s", want, header)
+		}
+	}
+
+	var approvedLine, deniedLine string
+	for _, line := range strings.Split(body, "\n") {
+		switch {
+		case strings.Contains(line, "appr-approved"):
+			approvedLine = line
+		case strings.Contains(line, "appr-denied"):
+			deniedLine = line
+		}
+	}
+	if approvedLine == "" {
+		t.Fatalf("no CSV line names the approved record's approval id:\n%s", body)
+	}
+	if !strings.Contains(approvedLine, "approved") {
+		t.Errorf("the approved row's CSV line does not contain \"approved\": %q", approvedLine)
+	}
+	if deniedLine == "" {
+		t.Fatalf("no CSV line names the denied record's approval id:\n%s", body)
+	}
+	if !strings.Contains(deniedLine, "denied") {
+		t.Errorf("the denied row's CSV line does not contain \"denied\": %q", deniedLine)
+	}
+}
+
 // TestActivity_ExportIsBoundedAndSaysSo. An unbounded export behind one link
 // is an unbounded read of the trail, and it appends a read record per page it
 // walks.

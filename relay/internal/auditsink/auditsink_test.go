@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -954,5 +955,113 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	if unlinked[0].ApprovalID != "" || unlinked[0].GrantID != "" {
 		t.Errorf("unapproved dispatch = approval %q grant %q, want both empty",
 			unlinked[0].ApprovalID, unlinked[0].GrantID)
+	}
+}
+
+// TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash (#545): a
+// decision's structured answer and Channel, and PlanHash on every Kind that
+// carries one, survive a REAL Sink.Record call and read back off the store —
+// not a mock, so a dropped mapping between AuditEntry and audit.Record would
+// fail here even if a narrower unit test missed it.
+func TestRecord_ApprovalDecidedCarriesTheAnswerChannelAndPlanHash(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")),
+		WithClock(fixedClock(time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC))),
+		WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+
+	approver := capability.Principal{Account: "ana", Role: "operator"}
+	denier := capability.Principal{Account: "bo", Role: "operator"}
+	revoker := capability.Principal{Account: "ops-console", Role: "admin"}
+
+	if err := sink.Record(context.Background(), capability.AuditEntry{
+		Kind: capability.AuditKindApprovalDecided, Principal: approver,
+		ApprovalID: "appr-approved", PlanHash: "hash-approved",
+		ApprovalAnswer: capability.ApprovalAnswerApproved, DecisionChannel: approval.ChannelOutOfBand,
+	}); err != nil {
+		t.Fatalf("Record(approved): %v", err)
+	}
+	if err := sink.Record(context.Background(), capability.AuditEntry{
+		Kind: capability.AuditKindApprovalDecided, Principal: denier,
+		ApprovalID: "appr-denied", PlanHash: "hash-denied",
+		ApprovalAnswer: capability.ApprovalAnswerDenied, DecisionChannel: approval.ChannelInBand,
+	}); err != nil {
+		t.Fatalf("Record(denied): %v", err)
+	}
+	if err := sink.Record(context.Background(), capability.AuditEntry{
+		Kind: capability.AuditKindApprovalDecided, Principal: revoker,
+		ApprovalID: "appr-revoked", GrantID: "grant-1", PlanHash: "hash-revoked",
+		// ApprovalAnswer and DecisionChannel deliberately left zero: RevokeGrant
+		// never sets them.
+	}); err != nil {
+		t.Fatalf("Record(revocation): %v", err)
+	}
+
+	approved, err := repo.ByApproval(context.Background(), "appr-approved")
+	if err != nil || len(approved) != 1 {
+		t.Fatalf("ByApproval(appr-approved): %v (%d records)", err, len(approved))
+	}
+	if approved[0].ApprovalAnswer != audit.ApprovalAnswerApproved {
+		t.Errorf("approved record ApprovalAnswer = %q, want %q", approved[0].ApprovalAnswer, audit.ApprovalAnswerApproved)
+	}
+	if approved[0].DecisionChannel != approval.ChannelOutOfBand.String() {
+		t.Errorf("approved record DecisionChannel = %q, want %q", approved[0].DecisionChannel, approval.ChannelOutOfBand.String())
+	}
+	if approved[0].PlanHash != "hash-approved" {
+		t.Errorf("approved record PlanHash = %q, want %q", approved[0].PlanHash, "hash-approved")
+	}
+
+	denied, err := repo.ByApproval(context.Background(), "appr-denied")
+	if err != nil || len(denied) != 1 {
+		t.Fatalf("ByApproval(appr-denied): %v (%d records)", err, len(denied))
+	}
+	if denied[0].ApprovalAnswer != audit.ApprovalAnswerDenied {
+		t.Errorf("denied record ApprovalAnswer = %q, want %q", denied[0].ApprovalAnswer, audit.ApprovalAnswerDenied)
+	}
+	if denied[0].DecisionChannel != approval.ChannelInBand.String() {
+		t.Errorf("denied record DecisionChannel = %q, want %q", denied[0].DecisionChannel, approval.ChannelInBand.String())
+	}
+
+	revoked, err := repo.ByApproval(context.Background(), "appr-revoked")
+	if err != nil || len(revoked) != 1 {
+		t.Fatalf("ByApproval(appr-revoked): %v (%d records)", err, len(revoked))
+	}
+	// The revocation's three are "" and NOT "unspecified": empty means "not
+	// recorded", and a fourth spelling nothing else understands would defeat
+	// the point of a fixed vocabulary.
+	if revoked[0].ApprovalAnswer != "" {
+		t.Errorf("revocation ApprovalAnswer = %q, want empty", revoked[0].ApprovalAnswer)
+	}
+	if revoked[0].DecisionChannel != "" {
+		t.Errorf("revocation DecisionChannel = %q, want empty, not %q", revoked[0].DecisionChannel, "unspecified")
+	}
+	if revoked[0].PlanHash != "hash-revoked" {
+		t.Errorf("revocation PlanHash = %q, want %q", revoked[0].PlanHash, "hash-revoked")
+	}
+}
+
+// TestApprovalAnswerVocabularyMatchesTheDomain pins capability.ApprovalAnswer*,
+// audit.ApprovalAnswer*, and approval.State*.String() equal — auditsink is the
+// one package that imports all three, so this is the one place the mirrored
+// vocabulary (capability may not import internal/audit) can be checked
+// against its source rather than trusted by convention.
+func TestApprovalAnswerVocabularyMatchesTheDomain(t *testing.T) {
+	if string(capability.ApprovalAnswerApproved) != audit.ApprovalAnswerApproved {
+		t.Errorf("capability.ApprovalAnswerApproved = %q, audit.ApprovalAnswerApproved = %q — the mirrored vocabularies disagree",
+			capability.ApprovalAnswerApproved, audit.ApprovalAnswerApproved)
+	}
+	if audit.ApprovalAnswerApproved != approval.StateApproved.String() {
+		t.Errorf("audit.ApprovalAnswerApproved = %q, approval.StateApproved.String() = %q — disagree",
+			audit.ApprovalAnswerApproved, approval.StateApproved.String())
+	}
+	if string(capability.ApprovalAnswerDenied) != audit.ApprovalAnswerDenied {
+		t.Errorf("capability.ApprovalAnswerDenied = %q, audit.ApprovalAnswerDenied = %q — the mirrored vocabularies disagree",
+			capability.ApprovalAnswerDenied, audit.ApprovalAnswerDenied)
+	}
+	if audit.ApprovalAnswerDenied != approval.StateDenied.String() {
+		t.Errorf("audit.ApprovalAnswerDenied = %q, approval.StateDenied.String() = %q — disagree",
+			audit.ApprovalAnswerDenied, approval.StateDenied.String())
+	}
+	if decisionChannel(approval.ChannelInBand) != approval.ChannelInBand.String() {
+		t.Errorf("decisionChannel(ChannelInBand) = %q, want %q", decisionChannel(approval.ChannelInBand), approval.ChannelInBand.String())
 	}
 }

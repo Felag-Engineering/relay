@@ -1,0 +1,45 @@
+-- #545 (ADR-0027 decision 10): the structured answer a decision carries.
+--
+-- Decision 10 requires "approved_by (verified, WITH CHANNEL AND PLAN-HASH)."
+-- Channel and PlanHash were already carried on capability.AuditEntry, but
+-- never persisted -- the answer itself lived only inside the prose Reason
+-- string (approvalDecisionReason). That is enough to READ one row, and not
+-- enough to QUERY or render: the Agents screen showed the bare word
+-- "decided" for every KindApprovalDecided row, whichever way it went.
+--
+-- Three columns, all nullable, no DEFAULT -- mirrors 0015's shape, not 0022's
+-- NOT NULL DEFAULT '':
+--
+--   approval_answer  -- "approved" or "denied" (audit.ApprovalAnswer*),
+--                       byte-identical to approval.StateApproved/StateDenied
+--                       String(). Set only on a KindApprovalDecided row.
+--   decision_channel -- the Channel the decision arrived on (OutOfBand /
+--                       InBand / Unspecified).
+--   plan_hash        -- the Plan hash the decision resolved, already carried
+--                       on the Request and Grant but not, until now, on the
+--                       trail row itself.
+--
+-- NO BACKFILL. There is nothing to backfill FROM: the answer exists only
+-- inside the free-text Reason an operator's own note may be concatenated
+-- onto, and parsing that prose would be a second, fallible implementation of
+-- the exact fact this column exists to make unambiguous. A pre-#545 row's
+-- answer is genuinely unknown, not recoverable.
+--
+-- NULL therefore carries a THIRD meaning that must never be collapsed into
+-- "denied" -- the #487 lesson, by number: conflating "no value" with "a
+-- value that means no" is the worst possible way for an audit surface to be
+-- wrong. The renderer keeps the pre-#545 "decided" chip for exactly these
+-- rows rather than guessing which way an unrecorded decision went.
+--
+-- NO INDEX. A 3-value column buys nothing to filter on; idx_audit_approval
+-- (0015) already answers "what happened under this approval", and plan_hash
+-- here is not a release lookup -- a dispatch proceeds on
+-- approval_requests.plan_hash, never on an audit row.
+--
+-- NOTE: keep semicolons out of these comments. splitStatements
+-- (store/migrate.go) splits the file on that character without stripping
+-- comments first, so one inside a comment is executed as SQL.
+
+ALTER TABLE audit ADD COLUMN approval_answer TEXT;
+ALTER TABLE audit ADD COLUMN decision_channel TEXT;
+ALTER TABLE audit ADD COLUMN plan_hash TEXT;

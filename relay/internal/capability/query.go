@@ -95,6 +95,16 @@ type AuditRow struct {
 
 	ApprovalID string
 	GrantID    string
+
+	// ApprovalAnswer, DecisionChannel, and PlanHash are the structured
+	// counterpart to a decision's prose Reason (#545). This does NOT widen
+	// the seam toward output: #441's criterion is Stdout/Stderr/Truncated,
+	// and these are the same class of field as ApprovalID/GrantID above,
+	// which #441 shipped with. DecisionChannel is a plain string here — a
+	// rendered projection, not a domain value a surface may act on.
+	ApprovalAnswer  ApprovalAnswer
+	DecisionChannel string
+	PlanHash        string
 }
 
 // AuditPage is one page of AuditRow, cursor-paginated newest first.

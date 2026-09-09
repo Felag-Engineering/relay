@@ -28,7 +28,7 @@ var _ audit.QueryRepository = (*sqliteAudit)(nil)
 const auditQueryColumns = `audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason,
 	account_id, account_name, account_role, token_id, auth_method, verified_source,
 	asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
-	approval_id, grant_id`
+	approval_id, grant_id, approval_answer, decision_channel, plan_hash`
 
 // auditArgKeyPattern bounds Query.ArgKey before it reaches
 // json_extract(args, '$.' || ?): defense in depth alongside
@@ -413,12 +413,13 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, string, error) {
 		authMethod, verifiedSource                           sql.NullString
 		onBehalfOf, traceparent, sessionRef, changeRef       sql.NullString
 		approvalID, grantID                                  sql.NullString
+		approvalAnswer, decisionChannel, planHash            sql.NullString
 	)
 	if err := row.Scan(&id, &ts, &kind, &principal, &selector, &jobID, &nodeID, &actionKind,
 		&operationName, &argsJSON, &argvJSON, &outcome, &reason,
 		&accountID, &accountName, &accountRole, &tokenID, &authMethod, &verifiedSource,
 		&onBehalfOf, &traceparent, &sessionRef, &changeRef,
-		&approvalID, &grantID); err != nil {
+		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash); err != nil {
 		return audit.Row{}, "", fmt.Errorf("scan audit query row: %w", err)
 	}
 
@@ -456,16 +457,19 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, string, error) {
 				ChangeRef:   changeRef.String,
 			},
 		},
-		Selector:      selector,
-		JobID:         jobID,
-		NodeID:        nodeID.String,
-		ActionKind:    actionKind,
-		OperationName: operationName.String,
-		Args:          argsMap,
-		RawExecArgv:   argv,
-		Outcome:       jobs.Outcome(outcome),
-		Reason:        reason.String,
-		ApprovalID:    approvalID.String,
-		GrantID:       grantID.String,
+		Selector:        selector,
+		JobID:           jobID,
+		NodeID:          nodeID.String,
+		ActionKind:      actionKind,
+		OperationName:   operationName.String,
+		Args:            argsMap,
+		RawExecArgv:     argv,
+		Outcome:         jobs.Outcome(outcome),
+		Reason:          reason.String,
+		ApprovalID:      approvalID.String,
+		GrantID:         grantID.String,
+		ApprovalAnswer:  approvalAnswer.String,
+		DecisionChannel: decisionChannel.String,
+		PlanHash:        planHash.String,
 	}, ts, nil
 }

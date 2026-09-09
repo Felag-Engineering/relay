@@ -15,8 +15,11 @@
 // posture) each NodeResult's captured Stdout/Stderr and the daemon-side
 // Truncated flag, copied verbatim — the sink never scrubs or redacts them
 // (Policy, ADR-0002, is where secret-emitting commands are prevented, not
-// here). Nothing else is added: no enrichment from tokens, keys, or other
-// in-memory secrets the sink never even sees.
+// here). Also copied verbatim (#545, ADR-0027 decision 10): PlanHash (every
+// Kind that carries one) and, on AuditKindApprovalDecided only,
+// ApprovalAnswer and DecisionChannel — the structured answer a decision
+// carries alongside its prose Reason. Nothing else is added: no enrichment
+// from tokens, keys, or other in-memory secrets the sink never even sees.
 //
 // Logging (#181): Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
@@ -45,6 +48,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
@@ -146,6 +150,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	// wrong.
 	base.ApprovalID = e.ApprovalID
 	base.GrantID = e.GrantID
+	base.PlanHash = e.PlanHash
 
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
@@ -195,6 +200,8 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	if e.Kind == capability.AuditKindApprovalDecided {
 		base.Kind = audit.KindApprovalDecided
 		base.Reason = e.Reason
+		base.ApprovalAnswer = approvalAnswer(e.ApprovalAnswer)
+		base.DecisionChannel = decisionChannel(e.DecisionChannel)
 		err := s.append(ctx, base)
 		s.logDecision(audit.KindApprovalDecided, e, 0, "")
 		return err
@@ -323,6 +330,25 @@ func actionKindString(k jobs.ActionKind) string {
 	default:
 		return "unspecified"
 	}
+}
+
+// approvalAnswer renders a capability.ApprovalAnswer as the string
+// audit.Record stores. The empty capability.ApprovalAnswerUnrecorded maps
+// to audit's own empty — both mean the same third state, "no answer was
+// recorded" (#487: never collapsed into "denied").
+func approvalAnswer(a capability.ApprovalAnswer) string {
+	return string(a)
+}
+
+// decisionChannel renders an approval.Channel as the string audit.Record
+// stores. ChannelUnspecified maps to "" and NOT to "unspecified": the trail's
+// empty means "not recorded", and "unspecified" would be a fourth value
+// nothing else understands.
+func decisionChannel(c approval.Channel) string {
+	if c == approval.ChannelUnspecified {
+		return ""
+	}
+	return c.String()
 }
 
 // logDecision emits exactly one structured slog Info "audit decision" line

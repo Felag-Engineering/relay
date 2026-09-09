@@ -107,6 +107,11 @@ type agentCall struct {
 	NodeHref string
 
 	Outcome string
+	// State is #498's `.chip.state` vocabulary (currently just
+	// "approved"/"denied", #545): a decision's structured answer, rendered
+	// INSTEAD OF Outcome — see agentCallFrom's KindApprovalDecided case and
+	// the template's exactly-one-chip rule.
+	State   string
 	JobID   string
 	JobHref string
 
@@ -834,10 +839,18 @@ func agentCallFrom(f trailFacts) agentCall {
 		// not a Decision at all in the glossary's sense — nobody answered a
 		// parked Job — so "decided" over it is a category error the record
 		// itself disproves.
-		c.Outcome = "decided"
 		if f.GrantID != "" {
-			c.Outcome = "revoked"
+			c.Outcome = "revoked" // #538, unchanged
+			break
 		}
+		// The structured answer (#545), rendered as State (the `.chip.state`
+		// group) rather than Outcome, so it is never mistaken for one of
+		// this switch's other outcome words.
+		if s := approvalStateChip(f); s != "" {
+			c.State = s
+			break
+		}
+		c.Outcome = "decided" // pre-#545 rows only: no structured answer recorded
 	case audit.KindJobCancel:
 		// A cancel has no per-Node verdict either: RecordCancel records who
 		// asked and which Job, and the per-Task truth is on the Job's own
@@ -1027,7 +1040,8 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
           {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}{{end}}
           <span class="evop"><code>{{.Tool}}</code></span>
           <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
-          <span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span>
+          {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>
+          {{else}}<span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span>{{end}}
           {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail and each counts on the rail.">x{{.Calls}}</span>{{end}}
         </div>
         {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}

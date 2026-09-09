@@ -256,6 +256,11 @@ type activityRow struct {
 	Args      string
 	Risk      string
 
+	// State is #498's `.chip.state` vocabulary (currently just
+	// "approved"/"denied", #545): a decision's structured answer.
+	// dispatchRowFromJob leaves it empty — a Job is not a Decision.
+	State string
+
 	JobID   string
 	JobHref string
 
@@ -307,6 +312,14 @@ type activityRow struct {
 	// inside" — is one an auditor needs and cannot recover from the approval
 	// id alone.
 	GrantID string
+
+	// ApprovalAnswer, DecisionChannel, and PlanHash are the export-only
+	// counterpart to State (#545): plain strings, fed from trailFacts,
+	// carried so the CSV export can name a decision's structured answer even
+	// though the page itself only ever renders State's chip form.
+	ApprovalAnswer  string
+	DecisionChannel string
+	PlanHash        string
 
 	Reason string
 
@@ -898,6 +911,7 @@ func matchesQuery(row activityRow, q string) bool {
 	hay := strings.ToLower(strings.Join([]string{
 		row.EventKind, row.Summary, row.Principal, row.OnBehalfOf, row.Selector,
 		row.NodeID, row.Operation, row.Args, row.JobID, row.Reason, row.ApprovalID, row.GrantID,
+		row.State,
 	}, " "))
 	for _, term := range strings.Fields(q) {
 		if !strings.Contains(hay, term) {
@@ -961,21 +975,25 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 // eventRowFromTrail builds every non-dispatch row from the trail lane.
 func eventRowFromTrail(f trailFacts) activityRow {
 	row := activityRow{
-		Kind:       kindOf(f.Kind),
-		EventKind:  f.Kind,
-		at:         f.Timestamp,
-		When:       f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
-		Principal:  principalText(f),
-		Verified:   f.VerifiedAccountID != "",
-		OnBehalfOf: f.OnBehalfOf,
-		Selector:   f.Selector,
-		NodeID:     f.NodeID,
-		Operation:  operationText(f),
-		Args:       argsText(f),
-		Reason:     f.Reason,
-		Summary:    summarize(f),
-		ApprovalID: f.ApprovalID,
-		GrantID:    f.GrantID,
+		Kind:            kindOf(f.Kind),
+		EventKind:       f.Kind,
+		at:              f.Timestamp,
+		When:            f.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
+		Principal:       principalText(f),
+		Verified:        f.VerifiedAccountID != "",
+		OnBehalfOf:      f.OnBehalfOf,
+		Selector:        f.Selector,
+		NodeID:          f.NodeID,
+		Operation:       operationText(f),
+		Args:            argsText(f),
+		Reason:          f.Reason,
+		Summary:         summarize(f),
+		ApprovalID:      f.ApprovalID,
+		GrantID:         f.GrantID,
+		State:           approvalStateChip(f),
+		ApprovalAnswer:  f.ApprovalAnswer,
+		DecisionChannel: f.DecisionChannel,
+		PlanHash:        f.PlanHash,
 	}
 	// The trail carries no declared risk class, so this lane INFERS one — the
 	// one place this package guesses, with its limits written down in
@@ -1053,7 +1071,20 @@ func summarize(f trailFacts) string {
 	case audit.KindApprovalPendingObserved:
 		return "re-drove a dispatch that is already parked"
 	case audit.KindApprovalDecided:
-		return "answered an approval request"
+		// Same discriminators as agents.go's agentCallFrom, no new vocabulary:
+		// GrantID is RevokeGrant's structural marker (#538); the structured
+		// answer (#545) otherwise names which way the decision went; a
+		// pre-#545 decision with neither falls back to the original sentence.
+		switch {
+		case f.GrantID != "":
+			return "revoked an Approval grant"
+		case f.ApprovalAnswer == audit.ApprovalAnswerApproved:
+			return "approved a parked dispatch"
+		case f.ApprovalAnswer == audit.ApprovalAnswerDenied:
+			return "denied a parked dispatch"
+		default:
+			return "answered an approval request"
+		}
 	case audit.KindApprovalExpired:
 		return "an approval request expired unanswered"
 	case audit.KindRefusal:
@@ -1091,7 +1122,8 @@ func summarize(f trailFacts) string {
 var activityCSVHeader = []string{
 	"when", "family", "audit_kind", "principal", "verified", "on_behalf_of",
 	"selector", "node_id", "operation", "args", "risk_class",
-	"job_id", "fan_out", "in_flight", "outcomes", "approval_id", "grant_id", "reason",
+	"job_id", "fan_out", "in_flight", "outcomes", "approval_id", "grant_id",
+	"approval_answer", "decision_channel", "plan_hash", "reason",
 }
 
 // writeActivityCSV re-runs the same filter across at most exportPages pages per
@@ -1179,7 +1211,8 @@ func activityCSVRecord(row activityRow) []string {
 		row.When, string(row.Kind), row.EventKind, row.Principal, verified, row.OnBehalfOf,
 		row.Selector, row.NodeID, row.Operation, row.Args, row.Risk,
 		row.JobID, itoa(row.FanOut), itoa(row.InFlight), strings.Join(outcomes, " "),
-		row.ApprovalID, row.GrantID, row.Reason,
+		row.ApprovalID, row.GrantID,
+		row.ApprovalAnswer, row.DecisionChannel, row.PlanHash, row.Reason,
 	}
 	for i, v := range fields {
 		fields[i] = csvSafe(v)
@@ -1262,6 +1295,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if .OpIsLink}}<a class="evop" href="{{.JobHref}}"><code>{{.Operation}}</code></a>
         {{else}}<span class="evsum">{{.Summary}}</span>{{end}}
         {{with .Risk}}<span class="chip risk" data-risk="{{.}}">{{.}}</span>{{end}}
+        {{with .State}}<span class="chip state" data-state="{{.}}">{{.}}</span>{{end}}
       </div>
       {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
       <div class="evmeta">
