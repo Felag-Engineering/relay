@@ -313,8 +313,10 @@ func TestEnroll_BadCSR(t *testing.T) {
 }
 
 // TestEnroll_NonNodeSelfLabel verifies that self_labels without the "node:" prefix
-// (or with an empty bare key) are rejected with InvalidArgument, and the registry
-// and relay space remain untouched.
+// (or with an empty bare key), or with a key/value that fails the well-formedness
+// gate (registry.WellFormedNodeLabel, #504), are rejected with InvalidArgument,
+// and the registry and relay space remain untouched (D2: enrollment REJECTS
+// where Hello DROPS — the fail-closed property this test pins).
 func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -323,6 +325,18 @@ func TestEnroll_NonNodeSelfLabel(t *testing.T) {
 		{"relay-prefix", &relayv1.Label{Key: "relay:env", Value: "prod"}},
 		{"bare-key", &relayv1.Label{Key: "role", Value: "web"}},
 		{"empty-bare-key", &relayv1.Label{Key: "node:", Value: ""}},
+		{
+			// The measured payload (#504's evidence): a value that would
+			// render as a second, relay:-spelled Selector term.
+			name:  "malformed-value",
+			label: &relayv1.Label{Key: "node:role", Value: "web, relay:quarantine=on"},
+		},
+		{
+			// The key-side split hazard: "=" in the KEY re-splits a
+			// rendered "key=value" pair with the wrong boundary.
+			name:  "malformed-key",
+			label: &relayv1.Label{Key: "node:role=x", Value: "web"},
+		},
 	}
 
 	for _, tc := range cases {

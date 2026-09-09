@@ -87,7 +87,7 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		); err != nil {
 			return registry.Node{}, fmt.Errorf("insert node: %w", err)
 		}
-		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels); err != nil {
+		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
 	} else {
@@ -105,7 +105,7 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		// enrolling_token_id and revoked_at are never touched here — provenance
 		// and revocation state are Relay-set/first-write-wins, exactly as
 		// registry.InMemory.Upsert preserves them on the update path.
-		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels); err != nil {
+		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
 	}
@@ -392,6 +392,7 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 	if err != nil {
 		return registry.Node{}, false, err
 	}
+	nodeLabels = wellFormedNodeLabels(nodeLabels)
 	relayLabels, err := fetchLabels(ctx, q, "relay_labels", nodeID)
 	if err != nil {
 		return registry.Node{}, false, err
@@ -444,6 +445,33 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 		RevokedAt:              revokedAtTime,
 		TemplateSetFingerprint: templateSetFingerprint,
 	}, true, nil
+}
+
+// wellFormedNodeLabels returns a copy of labels containing only the pairs
+// registry.WellFormedNodeLabel accepts (#504). It exists for one reason: rows
+// written BEFORE the ingress gate existed (protoconv.ParseNodeLabel) can carry
+// a value that was never validated. getNode is the single load path behind
+// both Get and List, so this one call site covers every reader — the Control
+// API, MCP, and the Console all read a stored node: label through here, never
+// around it.
+//
+// This does NOT delete or rewrite the stored row: node-space storage is the
+// Node's own self-description (invariant 7, ADR-0006), and the Relay declining
+// to SERVE a value is not the same act as the Relay MODIFYING one. The
+// legitimate way for the row to heal is the Node's own next Hello, which
+// replaces the whole node_labels set via replaceLabels — "never write,
+// decline to serve" keeps this fix unambiguously clear of the
+// Relay-immutability half of invariant 7. A Node that never reconnects keeps
+// serving a filtered view forever, which is the accepted cost of not being in
+// the business of rewriting a Node's self-description out from under it.
+func wellFormedNodeLabels(labels map[string]string) map[string]string {
+	out := make(map[string]string, len(labels))
+	for k, v := range labels {
+		if registry.WellFormedNodeLabel(k, v) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func fetchLabels(ctx context.Context, q queryer, table, nodeID string) (map[string]string, error) {

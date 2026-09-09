@@ -493,9 +493,8 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:            auditFixtureNode,
-		NodeLabels:        map[string]string{"role": "web"},
 		PolicyFingerprint: "sha256:aaaa",
-	}); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		panic("read_audit_test: seed registry: " + err.Error())
 	}
 

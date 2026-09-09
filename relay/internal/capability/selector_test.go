@@ -137,9 +137,8 @@ func seedRegistry(t *testing.T) registry.Repository {
 	reg := registry.NewInMemory()
 
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     "node-1",
-		NodeLabels: map[string]string{"role": "web", "env": "prod"},
-	}); err != nil {
+		NodeID: "node-1",
+	}.WithNodeLabels(map[string]string{"role": "web", "env": "prod"})); err != nil {
 		t.Fatalf("Upsert(node-1): %v", err)
 	}
 	if err := reg.SetRelayLabels("node-1", map[string]string{"quarantine": "on"}); err != nil {
@@ -147,18 +146,16 @@ func seedRegistry(t *testing.T) registry.Repository {
 	}
 
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     "node-2",
-		NodeLabels: map[string]string{"role": "db", "env": "prod"},
-	}); err != nil {
+		NodeID: "node-2",
+	}.WithNodeLabels(map[string]string{"role": "db", "env": "prod"})); err != nil {
 		t.Fatalf("Upsert(node-2): %v", err)
 	}
 
 	// node-3 carries "quarantine=on" as a node-space label, not a relay-
 	// space one. A relay:quarantine=on Selector must never match it.
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     "node-3",
-		NodeLabels: map[string]string{"role": "web", "quarantine": "on"},
-	}); err != nil {
+		NodeID: "node-3",
+	}.WithNodeLabels(map[string]string{"role": "web", "quarantine": "on"})); err != nil {
 		t.Fatalf("Upsert(node-3): %v", err)
 	}
 
@@ -223,9 +220,8 @@ func TestSelectorMatchesConjunction(t *testing.T) {
 func TestSelectorMatchesStateNeverReadsForgedLabels(t *testing.T) {
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{
-		NodeID:     "node-forged",
-		NodeLabels: map[string]string{"offline": "true"},
-	}); err != nil {
+		NodeID: "node-forged",
+	}.WithNodeLabels(map[string]string{"offline": "true"})); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 	if err := reg.SetRelayLabels("node-forged", map[string]string{"offline": "true"}); err != nil {

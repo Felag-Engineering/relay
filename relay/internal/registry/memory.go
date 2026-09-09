@@ -96,7 +96,7 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 		if r.maxNodes > 0 && len(r.nodes) >= r.maxNodes {
 			return Node{}, ErrAtCapacity
 		}
-		nl := maps.Clone(rep.NodeLabels)
+		nl := maps.Clone(rep.nodeLabels)
 		if nl == nil {
 			nl = map[string]string{}
 		}
@@ -117,7 +117,7 @@ func (r *InMemory) Upsert(rep Report) (Node, error) {
 	}
 
 	// Update path: overwrite node-rooted fields; leave relay-space untouched.
-	nl := maps.Clone(rep.NodeLabels)
+	nl := maps.Clone(rep.nodeLabels)
 	if nl == nil {
 		nl = map[string]string{}
 	}

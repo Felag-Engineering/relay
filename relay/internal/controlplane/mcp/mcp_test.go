@@ -157,10 +157,9 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 			Arch:        "amd64",
 			IPAddresses: []string{"10.0.0.1"},
 		},
-		NodeLabels:        map[string]string{"role": "web"},
 		PolicyFingerprint: "sha256:node-a-fingerprint",
 		DaemonVersion:     "1.1.0",
-	}); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("seed node A: %v", err)
 	}
 	if err := reg.SetRelayLabels(nodeA, map[string]string{"quarantine": "on"}); err != nil {
@@ -169,10 +168,9 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:            nodeB,
 		Facts:             registry.Facts{Hostname: "db-1", OS: "linux"},
-		NodeLabels:        map[string]string{"env": "prod"},
 		PolicyFingerprint: "sha256:node-b-fingerprint",
 		DaemonVersion:     "1.3.0",
-	}); err != nil {
+	}.WithNodeLabels(map[string]string{"env": "prod"})); err != nil {
 		t.Fatalf("seed node B: %v", err)
 	}
 

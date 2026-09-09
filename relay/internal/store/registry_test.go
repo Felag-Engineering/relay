@@ -20,12 +20,11 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		NodeID:                 "node-a",
 		CertFingerprint:        "fp-a",
 		Facts:                  registry.Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
-		NodeLabels:             map[string]string{"role": "web"},
 		EnrollingTokenID:       "tok-1",
 		PolicyFingerprint:      "abc123",
 		DaemonVersion:          "1.0.0",
 		TemplateSetFingerprint: "tmpl-abc",
-	})
+	}.WithNodeLabels(map[string]string{"role": "web"}))
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -53,12 +52,11 @@ func TestSqliteRegistry_UpsertInsertUpdate(t *testing.T) {
 		NodeID:                 "node-a",
 		CertFingerprint:        "fp-new",
 		Facts:                  registry.Facts{Hostname: "host-a-new", OS: "linux"},
-		NodeLabels:             map[string]string{"role": "db"},
 		EnrollingTokenID:       "tok-ignored",
 		PolicyFingerprint:      "def456",
 		DaemonVersion:          "1.1.0",
 		TemplateSetFingerprint: "tmpl-def",
-	})
+	}.WithNodeLabels(map[string]string{"role": "db"}))
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -112,8 +110,7 @@ func TestSqliteRegistry_FactsReplacedOnReconnect(t *testing.T) {
 		NodeID:           "node-facts",
 		EnrollingTokenID: "tok-facts",
 		Facts:            registry.Facts{Hostname: "old-host", OS: "linux"},
-		NodeLabels:       map[string]string{"env": "prod"},
-	})
+	}.WithNodeLabels(map[string]string{"env": "prod"}))
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -133,8 +130,7 @@ func TestSqliteRegistry_FactsReplacedOnReconnect(t *testing.T) {
 			Arch:        "x86_64",
 			IPAddresses: []string{"10.0.0.5"},
 		},
-		NodeLabels: map[string]string{"env": "staging"},
-	})
+	}.WithNodeLabels(map[string]string{"env": "staging"}))
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -438,5 +434,70 @@ func TestSqliteRegistry_ListSortedByNodeID(t *testing.T) {
 	if list[0].NodeID != "node-a" || list[1].NodeID != "node-b" || list[2].NodeID != "node-c" {
 		t.Errorf("List order: got [%q, %q, %q], want [node-a, node-b, node-c]",
 			list[0].NodeID, list[1].NodeID, list[2].NodeID)
+	}
+}
+
+// TestGetNode_DoesNotServeMalformedLegacyNodeLabel is the exception item 11
+// exists for (#504): a row written BEFORE the ingress gate existed
+// (protoconv.ParseNodeLabel) can carry a node_labels value the gate would
+// have refused. getNode is the single load path behind both Get and List, so
+// this one test covers every reader.
+//
+// The forged row is inserted STRAIGHT INTO node_labels via raw SQL,
+// bypassing Upsert entirely — exactly as a pre-fix Relay would have written
+// it — because Upsert itself now refuses to write what this test is
+// checking the READ path filters.
+func TestGetNode_DoesNotServeMalformedLegacyNodeLabel(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{
+		NodeID: "node-legacy",
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// The measured payload (#504's evidence), inserted as a pre-fix Relay
+	// would have stored it: no prefix stripping needed, node_labels already
+	// holds bare keys.
+	if _, err := st.db.Exec(
+		`INSERT INTO node_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-legacy", "env", "prod, relay:quarantine=on",
+	); err != nil {
+		t.Fatalf("insert forged legacy row: %v", err)
+	}
+
+	got, ok := reg.Get("node-legacy")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+	if len(got.NodeLabels) != 1 || got.NodeLabels["role"] != "web" {
+		t.Errorf("Get NodeLabels: got %#v, want only {role: web} — the forged legacy row must be declined, not served",
+			got.NodeLabels)
+	}
+	if _, forged := got.NodeLabels["env"]; forged {
+		t.Errorf("Get served the forged legacy env label: %q", got.NodeLabels["env"])
+	}
+
+	list := reg.List()
+	if len(list) != 1 {
+		t.Fatalf("List len: got %d, want 1", len(list))
+	}
+	if len(list[0].NodeLabels) != 1 || list[0].NodeLabels["role"] != "web" {
+		t.Errorf("List NodeLabels: got %#v, want only {role: web}", list[0].NodeLabels)
+	}
+
+	// The Relay declines to SERVE the forged row; it must not have DELETED
+	// or rewritten it (invariant 7: node-space storage is the Node's own
+	// self-description, and the Relay never edits it — only the Node's next
+	// Hello may replace the whole set).
+	var stillThere string
+	if err := st.db.QueryRow(
+		`SELECT value FROM node_labels WHERE node_id = ? AND key = ?`, "node-legacy", "env",
+	).Scan(&stillThere); err != nil {
+		t.Fatalf("the forged row must still be in node_labels (declined, not deleted): %v", err)
+	}
+	if stillThere != "prod, relay:quarantine=on" {
+		t.Errorf("the stored row must be unmodified: got %q", stillThere)
 	}
 }

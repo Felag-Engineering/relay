@@ -4,9 +4,11 @@ import (
 	"context"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
@@ -280,6 +282,131 @@ func TestTunnelOpen_HelloRegistersNode(t *testing.T) {
 	}
 }
 
+// TestOpen_MalformedNodeLabelDoesNotDropTheStream drives a Hello carrying one
+// malformed node: label through the real Open handler and asserts the stream
+// stays up (a Ping is still received) and the Node is present in the
+// registry WITHOUT the malformed label — pinning D1 (#504): a refused label
+// is omitted, never sanitised, and never tears down the connection. An
+// unreachable Node can never be inspected, quarantined or remediated, so
+// fail-closed here means failing closed on the DATA, not on the connection.
+func TestOpen_MalformedNodeLabelDoesNotDropTheStream(t *testing.T) {
+	const certNodeID = "cert-node-malformed"
+
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
+				NodeId: certNodeID,
+				Facts:  &relayv1.Facts{Hostname: "h", Os: "linux"},
+				Labels: []*relayv1.Label{
+					// The measured payload (#504's evidence).
+					{Key: "node:role", Value: "web, relay:quarantine=on"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+
+	// The stream must stay up: a Ping still arrives.
+	msg, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("recv ping: %v (the stream must survive a malformed node: label)", err)
+	}
+	if msg.GetPing() == nil {
+		t.Fatalf("expected Ping, got %T", msg.Body)
+	}
+
+	n, ok := reg.Get(certNodeID)
+	if !ok {
+		t.Fatal("node not found in registry after Hello — a malformed label must not cost the Node its connection")
+	}
+	if len(n.NodeLabels) != 0 {
+		t.Errorf("NodeLabels: got %v, want empty — the malformed label must be omitted, not sanitised", n.NodeLabels)
+	}
+}
+
+// TestOpen_HostileNodeLabelCannotRenderTwoPredicates is modelled on
+// nodestate_test.go's TestFacts_HostileDaemonVersionCannotInjectASelectorTerm:
+// it drives the issue's measured payload through the REAL ingress path
+// (Hello -> nodeLabelsFromHello -> registry.Upsert -> Get), re-renders every
+// stored node: pair exactly as console/fleet.go's buildFacets does
+// ("node:" + k + "=" + v), joins them with capability.ParseSelector's
+// separator, and asserts the result is the issue's own success condition:
+// no predicate ever lands in NamespaceRelay, and the predicate count matches
+// the number of labels actually stored — never more.
+func TestOpen_HostileNodeLabelCannotRenderTwoPredicates(t *testing.T) {
+	const certNodeID = "cert-node-hostile"
+
+	reg := registry.NewInMemory()
+	srv := grpc.NewServer(grpc.StreamInterceptor(injectNodeIDInterceptor(certNodeID)))
+	relayv1.RegisterTunnelServer(srv, &tunnelServer{reg: reg})
+	conn := newBufconnConn(t, srv)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := relayv1.NewTunnelClient(conn).Open(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+
+	if err := stream.Send(&relayv1.DaemonMessage{
+		Body: &relayv1.DaemonMessage_Hello{
+			Hello: &relayv1.Hello{
+				NodeId: certNodeID,
+				Facts:  &relayv1.Facts{Hostname: "h", Os: "linux"},
+				Labels: []*relayv1.Label{
+					// The measured payload (#504's evidence).
+					{Key: "node:role", Value: "web, relay:quarantine=on"},
+					{Key: "node:site", Value: "us-east-1"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send hello: %v", err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("recv ping: %v", err)
+	}
+
+	n, ok := reg.Get(certNodeID)
+	if !ok {
+		t.Fatal("node not found in registry after Hello")
+	}
+
+	rendered := make([]string, 0, len(n.NodeLabels))
+	for k, v := range n.NodeLabels {
+		rendered = append(rendered, "node:"+k+"="+v)
+	}
+	joined := strings.Join(rendered, ", ")
+	sel, err := capability.ParseSelector(joined)
+	if err != nil {
+		t.Fatalf("ParseSelector(%q): %v", joined, err)
+	}
+	if len(sel.Predicates) != len(n.NodeLabels) {
+		t.Fatalf("rendered %q to %d predicates, want exactly %d (one per stored label) — the issue's own two-predicate symptom",
+			joined, len(sel.Predicates), len(n.NodeLabels))
+	}
+	for _, p := range sel.Predicates {
+		if p.Namespace == capability.NamespaceRelay {
+			t.Fatalf("a hostile node: label injected a relay:-spelled predicate: %+v (rendered: %q)", p, joined)
+		}
+	}
+}
+
 // TestTunnelOpen_HeartbeatUpdatesLastSeen verifies that receiving a Heartbeat
 // causes the handler to advance the Node's LastSeen timestamp in the registry.
 // The registry is seeded with a fixed old clock so Hello records LastSeen=oldTime;
@@ -360,12 +487,15 @@ func TestTunnelOpen_HeartbeatUpdatesLastSeen(t *testing.T) {
 	}
 }
 
-// TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello helper.
+// TestNodeLabelsFromHello is a pure unit test for the nodeLabelsFromHello
+// helper, covering both the two-namespace label-authority rule (ADR-0006)
+// and the well-formedness gate (#504).
 func TestNodeLabelsFromHello(t *testing.T) {
 	tests := []struct {
-		name  string
-		input []*relayv1.Label
-		want  map[string]string
+		name        string
+		input       []*relayv1.Label
+		want        map[string]string
+		wantRefused []string
 	}{
 		{
 			name:  "node: prefix is accepted; bare key is stored",
@@ -378,20 +508,44 @@ func TestNodeLabelsFromHello(t *testing.T) {
 			want:  map[string]string{},
 		},
 		{
-			name:  "node: with empty bare key is dropped",
-			input: []*relayv1.Label{{Key: "node:", Value: "val"}},
-			want:  map[string]string{},
+			// Unlike a relay:/tag:/unprefixed key (never even an attempted
+			// node: label, so silently dropped per the WHY comment above),
+			// "node:" with nothing after the prefix IS an attempted node:
+			// label that failed well-formedness, so it is surfaced as refused.
+			name:        "node: with empty bare key is refused",
+			input:       []*relayv1.Label{{Key: "node:", Value: "val"}},
+			want:        map[string]string{},
+			wantRefused: []string{"node:"},
 		},
 		{
 			name:  "no namespace prefix is dropped",
 			input: []*relayv1.Label{{Key: "role", Value: "web"}},
 			want:  map[string]string{},
 		},
+		{
+			// The measured payload (#504's evidence): a value that would
+			// render as a second, relay:-spelled Selector term.
+			name:        "malformed value is refused, not sanitised",
+			input:       []*relayv1.Label{{Key: "node:role", Value: "web, relay:quarantine=on"}},
+			want:        map[string]string{},
+			wantRefused: []string{"node:role"},
+		},
+		{
+			// ONE BAD LABEL DOES NOT COST THE NODE ITS GOOD ONES (D1: omission
+			// is per-label).
+			name: "one malformed label among good ones costs only itself",
+			input: []*relayv1.Label{
+				{Key: "node:role", Value: "web"},
+				{Key: "node:site", Value: "a b"},
+			},
+			want:        map[string]string{"role": "web"},
+			wantRefused: []string{"node:site"},
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := nodeLabelsFromHello(tc.input)
+			got, refused := nodeLabelsFromHello(tc.input)
 			if len(got) != len(tc.want) {
 				t.Errorf("len: got %d, want %d; got=%v, want=%v",
 					len(got), len(tc.want), got, tc.want)
@@ -400,6 +554,14 @@ func TestNodeLabelsFromHello(t *testing.T) {
 			for k, v := range tc.want {
 				if got[k] != v {
 					t.Errorf("key %q: got %q, want %q", k, got[k], v)
+				}
+			}
+			if len(refused) != len(tc.wantRefused) {
+				t.Fatalf("refused: got %v, want %v", refused, tc.wantRefused)
+			}
+			for i, k := range tc.wantRefused {
+				if refused[i] != k {
+					t.Errorf("refused[%d]: got %q, want %q", i, refused[i], k)
 				}
 			}
 		})

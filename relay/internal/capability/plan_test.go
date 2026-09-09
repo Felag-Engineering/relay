@@ -289,16 +289,14 @@ func TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly(t *testing.T) {
 	reg := registry.NewInMemory(registry.WithMinDaemonVersion("1.2.0"))
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:        "node-current",
-		NodeLabels:    map[string]string{"role": "web"},
 		DaemonVersion: "1.2.0",
-	}); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("Upsert(node-current): %v", err)
 	}
 	if _, err := reg.Upsert(registry.Report{
 		NodeID:        "node-old",
-		NodeLabels:    map[string]string{"role": "web"},
 		DaemonVersion: "1.0.0",
-	}); err != nil {
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("Upsert(node-old): %v", err)
 	}
 

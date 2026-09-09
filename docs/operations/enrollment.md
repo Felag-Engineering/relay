@@ -95,6 +95,15 @@ Note the two Label namespaces at work: `RELAY_NODE_LABELS` become node-space
 (`node:…`) Labels — node-rooted, Relay-immutable, for routine targeting — while
 the token's scope became relay-space (`relay:…`) Labels the Node can never alter.
 
+Each `RELAY_NODE_LABELS` key and value must match `[A-Za-z0-9._-]+` (an empty
+value is fine — a bare `role` entry is a legitimate marker). A pair outside that
+alphabet is REFUSED at enrollment — the whole request fails, with no
+certificate and no registry row, so a human watching the install sees it
+immediately — and DROPPED at reconnect, where only that one label is omitted
+and the Node stays connected. Neither case sanitises the value into something
+it never was: a label the Relay cannot render as a single Selector term is
+refused, not rewritten (#504).
+
 ## 3. Bulk enrollment via config management
 
 One reusable scoped token + a loop over inventory. An Ansible-flavored role

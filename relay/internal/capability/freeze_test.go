@@ -209,7 +209,7 @@ func TestFreezeSurvivesRestart(t *testing.T) {
 	}
 
 	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-1", NodeLabels: map[string]string{"role": "web"}}); err != nil {
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-1"}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
 

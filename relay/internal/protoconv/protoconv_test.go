@@ -66,30 +66,56 @@ func TestParseNodeLabel(t *testing.T) {
 	tests := []struct {
 		name     string
 		key      string
+		value    string
 		wantBare string
 		wantOK   bool
 	}{
 		{
 			name:     "valid node: label",
 			key:      "node:role",
+			value:    "web",
 			wantBare: "role",
 			wantOK:   true,
 		},
 		{
 			name:     "relay: prefix is rejected",
 			key:      "relay:env",
+			value:    "prod",
 			wantBare: "",
 			wantOK:   false,
 		},
 		{
 			name:     "node: with empty bare key is rejected",
 			key:      "node:",
+			value:    "x",
 			wantBare: "",
 			wantOK:   false,
 		},
 		{
 			name:     "no prefix is rejected",
 			key:      "role",
+			value:    "web",
+			wantBare: "",
+			wantOK:   false,
+		},
+		{
+			name:     "empty value is a compatibility floor",
+			key:      "node:role",
+			value:    "",
+			wantBare: "role",
+			wantOK:   true,
+		},
+		{
+			name:     "the measured payload — comma-injected second term is rejected",
+			key:      "node:role",
+			value:    "web, relay:quarantine=on",
+			wantBare: "",
+			wantOK:   false,
+		},
+		{
+			name:     "equals in the key-side split hazard is rejected",
+			key:      "node:role=x",
+			value:    "web",
 			wantBare: "",
 			wantOK:   false,
 		},
@@ -97,7 +123,7 @@ func TestParseNodeLabel(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			bare, ok := protoconv.ParseNodeLabel(tc.key)
+			bare, ok := protoconv.ParseNodeLabel(tc.key, tc.value)
 			if ok != tc.wantOK {
 				t.Errorf("ok: got %v, want %v", ok, tc.wantOK)
 			}

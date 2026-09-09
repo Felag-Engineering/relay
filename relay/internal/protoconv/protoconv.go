@@ -26,17 +26,25 @@ func FactsFromProto(pf *relayv1.Facts) registry.Facts {
 	}
 }
 
-// ParseNodeLabel applies the two-namespace label-authority rule (ADR-0006):
-// a label key is a node-space label iff it has a "node:" prefix and a non-empty
-// bare key. On success it returns the bare key (prefix stripped) and true.
-// Otherwise it returns "" and false. It does NOT decide what to do on failure —
-// callers keep their own drop-vs-reject policy.
-func ParseNodeLabel(key string) (bare string, ok bool) {
+// ParseNodeLabel applies the two-namespace label-authority rule (ADR-0006)
+// AND the well-formedness gate (#504, registry.WellFormedNodeLabel): a label
+// is a node-space label iff its key has a "node:" prefix, the bare key is
+// non-empty, and (bare key, value) is well-formed. On success it returns the
+// bare key (prefix stripped) and true. Otherwise it returns "" and false. It
+// does NOT decide what to do on failure — callers keep their own
+// drop-vs-reject policy (Hello omits the label, Enroll rejects the request).
+//
+// TAKING THE VALUE IS THE POINT: a caller can no longer check the key and
+// forget the value, because doing so no longer compiles. Before #504 this
+// only validated the key; the measured payload — a `node:role` value of
+// "web, relay:quarantine=on" — passed straight through and rendered as two
+// Selector predicates, the second spelled relay:.
+func ParseNodeLabel(key, value string) (bare string, ok bool) {
 	if !strings.HasPrefix(key, "node:") {
 		return "", false
 	}
 	bare = strings.TrimPrefix(key, "node:")
-	if bare == "" {
+	if !registry.WellFormedNodeLabel(bare, value) {
 		return "", false
 	}
 	return bare, true

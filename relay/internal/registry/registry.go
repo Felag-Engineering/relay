@@ -11,6 +11,7 @@ package registry
 
 import (
 	"errors"
+	"maps"
 	"time"
 )
 
@@ -188,17 +189,53 @@ type Certificate struct {
 // Report is the input to Upsert. It deliberately carries no relay-label field —
 // this is the structural half of the node-side immutability boundary. A relay-daemon
 // can never supply relay-space labels through this type, regardless of what it sends.
+//
+// nodeLabels is unexported on purpose (#504): the ONLY way to populate it is
+// WithNodeLabels, so `rep.NodeLabels = someMap` — the bare field assignment
+// that would silently create a third write path alongside cmd/relay/tunnel.go
+// and internal/enroll/handler.go — is a compile error from any package
+// outside registry, not a convention a reviewer has to notice was broken.
+// protoconv/ingress_guard_test.go's TestReportNodeLabelsHasTwoWriters is the
+// backstop on TOP of that structural guarantee, pinning that exactly those
+// two files call WithNodeLabels; it is not the enforcement itself.
 type Report struct {
 	NodeID            string
 	CertFingerprint   string
 	Facts             Facts
-	NodeLabels        map[string]string
 	EnrollingTokenID  string
 	PolicyFingerprint string // SHA-256 hex of the Node's loaded Policy, sourced from Hello; report-only drift signal — the Relay never sets Policy (ADR-0002)
 	DaemonVersion     string // relay-daemon version self-reported on Hello; report-only drift/upgrade-progress signal (ADR-0014)
 	// TemplateSetFingerprint is the Node's reported template-set fingerprint,
 	// sourced from Hello; report-only drift signal (ADR-0021/ADR-0002).
 	TemplateSetFingerprint string
+
+	nodeLabels map[string]string
+}
+
+// WithNodeLabels returns a copy of r with its node-space label map set to
+// labels, and is the only way to set it (see Report's doc). labels must
+// already be well-formed bare key/value pairs — WellFormedNodeLabel is the
+// predicate — this method does no validation of its own; validation happens
+// once, at the protoconv.ParseNodeLabel ingress seam, and every legitimate
+// caller has already gone through it before reaching here.
+func (r Report) WithNodeLabels(labels map[string]string) Report {
+	r.nodeLabels = labels
+	return r
+}
+
+// NodeLabels returns a COPY of the node-space label map r carries. Exported
+// as a read-only accessor (rather than the field itself) so internal/store,
+// which is outside this package, can read what Upsert is about to persist
+// without being able to write it.
+//
+// It copies because unexporting the field bounds who may SET the map, not who
+// may MUTATE it: handing out the live map would let any holder of a Report do
+// `rep.NodeLabels()["role"] = "web, relay:quarantine=on"` and put back exactly
+// the value #504's ingress gate exists to reject, with neither the compiler
+// nor the ingress guard able to see it. The two writers are the only writers
+// by construction only if this is a copy.
+func (r Report) NodeLabels() map[string]string {
+	return maps.Clone(r.nodeLabels)
 }
 
 // Repository is the interface for the Node registry.

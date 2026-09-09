@@ -19,18 +19,16 @@ func TestUpsert_RegisterGetList(t *testing.T) {
 		NodeID:            "node-a",
 		CertFingerprint:   "fp-a",
 		Facts:             Facts{Hostname: "host-a", OS: "linux", IPAddresses: []string{"10.0.0.1"}},
-		NodeLabels:        map[string]string{"role": "web"},
 		EnrollingTokenID:  "tok-1",
 		PolicyFingerprint: "abc123",
-	}
+	}.WithNodeLabels(map[string]string{"role": "web"})
 	rep2 := Report{
 		NodeID:            "node-b",
 		CertFingerprint:   "fp-b",
 		Facts:             Facts{Hostname: "host-b", OS: "linux"},
-		NodeLabels:        map[string]string{"role": "db"},
 		EnrollingTokenID:  "tok-2",
 		PolicyFingerprint: "def456",
-	}
+	}.WithNodeLabels(map[string]string{"role": "db"})
 
 	n1, err := reg.Upsert(rep1)
 	if err != nil {
@@ -124,9 +122,8 @@ func TestImmutabilityBoundary_RelaySurvivesNodeReport(t *testing.T) {
 
 	// Initial upsert with node labels A.
 	_, err := reg.Upsert(Report{
-		NodeID:     "node-q",
-		NodeLabels: map[string]string{"env": "prod"},
-	})
+		NodeID: "node-q",
+	}.WithNodeLabels(map[string]string{"env": "prod"}))
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -138,9 +135,8 @@ func TestImmutabilityBoundary_RelaySurvivesNodeReport(t *testing.T) {
 
 	// Node re-upserts with updated node labels B — must not clear relay labels.
 	_, err = reg.Upsert(Report{
-		NodeID:     "node-q",
-		NodeLabels: map[string]string{"env": "staging"},
-	})
+		NodeID: "node-q",
+	}.WithNodeLabels(map[string]string{"env": "staging"}))
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
@@ -159,10 +155,9 @@ func TestImmutabilityBoundary_NodeSurvivesRelaySet(t *testing.T) {
 	reg := NewInMemory()
 
 	_, err := reg.Upsert(Report{
-		NodeID:     "node-r",
-		NodeLabels: map[string]string{"role": "api"},
-		Facts:      Facts{Hostname: "host-r", OS: "linux"},
-	})
+		NodeID: "node-r",
+		Facts:  Facts{Hostname: "host-r", OS: "linux"},
+	}.WithNodeLabels(map[string]string{"role": "api"}))
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -227,10 +222,9 @@ func TestGetReturnsCopy(t *testing.T) {
 	reg := NewInMemory()
 
 	_, err := reg.Upsert(Report{
-		NodeID:     "node-copy",
-		NodeLabels: map[string]string{"k": "v"},
-		Facts:      Facts{IPAddresses: []string{"192.168.1.1"}},
-	})
+		NodeID: "node-copy",
+		Facts:  Facts{IPAddresses: []string{"192.168.1.1"}},
+	}.WithNodeLabels(map[string]string{"k": "v"}))
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
@@ -389,8 +383,7 @@ func TestUpsert_FactsReplacedOnReconnect(t *testing.T) {
 		NodeID:           "node-facts",
 		EnrollingTokenID: "tok-facts",
 		Facts:            Facts{Hostname: "old-host", OS: "linux"},
-		NodeLabels:       map[string]string{"env": "prod"},
-	})
+	}.WithNodeLabels(map[string]string{"env": "prod"}))
 	if err != nil {
 		t.Fatalf("first upsert: %v", err)
 	}
@@ -411,8 +404,7 @@ func TestUpsert_FactsReplacedOnReconnect(t *testing.T) {
 			Arch:        "x86_64",
 			IPAddresses: []string{"10.0.0.5"},
 		},
-		NodeLabels: map[string]string{"env": "staging"},
-	})
+	}.WithNodeLabels(map[string]string{"env": "staging"}))
 	if err != nil {
 		t.Fatalf("second upsert: %v", err)
 	}
