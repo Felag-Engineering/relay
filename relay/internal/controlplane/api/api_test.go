@@ -22,6 +22,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -31,16 +32,39 @@ import (
 
 // fakeTokenRevoker is a TokenRevoker fake that records every id it was
 // called with and returns a configurable error.
+//
+// cascade, when non-empty, stands in for the Nodes revocation.Service's
+// re-scan would have found: RevokeToken calls record(n) for each n in
+// cascade, in order, COLLECTING every returned error into recordErrs —
+// collecting rather than discarding the return value is what makes mutation
+// 4 (a recorder closure that swallows the audit error) redden. cascadeErr, if
+// set, is returned from RevokeToken after every record call, standing in for
+// revocation.Service's own ErrCascadeNotRecorded return.
 type fakeTokenRevoker struct {
 	mu         sync.Mutex
 	calledWith []string
 	err        error
+
+	cascade    []string
+	cascadeErr error
+	recordErrs []error
 }
 
-func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string) error {
+func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record revocation.RevocationRecorder) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calledWith = append(f.calledWith, id)
+	cascade := f.cascade
+	f.mu.Unlock()
+
+	for _, nodeID := range cascade {
+		err := record(nodeID)
+		f.mu.Lock()
+		f.recordErrs = append(f.recordErrs, err)
+		f.mu.Unlock()
+	}
+	if f.cascadeErr != nil {
+		return f.cascadeErr
+	}
 	return f.err
 }
 
@@ -152,6 +176,13 @@ const testCredential = accounts.TokenPrefix + "1234567890abcdef.test-secret" //n
 // the routes rather than on minting a credential first.
 const testTokenID = "tok-test"
 
+// testFoundingAdminAccountID is staticVerifier's stand-in for the Relay-
+// assigned stable identifier a real store.Accounts().EnsureFoundingAdmin
+// would mint. Given so tests can assert Attribution.Verified.AccountID is
+// non-empty and identity-stable, mirroring what principalFromAccount does
+// with a real Account in production.
+const testFoundingAdminAccountID = "acct-founding-admin"
+
 type staticVerifier struct{ credential string }
 
 func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.Account, accounts.APIToken, error) {
@@ -159,6 +190,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 		return accounts.Account{}, accounts.APIToken{}, accounts.ErrTokenInvalid
 	}
 	return accounts.Account{
+		ID:      testFoundingAdminAccountID,
 		Name:    accounts.FoundingAdminName,
 		Kind:    accounts.KindHuman,
 		Role:    accounts.RoleAdmin,
@@ -171,6 +203,7 @@ func (v staticVerifier) Verify(_ context.Context, credential string) (accounts.A
 // part of the identity, not decoration on it.
 func testPrincipal() capability.Principal {
 	p := controlplane.FoundingAdmin()
+	p.AccountID = testFoundingAdminAccountID
 	p.TokenID = testTokenID
 	p.AuthMethod = capability.AuthMethodAPIToken
 	// The authentication boundary now stamps the peer address into the
@@ -390,6 +423,192 @@ func TestHandleRevokeToken(t *testing.T) {
 	}
 	if !strings.Contains(got.Reason, "tok-123") {
 		t.Errorf("audit Reason = %q, want it to reference tok-123", got.Reason)
+	}
+}
+
+// TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason is the
+// heart of #557: it must fail if the cascade's per-Node records exist but are
+// unattributed, not just if they are missing. A test that only counted audit
+// records would be satisfied by a KindNodeRevoke row with an empty Principal
+// and a blank Attribution — exactly the half-fix the issue's testing note
+// warns about — so this asserts field VALUES, never the count alone
+// (mutation 3).
+func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testing.T) {
+	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b"}}
+	auditor := &fakeAuditor{}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	records := auditor.all()
+	if len(records) != 3 {
+		t.Fatalf("audit records = %d, want 3 (one token_revoke + two node_revoke)", len(records))
+	}
+
+	seenIDs := map[string]bool{}
+	nodeRows := map[string]audit.Record{}
+	for _, r := range records {
+		if r.ID == "" {
+			t.Errorf("audit Record.ID is empty: %+v", r)
+		}
+		if seenIDs[r.ID] {
+			t.Errorf("audit Record.ID %q reused across rows", r.ID)
+		}
+		seenIDs[r.ID] = true
+		if r.Kind == audit.KindNodeRevoke {
+			nodeRows[r.NodeID] = r
+		}
+	}
+	if len(nodeRows) != 2 {
+		t.Fatalf("node_revoke rows = %v, want exactly node-a and node-b", nodeRows)
+	}
+
+	wantPrincipal := controlplane.FoundingAdmin().Attribution()
+	for _, nodeID := range []string{"node-a", "node-b"} {
+		row, ok := nodeRows[nodeID]
+		if !ok {
+			t.Fatalf("no node_revoke row for %s", nodeID)
+		}
+		if row.Principal != wantPrincipal {
+			t.Errorf("%s: Principal = %q, want %q", nodeID, row.Principal, wantPrincipal)
+		}
+		v := row.Attribution.Verified
+		if v.AccountID == "" || v.AccountID != testFoundingAdminAccountID {
+			t.Errorf("%s: Verified.AccountID = %q, want the founding admin's non-empty id %q", nodeID, v.AccountID, testFoundingAdminAccountID)
+		}
+		if v.AccountName == "" || v.AccountName != accounts.FoundingAdminName {
+			t.Errorf("%s: Verified.AccountName = %q, want %q", nodeID, v.AccountName, accounts.FoundingAdminName)
+		}
+		if v.Role == "" || v.Role != string(accounts.RoleAdmin) {
+			t.Errorf("%s: Verified.Role = %q, want %q", nodeID, v.Role, accounts.RoleAdmin)
+		}
+		wantReason := capability.CascadeRevokeReason("tok-123")
+		if row.Reason != wantReason {
+			t.Errorf("%s: Reason = %q, want %q", nodeID, row.Reason, wantReason)
+		}
+	}
+}
+
+// TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke covers the
+// completed-but-unrecorded 500: RevokeToken returning an error wrapping
+// ErrCascadeNotRecorded means the token and its Nodes WERE revoked, so the
+// KindTokenRevoke row must still be written even though the response is a
+// 500.
+func TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke(t *testing.T) {
+	tr := &fakeTokenRevoker{
+		cascade:    []string{"node-a"},
+		cascadeErr: fmt.Errorf("wrap: %w", revocation.ErrCascadeNotRecorded),
+	}
+	auditor := &fakeAuditor{}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+
+	var sawTokenRevoke bool
+	for _, r := range auditor.all() {
+		if r.Kind == audit.KindTokenRevoke {
+			sawTokenRevoke = true
+		}
+	}
+	if !sawTokenRevoke {
+		t.Error("no KindTokenRevoke record was written despite the token and its Nodes having been revoked")
+	}
+}
+
+// TestHandleRevokeToken_CascadeRecorderReportsAuditFailure asserts the
+// recorder closure this handler builds propagates a real audit failure back
+// to the caller (revocation.Service) rather than swallowing it — mutation 4.
+func TestHandleRevokeToken_CascadeRecorderReportsAuditFailure(t *testing.T) {
+	auditErr := errors.New("audit store unavailable")
+	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b"}}
+	auditor := &fakeAuditor{err: auditErr}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+
+	if len(tr.recordErrs) != 2 {
+		t.Fatalf("recordErrs = %v, want 2 entries (one per cascaded Node)", tr.recordErrs)
+	}
+	for i, err := range tr.recordErrs {
+		if err == nil {
+			t.Errorf("recordErrs[%d] = nil, want the recorder to report the audit failure", i)
+		}
+	}
+}
+
+// TestHandleRevokeToken_RejectsUnrenderableTokenID asserts a token id that
+// cannot be rendered into a valid revocation reason (an embedded control
+// character) is refused with 400 before TokenRevoker is ever called and
+// before any audit record is written — mutation 10.
+func TestHandleRevokeToken_RejectsUnrenderableTokenID(t *testing.T) {
+	tr := &fakeTokenRevoker{}
+	auditor := &fakeAuditor{}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := doRaw(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok%0Abad", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if len(tr.calledWith) != 0 {
+		t.Errorf("TokenRevoker.RevokeToken called with %v, want it never called", tr.calledWith)
+	}
+	if len(auditor.all()) != 0 {
+		t.Errorf("audit records = %v, want none", auditor.all())
+	}
+}
+
+// TestRevokeTokenCascade_PersistsOneRowPerNode mirrors
+// TestMintThenRevokeToken_BothProduceAuditRows: it uses the REAL SQLite-backed
+// audit.Repository so the audit_id PRIMARY KEY constraint is genuinely
+// exercised over a 5-Node cascade — a fake Auditor cannot catch a reused
+// Record.ID (mutation 11).
+func TestRevokeTokenCascade_PersistsOneRowPerNode(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+
+	cascade := []string{"node-1", "node-2", "node-3", "node-4", "node-5"}
+	tr := &fakeTokenRevoker{cascade: cascade}
+	d := Deps{TokenRevoker: tr, Audit: st.Audit(), Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	records, err := st.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("st.Audit().List: %v", err)
+	}
+	if len(records) != len(cascade)+1 {
+		t.Fatalf("audit records = %d, want %d (one token_revoke + %d node_revoke)",
+			len(records), len(cascade)+1, len(cascade))
+	}
+	seen := map[string]bool{}
+	for _, r := range records {
+		if r.ID == "" {
+			t.Errorf("audit Record.ID is empty: %+v", r)
+		}
+		if seen[r.ID] {
+			t.Errorf("audit Record.ID %q reused across rows", r.ID)
+		}
+		seen[r.ID] = true
+	}
+	if len(seen) != len(cascade)+1 {
+		t.Errorf("distinct audit_ids = %d, want %d", len(seen), len(cascade)+1)
 	}
 }
 

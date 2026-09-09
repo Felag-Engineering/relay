@@ -542,7 +542,10 @@ paths:
       summary: Revoke an Enrollment Token
       description: |
         Revokes the token and cascade-revokes the Nodes already enrolled with
-        it, tearing down their live Tunnels.
+        it, tearing down their live Tunnels. The cascade also writes one Node
+        revocation audit record per Node, attributed to the calling Account
+        with a derived reason naming the token (#557) — a cascade-revoked
+        Node is as attributable as one revoked directly.
 
         **Requires the `admin` role**: revocation is the middle rung of
         ADR-0020's incident ladder, and this route reaches every Node the
@@ -550,6 +553,7 @@ paths:
       responses:
         "204":
           description: Revoked.
+        "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "404":
@@ -557,7 +561,15 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
-        "500": { $ref: '#/components/responses/InternalError' }
+        "500":
+          description: |
+            Revoke failed, OR the token and its Nodes were revoked but one or
+            more of their per-Node revocation records could not be written
+            (the revocation still took effect; retrying will not restore the
+            missing records).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
 
   /api/v1/nodes/{node_id}:
     parameters:

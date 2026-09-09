@@ -153,7 +153,11 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	}
 
 	// Revoke the token (cascade over an empty registry just kills the token).
-	if err := deps.revocation.RevokeToken(ctx, tok.ID); err != nil {
+	// This test's registry is empty, so the cascade records nothing through
+	// this recorder; the attribution assertions for a non-empty cascade live at
+	// the API seam (internal/controlplane/api).
+	noopRecord := func(string) error { return nil }
+	if err := deps.revocation.RevokeToken(ctx, tok.ID, noopRecord); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}
 

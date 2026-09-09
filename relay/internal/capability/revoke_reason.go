@@ -72,17 +72,16 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // surface must remember to call, not a gate it cannot get past.
 //
 // What that buys, precisely: POST /api/v1/nodes/{node_id}/revoke cannot revoke
-// unattributed. It does NOT make revocation attributable, and the difference is
-// not academic. revocation.Service.RevokeToken cascade-revokes every Node an
+// unattributed. revocation.Service.RevokeToken cascade-revokes every Node an
 // Enrollment Token enrolled, reached by DELETE /api/v1/enrollment-tokens/{id};
-// that path writes one KindTokenRevoke record and NO KindNodeRevoke record for
-// any cascaded Node, so an admin who wants an unattributed Node revocation can
-// simply revoke the enrolling token instead — same irreversible outcome, no
-// reason demanded, and Node detail then renders its weaker "no revocation
-// record is in the trail" branch. Same role throughout, so this is an
-// attribution gap and not a privilege escalation. Closing it means giving
-// revocation.Service an audit sink, which it does not have today and which is a
-// larger change than #487 asked for; it is filed separately.
+// the cascade now records one KindNodeRevoke per cascaded Node, attributed to
+// the same Principal as the KindTokenRevoke row for the token itself, with a
+// reason from CascadeRevokeReason (#557). revocation.Service still has no
+// audit sink of its own — it imports neither internal/audit nor
+// internal/capability (see revocation.RevocationRecorder) — so each record is
+// written by a CALLER-supplied recorder, and its content is authored at the
+// surface that authenticated the operator while the set of Nodes is decided
+// inside the cascade's re-scan, the only place that knows it.
 //
 // enroll.Service also revokes a just-minted identity when enrollment fails
 // partway (its own nodeDenylister, never this validator). That one is correct
@@ -129,6 +128,20 @@ func ValidateRevokeReason(raw string) (string, error) {
 		}
 	}
 	return reason, nil
+}
+
+// CascadeRevokeReason renders the DERIVED reason for a Node revoked by an
+// Enrollment Token cascade (#557): the operator authored no per-Node reason
+// for a Node they never named and must not be asked for one after the fact,
+// so this names the CAUSE instead — the token whose revocation swept the Node
+// up.
+//
+// It is a renderer, not a validator: tokenID is caller-supplied path input
+// (DELETE /api/v1/enrollment-tokens/{id}), so callers must still pass its
+// output through ValidateRevokeReason before recording it, exactly as a
+// human-authored reason would be.
+func CascadeRevokeReason(tokenID string) string {
+	return "cascade: enrollment token " + tokenID + " revoked"
 }
 
 // isBidiOrZeroWidth reports whether r reorders or hides surrounding text: the

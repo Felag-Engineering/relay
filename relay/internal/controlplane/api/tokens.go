@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
 
 // maxTTLSeconds bounds ttl_seconds: it guards against
@@ -101,8 +103,9 @@ func handleMintToken(d Deps) http.HandlerFunc {
 
 // handleRevokeToken implements DELETE /api/v1/enrollment-tokens/{id}:
 // revoke the token (and, via TokenRevoker.RevokeToken, cascade-revoke every
-// Node it enrolled), audit the revoke (KindTokenRevoke), and return 204.
-// Idempotent: revoking an unknown or already-revoked id still returns 204
+// Node it enrolled), audit the revoke (KindTokenRevoke) plus one
+// KindNodeRevoke per cascaded Node (#557), and return 204. Idempotent:
+// revoking an unknown or already-revoked id still returns 204
 // (revocation.Service.RevokeToken swallows enroll.ErrNotFound).
 //
 // **Requires `admin`** (#397). #397's table named the mint and the Node
@@ -110,6 +113,10 @@ func handleMintToken(d Deps) http.HandlerFunc {
 // issue asked for. It cascades to every Node the token enrolled, tearing down
 // live Tunnels — the same availability blast radius as revoking those Nodes
 // one at a time, which ADR-0020's incident ladder puts at admin.
+//
+// Can now also answer 400 (the token id cannot be rendered into a revocation
+// reason) and a completed-but-unrecorded 500 (the token and its Nodes were
+// revoked, but one or more per-Node records could not be written).
 func handleRevokeToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -126,12 +133,51 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.TokenRevoker.RevokeToken(r.Context(), id); err != nil {
+		// id is raw r.PathValue input, not a store-validated value — RevokeToken
+		// deliberately tolerates an unknown id and still cascades (it may name a
+		// token that was already deleted) — so this is NOT ceremony: without it, a
+		// control character or bidi override in the path would be persisted
+		// verbatim into every cascade record and rendered on Node detail. A
+		// genuine 32-hex id passes this trivially.
+		reason, err := capability.ValidateRevokeReason(capability.CascadeRevokeReason(id))
+		if err != nil {
+			writeProblem(w, http.StatusBadRequest, "invalid token id",
+				"the token id cannot be rendered into a revocation reason: "+err.Error())
+			return
+		}
+
+		// WithoutCancel: the cascade performs N irreversible acts (denylist +
+		// live-Tunnel teardown per Node); if the client hangs up midway the
+		// revocations continue, so the audit records describing them must too.
+		// Values — and so capability.AssertionsFromContext's asserted lane —
+		// survive WithoutCancel; only the cancellation signal is dropped.
+		auditCtx := context.WithoutCancel(r.Context())
+		record := func(nodeID string) error {
+			return recordLifecycleErr(auditCtx, d, p, audit.KindNodeRevoke, nodeID, reason)
+		}
+
+		err = d.TokenRevoker.RevokeToken(r.Context(), id, record)
+		if err != nil && !errors.Is(err, revocation.ErrCascadeNotRecorded) {
 			writeProblem(w, http.StatusInternalServerError, "revoke enrollment token failed", "")
 			return
 		}
 
+		// KindTokenRevoke stays AFTER the act and best-effort (recordLifecycle,
+		// not recordLifecycleErr) — unlike handleRevokeNode's record-before-act
+		// ordering, deliberately: RevokeToken CAN return an error, so recording
+		// first would risk a permanent record asserting a revoke that never
+		// happened. recordLifecycleErr's doc explains #487 was allowed to invert
+		// this ordering only because RevokeNode has no error return to strand;
+		// RevokeToken does, so this route keeps recordLifecycle's ordinary
+		// best-effort contract instead.
 		recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id)
+
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "revoke not fully recorded",
+				"the Enrollment Token and its Nodes were revoked, but one or more per-Node "+
+					"revocation records could not be written; retrying will not restore them")
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

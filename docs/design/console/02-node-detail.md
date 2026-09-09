@@ -116,7 +116,10 @@ is a link and this screen has no mutating route.
   that change has an attribution and a blank reason because there was nowhere to put one; the page
   says so explicitly rather than showing an empty field, because "no reason was given" and "this
   Relay could not ask for one" are different facts. The CAUSATIVE record is shown, not the latest:
-  revoke is idempotent, so a later re-revoke must not relabel why the Node was revoked.
+  revoke is idempotent, so a later re-revoke must not relabel why the Node was revoked. A Node
+  revoked by a token cascade now shows the derived cause instead of falling through to the "no
+  revocation record" branch (#557); the causative-record rule is unchanged, and a Node already
+  revoked when the cascade reaches it keeps its original record.
 - **`viewer`** — no label actions, no "Run here".
 - **`console_execution = off`** — "Run here" is absent.
 

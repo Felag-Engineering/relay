@@ -33,6 +33,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/enroll"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
 
 // TokenMinter mints a scoped, expiring Enrollment Token. *enroll.Service
@@ -44,8 +45,15 @@ type TokenMinter interface {
 // TokenRevoker revokes an Enrollment Token by id. *revocation.Service
 // satisfies this interface (RevokeToken cascade-revokes the token's already
 // -enrolled Nodes too — see tokens.go).
+//
+// The cascade writes one KindNodeRevoke record per cascaded Node through the
+// record callback this surface supplies (#557) — revocation.Service has no
+// audit sink of its own, so tokens.go's handleRevokeToken builds the closure
+// that authors each record's Principal and reason and hands it in. A
+// returned ErrCascadeNotRecorded means the token and every Node it enrolled
+// were revoked, but the trail is incomplete for one or more of them.
 type TokenRevoker interface {
-	RevokeToken(ctx context.Context, id string) error
+	RevokeToken(ctx context.Context, id string, record revocation.RevocationRecorder) error
 }
 
 // NodeRevoker revokes a single Node, tearing down its live Tunnel

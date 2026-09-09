@@ -211,7 +211,11 @@ The mint and every enrollment are in the audit trail, attributed to the token id
 - Let the token **expire** (its TTL was sized to the window), or revoke it
   explicitly if it is no longer needed — remembering that revoking a token
   cascade-revokes the Nodes it enrolled, so explicit token revocation is for
-  "that token/batch should not exist", not routine cleanup.
+  "that token/batch should not exist", not routine cleanup. Token revocation
+  now records a per-Node revocation record for every Node it cascades to,
+  attributed to the revoking Account, with a derived reason naming the token
+  (#557) — so a cascade-revoked Node is as attributable as a directly revoked
+  one.
 - Rotate the Vault entry; nothing on the Nodes needs it again.
 - Single-Node removal is `POST /api/v1/nodes/{node_id}/revoke` — instant refusal
   at the Relay, independent of certificate expiry. It requires a JSON body

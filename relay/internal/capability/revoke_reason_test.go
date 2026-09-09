@@ -117,6 +117,40 @@ func TestValidateRevokeReason(t *testing.T) {
 	})
 }
 
+// TestCascadeRevokeReason_PassesValidateRevokeReason is the explicit answer to
+// "does a cascade-derived reason flow through the same gate a human-authored
+// one does" -- it does, trivially, but PINNED rather than assumed: a realistic
+// 32-lowercase-hex token id must round-trip through ValidateRevokeReason
+// UNCHANGED, with no error, and the result must still name the token id.
+func TestCascadeRevokeReason_PassesValidateRevokeReason(t *testing.T) {
+	const tokenID = "0123456789abcdef0123456789abcdef"
+	reason := CascadeRevokeReason(tokenID)
+
+	got, err := ValidateRevokeReason(reason)
+	if err != nil {
+		t.Fatalf("ValidateRevokeReason(%q) error = %v, want nil", reason, err)
+	}
+	if got != reason {
+		t.Errorf("ValidateRevokeReason(%q) = %q, want it returned unchanged", reason, got)
+	}
+	if !strings.Contains(got, tokenID) {
+		t.Errorf("CascadeRevokeReason(%q) = %q, want it to name the token id", tokenID, got)
+	}
+}
+
+// TestCascadeRevokeReason_NamesTheTokenAndIsOneLine guards the shape
+// ValidateRevokeReason itself checks: no newline, and within
+// MaxRevokeReasonBytes.
+func TestCascadeRevokeReason_NamesTheTokenAndIsOneLine(t *testing.T) {
+	reason := CascadeRevokeReason("tok-123")
+	if strings.Contains(reason, "\n") {
+		t.Errorf("CascadeRevokeReason = %q, want a single line", reason)
+	}
+	if len(reason) > MaxRevokeReasonBytes {
+		t.Errorf("CascadeRevokeReason = %q (%d bytes), want <= %d", reason, len(reason), MaxRevokeReasonBytes)
+	}
+}
+
 // TestIsBidiOrZeroWidthCoversWhatItsCommentClaims guards the hand-written list
 // against a later edit that trims it. Separate from the table above because
 // that one proves the CHECK runs; this one proves the LIST is whole.
