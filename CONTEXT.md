@@ -302,7 +302,11 @@ Requesting one is *not* being granted one — it creates an ordinary Approval wh
 is a Scope, answered on the same channel with the same quorum, audience, requester
 exclusion, and channel floor. What it costs to approve is derived from the Gate rules at
 the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
-replaces. Every dispatch it releases audits to the same approval ID.
+replaces. Every dispatch it releases audits to the same approval ID. **The ask is its own
+audit record**, separate from a single dispatch parking for approval (#546): the two are
+answered the same way but their blast radii are not comparable, and a trail that files
+them together says an ask for standing authority over many future dispatches is the same
+act as one Plan waiting for one answer.
 _Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
 blanket nor unbounded), standing approval, pre-authorization
 

@@ -126,7 +126,11 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 	}
 
 	entry := AuditEntry{
-		Kind: AuditKindApprovalRequested, Principal: p,
+		// #546: its own kind, not AuditKindApprovalRequested. GrantID already
+		// distinguished the two structurally, but every surface had to
+		// remember to check it; a kind that is wrong is caught by audit's
+		// partition machinery instead of rendering a wrong sentence.
+		Kind: AuditKindApprovalGrantRequested, Principal: p,
 		ApprovalID: requestID, PlanHash: request.PlanHash, GrantID: grantID,
 		Reason:   "batch/window grant requested: " + summary,
 		Asserted: AssertionsFromContext(ctx),
