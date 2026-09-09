@@ -17,9 +17,11 @@ import (
 const maxTTLSeconds = 365 * 24 * 60 * 60
 
 // mintTokenRequest is the POST /api/v1/enrollment-tokens request body.
-// Scope must be non-empty and every entry relay:-prefixed (enforced by
-// enroll.Service.Create -> enroll.validateScope, ADR-0006) — this handler
-// never re-implements or loosens that check. MaxUses <= 0 means unlimited
+// Scope must be non-empty and every entry relay:-prefixed with a non-empty
+// bare key and a (possibly empty) value whose every byte is in
+// [A-Za-z0-9._-] (enforced by enroll.Service.Create -> enroll.validateScope,
+// registry.WellFormedLabel, ADR-0006, #555) — this handler never
+// re-implements or loosens that check. MaxUses <= 0 means unlimited
 // (enroll.WithMaxUses's own convention).
 type mintTokenRequest struct {
 	Scope      []string `json:"scope"`

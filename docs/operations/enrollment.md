@@ -43,11 +43,17 @@ $ curl --cacert ca-cert.pem \
 }
 ```
 
-- **`scope`** — required, non-empty, every entry `relay:`-prefixed. These become
-  the Node's relay-space Labels: Node-immutable, reserved for the
-  security-sensitive lane (quarantine, remediation, secret-distribution
-  targeting). A token scoped to `relay:env=prod` makes every Node it enrolls
-  *provably* prod for that lane, with no per-Node human labeling.
+- **`scope`** — required, non-empty, every entry `relay:`-prefixed with a
+  non-empty bare key and a (possibly empty) value whose every byte is in
+  `[A-Za-z0-9._-]`; a violating entry is refused with `400` and never
+  sanitised (#555). These become the Node's relay-space Labels:
+  Node-immutable, reserved for the security-sensitive lane (quarantine,
+  remediation, secret-distribution targeting). A token scoped to
+  `relay:env=prod` makes every Node it enrolls *provably* prod for that lane,
+  with no per-Node human labeling. A token minted before this rule existed
+  whose scope violates it is now refused at enrollment — with the ordinary
+  "enrollment token rejected" every other rejection returns — rather than
+  stamping a malformed label; mint a replacement token.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the
   enrollment window, not to convenience: for a planned bulk run, hours or a day.
 - **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run

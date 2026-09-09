@@ -311,7 +311,7 @@ func boundLogKey(k string) string {
 // a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
 // of every label that ParseNodeLabel refused. Only keys with a "node:"
 // prefix, a non-empty bare key, and a well-formed (bare key, value) pair
-// (registry.WellFormedNodeLabel, #504) are accepted; everything else is
+// (registry.WellFormedLabel, #504) are accepted; everything else is
 // omitted from the map, never sanitised into it.
 //
 // WHY relay: labels are dropped: per ADR-0006 and the two-namespace label model,

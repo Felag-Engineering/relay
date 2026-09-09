@@ -1199,7 +1199,7 @@ func buildFacets(nodes []fleetNode, link linkContext) []facet {
 	}
 
 	// node:role's value is now well-formed BY CONSTRUCTION at ingress
-	// (registry.WellFormedNodeLabel, applied by protoconv.ParseNodeLabel —
+	// (registry.WellFormedLabel, applied by protoconv.ParseNodeLabel —
 	// #504): every node: label stored in the registry has already been
 	// refused if it could render as more than one Selector term, so
 	// "node:role=" + k below is safe for exactly that reason, at the one

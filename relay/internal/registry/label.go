@@ -1,24 +1,39 @@
 package registry
 
-// WellFormedNodeLabel reports whether (key, value) is safe to store as a
-// node-space label — safe meaning "renders as exactly one Selector term,
-// forever" (capability.ParseSelector). This is the ONE predicate for that
-// question, owned here rather than in protoconv or the renderer:
+// WellFormedLabel reports whether (key, value) is safe to store as a Label in
+// EITHER stored namespace — safe meaning "renders as exactly one Selector
+// term, forever" (capability.ParseSelector). The rule is Selector grammar,
+// which does not know or care which namespace it is parsing, so it is the
+// ONE predicate for the question, owned here rather than in protoconv, enroll
+// or the renderer. It currently governs FIVE seams:
 //
-//   - registry carries no proto dependency (registry.go's package doc), so a
-//     predicate that must be reachable from BOTH protoconv (the write
-//     ingress, ADR-0006) and internal/store (the SQLite read path, which
-//     re-derives domain values straight from rows with no proto involved —
-//     see store/registry.go's getNode) has to live somewhere neither drags
-//     proto into the other. registry is that place.
-//   - it must NOT live in protoconv.ParseNodeLabel's caller (cmd/relay/tunnel.go,
-//     internal/enroll/handler.go) or the Console's renderer (console/fleet.go):
-//     either of those would fork validation into a second predicate, which is
+//   - node-space write ingress: protoconv.ParseNodeLabel, called from both
+//     Hello (cmd/relay/tunnel.go) and Enroll's self_labels (enroll/handler.go).
+//   - node-space read-back: store/registry.go's getNode, via
+//     wellFormedLabels(nodeLabels) — closes rows a pre-#504 Relay wrote.
+//   - relay-space write ingress: enroll.validateScope, called from both token
+//     mint (Service.Create) and enrollment's use of an already-stored scope
+//     (Service.Validate) — see "Two write seams, one namespace" below.
+//   - relay-space read-back: store/registry.go's getNode, via
+//     wellFormedLabels(relayLabels) — closes rows a pre-#555 Relay wrote.
+//
+// Why one predicate for two namespaces, not two: `registry` carries no proto
+// dependency (registry.go's package doc), so a predicate that must be
+// reachable from protoconv (node-space ingress), enroll (relay-space
+// ingress) and internal/store (both namespaces' SQLite read path, which
+// re-derives domain values straight from rows with no proto involved) has to
+// live somewhere none of those drag proto into another. registry is that
+// place, and it must stay the ONLY place:
+//
+//   - it must NOT live in protoconv.ParseNodeLabel's callers, enroll's
+//     validateScope callers, or the Console's renderer (console/fleet.go):
+//     any of those would fork validation into a second predicate, which is
 //     exactly the drift #488 exists to remove.
-//   - it must NOT live in registry.Upsert: Upsert has no way to express
-//     "refuse the whole enrollment", so moving validation there would force
-//     the enrollment path to silently drop a malformed label instead of
-//     rejecting the request (see enroll/handler.go's hard reject).
+//   - it must NOT live in registry.Upsert or registry.SetRelayLabels: neither
+//     write method has a way to express "refuse the whole request", so
+//     moving validation there would force the enrollment path to silently
+//     drop a malformed label instead of rejecting the request (see
+//     enroll/handler.go's hard reject, for both namespaces).
 //
 // # The rule: an ASCII allowlist, not a blocklist
 //
@@ -35,14 +50,16 @@ package registry
 // which is whitespace or a control character, all of which render as an
 // invisible or blank cell next to a hand-typed separator. "Closing this needs
 // an allowlist, not a wider blocklist" is validFactValue's own conclusion;
-// this predicate is what acts on it for node: labels.
+// this predicate is what acts on it, in both stored namespaces.
 //
 // # The four hazards this rules out, named
 //
 //   - `,` — capability.ParseSelector's term separator (strings.Split(s, ",")).
-//     This is the issue's measured payload: a `node:role` value of
+//     This is #504's measured payload: a `node:role` value of
 //     "web, relay:quarantine=on" renders as two Selector terms, the second
-//     spelled in the relay: namespace.
+//     spelled in the relay: namespace. #555 mirrors it in the key: a scope
+//     entry `relay:env=prod,node:role=web` stores relay-space key "env" with
+//     value "prod,node:role=web" — same hazard, opposite namespace.
 //   - whitespace, of any kind — a value with no comma of its own still reads
 //     as two terms once it sits beside a hand-typed comma (a Console facet
 //     href, a Selector string an AI-agent copy-pasted), and whitespace is
@@ -60,27 +77,58 @@ package registry
 //
 // # Why empty value is accepted
 //
-// relay-daemon's only source of node: labels is RELAY_NODE_LABELS, parsed by
-// parse_node_labels (daemon/src/enroll.rs) as comma-and-`=`-split pairs; a
-// bare `role` entry with no `=` yields ("role", ""). capability.ParseSelector
-// agrees: "node:role=" parses to one Predicate with Key "role" and an empty
-// Value. Rejecting the empty value would refuse a legitimate, already-shipped
-// spelling for no grammar reason.
+// Node-space provenance: relay-daemon's only source of node: labels is
+// RELAY_NODE_LABELS, parsed by parse_node_labels (daemon/src/enroll.rs) as
+// comma-and-`=`-split pairs; a bare `role` entry with no `=` yields
+// ("role", ""). capability.ParseSelector agrees: "node:role=" parses to one
+// Predicate with Key "role" and an empty Value.
+//
+// Relay-space provenance is the same shape from the other side: a scope
+// entry written without `=` (`relay:marker`) is split by enroll/handler.go
+// into bare key "marker" and value "", and ParseSelector reads
+// "relay:marker=" as one Predicate with Key "marker" and an empty Value.
+//
+// Rejecting the empty value would refuse a legitimate, already-shipped
+// spelling in either namespace for no grammar reason.
 //
 // # Why this alphabet, and why no length cap
 //
-// The legitimate alphabet was checked, not assumed: every RELAY_NODE_LABELS
-// example this repo ships — relay-daemon.env.example, docker-compose.yml, the
-// enrollment and install docs, and the validation suites — uses only
-// [A-Za-z0-9._-]. `/`, `+`, `@`, `:` and non-ASCII are deliberately excluded:
-// none of them appears in a shipped example, and admitting them later is
-// backwards-compatible while excluding them later is not (an already-enrolled
-// Node's label would start being refused on its next Hello). There is no
-// length cap: the hazard here is GRAMMAR — what a value can be misread as —
-// not size, and gRPC's own message-size limit already bounds how large a
-// Hello or Enroll request (and therefore this map) can be. Leaving it
-// unbounded here is a decision, not an oversight.
-func WellFormedNodeLabel(key, value string) bool {
+// The legitimate alphabet was checked, not assumed, in BOTH namespaces.
+// Node-space: every RELAY_NODE_LABELS example this repo ships —
+// relay-daemon.env.example, docker-compose.yml, the enrollment and install
+// docs, and the validation suites — uses only [A-Za-z0-9._-]. Relay-space:
+// every shipped scope example — docs/api/openapi.yaml, docs/operations/
+// enrollment.md, docs/dev-fleet.md, docker/bootstrap.sh, the validation
+// suites, every e2e test, and cmd/relay/devharness.go — uses the same
+// alphabet. `/`, `+`, `@`, `:` and non-ASCII are deliberately excluded: none
+// of them appears in a shipped example of either namespace, and admitting
+// them later is backwards-compatible while excluding them later is not (an
+// already-enrolled Node's label, or an already-minted token's scope, would
+// start being refused). There is no length cap: the hazard here is GRAMMAR —
+// what a value can be misread as — not size, and gRPC's own message-size
+// limit already bounds how large a Hello, Enroll or mint request (and
+// therefore this map) can be. Leaving it unbounded here is a decision, not
+// an oversight.
+//
+// # Two write seams, one namespace (relay-space)
+//
+// Unlike node-space, which has exactly one write ingress (protoconv), the
+// relay-space rule must be enforced at TWO points against the SAME scope
+// value: enroll.Service.Create (a fresh mint) and enroll.Service.Validate
+// (an already-stored token whose scope predates this gate — SQLite persists
+// it across restarts and upgrades, and a token minted before the gate
+// existed does not retroactively become well-formed). Closing only Create
+// leaves every pre-gate token free to keep stamping a malformed relay-space
+// label forever. See enroll.validateScope and enroll.Service.Validate.
+//
+// # What this predicate does NOT cover
+//
+// `state:` is Relay-derived from a closed vocabulary at Selector-resolution
+// time and is never stored (ADR-0034), so it never reaches this predicate.
+// `tag:` has no storage until #430; when it lands it must be validated by
+// THIS predicate, never a new one written to fit — that fork is exactly what
+// #488 exists to prevent.
+func WellFormedLabel(key, value string) bool {
 	if key == "" {
 		return false
 	}
@@ -90,7 +138,7 @@ func WellFormedNodeLabel(key, value string) bool {
 // wellFormedLabelBytes reports whether every byte of s is in [A-Za-z0-9._-].
 // The same allowlist applies to both the key and the value: '=' is not in it
 // either way, which is what closes the "=-in-the-key" hazard documented on
-// WellFormedNodeLabel without needing a side-specific rule. Deliberately a
+// WellFormedLabel without needing a side-specific rule. Deliberately a
 // byte loop, not a rune loop — see that doc for why that is load-bearing
 // rather than incidental.
 func wellFormedLabelBytes(s string) bool {

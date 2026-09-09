@@ -214,7 +214,7 @@ type Report struct {
 
 // WithNodeLabels returns a copy of r with its node-space label map set to
 // labels, and is the only way to set it (see Report's doc). labels must
-// already be well-formed bare key/value pairs — WellFormedNodeLabel is the
+// already be well-formed bare key/value pairs — WellFormedLabel is the
 // predicate — this method does no validation of its own; validation happens
 // once, at the protoconv.ParseNodeLabel ingress seam, and every legitimate
 // caller has already gone through it before reaching here.

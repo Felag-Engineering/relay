@@ -316,6 +316,13 @@ func TestHandleMintToken_InvalidScopeOrTTL(t *testing.T) {
 		{"zero ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: 0}},
 		{"negative ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: -1}},
 		{"over-max ttl", mintTokenRequest{Scope: []string{"relay:env=prod"}, TTLSeconds: maxTTLSeconds + 1}},
+		// #555: the scope is relay:-prefixed but fails the well-formedness
+		// gate. This is an end-to-end status check through the REAL
+		// enroll.Service (tokenSvc below), so it also pins that a violation
+		// still maps to 400 and not 500 — RED ON introducing a second
+		// sentinel without adding it to tokens.go's errors.Is list.
+		{"comma-injected second term", mintTokenRequest{Scope: []string{"relay:env=prod,node:role=web"}, TTLSeconds: 3600}},
+		{"zero width space in key", mintTokenRequest{Scope: []string{"relay:quarantine\u200b=on"}, TTLSeconds: 3600}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -86,6 +86,11 @@ const (
 	AttemptAtCapacity           AttemptReason = "at_capacity"
 	AttemptRevokedMidEnrollment AttemptReason = "revoked_mid_enrollment"
 	AttemptInternal             AttemptReason = "internal"
+	// AttemptInvalidScope: the token's STORED scope is not well-formed — a fault in
+	// a token this Relay minted before the gate existed, never in the daemon's
+	// request. Deliberately not AttemptMalformed, which means "the caller sent
+	// something malformed" and would send an operator to debug the wrong side.
+	AttemptInvalidScope AttemptReason = "invalid_scope"
 )
 
 // AttemptEvent is one Enroll attempt, accepted or rejected.
@@ -351,10 +356,14 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 
 	// c. Parse self_labels (no side effects). Require a "node:" prefix, a
 	//    non-empty bare key, AND a well-formed (bare key, value) pair
-	//    (registry.WellFormedNodeLabel, #504) to enforce the structural
+	//    (registry.WellFormedLabel, #504) to enforce the structural
 	//    boundary: a daemon can never inject relay-space labels (ADR-0006
 	//    two-namespace invariant), and it can never enroll a label that
-	//    would render as more than one Selector term.
+	//    would render as more than one Selector term. The relay-space
+	//    sibling of this refuse-vs-drop argument lives at Service.Validate
+	//    (#555): the scope is refused before Validate returns, for the same
+	//    fail-closed reason — this is one-shot and supervised, so a
+	//    rejection here tears down nothing that was already up.
 	//
 	//    WHY enrollment REJECTS where Hello (tunnel.go) DROPS: enrollment is
 	//    one-shot, pre-identity and supervised — a human is watching the
@@ -405,10 +414,23 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 			reason = AttemptExhausted
 		case errors.Is(err, ErrInvalidToken):
 			reason = AttemptUnknown
+		case errors.Is(err, ErrInvalidScope):
+			reason = AttemptInvalidScope
 		}
 		s.attempt(ctx, AttemptEvent{Reason: reason, TokenID: tokenID, Source: source})
 		if errors.Is(err, ErrInvalidToken) || errors.Is(err, ErrExpired) ||
-			errors.Is(err, ErrRevoked) || errors.Is(err, ErrExhausted) {
+			errors.Is(err, ErrRevoked) || errors.Is(err, ErrExhausted) ||
+			errors.Is(err, ErrInvalidScope) {
+			if errors.Is(err, ErrInvalidScope) {
+				// The offending entry surfaces here and nowhere else: it never
+				// goes on the wire, and the collapse below returns the same
+				// PermissionDenied every other token rejection returns, so it
+				// cannot become an oracle that distinguishes this rejection
+				// from any other. (Scope is already loggable: Token.LogValue
+				// emits it.)
+				slog.Warn("enrollment denied: stored token scope is not well-formed",
+					"token_id", tokenID, "err", err)
+			}
 			return nil, status.Error(codes.PermissionDenied, "enrollment token rejected")
 		}
 		return nil, status.Error(codes.Internal, "enrollment failed")
@@ -482,15 +504,13 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	}
 
 	// k. Parse the token scope into bare relay-space keys and stamp them on the Node.
+	//    The scope is well-formed BY CONSTRUCTION here — Service.Validate (#555)
+	//    already refused otherwise, before any certificate was signed or any row
+	//    written — so nothing this stamps can render as more than one Selector term.
 	relayBare := make(map[string]string, len(scope))
 	for _, entry := range scope {
-		bare := strings.TrimPrefix(entry, "relay:")
-		kv := strings.SplitN(bare, "=", 2)
-		if len(kv) == 2 {
-			relayBare[kv[0]] = kv[1]
-		} else {
-			relayBare[kv[0]] = ""
-		}
+		key, value := splitScopeEntry(entry)
+		relayBare[key] = value
 	}
 	if err := s.registry.SetRelayLabels(nodeID, relayBare); err != nil {
 		s.attempt(ctx, AttemptEvent{Reason: AttemptInternal, TokenID: tokenID, NodeID: nodeID, Source: source})
@@ -530,15 +550,12 @@ func (s *Server) Enroll(ctx context.Context, req *relayv1.EnrollRequest) (*relay
 	}
 
 	// l. Build assigned_labels, keeping the "relay:" namespace prefix in Key per proto convention.
+	//    Setting Value unconditionally is wire-identical to the old conditional
+	//    assignment: proto3 already renders an unset string field as "".
 	assigned := make([]*relayv1.Label, 0, len(scope))
 	for _, entry := range scope {
-		bare := strings.TrimPrefix(entry, "relay:")
-		kv := strings.SplitN(bare, "=", 2)
-		l := &relayv1.Label{Key: "relay:" + kv[0]}
-		if len(kv) == 2 {
-			l.Value = kv[1]
-		}
-		assigned = append(assigned, l)
+		key, value := splitScopeEntry(entry)
+		assigned = append(assigned, &relayv1.Label{Key: scopePrefix + key, Value: value})
 	}
 
 	// m. Log one audit line. tokenID is the public half of the credential — safe to log.

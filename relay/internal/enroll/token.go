@@ -14,16 +14,26 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // secretSep separates the public id from the secret part in the plaintext credential.
 // Neither hex (id) nor base64.RawURLEncoding (secret) emit '.', so a split into
 // exactly two parts is unambiguous.
 const secretSep = "."
+
+// scopePrefix is the one spelling of the relay-space prefix a scope entry
+// must carry. Every occurrence of the literal "relay:" in this package's
+// scope handling (validateScope, and handler.go's steps (k) and (l)) uses
+// this constant instead, so the prefix cannot drift between the check and
+// the two places that act on it.
+const scopePrefix = "relay:"
 
 // Sentinel errors returned by Service methods. Use errors.Is to check.
 var (
@@ -48,9 +58,14 @@ var (
 	// id collision, not a validation failure on a presented credential.
 	ErrDuplicateID = errors.New("enroll: token id already exists")
 
-	// ErrInvalidScope is returned when the scope is empty or any entry lacks a
-	// "relay:" prefix (ADR-0006 invariant #7).
-	ErrInvalidScope = errors.New("enroll: scope must contain at least one relay:-prefixed label")
+	// ErrInvalidScope is returned when the scope is empty, or when any entry
+	// is not "relay:"-prefixed with a well-formed bare key/value pair
+	// (registry.WellFormedLabel, #555) — ADR-0006 invariant #7. Returned
+	// verbatim as the Control API's 400 problem detail (api/tokens.go), so
+	// its message states both rules rather than only the prefix one.
+	ErrInvalidScope = errors.New("enroll: scope must be non-empty, and every entry must be " +
+		"relay:-prefixed with a non-empty bare key and a (possibly empty) value whose every " +
+		"byte is in [A-Za-z0-9._-]")
 
 	// ErrInvalidTTL is returned when Create is called with a zero or negative TTL.
 	ErrInvalidTTL = errors.New("enroll: TTL must be positive")
@@ -153,15 +168,37 @@ func NewService(repo Repository, sopts ...ServiceOption) *Service {
 	return s
 }
 
-// validateScope returns ErrInvalidScope if scope is empty or any entry is not
-// prefixed with "relay:", enforcing ADR-0006 invariant #7.
+// splitScopeEntry decomposes a scope entry into the bare relay-space key and
+// value enrollment will stamp. THE ONE DECOMPOSITION: validateScope checks
+// exactly what Server.Enroll (k) stores and (l) returns, so the gate can
+// never validate a different split than the one that reaches the registry.
+// Callers must have established the relay: prefix first (validateScope
+// does); TrimPrefix is a no-op otherwise, which is exactly what (k) did
+// before this existed.
+func splitScopeEntry(entry string) (key, value string) {
+	bare := strings.TrimPrefix(entry, scopePrefix)
+	key, value, _ = strings.Cut(bare, "=")
+	return key, value
+}
+
+// validateScope returns ErrInvalidScope if scope is empty, or if any entry is
+// not "relay:"-prefixed with a well-formed bare key/value pair
+// (registry.WellFormedLabel, #555), enforcing ADR-0006 invariant #7.
+//
+// This checks the SAME split Server.Enroll stamps and returns
+// (splitScopeEntry), not the raw entry string: WellFormedLabel over the
+// whole entry would reject the ":" in "relay:" itself.
 func validateScope(scope []string) error {
 	if len(scope) == 0 {
 		return ErrInvalidScope
 	}
 	for _, e := range scope {
-		if !strings.HasPrefix(e, "relay:") {
-			return ErrInvalidScope
+		if !strings.HasPrefix(e, scopePrefix) {
+			return fmt.Errorf("%w (offending entry: %q)", ErrInvalidScope, e)
+		}
+		key, value := splitScopeEntry(e)
+		if !registry.WellFormedLabel(key, value) {
+			return fmt.Errorf("%w (offending entry: %q)", ErrInvalidScope, e)
 		}
 	}
 	return nil
@@ -223,8 +260,9 @@ func (s *Service) Create(ctx context.Context, scope []string, ttl time.Duration,
 // Scope (a defensive copy) and increments the use count. Errors:
 //   - ErrInvalidToken: malformed credential, unknown id, or wrong secret
 //     (collapsed into one error to avoid an existence/state oracle).
-//   - ErrRevoked, ErrExpired, ErrExhausted: state errors, disclosed only after the
-//     secret is verified (so a party without the secret learns nothing about state).
+//   - ErrRevoked, ErrExpired, ErrExhausted, ErrInvalidScope: state errors,
+//     disclosed only after the secret is verified (so a party without the
+//     secret learns nothing about state).
 func (s *Service) Validate(ctx context.Context, presented string) ([]string, error) {
 	// mu makes the read→check→increment sequence atomic so MaxUses is never exceeded.
 	s.mu.Lock()
@@ -259,6 +297,20 @@ func (s *Service) Validate(ctx context.Context, presented string) ([]string, err
 	}
 	if t.MaxUses > 0 && t.Uses >= t.MaxUses {
 		return nil, ErrExhausted
+	}
+
+	// Re-validate the STORED scope, not just what Create checked at mint
+	// time: a token minted before this gate existed (#555) survives an
+	// upgrade in SQLite untouched, and would otherwise still stamp a
+	// malformed relay-space label on every Node it enrolls. This sits
+	// BEFORE the Uses increment below so a refusal never burns a use — a
+	// retrying daemon must not be able to exhaust a token against a scope
+	// it can never satisfy. It is safe for the no-oracle property the same
+	// way Revoked/Expired/Exhausted are: it only fires after the secret is
+	// verified, and the handler collapses it into the identical wire
+	// rejection as every other post-secret state error.
+	if err := validateScope(t.Scope); err != nil {
+		return nil, err
 	}
 
 	t.Uses++
