@@ -439,7 +439,16 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
 	h := newTestHandler(d)
 
-	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	// The ASSERTED lane is exercised too, not just the verified one. The two are
+	// kept structurally apart (ADR-0027 decision 10, CONTEXT.md "Attribution"),
+	// and a cascade row that carried the verified lane while silently dropping
+	// the asserted one would be half-attributed in exactly the way that split
+	// exists to prevent. Nothing pinned it until the security review asked.
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	req.Header.Set(controlplane.HeaderOnBehalfOf, "carol@example.com")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
 	}
@@ -485,6 +494,15 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 		}
 		if v.Role == "" || v.Role != string(accounts.RoleAdmin) {
 			t.Errorf("%s: Verified.Role = %q, want %q", nodeID, v.Role, accounts.RoleAdmin)
+		}
+		// The asserted lane, kept structurally apart from the verified one.
+		// A cascade row carrying one and dropping the other is half-attributed
+		// in exactly the way that split exists to prevent, and it survives
+		// context.WithoutCancel only because Value lookups delegate to the
+		// parent — which is worth pinning rather than trusting.
+		if got := row.Attribution.Asserted.OnBehalfOf; got != "carol@example.com" {
+			t.Errorf("%s: Asserted.OnBehalfOf = %q, want the header's value — the asserted "+
+				"lane did not survive onto the cascade row", nodeID, got)
 		}
 		wantReason := capability.CascadeRevokeReason("tok-123")
 		if row.Reason != wantReason {

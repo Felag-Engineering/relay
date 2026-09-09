@@ -101,6 +101,16 @@ func handleMintToken(d Deps) http.HandlerFunc {
 	}
 }
 
+// cascadeAuditBudget bounds the wall-clock time the per-Node cascade records may
+// take in total, once detached from the request context.
+//
+// Generous rather than tight: it exists to stop an unbounded stall on the
+// Relay's single store connection, not to police a slow disk. A cascade that
+// exceeds it stops recording and reports the shortfall like any other
+// unrecorded cascade — the Nodes are still revoked, which is the direction
+// revocation/service.go settles.
+const cascadeAuditBudget = 2 * time.Minute
+
 // handleRevokeToken implements DELETE /api/v1/enrollment-tokens/{id}:
 // revoke the token (and, via TokenRevoker.RevokeToken, cascade-revoke every
 // Node it enrolled), audit the revoke (KindTokenRevoke) plus one
@@ -151,7 +161,19 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// revocations continue, so the audit records describing them must too.
 		// Values — and so capability.AssertionsFromContext's asserted lane —
 		// survive WithoutCancel; only the cancellation signal is dropped.
-		auditCtx := context.WithoutCancel(r.Context())
+		//
+		// BUT NOT WITHOUT A DEADLINE. Detaching from the request would otherwise
+		// leave these writes unbounded, and they are not cheap: the store runs
+		// on a single connection (SetMaxOpenConns(1)) and each record is its own
+		// fsynced INSERT, so a token covering a large fleet head-of-line blocks
+		// every other store-backed request — registry reads, Job persistence,
+		// the fail-closed read-audit path — during the incident that motivated
+		// the revoke. The cap bounds that stall without bounding N, which must
+		// stay unbounded: capping the cascade would leave Nodes either unrevoked
+		// (an authentication hole) or unrecorded (the bug this closes).
+		auditCtx, cancelAudit := context.WithTimeout(
+			context.WithoutCancel(r.Context()), cascadeAuditBudget)
+		defer cancelAudit()
 		record := func(nodeID string) error {
 			return recordLifecycleErr(auditCtx, d, p, audit.KindNodeRevoke, nodeID, reason)
 		}
