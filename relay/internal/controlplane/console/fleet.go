@@ -932,7 +932,7 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	case normal == 0:
 		g.ModeLine = "every Node in this group carries at least one state label."
 	default:
-		g.ModeLine = plural(normal, "Node carries", "Nodes carry") +
+		g.ModeLine = countOf(normal, "Node carries", "Nodes carry") +
 			" no state label at all — reachable, current, permitted."
 	}
 
@@ -944,7 +944,21 @@ func buildGroup(key string, nodes []fleetNode, listWhole bool, link linkContext)
 	return g
 }
 
-func plural(n int, one, many string) string {
+// countOf renders a count AND its noun: "1 Node", "3 Nodes". It is the Go-side
+// counterpart to the template funcMap's "plural" (screen.go), which returns
+// ONLY the word and leaves the number to the template.
+//
+// The two are deliberately named differently because they once were not. Both
+// took (int, string, string) and returned string, so nothing at either
+// definition revealed that a sibling with the opposite contract existed, and
+// which one you got depended purely on whether you were inside a template or
+// inside Go. That cost three wrong conclusions in a single session (#550): a
+// double-prefixed "1 1 Account" written in Go from the template's contract, a
+// correct template line reported as a double-render bug from this contract,
+// and a reviewer who believed the report and nearly filed ~25 phantom bugs.
+// No code was ever wrong; only readers were. Hence a name that states the
+// contract instead of a comment asking people to remember it.
+func countOf(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
 	}
