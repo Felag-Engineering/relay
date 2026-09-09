@@ -4418,6 +4418,18 @@ func sinkParkAndGrantRequestRecords(t *testing.T) (park, grantReq audit.Record) 
 		t.Fatalf("the grant request has Kind %q, want %q — the sink is not mapping the new kind",
 			grantReq.Kind, audit.KindApprovalGrantRequested)
 	}
+	// The prose survives the sink. Building through the real sink only buys
+	// something if the record coming OUT is asserted; otherwise this helper is
+	// ceremony around a struct literal. A grant request whose Reason was
+	// dropped in the sink's branch still renders a correct chip and a correct
+	// summary sentence — both are computed from Kind — so nothing else here
+	// would notice that the approvals detail page had stopped saying what was
+	// asked for.
+	for _, rec := range []audit.Record{park, grantReq} {
+		if rec.Reason == "" {
+			t.Fatalf("the sink dropped Reason for kind %q", rec.Kind)
+		}
+	}
 	return park, grantReq
 }
 

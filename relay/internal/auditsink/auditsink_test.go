@@ -3,6 +3,7 @@ package auditsink
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -891,6 +892,7 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 
 	kinds := []capability.AuditKind{
 		capability.AuditKindApprovalRequested,
+		capability.AuditKindApprovalGrantRequested,
 		capability.AuditKindApprovalPendingObserved,
 		capability.AuditKindApprovalDecided,
 		capability.AuditKindDispatch,
@@ -899,6 +901,12 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 		entry := capability.AuditEntry{
 			Kind: kind, Principal: p, Action: act,
 			ApprovalID: "appr-1", GrantID: "grant-1",
+			// Reason is set for every kind so the assertion below can hold the
+			// per-kind branches to carrying it. Dropping base.Reason from one
+			// of them stores a record whose prose is blank, which on the
+			// approvals detail page means the ask no longer says what was
+			// asked for -- and nothing else in the suite looks at it.
+			Reason: fmt.Sprintf("linked-%v", kind),
 		}
 		if kind == capability.AuditKindDispatch {
 			entry.JobID = "job-1"
@@ -926,13 +934,29 @@ func TestRecordCarriesTheApprovalLinkOnEveryKind(t *testing.T) {
 	// recorded as something that ran.
 	wantKinds := map[string]bool{
 		audit.KindApprovalRequested:       true,
+		audit.KindApprovalGrantRequested:  true,
 		audit.KindApprovalPendingObserved: true,
 		audit.KindApprovalDecided:         true,
 		audit.KindDispatch:                true,
 	}
+	// Reason is asserted for the APPROVAL kinds only. Each of their branches
+	// copies e.Reason explicitly, and dropping that line stores a record whose
+	// prose is blank — on the approvals detail page, an ask that no longer says
+	// what was asked for. A dispatch is excluded deliberately: it carries
+	// results rather than a sentence, and its branch does not set Reason at all.
+	reasonKinds := map[string]bool{
+		audit.KindApprovalRequested:       true,
+		audit.KindApprovalGrantRequested:  true,
+		audit.KindApprovalPendingObserved: true,
+		audit.KindApprovalDecided:         true,
+	}
 	for _, r := range got {
+		if reasonKinds[r.Kind] && r.Reason == "" {
+			t.Errorf("record %q (kind %s) lost its Reason — the branch that maps this kind "+
+				"is not copying it, and the ask stops saying what was asked for", r.ID, r.Kind)
+		}
 		if !wantKinds[r.Kind] {
-			t.Errorf("record %q stored under kind %q, not one of the four linked kinds", r.ID, r.Kind)
+			t.Errorf("record %q stored under kind %q, not one of the linked kinds", r.ID, r.Kind)
 		}
 		delete(wantKinds, r.Kind)
 	}
