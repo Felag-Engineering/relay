@@ -458,7 +458,25 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 //     never validated either. The ingress fix alone leaves these rows serving
 //     forever — the Console renders every relay_labels entry as a `relay:`
 //     chip (console/fleet.go's declaredChips), lock glyph and security hue,
-//     for a label no Selector can actually match.
+//     for a label this Relay's own ingress gate would now refuse.
+//
+// WHAT IT DROPS IS WIDER THAN WHAT IS UNMATCHABLE, and that difference is a
+// residual, not a rounding error. WellFormedLabel is deliberately narrower
+// than capability.ParseSelector: the parser needs only a non-empty key and
+// cuts on the first `=`, so `relay:tier=pci/1`, `relay:owner=team@sec` and
+// `relay:dc=dc1:rack2` each parse to exactly ONE predicate and match a Node
+// today. The allowlist refuses them anyway, because the hazard it exists for
+// is RENDERING (a term concatenated back together by a Console href or an
+// AI-agent), not parsing. So on upgrade this filter removes some labels that
+// were genuinely matchable, permanently and with no self-heal — relay-space
+// has no equivalent of the Node's next Hello. The direction is always
+// UNDER-inclusion (a filter can only remove matches; the Selector grammar has
+// no negation) and a quarantine specifically cannot be lost, per the note
+// below — but a security-lane Selector CAN come to resolve to fewer Nodes
+// than it did before the upgrade, silently. That is an accepted residual
+// (threat model R13), not a claim that nothing was lost, and it is why
+// docs/operations/enrollment.md tells operators to re-mint before upgrading.
+// A bounded signal at this seam, for BOTH namespaces, is #565.
 //
 // getNode is the single load path behind both Get and List, so this one
 // function, called once per namespace, covers every reader — the Control

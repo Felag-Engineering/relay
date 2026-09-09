@@ -127,13 +127,17 @@ never a valid security-lane target — ADR-0020), or **state-space** (`state:…
 from the registry, set by nobody — not the Node, not an operator, not an `admin` — evaluated at
 Selector-resolution time, closed vocabulary, for routine targeting only and never a valid
 security-lane target — ADR-0034). Remediation/quarantine and secret-distribution
-Selectors target `relay:` labels only. A stored Label the Relay cannot render as a
-single Selector term (a comma, whitespace, a `:`, or `=` in the key) is refused at
+Selectors target `relay:` labels only. A stored Label must render as exactly one
+Selector term, enforced as an allowlist rather than by example: the key is non-empty and
+every byte of key and value is in `[A-Za-z0-9._-]`. A violating Label is refused at
 ingress, never sanitised — sanitising would let the Relay itself manufacture a value
 that matches a Selector nobody wrote. For node-space this is refused at Hello/Enroll
 ingress (#504); for relay-space, the security-sensitive namespace, it is refused at
 Enrollment Token mint and again when an already-minted token's scope is used to enroll
-a Node (#555).
+a Node (#555). The allowlist is deliberately narrower than the Selector parser, which
+would accept `relay:tier=pci/1` — the hazard it guards is a term being re-rendered into
+two, not a term failing to parse — so a Label stored before the gate can be refused now
+and is also declined on read-back (threat model R13).
 _Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
 annotation
 
