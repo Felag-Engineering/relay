@@ -58,12 +58,12 @@ type Selector struct {
 }
 
 // ParseSelector parses a comma-separated list of "node:key=value",
-// "relay:key=value", "tag:key=value" and "state:key[=value]" terms (e.g.
-// "node:role=web, relay:quarantine=on"). Every term MUST carry one of the
-// four namespace prefixes — an unprefixed term is a parse error. This is a
-// fail-closed design: the parser never guesses which namespace a bare key
-// belongs to (mirrors protoconv.ParseNodeLabel's prefix-stripping style,
-// extended here to all four namespaces).
+// "relay:key=value" and "state:key[=value]" terms (e.g.
+// "node:role=web, relay:quarantine=on"). Every term MUST carry one of those
+// three prefixes — an unprefixed term is a parse error, and so is a tag: one
+// (see below). This is a fail-closed design: the parser never guesses which
+// namespace a bare key belongs to (mirrors protoconv.ParseNodeLabel's
+// prefix-stripping style, extended here to every namespace).
 //
 // node: and relay: keep the same "key=value, value required" grammar. tag: is
 // REFUSED outright (ErrSelectorTagUnsupported, #560): the namespace exists in
@@ -140,8 +140,15 @@ func ParseSelector(s string) (Selector, error) {
 			predicates = append(predicates, p)
 			continue
 		default:
+			// tag: is deliberately NOT offered here even though it is a real
+			// namespace: since #560 every tag: term is refused, so listing it
+			// as a way out of a typo would advertise the one prefix that
+			// cannot work. Surfaces render this string verbatim (the Console's
+			// fallback lead, MCP's "invalid selector" wrap, the Control API's
+			// problem detail), so a stale list here reaches an operator and an
+			// agent alike.
 			return Selector{}, fmt.Errorf(
-				"capability: selector term %q has no node:, relay:, tag:, or state: prefix", term)
+				"capability: selector term %q has no node:, relay:, or state: prefix", term)
 		}
 
 		key, value, ok := strings.Cut(rest, "=")

@@ -176,6 +176,31 @@ func TestParseSelectorTagRefusalIsASentinel(t *testing.T) {
 	}
 }
 
+// TestParseSelectorUnprefixedErrorDoesNotOfferTag guards the OTHER half of
+// #560, which the tag:-prefixed tests cannot see.
+//
+// Every surface renders this string verbatim -- the Console's fallback lead,
+// MCP's "invalid selector" wrap, the Control API's problem detail -- so a
+// stale namespace list here advertises tag: to the operator and the agent for
+// any ordinary typo, which is the exact false advertisement this issue exists
+// to remove. It was stale in the first version of this change and no test saw
+// it, because they all exercised the tag:-prefixed path.
+func TestParseSelectorUnprefixedErrorDoesNotOfferTag(t *testing.T) {
+	_, err := ParseSelector("bogus")
+	if err == nil {
+		t.Fatal("ParseSelector(\"bogus\") = nil error, want a parse error")
+	}
+	if strings.Contains(err.Error(), "tag:") {
+		t.Errorf("the unprefixed-term error offers tag:, which is never accepted: %v", err)
+	}
+	// And it still names the three that DO work, so the message stays useful.
+	for _, ns := range []string{"node:", "relay:", "state:"} {
+		if !strings.Contains(err.Error(), ns) {
+			t.Errorf("the unprefixed-term error does not name %s: %v", ns, err)
+		}
+	}
+}
+
 // seedRegistry builds an InMemory registry with three Nodes exercising both
 // label namespaces, including the deliberately-ambiguous "quarantine" key
 // set in only one namespace per Node, to prove node: and relay: predicates
