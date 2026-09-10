@@ -741,10 +741,18 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 			}
 			// #487: the irreversible rung says WHY, end to end and through the
 			// real store — not just in the handler's unit test.
-			if r.Kind == audit.KindNodeRevoke {
+			//
+			// SCOPED TO THE NODE (#557). node_revoke is no longer one record per
+			// run: revoking an Enrollment Token now cascades a record per Node it
+			// enrolled, each carrying a DERIVED reason naming the token rather
+			// than this operator's sentence. An unscoped loop matches whichever
+			// of those came last and compares the wrong record — which is exactly
+			// how this assertion failed when the cascade landed.
+			if r.Kind == audit.KindNodeRevoke && r.NodeID == nodeBetaID {
 				sawNodeRevoke = true
 				if r.Reason != revokeReason {
-					t.Errorf("node_revoke Reason = %q, want %q", r.Reason, revokeReason)
+					t.Errorf("node_revoke Reason for the directly-revoked Node = %q, want %q",
+						r.Reason, revokeReason)
 				}
 			}
 		}

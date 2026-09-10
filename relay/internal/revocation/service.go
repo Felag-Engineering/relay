@@ -3,6 +3,7 @@ package revocation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -29,6 +30,66 @@ type Registry interface {
 type TokenRevoker interface {
 	Revoke(ctx context.Context, id string) error
 }
+
+// RevocationRecorder records the trail's entry for one Node the cascade is
+// about to revoke, and reports whether that record was written.
+//
+// WHY A CALLBACK AND NOT A SINK FIELD: package revocation imports neither
+// internal/audit nor internal/capability (imports_test.go enforces this), so
+// the record's CONTENT — the acting Principal, its asserted lane, and the
+// derived reason naming the token — must be authored by the surface that
+// authenticated the operator, while the SET of Nodes to record is decided
+// HERE, inside RevokeToken's re-scan, which is the only place that set is
+// first knowable (a Node can appear on a later pass than the caller's own
+// snapshot). A callback is what lets those two facts stay split along the
+// line that already exists between this package and its caller.
+//
+// WHY IT TAKES NO context.Context: the caller already chose the context its
+// audit write runs under before constructing this closure — that is what lets
+// the Control API detach the write from the client connection (see
+// context.WithoutCancel in tokens.go) so an irreversible cascade is not
+// aborted by a client that hangs up mid-revoke.
+type RevocationRecorder func(nodeID string) error
+
+// ErrRecorderRequired is returned by RevokeToken when called with a nil
+// recorder, before the token store or the registry is touched.
+//
+// A nil recorder must not be read as "skip recording": a cascade that CAN run
+// unattributed is the bug #557 exists to close, so making that state
+// unreachable IS the fix. This mirrors api.authorizeControl's nil-Authz
+// posture (#397) — loud and closed, never quiet and open.
+var ErrRecorderRequired = errors.New("revocation: RevokeToken requires a recorder; refusing to run an unattributed cascade")
+
+// CascadeShortfall reports how much of a cascade went unrecorded. It wraps
+// ErrCascadeNotRecorded, so errors.Is keeps working for callers that only need
+// to know THAT the trail is incomplete.
+//
+// The counts are a typed field rather than text inside an error string because
+// they are the number an on-call operator reads to size the audit gap -- the
+// threat model's R12 entry rests on "notes any failure" being an honest count.
+// Baked into a format string, that number is unassertable without parsing prose,
+// and a corruption of it (double-counting, or setting it to the cascade length
+// on the first failure) reddens nothing. A code review found exactly that: the
+// entire suite stayed green with unrecorded incremented by two.
+type CascadeShortfall struct {
+	Unrecorded int
+	Total      int
+}
+
+func (e *CascadeShortfall) Error() string {
+	return fmt.Sprintf("revocation: %d of %d cascaded Node revocations were not recorded",
+		e.Unrecorded, e.Total)
+}
+
+// Unwrap lets errors.Is(err, ErrCascadeNotRecorded) hold, which is what the
+// Control API route keys on to tell a completed-but-unrecorded cascade from an
+// outright failure.
+func (e *CascadeShortfall) Unwrap() error { return ErrCascadeNotRecorded }
+
+// ErrCascadeNotRecorded is returned by RevokeToken when every cascaded Node
+// was revoked but one or more of their revocation records could not be
+// written. See RevokeToken's cascade loop for why the revoke proceeds anyway.
+var ErrCascadeNotRecorded = errors.New("revocation: one or more cascaded Node revocations were not recorded")
 
 // Service coordinates the denylist and live-connection teardown for Node and
 // Enrollment Token revocation.
@@ -85,7 +146,18 @@ func (s *Service) RevokeNode(nodeID string) {
 //
 // token_id is the public, non-secret half of the Enrollment Token credential —
 // safe to log (see enroll/token.go).
-func (s *Service) RevokeToken(ctx context.Context, tokenID string) error {
+//
+// record is REQUIRED (#557): every cascaded Node's revocation must be
+// recorded through it, one call per Node, from inside the pass loop below —
+// see RevocationRecorder's doc for why a callback rather than a sink field,
+// and why it takes no context.
+func (s *Service) RevokeToken(ctx context.Context, tokenID string, record RevocationRecorder) error {
+	// A nil recorder is refused before the token store is touched, so a nil
+	// recorder revokes NOTHING — see ErrRecorderRequired.
+	if record == nil {
+		return ErrRecorderRequired
+	}
+
 	// Step 1: Revoke the token FIRST — this is the barrier. After this returns,
 	// any subsequent Enroll Validate call for tokenID returns ErrRevoked, so no
 	// new node_id can be minted under this token.
@@ -112,7 +184,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string) error {
 	// so re-visiting an already-revoked Node (detected via IsRevoked) is a
 	// harmless no-op and avoids redundant Disconnect churn.
 	const maxRescanPasses = 2 // initial scan + up to 2 re-scans = 3 passes total
-	var total int
+	var total, unrecorded int
 	for pass := 0; pass <= maxRescanPasses; pass++ {
 		var newThisPass int
 		for _, n := range s.reg.List() {
@@ -121,7 +193,32 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string) error {
 			}
 			if s.denylist.IsRevoked(n.NodeID) {
 				// Already handled in a prior pass; skip to avoid redundant Disconnect.
+				// This also means an already-revoked Node gets no second record,
+				// preserving the Console's causative-record rule (console/node.go,
+				// #545/#487): the record that already exists for it stays the one
+				// that answers "who did it".
 				continue
+			}
+
+			// Record BEFORE revoking, but — unlike handleRevokeNode's #487
+			// ordering — revoke EITHER WAY, deliberately inverting that posture.
+			// #487's fail-closed order was licensed by two facts that do not hold
+			// here: nothing had happened yet, and RevokeNode has no error return
+			// to strand. Here the token is already revoked (Step 1 above) and any
+			// earlier Node in this same cascade already is too; refusing to revoke
+			// Node n because ITS record failed would leave a Node whose enrolling
+			// token is already dead still holding a live Tunnel and a
+			// cert-authenticated Renew path — a permanent security hole traded for
+			// an audit gap, against this file's own stated direction (see the
+			// over-denying comment in RevokeNode). Aborting the loop entirely would
+			// be worse still: it would un-revoke nothing already done and
+			// under-revoke everything still to come. So: record, note the failure,
+			// revoke anyway, and report the shortfall to the caller afterward via
+			// ErrCascadeNotRecorded rather than papering over it.
+			if err := record(n.NodeID); err != nil {
+				slog.Error("cascaded node revocation not recorded",
+					"node_id", n.NodeID, "token_id", tokenID, "error", err)
+				unrecorded++
 			}
 			s.RevokeNode(n.NodeID)
 			newThisPass++
@@ -133,6 +230,9 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string) error {
 			break
 		}
 	}
-	slog.Info("token revoked", "token_id", tokenID, "nodes_revoked", total)
+	slog.Info("token revoked", "token_id", tokenID, "nodes_revoked", total, "nodes_unrecorded", unrecorded)
+	if unrecorded > 0 {
+		return &CascadeShortfall{Unrecorded: unrecorded, Total: total}
+	}
 	return nil
 }
