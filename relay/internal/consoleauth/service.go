@@ -363,6 +363,20 @@ func (s *Service) Resolve(ctx context.Context, id SessionID) (Session, accounts.
 	return sess, acct, nil
 }
 
+// CSRFToken derives id's Console CSRF token, delegating to the session
+// store's Store.CSRFToken — see that method for the derivation and the
+// threat model it buys.
+//
+// This is the seam controlplane.ConsoleSessionResolver reads: the resolver
+// interface needs the derivation (not the raw pepper) because Secure is
+// middleware with no Deps of its own and cannot reach a *Service to compute
+// one itself, so the boundary computes it once, here, at the moment it
+// already has the resolved SessionID, and carries the result — not the
+// pepper, not the identifier's source material — onto the request context.
+func (s *Service) CSRFToken(id SessionID) string {
+	return s.sessions.CSRFToken(id)
+}
+
 // StepUp re-verifies a password against the session's own Account and, on
 // success, refreshes the proof of human presence.
 //

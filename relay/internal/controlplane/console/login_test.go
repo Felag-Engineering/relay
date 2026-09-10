@@ -39,6 +39,12 @@ type loginFixture struct {
 	// sessionscope_test.go, which needs the real Authenticator and the real
 	// SessionScope in front of a route that is not the Console's.
 	svc *consoleauth.Service
+
+	// deps is the exact Deps Register mounted handler over. Exposed so a
+	// test that needs to walk Routes(d) — security_test.go's sweep for a
+	// leaked CSRF cookie — walks the table this fixture actually serves,
+	// rather than reconstructing one that could silently drift from it.
+	deps Deps
 }
 
 type testClock struct{ t time.Time }
@@ -100,6 +106,7 @@ func newLoginFixture(t *testing.T) *loginFixture {
 		accounts: st.Accounts(),
 		mike:     mike,
 		clk:      clk,
+		deps:     d,
 	}
 }
 
@@ -121,7 +128,7 @@ func (f *loginFixture) signIn(t *testing.T, username, password string, extra ...
 	// Fetch the form first so the CSRF cookie exists, exactly as a browser
 	// would: the double-submit token is worthless if a test can skip it.
 	formRec := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil), extra...)
-	csrf := cookieNamed(formRec.Result().Cookies(), csrfCookieName)
+	csrf := cookieNamed(formRec.Result().Cookies(), signInCSRFCookieName)
 	if csrf == nil {
 		t.Fatal("the sign-in form set no CSRF cookie")
 	}
@@ -131,6 +138,23 @@ func (f *loginFixture) signIn(t *testing.T, username, password string, extra ...
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	rec := f.do(t, req, append([]*http.Cookie{csrf}, extra...)...)
 	return rec, rec.Result().Cookies()
+}
+
+// renderedCSRFTokenPattern extracts the value layout.go's hidden field
+// renders (`<input type="hidden" name="csrf_token" value="...">`), so a test
+// can read the token a signed-in page actually carries rather than a cookie —
+// under #460's scheme the session lane has no cookie, so this is how a test
+// plays the part of a browser reading its own page before submitting a form.
+var renderedCSRFTokenPattern = regexp.MustCompile(`name="csrf_token" value="([^"]*)"`)
+
+// renderedCSRFToken returns the CSRF token rendered into body, or "" if the
+// page carried none (a bearer-lane render, or a page with no form at all).
+func renderedCSRFToken(body string) string {
+	m := renderedCSRFTokenPattern.FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	return m[1]
 }
 
 func cookieNamed(cookies []*http.Cookie, name string) *http.Cookie {
@@ -457,17 +481,22 @@ func TestConsole_SignOutEndsTheSession(t *testing.T) {
 		t.Fatalf("sign-in status = %d", rec.Code)
 	}
 	session := cookieNamed(cookies, consoleauth.SessionCookieName)
-	csrf := cookieNamed(cookies, csrfCookieName)
-	if csrf == nil {
-		// The sign-in response may not re-set it; take it from the form fetch.
-		formRec := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath, nil))
-		csrf = cookieNamed(formRec.Result().Cookies(), csrfCookieName)
+
+	// Under #460's scheme a signed-in POST carries no CSRF cookie at all: the
+	// session lane checks the submitted token against the session's own
+	// derived secret. A browser gets that token from the page it already
+	// has, so this reads it the same way — off the fleet view's hidden
+	// field, rendered with the session cookie the sign-in just issued.
+	page := f.do(t, httptest.NewRequest(http.MethodGet, "/console/", nil), session)
+	token := renderedCSRFToken(page.Body.String())
+	if token == "" {
+		t.Fatal("the signed-in fleet view rendered no CSRF token")
 	}
 
-	body := url.Values{"csrf_token": {csrf.Value}}
+	body := url.Values{"csrf_token": {token}}
 	req := httptest.NewRequest(http.MethodPost, LogoutPath, strings.NewReader(body.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	out := f.do(t, req, session, csrf)
+	out := f.do(t, req, session)
 
 	if out.Code != http.StatusSeeOther {
 		t.Fatalf("sign-out = %d, want %d; body = %s", out.Code, http.StatusSeeOther, out.Body.String())

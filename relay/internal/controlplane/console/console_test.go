@@ -235,6 +235,14 @@ func TestConsole_SecurityHeaders(t *testing.T) {
 // because the route table is all-GET today and the middleware must already be
 // correct when the first mutating route arrives — not correct as of the change
 // that adds one.
+//
+// Since #460 this pins the SESSION lane's fail-closed branch specifically: a
+// bare Secure with no ConsoleSession in context (this request carries none —
+// it is not even routed through Authenticator.Middleware) refuses every
+// unsafe method outright, with no fallback of any kind. The sign-in lane's
+// own refusal is covered end to end in security_test.go, over the real
+// stack, because it needs a real cookie to refuse correctly rather than an
+// absent one.
 func TestConsole_CSRFRefusesUnsafeMethodWithoutToken(t *testing.T) {
 	reached := false
 	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
@@ -248,38 +256,6 @@ func TestConsole_CSRFRefusesUnsafeMethodWithoutToken(t *testing.T) {
 	}
 	if reached {
 		t.Error("a POST without a CSRF token reached the handler")
-	}
-}
-
-// TestConsole_CSRFAcceptsMatchingToken is the other half: the control must
-// admit a legitimate request, or it is not a control but an outage.
-func TestConsole_CSRFAcceptsMatchingToken(t *testing.T) {
-	reached := false
-	h := Secure(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached = true }))
-
-	// A GET mints the cookie the page would carry.
-	seed := httptest.NewRequest(http.MethodGet, "/console/", nil)
-	seedRec := httptest.NewRecorder()
-	h.ServeHTTP(seedRec, seed)
-
-	var token string
-	for _, c := range seedRec.Result().Cookies() {
-		if c.Name == csrfCookieName {
-			token = c.Value
-		}
-	}
-	if token == "" {
-		t.Fatal("no CSRF cookie was minted on a GET")
-	}
-
-	req := httptest.NewRequest(http.MethodPost, "/console/anything", nil)
-	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: token})
-	req.Header.Set(csrfHeaderName, token)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-
-	if !reached || rec.Code == http.StatusForbidden {
-		t.Errorf("a request carrying a matching CSRF token was refused: code=%d reached=%v", rec.Code, reached)
 	}
 }
 

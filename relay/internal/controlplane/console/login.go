@@ -154,6 +154,14 @@ func UnauthorizedHandler() http.Handler {
 // long enough to type a password and short enough that "that action" is not
 // stale. Value "1": presence is the entire signal, so there is nothing to
 // parse and nothing to inject.
+//
+// security.go's sign-in CSRF cookie reaches the opposite conclusion about a
+// `__Host-` prefix's forced Path=/, and the difference is what each cookie
+// IS: a planted interruption marker carries no authority at all — at worst a
+// false "your session ended" note — whereas a planted CSRF cookie would BE
+// the attack this scheme exists to stop. Path=/ is mandatory on the one
+// where a sibling host's ability to plant it is the entire threat, and
+// wasteful on the one where planting it costs nothing.
 func setInterruptedMarker(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     interruptedCookieName,
@@ -324,7 +332,7 @@ func handleLoginForm(d Deps) http.HandlerFunc {
 			redirectAfterLogin(w, r, safeReturnPath(r.URL.Query().Get("next")))
 			return
 		}
-		token, err := ensureCSRFCookie(w, r)
+		token, err := signInCSRFToken(w, r)
 		if err != nil {
 			http.Error(w, "could not establish a CSRF token", http.StatusInternalServerError)
 			return
@@ -355,7 +363,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 			http.Error(w, "could not read the sign-in form", http.StatusBadRequest)
 			return
 		}
-		token, err := ensureCSRFCookie(w, r)
+		token, err := signInCSRFToken(w, r)
 		if err != nil {
 			http.Error(w, "could not establish a CSRF token", http.StatusInternalServerError)
 			return
@@ -386,6 +394,16 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 		switch {
 		case err == nil:
 			setSessionCookie(w, id)
+			// "Clear on login" (spec 11's rotation requirement, the other
+			// half of which — "rotate on login" — is structural: Issue mints
+			// a fresh derivation for the new session automatically, see
+			// consoleauth.Store.CSRFToken). The sign-in cookie's whole job
+			// ends the instant a session exists; from here the token that
+			// matters is the session's own derived one. A stale sign-in form
+			// left open in another tab will now refuse its next submission
+			// with the existing "Reload the page and try again" copy — a
+			// correctness cost, paid in the fail-closed direction, not a bug.
+			clearSignInCSRFCookie(w)
 			redirectAfterLogin(w, r, next)
 			return
 
@@ -435,6 +453,15 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 // second time here would be a second, independent parse of the same
 // credential. Production-identical to the old read; the difference is that
 // there is now exactly one place that turns the cookie into a SessionID.
+//
+// This is also "clear the CSRF token on logout" (#460, spec 11), and there is
+// no line of code here that does it: d.Auth.Logout ends the session through
+// Store.End, so the very next request carrying the old session cookie fails
+// to resolve a Session at all — Resolve returns ErrNoSession, so no
+// ConsoleSession reaches the context, so sessionCSRFValid's no-session branch
+// refuses it before any token comparison is even attempted. The token dies
+// with the session structurally, the same way Issue's fresh derivation makes
+// "rotate on login" automatic rather than a step someone has to remember.
 func handleLogout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		cs, ok := controlplane.ConsoleSessionFromContext(r.Context())
@@ -547,6 +574,12 @@ func setSessionCookie(w http.ResponseWriter, id consoleauth.SessionID) {
 
 // clearSessionCookie expires the session cookie. The attributes must match
 // setSessionCookie's or the browser keeps the original.
+//
+// There is no CSRF cookie to clear alongside it (#460): the session lane's
+// token is derived from the session identifier, not carried in a cookie, so
+// there is nothing here to clear — once d.Auth.Logout ends the session this
+// cookie named, no later request resolves a ConsoleSession to derive or
+// compare a token against in the first place. See handleLogout's doc.
 func clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     consoleauth.SessionCookieName,

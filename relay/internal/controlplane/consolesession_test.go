@@ -37,6 +37,13 @@ const testSessionID = "console-session-fixture"
 // zero-value stand-in a handler could not tell apart from "no session".
 var testSessionAuthenticatedAt = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 
+// testSessionCSRFSecret stands in for a derived CSRF token: a distinctive,
+// non-zero value so a test can tell "the boundary carried the resolver's
+// derivation" apart from "the boundary carried a zero-value stand-in". A
+// plain string is enough here — CSRFToken (#460) is a value recomputed per
+// request, not a type with its own construction rules the way SessionID is.
+const testSessionCSRFSecret = "csrf-token-fixture"
+
 // fakeSessionResolver stands in for *consoleauth.Service on the browser lane.
 // It models the real resolver's contract: one indistinguishable error for
 // every failure, and the Account read at call time so a test can mutate it
@@ -60,6 +67,17 @@ func (f *fakeSessionResolver) Resolve(_ context.Context, id consoleauth.SessionI
 		Method:          consoleauth.MethodPassword,
 		AuthenticatedAt: testSessionAuthenticatedAt,
 	}, f.acct, nil
+}
+
+// CSRFToken stands in for the real derivation (consoleauth.Store.CSRFToken):
+// a fixed, distinctive value for the one identifier this fixture ever
+// resolves, and empty for anything else — mirroring the production
+// derivation's "no identifier, no token" shape without needing a real Store.
+func (f *fakeSessionResolver) CSRFToken(id consoleauth.SessionID) string {
+	if id.Reveal() != f.valid {
+		return ""
+	}
+	return testSessionCSRFSecret
 }
 
 // testConsoleAuthenticator wires both lanes: the API Token lane (testToken)
@@ -240,6 +258,26 @@ func TestConsoleSession_TheResolvedSessionReachesTheHandler(t *testing.T) {
 	}
 }
 
+// TestConsoleSession_CarriesTheSessionCSRFSecret pins that authenticateConsole
+// populates CSRFToken from the resolver's derivation (#460), not from
+// consoleauth.Session — there is no field on Session to read it from, by
+// design. *Fails if*: authenticateConsole drops the field, or stops calling
+// ConsoleSessionResolver.CSRFToken.
+func TestConsoleSession_CarriesTheSessionCSRFSecret(t *testing.T) {
+	a, _ := testConsoleAuthenticator()
+	status, cs, ok, reached := consoleSessionRequest(t, a, http.MethodGet, "/console/",
+		&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+	if !reached {
+		t.Fatalf("a valid Console cookie was refused: status = %d", status)
+	}
+	if !ok {
+		t.Fatal("ConsoleSessionFromContext returned ok=false on the browser lane")
+	}
+	if cs.CSRFToken != testSessionCSRFSecret {
+		t.Errorf("ConsoleSession.CSRFToken = %q, want %q", cs.CSRFToken, testSessionCSRFSecret)
+	}
+}
+
 // TestConsoleSession_TheTokenLaneCarriesNoSession is the one that matters for
 // #460: a zero-value Session leaking onto the machine lane would later mean a
 // zero-value CSRF secret on a surface that never had one.
@@ -319,7 +357,16 @@ func TestWithConsoleSessions_PanicsWithoutAScope(t *testing.T) {
 // If a consumer genuinely needs a session fact, add a NARROW, refreshed field
 // (as AuthenticatedAt is) and extend the allowlist here deliberately.
 func TestConsoleSession_CarriesNoIdentitySnapshot(t *testing.T) {
-	allowed := map[string]bool{"ID": true, "AuthenticatedAt": true}
+	allowed := map[string]bool{
+		"ID":              true,
+		"AuthenticatedAt": true,
+		// CSRFToken (#460) is the narrow, non-identity field this issue
+		// added: it is derived PER REQUEST from the ID already on this same
+		// struct, names no identity of its own, and redacts nothing because
+		// it is not stored anywhere to redact (consoleauth.Store.CSRFToken
+		// keeps no table of these — see that method's doc).
+		"CSRFToken": true,
+	}
 
 	typ := reflect.TypeOf(ConsoleSession{})
 	for i := 0; i < typ.NumField(); i++ {

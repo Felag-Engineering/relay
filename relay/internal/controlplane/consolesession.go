@@ -43,6 +43,16 @@ import (
 // able to mint credentials.
 type ConsoleSessionResolver interface {
 	Resolve(ctx context.Context, id consoleauth.SessionID) (consoleauth.Session, accounts.Account, error)
+
+	// CSRFToken derives id's CSRF token (#460). It is fetched here, at
+	// resolution time, rather than carried on consoleauth.Session: the CSRF
+	// token is not a session fact to snapshot, it is a value RECOMPUTED per
+	// request from an identifier the boundary just resolved, and this
+	// interface is where that identifier is in scope. See
+	// ConsoleSession.CSRFToken for what crosses onto the context, and
+	// consoleauth.Store.CSRFToken for the derivation itself and the threat
+	// model it buys over a stored secret.
+	CSRFToken(id consoleauth.SessionID) string
 }
 
 // consoleLane is the browser credential lane's configuration.
@@ -201,6 +211,25 @@ type ConsoleSession struct {
 	// REFRESHED — Service.StepUp writes it — so the value here is current as
 	// of this request, unlike the identity snapshot below.
 	AuthenticatedAt time.Time
+
+	// CSRFToken is this request's derived Console CSRF token (#460) — NOT a
+	// stored secret. It is recomputed by ConsoleSessionResolver.CSRFToken on
+	// every resolution from an identifier the boundary just resolved, so
+	// there is no table of these anywhere and its lifetime is this request's,
+	// same as the ID it was derived from.
+	//
+	// This is a second NARROW, non-identity field under the type's own rule
+	// (see the doc above: "add a narrow, refreshed field and extend the
+	// allowlist"). It names no identity and grants no reach on its own —
+	// knowing it authorizes nothing; it is one half of an equality check
+	// package console's Secure performs. Unlike SessionID it is a plain
+	// string with no redacting methods, deliberately: there is no table of
+	// these anywhere to protect from a heap dump (that is the whole point of
+	// deriving rather than storing — see consoleauth.Store.CSRFToken), so
+	// there is nothing here for redaction to buy. It still must never be
+	// logged deliberately, for the ordinary reason any credential-shaped
+	// value must not be.
+	CSRFToken string
 }
 
 // ConsoleSessionFromContext returns the ConsoleSession that Middleware
@@ -227,5 +256,13 @@ func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.
 	// No TokenID: a Console session presents no API Token. The audit trail's
 	// verified lane carries the method instead, which is what distinguishes
 	// "someone's browser did this" from "someone's script did this".
-	return authResult{principal: p, console: &ConsoleSession{ID: id, AuthenticatedAt: sess.AuthenticatedAt}}, true
+	//
+	// CSRFToken is derived here, not read off sess: it is not a session
+	// fact, it is recomputed from id on every resolution (see
+	// ConsoleSessionResolver.CSRFToken's doc).
+	return authResult{principal: p, console: &ConsoleSession{
+		ID:              id,
+		AuthenticatedAt: sess.AuthenticatedAt,
+		CSRFToken:       a.console.resolver.CSRFToken(id),
+	}}, true
 }

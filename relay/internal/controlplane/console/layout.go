@@ -76,6 +76,14 @@ type Page struct {
 	// request carries it without a line of inline script. An ATTRIBUTE is not
 	// script and the content security policy does not touch it — which is the
 	// entire reason the conventions ban hx-on:, which is.
+	//
+	// This is the SESSION's derived secret (#460), not a cookie value: it is
+	// sessionCSRFToken's read of the ConsoleSession the authentication
+	// boundary already resolved, so a page and the request it later submits
+	// are checked against the same per-session-per-request derivation rather
+	// than against a value a cookie merely carried along. Empty when no
+	// browser session is in context — see page()'s comment for why that
+	// renders rather than fails.
 	CSRFToken string
 
 	// Scripts are external script files this page loads, each an absolute
@@ -161,11 +169,17 @@ func page(d Deps, w http.ResponseWriter, r *http.Request, title string) (Page, b
 	if !ok {
 		return Page{}, false
 	}
-	token, err := ensureCSRFCookie(w, r)
-	if err != nil {
-		http.Error(w, "could not establish a CSRF token", http.StatusInternalServerError)
-		return Page{}, false
-	}
+	// token is "" when this request has no browser session — a bearer-lane
+	// caller rendering Console HTML, which is how every screen test in this
+	// package authenticates (console_test.go's request helper). Rendering
+	// with an empty token rather than failing the request is safe under two
+	// independent guards, neither of which lives here: sessionCSRFValid
+	// refuses every unsafe method on the session lane before comparing
+	// anything, and consoleauth.CSRFTokensEqual refuses an empty submitted
+	// token outright. See sessionCSRFToken's doc for the rest of the
+	// argument, including why making Console GETs browser-lane-only (which
+	// would remove the need for this fallback) is a separate, larger change.
+	token, _ := sessionCSRFToken(r)
 	role := accounts.Role(p.Role)
 	return Page{
 		Title:     title,

@@ -78,6 +78,10 @@ No inline styles either where a nonce would otherwise be required; ship a styles
 violations rather than silently dropping them, because a CSP violation in this product is a
 security event, not a rendering glitch.
 
+**Reporting is deferred, not shipped**, as of #460: see `99-open-decisions.md` D15 for the four
+reasons and what would close it. The rest of this section's policy ships; a `report-to` naming a
+group with no endpoint behind it does not.
+
 ## CSRF
 
 A token on **every** mutating route, verified server-side, rotated per session.

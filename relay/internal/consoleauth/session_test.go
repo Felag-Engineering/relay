@@ -289,6 +289,176 @@ func TestSessionID_NeverRendersItself(t *testing.T) {
 	}
 }
 
+// --- CSRF token derivation (#460) -------------------------------------------
+//
+// There is no CSRFSecret type and nothing stored on Session: the token is
+// derived fresh, every time, from the Store's process-lifetime pepper and the
+// session identifier. See Store.CSRFToken's doc for why an earlier stored-
+// secret design was rejected.
+
+func TestCSRFToken_IsStableForOneSession(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	first := st.CSRFToken(id)
+	second := st.CSRFToken(id)
+	if first == "" {
+		t.Fatal("CSRFToken returned empty for a live session")
+	}
+	// RED ON: making the token random per call, which would break every form
+	// — a token rendered into a page has to still be valid by the time the
+	// browser submits it.
+	if first != second {
+		t.Errorf("CSRFToken(%v) = %q then %q; want the same value both times", id, first, second)
+	}
+}
+
+func TestCSRFToken_DiffersBetweenSessions(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	id1, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	id2, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// RED ON: keying the HMAC on anything but the identifier (e.g. the
+	// Account), which would let one session's rendered token validate
+	// another's request.
+	if st.CSRFToken(id1) == st.CSRFToken(id2) {
+		t.Error("two distinct sessions derived the same CSRF token")
+	}
+}
+
+func TestCSRFToken_DiffersAcrossStores(t *testing.T) {
+	t.Parallel()
+	c := newClock()
+	st1 := consoleauth.NewStore(consoleauth.WithClock(c.now))
+	st2 := consoleauth.NewStore(consoleauth.WithClock(c.now))
+
+	// The identifier is a 256-bit CSPRNG value; the only way two Stores can
+	// be asked about "the same id" in a test is to hand each the very same
+	// SessionID rather than to Issue twice and hope for a collision.
+	id, err := st1.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	// RED ON: a package-level or hard-coded pepper, which would make one
+	// Relay's rendered tokens valid against a different Relay's sessions —
+	// exactly the exposure a per-process pepper exists to prevent.
+	if st1.CSRFToken(id) == st2.CSRFToken(id) {
+		t.Error("two different Stores derived the same CSRF token for the same identifier")
+	}
+}
+
+func TestCSRFToken_ChangesWhenTheIdentifierDoes(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	oldID, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	before := st.CSRFToken(oldID)
+
+	newID, err := st.Rotate(oldID)
+	if err != nil {
+		t.Fatalf("Rotate: %v", err)
+	}
+	after := st.CSRFToken(newID)
+
+	// This pins that CSRF rotation is STRUCTURAL, not a line someone has to
+	// add to Rotate: the new session's token differs from the old one purely
+	// because the derivation is keyed on the identifier, and Rotate already
+	// mints a fresh identifier for the session-fixation control. Nothing in
+	// Rotate itself needs to know about CSRF at all — which is the point:
+	// this test exists so a later reader who thinks CSRF rotation logic is
+	// MISSING from Rotate finds this test instead of adding one.
+	//
+	// The pre-rotation identifier is deliberately not re-derived here: it no
+	// longer resolves to any live session (TestStore_RotateRetiresTheOldIdentifier
+	// pins that), so nothing checks a submitted token against it again — the
+	// derivation being a pure function of oldID is harmless, not a residual
+	// hazard.
+	if before == after {
+		t.Error("the CSRF token survived Rotate unchanged; rotation must be automatic under derivation")
+	}
+}
+
+func TestCSRFToken_ZeroIdentifierYieldsNoToken(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	if got := st.CSRFToken(consoleauth.SessionID{}); got != "" {
+		t.Errorf("CSRFToken(zero) = %q, want \"\"", got)
+	}
+}
+
+func TestCSRFTokensEqual_RefusesEmptiesAndZero(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	token := st.CSRFToken(id)
+	if token == "" {
+		t.Fatal("CSRFToken returned empty for a live session")
+	}
+
+	// RED ON: dropping the empty guard and trusting
+	// subtle.ConstantTimeCompare("", "") == 1 — which is exactly true, and
+	// exactly the bypass this guard exists to close.
+	cases := []struct {
+		name               string
+		derived, submitted string
+	}{
+		{"empty derived, empty submitted", "", ""},
+		{"empty derived, real submitted", "", token},
+		{"real derived, empty submitted", token, ""},
+	}
+	for _, c := range cases {
+		if consoleauth.CSRFTokensEqual(c.derived, c.submitted) {
+			t.Errorf("%s: CSRFTokensEqual(%q, %q) = true, want false", c.name, c.derived, c.submitted)
+		}
+	}
+	if !consoleauth.CSRFTokensEqual(token, token) {
+		t.Error("CSRFTokensEqual refused a token compared against itself")
+	}
+}
+
+// TestCSRFToken_IsNotLoggable pins that the derived token never rides on
+// Session at all — trivially true today because there is no field to log,
+// but asserted anyway so a future refactor that adds one back (to "cache" the
+// derivation, say) is caught by a test rather than by a security review.
+func TestCSRFToken_IsNotLoggable(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	sess, err := st.Lookup(id)
+	if err != nil {
+		t.Fatalf("Lookup: %v", err)
+	}
+	token := st.CSRFToken(id)
+
+	rendered := fmt.Sprintf("%+v", sess)
+	if strings.Contains(rendered, token) {
+		t.Errorf("%%+v of a Session contains the derived CSRF token %q — it must not be a field on Session", token)
+	}
+}
+
 func TestStore_IdentifiersAreUnique(t *testing.T) {
 	t.Parallel()
 	st := consoleauth.NewStore(consoleauth.WithMaxSessions(1000))
