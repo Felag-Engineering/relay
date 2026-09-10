@@ -63,6 +63,14 @@ type TokenVerifier interface {
 	Verify(ctx context.Context, credential string) (accounts.Account, accounts.APIToken, error)
 }
 
+// authResult is what ONE credential lane established: the acting identity,
+// plus whatever else that lane knows. Only the browser lane sets console —
+// the bearer/OAuth lanes have no session to carry.
+type authResult struct {
+	principal capability.Principal
+	console   *ConsoleSession // nil on every lane but the browser's
+}
+
 // PrincipalFromContext returns the Principal that Middleware injected into ctx
 // after successful authentication. It is the seam the Control API and the MCP
 // surface read to pass a Principal into capability.Service.Run for audit
@@ -167,16 +175,15 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 		// a Principal and finds none still gets the defensive 500 in
 		// console.principal, never an unattributed action.
 		if a.console != nil && a.console.public(r) {
-			if principal, ok := a.authenticateRequest(r); ok {
-				next.ServeHTTP(w, r.WithContext(
-					context.WithValue(r.Context(), principalContextKey{}, principal)))
+			if res, ok := a.authenticateRequest(r); ok {
+				next.ServeHTTP(w, r.WithContext(a.contextWith(r.Context(), res)))
 				return
 			}
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		principal, ok := a.authenticateRequest(r)
+		res, ok := a.authenticateRequest(r)
 		if !ok {
 			// EVERY failure lands here with the same generic refusal:
 			// malformed header, unknown token, wrong secret, revoked token,
@@ -198,10 +205,22 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), principalContextKey{}, principal)
+		ctx := a.contextWith(r.Context(), res)
 		ctx = capability.WithAssertions(ctx, asserted)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// contextWith injects what one credential lane established, so the
+// sign-in-page branch above and the main branch inject the same shape from
+// the same code rather than two hand-rolled context.WithValue calls that can
+// drift.
+func (a *Authenticator) contextWith(ctx context.Context, res authResult) context.Context {
+	ctx = context.WithValue(ctx, principalContextKey{}, res.principal)
+	if res.console != nil {
+		ctx = context.WithValue(ctx, consoleSessionContextKey{}, *res.console)
+	}
+	return ctx
 }
 
 // authenticateRequest picks the credential lane from the SHAPE of the request
@@ -220,16 +239,16 @@ func (a *Authenticator) Middleware(next http.Handler) http.Handler {
 // every path — the `__Host-` prefix forces Path=/ — is a credential for the
 // Console and for nothing else on this listener. The token lanes carry no such
 // bound: an API Token is a control-plane credential by construction.
-func (a *Authenticator) authenticateRequest(r *http.Request) (capability.Principal, bool) {
+func (a *Authenticator) authenticateRequest(r *http.Request) (authResult, bool) {
 	source := sourceAddress(r)
 
 	if credential, ok := bearerToken(r); ok {
 		p, ok := a.authenticate(r.Context(), credential)
 		if !ok {
-			return capability.Principal{}, false
+			return authResult{}, false
 		}
 		p.Source = source
-		return p, true
+		return authResult{principal: p}, true
 	}
 
 	// The cookie is only a credential ON THE CONSOLE (#459). The `__Host-`
@@ -242,7 +261,7 @@ func (a *Authenticator) authenticateRequest(r *http.Request) (capability.Princip
 			return a.authenticateConsole(r.Context(), id, source)
 		}
 	}
-	return capability.Principal{}, false
+	return authResult{}, false
 }
 
 // sourceAddress is the peer address, port stripped, as read off the

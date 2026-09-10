@@ -27,6 +27,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -139,15 +140,86 @@ func consoleSessionFromRequest(r *http.Request) (consoleauth.SessionID, bool) {
 	return consoleauth.ParseSessionID(c.Value), true
 }
 
+// consoleSessionContextKey is an unexported type so no other package can
+// collide with or forge this context key (standard Go context-key idiom).
+type consoleSessionContextKey struct{}
+
+// ConsoleSession is what the browser lane resolved: the identifier the
+// browser presented and the Session it resolved to. Injected ONLY on that
+// lane — a bearer-token or OAuth request carries none, so a consumer can tell
+// "a human's browser" from "a script" structurally instead of by a zero
+// value.
+//
+// Carrying the ID here grants a handler no reach it did not already have: the
+// cookie is on the request regardless, so every handler could read it anyway.
+// What this removes is the REASON to. A handler that wants its session would
+// otherwise parse the cookie itself — the shape handleLogout had before this
+// change, and the one #428's step-up POST must not grow — and a second place
+// that parses the same credential is a second authentication path waiting to
+// disagree with the first.
+//
+// One raw-cookie read deliberately remains, and it is not an exception to
+// that argument so much as a different job: handleLoginSubmit needs the
+// identifier the browser PRESENTED, including a planted one that resolves to
+// nothing, because retiring it is the session-fixation control. This value is
+// unset for exactly that case, which is why it cannot serve there.
+//
+// This is NOT a second auth path itself: the Principal on the context is what
+// authenticated the request, and this value is that same resolution's
+// by-product — a handler consumes it, it never re-verifies it.
+//
+// # WHY THE IDENTITY SNAPSHOT DELIBERATELY DOES NOT CROSS
+//
+// consoleauth.Session carries Account, Role and Kind, and its own doc calls
+// them "the snapshot taken at sign-in" — AccountID is "the only field here
+// that authorization depends on". Service.Resolve returns that stale Session
+// beside a FRESHLY read accounts.Account, and the Principal on this context
+// is built from the fresh one, so a role change takes effect on the very next
+// click.
+//
+// Carrying the whole Session here would put a stale Role and Kind on the
+// context right next to the authoritative fresh ones, with nothing in the
+// type saying which is which. The trap is specific and this seam's declared
+// next consumer walks straight into it: #428's step-up POST is the handler
+// that gates mutate applies (ADR-0026 decision 3) and relay:-label
+// management (invariant 7), and it already needs the ID from here — so
+// `cs.Session.Role` would be the nearest field to hand and would read
+// `admin` for a demoted admin until their session lapsed on its own.
+//
+// So only the ID and the refreshed step-up stamp cross. AUTHORIZATION COMES
+// FROM THE PRINCIPAL AND ONLY THE PRINCIPAL. A handler needing any other
+// session fact should take it from a fresh Resolve rather than have this
+// type grow a snapshot field; TestConsoleSession_CarriesNoIdentitySnapshot
+// fails if one is added.
+type ConsoleSession struct {
+	// ID is the session identifier, which redacts under every stringifying
+	// interface (consoleauth.SessionID).
+	ID consoleauth.SessionID
+
+	// AuthenticatedAt is the step-up stamp: the last moment a human proved
+	// presence by re-entering a credential. Safe to carry because it is
+	// REFRESHED — Service.StepUp writes it — so the value here is current as
+	// of this request, unlike the identity snapshot below.
+	AuthenticatedAt time.Time
+}
+
+// ConsoleSessionFromContext returns the ConsoleSession that Middleware
+// injected into ctx, on the browser lane only. ok is false on every other
+// lane, including an unauthenticated public request.
+func ConsoleSessionFromContext(ctx context.Context) (ConsoleSession, bool) {
+	cs, ok := ctx.Value(consoleSessionContextKey{}).(ConsoleSession)
+	return cs, ok
+}
+
 // authenticateConsole resolves a browser session into the acting identity.
 //
 // The Account is read fresh by the resolver on every call, exactly as the token
 // lane does, which is what makes a demotion or a disablement take effect on the
 // very next click rather than at the next sign-in.
-func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.SessionID, source string) (capability.Principal, bool) {
+func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.SessionID, source string) (authResult, bool) {
 	sess, acct, err := a.console.resolver.Resolve(ctx, id)
 	if err != nil {
-		return capability.Principal{}, false
+		return authResult{}, false
 	}
 	p := principalFromAccount(acct)
 	p.AuthMethod = capability.AuthMethodConsoleSession
@@ -155,6 +227,5 @@ func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.
 	// No TokenID: a Console session presents no API Token. The audit trail's
 	// verified lane carries the method instead, which is what distinguishes
 	// "someone's browser did this" from "someone's script did this".
-	_ = sess
-	return p, true
+	return authResult{principal: p, console: &ConsoleSession{ID: id, AuthenticatedAt: sess.AuthenticatedAt}}, true
 }

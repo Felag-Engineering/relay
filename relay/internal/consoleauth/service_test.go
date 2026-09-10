@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -420,6 +421,173 @@ func TestStepUp_IsNotACheaperCheckThanTheSignIn(t *testing.T) {
 	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	if _, throttled := consoleauth.Throttled(err); !throttled {
 		t.Fatalf("an immediate step-up retry = %v, want a ThrottledError", err)
+	}
+}
+
+// TestStepUp_AThrottledStepUpIsAudited is the bug the issue reported: a
+// throttled step-up returned ThrottledError without recordLogin, so the
+// throttle simply never reached the trail. Contrast Login's throttle branch,
+// which always has.
+func TestStepUp_AThrottledStepUpIsAudited(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+		t.Fatalf("StepUp with a wrong password = %v, want ErrBadCredentials", err)
+	}
+	afterFailure := len(f.audit.all())
+
+	// The immediate retry lands inside the progressive delay the failure
+	// above just earned.
+	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	wait, throttled := consoleauth.Throttled(err)
+	if !throttled {
+		t.Fatalf("StepUp inside the delay window = %v, want a ThrottledError", err)
+	}
+
+	events := f.audit.all()
+	// Exactly one new event: the count is what stops this test passing on
+	// today's bug, where the throttle records nothing and the last event
+	// stays the earlier failure.
+	if got, want := len(events), afterFailure+1; got != want {
+		t.Fatalf("recorded %d events after the throttled attempt, want %d", got, want)
+	}
+	last := events[len(events)-1]
+	if last.Kind != audit.KindStepUpThrottled {
+		t.Errorf("audited kind = %q, want %q", last.Kind, audit.KindStepUpThrottled)
+	}
+	if !strings.Contains(last.Reason, "step-up") {
+		t.Errorf("reason = %q, does not name the step-up", last.Reason)
+	}
+	if !strings.Contains(last.Reason, wait.Round(time.Second).String()) {
+		t.Errorf("reason = %q, does not name the wait %s", last.Reason, wait.Round(time.Second))
+	}
+}
+
+// TestStepUp_AnUnauditableThrottleIsNotSilentlyAThrottle: an audit failure on
+// the throttle branch must fail closed exactly like every other exit of
+// StepUp, not be swallowed so the caller still sees a plain ThrottledError.
+func TestStepUp_AnUnauditableThrottleIsNotSilentlyAThrottle(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+		t.Fatalf("StepUp with a wrong password = %v, want ErrBadCredentials", err)
+	}
+
+	f.audit.failWith = errors.New("the audit store is unreachable")
+	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	if err == nil {
+		t.Fatal("an unauditable throttled step-up returned no error")
+	}
+	if _, throttled := consoleauth.Throttled(err); throttled {
+		t.Errorf("an unauditable throttle was reported as an ordinary ThrottledError: %v", err)
+	}
+}
+
+// TestStepUp_SucceedsUnderItsOwnAuditKind pins the fix for the issue's second
+// bug: a successful step-up must be its own Kind, not indistinguishable from
+// an ordinary sign-in.
+func TestStepUp_SucceedsUnderItsOwnAuditKind(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, consoleauth.WithStepUpWindow(5*time.Minute))
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	// Past both the step-up window and the throttle's progressive delay.
+	f.clk.advance(6 * time.Minute)
+
+	if err := f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7"); err != nil {
+		t.Fatalf("StepUp: %v", err)
+	}
+
+	events := f.audit.all()
+	if len(events) != 2 {
+		t.Fatalf("recorded %d events, want sign-in then step-up: %+v", len(events), events)
+	}
+	if events[0].Kind != audit.KindLoginSucceeded {
+		t.Errorf("first event kind = %q, want %q", events[0].Kind, audit.KindLoginSucceeded)
+	}
+	last := events[len(events)-1]
+	if last.Kind != audit.KindStepUp {
+		t.Errorf("a successful step-up was recorded as %q, want %q", last.Kind, audit.KindStepUp)
+	}
+	if last.Account != "mike" || last.AccountID != f.mike.ID || last.Role != string(accounts.RoleAdmin) {
+		t.Errorf("the successful step-up is not attributed: %+v", last)
+	}
+}
+
+// TestStepUp_ARefusedStepUpIsNotASignInFailure pins the amendment: the
+// step-up door's refusal must not be filed under the sign-in door's failure
+// kind, even though that line "already worked" before this change.
+func TestStepUp_ARefusedStepUpIsNotASignInFailure(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+		t.Fatalf("StepUp: %v", err)
+	}
+
+	last := f.audit.last()
+	if last.Kind == audit.KindLoginFailed {
+		t.Error("a refused step-up was filed under the sign-in door's failure kind — a consumer " +
+			"watching login_failed would never see a session grinding at the step-up prompt")
+	}
+	if last.Kind != audit.KindStepUpFailed {
+		t.Errorf("audited kind = %q, want %q", last.Kind, audit.KindStepUpFailed)
+	}
+}
+
+// TestStepUp_RefusedAndThrottledStepUpsNameNoAccount holds LoginEvent's
+// anti-enumeration rule (the verified lane is empty on every non-success
+// record, ALWAYS) across the step-up door too. A step-up runs against an
+// Account the Relay already knows, which makes filling the verified lane
+// tempting — but doing so would break the very rule the pooling cost in the
+// amendment's rationale depends on.
+func TestStepUp_RefusedAndThrottledStepUpsNameNoAccount(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+
+	if err := f.svc.StepUp(ctx, id, accounts.NewPassword("wrong"), "198.51.100.7"); !errors.Is(err, consoleauth.ErrBadCredentials) {
+		t.Fatalf("StepUp: %v", err)
+	}
+	refused := f.audit.last()
+	if refused.Account != "" || refused.AccountID != "" {
+		t.Errorf("a refused step-up named an Account: %+v", refused)
+	}
+
+	// The immediate retry lands inside the delay the refusal above earned.
+	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
+	if _, throttled := consoleauth.Throttled(err); !throttled {
+		t.Fatalf("StepUp inside the delay window = %v, want a ThrottledError", err)
+	}
+	throttledEvent := f.audit.last()
+	if throttledEvent.Account != "" || throttledEvent.AccountID != "" {
+		t.Errorf("a throttled step-up named an Account: %+v", throttledEvent)
 	}
 }
 

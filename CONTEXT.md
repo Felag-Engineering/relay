@@ -456,6 +456,18 @@ the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them.
 from the **AI-agent**, which drives the Relay over MCP.
 _Avoid_: dashboard, portal, admin panel, "the UI"
 
+**Step-up re-authentication**:
+Re-proving human presence by re-entering a credential against the session's own Account,
+without ending the session. Gates privilege-granting actions (ADR-0009) and every `mutate`
+apply on the Admin Console (ADR-0026 decision 3) and `relay:`-label management (invariant
+7). Its window — how recently is "recent enough" — is file-only Relay configuration no
+Account may widen over the wire (invariant 11). Recorded as its own event, distinct from a
+sign-in: a hijacked session grinding at the step-up prompt is a different incident from an
+anonymous caller grinding at the sign-in form, because the step-up door is reachable only
+from an already-authenticated session. A refused or throttled step-up is likewise its own
+event, distinct from a refused or throttled sign-in, for the same reason.
+_Avoid_: re-auth, sudo mode, 2FA, MFA, confirmation (unqualified — name the rung)
+
 **Event seam**:
 The Relay's one in-process pub/sub (`internal/events`) feeding the Admin Console's live
 views: exactly four publishers — registry transitions, Job transitions, MCP tool calls,

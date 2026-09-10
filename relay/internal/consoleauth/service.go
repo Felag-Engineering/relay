@@ -19,6 +19,10 @@ const (
 	auditKindLoginFailed    = audit.KindLoginFailed
 	auditKindLoginThrottled = audit.KindLoginThrottled
 	auditKindLogout         = audit.KindLogout
+
+	auditKindStepUp          = audit.KindStepUp
+	auditKindStepUpFailed    = audit.KindStepUpFailed
+	auditKindStepUpThrottled = audit.KindStepUpThrottled
 )
 
 // Authentication methods, as recorded in the audit trail's verified lane.
@@ -97,7 +101,8 @@ type Attempt struct {
 // LoginEvent is one auditable authentication event.
 type LoginEvent struct {
 	// Kind is one of audit.KindLoginSucceeded, KindLoginFailed,
-	// KindLoginThrottled or KindLogout.
+	// KindLoginThrottled, KindLogout, KindStepUp, KindStepUpFailed or
+	// KindStepUpThrottled.
 	Kind string
 
 	// Account and AccountID identify the acting Account. Both are empty on a
@@ -364,6 +369,26 @@ func (s *Service) Resolve(ctx context.Context, id SessionID) (Session, accounts.
 // It takes the same Attempt shape and runs the same throttle as Login, because
 // it IS a login — the strongest one in the system. What it must never be is a
 // cheaper check than the one that established the session.
+//
+// Every exit that CHECKED A CREDENTIAL is audited, deliberately under its OWN
+// kinds (KindStepUp/Failed/Throttled) rather than the sign-in ones: the step-up
+// door is reached only from an already-authenticated session, so "someone is
+// guessing at the front door" and "something inside this session is trying
+// to escalate" are different questions, and ADR-0026's threat model is the
+// second one (see audit.go's doc). audit.AuthFailureKinds is how a consumer
+// asks both refusal questions at once when it needs to.
+//
+// TWO EXITS WRITE NO RECORD, and the distinction is "was a credential
+// compared", not "did this attempt matter": the Resolve failure below (an
+// expired, unknown or disabled session) and a sessions.StepUp write failure
+// both return before or after the comparison, never because of it. The first
+// is the gap worth knowing about — a caller probing this endpoint with a
+// stale or invented session identifier leaves nothing in the trail, and
+// audit.AuthFailureKinds cannot recover what was never written. That is
+// pre-existing behaviour, shared with every other route that resolves a
+// session, and closing it belongs with the session lane rather than with this
+// function; it is recorded here rather than left for a reader to discover
+// that "audited" quietly meant "mostly".
 func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Password, source string) error {
 	sess, acct, err := s.Resolve(ctx, id)
 	if err != nil {
@@ -372,6 +397,16 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 	name := accounts.NormalizeName(sess.Account)
 
 	if wait := s.throttle.Check(source, name); wait > 0 {
+		if err := s.recordLogin(ctx, LoginEvent{
+			Kind:          auditKindStepUpThrottled,
+			SubmittedName: sess.Account,
+			Method:        MethodPassword,
+			Source:        source,
+			Reason: fmt.Sprintf("step-up re-authentication refused before any credential "+
+				"was checked; next attempt accepted in %s", wait.Round(time.Second)),
+		}); err != nil {
+			return err
+		}
 		return &ThrottledError{RetryAfter: wait}
 	}
 
@@ -382,7 +417,7 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 		}
 		s.throttle.Fail(source, name)
 		if err := s.recordLogin(ctx, LoginEvent{
-			Kind:          auditKindLoginFailed,
+			Kind:          auditKindStepUpFailed,
 			SubmittedName: sess.Account,
 			Method:        MethodPassword,
 			Source:        source,
@@ -397,7 +432,7 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 		return err
 	}
 	return s.recordLogin(ctx, LoginEvent{
-		Kind:      auditKindLoginSucceeded,
+		Kind:      auditKindStepUp,
 		Account:   acct.Name,
 		AccountID: acct.ID,
 		Role:      string(acct.Role),

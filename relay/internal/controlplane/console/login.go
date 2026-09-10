@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -62,6 +63,15 @@ const (
 	// destination, this is the Console's extent — so [SessionScope] names
 	// this one.
 	PathPrefix = "/console/"
+
+	// interruptedCookieName marks that UnauthorizedHandler, and only it, sent
+	// this browser to sign in. See UnauthorizedHandler and handleLoginForm
+	// for why this is a cookie rather than a query parameter: the sign-in
+	// page is reachable by anyone, and every byte of its URL is
+	// attacker-writable, so a `?interrupted=1` query parameter would record a
+	// provenance check that provides none. A cookie for this origin is the
+	// one thing a cross-site attacker cannot write.
+	interruptedCookieName = "relay_console_interrupted"
 )
 
 // Authenticator is the Console's view of the sign-in service: it can start a
@@ -118,6 +128,10 @@ func UnauthorizedHandler() http.Handler {
 		target := LoginPath
 		if next := safeReturnPath(r.URL.RequestURI()); next != "" && next != HomePath {
 			target += "?next=" + url.QueryEscape(next)
+			// A real interruption, with somewhere to return to: mark it so
+			// the sign-in page can say what happened rather than guessing
+			// from the URL alone (which any link could have crafted).
+			setInterruptedMarker(w)
 		}
 		// Never cache a redirect to a sign-in page: the next request from
 		// this browser may well be authenticated.
@@ -126,12 +140,76 @@ func UnauthorizedHandler() http.Handler {
 	})
 }
 
+// setInterruptedMarker records that THIS response is the one sending the
+// browser to sign in mid-action.
+//
+// Path=LoginPath, not "/console/": the narrowest scope that still reaches the
+// only handler that reads it, so the marker never rides on /api/v1 the way a
+// `__Host-` cookie's forced Path=/ would. No `__Host-` prefix for the same
+// reason — the trade is named, not hidden: a sibling subdomain could plant a
+// false note, but a false note carries no authority and no attacker-supplied
+// content, which is strictly better than today, where any link at all can
+// render this copy. HttpOnly/Secure/SameSite=Strict match the session
+// cookie's posture, which already assumes a secure context. Max-Age 300 is
+// long enough to type a password and short enough that "that action" is not
+// stale. Value "1": presence is the entire signal, so there is nothing to
+// parse and nothing to inject.
+func setInterruptedMarker(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     interruptedCookieName,
+		Value:    "1",
+		Path:     LoginPath,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   300,
+	})
+}
+
+// takeInterruptedMarker reports whether the marker cookie is present and
+// clears it in the same response, so a marker set for one visit cannot
+// survive to color a later, unrelated one.
+func takeInterruptedMarker(w http.ResponseWriter, r *http.Request) bool {
+	_, err := r.Cookie(interruptedCookieName)
+	present := err == nil
+	http.SetCookie(w, &http.Cookie{
+		Name:     interruptedCookieName,
+		Value:    "",
+		Path:     LoginPath,
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+	})
+	return present
+}
+
 // safeReturnPath sanitises a post-sign-in destination.
 //
 // An open redirect on a sign-in page is a phishing primitive: it lends this
 // Relay's hostname to somebody else's page, moments after an operator typed
 // their password. So a return path must be rooted at the Console and may not
 // be protocol-relative, and anything else is discarded rather than repaired.
+//
+// # The dot-segment defect this closes
+//
+// The previous check prefix-matched EscapedPath() against "/console/" and
+// resolved no dot segment at all. That was NOT an escaping bug — the plain,
+// unescaped "/console/../api/v1/x" passed it too, because EscapedPath()
+// returns that string verbatim and the prefix test is satisfied regardless.
+// Switching EscapedPath() for the decoded Path would have fixed neither form.
+// The fix below decides membership on the DECODED path (parsed.Path), which
+// collapses "..", "%2e%2e", "%2E%2E", "..%2f" and "//" to the same reading,
+// and rejects anything that is not already in that canonical form rather than
+// repairing it (see cleanPath and CONTEXT.md's Canonical form). The value
+// actually returned is still EscapedPath() — byte-identical to what the
+// browser asked for — so a legitimately percent-encoded segment like "a%2fb"
+// is never silently rewritten to "a/b".
+//
+// cleanPath is the same helper Unauthenticated and SessionScope use, so the
+// return path, the public-route predicate and the cookie's reach cannot
+// disagree about what a path is. It preserves a trailing slash, so
+// "/console/" and "/console/nodes/" still pass.
 func safeReturnPath(raw string) string {
 	if raw == "" {
 		return ""
@@ -145,14 +223,35 @@ func safeReturnPath(raw string) string {
 	if err != nil || parsed.IsAbs() || parsed.Host != "" {
 		return ""
 	}
-	p := parsed.EscapedPath()
+	p := parsed.Path // percent-decoded
+	if p != cleanPath(p) {
+		return ""
+	}
 	if !strings.HasPrefix(p, "/console/") || p == LoginPath || p == LogoutPath {
 		return ""
 	}
-	if q := parsed.RawQuery; q != "" {
-		return p + "?" + q
+	// The ESCAPED form must be rooted at the Console too, not only the decoded
+	// one. Deciding on the decoded path is what catches `..` and `%2e%2e`
+	// alike, but on its own it admits a value that is not rooted at `/` at
+	// all: `%2fconsole%2fnodes` decodes to the canonical, correctly-prefixed
+	// "/console/nodes" and passes both checks above, while the value RETURNED
+	// below is the escaped "%2fconsole%2fnodes" — a relative reference. The
+	// old EscapedPath-based prefix check refused that by accident; this keeps
+	// it refused on purpose.
+	//
+	// Not exploitable through today's two callers, which hand the result to
+	// http.Redirect from a request at /console/login, so Go anchors it to the
+	// current directory and the Location stays inside /console/. That is a
+	// property of where those call sites happen to live, not of anything this
+	// function guarantees, and this function is the one that claims the value
+	// is safe to redirect to.
+	if !strings.HasPrefix(parsed.EscapedPath(), "/console/") {
+		return ""
 	}
-	return p
+	if q := parsed.RawQuery; q != "" {
+		return parsed.EscapedPath() + "?" + q
+	}
+	return parsed.EscapedPath()
 }
 
 // loginView is what the sign-in template renders.
@@ -212,6 +311,11 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
 // handleLoginForm renders the sign-in page.
 func handleLoginForm(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Read and clear the marker FIRST, before any early return: a marker
+		// left unread here would survive to color a later, unrelated visit to
+		// this page.
+		interrupted := takeInterruptedMarker(w, r)
+
 		// Already signed in: go where they were headed. The authentication
 		// boundary injects a Principal on a public route when one resolves,
 		// so this is a read of what it already established rather than the
@@ -225,10 +329,17 @@ func handleLoginForm(d Deps) http.HandlerFunc {
 			http.Error(w, "could not establish a CSRF token", http.StatusInternalServerError)
 			return
 		}
+		next := safeReturnPath(r.URL.Query().Get("next"))
 		renderLogin(w, http.StatusOK, loginView{
-			CSRFToken:   token,
-			Next:        safeReturnPath(r.URL.Query().Get("next")),
-			Interrupted: r.URL.Query().Get("next") != "",
+			CSRFToken: token,
+			Next:      next,
+			// Both conditions matter: the marker says a real interruption
+			// happened, and the validated Next says there is somewhere to
+			// return to. A marker with no surviving Next means safeReturnPath
+			// threw the crafted destination away, and the copy about "that
+			// action" must not render for a destination that no longer
+			// exists.
+			Interrupted: interrupted && next != "",
 		})
 	}
 }
@@ -260,6 +371,13 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 		// RETIRED, not reused. It may have been planted before the
 		// authentication boundary — that is session fixation, and rotating
 		// here is the control.
+		//
+		// Deliberately the raw cookie, not controlplane.ConsoleSessionFromContext:
+		// Attempt.Existing must carry whatever identifier the browser
+		// PRESENTED so it can be retired, including a planted one that
+		// resolves to nothing at all. The boundary's resolved session is
+		// exactly the wrong thing to read here — it is empty for the one
+		// identifier this control exists to catch.
 		if c, err := r.Cookie(consoleauth.SessionCookieName); err == nil {
 			attempt.Existing = consoleauth.ParseSessionID(c.Value)
 		}
@@ -309,10 +427,42 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 }
 
 // handleLogout ends the session and returns to the sign-in page.
+//
+// It reads the session ID from the authentication boundary
+// (controlplane.ConsoleSessionFromContext) rather than re-reading the raw
+// cookie: LogoutPath is never a public route, so Middleware has already
+// resolved this very cookie by the time this handler runs, and reading it a
+// second time here would be a second, independent parse of the same
+// credential. Production-identical to the old read; the difference is that
+// there is now exactly one place that turns the cookie into a SessionID.
 func handleLogout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(consoleauth.SessionCookieName); err == nil && d.Auth != nil {
-			if err := d.Auth.Logout(r.Context(), consoleauth.ParseSessionID(c.Value), sourceAddress(r)); err != nil {
+		cs, ok := controlplane.ConsoleSessionFromContext(r.Context())
+		if !ok && d.Auth != nil {
+			// FAIL CLOSED, do not fall through to the happy path. An
+			// authenticated request reached a gated /console/ route without a
+			// resolved browser session, which on the cookie lane cannot
+			// happen — Middleware sets the value for every request it lets
+			// through there. The one way here is a request that authenticated
+			// on ANOTHER lane: authenticateRequest prefers the bearer lane
+			// unconditionally and with no path scope, so an API Token or OAuth
+			// bearer aimed at this route takes it.
+			//
+			// Falling through would clear the cookie, 303 to the sign-in page,
+			// and leave the server-side session alive — "a sign-out an operator
+			// believes happened and did not", which is the exact failure the
+			// comment below refuses to allow for a different reason. It is not
+			// browser-reachable, so this is a wiring alarm rather than a live
+			// hole; it is a 500 because the next consumer of this seam (#428's
+			// step-up POST) will copy whatever shape it finds here, and the
+			// shape it must copy is "no session, no action".
+			slog.Error("console sign-out reached without a resolved browser session",
+				"path", r.URL.Path)
+			http.Error(w, "the Relay could not identify the session to end", http.StatusInternalServerError)
+			return
+		}
+		if ok && d.Auth != nil {
+			if err := d.Auth.Logout(r.Context(), cs.ID, sourceAddress(r)); err != nil {
 				http.Error(w, "the Relay could not record the sign-out", http.StatusInternalServerError)
 				return
 			}
