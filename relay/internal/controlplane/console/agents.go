@@ -830,6 +830,10 @@ func agentCallFrom(f trailFacts) agentCall {
 		c.Outcome = "refused"
 	case audit.KindApprovalRequested:
 		c.Outcome = "parked"
+	case audit.KindApprovalGrantRequested:
+		// #546: not "parked". A park suspends one Plan; this asks for a
+		// window that will release many, and the two chips must differ.
+		c.Outcome = "grant requested"
 	case audit.KindApprovalPendingObserved:
 		c.Outcome = "already parked"
 	case audit.KindApprovalDecided:
@@ -970,6 +974,8 @@ func toolName(f trailFacts) string {
 	switch f.Kind {
 	case audit.KindApprovalRequested, audit.KindApprovalPendingObserved:
 		return "parked for approval"
+	case audit.KindApprovalGrantRequested:
+		return "request approval grant"
 	case audit.KindApprovalDecided:
 		// GrantID is set ONLY by RevokeGrant (capability/approval_grant.go) —
 		// a structural discriminator, not a guess. See the doc comment above

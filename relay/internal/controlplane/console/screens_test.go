@@ -4384,6 +4384,154 @@ func TestApprovals_LapsedRowsAreOrderedMostRecentFirst(t *testing.T) {
 // erase Reason or the tool name. Locating the row by the very text a
 // mutation deletes would make the helper fail closed for the wrong reason
 // instead of the one under test.
+// sinkParkAndGrantRequestRecords builds one ordinary park and one grant
+// request THROUGH THE REAL SINK, so the kinds under test are the ones the
+// product writes rather than two literals this test invented (#463/#517/#520).
+func sinkParkAndGrantRequestRecords(t *testing.T) (park, grantReq audit.Record) {
+	t.Helper()
+	repo := &captureRepo{}
+	sink := auditsink.New(repo,
+		auditsink.WithClock(func() time.Time { return testNow }),
+		auditsink.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	asker := capability.Principal{
+		AccountID: "acct-parker", Account: "parker", Role: "operator", Kind: "machine",
+	}
+	granter := capability.Principal{
+		AccountID: "acct-granter", Account: "granter", Role: "operator", Kind: "machine",
+	}
+	ctx := context.Background()
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalRequested,
+		Principal:  asker,
+		ApprovalID: "appr-park",
+		Reason:     "parked for approval: restart the web fleet",
+	}); err != nil {
+		t.Fatalf("sink.Record(park): %v", err)
+	}
+	if err := sink.Record(ctx, capability.AuditEntry{
+		Kind:       capability.AuditKindApprovalGrantRequested,
+		Principal:  granter,
+		ApprovalID: "appr-grant",
+		GrantID:    "grant-9",
+		Reason:     "batch/window grant requested: mutate on node:role=web for 1h",
+	}); err != nil {
+		t.Fatalf("sink.Record(grant request): %v", err)
+	}
+	if len(repo.recs) != 2 {
+		t.Fatalf("the sink wrote %d records for 2 entries, want 2", len(repo.recs))
+	}
+	park, grantReq = repo.recs[0], repo.recs[1]
+	if park.Kind != audit.KindApprovalRequested {
+		t.Fatalf("the park record has Kind %q, want %q", park.Kind, audit.KindApprovalRequested)
+	}
+	if grantReq.Kind != audit.KindApprovalGrantRequested {
+		t.Fatalf("the grant request has Kind %q, want %q — the sink is not mapping the new kind",
+			grantReq.Kind, audit.KindApprovalGrantRequested)
+	}
+	// The prose survives the sink. Building through the real sink only buys
+	// something if the record coming OUT is asserted; otherwise this helper is
+	// ceremony around a struct literal. A grant request whose Reason was
+	// dropped in the sink's branch still renders a correct chip and a correct
+	// summary sentence — both are computed from Kind — so nothing else here
+	// would notice that the approvals detail page had stopped saying what was
+	// asked for.
+	for _, rec := range []audit.Record{park, grantReq} {
+		if rec.Reason == "" {
+			t.Fatalf("the sink dropped Reason for kind %q", rec.Kind)
+		}
+	}
+	return park, grantReq
+}
+
+// TestParkRecord_FindsAGrantBackedRequest guards the regression a SPLIT KIND
+// invites and that audit's partition machinery structurally cannot catch.
+//
+// parkRecord is an indexed POINT READ, filtered by kind, that answers "what was
+// the ask behind this pending Request?". A Request is created two ways — a
+// dispatch parking, or a Grant being asked for — so naming only
+// approval_requested would make every grant-backed approval report no ask at
+// all. The request would still be listed and still decidable, but the screen
+// would stop being able to say who asked or why, which is most of what it is
+// for. Kinds() catches a kind that is CLASSIFIED nowhere; nothing catches a
+// point read that forgot one.
+func TestParkRecord_FindsAGrantBackedRequest(t *testing.T) {
+	q := &fakeQueries{rows: []capability.AuditRow{
+		{
+			Kind: audit.KindApprovalGrantRequested, ApprovalID: "appr-grant",
+			GrantID: "grant-9", Timestamp: testNow,
+			Reason: "batch/window grant requested: mutate on node:role=web for 1h",
+		},
+		{
+			Kind: audit.KindApprovalRequested, ApprovalID: "appr-park",
+			Timestamp: testNow, Reason: "parked for approval: restart the web fleet",
+		},
+	}}
+	d := activityDeps(q)
+	caller := capability.Principal{AccountID: "acct-admin", Account: "alice", Role: "admin"}
+
+	row, ok, err := parkRecord(context.Background(), d, caller, "appr-grant")
+	if err != nil {
+		t.Fatalf("parkRecord(grant-backed): %v", err)
+	}
+	if !ok {
+		t.Fatal("parkRecord found no ask for a grant-backed Request — the approvals screen " +
+			"cannot say who asked or why")
+	}
+	if row.Kind != audit.KindApprovalGrantRequested {
+		t.Errorf("parkRecord returned Kind %q, want %q", row.Kind, audit.KindApprovalGrantRequested)
+	}
+
+	// The ordinary park still resolves, so widening the filter did not trade
+	// one lookup for the other.
+	row, ok, err = parkRecord(context.Background(), d, caller, "appr-park")
+	if err != nil {
+		t.Fatalf("parkRecord(park): %v", err)
+	}
+	if !ok || row.Kind != audit.KindApprovalRequested {
+		t.Errorf("parkRecord lost the ordinary park: ok=%v kind=%q", ok, row.Kind)
+	}
+}
+
+// TestApprovalGrantRequestDoesNotRenderAsAPark is #546(i)'s acceptance: the two
+// acts must render DIFFERENTLY, on every surface that names them.
+//
+// A Grant is an ask for standing authority over many future dispatches; a park
+// is one Plan waiting for one answer. Filed under one kind they were the same
+// sentence and the same chip, and the blast radii are not comparable.
+//
+// Each assertion names its own surface, so a regression on one does not hide
+// behind another passing.
+func TestApprovalGrantRequestDoesNotRenderAsAPark(t *testing.T) {
+	park, grantReq := sinkParkAndGrantRequestRecords(t)
+
+	parkFacts, grantFacts := factsOfRecord(park), factsOfRecord(grantReq)
+
+	if got := summarize(parkFacts); got == summarize(grantFacts) {
+		t.Errorf("Activity gives a park and a grant request the same sentence: %q", got)
+	}
+	if got := summarize(grantFacts); !strings.Contains(got, "grant") {
+		t.Errorf("Activity's sentence for a grant request does not say grant: %q", got)
+	}
+
+	parkCall, grantCall := agentCallFrom(parkFacts), agentCallFrom(grantFacts)
+	if parkCall.Outcome == grantCall.Outcome {
+		t.Errorf("the Agents outcome chip is %q for both a park and a grant request",
+			parkCall.Outcome)
+	}
+	if parkCall.Tool == grantCall.Tool {
+		t.Errorf("the Agents tool cell is %q for both a park and a grant request", parkCall.Tool)
+	}
+
+	// And the grant request stays in the approval family — it must not fall to
+	// `other`, which is where an unclassified kind lands. kindOf has a default
+	// arm, so a kind added and never classified renders on the trail under the
+	// wrong chip WITHOUT failing the partition test: that test proves a kind
+	// APPEARS, not that it appears in the right family.
+	if got := kindOf(grantReq.Kind); got != rowApproval {
+		t.Errorf("a grant request maps to family %q, want the approval family", got)
+	}
+}
+
 func sinkApprovalDecisionRecords(t *testing.T) (decision, revocation, legacy audit.Record) {
 	t.Helper()
 	repo := &captureRepo{}

@@ -52,6 +52,29 @@ const (
 	// hammering a parked request, just not filed as repeat asks.
 	KindApprovalPendingObserved = "approval_pending_observed"
 
+	// KindApprovalGrantRequested is a request for a batch/window Grant (#546,
+	// ADR-0027 decision 12): an ask for STANDING authority over many future
+	// dispatches, not a single Plan waiting for a single answer.
+	//
+	// Distinct from KindApprovalRequested for the reason #379 split
+	// KindApprovalPendingObserved out of it — so that kind keeps meaning one
+	// thing. Filed together, "somebody asked for a window covering every
+	// mutate on the fleet for the next hour" rendered identically to "one
+	// dispatch is parked", and the blast radii are not comparable: a Grant
+	// releases many Jobs, a park releases one.
+	//
+	// GrantID distinguishes them structurally and always has. A separate kind
+	// is the stronger form of the same fact: a surface that forgets to check
+	// GrantID renders a wrong sentence, whereas one that forgets this kind
+	// fails audit's partition test instead (see Kinds).
+	//
+	// This is the ASK, not the grant of it. The Grant row exists from this
+	// moment but cannot be claimed until the Request reaches approved, which
+	// the store's claim query enforces — so the window this names is still
+	// shut. RevokeGrant's closing of it is a KindApprovalDecided carrying a
+	// GrantID, not this kind.
+	KindApprovalGrantRequested = "approval_grant_requested"
+
 	// KindApprovalExpired is a parked dispatch that ran out of time (#269,
 	// ADR-0027). Recorded because an approval that lapsed is a fact the trail
 	// must carry: without it a parked dispatch just vanishes from the record
@@ -145,6 +168,7 @@ var allKinds = []string{
 	KindNodeRevoke,
 	KindPlan,
 	KindApprovalRequested,
+	KindApprovalGrantRequested,
 	KindApprovalPendingObserved,
 	KindApprovalExpired,
 	KindApprovalDecided,

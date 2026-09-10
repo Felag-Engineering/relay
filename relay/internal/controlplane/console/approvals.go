@@ -1247,12 +1247,22 @@ func releasedJobs(ctx context.Context, d Deps, caller capability.Principal, gran
 	return out, false, nil
 }
 
-// parkRecord reads the approval_requested record for one Request: an INDEXED
-// point read on approval_id (idx_audit_approval), not a scan.
+// parkRecord reads the record that CREATED one Request: an INDEXED point read
+// on approval_id (idx_audit_approval), not a scan.
+//
+// BOTH creating kinds are named (#546). A Request is created either by a
+// dispatch parking (approval_requested) or by a batch/window Grant being asked
+// for (approval_grant_requested), and this read is how the approvals screen
+// finds the ask behind a pending Request. Naming only the first would have made
+// every grant-backed approval report "no park record" — the request would still
+// be listed and still be decidable, but the screen would stop being able to say
+// who asked or why, which is most of what it is for. That is the failure mode a
+// split kind invites, and the one audit's partition machinery cannot catch:
+// this filter is a point read, not a classification.
 func parkRecord(ctx context.Context, d Deps, caller capability.Principal, approvalID string) (capability.AuditRow, bool, error) {
 	trail, err := d.Queries.QueryAudit(ctx, caller, capability.AuditFilter{
 		ApprovalID: approvalID,
-		Kinds:      []string{audit.KindApprovalRequested},
+		Kinds:      []string{audit.KindApprovalRequested, audit.KindApprovalGrantRequested},
 	}, capability.PageRequest{Limit: 1})
 	if err != nil {
 		return capability.AuditRow{}, false, err

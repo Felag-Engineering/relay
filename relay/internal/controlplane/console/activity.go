@@ -129,8 +129,9 @@ func kindOf(k string) rowKind {
 		return rowRead
 	case audit.KindRefusal:
 		return rowRefusal
-	case audit.KindApprovalRequested, audit.KindApprovalDecided,
-		audit.KindApprovalExpired, audit.KindApprovalPendingObserved:
+	case audit.KindApprovalRequested, audit.KindApprovalGrantRequested,
+		audit.KindApprovalDecided, audit.KindApprovalExpired,
+		audit.KindApprovalPendingObserved:
 		return rowApproval
 	case audit.KindTokenMint, audit.KindTokenRevoke, audit.KindAPITokenMint, audit.KindAPITokenRevoke:
 		return rowToken
@@ -1068,6 +1069,10 @@ func summarize(f trailFacts) string {
 		return "signed out"
 	case audit.KindApprovalRequested:
 		return "parked a dispatch for approval"
+	case audit.KindApprovalGrantRequested:
+		// #546: a Grant is an ask for STANDING authority over many future
+		// dispatches, so it must not read as one Plan waiting for one answer.
+		return "requested an Approval grant"
 	case audit.KindApprovalPendingObserved:
 		return "re-drove a dispatch that is already parked"
 	case audit.KindApprovalDecided:

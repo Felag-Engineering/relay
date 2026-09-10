@@ -180,6 +180,19 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 		return err
 	}
 
+	// A request for a batch/window Grant (#546). Same no-Results shape as a
+	// park and handled before the same fall-through, for the same reason: it
+	// would otherwise be recorded as a zero-Node dispatch. Its own kind
+	// because a Grant is an ask for standing authority over many dispatches,
+	// which is not the act approval_requested names.
+	if e.Kind == capability.AuditKindApprovalGrantRequested {
+		base.Kind = audit.KindApprovalGrantRequested
+		base.Reason = e.Reason
+		err := s.append(ctx, base)
+		s.logDecision(audit.KindApprovalGrantRequested, e, 0, "")
+		return err
+	}
+
 	// A re-drive of an already-parked dispatch (#379): same shape as a park,
 	// but nothing was created — the caller bounced off the existing pending
 	// Request. Recorded under its own kind so approval_requested keeps meaning

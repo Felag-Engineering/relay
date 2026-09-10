@@ -95,12 +95,22 @@ func TestRequestGrantCreatesAPendingRequest(t *testing.T) {
 
 	var requested *AuditEntry
 	for i := range audit.entries {
-		if audit.entries[i].Kind == AuditKindApprovalRequested {
+		if audit.entries[i].Kind == AuditKindApprovalGrantRequested {
 			requested = &audit.entries[i]
 		}
 	}
 	if requested == nil {
-		t.Fatal("no AuditKindApprovalRequested entry for the grant request")
+		t.Fatal("no AuditKindApprovalGrantRequested entry for the grant request")
+	}
+	// #546: and emphatically NOT filed as an ordinary park. Asserted rather
+	// than assumed, because the two were the same kind until this change and a
+	// revert would otherwise only fail the positive check above.
+	for i := range audit.entries {
+		if audit.entries[i].Kind == AuditKindApprovalRequested {
+			t.Errorf("the grant request was ALSO filed as an ordinary park (%+v) — a Grant is "+
+				"an ask for standing authority, not one Plan waiting for one answer",
+				audit.entries[i])
+		}
 	}
 	if requested.GrantID != grant.ID || requested.ApprovalID != request.ID {
 		t.Errorf("audit entry = %+v, want it to name both the grant and its authorizing request", requested)

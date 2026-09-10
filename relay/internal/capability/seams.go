@@ -169,6 +169,15 @@ const (
 	// is how a safety feature gets switched off.
 	AuditKindApprovalRequested
 
+	// AuditKindApprovalGrantRequested is a request for a batch/window Grant
+	// (#546, ADR-0027 decision 12) — an ask for STANDING authority over many
+	// future dispatches, written by RequestGrant. Distinct from
+	// AuditKindApprovalRequested so that kind keeps meaning "one Plan is
+	// parked": a Grant and a park have blast radii that are not comparable,
+	// and filing them together made the trail say they were the same act.
+	// ApprovalID, PlanHash and GrantID are all set on it.
+	AuditKindApprovalGrantRequested
+
 	// AuditKindApprovalPendingObserved is a re-drive of a dispatch that is
 	// ALREADY parked (#379): checkApproval found an existing pending Request
 	// rather than creating one. Fields are set exactly as for
