@@ -150,12 +150,20 @@ type consoleSessionContextKey struct{}
 // value.
 //
 // Carrying the ID here grants a handler no reach it did not already have: the
-// cookie is on the request regardless, so every handler could read it today.
-// What this removes is the REASON to — a handler that wants its session
-// re-reads the cookie today (login.go's raw-cookie logout, #428's step-up
-// POST tomorrow), and a second place that parses the same credential is a
-// second authentication path waiting to disagree with the first. This is
-// NOT a second auth path itself: the Principal on the context is what
+// cookie is on the request regardless, so every handler could read it anyway.
+// What this removes is the REASON to. A handler that wants its session would
+// otherwise parse the cookie itself — the shape handleLogout had before this
+// change, and the one #428's step-up POST must not grow — and a second place
+// that parses the same credential is a second authentication path waiting to
+// disagree with the first.
+//
+// One raw-cookie read deliberately remains, and it is not an exception to
+// that argument so much as a different job: handleLoginSubmit needs the
+// identifier the browser PRESENTED, including a planted one that resolves to
+// nothing, because retiring it is the session-fixation control. This value is
+// unset for exactly that case, which is why it cannot serve there.
+//
+// This is NOT a second auth path itself: the Principal on the context is what
 // authenticated the request, and this value is that same resolution's
 // by-product — a handler consumes it, it never re-verifies it.
 type ConsoleSession struct {
