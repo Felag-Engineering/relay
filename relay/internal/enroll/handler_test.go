@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -80,11 +81,23 @@ func parseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 // TestEnroll_Success verifies the happy path: a valid token + valid CSR + node: self_labels
 // produce a signed cert (CN == NodeId, not the CSR CN), the correct CA bundle, relay: labels
 // from the token scope, and a fully-populated registry entry.
+//
+// The "relay:marker" entry (no `=`) pins splitScopeEntry's empty-value
+// semantics all the way through: RED ON step (k) or (l) dropping a no-`=`
+// entry instead of storing it with an empty value.
+//
+// Note what this canNOT pin, and why nothing can: switching splitScopeEntry
+// to cut on the LAST `=` is behaviour-preserving. It is THE ONE
+// DECOMPOSITION — validateScope splits the same way it stamps — and any
+// entry carrying two `=` is refused under either cut, because `=` is outside
+// registry.WellFormedLabel's allowlist for both halves (pinned by
+// TestCreate_InvalidScope's "two equals signs" row). With zero or one `=`,
+// first and last are the same character.
 func TestEnroll_Success(t *testing.T) {
 	svc := NewService(NewMemoryRepository())
 	srv, reg, realCA := newEnrollServer(t, svc)
 
-	scope := []string{"relay:role=web", "relay:env=prod"}
+	scope := []string{"relay:role=web", "relay:env=prod", "relay:marker"}
 	tok, plaintext := mintToken(t, svc, scope)
 
 	req := &relayv1.EnrollRequest{
@@ -124,8 +137,8 @@ func TestEnroll_Success(t *testing.T) {
 	}
 
 	// AssignedLabels must carry the relay: namespace prefix in Key.
-	if len(resp.AssignedLabels) != 2 {
-		t.Fatalf("AssignedLabels len: got %d, want 2", len(resp.AssignedLabels))
+	if len(resp.AssignedLabels) != 3 {
+		t.Fatalf("AssignedLabels len: got %d, want 3", len(resp.AssignedLabels))
 	}
 	assignedByKey := make(map[string]string, len(resp.AssignedLabels))
 	for _, l := range resp.AssignedLabels {
@@ -136,6 +149,9 @@ func TestEnroll_Success(t *testing.T) {
 	}
 	if assignedByKey["relay:env"] != "prod" {
 		t.Errorf("AssignedLabels[relay:env]: got %q, want prod", assignedByKey["relay:env"])
+	}
+	if v, ok := assignedByKey["relay:marker"]; !ok || v != "" {
+		t.Errorf("AssignedLabels[relay:marker]: got (%q, present=%v), want (\"\", true)", v, ok)
 	}
 
 	// Registry entry: node: labels from self_labels (bare keys), relay: labels from scope (bare keys).
@@ -151,6 +167,9 @@ func TestEnroll_Success(t *testing.T) {
 	}
 	if node.RelayLabels["env"] != "prod" {
 		t.Errorf("RelayLabels[env]: got %q, want prod", node.RelayLabels["env"])
+	}
+	if v, ok := node.RelayLabels["marker"]; !ok || v != "" {
+		t.Errorf("RelayLabels[marker]: got (%q, present=%v), want (\"\", true)", v, ok)
 	}
 	if node.EnrollingTokenID != tok.ID {
 		t.Errorf("EnrollingTokenID: got %q, want %q", node.EnrollingTokenID, tok.ID)
@@ -314,7 +333,7 @@ func TestEnroll_BadCSR(t *testing.T) {
 
 // TestEnroll_NonNodeSelfLabel verifies that self_labels without the "node:" prefix
 // (or with an empty bare key), or with a key/value that fails the well-formedness
-// gate (registry.WellFormedNodeLabel, #504), are rejected with InvalidArgument,
+// gate (registry.WellFormedLabel, #504), are rejected with InvalidArgument,
 // and the registry and relay space remain untouched (D2: enrollment REJECTS
 // where Hello DROPS — the fail-closed property this test pins).
 func TestEnroll_NonNodeSelfLabel(t *testing.T) {
@@ -685,5 +704,81 @@ func TestEnroll_EmptyTokenOrCSR(t *testing.T) {
 				t.Errorf("%s: want InvalidArgument, got %v", tc.name, err)
 			}
 		})
+	}
+}
+
+// TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect pins seam (ii)
+// (#555): a Token whose scope predates registry.WellFormedLabel can still be
+// sitting in the Repository — an upgrade does not retroactively validate a
+// stored row — and Enroll must refuse it exactly like any other rejected
+// token, with no certificate signed and no registry row written.
+//
+// The legacy token is written straight into the Repository, bypassing
+// Create, which now refuses this scope itself.
+func TestEnroll_LegacyMalformedScopeIsRefusedBeforeAnySideEffect(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	obs := &capturingAttemptObserver{}
+	srv, reg := newObservedEnrollServer(t, svc, obs)
+
+	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	hash := sha256.Sum256([]byte(secret))
+	legacy := &Token{
+		ID:         "deadbeefdeadbeefdeadbeefdeadbeef",
+		SecretHash: hash[:],
+		Scope:      []string{"relay:quarantine\u200b=on"},
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	if err := repo.Create(context.Background(), legacy); err != nil {
+		t.Fatalf("seeding legacy token: %v", err)
+	}
+	plaintext := legacy.ID + secretSep + secret
+
+	resp, err := srv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: plaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+
+	// RED ON: giving the scope refusal its own code or message — compared
+	// against a REVOKED token's rejection captured from a fresh Server in
+	// this same test, never a hardcoded string, so a change to the shared
+	// message cannot silently desynchronize the two assertions.
+	if resp != nil {
+		t.Errorf("resp = %+v, want nil", resp)
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Enroll: want PermissionDenied, got %v", err)
+	}
+
+	revokedSvc := NewService(NewMemoryRepository())
+	revokedSrv, _, _ := newEnrollServer(t, revokedSvc)
+	revokedTok, revokedPlaintext := mintToken(t, revokedSvc, []string{"relay:env=prod"})
+	if err := revokedSvc.Revoke(context.Background(), revokedTok.ID); err != nil {
+		t.Fatalf("Revoke: %v", err)
+	}
+	_, revokedErr := revokedSrv.Enroll(context.Background(), &relayv1.EnrollRequest{
+		EnrollmentToken: revokedPlaintext,
+		Csr:             genCSR(t, "cn"),
+	})
+	if err.Error() != revokedErr.Error() {
+		t.Errorf("scope refusal message = %q, want identical to a revoked token's %q — a distinct message is an oracle", err.Error(), revokedErr.Error())
+	}
+
+	// RED ON: moving the gate to step (k), which runs after
+	// Upsert/SignCSR/RecordEnrollment — the exact placement error #555 flags.
+	if got := len(reg.List()); got != 0 {
+		t.Errorf("registry must be empty after rejection, got %d entries", got)
+	}
+
+	// RED ON: reusing AttemptMalformed instead of the dedicated reason.
+	events := obs.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("got %d AttemptEvents, want 1: %+v", len(events), events)
+	}
+	if events[0].Accepted {
+		t.Errorf("event.Accepted = true, want false")
+	}
+	if events[0].Reason != AttemptInvalidScope {
+		t.Errorf("event.Reason = %q, want %q", events[0].Reason, AttemptInvalidScope)
 	}
 }

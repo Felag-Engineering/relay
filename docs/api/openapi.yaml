@@ -1403,6 +1403,11 @@ components:
             `relay:` labels stamped on Nodes enrolling with this token. These are
             Node-immutable and are the only namespace valid for security-lane
             targeting (ADR-0020).
+
+            Every entry must be `relay:` plus a non-empty bare key, optionally
+            followed by `=value`; every byte of the key and of the value must be
+            in `[A-Za-z0-9._-]`. A violating entry is refused with `400` and
+            never sanitised (#555).
           examples: [["relay:env=prod"]]
         ttl_seconds: { type: integer, format: int64 }
         max_uses:

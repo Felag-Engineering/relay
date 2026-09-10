@@ -392,11 +392,12 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 	if err != nil {
 		return registry.Node{}, false, err
 	}
-	nodeLabels = wellFormedNodeLabels(nodeLabels)
+	nodeLabels = wellFormedLabels(nodeLabels)
 	relayLabels, err := fetchLabels(ctx, q, "relay_labels", nodeID)
 	if err != nil {
 		return registry.Node{}, false, err
 	}
+	relayLabels = wellFormedLabels(relayLabels)
 
 	lastSeenTime, err := parseTime(sql.NullString{String: lastSeen, Valid: true})
 	if err != nil {
@@ -447,27 +448,67 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 	}, true, nil
 }
 
-// wellFormedNodeLabels returns a copy of labels containing only the pairs
-// registry.WellFormedNodeLabel accepts (#504). It exists for one reason: rows
-// written BEFORE the ingress gate existed (protoconv.ParseNodeLabel) can carry
-// a value that was never validated. getNode is the single load path behind
-// both Get and List, so this one call site covers every reader — the Control
-// API, MCP, and the Console all read a stored node: label through here, never
+// wellFormedLabels returns a copy of labels containing only the pairs
+// registry.WellFormedLabel accepts. It governs BOTH stored namespaces:
+//
+//   - node_labels (#504): rows written BEFORE the ingress gate existed
+//     (protoconv.ParseNodeLabel) can carry a value that was never validated.
+//   - relay_labels (#555): rows stamped by an enrollment that ran BEFORE the
+//     ingress gate existed (enroll.validateScope) can carry a value that was
+//     never validated either. The ingress fix alone leaves these rows serving
+//     forever — the Console renders every relay_labels entry as a `relay:`
+//     chip (console/fleet.go's declaredChips), lock glyph and security hue,
+//     for a label this Relay's own ingress gate would now refuse.
+//
+// WHAT IT DROPS IS WIDER THAN WHAT IS UNMATCHABLE, and that difference is a
+// residual, not a rounding error. WellFormedLabel is deliberately narrower
+// than capability.ParseSelector: the parser needs only a non-empty key and
+// cuts on the first `=`, so `relay:tier=pci/1`, `relay:owner=team@sec` and
+// `relay:dc=dc1:rack2` each parse to exactly ONE predicate and match a Node
+// today. The allowlist refuses them anyway, because the hazard it exists for
+// is RENDERING (a term concatenated back together by a Console href or an
+// AI-agent), not parsing. So on upgrade this filter removes some labels that
+// were genuinely matchable, permanently and with no self-heal — relay-space
+// has no equivalent of the Node's next Hello. The direction is always
+// UNDER-inclusion (a filter can only remove matches; the Selector grammar has
+// no negation) and a quarantine specifically cannot be lost, per the note
+// below — but a security-lane Selector CAN come to resolve to fewer Nodes
+// than it did before the upgrade, silently. That is an accepted residual
+// (threat model R13), not a claim that nothing was lost, and it is why
+// docs/operations/enrollment.md tells operators to re-mint before upgrading.
+// A bounded signal at this seam, for BOTH namespaces, is #565.
+//
+// getNode is the single load path behind both Get and List, so this one
+// function, called once per namespace, covers every reader — the Control
+// API, MCP, and the Console all read a stored label through here, never
 // around it.
 //
 // This does NOT delete or rewrite the stored row: node-space storage is the
-// Node's own self-description (invariant 7, ADR-0006), and the Relay declining
-// to SERVE a value is not the same act as the Relay MODIFYING one. The
-// legitimate way for the row to heal is the Node's own next Hello, which
-// replaces the whole node_labels set via replaceLabels — "never write,
-// decline to serve" keeps this fix unambiguously clear of the
-// Relay-immutability half of invariant 7. A Node that never reconnects keeps
-// serving a filtered view forever, which is the accepted cost of not being in
-// the business of rewriting a Node's self-description out from under it.
-func wellFormedNodeLabels(labels map[string]string) map[string]string {
+// Node's own self-description, and relay-space storage is the Relay's own
+// stamp from a token scope (both invariant 7, ADR-0006) — the Relay declining
+// to SERVE a value is not the same act as the Relay MODIFYING one. For
+// node_labels the legitimate way for the row to heal is the Node's own next
+// Hello, which replaces the whole set via replaceLabels. For relay_labels
+// there is no equivalent self-heal: the only production writer is
+// SetRelayLabels, whose only caller is enrollment, which builds its map from
+// a token scope and never from a read — Upsert's internal getNode (line 358)
+// is read-only, so there is no read-modify-write path that could turn this
+// filter into a delete. STANDING OBLIGATION: a future admin relay-label
+// writer (ADR-0020's incident ladder) must preserve that — it must never
+// read-modify-write over this filtered view, or "decline to serve" silently
+// becomes "delete". "Never write, decline to serve" keeps this fix
+// unambiguously clear of the Relay-immutability half of invariant 7. A Node
+// whose relay_labels predate this gate, and that never gets a fresh
+// enrollment, keeps serving a filtered view forever — accepted for the same
+// reason as node-space: the Relay is not in the business of rewriting a
+// stored label out from under whichever side owns it.
+//
+// The filter can never lift a quarantine: registry.QuarantineKey/
+// QuarantineOn are "quarantine"/"on", both inside the allowlist.
+func wellFormedLabels(labels map[string]string) map[string]string {
 	out := make(map[string]string, len(labels))
 	for k, v := range labels {
-		if registry.WellFormedNodeLabel(k, v) {
+		if registry.WellFormedLabel(k, v) {
 			out[k] = v
 		}
 	}

@@ -774,6 +774,12 @@ func enrollmentReasonText(r events.EnrollmentReason) string {
 		return "the token was revoked while the Node was enrolling"
 	case events.ReasonInternal:
 		return "the Relay failed to complete the enrollment"
+	case events.ReasonInvalidScope:
+		// Deliberately not framed as a daemon-side problem: this names a fault
+		// in the TOKEN's stored scope, minted before this well-formedness gate
+		// existed (#555) — the same "wrong side" concern ReasonMalformed's
+		// comment raises, mirrored for relay-space.
+		return "the token's stored scope is not a valid set of relay: labels — mint a replacement token"
 	default:
 		return "refused for a reason this Console does not recognise"
 	}

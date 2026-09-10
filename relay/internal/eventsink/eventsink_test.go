@@ -231,6 +231,7 @@ func TestEnrollment_ReasonMappingIsExhaustive(t *testing.T) {
 		{enroll.AttemptAtCapacity, events.ReasonAtCapacity},
 		{enroll.AttemptRevokedMidEnrollment, events.ReasonRevokedMidEnrollment},
 		{enroll.AttemptInternal, events.ReasonInternal},
+		{enroll.AttemptInvalidScope, events.ReasonInvalidScope},
 		{enroll.AttemptReason("some-future-reason-nobody-taught-this-switch-about"), events.ReasonInternal},
 	}
 

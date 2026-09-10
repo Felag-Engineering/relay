@@ -147,6 +147,8 @@ func (o enrollmentObserver) Attempt(_ context.Context, e enroll.AttemptEvent) {
 		reason = events.ReasonRevokedMidEnrollment
 	case enroll.AttemptInternal:
 		reason = events.ReasonInternal
+	case enroll.AttemptInvalidScope:
+		reason = events.ReasonInvalidScope
 	default:
 		reason = events.ReasonInternal
 	}

@@ -331,7 +331,14 @@ func TestMaxUses_Concurrent(t *testing.T) {
 	}
 }
 
-// TestCreate_InvalidScope checks that scopes without relay: prefixes are rejected.
+// TestCreate_InvalidScope checks that scopes without relay: prefixes, and
+// scopes that ARE relay:-prefixed but fail the well-formedness gate
+// (registry.WellFormedLabel, #555), are rejected.
+//
+// RED ON: reverting validateScope to the prefix-only check — the
+// malformed-but-correctly-prefixed rows below would then pass Create,
+// while the pre-existing prefix-only rows above them keep passing either
+// way, so the two rules stay separately pinned.
 func TestCreate_InvalidScope(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
@@ -346,6 +353,24 @@ func TestCreate_InvalidScope(t *testing.T) {
 		{"node-prefix", []string{"node:role=web"}},
 		{"mixed", []string{"relay:env=prod", "node:role=web"}},
 		{"empty-entry", []string{"relay:env=prod", ""}},
+		// The mirrored measured payload (#504's evidence, opposite
+		// namespace): a comma smuggles a second, cross-namespace term into
+		// what would otherwise store as one relay-space value.
+		{"comma-injected second term", []string{"relay:env=prod,node:role=web"}},
+		// Correctly prefixed but the bare key is empty.
+		{"empty bare key", []string{"relay:"}},
+		// The issue's homoglyph payload: a ZERO WIDTH SPACE in the key.
+		{"zero width space in key", []string{"relay:quarantine\u200b=on"}},
+		// A colon in the bare key re-introduces the namespace-prefix hazard
+		// one level down.
+		{"colon in bare key", []string{"relay:a:b=c"}},
+		// Whitespace after the value, with no comma of its own.
+		{"whitespace in value", []string{"relay:env=prod x"}},
+		// A second `=` is refused whichever half it lands in, because `=` is
+		// outside the allowlist for BOTH key and value. That is what makes
+		// splitScopeEntry's cut direction unobservable downstream — see
+		// TestEnroll_Success's note — so it is pinned here rather than assumed.
+		{"two equals signs", []string{"relay:a=b=c"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,6 +379,72 @@ func TestCreate_InvalidScope(t *testing.T) {
 				t.Errorf("scope %v: want ErrInvalidScope, got %v", tc.scope, err)
 			}
 		})
+	}
+}
+
+// TestCreate_WellFormedScopeAccepted checks that a scope whose entries all
+// pass registry.WellFormedLabel is accepted in a single Create call,
+// including a no-`=` entry (empty value).
+//
+// RED ON: an over-tight gate — requiring `=`, rejecting the empty value, or
+// running WellFormedLabel over the whole entry instead of the split halves
+// (the last would reject the ":" in "relay:" itself and is the most likely
+// implementation slip).
+func TestCreate_WellFormedScopeAccepted(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+
+	scope := []string{"relay:env=prod", "relay:role=web-1.a_b", "relay:marker"}
+	if _, _, err := svc.Create(ctx, scope, time.Hour); err != nil {
+		t.Errorf("Create(%v): unexpected error: %v", scope, err)
+	}
+}
+
+// TestValidate_RefusesLegacyMalformedScope pins the second write seam: a
+// Token whose scope predates the well-formedness gate can still be sitting
+// in the repository (an upgrade does not retroactively validate stored
+// rows). Validate must refuse it, and must do so BEFORE incrementing Uses.
+//
+// The Token is written straight into the Repository, bypassing Create —
+// the same device store/registry_test.go's legacy-row tests use to forge a
+// pre-gate row — because Create itself now refuses what this test needs to
+// exist in storage.
+//
+// RED ON: gating only Create (the upgrade-path hole this seam exists to
+// close); moving the check below the repo.Save that PERSISTS the increment.
+//
+// Not "after t.Uses++": t is the defensive copy ByID handed back, so the
+// increment alone changes nothing a reader can observe, and a check placed
+// between it and the Save is behaviour-preserving. Save is where a use is
+// actually burned, and that is the mutation this assertion catches.
+func TestValidate_RefusesLegacyMalformedScope(t *testing.T) {
+	repo := NewMemoryRepository()
+	svc := NewService(repo)
+	ctx := context.Background()
+
+	const secret = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	hash := sha256.Sum256([]byte(secret))
+	legacy := &Token{
+		ID:         "deadbeefdeadbeefdeadbeefdeadbeef", // 32 hex chars, tokenIDLen's shape
+		SecretHash: hash[:],
+		Scope:      []string{"relay:quarantine\u200b=on"},
+		ExpiresAt:  time.Now().Add(time.Hour),
+	}
+	if err := repo.Create(ctx, legacy); err != nil {
+		t.Fatalf("seeding legacy token: %v", err)
+	}
+
+	_, err := svc.Validate(ctx, legacy.ID+secretSep+secret)
+	if !errors.Is(err, ErrInvalidScope) {
+		t.Fatalf("Validate: want ErrInvalidScope, got %v", err)
+	}
+
+	stored, err := repo.ByID(ctx, legacy.ID)
+	if err != nil {
+		t.Fatalf("ByID: %v", err)
+	}
+	if stored.Uses != 0 {
+		t.Errorf("Uses = %d, want 0 — a scope refusal must not burn a use", stored.Uses)
 	}
 }
 

@@ -157,6 +157,7 @@ const (
 	ReasonAtCapacity           EnrollmentReason = "at_capacity"
 	ReasonRevokedMidEnrollment EnrollmentReason = "revoked_mid_enrollment"
 	ReasonInternal             EnrollmentReason = "internal"
+	ReasonInvalidScope         EnrollmentReason = "invalid_scope"
 )
 
 // EnrollmentEvent is one Enroll attempt, accepted or rejected. TokenID is

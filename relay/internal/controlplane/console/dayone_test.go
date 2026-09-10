@@ -194,6 +194,17 @@ func TestDayOne_RejectedAttemptRendersWithItsReason(t *testing.T) {
 	}
 }
 
+// TestEnrollmentReasonText_InvalidScopeIsNotTheFallback pins #555's day-one
+// text: a reason this Console DOES recognise must never render the "does not
+// recognise" fallback enrollmentReasonText's default case returns for a
+// reason it has NOT been taught about.
+func TestEnrollmentReasonText_InvalidScopeIsNotTheFallback(t *testing.T) {
+	got := enrollmentReasonText(events.ReasonInvalidScope)
+	if got == enrollmentReasonText(events.EnrollmentReason("some-reason-this-console-does-not-recognise")) {
+		t.Errorf("enrollmentReasonText(ReasonInvalidScope) = %q, want a dedicated case, not the fallback", got)
+	}
+}
+
 // TestDayOne_NeverClaimsToSeeDaemonSideRejections is criterion 3's second half,
 // and it must hold whether or not the watch is live. A daemon that refuses this
 // Relay's certificate aborts the handshake before it sends anything (ADR-0031),

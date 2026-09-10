@@ -501,3 +501,78 @@ func TestGetNode_DoesNotServeMalformedLegacyNodeLabel(t *testing.T) {
 		t.Errorf("the stored row must be unmodified: got %q", stillThere)
 	}
 }
+
+// TestGetNode_DoesNotServeMalformedLegacyRelayLabel is
+// TestGetNode_DoesNotServeMalformedLegacyNodeLabel's relay-space sibling
+// (#555): a relay_labels row stamped by an enrollment that ran BEFORE the
+// well-formedness gate existed (enroll.validateScope) can carry a value the
+// gate would have refused. getNode is the single load path behind both Get
+// and List, so this one test covers every reader.
+//
+// The forged row is inserted STRAIGHT INTO relay_labels via raw SQL,
+// bypassing SetRelayLabels entirely — exactly as a pre-fix enrollment would
+// have written it.
+func TestGetNode_DoesNotServeMalformedLegacyRelayLabel(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{
+		NodeID: "node-legacy-relay",
+	}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	// #504's measured payload mirrored into relay-space: a comma smuggles a
+	// second, cross-namespace term into the value.
+	if _, err := st.db.Exec(
+		`INSERT INTO relay_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-legacy-relay", "env", "prod, relay:quarantine=on",
+	); err != nil {
+		t.Fatalf("insert forged legacy row: %v", err)
+	}
+	if _, err := st.db.Exec(
+		`INSERT INTO relay_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-legacy-relay", registry.QuarantineKey, registry.QuarantineOn,
+	); err != nil {
+		t.Fatalf("insert quarantine row: %v", err)
+	}
+
+	got, ok := reg.Get("node-legacy-relay")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+	// RED ON: not filtering relay_labels — the forged pair must be absent.
+	if _, forged := got.RelayLabels["env"]; forged {
+		t.Errorf("Get served the forged legacy relay label: %q", got.RelayLabels["env"])
+	}
+	// RED ON: filtering too broadly — the quarantine fence pair, entirely
+	// inside the allowlist, must survive and still read as quarantined.
+	if got.RelayLabels[registry.QuarantineKey] != registry.QuarantineOn {
+		t.Errorf("RelayLabels[%s]: got %q, want %q", registry.QuarantineKey, got.RelayLabels[registry.QuarantineKey], registry.QuarantineOn)
+	}
+	if !got.Quarantined() {
+		t.Error("got.Quarantined() = false, want true — the filter must never lift a quarantine")
+	}
+
+	list := reg.List()
+	if len(list) != 1 {
+		t.Fatalf("List len: got %d, want 1", len(list))
+	}
+	if _, forged := list[0].RelayLabels["env"]; forged {
+		t.Errorf("List served the forged legacy relay label: %q", list[0].RelayLabels["env"])
+	}
+
+	// RED ON: "healing" the row by deleting or rewriting it instead of
+	// declining to serve it (ADR-0017's forge-to-attract cell) — the Relay
+	// declines to SERVE the forged row; it must not have DELETED or
+	// rewritten it.
+	var stillThere string
+	if err := st.db.QueryRow(
+		`SELECT value FROM relay_labels WHERE node_id = ? AND key = ?`, "node-legacy-relay", "env",
+	).Scan(&stillThere); err != nil {
+		t.Fatalf("the forged row must still be in relay_labels (declined, not deleted): %v", err)
+	}
+	if stillThere != "prod, relay:quarantine=on" {
+		t.Errorf("the stored row must be unmodified: got %q", stillThere)
+	}
+}

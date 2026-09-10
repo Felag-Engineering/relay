@@ -43,11 +43,35 @@ $ curl --cacert ca-cert.pem \
 }
 ```
 
-- **`scope`** — required, non-empty, every entry `relay:`-prefixed. These become
-  the Node's relay-space Labels: Node-immutable, reserved for the
-  security-sensitive lane (quarantine, remediation, secret-distribution
-  targeting). A token scoped to `relay:env=prod` makes every Node it enrolls
-  *provably* prod for that lane, with no per-Node human labeling.
+- **`scope`** — required, non-empty, every entry `relay:`-prefixed with a
+  non-empty bare key and a (possibly empty) value whose every byte is in
+  `[A-Za-z0-9._-]`; a violating entry is refused with `400` and never
+  sanitised (#555). These become the Node's relay-space Labels:
+  Node-immutable, reserved for the security-sensitive lane (quarantine,
+  remediation, secret-distribution targeting). A token scoped to
+  `relay:env=prod` makes every Node it enrolls *provably* prod for that lane,
+  with no per-Node human labeling. A token minted before this rule existed
+  whose scope violates it is now refused at enrollment — with the ordinary
+  "enrollment token rejected" every other rejection returns — rather than
+  stamping a malformed label; mint a replacement token.
+
+  **Before upgrading, check your existing scopes.** The rule is narrower than
+  what the Selector parser accepts, so a scope like `relay:tier=pci/1` worked
+  and matched before and is refused now. Two things change on upgrade, and
+  the second is the one to plan for:
+
+  1. Tokens whose scope violates the rule stop enrolling. Re-mint them.
+  2. Nodes **already enrolled** under such a scope keep their stored label in
+     the database, but the Relay stops SERVING it — it disappears from the
+     Console, the Control API and MCP, and from Selector matching. A
+     security-lane Selector such as `relay:tier=pci/1` will then resolve to
+     fewer Nodes than it did before, with nothing logged at the moment it
+     happens. Nothing is deleted and no quarantine can be lost (`quarantine`
+     and `on` are both inside the allowlist), but targeting does change.
+
+  Audit with `GET /api/v1/nodes` before you upgrade and compare the
+  `relay_labels` you get back afterwards; re-enrol any Node whose label the
+  new rule refuses, under a re-minted, conforming scope.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the
   enrollment window, not to convenience: for a planned bulk run, hours or a day.
 - **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run
