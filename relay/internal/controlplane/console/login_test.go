@@ -202,6 +202,71 @@ func TestConsole_UnauthenticatedRequestIsSentToSignIn(t *testing.T) {
 	}
 }
 
+// TestConsole_UnauthorizedRedirectDropsATraversalDestination drives a crafted
+// dot-segment destination through the REAL middleware, not just
+// safeReturnPath in isolation: a fix applied in handleLoginForm rather than
+// in safeReturnPath itself would still mint the crafted destination into
+// THIS redirect, because UnauthorizedHandler calls safeReturnPath directly.
+func TestConsole_UnauthorizedRedirectDropsATraversalDestination(t *testing.T) {
+	f := newLoginFixture(t)
+
+	for _, target := range []string{
+		"/console/../api/v1/x",     // plain
+		"/console/%2e%2e/api/v1/x", // escaped
+	} {
+		t.Run(target, func(t *testing.T) {
+			rec := f.do(t, httptest.NewRequest(http.MethodGet, target, nil))
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+			}
+			if loc := rec.Header().Get("Location"); loc != LoginPath {
+				t.Errorf("Location = %q, want exactly %q with no next at all", loc, LoginPath)
+			}
+		})
+	}
+}
+
+// TestConsole_InterruptedNoteRequiresARealRedirect pins the provenance fix:
+// the "your session ended" copy must render only when UnauthorizedHandler
+// itself sent the browser here with somewhere real to return to — never for
+// an operator who merely typed a `?next=` onto the sign-in URL by hand.
+func TestConsole_InterruptedNoteRequiresARealRedirect(t *testing.T) {
+	f := newLoginFixture(t)
+
+	// (a) A hand-crafted ?next= with no marker cookie: the note must not
+	// render. This is the defect `Interrupted: query.Get("next") != ""` was —
+	// it fires on ANY next, including one nobody was redirected to attach.
+	crafted := f.do(t, httptest.NewRequest(http.MethodGet, LoginPath+"?next=/console/activity", nil))
+	if strings.Contains(crafted.Body.String(), "Your session ended") {
+		t.Error("(a) an unmarked, hand-typed ?next= rendered the interrupted note")
+	}
+
+	// (b) A real interruption: an unauthenticated request to a protected
+	// route, redirected by UnauthorizedHandler.
+	redirected := f.do(t, httptest.NewRequest(http.MethodGet, "/console/activity", nil))
+	if redirected.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", redirected.Code, http.StatusSeeOther)
+	}
+	loc := redirected.Header().Get("Location")
+	marker := cookieNamed(redirected.Result().Cookies(), interruptedCookieName)
+	if marker == nil {
+		t.Fatal("UnauthorizedHandler set no interrupted marker cookie")
+	}
+	landed := f.do(t, httptest.NewRequest(http.MethodGet, loc, nil), marker)
+	if !strings.Contains(landed.Body.String(), "Your session ended") {
+		t.Error("(b) a real interruption, carrying the marker, did not render the note")
+	}
+	if !strings.Contains(landed.Body.String(), `name="next"`) {
+		t.Error("(b) the note rendered without the hidden next field to resume the interrupted action")
+	}
+
+	// (c) The marker is one-shot: the response that read it must clear it.
+	cleared := cookieNamed(landed.Result().Cookies(), interruptedCookieName)
+	if cleared == nil || cleared.MaxAge >= 0 {
+		t.Error("(c) the interrupted marker was not cleared after being read")
+	}
+}
+
 // --- Signing in -------------------------------------------------------------
 
 func TestConsole_SignInIssuesASessionAndLands(t *testing.T) {
@@ -467,6 +532,23 @@ func TestConsole_ReturnPathCannotLeaveTheConsole(t *testing.T) {
 		LoginPath,  // no loops
 		LogoutPath, // no sign-in that signs you out
 		"",
+
+		// The dot-segment defect (#477): the OLD check prefix-matched
+		// EscapedPath() against "/console/" and resolved no ".." at all.
+		"/console/../api/v1/x", // PLAIN. Passes the CURRENT-BEFORE-THE-FIX
+		// check, because EscapedPath() returns this verbatim and the prefix
+		// test is satisfied regardless — this is the row an escape-only fix
+		// (e.g. `strings.Contains(raw, "..")` catching only the encoded
+		// forms below) would still let through, and the one the issue's own
+		// "escaping bug" diagnosis would have missed.
+		"/console/%2e%2e/api/v1/x", // escaped
+		"/console/%2E%2E/api/v1/x", // case
+		"/console/..%2fapi/v1/x",   // mixed: literal ".." + an escaped slash
+		"/console/nodes/../login",  // traversal back onto the sign-in page —
+		// catches a fix that CLEANS and RETURNS the cleaned path (this would
+		// come back as LoginPath, which safeReturnPath must never allow)
+		// instead of rejecting a non-canonical input outright.
+		"/console//evil.example", // empty segment
 	}
 	for _, raw := range refused {
 		if got := safeReturnPath(raw); got != "" {
@@ -474,6 +556,7 @@ func TestConsole_ReturnPathCannotLeaveTheConsole(t *testing.T) {
 		}
 	}
 	allowed := map[string]string{
+		"/console/":                       "/console/", // cleanPath's trailing-slash restoration
 		"/console/activity":               "/console/activity",
 		"/console/nodes/node-1":           "/console/nodes/node-1",
 		"/console/activity?filter=denied": "/console/activity?filter=denied",

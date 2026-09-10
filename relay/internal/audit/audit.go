@@ -138,6 +138,39 @@ const (
 	KindLoginThrottled = "login_throttled"
 	KindLogout         = "logout"
 
+	// KindStepUp/Failed/Throttled are the step-up door (#477, ADR-0026
+	// decision 3), reached only from an ALREADY-AUTHENTICATED session — never
+	// by an anonymous caller, which is what the sign-in door above is for. The
+	// two doors answer different questions: KindLoginFailed/Throttled is
+	// "someone is guessing at the front door"; the three below are "something
+	// inside this session is trying to escalate", which is ADR-0026's own
+	// threat model for a hijacked session reaching for a mutate apply. Pooling
+	// them into the sign-in kinds would answer neither question well, and the
+	// step-up-ness would survive only as prose in Reason — a field no query
+	// (audit.Query / capability.AuditFilter) can filter on, not even by
+	// prefix. See AuthFailureKinds for how the split is kept from costing the
+	// pooled "is someone grinding a password" query.
+	//
+	// KindStepUp is the SUCCESSFUL re-proof of human presence: the fact that
+	// authorizes a mutate apply (ADR-0026 decision 3) or a privilege-granting
+	// action (ADR-0009). Distinct from KindLoginSucceeded so a kind-filtered
+	// consumer can tell "signed in" from "re-proved presence mid-session".
+	//
+	// KindStepUpFailed carries no indication of which half was wrong, for the
+	// same enumeration reason KindLoginFailed states above: a step-up runs
+	// against the session's own Account, but a trail that named it anyway
+	// would still be the oracle the login response refuses to be, readable by
+	// anyone with audit access.
+	//
+	// KindStepUpThrottled is distinct from KindStepUpFailed because nothing
+	// was checked, for the same reason KindLoginThrottled is distinct from
+	// KindLoginFailed: the attempt was refused before any credential was
+	// compared, so counting it as a failure would overstate how many guesses
+	// were actually made.
+	KindStepUp          = "step_up"
+	KindStepUpFailed    = "step_up_failed"
+	KindStepUpThrottled = "step_up_throttled"
+
 	KindAPITokenMint   = "api_token_mint"
 	KindAPITokenRevoke = "api_token_revoke"
 )
@@ -181,6 +214,9 @@ var allKinds = []string{
 	KindLoginFailed,
 	KindLoginThrottled,
 	KindLogout,
+	KindStepUp,
+	KindStepUpFailed,
+	KindStepUpThrottled,
 	KindAPITokenMint,
 	KindAPITokenRevoke,
 }
@@ -198,6 +234,38 @@ var allKinds = []string{
 // reorder or truncate.
 func Kinds() []string {
 	return append([]string(nil), allKinds...)
+}
+
+// authFailureKinds is every Kind recording a credential that was submitted
+// and not accepted, at either the sign-in door or the step-up door. Named
+// once here rather than left for AuthFailureKinds to build on every call, for
+// the same reason allKinds is a package var and not a literal inside Kinds.
+var authFailureKinds = []string{
+	KindLoginFailed,
+	KindLoginThrottled,
+	KindStepUpFailed,
+	KindStepUpThrottled,
+}
+
+// AuthFailureKinds is every Kind recording a credential that was submitted
+// and not accepted, at EITHER door — the sign-in form or the step-up prompt.
+//
+// It exists so "someone is grinding a password" stays ONE thing to ask for
+// after #477 split the step-up door out of the sign-in kinds. The trap it
+// closes: a consumer that hand-lists KindLoginFailed and KindLoginThrottled is
+// not wrong today, and goes blind the moment an attacker pivots from the
+// sign-in form to the step-up prompt — the cheaper target precisely because
+// the session already exists. Reaching for this instead of naming the kinds
+// again is what keeps that pivot from going unnoticed.
+//
+// Never KindStepUp or KindLoginSucceeded: a query built from this list is
+// asking "who failed", and a success counted as a failure would make the
+// grinding query lie in the one direction that matters.
+//
+// The returned slice is a copy, exactly like Kinds(): the package's own list
+// is not a caller's to reorder or truncate.
+func AuthFailureKinds() []string {
+	return append([]string(nil), authFailureKinds...)
 }
 
 // Record is one append-only audit entry: a single Task's dispatch, a

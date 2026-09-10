@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -30,6 +31,11 @@ import (
 
 const testSessionID = "console-session-fixture"
 
+// testSessionAuthenticatedAt is a fixed, non-zero moment so a test can assert
+// the SESSION that crossed the boundary is the resolver's, and not a
+// zero-value stand-in a handler could not tell apart from "no session".
+var testSessionAuthenticatedAt = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
+
 // fakeSessionResolver stands in for *consoleauth.Service on the browser lane.
 // It models the real resolver's contract: one indistinguishable error for
 // every failure, and the Account read at call time so a test can mutate it
@@ -45,7 +51,14 @@ func (f *fakeSessionResolver) Resolve(_ context.Context, id consoleauth.SessionI
 	if id.Reveal() != f.valid || !f.acct.Enabled {
 		return consoleauth.Session{}, accounts.Account{}, errors.New("no such session")
 	}
-	return consoleauth.Session{AccountID: f.acct.ID}, f.acct, nil
+	// Method and AuthenticatedAt are set to distinctive, non-zero values so a
+	// test can tell "the boundary carried the resolver's actual Session"
+	// apart from "the boundary carried a zero-value stand-in".
+	return consoleauth.Session{
+		AccountID:       f.acct.ID,
+		Method:          consoleauth.MethodPassword,
+		AuthenticatedAt: testSessionAuthenticatedAt,
+	}, f.acct, nil
 }
 
 // testConsoleAuthenticator wires both lanes: the API Token lane (testToken)
@@ -176,6 +189,93 @@ func TestConsoleSession_BearerHeaderIsNeverResolvedAsASession(t *testing.T) {
 	}
 	if len(resolver.seen) != 0 {
 		t.Errorf("the session resolver saw %d request(s) carrying a bearer header", len(resolver.seen))
+	}
+}
+
+// -----------------------------------------------------------------------
+// The session seam (#477)
+// -----------------------------------------------------------------------
+
+// consoleSessionRequest is consoleRequest's twin for tests that need the
+// ConsoleSession the boundary injected, not just the Principal.
+func consoleSessionRequest(t *testing.T, a *Authenticator, method, target string, cookies ...*http.Cookie) (status int, cs ConsoleSession, csOK, reached bool) {
+	t.Helper()
+	h := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		cs, csOK = ConsoleSessionFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(method, target, nil)
+	for _, c := range cookies {
+		req.AddCookie(c)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code, cs, csOK, reached
+}
+
+// TestConsoleSession_TheResolvedSessionReachesTheHandler pins #477's fix: the
+// Session Resolve returns must reach the handler through the context, not be
+// discarded (`_ = sess`) leaving a handler to re-read the raw cookie — the
+// second authentication path this seam exists to prevent.
+func TestConsoleSession_TheResolvedSessionReachesTheHandler(t *testing.T) {
+	a, _ := testConsoleAuthenticator()
+	status, cs, ok, reached := consoleSessionRequest(t, a, http.MethodGet, "/console/",
+		&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+	if !reached {
+		t.Fatalf("a valid Console cookie was refused: status = %d", status)
+	}
+	if !ok {
+		t.Fatal("ConsoleSessionFromContext returned ok=false on the browser lane")
+	}
+	if cs.ID.Reveal() != testSessionID {
+		t.Errorf("ConsoleSession.ID = %q, want %q", cs.ID.Reveal(), testSessionID)
+	}
+	if cs.Session.Method != consoleauth.MethodPassword {
+		t.Errorf("ConsoleSession.Session.Method = %q, want %q", cs.Session.Method, consoleauth.MethodPassword)
+	}
+	if !cs.Session.AuthenticatedAt.Equal(testSessionAuthenticatedAt) {
+		t.Errorf("ConsoleSession.Session.AuthenticatedAt = %v, want %v", cs.Session.AuthenticatedAt, testSessionAuthenticatedAt)
+	}
+}
+
+// TestConsoleSession_TheTokenLaneCarriesNoSession is the one that matters for
+// #460: a zero-value Session leaking onto the machine lane would later mean a
+// zero-value CSRF secret on a surface that never had one.
+func TestConsoleSession_TheTokenLaneCarriesNoSession(t *testing.T) {
+	a, _ := testConsoleAuthenticator()
+	h := a.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := ConsoleSessionFromContext(r.Context()); ok {
+			t.Error("a bearer-token request carried a ConsoleSession")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/console/", nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("a valid bearer token was refused: status = %d", rec.Code)
+	}
+}
+
+// TestConsoleSession_TheSignInPageSeesItToo is Middleware's PUBLIC branch —
+// the one an already-signed-in visitor to the sign-in page hits. It must
+// inject the session through the same contextWith path as the main branch,
+// or a fix applied only to the main branch leaves this one's hand-rolled
+// WithValue behind.
+func TestConsoleSession_TheSignInPageSeesItToo(t *testing.T) {
+	a, _ := testConsoleAuthenticator()
+	status, cs, ok, reached := consoleSessionRequest(t, a, http.MethodGet, "/console/login",
+		&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+	if !reached {
+		t.Fatalf("the public sign-in route refused a valid cookie: status = %d", status)
+	}
+	if !ok {
+		t.Fatal("the public branch resolved a Principal but injected no ConsoleSession")
+	}
+	if cs.ID.Reveal() != testSessionID {
+		t.Errorf("ConsoleSession.ID = %q, want %q", cs.ID.Reveal(), testSessionID)
 	}
 }
 

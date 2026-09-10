@@ -139,7 +139,8 @@ func kindOf(k string) rowKind {
 		return rowNode
 	case audit.KindFreezeEngage, audit.KindFreezeRelease:
 		return rowFreeze
-	case audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout:
+	case audit.KindLoginSucceeded, audit.KindLoginFailed, audit.KindLoginThrottled, audit.KindLogout,
+		audit.KindStepUp, audit.KindStepUpFailed, audit.KindStepUpThrottled:
 		return rowAuth
 	case audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountEnable, audit.KindAccountDisable:
 		return rowAccount
@@ -1067,6 +1068,12 @@ func summarize(f trailFacts) string {
 		return "was throttled signing in"
 	case audit.KindLogout:
 		return "signed out"
+	case audit.KindStepUp:
+		return "re-proved presence for a step-up"
+	case audit.KindStepUpFailed:
+		return "failed a step-up re-authentication"
+	case audit.KindStepUpThrottled:
+		return "was throttled re-authenticating for a step-up"
 	case audit.KindApprovalRequested:
 		return "parked a dispatch for approval"
 	case audit.KindApprovalGrantRequested:

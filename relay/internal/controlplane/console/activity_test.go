@@ -13,6 +13,7 @@ import (
 	"encoding/csv"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -20,10 +21,13 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
 // activityDeps is renderableDeps with a query lane the test controls.
@@ -214,6 +218,111 @@ func TestActivity_EveryAuditKindIsClassified(t *testing.T) {
 			t.Errorf("audit kind %q maps to family %q, whose kind list does not contain it — the "+
 				"chip would not show it", k, family)
 		}
+	}
+}
+
+// TestActivity_AStepUpIsNotASignIn is #477's Console-rendering seam, run
+// through the REAL auditsink.Sink rather than a fixture built by hand: that
+// is what actually turns a consoleauth.LoginEvent into the audit.Record this
+// package reads, and auditsink.RecordLogin has had no test of its own before
+// this one (the #463/#517/#520 lesson — a fixture built by hand can pass a
+// mapping bug the real seam would not).
+func TestActivity_AStepUpIsNotASignIn(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	sink := auditsink.New(st.Audit())
+	ctx := context.Background()
+
+	if err := sink.RecordLogin(ctx, consoleauth.LoginEvent{
+		Kind: audit.KindLoginSucceeded, Account: "mike", AccountID: "acct-1", Role: "admin",
+	}); err != nil {
+		t.Fatalf("RecordLogin (sign-in): %v", err)
+	}
+	if err := sink.RecordLogin(ctx, consoleauth.LoginEvent{
+		Kind: audit.KindStepUp, Account: "mike", AccountID: "acct-1", Role: "admin",
+		Reason: "step-up re-authentication",
+	}); err != nil {
+		t.Fatalf("RecordLogin (step-up): %v", err)
+	}
+
+	records, err := st.Audit().List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("recorded %d rows, want 2", len(records))
+	}
+
+	var signIn, stepUp trailFacts
+	for _, rec := range records {
+		switch rec.Kind {
+		case audit.KindLoginSucceeded:
+			signIn = factsOfRecord(rec)
+		case audit.KindStepUp:
+			stepUp = factsOfRecord(rec)
+		default:
+			t.Fatalf("unexpected recorded kind %q", rec.Kind)
+		}
+	}
+
+	if got := kindOf(audit.KindStepUp); got != rowAuth {
+		t.Errorf("kindOf(KindStepUp) = %q, want rowAuth", got)
+	}
+
+	signInSentence, stepUpSentence := summarize(signIn), summarize(stepUp)
+	if stepUpSentence == signInSentence {
+		t.Errorf("a step-up and a sign-in render the same sentence: %q", stepUpSentence)
+	}
+	// Hyphenated, so the raw kind string "step_up" falling through
+	// summarize's default arm cannot satisfy this.
+	if !strings.Contains(stepUpSentence, "step-up") {
+		t.Errorf("summarize(step-up) = %q, does not read as a step-up", stepUpSentence)
+	}
+	if stepUpSentence == audit.KindStepUp {
+		t.Errorf("summarize(step-up) rendered the raw kind string %q", stepUpSentence)
+	}
+}
+
+// TestActivity_StepUpFailureKindsRenderDistinctly covers #477's amendment:
+// three step-up kinds, not one, each classified and each carrying its own
+// sentence. Omitting a summarize case is #562's exact failure mode — the row
+// still lands in rowAuth via the default arm's classification below, and
+// nothing else fails — which is why each case is checked against BOTH its
+// sign-in counterpart and its step-up siblings, not just asserted non-empty.
+func TestActivity_StepUpFailureKindsRenderDistinctly(t *testing.T) {
+	cases := []struct {
+		kind       string
+		signInTwin string
+	}{
+		{audit.KindStepUp, audit.KindLoginSucceeded},
+		{audit.KindStepUpFailed, audit.KindLoginFailed},
+		{audit.KindStepUpThrottled, audit.KindLoginThrottled},
+	}
+	seen := map[string]string{} // sentence -> kind that produced it
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			if got := kindOf(tc.kind); got != rowAuth {
+				t.Errorf("kindOf(%q) = %q, want rowAuth", tc.kind, got)
+			}
+			got := summarize(trailFacts{Kind: tc.kind})
+			if got == tc.kind {
+				t.Fatalf("summarize(%q) rendered the raw kind string — no case for it in the switch", tc.kind)
+			}
+			if !strings.Contains(got, "step-up") {
+				t.Errorf("summarize(%q) = %q, does not read as a step-up", tc.kind, got)
+			}
+			if twin := summarize(trailFacts{Kind: tc.signInTwin}); got == twin {
+				t.Errorf("summarize(%q) == summarize(%q) == %q; the step-up door must read "+
+					"distinctly from the sign-in door", tc.kind, tc.signInTwin, got)
+			}
+			if by, dup := seen[got]; dup {
+				t.Errorf("summarize(%q) = %q, duplicates summarize(%q)", tc.kind, got, by)
+			}
+			seen[got] = tc.kind
+		})
 	}
 }
 

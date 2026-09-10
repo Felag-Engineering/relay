@@ -82,3 +82,81 @@ func TestKinds_ReturnsACopy(t *testing.T) {
 		t.Error("a caller mutated the package's Kind list through the slice Kinds() returned")
 	}
 }
+
+// TestAuthFailureKinds_MatchesTheSuffixConvention derives the expectation
+// from the vocabulary itself rather than restating authFailureKinds' literal
+// contents, for the same reason TestKinds_ListsEveryDeclaredKind reads
+// audit.go's source instead of hand-copying allKinds: a hand-maintained group
+// is the same class of hazard as a hand-maintained partition, and this way a
+// fourth door's failure kinds join the group by naming convention rather than
+// by somebody remembering to add them.
+//
+// The convention this guard rests on: every Kind ending in "_failed" or
+// "_throttled" means "a credential was submitted and not accepted". A future
+// kind that means that but is spelled differently breaks this guard loudly,
+// which is the point — it must not be able to escape the group silently.
+func TestAuthFailureKinds_MatchesTheSuffixConvention(t *testing.T) {
+	inGroup := map[string]bool{}
+	for _, k := range AuthFailureKinds() {
+		inGroup[k] = true
+	}
+
+	for _, k := range Kinds() {
+		bySuffix := strings.HasSuffix(k, "_failed") || strings.HasSuffix(k, "_throttled")
+		if bySuffix && !inGroup[k] {
+			t.Errorf("%q ends in _failed/_throttled but is absent from AuthFailureKinds()", k)
+		}
+		if !bySuffix && inGroup[k] {
+			t.Errorf("%q is in AuthFailureKinds() but its name gives no _failed/_throttled reason to be", k)
+		}
+	}
+}
+
+// TestAuthFailureKinds_NeverASuccessKind is the failure mode the suffix guard
+// above cannot see for itself: KindStepUp and KindLoginSucceeded name no
+// suffix at all, so the loop above never visits them. A grinding query that
+// counted a successful sign-in or step-up as an attack would be worse than no
+// query.
+func TestAuthFailureKinds_NeverASuccessKind(t *testing.T) {
+	for _, k := range AuthFailureKinds() {
+		if k == KindStepUp || k == KindLoginSucceeded {
+			t.Errorf("AuthFailureKinds() contains the success kind %q", k)
+		}
+	}
+}
+
+// TestAuthFailureKinds_ContainsExactlyTheFour pins the concrete membership
+// the suffix guard only checks abstractly, so a typo in one of the four
+// literal strings (e.g. a stray KindStepUpFailed vs KindLoginFailed swap)
+// fails here even though both still end in "_failed".
+func TestAuthFailureKinds_ContainsExactlyTheFour(t *testing.T) {
+	want := map[string]bool{
+		KindLoginFailed:     true,
+		KindLoginThrottled:  true,
+		KindStepUpFailed:    true,
+		KindStepUpThrottled: true,
+	}
+	got := AuthFailureKinds()
+	if len(got) != len(want) {
+		t.Fatalf("AuthFailureKinds() = %v, want exactly the four not-accepted kinds", got)
+	}
+	for _, k := range got {
+		if !want[k] {
+			t.Errorf("AuthFailureKinds() contains unexpected kind %q", k)
+		}
+	}
+}
+
+// TestAuthFailureKinds_ReturnsACopy: it must hold the same property Kinds()
+// documents for itself, or a caller mutating one slice corrupts the other's
+// backing array.
+func TestAuthFailureKinds_ReturnsACopy(t *testing.T) {
+	first := AuthFailureKinds()
+	if len(first) == 0 {
+		t.Fatal("AuthFailureKinds() is empty")
+	}
+	first[0] = "clobbered"
+	if AuthFailureKinds()[0] == "clobbered" {
+		t.Error("a caller mutated the package's list through the slice AuthFailureKinds() returned")
+	}
+}

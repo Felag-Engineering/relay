@@ -139,15 +139,47 @@ func consoleSessionFromRequest(r *http.Request) (consoleauth.SessionID, bool) {
 	return consoleauth.ParseSessionID(c.Value), true
 }
 
+// consoleSessionContextKey is an unexported type so no other package can
+// collide with or forge this context key (standard Go context-key idiom).
+type consoleSessionContextKey struct{}
+
+// ConsoleSession is what the browser lane resolved: the identifier the
+// browser presented and the Session it resolved to. Injected ONLY on that
+// lane — a bearer-token or OAuth request carries none, so a consumer can tell
+// "a human's browser" from "a script" structurally instead of by a zero
+// value.
+//
+// Carrying the ID here grants a handler no reach it did not already have: the
+// cookie is on the request regardless, so every handler could read it today.
+// What this removes is the REASON to — a handler that wants its session
+// re-reads the cookie today (login.go's raw-cookie logout, #428's step-up
+// POST tomorrow), and a second place that parses the same credential is a
+// second authentication path waiting to disagree with the first. This is
+// NOT a second auth path itself: the Principal on the context is what
+// authenticated the request, and this value is that same resolution's
+// by-product — a handler consumes it, it never re-verifies it.
+type ConsoleSession struct {
+	ID      consoleauth.SessionID // redacts under every stringifying interface
+	Session consoleauth.Session   // a COPY; Store.Lookup already returns one
+}
+
+// ConsoleSessionFromContext returns the ConsoleSession that Middleware
+// injected into ctx, on the browser lane only. ok is false on every other
+// lane, including an unauthenticated public request.
+func ConsoleSessionFromContext(ctx context.Context) (ConsoleSession, bool) {
+	cs, ok := ctx.Value(consoleSessionContextKey{}).(ConsoleSession)
+	return cs, ok
+}
+
 // authenticateConsole resolves a browser session into the acting identity.
 //
 // The Account is read fresh by the resolver on every call, exactly as the token
 // lane does, which is what makes a demotion or a disablement take effect on the
 // very next click rather than at the next sign-in.
-func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.SessionID, source string) (capability.Principal, bool) {
+func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.SessionID, source string) (authResult, bool) {
 	sess, acct, err := a.console.resolver.Resolve(ctx, id)
 	if err != nil {
-		return capability.Principal{}, false
+		return authResult{}, false
 	}
 	p := principalFromAccount(acct)
 	p.AuthMethod = capability.AuthMethodConsoleSession
@@ -155,6 +187,5 @@ func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.
 	// No TokenID: a Console session presents no API Token. The audit trail's
 	// verified lane carries the method instead, which is what distinguishes
 	// "someone's browser did this" from "someone's script did this".
-	_ = sess
-	return p, true
+	return authResult{principal: p, console: &ConsoleSession{ID: id, Session: sess}}, true
 }
