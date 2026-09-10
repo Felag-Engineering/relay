@@ -339,6 +339,37 @@ func decodeResult(t *testing.T, res *sdkmcp.CallToolResult, out any) {
 	}
 }
 
+// TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty is #560's acceptance at the
+// surface the issue is actually about.
+//
+// Before this, list_nodes advertised tag: in its schema and answered a tag:
+// filter with a successful, EMPTY Node list — which an agent reads as "no Node
+// carries that tag" rather than "this namespace is not implemented". Asserting
+// only that the parser refuses the term would not have caught that, because
+// the defect was that the surface turned a false predicate into a 200.
+//
+// So this asserts the tool ERRORS, and that the message names the namespace
+// and the issue that will make it resolvable — an agent that cannot tell
+// "unimplemented" from "matched nothing" is the whole complaint.
+func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	res := callTool(t, session, "list_nodes", map[string]any{"selector": "tag:env=prod"})
+	if !res.IsError {
+		var out mcp.ListNodesOutput
+		decodeResult(t, res, &out)
+		t.Fatalf("a tag: selector succeeded with %d Nodes — an empty list here reads as "+
+			"\"no Node carries that tag\", not \"tag: is not implemented\"", len(out.Nodes))
+	}
+	msg := toolErrorText(t, res)
+	for _, want := range []string{"tag:", "#430"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the refusal does not mention %q, so the caller cannot tell why: %s", want, msg)
+		}
+	}
+}
+
 func TestMCP_ListNodes_All(t *testing.T) {
 	ts := newTestServer(t)
 	session := ts.connect(t)

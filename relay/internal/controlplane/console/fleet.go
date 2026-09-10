@@ -27,6 +27,7 @@ package console
 // the same code. A second, Console-local parser that agreed today would drift.
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
@@ -724,24 +725,27 @@ func sortedKeys(m map[string]string) []string {
 // `tag:` — the one namespace it still cannot express — with a message that
 // names the reason.
 //
-// `tag:` is in the model (invariant 7, ADR-0020) and not in the parser: it
-// has no storage on registry.Node until #430 gives it one, so a filter on it
-// would silently match nothing today, and a filter box that returns zero
-// rows for a valid-looking term is worse than one that refuses.
+// `tag:` is in the model (invariant 7, ADR-0020) and not resolvable: it has no
+// storage on registry.Node until #430 gives it one. The REFUSAL now lives in
+// capability.ParseSelector (#560), not here. This screen used to guard it
+// itself, which meant MCP's list_nodes answered the same term with 200 and an
+// empty list while this box refused it — the surface-local guard was how the
+// two drifted. What is left here is rendering: recognise the sentinel and say
+// it in this screen's register, never re-decide it.
 //
-// `state:` is NOT refused here (#414, ADR-0034): it resolves through
+// `state:` is NOT special-cased at all (#414, ADR-0034): it resolves through
 // capability.ParseSelector/Matches exactly like node: and relay:, so a
 // `state:offline` filter narrows the table the same way a facet click does
 // — one resolver, no surface-local evaluation.
 func parseFleetFilter(s string) (capability.Selector, error) {
-	for _, term := range strings.Split(s, ",") {
-		term = strings.TrimSpace(term)
-		if strings.HasPrefix(term, "tag:") {
-			return capability.Selector{}, filterErr("tag: labels are not resolvable yet — operator-set grouping lands with label management (#430). Filter on node:, relay:, or state: for now.")
-		}
-	}
 	sel, err := capability.ParseSelector(s)
-	if err != nil {
+	switch {
+	case errors.Is(err, capability.ErrSelectorTagUnsupported):
+		// Rendered without the generic lead sentence below: the term DOES
+		// carry a prefix, so "every term needs a namespace prefix" would name
+		// the wrong problem.
+		return capability.Selector{}, filterErr("tag: labels are not resolvable yet — operator-set grouping lands with label management (#430). Filter on node:, relay:, or state: for now.")
+	case err != nil:
 		return capability.Selector{}, filterErr("every term needs a namespace prefix, like node:role=web or state:offline. " + strings.TrimPrefix(err.Error(), "capability: "))
 	}
 	return sel, nil
