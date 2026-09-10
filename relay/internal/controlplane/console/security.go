@@ -81,8 +81,12 @@ import (
 // have been delivering the token to the page, and that job never actually
 // existed here: the server renders the token into the HTML directly
 // (layout.go's hx-headers attribute and the hidden field), and no shipped
-// script reads any cookie (verified: every file under assets/ greps clean for
-// "cookie" and "csrf").
+// script reads any cookie. Verified precisely, because the loose version of
+// this claim invites a grep that appears to refute it: the three shipped
+// scripts (activity.js, dayone.js, stream.js) contain no occurrence of
+// "cookie" or "csrf" and make exactly one network call between them, an
+// EventSource GET. console.css mentions both words in prose comments, which is
+// not a reader.
 //
 // # `__Host-` forces Path=/; accepted
 //
@@ -192,9 +196,10 @@ const contentSecurityPolicy = "default-src 'self'; " +
 //
 // Secure mints nothing and can no longer fail with a 500: the session lane
 // reads a value Middleware already put on the context, and the sign-in lane's
-// mint (signInCSRFToken) only ever fails on a broken entropy source, which is
-// the same unrecoverable condition every other minting call in this process
-// treats as a panic, not a request-scoped error — see signInCSRFToken.
+// mint (signInCSRFToken) only ever fails on a broken entropy source. Every
+// OTHER minting call in this process treats that as a panic; this one still
+// returns an error, unchanged from the ensureCSRFCookie it replaces, because
+// login.go's callers need it request-scoped — they have a page to re-render.
 func Secure(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", contentSecurityPolicy)
@@ -212,9 +217,16 @@ func Secure(h http.Handler) http.Handler {
 		// whether a session happened to resolve — see THE SCHEME above and
 		// ADR-0023/#299's rule that a credential is routed to exactly one
 		// verifier, never offered to each until one accepts.
-		valid := sessionCSRFValid(r)
+		// if/else, not assign-then-override: the two lanes are mutually
+		// exclusive and the code should say so syntactically rather than
+		// leave it to be inferred from which result survives. The file's
+		// claim above is that they are never tried in turn; an `else` is
+		// what makes that literally true of the control flow.
+		var valid bool
 		if Unauthenticated(r) {
 			valid = signInCSRFValid(r)
+		} else {
+			valid = sessionCSRFValid(r)
 		}
 		if !valid {
 			// Rendered as a refusal a human can act on, not a bare 403: a user
@@ -268,7 +280,10 @@ func sessionCSRFValid(r *http.Request) bool {
 	if !ok {
 		return false
 	}
-	return consoleauth.CSRFTokensEqual(cs.CSRFToken, submittedCSRFToken(r))
+	// Reveal() only here and in sessionCSRFToken: the token is a redacting
+	// type precisely so the two places that must handle the raw value are the
+	// two that name it out loud.
+	return consoleauth.CSRFTokensEqual(cs.CSRFToken.Reveal(), submittedCSRFToken(r))
 }
 
 // signInCSRFValid is the sign-in lane: POST /console/login only.
@@ -283,6 +298,28 @@ func sessionCSRFValid(r *http.Request) bool {
 // cookie and echo that same value in the form field, defeating the double
 // submit entirely.
 func signInCSRFValid(r *http.Request) bool {
+	// SELF-GATING, and this is the load-bearing half. Unauthenticated(r) — the
+	// predicate Secure uses to pick this lane — is true for the whole
+	// AssetsPrefix subtree as well as LoginPath, because it is simultaneously
+	// the authentication wrapper's Public predicate. So without this check, ONE
+	// edit widening the auth hole would silently also move the new route onto
+	// the weaker double-submit lane: two security decisions made by one change,
+	// with no test going red (the existing guard asserts the PREDICATE's extent
+	// and says nothing about CSRF lanes).
+	//
+	// That is not hypothetical. This change's own deferred CSP report sink
+	// (99-open-decisions D15) needs a route outside both Secure and the
+	// authenticator, and a browser sends those reports with no token and no
+	// credentials — so arriving on this lane it would either be refused
+	// forever or be "made to work" by a cookie pair a same-host writer can
+	// plant. Refusing anything but the one request this lane exists for means
+	// such a route fails closed on the session lane instead of inheriting the
+	// weaker one, and makes "POST /console/login only" true in code rather
+	// than by inference from a doc comment.
+	if r.Method != http.MethodPost || cleanPath(r.URL.Path) != LoginPath {
+		return false
+	}
+
 	c, err := r.Cookie(signInCSRFCookieName)
 	if err != nil || !wellFormedSignInCSRFToken.MatchString(c.Value) {
 		return false
@@ -374,7 +411,7 @@ func sessionCSRFToken(r *http.Request) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return cs.CSRFToken, true
+	return cs.CSRFToken.Reveal(), true
 }
 
 // submittedCSRFToken reads whatever token r carries, header first and then

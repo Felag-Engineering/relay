@@ -358,9 +358,16 @@ func TestConsoleCSRF_ABearerLaneRequestCannotMutateTheConsole(t *testing.T) {
 // renders csrf_token=""; submitting "" back (header and field, both empty)
 // must still be refused.
 //
-// *Fails if*: either of the two guards — the lane requiring a resolved
-// session, and CSRFTokensEqual refusing an empty submitted value — is
-// removed.
+// *Fails if*: the lane's requirement for a resolved session is removed.
+//
+// Deliberately NOT claiming both guards. CSRFTokensEqual's empty guard is the
+// second line of defence here and this test does not reach it: the bearer-lane
+// request is refused by sessionCSRFValid's no-session branch before any
+// comparison runs, so removing the empty guard leaves this test green (verified
+// by mutation). That guard is covered where it can actually be exercised, in
+// consoleauth's TestCSRFTokensEqual_RefusesEmptiesAndZero. Saying "either
+// guard" here would have been a comment taking credit for coverage it has not
+// got — the failure mode this repo keeps finding.
 func TestConsoleCSRF_AnEmptyRenderedTokenCannotValidate(t *testing.T) {
 	f := newLoginFixture(t)
 
@@ -446,4 +453,76 @@ func TestConsoleCSRF_SuccessfulSignInClearsTheSignInCookie(t *testing.T) {
 	if cleared.Path != "/" {
 		t.Errorf("clearing cookie Path = %q, want \"/\" to match the cookie being cleared", cleared.Path)
 	}
+}
+
+// TestConsoleCSRF_TheWeakLaneRefusesAnythingButTheSignInPost pins finding 1 of
+// #460's security review: the double-submit lane must gate itself, not rely on
+// Secure's choice of lane being correct forever.
+//
+// Unauthenticated(r) is true for the whole assets subtree as well as LoginPath,
+// and it is the SAME predicate the authentication wrapper uses as Public. So
+// one edit widening the auth hole would otherwise also move the new route onto
+// the weaker lane — two security decisions in one change, with nothing going
+// red. A route added to the unauthenticated set must fail closed on the session
+// lane instead of inheriting the cookie lane.
+//
+// *Fails if*: signInCSRFValid stops checking the method and path, which is the
+// shape a reader "simplifying" the lane selection would most plausibly produce.
+func TestConsoleCSRF_TheWeakLaneRefusesAnythingButTheSignInPost(t *testing.T) {
+	// A well-formed cookie/field pair an attacker can plant and echo. On the
+	// sign-in POST this pair is exactly what the lane accepts, so if any other
+	// unauthenticated path admitted it, that path would be forgeable.
+	const planted = "AttackerChosenValue-well_formed-by-shape-00"
+
+	for _, path := range []string{
+		AssetsPrefix + "report",      // the shape D15's deferred CSP sink would take
+		AssetsPrefix + "console.css", // a real asset, reached with an unsafe method
+	} {
+		t.Run(path, func(t *testing.T) {
+			if !Unauthenticated(httptest.NewRequest(http.MethodPost, path, nil)) {
+				t.Fatalf("fixture is not exercising the weak lane: Unauthenticated(%q) is false", path)
+			}
+			body := url.Values{"csrf_token": {planted}}
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if signInCSRFValid(withCookies(req, &http.Cookie{Name: signInCSRFCookieName, Value: planted})) {
+				t.Errorf("the double-submit lane accepted %s %s; it must serve POST %s and nothing else",
+					http.MethodPost, path, LoginPath)
+			}
+		})
+	}
+
+	// And the requests it DOES serve still work, or the gate is an outage.
+	//
+	// The traversal form is ACCEPTED deliberately, and that is worth pinning
+	// rather than leaving to surprise: the gate compares cleanPath(), so a path
+	// that normalises back to LoginPath IS the sign-in POST by the time the
+	// router sees it. Comparing the raw path instead would refuse a request the
+	// router is about to send to the sign-in handler — a gate and a router
+	// disagreeing about which route is being asked for, which is the whole
+	// reason cleanPath exists.
+	for _, path := range []string{LoginPath, LoginPath + "/../login"} {
+		body := url.Values{"csrf_token": {planted}}
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if !signInCSRFValid(withCookies(req, &http.Cookie{Name: signInCSRFCookieName, Value: planted})) {
+			t.Errorf("the double-submit lane refused POST %s, which resolves to the one request it exists for", path)
+		}
+	}
+
+	// A SAFE method on the sign-in path is refused too: Secure never reaches a
+	// lane for those, so this only pins that the gate does not widen on its own.
+	getReq := httptest.NewRequest(http.MethodGet, LoginPath, nil)
+	if signInCSRFValid(withCookies(getReq, &http.Cookie{Name: signInCSRFCookieName, Value: planted})) {
+		t.Error("the double-submit lane accepted a GET; it must serve the sign-in POST only")
+	}
+}
+
+// withCookies attaches cookies to a request and returns it, so a table row
+// stays one expression.
+func withCookies(r *http.Request, cookies ...*http.Cookie) *http.Request {
+	for _, c := range cookies {
+		r.AddCookie(c)
+	}
+	return r
 }

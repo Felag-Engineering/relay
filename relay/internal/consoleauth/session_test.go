@@ -306,7 +306,7 @@ func TestCSRFToken_IsStableForOneSession(t *testing.T) {
 	}
 	first := st.CSRFToken(id)
 	second := st.CSRFToken(id)
-	if first == "" {
+	if first.IsZero() {
 		t.Fatal("CSRFToken returned empty for a live session")
 	}
 	// RED ON: making the token random per call, which would break every form
@@ -396,8 +396,8 @@ func TestCSRFToken_ZeroIdentifierYieldsNoToken(t *testing.T) {
 	t.Parallel()
 	st := consoleauth.NewStore()
 
-	if got := st.CSRFToken(consoleauth.SessionID{}); got != "" {
-		t.Errorf("CSRFToken(zero) = %q, want \"\"", got)
+	if got := st.CSRFToken(consoleauth.SessionID{}); !got.IsZero() {
+		t.Errorf("CSRFToken(zero) = %q, want the zero token", got.Reveal())
 	}
 }
 
@@ -410,7 +410,7 @@ func TestCSRFTokensEqual_RefusesEmptiesAndZero(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 	token := st.CSRFToken(id)
-	if token == "" {
+	if token.IsZero() {
 		t.Fatal("CSRFToken returned empty for a live session")
 	}
 
@@ -418,19 +418,19 @@ func TestCSRFTokensEqual_RefusesEmptiesAndZero(t *testing.T) {
 	// subtle.ConstantTimeCompare("", "") == 1 — which is exactly true, and
 	// exactly the bypass this guard exists to close.
 	cases := []struct {
-		name               string
-		derived, submitted string
+		name            string
+		held, submitted string
 	}{
-		{"empty derived, empty submitted", "", ""},
-		{"empty derived, real submitted", "", token},
-		{"real derived, empty submitted", token, ""},
+		{"empty held, empty submitted", "", ""},
+		{"empty held, real submitted", "", token.Reveal()},
+		{"real held, empty submitted", token.Reveal(), ""},
 	}
 	for _, c := range cases {
-		if consoleauth.CSRFTokensEqual(c.derived, c.submitted) {
-			t.Errorf("%s: CSRFTokensEqual(%q, %q) = true, want false", c.name, c.derived, c.submitted)
+		if consoleauth.CSRFTokensEqual(c.held, c.submitted) {
+			t.Errorf("%s: CSRFTokensEqual(%q, %q) = true, want false", c.name, c.held, c.submitted)
 		}
 	}
-	if !consoleauth.CSRFTokensEqual(token, token) {
+	if !consoleauth.CSRFTokensEqual(token.Reveal(), token.Reveal()) {
 		t.Error("CSRFTokensEqual refused a token compared against itself")
 	}
 }
@@ -454,8 +454,8 @@ func TestCSRFToken_IsNotLoggable(t *testing.T) {
 	token := st.CSRFToken(id)
 
 	rendered := fmt.Sprintf("%+v", sess)
-	if strings.Contains(rendered, token) {
-		t.Errorf("%%+v of a Session contains the derived CSRF token %q — it must not be a field on Session", token)
+	if strings.Contains(rendered, token.Reveal()) {
+		t.Errorf("%%+v of a Session contains the derived CSRF token %q — it must not be a field on Session", token.Reveal())
 	}
 }
 
@@ -474,4 +474,71 @@ func TestStore_IdentifiersAreUnique(t *testing.T) {
 		}
 		seen[id.Reveal()] = true
 	}
+}
+
+// TestCSRFToken_RefusesAnIdentifierThatIsNotLive pins finding 3 of #460's
+// security review: CSRFToken must not be a forgery oracle for any identifier a
+// caller can name.
+//
+// Without a liveness check the method hands back a permanently-valid token for
+// a session the caller does not own, and nothing in the signature warns them.
+// Today's only caller has already resolved the session, so the check is
+// redundant TODAY — which is precisely the kind of safety that stops holding
+// when a second caller appears. #428's step-up POST is the expected one, and
+// like handleLoginSubmit it reads the raw cookie rather than a resolved session.
+//
+// *Fails if*: the liveness lookup is removed and the method derives from shape
+// alone.
+func TestCSRFToken_RefusesAnIdentifierThatIsNotLive(t *testing.T) {
+	t.Parallel()
+	st := consoleauth.NewStore()
+
+	// Never issued: the shape is plausible, the session does not exist.
+	invented := consoleauth.ParseSessionID("0000000000000000000000000000000000000000000")
+	if got := st.CSRFToken(invented); !got.IsZero() {
+		t.Errorf("CSRFToken(never-issued) = %q, want the zero token", got.Reveal())
+	}
+
+	// Issued and then ended: the identifier was real and must stop deriving.
+	id, err := st.Issue(aSession())
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if st.CSRFToken(id).IsZero() {
+		t.Fatal("CSRFToken returned nothing for a live session")
+	}
+	st.End(id)
+	if got := st.CSRFToken(id); !got.IsZero() {
+		t.Errorf("CSRFToken(ended session) = %q, want the zero token — the token must die with the session", got.Reveal())
+	}
+}
+
+// TestCSRFToken_AZeroStorePanicsRatherThanForging pins finding 4: a Store built
+// without NewStore would derive under a nil HMAC key, producing a value anyone
+// knowing the raw identifier can recompute, identical in every process.
+//
+// No construction path produces one today, which is why this is loud rather
+// than silent: the single way to obtain a universally-forgeable token should
+// fail the way NewStore fails on a broken entropy source, not return quietly.
+func TestCSRFToken_AZeroStorePanicsRatherThanForging(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("a zero-value Store derived a token instead of panicking")
+		}
+		// The MESSAGE is the assertion, not merely that something panicked. A
+		// zero Store also has a nil clock, so removing the pepper guard still
+		// panics — one frame deeper, on calling s.now(). An assertion that only
+		// checked "it panicked" would therefore pass with the guard deleted,
+		// which a coordinator mutation pass confirmed. Naming the guard's own
+		// message is what makes this test about the guard.
+		msg := fmt.Sprint(r)
+		if !strings.Contains(msg, "NewStore") {
+			t.Errorf("panic = %q, want the pepper guard's message naming NewStore; "+
+				"a panic from somewhere else means the guard is gone", msg)
+		}
+	}()
+	var st consoleauth.Store
+	_ = st.CSRFToken(consoleauth.ParseSessionID("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
 }

@@ -373,7 +373,7 @@ func (s *Service) Resolve(ctx context.Context, id SessionID) (Session, accounts.
 // one itself, so the boundary computes it once, here, at the moment it
 // already has the resolved SessionID, and carries the result — not the
 // pepper, not the identifier's source material — onto the request context.
-func (s *Service) CSRFToken(id SessionID) string {
+func (s *Service) CSRFToken(id SessionID) CSRFToken {
 	return s.sessions.CSRFToken(id)
 }
 

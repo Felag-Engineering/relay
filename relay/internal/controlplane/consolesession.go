@@ -52,7 +52,7 @@ type ConsoleSessionResolver interface {
 	// ConsoleSession.CSRFToken for what crosses onto the context, and
 	// consoleauth.Store.CSRFToken for the derivation itself and the threat
 	// model it buys over a stored secret.
-	CSRFToken(id consoleauth.SessionID) string
+	CSRFToken(id consoleauth.SessionID) consoleauth.CSRFToken
 }
 
 // consoleLane is the browser credential lane's configuration.
@@ -229,7 +229,7 @@ type ConsoleSession struct {
 	// there is nothing here for redaction to buy. It still must never be
 	// logged deliberately, for the ordinary reason any credential-shaped
 	// value must not be.
-	CSRFToken string
+	CSRFToken consoleauth.CSRFToken
 }
 
 // ConsoleSessionFromContext returns the ConsoleSession that Middleware

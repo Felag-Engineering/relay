@@ -102,7 +102,10 @@ var (
 	ErrStepUpRequired = errors.New("consoleauth: step-up re-authentication required")
 )
 
-const redactedSessionID = "[REDACTED session id]"
+const (
+	redactedSessionID = "[REDACTED session id]"
+	redactedCSRFToken = "[REDACTED csrf token]"
+)
 
 // SessionID is a Console session's bearer identifier — the value that rides in
 // the cookie.
@@ -126,6 +129,41 @@ func (s SessionID) MarshalJSON() ([]byte, error) { return json.Marshal(redactedS
 
 // ParseSessionID wraps an identifier read off a request.
 func ParseSessionID(raw string) SessionID { return SessionID{id: raw} }
+
+// CSRFToken is a session's derived CSRF token, held in a type that redacts
+// under every stringifying interface.
+//
+// Redacting for SessionID's reason, verbatim: this value is checked by
+// EQUALITY, so a copy of it in a log line is a working credential rather than
+// a cracking target. #460 rejected a STORED per-session secret partly because
+// "a heap dump, a core file, or a log leak" would each be sufficient — the
+// attacker never needs the session cookie, since the victim's browser attaches
+// it. Deriving rather than storing answers the heap and core-file halves; only
+// a type that refuses to print itself answers the log half, and logs are the
+// cheap one because they ship off-box.
+//
+// So a bare string here would leave the argument for derivation half-made. The
+// hazard is concrete: one slog.Debug("request", "session", cs) or a %+v of a
+// struct carrying this, anywhere in a handler or middleware, and an attacker
+// with log access needs only to get the victim's browser to issue one POST.
+type CSRFToken struct{ token string }
+
+// Reveal returns the token. The single way out of the type, used where the
+// value must actually be compared or rendered.
+func (c CSRFToken) Reveal() string { return c.token }
+
+// IsZero reports whether no token is held.
+func (c CSRFToken) IsZero() bool { return c.token == "" }
+
+func (c CSRFToken) String() string               { return redactedCSRFToken }
+func (c CSRFToken) GoString() string             { return redactedCSRFToken }
+func (c CSRFToken) LogValue() slog.Value         { return slog.StringValue(redactedCSRFToken) }
+func (c CSRFToken) MarshalJSON() ([]byte, error) { return json.Marshal(redactedCSRFToken) }
+
+// ParseCSRFToken wraps a token value a test fixture or a caller already holds.
+// It is NOT a mint — the only way to obtain a real token is Store.CSRFToken,
+// which derives it and checks the session is live. Mirrors ParseSessionID.
+func ParseCSRFToken(raw string) CSRFToken { return CSRFToken{token: raw} }
 
 // Session is one signed-in human.
 //
@@ -401,17 +439,55 @@ func (s *Store) Rotate(old SessionID) (SessionID, error) {
 // own lane (security.go's signInCSRFValid) rather than by this derivation,
 // which has no session to bind to yet. See security.go's file doc for the
 // two-lane scheme this method is half of.
-func (s *Store) CSRFToken(id SessionID) string {
-	if id.IsZero() {
-		return ""
+func (s *Store) CSRFToken(id SessionID) CSRFToken {
+	// A zero-value Store would derive under a nil HMAC key: a value anyone who
+	// knows the raw identifier can recompute, identical in every process. No
+	// construction path produces one (NewStore is the only one and it panics on
+	// a broken entropy source), and the type doc says the zero value is not
+	// usable — but the single way to get a universally-forgeable token should be
+	// loud rather than silent, for exactly NewStore's reason.
+	if len(s.csrfPepper) == 0 {
+		panic("consoleauth: CSRFToken called on a Store built without NewStore")
 	}
+	if id.IsZero() {
+		return CSRFToken{}
+	}
+
+	// LIVENESS, not just shape. Without it this method is a forgery oracle for
+	// any identifier a caller can name: it would hand back a permanently-valid
+	// token for a session the caller does not own, and nothing in the signature
+	// would warn them. Today's only caller has already resolved the session, so
+	// the check is redundant TODAY — and that is precisely the kind of safety
+	// that stops holding when a second caller appears. #428's step-up POST is
+	// the expected one, and (like handleLoginSubmit already does, deliberately)
+	// it reads the raw cookie rather than a resolved session.
+	//
+	// Refusing an unknown identifier also makes the token's lifetime match the
+	// session's at both ends rather than only at issue.
+	key := hashID(id)
+	now := s.now()
+	s.mu.Lock()
+	sess, ok := s.sessions[key]
+	expired := ok && s.expiredLocked(sess, now)
+	s.mu.Unlock()
+	if !ok || expired {
+		return CSRFToken{}
+	}
+
 	mac := hmac.New(sha256.New, s.csrfPepper)
 	mac.Write([]byte(id.Reveal()))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return CSRFToken{token: base64.RawURLEncoding.EncodeToString(mac.Sum(nil))}
 }
 
-// CSRFTokensEqual reports whether a derived CSRF token and a submitted one
-// match, in constant time.
+// CSRFTokensEqual reports whether a CSRF token the server holds and one a
+// request submitted match, in constant time.
+//
+// Deliberately origin-neutral in both name and parameters, because it has two
+// callers with different notions of "held": the session lane compares a token
+// DERIVED from the session identifier, and the sign-in lane compares the value
+// of a double-submit cookie. The comparison and its guard are identical for
+// both, and duplicating a security-sensitive guard across two files to keep the
+// parameter names specific would be the worse trade.
 //
 // The empty guard is load-bearing and must stay: subtle.ConstantTimeCompare
 // of two empty slices returns 1, so without it a request presenting no token
@@ -419,11 +495,11 @@ func (s *Store) CSRFToken(id SessionID) string {
 // (a zero SessionID, or a caller that never derived one). Refusing empties on
 // EITHER side, before the comparison runs, is what makes "no token" and "the
 // zero value" the same failure rather than a bypass.
-func CSRFTokensEqual(derived, submitted string) bool {
-	if derived == "" || submitted == "" {
+func CSRFTokensEqual(held, submitted string) bool {
+	if held == "" || submitted == "" {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(derived), []byte(submitted)) == 1
+	return subtle.ConstantTimeCompare([]byte(held), []byte(submitted)) == 1
 }
 
 // StepUp refreshes the session's proof of human presence. Call it only after a
