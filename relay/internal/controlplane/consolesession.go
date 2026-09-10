@@ -27,6 +27,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -166,9 +167,40 @@ type consoleSessionContextKey struct{}
 // This is NOT a second auth path itself: the Principal on the context is what
 // authenticated the request, and this value is that same resolution's
 // by-product — a handler consumes it, it never re-verifies it.
+//
+// # WHY THE IDENTITY SNAPSHOT DELIBERATELY DOES NOT CROSS
+//
+// consoleauth.Session carries Account, Role and Kind, and its own doc calls
+// them "the snapshot taken at sign-in" — AccountID is "the only field here
+// that authorization depends on". Service.Resolve returns that stale Session
+// beside a FRESHLY read accounts.Account, and the Principal on this context
+// is built from the fresh one, so a role change takes effect on the very next
+// click.
+//
+// Carrying the whole Session here would put a stale Role and Kind on the
+// context right next to the authoritative fresh ones, with nothing in the
+// type saying which is which. The trap is specific and this seam's declared
+// next consumer walks straight into it: #428's step-up POST is the handler
+// that gates mutate applies (ADR-0026 decision 3) and relay:-label
+// management (invariant 7), and it already needs the ID from here — so
+// `cs.Session.Role` would be the nearest field to hand and would read
+// `admin` for a demoted admin until their session lapsed on its own.
+//
+// So only the ID and the refreshed step-up stamp cross. AUTHORIZATION COMES
+// FROM THE PRINCIPAL AND ONLY THE PRINCIPAL. A handler needing any other
+// session fact should take it from a fresh Resolve rather than have this
+// type grow a snapshot field; TestConsoleSession_CarriesNoIdentitySnapshot
+// fails if one is added.
 type ConsoleSession struct {
-	ID      consoleauth.SessionID // redacts under every stringifying interface
-	Session consoleauth.Session   // a COPY; Store.Lookup already returns one
+	// ID is the session identifier, which redacts under every stringifying
+	// interface (consoleauth.SessionID).
+	ID consoleauth.SessionID
+
+	// AuthenticatedAt is the step-up stamp: the last moment a human proved
+	// presence by re-entering a credential. Safe to carry because it is
+	// REFRESHED — Service.StepUp writes it — so the value here is current as
+	// of this request, unlike the identity snapshot below.
+	AuthenticatedAt time.Time
 }
 
 // ConsoleSessionFromContext returns the ConsoleSession that Middleware
@@ -195,5 +227,5 @@ func (a *Authenticator) authenticateConsole(ctx context.Context, id consoleauth.
 	// No TokenID: a Console session presents no API Token. The audit trail's
 	// verified lane carries the method instead, which is what distinguishes
 	// "someone's browser did this" from "someone's script did this".
-	return authResult{principal: p, console: &ConsoleSession{ID: id, Session: sess}}, true
+	return authResult{principal: p, console: &ConsoleSession{ID: id, AuthenticatedAt: sess.AuthenticatedAt}}, true
 }

@@ -247,6 +247,54 @@ var authFailureKinds = []string{
 	KindStepUpThrottled,
 }
 
+// notAnAuthFailureKinds is every OTHER Kind: the ones that record something
+// besides a refused credential. It exists only so the two lists together form
+// a CLOSED PARTITION of Kinds(), which is what makes
+// TestAuthFailureKinds_PartitionsTheWholeVocabulary able to fail on a kind
+// nobody classified.
+//
+// Why a second list rather than a rule over names: the first version of that
+// test derived membership from the "_failed"/"_throttled" suffix, and a
+// security review showed it did not catch the case it was written for. A new
+// kind spelled step_up_denied (or login_refused, or password_mismatch) that
+// somebody forgot to add to authFailureKinds has no suffix, so the suffix test
+// saw nothing to complain about and passed — it only ever fired on a kind
+// ADDED to the group, which is not the mistake anyone makes. The suffix rule
+// also silently COMPELLED the wrong answer in the other direction: a future
+// enrollment_failed or dispatch_failed would have been forced into the
+// credential-grinding query, where a Node enrollment failure would be counted
+// as an attack on a password.
+//
+// Listing both sides costs one line per new kind and makes that line a
+// decision. Anything unclassified fails the test until someone says which it
+// is, which is the property the group needs and the suffix could not give.
+var notAnAuthFailureKinds = []string{
+	KindDispatch,
+	KindRefusal,
+	KindFreezeEngage,
+	KindFreezeRelease,
+	KindJobCancel,
+	KindTokenMint,
+	KindTokenRevoke,
+	KindNodeRevoke,
+	KindPlan,
+	KindApprovalRequested,
+	KindApprovalGrantRequested,
+	KindApprovalPendingObserved,
+	KindApprovalExpired,
+	KindApprovalDecided,
+	KindRead,
+	KindAccountCreate,
+	KindAccountRole,
+	KindAccountEnable,
+	KindAccountDisable,
+	KindLoginSucceeded,
+	KindLogout,
+	KindStepUp,
+	KindAPITokenMint,
+	KindAPITokenRevoke,
+}
+
 // AuthFailureKinds is every Kind recording a credential that was submitted
 // and not accepted, at EITHER door — the sign-in form or the step-up prompt.
 //

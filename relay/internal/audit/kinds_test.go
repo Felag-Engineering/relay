@@ -83,31 +83,52 @@ func TestKinds_ReturnsACopy(t *testing.T) {
 	}
 }
 
-// TestAuthFailureKinds_MatchesTheSuffixConvention derives the expectation
-// from the vocabulary itself rather than restating authFailureKinds' literal
-// contents, for the same reason TestKinds_ListsEveryDeclaredKind reads
-// audit.go's source instead of hand-copying allKinds: a hand-maintained group
-// is the same class of hazard as a hand-maintained partition, and this way a
-// fourth door's failure kinds join the group by naming convention rather than
-// by somebody remembering to add them.
+// TestAuthFailureKinds_PartitionsTheWholeVocabulary is the guard the group
+// actually needs: every Kind in Kinds() must appear in EXACTLY ONE of
+// authFailureKinds or notAnAuthFailureKinds. A kind nobody classified fails
+// here, which is the mistake that actually happens — somebody adds a kind and
+// does not think about whether it belongs to the credential-grinding query.
 //
-// The convention this guard rests on: every Kind ending in "_failed" or
-// "_throttled" means "a credential was submitted and not accepted". A future
-// kind that means that but is spelled differently breaks this guard loudly,
-// which is the point — it must not be able to escape the group silently.
-func TestAuthFailureKinds_MatchesTheSuffixConvention(t *testing.T) {
-	inGroup := map[string]bool{}
-	for _, k := range AuthFailureKinds() {
-		inGroup[k] = true
+// This replaced a suffix heuristic (membership derived from a "_failed" /
+// "_throttled" ending). A security review defeated that version with one
+// input: a kind named step_up_denied, added to Kinds() and NOT to the group,
+// passed — no suffix, so the rule had nothing to say about it. The heuristic
+// only ever fired when a kind was wrongly ADDED to the group, which nobody
+// does by accident, and it would have force-marched a future enrollment_failed
+// into the group, counting Node enrollment failures as password attacks.
+//
+// A closed partition has no such blind spot, because the obligation is on
+// Kinds() rather than on how a name is spelled.
+func TestAuthFailureKinds_PartitionsTheWholeVocabulary(t *testing.T) {
+	inFailure := map[string]bool{}
+	for _, k := range authFailureKinds {
+		inFailure[k] = true
+	}
+	inOther := map[string]bool{}
+	for _, k := range notAnAuthFailureKinds {
+		inOther[k] = true
 	}
 
 	for _, k := range Kinds() {
-		bySuffix := strings.HasSuffix(k, "_failed") || strings.HasSuffix(k, "_throttled")
-		if bySuffix && !inGroup[k] {
-			t.Errorf("%q ends in _failed/_throttled but is absent from AuthFailureKinds()", k)
+		switch {
+		case inFailure[k] && inOther[k]:
+			t.Errorf("%q is in BOTH authFailureKinds and notAnAuthFailureKinds", k)
+		case !inFailure[k] && !inOther[k]:
+			t.Errorf("%q is in neither authFailureKinds nor notAnAuthFailureKinds. "+
+				"Decide: does a query for %q mean a credential was submitted and refused? "+
+				"Add it to one list or the other.", k, k)
 		}
-		if !bySuffix && inGroup[k] {
-			t.Errorf("%q is in AuthFailureKinds() but its name gives no _failed/_throttled reason to be", k)
+	}
+
+	// And nothing may be classified that is not a declared Kind, or the
+	// partition could be "complete" while naming something that does not exist.
+	declared := map[string]bool{}
+	for _, k := range Kinds() {
+		declared[k] = true
+	}
+	for _, k := range append(append([]string(nil), authFailureKinds...), notAnAuthFailureKinds...) {
+		if !declared[k] {
+			t.Errorf("%q is classified but is not in Kinds()", k)
 		}
 	}
 }

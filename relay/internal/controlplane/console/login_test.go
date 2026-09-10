@@ -549,6 +549,11 @@ func TestConsole_ReturnPathCannotLeaveTheConsole(t *testing.T) {
 		// come back as LoginPath, which safeReturnPath must never allow)
 		// instead of rejecting a non-canonical input outright.
 		"/console//evil.example", // empty segment
+		// Decodes to a canonical, /console/-prefixed path, so the decoded
+		// checks pass — but the value returned would be the escaped form,
+		// which is not rooted at "/" at all. Found by security review.
+		"%2fconsole%2fnodes",
+		"%2fconsole%2f",
 	}
 	for _, raw := range refused {
 		if got := safeReturnPath(raw); got != "" {

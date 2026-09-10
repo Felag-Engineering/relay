@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -231,11 +232,11 @@ func TestConsoleSession_TheResolvedSessionReachesTheHandler(t *testing.T) {
 	if cs.ID.Reveal() != testSessionID {
 		t.Errorf("ConsoleSession.ID = %q, want %q", cs.ID.Reveal(), testSessionID)
 	}
-	if cs.Session.Method != consoleauth.MethodPassword {
-		t.Errorf("ConsoleSession.Session.Method = %q, want %q", cs.Session.Method, consoleauth.MethodPassword)
-	}
-	if !cs.Session.AuthenticatedAt.Equal(testSessionAuthenticatedAt) {
-		t.Errorf("ConsoleSession.Session.AuthenticatedAt = %v, want %v", cs.Session.AuthenticatedAt, testSessionAuthenticatedAt)
+	// The step-up stamp crosses because StepUp refreshes it. Method, Role and
+	// the rest of the sign-in snapshot deliberately do not — see the type's doc
+	// and TestConsoleSession_CarriesNoIdentitySnapshot.
+	if !cs.AuthenticatedAt.Equal(testSessionAuthenticatedAt) {
+		t.Errorf("ConsoleSession.AuthenticatedAt = %v, want %v", cs.AuthenticatedAt, testSessionAuthenticatedAt)
 	}
 }
 
@@ -300,4 +301,41 @@ func TestWithConsoleSessions_PanicsWithoutAScope(t *testing.T) {
 			Unauthorized: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}),
 		}),
 	)
+}
+
+// TestConsoleSession_CarriesNoIdentitySnapshot is a structural guard, not a
+// behavioural one: it fails if ConsoleSession ever grows a field naming an
+// identity, because consoleauth.Session's Account/Role/Kind are a sign-in-time
+// snapshot that is never refreshed, while the Principal beside it on the same
+// context is rebuilt from a fresh Account read on every request.
+//
+// Written as a guard rather than left to review because the field that would
+// be added is the one a handler reaches for. #428's step-up POST gates mutate
+// applies and relay:-label management and already takes the ID from here; a
+// `Role` within reach would read `admin` for a demoted admin until their
+// session lapsed, and no behavioural test would notice. Reflection over the
+// declared fields is what makes "do not add one" enforceable.
+//
+// If a consumer genuinely needs a session fact, add a NARROW, refreshed field
+// (as AuthenticatedAt is) and extend the allowlist here deliberately.
+func TestConsoleSession_CarriesNoIdentitySnapshot(t *testing.T) {
+	allowed := map[string]bool{"ID": true, "AuthenticatedAt": true}
+
+	typ := reflect.TypeOf(ConsoleSession{})
+	for i := 0; i < typ.NumField(); i++ {
+		name := typ.Field(i).Name
+		if !allowed[name] {
+			t.Errorf("ConsoleSession grew field %q. Authorization comes from the Principal "+
+				"and only the Principal — see the type's doc comment before widening this.", name)
+		}
+	}
+
+	// And the snapshot fields specifically, by name, so the message a future
+	// reader gets names the actual hazard rather than only the allowlist.
+	for _, forbidden := range []string{"Role", "Kind", "Account", "AccountID", "Session"} {
+		if _, found := typ.FieldByName(forbidden); found {
+			t.Errorf("ConsoleSession carries %q, a sign-in-time snapshot that goes stale; "+
+				"the fresh value lives on the Principal", forbidden)
+		}
+	}
 }

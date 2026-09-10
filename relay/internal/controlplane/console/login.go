@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -229,6 +230,24 @@ func safeReturnPath(raw string) string {
 	if !strings.HasPrefix(p, "/console/") || p == LoginPath || p == LogoutPath {
 		return ""
 	}
+	// The ESCAPED form must be rooted at the Console too, not only the decoded
+	// one. Deciding on the decoded path is what catches `..` and `%2e%2e`
+	// alike, but on its own it admits a value that is not rooted at `/` at
+	// all: `%2fconsole%2fnodes` decodes to the canonical, correctly-prefixed
+	// "/console/nodes" and passes both checks above, while the value RETURNED
+	// below is the escaped "%2fconsole%2fnodes" — a relative reference. The
+	// old EscapedPath-based prefix check refused that by accident; this keeps
+	// it refused on purpose.
+	//
+	// Not exploitable through today's two callers, which hand the result to
+	// http.Redirect from a request at /console/login, so Go anchors it to the
+	// current directory and the Location stays inside /console/. That is a
+	// property of where those call sites happen to live, not of anything this
+	// function guarantees, and this function is the one that claims the value
+	// is safe to redirect to.
+	if !strings.HasPrefix(parsed.EscapedPath(), "/console/") {
+		return ""
+	}
 	if q := parsed.RawQuery; q != "" {
 		return parsed.EscapedPath() + "?" + q
 	}
@@ -418,7 +437,31 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 // there is now exactly one place that turns the cookie into a SessionID.
 func handleLogout(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if cs, ok := controlplane.ConsoleSessionFromContext(r.Context()); ok && d.Auth != nil {
+		cs, ok := controlplane.ConsoleSessionFromContext(r.Context())
+		if !ok && d.Auth != nil {
+			// FAIL CLOSED, do not fall through to the happy path. An
+			// authenticated request reached a gated /console/ route without a
+			// resolved browser session, which on the cookie lane cannot
+			// happen — Middleware sets the value for every request it lets
+			// through there. The one way here is a request that authenticated
+			// on ANOTHER lane: authenticateRequest prefers the bearer lane
+			// unconditionally and with no path scope, so an API Token or OAuth
+			// bearer aimed at this route takes it.
+			//
+			// Falling through would clear the cookie, 303 to the sign-in page,
+			// and leave the server-side session alive — "a sign-out an operator
+			// believes happened and did not", which is the exact failure the
+			// comment below refuses to allow for a different reason. It is not
+			// browser-reachable, so this is a wiring alarm rather than a live
+			// hole; it is a 500 because the next consumer of this seam (#428's
+			// step-up POST) will copy whatever shape it finds here, and the
+			// shape it must copy is "no session, no action".
+			slog.Error("console sign-out reached without a resolved browser session",
+				"path", r.URL.Path)
+			http.Error(w, "the Relay could not identify the session to end", http.StatusInternalServerError)
+			return
+		}
+		if ok && d.Auth != nil {
 			if err := d.Auth.Logout(r.Context(), cs.ID, sourceAddress(r)); err != nil {
 				http.Error(w, "the Relay could not record the sign-out", http.StatusInternalServerError)
 				return
