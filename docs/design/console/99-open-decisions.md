@@ -255,6 +255,36 @@ Act          Run · Policy · Approvals
 Administer   Add Nodes · Accounts · Incident
 ```
 
+### D15. CSP violation reporting — **DEFERRED (#460)**
+
+Spec 11's CSP section says to "report violations rather than silently dropping them, because a
+CSP violation in this product is a security event, not a rendering glitch." #460 (the Console
+CSRF fix) implements the rest of that section but ships no `report-to`/`Reporting-Endpoints`
+pair, deliberately: naming a reporting group with no endpoint behind it is worse than naming
+none, because it looks like a working control while silently dropping every report.
+
+Four reasons, recorded here rather than left an unrecorded omission:
+
+1. **A report sink is an unauthenticated POST.** The Reporting API delivers to whatever endpoint
+   the header names with no credential attached, so the sink is attacker-reachable by
+   construction. It needs a body cap, a rate limit and a redaction rule before it is safe to
+   expose at all — none of which exists yet.
+2. **It cannot live behind this file's own control.** The browser's Reporting API sends reports
+   without this Console's CSRF token and, by default, without credentials, so routing reports
+   through `Secure` would have it 403 every report it was supposed to receive. It needs a route
+   outside both `Secure` and the authenticator — a THIRD hole in the control plane's auth
+   wrapper, whose extent `Unauthenticated`'s own doc asserts is exactly two routes and no more.
+3. **Where reports go is an open product decision, not an implementation detail.** If a CSP
+   violation is a security event per spec 11, it belongs in the audit trail — under a `kind` that
+   does not exist yet — against ADR-0025's posture that the Relay authors its own audit records
+   rather than accepting one from an unauthenticated caller.
+4. **It is on neither spec 11's acceptance list nor v0.6.0's.** Nothing currently promises this
+   ships in this milestone.
+
+**What would close it:** a ruling on the sink (a new audit `kind`, most likely, given (3)), plus a
+bounded, rate-limited, unauthenticated route built to receive it — sized as its own change, not a
+rider on a CSRF fix.
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**

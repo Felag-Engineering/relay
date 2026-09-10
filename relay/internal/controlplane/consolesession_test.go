@@ -2,7 +2,10 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -37,6 +40,13 @@ const testSessionID = "console-session-fixture"
 // zero-value stand-in a handler could not tell apart from "no session".
 var testSessionAuthenticatedAt = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 
+// testSessionCSRFSecret stands in for a derived CSRF token: a distinctive,
+// non-zero value so a test can tell "the boundary carried the resolver's
+// derivation" apart from "the boundary carried a zero-value stand-in". A
+// plain string is enough here — CSRFToken (#460) is a value recomputed per
+// request, not a type with its own construction rules the way SessionID is.
+const testSessionCSRFSecret = "csrf-token-fixture"
+
 // fakeSessionResolver stands in for *consoleauth.Service on the browser lane.
 // It models the real resolver's contract: one indistinguishable error for
 // every failure, and the Account read at call time so a test can mutate it
@@ -60,6 +70,17 @@ func (f *fakeSessionResolver) Resolve(_ context.Context, id consoleauth.SessionI
 		Method:          consoleauth.MethodPassword,
 		AuthenticatedAt: testSessionAuthenticatedAt,
 	}, f.acct, nil
+}
+
+// CSRFToken stands in for the real derivation (consoleauth.Store.CSRFToken):
+// a fixed, distinctive value for the one identifier this fixture ever
+// resolves, and empty for anything else — mirroring the production
+// derivation's "no identifier, no token" shape without needing a real Store.
+func (f *fakeSessionResolver) CSRFToken(id consoleauth.SessionID) consoleauth.CSRFToken {
+	if id.Reveal() != f.valid {
+		return consoleauth.CSRFToken{}
+	}
+	return consoleauth.ParseCSRFToken(testSessionCSRFSecret)
 }
 
 // testConsoleAuthenticator wires both lanes: the API Token lane (testToken)
@@ -240,6 +261,26 @@ func TestConsoleSession_TheResolvedSessionReachesTheHandler(t *testing.T) {
 	}
 }
 
+// TestConsoleSession_CarriesTheSessionCSRFSecret pins that authenticateConsole
+// populates CSRFToken from the resolver's derivation (#460), not from
+// consoleauth.Session — there is no field on Session to read it from, by
+// design. *Fails if*: authenticateConsole drops the field, or stops calling
+// ConsoleSessionResolver.CSRFToken.
+func TestConsoleSession_CarriesTheSessionCSRFSecret(t *testing.T) {
+	a, _ := testConsoleAuthenticator()
+	status, cs, ok, reached := consoleSessionRequest(t, a, http.MethodGet, "/console/",
+		&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+	if !reached {
+		t.Fatalf("a valid Console cookie was refused: status = %d", status)
+	}
+	if !ok {
+		t.Fatal("ConsoleSessionFromContext returned ok=false on the browser lane")
+	}
+	if cs.CSRFToken.Reveal() != testSessionCSRFSecret {
+		t.Errorf("ConsoleSession.CSRFToken = %q, want %q", cs.CSRFToken.Reveal(), testSessionCSRFSecret)
+	}
+}
+
 // TestConsoleSession_TheTokenLaneCarriesNoSession is the one that matters for
 // #460: a zero-value Session leaking onto the machine lane would later mean a
 // zero-value CSRF secret on a surface that never had one.
@@ -319,7 +360,19 @@ func TestWithConsoleSessions_PanicsWithoutAScope(t *testing.T) {
 // If a consumer genuinely needs a session fact, add a NARROW, refreshed field
 // (as AuthenticatedAt is) and extend the allowlist here deliberately.
 func TestConsoleSession_CarriesNoIdentitySnapshot(t *testing.T) {
-	allowed := map[string]bool{"ID": true, "AuthenticatedAt": true}
+	allowed := map[string]bool{
+		"ID":              true,
+		"AuthenticatedAt": true,
+		// CSRFToken (#460) is the narrow, non-identity field this issue
+		// added: it is derived PER REQUEST from the ID already on this same
+		// struct, names no identity of its own, and redacts nothing because
+		// it redacts under every stringifying interface, exactly as
+		// SessionID does and for the same reason — a value checked by
+		// equality is a working credential in a log line, not a cracking
+		// target (consoleauth.Store.CSRFToken
+		// keeps no table of these — see that method's doc).
+		"CSRFToken": true,
+	}
 
 	typ := reflect.TypeOf(ConsoleSession{})
 	for i := 0; i < typ.NumField(); i++ {
@@ -337,5 +390,51 @@ func TestConsoleSession_CarriesNoIdentitySnapshot(t *testing.T) {
 			t.Errorf("ConsoleSession carries %q, a sign-in-time snapshot that goes stale; "+
 				"the fresh value lives on the Principal", forbidden)
 		}
+	}
+}
+
+// TestConsoleSession_NeverPrintsItsCSRFToken pins finding 2 of #460's security
+// review: the derived token must not be recoverable by formatting or logging a
+// ConsoleSession.
+//
+// #460 rejected a STORED per-session secret partly because "a heap dump, a core
+// file, or a log leak" would each be sufficient — the attacker never needs the
+// session cookie, since the victim's browser attaches it. Deriving rather than
+// storing answers the heap and core-file halves. Only a type that refuses to
+// print itself answers the log half, and that is the cheap half, because logs
+// ship off-box.
+//
+// *Fails if*: CSRFToken becomes a bare string again, or loses any of its four
+// redacting methods. One slog call or one %+v anywhere in a handler or
+// middleware is all it would take.
+func TestConsoleSession_NeverPrintsItsCSRFToken(t *testing.T) {
+	cs := ConsoleSession{
+		ID:        consoleauth.ParseSessionID(testSessionID),
+		CSRFToken: consoleauth.ParseCSRFToken(testSessionCSRFSecret),
+	}
+
+	for _, rendered := range []string{
+		fmt.Sprintf("%v", cs),
+		fmt.Sprintf("%+v", cs),
+		fmt.Sprintf("%#v", cs),
+		cs.CSRFToken.String(),
+		fmt.Sprint(slog.AnyValue(cs.CSRFToken)),
+	} {
+		if strings.Contains(rendered, testSessionCSRFSecret) {
+			t.Errorf("a rendered ConsoleSession leaked the CSRF token: %s", rendered)
+		}
+	}
+
+	marshalled, err := json.Marshal(cs)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(marshalled), testSessionCSRFSecret) {
+		t.Errorf("JSON-marshalling a ConsoleSession leaked the CSRF token: %s", marshalled)
+	}
+
+	// And the one legitimate way out still works, or the type is unusable.
+	if cs.CSRFToken.Reveal() != testSessionCSRFSecret {
+		t.Errorf("Reveal() = %q, want %q", cs.CSRFToken.Reveal(), testSessionCSRFSecret)
 	}
 }

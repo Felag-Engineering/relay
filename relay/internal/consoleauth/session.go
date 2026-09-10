@@ -37,8 +37,10 @@
 package consoleauth
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -81,9 +83,13 @@ const (
 )
 
 // sessionIDBytes is the entropy in a session identifier. 32 bytes is the same
-// budget the CSRF token and the API Token secret carry: guessing is not a
+// budget the CSRF pepper and the API Token secret carry: guessing is not a
 // threat model anyone needs to think about again.
 const sessionIDBytes = 32
+
+// csrfPepperBytes is the entropy in a Store's CSRF pepper. See CSRFToken and
+// the Store field it keys.
+const csrfPepperBytes = 32
 
 var (
 	// ErrNoSession means the presented identifier matches no live session —
@@ -96,7 +102,10 @@ var (
 	ErrStepUpRequired = errors.New("consoleauth: step-up re-authentication required")
 )
 
-const redactedSessionID = "[REDACTED session id]"
+const (
+	redactedSessionID = "[REDACTED session id]"
+	redactedCSRFToken = "[REDACTED csrf token]"
+)
 
 // SessionID is a Console session's bearer identifier — the value that rides in
 // the cookie.
@@ -120,6 +129,41 @@ func (s SessionID) MarshalJSON() ([]byte, error) { return json.Marshal(redactedS
 
 // ParseSessionID wraps an identifier read off a request.
 func ParseSessionID(raw string) SessionID { return SessionID{id: raw} }
+
+// CSRFToken is a session's derived CSRF token, held in a type that redacts
+// under every stringifying interface.
+//
+// Redacting for SessionID's reason, verbatim: this value is checked by
+// EQUALITY, so a copy of it in a log line is a working credential rather than
+// a cracking target. #460 rejected a STORED per-session secret partly because
+// "a heap dump, a core file, or a log leak" would each be sufficient — the
+// attacker never needs the session cookie, since the victim's browser attaches
+// it. Deriving rather than storing answers the heap and core-file halves; only
+// a type that refuses to print itself answers the log half, and logs are the
+// cheap one because they ship off-box.
+//
+// So a bare string here would leave the argument for derivation half-made. The
+// hazard is concrete: one slog.Debug("request", "session", cs) or a %+v of a
+// struct carrying this, anywhere in a handler or middleware, and an attacker
+// with log access needs only to get the victim's browser to issue one POST.
+type CSRFToken struct{ token string }
+
+// Reveal returns the token. The single way out of the type, used where the
+// value must actually be compared or rendered.
+func (c CSRFToken) Reveal() string { return c.token }
+
+// IsZero reports whether no token is held.
+func (c CSRFToken) IsZero() bool { return c.token == "" }
+
+func (c CSRFToken) String() string               { return redactedCSRFToken }
+func (c CSRFToken) GoString() string             { return redactedCSRFToken }
+func (c CSRFToken) LogValue() slog.Value         { return slog.StringValue(redactedCSRFToken) }
+func (c CSRFToken) MarshalJSON() ([]byte, error) { return json.Marshal(redactedCSRFToken) }
+
+// ParseCSRFToken wraps a token value a test fixture or a caller already holds.
+// It is NOT a mint — the only way to obtain a real token is Store.CSRFToken,
+// which derives it and checks the session is live. Mirrors ParseSessionID.
+func ParseCSRFToken(raw string) CSRFToken { return CSRFToken{token: raw} }
 
 // Session is one signed-in human.
 //
@@ -179,6 +223,11 @@ type Store struct {
 	// so an attacker cannot deny service to real operators by filling the
 	// table first.
 	maxSessions int
+
+	// csrfPepper is the key CSRFToken derives every session's CSRF token
+	// from. See CSRFToken's doc for the threat model this buys and NewStore
+	// for why it is minted here rather than taken as configuration.
+	csrfPepper []byte
 }
 
 // DefaultMaxSessions is a ceiling far above any real operator population and
@@ -219,13 +268,28 @@ func WithMaxSessions(n int) StoreOption {
 }
 
 // NewStore constructs an empty session store.
+//
+// It mints the CSRF pepper here, once, for the Store's whole process
+// lifetime — see CSRFToken for why a pepper that dies with the process is
+// exactly right rather than a limitation.
 func NewStore(opts ...StoreOption) *Store {
+	pepper := make([]byte, csrfPepperBytes)
+	if _, err := rand.Read(pepper); err != nil {
+		// crypto/rand.Read on the standard Reader only fails if the OS
+		// entropy source is broken, which is unrecoverable — the same
+		// composition-root-wiring-bug treatment events.NewBus's epoch mint
+		// gives, for the identical reason: NewStore's signature has no error
+		// to return.
+		panic("consoleauth: mint CSRF pepper: " + err.Error())
+	}
+
 	s := &Store{
 		sessions:         make(map[string]*Session),
 		absoluteLifetime: DefaultAbsoluteLifetime,
 		idleTimeout:      DefaultIdleTimeout,
 		now:              func() time.Time { return time.Now().UTC() },
 		maxSessions:      DefaultMaxSessions,
+		csrfPepper:       pepper,
 	}
 	for _, o := range opts {
 		o(s)
@@ -325,6 +389,117 @@ func (s *Store) Rotate(old SessionID) (SessionID, error) {
 	delete(s.sessions, oldKey)
 	s.sessions[hashID(newID)] = sess
 	return newID, nil
+}
+
+// CSRFToken derives THIS session's Console CSRF token: HMAC-SHA256 of id's
+// identifier, keyed by the Store's process-lifetime pepper, base64-encoded.
+// It returns "" for a zero identifier — there is nothing to derive from.
+//
+// # Derive, never store
+//
+// An earlier design minted a per-session secret and stored it on the Session
+// in the clear, reasoning that it was "not a credential on its own" because a
+// heap-dump reader would not also have the (hashed) session identifier. That
+// reasoning does not survive contact with what CSRF actually is: the
+// attacker NEVER needs the session cookie, because the victim's own browser
+// attaches it. So an attacker who learned only the stored secret — from a
+// heap dump, a core file, or a log leak — could forge the exact same-site
+// request this control exists to stop, against any browser still holding a
+// live session, without ever touching that session's identifier. Storing N
+// plaintext secrets for up to the session's absolute lifetime reintroduced,
+// for the CSRF half, precisely the exposure this package already refuses for
+// the identifier half (see hashID). The asymmetry was convenience, not
+// safety.
+//
+// Deriving instead of storing changes what a heap reader gets: ONE pepper,
+// process-wide, plus N hashed identifiers. The pepper alone is inert —
+// forging a token needs HMAC(pepper, rawID), and a raw identifier is exactly
+// what this package never keeps at rest (Lookup and hashID). There is no
+// table of secrets to leak, because there is no table: this is the ONE
+// derivation in the process, computed fresh from whatever identifier the
+// caller already resolved.
+//
+// # Why the pepper is process-lifetime, not persisted
+//
+// Sessions are held in memory (see the package doc), and a Relay restart
+// already ends every one of them. A pepper that dies with the process
+// invalidates tokens and sessions together, in the same step — there is
+// nothing to migrate, because there is nothing left to protect. A persisted
+// pepper would be a stored credential whose only job is to make a stored
+// credential (the token) unnecessary; that is not a saving, it is the same
+// liability moved one level up. It is minted in NewStore, never taken from
+// configuration (invariant 11: nothing here is settable, and nothing here is
+// a request away from being read).
+//
+// # What this closes
+//
+// Binding the token to the session this way also closes classic LOGIN CSRF
+// — forcing a victim's browser to submit credentials into an
+// attacker-controlled account — because the sign-in POST is covered by its
+// own lane (security.go's signInCSRFValid) rather than by this derivation,
+// which has no session to bind to yet. See security.go's file doc for the
+// two-lane scheme this method is half of.
+func (s *Store) CSRFToken(id SessionID) CSRFToken {
+	// A zero-value Store would derive under a nil HMAC key: a value anyone who
+	// knows the raw identifier can recompute, identical in every process. No
+	// construction path produces one (NewStore is the only one and it panics on
+	// a broken entropy source), and the type doc says the zero value is not
+	// usable — but the single way to get a universally-forgeable token should be
+	// loud rather than silent, for exactly NewStore's reason.
+	if len(s.csrfPepper) == 0 {
+		panic("consoleauth: CSRFToken called on a Store built without NewStore")
+	}
+	if id.IsZero() {
+		return CSRFToken{}
+	}
+
+	// LIVENESS, not just shape. Without it this method is a forgery oracle for
+	// any identifier a caller can name: it would hand back a permanently-valid
+	// token for a session the caller does not own, and nothing in the signature
+	// would warn them. Today's only caller has already resolved the session, so
+	// the check is redundant TODAY — and that is precisely the kind of safety
+	// that stops holding when a second caller appears. #428's step-up POST is
+	// the expected one, and (like handleLoginSubmit already does, deliberately)
+	// it reads the raw cookie rather than a resolved session.
+	//
+	// Refusing an unknown identifier also makes the token's lifetime match the
+	// session's at both ends rather than only at issue.
+	key := hashID(id)
+	now := s.now()
+	s.mu.Lock()
+	sess, ok := s.sessions[key]
+	expired := ok && s.expiredLocked(sess, now)
+	s.mu.Unlock()
+	if !ok || expired {
+		return CSRFToken{}
+	}
+
+	mac := hmac.New(sha256.New, s.csrfPepper)
+	mac.Write([]byte(id.Reveal()))
+	return CSRFToken{token: base64.RawURLEncoding.EncodeToString(mac.Sum(nil))}
+}
+
+// CSRFTokensEqual reports whether a CSRF token the server holds and one a
+// request submitted match, in constant time.
+//
+// Deliberately origin-neutral in both name and parameters, because it has two
+// callers with different notions of "held": the session lane compares a token
+// DERIVED from the session identifier, and the sign-in lane compares the value
+// of a double-submit cookie. The comparison and its guard are identical for
+// both, and duplicating a security-sensitive guard across two files to keep the
+// parameter names specific would be the worse trade.
+//
+// The empty guard is load-bearing and must stay: subtle.ConstantTimeCompare
+// of two empty slices returns 1, so without it a request presenting no token
+// at all would validate against a session whose token happened to be empty
+// (a zero SessionID, or a caller that never derived one). Refusing empties on
+// EITHER side, before the comparison runs, is what makes "no token" and "the
+// zero value" the same failure rather than a bypass.
+func CSRFTokensEqual(held, submitted string) bool {
+	if held == "" || submitted == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(held), []byte(submitted)) == 1
 }
 
 // StepUp refreshes the session's proof of human presence. Call it only after a
