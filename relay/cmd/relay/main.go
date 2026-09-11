@@ -514,6 +514,20 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
 
+	// The one-shot declined-Label startup scan (#565, threat model R13) runs
+	// here: immediately after Open, before anything else touches the store,
+	// so the signal fires even if a later startup step fails. A failed scan
+	// is a diagnostic failure, never a startup refusal — logged and
+	// tolerated rather than returned, so the ABSENCE of the signal is itself
+	// visible instead of silently taking the whole Relay down with it. Not
+	// called from store.Open itself: two of Open's other callers are the
+	// `relay bootstrap-token` and `relay console-password` CLIs, and a
+	// fleet-wide warning dump in the middle of minting a token is noise in
+	// the wrong place.
+	if _, err := st.ScanDeclinedLabels(context.Background()); err != nil {
+		slog.Warn("declined-label startup scan failed", "err", err)
+	}
+
 	// denylist and conns implement immediate Node revocation (ADR-0006).
 	// denylist.Add is reached at runtime by revocationSvc.RevokeNode (the
 	// post-enroll revocation recheck and the Control API revoke path both call
@@ -570,6 +584,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			Commit:    version.Commit,
 			BuildDate: version.BuildDate,
 		},
+		// The read-back label filter's live counters (#565), read straight
+		// off the Store rather than duplicated here — see
+		// Store.LabelsDeclined and metrics.GaugeSources.LabelsDeclined.
+		LabelsDeclined: st.LabelsDeclined,
 	})
 
 	// The node-plane listener's own TLS server certificate (#403, ADR-0031 §5).

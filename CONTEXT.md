@@ -137,7 +137,8 @@ Enrollment Token mint and again when an already-minted token's scope is used to 
 a Node (#555). The allowlist is deliberately narrower than the Selector parser, which
 would accept `relay:tier=pci/1` — the hazard it guards is a term being re-rendered into
 two, not a term failing to parse — so a Label stored before the gate can be refused now
-and is also declined on read-back (threat model R13).
+and is also declined on read-back (threat model R13) — reported once per Relay startup
+and counted on /metrics, per namespace (#565).
 _Avoid_: tag (for the general concept — `tag:` names only the operator namespace), attribute,
 annotation
 

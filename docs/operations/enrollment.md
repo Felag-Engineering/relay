@@ -69,9 +69,30 @@ $ curl --cacert ca-cert.pem \
      happens. Nothing is deleted and no quarantine can be lost (`quarantine`
      and `on` are both inside the allowlist), but targeting does change.
 
+  The Relay now tells you which Nodes, at every startup: a one-shot,
+  read-only scan logs each affected Node as `stored label declined on
+  read-back` (fields: `namespace`, `node_id`, `key`, `key_truncated`,
+  `malformed_part`), followed by a `startup scan: stored labels declined on
+  read-back` summary per non-empty namespace naming exact
+  `labels_declined_at_scan`/`nodes_affected_at_scan` totals, `reported`
+  (capped at 50 per namespace), and `truncated`. The declined **value** is
+  deliberately never logged — read it from the store row or the token scope
+  you are re-minting, not from the log line. `relay_labels_declined_total{
+  namespace="relay"}` on `/metrics` is the ongoing alert signal between
+  startups, but it counts read-back *events*, not distinct Labels, and it is
+  traffic-driven: it stays flat both when nothing is wrong and when nothing
+  has read an affected Node since the fix, so it tells you the condition is
+  advancing, not that it is clean.
+
+  State plainly: **neither signal repairs anything.** The startup scan and
+  the counter make the condition detectable; they do not restore a single
+  Label. Re-mint and re-enroll is the only fix.
+
   Audit with `GET /api/v1/nodes` before you upgrade and compare the
-  `relay_labels` you get back afterwards; re-enrol any Node whose label the
-  new rule refuses, under a re-minted, conforming scope.
+  `relay_labels` you get back afterwards — this before/after comparison
+  remains the audit; the startup scan is how you find affected Nodes after an
+  upgrade you have already performed. Re-enrol any Node whose label the new
+  rule refuses, under a re-minted, conforming scope.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the
   enrollment window, not to convenience: for a planned bulk run, hours or a day.
 - **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run

@@ -23,6 +23,12 @@ package registry
 //   - relay-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(relayLabels) — closes rows a pre-#555 Relay wrote.
 //
+// #565 adds a sixth CALL SITE of this predicate — store/labelscan.go's
+// startup scan, plus the relay_labels_declined_total counter at the
+// read-back seams above — but not a sixth SEAM: both are READERS of this
+// predicate, reporting what it refuses or declines; neither one itself
+// refuses or declines anything. The count above stays FIVE.
+//
 // Why one predicate for two namespaces, not two: `registry` carries no proto
 // dependency (registry.go's package doc), so a predicate that must be
 // reachable from protoconv (node-space ingress), enroll (relay-space

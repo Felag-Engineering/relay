@@ -181,6 +181,25 @@ func (s *Store) Registry() registry.Repository {
 	return s.reg
 }
 
+// LabelsDeclined returns the read-back label filter's live counters (#565):
+// the number of stored pairs getNode's wellFormedLabels has declined to
+// serve so far this process, by namespace. This is the read side of
+// relay_labels_declined_total.
+//
+// The atomics live in internal/store, on sqliteRegistry, because the
+// increment site is the SQLite read-back filter itself; internal/metrics
+// reads them through a GaugeSources closure exactly as it already reads
+// registry.Count, so neither package imports the other (metrics' package doc
+// pins its dependencies to capability + jobs).
+//
+// Calls s.Registry() first to force regOnce: a /metrics scrape can be the
+// first caller to ever touch the registry, and the counters live on the
+// memoised *sqliteRegistry, not on Store itself.
+func (s *Store) LabelsDeclined() (node, relay int64) {
+	s.Registry()
+	return s.reg.declined[nsNode].Load(), s.reg.declined[nsRelay].Load()
+}
+
 // Jobs returns the SQLite-backed jobs.JobRepository.
 func (s *Store) Jobs() jobs.JobRepository {
 	return &sqliteJobs{db: s.db}

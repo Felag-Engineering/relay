@@ -83,6 +83,15 @@ type GaugeSources struct {
 	// it never changes while the process runs. A zero Build (empty Version)
 	// omits the metric entirely, matching the nil-closure behaviour above.
 	Build BuildInfo
+	// LabelsDeclined returns the SQLite read-back label filter's live
+	// counters (internal/store's Store.LabelsDeclined, #565): how many stored
+	// pairs have been declined so far this process, by namespace. A closure
+	// rather than an IncX method on Metrics, because the atomics it reads
+	// live in internal/store at the filter itself, not here — and plain
+	// int64s rather than a namespace type, so neither package needs to import
+	// the other's enum, exactly as Nodes above reads registry.Count without
+	// internal/registry importing this package. nil omits both series.
+	LabelsDeclined func() (node, relay int64)
 }
 
 // BuildInfo is the Relay binary's build identity as exposed on /metrics. The
@@ -246,6 +255,10 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	buf = appendRefusals(buf, &m.refusals)
 	buf = appendCounter(buf, "relay_enrollments_total", "Total successful Node enrollments.", m.enrollments.Load())
 	buf = appendCertRotations(buf, &m.certRotation)
+	if m.src.LabelsDeclined != nil {
+		node, relay := m.src.LabelsDeclined()
+		buf = appendLabelsDeclined(buf, node, relay)
+	}
 
 	_, _ = w.Write(buf)
 }
@@ -315,6 +328,32 @@ func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int
 		buf = fmt.Appendf(buf, "relay_server_cert_rotations_total{listener=%q} %d\n",
 			listenerLabel(l), rotations[int(l)].Load())
 	}
+	return buf
+}
+
+// appendLabelsDeclined renders relay_labels_declined_total, one series per
+// namespace, node before relay (matching every other two-value enum's
+// render order in this file). Namespace label values are literals here
+// rather than a type this package owns — a closed two-value set, mirroring
+// listenerLabel — because internal/store's labelNamespace must not leak into
+// this package's API surface any more than its atomics do.
+//
+// HELP says "events, not distinct Labels" deliberately: this counter
+// advances once per DECLINED READ, not once per distinct stored Label, so an
+// operator reading a large number here has NOT necessarily found that many
+// broken Labels — a Node read or listed repeatedly re-advances the same
+// series. It is also traffic-driven: a flat counter can mean "clean" or
+// "nobody has read this Node since the fix", and only the one-shot startup
+// scan (internal/store's ScanDeclinedLabels) distinguishes the two. Still
+// monotonic despite being sourced from a closure rather than an internal
+// atomic.Int64: the underlying counters are add-only.
+func appendLabelsDeclined(buf []byte, node, relay int64) []byte {
+	const name = "relay_labels_declined_total"
+	buf = appendHelp(buf, name,
+		"Total stored Label pairs declined at read-back as not well-formed (threat model R13), by namespace. Counts read-back events, not distinct Labels.")
+	buf = appendType(buf, name, "counter")
+	buf = fmt.Appendf(buf, "%s{namespace=%q} %d\n", name, "node", node)
+	buf = fmt.Appendf(buf, "%s{namespace=%q} %d\n", name, "relay", relay)
 	return buf
 }
 
