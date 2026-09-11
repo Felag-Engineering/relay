@@ -19,7 +19,7 @@ import "fmt"
 // AccountID is carried alongside Account (the name) so attribution survives a
 // rename: the name is what a human reads, the ID is what joins.
 //
-// Naming: CONTEXT.md's glossary prefers "Account" over "principal" in prose,
+// Naming: GLOSSARY.md's glossary prefers "Account" over "principal" in prose,
 // and this type's *meaning* is now exactly an Account. The identifier keeps its
 // name for the moment because renaming it touches every surface at once; the
 // glossary entry records that the capability layer's `Principal` **is** the

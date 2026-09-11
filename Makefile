@@ -34,7 +34,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # hard-failed: a check you did not run must not look like a check that passed.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
-        apiclient-check verify-proto \
+        apiclient-check verify-proto docs-check \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -147,6 +147,14 @@ proto-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
+
+# Documentation gates: ADR numbers are unique, and every test a capability spec
+# names in its proof table still exists. Both catch drift that has happened here —
+# two files once claimed ADR-0015, and a spec citing tests by name breaks silently
+# when one is renamed. Cheap, hermetic, no network.
+.PHONY: docs-check
+docs-check:
+	@./scripts/check-docs.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.

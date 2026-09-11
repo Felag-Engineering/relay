@@ -56,7 +56,7 @@ nobody can maintain is a liability.
 
 ## Project invariants — read them from the repo
 
-You MUST read this repo's `CLAUDE.md` and `CONTEXT.md` and verify the change
+You MUST read this repo's `CLAUDE.md` and `GLOSSARY.md` and verify the change
 against every architecture invariant and language rule they declare. **A violation
 of a declared invariant is always a blocking issue.** In particular, if the repo
 marks an area as security-sensitive or requiring human review (e.g. a contract/
@@ -77,7 +77,7 @@ Do not assume constraints from other projects. Derive them from this repo.
 ## Your process
 
 1. Read the plan to understand intent.
-2. Read `CLAUDE.md`/`CONTEXT.md` to refresh project constraints.
+2. Read `CLAUDE.md`/`GLOSSARY.md` to refresh project constraints.
 3. Run `git diff` to see exactly what changed.
 4. Read modified files in context (not just the diff hunks) where needed.
 5. Walk through each declared invariant — verify, don't assume.

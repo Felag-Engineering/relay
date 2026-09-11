@@ -1,5 +1,25 @@
 # Roadmap
 
+> ## ⚠️ Deprecated — being retired
+>
+> **Do not add milestones or acceptance criteria to this file.** It is being slimmed to a
+> short sequencing note once the content below has moved. Its parts are going to the document
+> that is authoritative for each, rather than being copied here:
+>
+> | What | Moves to |
+> |---|---|
+> | Milestone acceptance criteria | The relevant capability specification in [`docs/specs/`](docs/specs/). These are durable behavioural statements; ~32 tests already cite them as "the ROADMAP acceptance line" while living in a milestone that closed months ago. |
+> | Status — what is in flight | **GitHub milestones**, which are already the authority. The table below is a hand-synced copy and has been observed 65 PRs stale. |
+> | Architectural decisions | [`docs/adr/`](docs/adr/) |
+> | What must always be true | The architecture invariants in [`CLAUDE.md`](CLAUDE.md) |
+> | Domain language | [`GLOSSARY.md`](GLOSSARY.md) |
+> | The Deferred list | GitHub issues |
+> | Why the order is what it is, and what is gated on a human | **Stays** — this is the short note the file becomes |
+>
+> **Until that migration lands, this file remains the record of milestone acceptance
+> criteria.** A missing capability spec is not permission to ignore an acceptance line here.
+> New behaviour gets written into a capability spec instead.
+
 Pre-1.0 software. Each milestone is a versioned, runnable increment; together they converge on
 **`v0.1.0-beta`** — the first complete vertical slice, deployable to a small test fleet. The
 strategy is to build *one thin path through every layer* rather than any one layer in full, so
@@ -43,13 +63,17 @@ covering everything shipped through v0.0.9 is `docs/testing/validate-v0.0.9-curr
 > aggregation) → **v0.9.0**. Ordering rationale: Accounts → API → Approvals → Console is
 > a strict dependency chain (`docs/design/console-backend-coverage.md`).
 
-## Status, 2026-08-27
+## Status, 2026-09-08
 
 **✅ complete · 🚧 in progress · unmarked = not started.**
 
 Post-beta milestones were built ahead of `v0.1.0-beta`, which is deliberate — beta is the
 *real-hardware* proof, and there was more value in having something worth proving. What
 remains before it is small and named below.
+
+Counts in this table were taken from the GitHub milestones on 2026-09-08. A further ten open
+issues carry no milestone — the self-serve enrollment set (#398–#410, feeding `v0.1.0-beta`),
+the investor-demo epic (#451–#457), and loose defects the loop is draining.
 
 | Milestone | State | What is actually outstanding |
 |---|---|---|
@@ -60,7 +84,15 @@ remains before it is small and named below.
 | `v0.4.0` | ✅ code | [7/7] (#362) merged in #395. [6/7] (#361, the thin Ansible role) **closed as superseded** 2026-08-18 — the enrollment-bundle capability (ADR-0032, #405) renders the same playbook from the capability layer, so it reaches all three surfaces from one implementation. `validate-v0.4.0.md` unwritten. |
 | `v0.5.0` | ✅ code | `validate-v0.5.0.md` unwritten. |
 | `v0.5.1` | ✅ | Validation run waived, recorded — no MCP client implements Tasks yet. |
-| `v0.6.0` | 🚧 | **Current milestone.** 12 of 35 issues closed. Both gating defects (#403 cert rotation, #397 role gate) have landed, so the Console lane is unblocked. #416 (SSE event seam) merged in #485, which is what #476 was waiting on to decide the 'live' acceptance. The bulk of what is open is defects found by driving the UI, plus `validate-v0.6.0.md`. |
+| `v0.6.0` | 🚧 | **Current milestone.** 24 of 35 issues closed. Both gating defects (#403 cert rotation, #397 role gate) landed, and #416 (the SSE event seam) merged in #485 — which is what #476 was waiting on to decide the 'live' acceptance. What remains is defects found by driving the UI (#460 CSRF binding, #466 fleet view at scale, #462/#469 approval-record gaps), test debt (#470), the Console-shell ADR (#475), and `validate-v0.6.0.md` (#476). |
+| `v0.7.0` | 🚧 | 3 of 17 closed — started ahead of v0.6.0's close, deliberately: #264 settled the execution-surface ADR (ADR-0026, amending invariant 10) and #429/#432 landed Account suspension and agent disconnect. The execution surface itself (#438 composer, #428 step-up, #435 approval decisions) is not built. #482 is an open security defect on approval Grant scope. |
+
+**Where this file sits now.** ROADMAP sequences; it does not describe. What a capability
+*does* belongs in its capability specification ([`docs/specs/`](docs/specs/)), what must
+always be true belongs in the invariants in [`CLAUDE.md`](CLAUDE.md), and why a shape was
+chosen belongs in an
+[ADR](docs/adr/). Milestone entries below keep their deliverables and acceptance criteria —
+those are the definition of done for a slice of work, not a description of the system.
 
 **The one systematic gap: manual validation scripts.** This file says every milestone ships
 one, and `v0.3.0`, `v0.4.0`, and `v0.5.0` have none. Each of those milestones lists it in
@@ -433,7 +465,7 @@ Prove the end-to-end path on real machines, documented well enough for a strange
   **Packaging** — #407 `relay-install.sh` in the release · #408 daemon `.deb`/`.rpm` ·
   #399 Relay container image *(evaluation artifact; deliberately no daemon image — #389)*.
   **Migration & docs** — #409 dev fleet + e2e onto `RELAY_JOIN` · #410 operations-docs
-  rewrite and the `CONTEXT.md` **join string** entry · #402 quickstart.
+  rewrite and the `GLOSSARY.md` **join string** entry · #402 quickstart.
 
   #398 is satisfied by ADR-0030. One question stays open: whether to build
   `relay-daemon preflight` (design doc, "Open — needs a call").
@@ -834,7 +866,7 @@ show).
 
 ---
 
-## `v0.7.0` — Admin Console: Administration & Execution (post-beta)
+## `v0.7.0` — Admin Console: Administration & Execution (post-beta) 🚧
 
 Phase two: the keys — and, per [ADR-0026](docs/adr/0026-admin-console-execution-surface.md)
 (#264; supersedes ADR-0009's no-execution clause, invariant #10 amended in the same

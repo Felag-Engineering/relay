@@ -51,7 +51,7 @@ type Predicate struct {
 	Value     string
 }
 
-// Selector is a label-based query that targets a set of Nodes (CONTEXT.md).
+// Selector is a label-based query that targets a set of Nodes (GLOSSARY.md).
 // A Node matches a Selector iff it matches every Predicate.
 type Selector struct {
 	Predicates []Predicate

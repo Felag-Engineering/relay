@@ -26,7 +26,7 @@ component (`v0.*`, `v*-beta`, `v*-rc.1`, …) publish as **GitHub pre-releases**
 <binary>-<version>-<target-triple>
 ```
 
-- `<binary>` — `relay-daemon` or `relay` (CONTEXT.md names; never "agent").
+- `<binary>` — `relay-daemon` or `relay` (GLOSSARY.md names; never "agent").
 - `<version>` — the tag without the leading `v`. The release workflow's
   **stamped-version-equals-tag guard** fails the release unless both binaries'
   `--version` output equals this exactly, so the filename, the git tag, and what the

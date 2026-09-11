@@ -12,7 +12,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 1. **Read the issue carefully.** Understand every acceptance criterion before
    touching the codebase.
-2. **Read the repo's `CLAUDE.md` and any glossary/`CONTEXT.md` first.** These
+2. **Read the repo's `CLAUDE.md` and any glossary/`GLOSSARY.md` first.** These
    carry the project's conventions, ubiquitous language, and hard architecture
    invariants. They are authoritative — your plan must obey them. Read the ADRs
    they reference for the area you are touching.
@@ -35,7 +35,10 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 ## What to explore
 
-- `CLAUDE.md` and `CONTEXT.md` (or equivalent glossary) for conventions, language, and hard constraints
+- `CLAUDE.md` and `GLOSSARY.md` (or equivalent glossary) for conventions, language, and hard constraints
+- **The capability specification governing this area — `docs/specs/<capability>.md`.** It states
+  what that capability does today, across every surface. Your plan must satisfy it. You may not
+  edit it: capability specs are human-authored (see below)
 - The ADR(s) governing the area you're changing
 - Every file named or referenced in the issue body
 - Files that import or are imported by the affected files
@@ -45,7 +48,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 ## Constraints — read them from the repo, do not invent them
 
 Do not hardcode assumptions about the project. Derive the binding constraints from
-this repo's `CLAUDE.md`/`CONTEXT.md`/ADRs and state, in your plan, which ones apply
+this repo's `CLAUDE.md`/`GLOSSARY.md`/ADRs and state, in your plan, which ones apply
 to this change. If the repo declares architecture invariants (e.g. security,
 transport, data-access, or layering rules), treat any change that would touch them
 as **stop-and-flag**: call it out explicitly in "Constraints and risks" rather than
@@ -75,7 +78,7 @@ Test strategy:
   - <what to test, what cases to cover, which test file>
 
 Constraints and risks:
-  - <CLAUDE.md/CONTEXT.md/ADR constraints that apply to this change>
+  - <CLAUDE.md/GLOSSARY.md/ADR constraints that apply to this change>
   - <whether this touches a declared architecture invariant — flag it>
   - <breaking-change, integration, or ordering risks>
 ```
@@ -86,3 +89,10 @@ Be specific. "Modify the registry" is useless. "Add a `LastSeen time.Time` field
 
 Do not propose changes outside the issue's explicit scope.
 Do not invent requirements not stated in the acceptance criteria.
+
+**Capability specifications are human-authored and you never edit one.** They are written
+deliberately, alongside a human, in an interactive session — never by an unattended run. Your
+job is to read the governing spec, plan work that satisfies it, and say so plainly if the issue
+cannot be implemented without making one of its statements untrue. That is an escalation and it
+is never "outside the issue's scope" — escalating a conflict with a capability spec, an ADR, or
+an invariant is the one thing you must always do.

@@ -59,7 +59,7 @@ is no series to chart even if someone wanted one.
 | `relay:` | the Relay (enrollment stamp, or `admin` + step-up) | the Node | yes | **yes — only this** |
 | `state:` | **derived by the Relay; nobody sets it** | everyone | yes | no |
 
-`state:` is new and **needs an ADR and a CONTEXT.md entry** — see `99-open-decisions.md` D1,
+`state:` is new and **needs an ADR and a GLOSSARY.md entry** — see `99-open-decisions.md` D1,
 where its content is settled. Its vocabulary is **closed** and defined in the contract.
 
 **Every `state:` label is Node-local and objective** — computable from one Node's record with no

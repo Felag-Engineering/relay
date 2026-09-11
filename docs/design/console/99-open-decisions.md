@@ -26,7 +26,7 @@ ones that are behind" — and today it is not expressible. Labels target; Facts 
 and daemon version and the fingerprints are *neither*, as `Hello` shows by carrying
 `daemon_version` and `Facts` as separate fields.
 
-**ADR-0034 is merged**, with the CONTEXT.md and CLAUDE.md invariant #7 amendments. Its Consequences
+**ADR-0034 is merged**, with the GLOSSARY.md and CLAUDE.md invariant #7 amendments. Its Consequences
 carry the review's additions: the registry must first persist liveness and certificate validity
 (#440), the `cert-expiring` window is 25% of `LeafValidity` remaining, `tag:` parsing lands in the
 same Selector change, and the security-lane assertion lives on the `relay:` write path (#430).
@@ -40,7 +40,7 @@ behind the fleet's mode", which is fleet-relative and fails badly: roll a Policy
 fleet and the mode flips, so the other 49% become "drifted" without anything about them changing.
 A Selector targeting it would **silently invert its meaning mid-rollout**. It also smuggles
 desired-state past invariant #9 — computing "behind" requires a notion of what the fleet *should*
-be on, and CONTEXT.md deliberately defines fingerprints as an observation ("confirm a rollout
+be on, and GLOSSARY.md deliberately defines fingerprints as an observation ("confirm a rollout
 landed by string comparison"), not a target.
 
 #### The closed vocabulary
@@ -184,7 +184,7 @@ additive-only evolution within `relay.v1`, so a rename is a breaking contract ch
 cosmetic gain.
 
 **Follow-up work this creates:**
-- CONTEXT.md gains an `outdated` entry pinned to ADR-0014's meaning, with *Avoid: version-gated,
+- GLOSSARY.md gains an `outdated` entry pinned to ADR-0014's meaning, with *Avoid: version-gated,
   stale, behind*.
 - `ui-advisory.md`'s "`outdated` flags" sentence, which refers to Policy fingerprints, is corrected.
 

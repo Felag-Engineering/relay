@@ -865,10 +865,10 @@ func agentCallFrom(f trailFacts) agentCall {
 		// "cancelled" is a TASK outcome word (OutcomeLabel) and, on a row that
 		// names a Job, it claims that Job's fate. Cancellation is best-effort
 		// and honest: a Task that already finished reports its real outcome
-		// and is never retroactively cancelled (ADR-0013, CONTEXT.md), so a
+		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a
 		// mostly-finished Job would render as cancelled on the one screen
 		// billed as what the agent actually asked for. "stopped", "aborted"
-		// and "killed" are CONTEXT.md's rejected synonyms for Cancellation and
+		// and "killed" are GLOSSARY.md's rejected synonyms for Cancellation and
 		// are not available at any price.
 		//
 		// "requested" says the one thing the record does carry, and carries
@@ -959,7 +959,7 @@ func agentCallFrom(f trailFacts) agentCall {
 // committed fresh in this one. GrantID IS a reliable, structural discriminator
 // (only RevokeGrant sets it), which is why that arm below returns a different
 // string and this one does not. A decision row therefore names the ACT —
-// "approval decision", CONTEXT.md's Decision — and never the MCP tool name.
+// "approval decision", GLOSSARY.md's Decision — and never the MCP tool name.
 // Do not "fix" this to `approve_request`.
 func toolName(f trailFacts) string {
 	if f.Kind == audit.KindRead {

@@ -114,7 +114,7 @@ short ADR), referenced but not specified here.
   widening act stays human, exactly as for Policy.
 - #288 (read auditing / output-retention) must be decided before the catalog makes reads
   ubiquitous; the data-egress section above is its motivation.
-- CONTEXT.md gains **Template Operation** and **template pack** in the same change.
+- GLOSSARY.md gains **Template Operation** and **template pack** in the same change.
 
 ## Amendment (2026-08-10, issue #292 / #287): the self-reference lint, and no daemon-side floor
 

@@ -209,7 +209,7 @@ func takeInterruptedMarker(w http.ResponseWriter, r *http.Request) bool {
 // The fix below decides membership on the DECODED path (parsed.Path), which
 // collapses "..", "%2e%2e", "%2E%2E", "..%2f" and "//" to the same reading,
 // and rejects anything that is not already in that canonical form rather than
-// repairing it (see cleanPath and CONTEXT.md's Canonical form). The value
+// repairing it (see cleanPath and GLOSSARY.md's Canonical form). The value
 // actually returned is still EscapedPath() — byte-identical to what the
 // browser asked for — so a legitimately percent-encoded segment like "a%2fb"
 // is never silently rewritten to "a/b".

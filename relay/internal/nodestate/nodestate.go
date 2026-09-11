@@ -281,7 +281,7 @@ var factNamespacePrefixes = []string{"node:", "relay:", "tag:", "state:"}
 //   - any Unicode `White_Space` rune anywhere in the value — leading,
 //     trailing or embedded — lets a value sit next to a hand-typed comma (a
 //     Console facet href, an AI-agent's copy-pasted selector string) and
-//     still read as two terms once joined. This is CONTEXT.md's "Canonical
+//     still read as two terms once joined. This is GLOSSARY.md's "Canonical
 //     form" whitespace notion: Go's `unicode.IsSpace` agrees with
 //     `unicode.Is(unicode.White_Space, r)` over every rune in Go's Unicode
 //     tables, and Rust's `char::is_whitespace` (ADR-0019's Raw Exec split,

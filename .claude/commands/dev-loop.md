@@ -100,7 +100,7 @@ question.
 
 **Underspecified (interactive)** → brainstorm, then Stage 2:
 
-1. **Explore the codebase first** (read `CLAUDE.md`/`CONTEXT.md` and related files)
+1. **Explore the codebase first** (read `CLAUDE.md`/`GLOSSARY.md` and related files)
    so your questions are informed. Persist findings to `.dev-loop/context.md`.
 2. Summarize what's clear.
 3. Ask clarifying questions **one at a time** with `AskUserQuestion` (max 5; stop
@@ -166,7 +166,7 @@ itself. Write its output to `.dev-loop/plan.md`.
 **Use the `devloop-developer` agent.** Pass it: read the issue from
 `.dev-loop/issue.md`; read the plan from `.dev-loop/plan.md`; on a revision cycle,
 read `.dev-loop/review-feedback.md`. Emphasize: code is written for humans; obey the
-repo's CLAUDE.md/CONTEXT.md invariants and ubiquitous language; **do not run
+repo's CLAUDE.md/GLOSSARY.md invariants and ubiquitous language; **do not run
 `git commit`/`git push`/`gh pr create`**; end with a `## Implementation Summary`.
 
 If the developer returns `No changes needed`, stop the pipeline, print the
@@ -182,16 +182,16 @@ this local run is the *only* thing verifying the PR before a human merges it. So
 **full** suite CI would run, not a subset.
 
 1. **Toolchain preflight.** Confirm the toolchains the full gate needs are on `PATH` —
-   derive the list from the gate itself (the `ci-local` target's lanes, or the CI
+   derive the list from the gate itself (the `verify` target's lanes, or the CI
    workflow jobs; e.g. for Gleipnir: `go`, `node`/`npm`, `sqlc`, `buf`). If a required
    one is missing, **stop** and tell the user which lane can't be verified. Never
    silently skip half the suite and call it green.
 
 2. **Run the repo's full pre-merge gate:**
    ```bash
-   make ci-local
+   make verify
    ```
-   `ci-local` mirrors the PR CI jobs (build + lint/format + race tests + daemon tests +
+   `verify` mirrors the PR CI jobs (build + lint/format + race tests + daemon tests +
    integration + cross-binary). **If the repo has no such aggregate target,** enumerate
    what its CI actually runs from `.github/workflows/*.yml` and run every one of those
    `make`/toolchain commands locally — do **not** settle for `make test` if CI also runs
@@ -208,7 +208,7 @@ the gate. **Max 2 fix attempts**; if it still fails, stop and surface it to the 
 in `--non-interactive` mode, comment on the issue and stop).
 
 Record in `.dev-loop/review-feedback.md` **exactly which gate ran and that it passed** —
-the command and the lanes it covered (e.g. "`make ci-local` ✅ — build, lint, race,
+the command and the lanes it covered (e.g. "`make verify` ✅ — build, lint, race,
 daemon, integration, cross-binary"). Stage 7 copies this into the PR body as the
 local-verification signal the human merges on.
 
@@ -229,20 +229,27 @@ verify the repo's declared invariants; readability is the top priority.
 Check whether the change shifts anything the project docs must track. Update in the
 same PR if so:
 
-- **`CONTEXT.md`** — if the domain/ubiquitous language shifted (new or changed term).
+- **`GLOSSARY.md`** — if the domain/ubiquitous language shifted (new or changed term).
 - **`CLAUDE.md`** — if conventions, layout, commands, or settled decisions changed.
-- Any area-specific docs the repo keeps current (READMEs, ADback-references).
+- Any area-specific docs the repo keeps current (READMEs, ADR back-references).
 
-If nothing needs updating, print: `Stage 6.5: project docs are current.`
+**`docs/specs/` is different — never edit a capability specification.** They are human-authored,
+deliberately and interactively (`docs/specs/README.md`); the loop reads them and complies with
+them. If this change makes any statement in the governing spec untrue, do **not** update the
+spec and do **not** proceed quietly: name the false statement under Escalations in the PR body
+and stop. A human updates the spec first, and the code follows.
+
+If nothing needs updating, print: `Stage 6.5: project docs are current; capability spec still
+true.`
 
 ### Stage 6.6 — Security review (when the security surface is touched)
 
 Run `git diff --name-only`. If the change touches the repo's security/architecture
 surface (for this project: `proto/`, `docs/adr/`, Policy/exec/transport/mTLS/auth
-code, `CLAUDE.md`, `CONTEXT.md`, the `Makefile`, or CI/workflow config), **use the
+code, `CLAUDE.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow config), **use the
 `devloop-security-reviewer` agent** for a dedicated adversarial pass focused on the
 repo's declared security invariants. Pass it: read the issue, the plan, and
-`CLAUDE.md`/`CONTEXT.md`/relevant ADRs; start from `git diff`; assume the change is
+`CLAUDE.md`/`GLOSSARY.md`/relevant ADRs; start from `git diff`; assume the change is
 unsafe until proven otherwise.
 
 - **PASS** → proceed; carry its summary into the PR body.
@@ -259,7 +266,7 @@ If the diff does not touch the security surface, print:
 
 Inspect `git diff --name-only`. If the change touches the repo's security/architecture
 surface — for this project that means any of: `proto/`, `docs/adr/`, Policy/exec/
-transport/mTLS/auth code, `CLAUDE.md`, `CONTEXT.md`, the `Makefile`, or CI/workflow
+transport/mTLS/auth code, `CLAUDE.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow
 config — then:
 
 - Do **not** treat the PR as routine. Add a prominent **⚠️ Security surface** section
@@ -275,7 +282,7 @@ attention is aimed at the sensitive parts.
 
 1. **Re-verify only if code changed after Stage 5.5** (a review/security loop-back, or
    doc edits that touch buildable files). If anything changed since the last green
-   gate, re-run the **full gate** (`make ci-local`, per Stage 5.5) and fix via the
+   gate, re-run the **full gate** (`make verify`, per Stage 5.5) and fix via the
    `devloop-developer` agent (max 2 attempts) before committing. If nothing changed
    since Stage 5.5, the tree is already green — proceed.
 
@@ -301,7 +308,7 @@ attention is aimed at the sensitive parts.
    PR body includes: `Closes #<issue-number>`; a brief summary; the plan in a
    `<details>` block; review cycles used; whether docs were updated; a
    **✅ Local verification** line naming the exact gate that passed and the lanes it
-   covered (e.g. "`make ci-local` — build, lint, race, daemon, integration,
+   covered (e.g. "`make verify` — build, lint, race, daemon, integration,
    cross-binary") and noting whether CI was relied on — this is the signal a human
    merges on when CI is unavailable; the security review verdict (Stage 6.6) if it ran;
    the **⚠️ Security surface** section from Stage 6.7 if it applies; and a note that this
@@ -326,6 +333,6 @@ brainstorming fired, and whether the change touches the security surface.
 7. **Pass context by file, not by pasting.** Agents read `.dev-loop/*.md`.
 8. **Only the coordinator touches git.** The developer agent never commits, pushes,
    or opens PRs.
-9. **Honor the repo's CLAUDE.md/CONTEXT.md and architecture invariants** at every
+9. **Honor the repo's CLAUDE.md/GLOSSARY.md and architecture invariants** at every
    stage. When a change would touch a declared invariant, stop and flag a human
    rather than design around it.

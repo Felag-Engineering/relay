@@ -6,7 +6,7 @@
 //
 // A Relay **Task** is one Operation executing on one Node (ADR-0004). An **MCP
 // task handle** is a client-polled reference to one outstanding `tools/call`.
-// The naming collision is MCP's, not ours; CONTEXT.md carries both entries and
+// The naming collision is MCP's, not ours; GLOSSARY.md carries both entries and
 // the rule that the MCP one is always written in full. This package is named
 // `mcptask` so that every reference to it at a call site — `mcptask.Handle` —
 // carries that qualification without anyone having to remember to.

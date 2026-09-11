@@ -6,7 +6,7 @@ lint:
     - STANDARD
   except:
     # Service names follow domain vocabulary (Enrollment, Tunnel) without the redundant
-    # "Service" suffix — the meaning is unambiguous in context (CONTEXT.md).
+    # "Service" suffix — the meaning is unambiguous in context (GLOSSARY.md).
     - SERVICE_SUFFIX
     # The Tunnel.Connect RPC uses DaemonMessage/RelayMessage (role-based names,
     # per ADR-0005) rather than the ConnectRequest/ConnectResponse convention.

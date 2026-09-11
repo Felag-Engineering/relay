@@ -2,7 +2,7 @@
 
 The product built in this repo is **Relay** — the fleet-administration control plane.
 **Gleipnir** is a *different*, first-party project: the AI-agent system that drives Relay
-as a consumer (over MCP and the Control API), never a component of it (CONTEXT.md). The
+as a consumer (over MCP and the Control API), never a component of it (GLOSSARY.md). The
 repo name `gleipnir-relay` is historical, from before that boundary was drawn, and the
 name had leaked inward: the proto package (`gleipnir.v1`), the generated Go import path
 (`internal/gleipnir/v1`), the daemon crate (`gleipnir-relay-daemon`), the CA subject
@@ -19,7 +19,7 @@ security-critical control plane.
   subject CommonNames become `Relay` / `Relay CA`, and the daemon crate becomes
   `relay-daemon` (its `[[bin]]` was already `relay-daemon`).
 - **"Gleipnir" is retained in exactly two places, both legitimate:** (a) the separate
-  first-party AI-agent system that consumes Relay, as framed in CONTEXT.md/CLAUDE.md/
+  first-party AI-agent system that consumes Relay, as framed in GLOSSARY.md/CLAUDE.md/
   README.md; and (b) the historical repo name `gleipnir-relay` and everything that
   derives from it (clone URLs, the Go module path).
 - **The `relay.v1` rename is deliberately wire-breaking, and lands now.** The fully

@@ -67,7 +67,7 @@ type trailFacts struct {
 	VerifiedAccountName string
 	VerifiedAccountID   string
 	// Role is the authority the Account held AT THAT MOMENT, VERIFIED lane
-	// only (CONTEXT.md's Attribution). Empty means the Relay authenticated no
+	// only (GLOSSARY.md's Attribution). Empty means the Relay authenticated no
 	// role for this record, and nothing may substitute one — see agents.go's
 	// buildAgents for why the asserted lane's "account:role" principal string
 	// must never fill this field.

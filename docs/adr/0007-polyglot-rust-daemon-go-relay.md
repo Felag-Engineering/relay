@@ -25,4 +25,4 @@ wire protocol and the Operation vocabulary. Each side generates its own types fr
 - The agentic development loop must support two toolchains, two test conventions, and two CI
   lanes; `CLAUDE.md` documents both. This is the accepted tax.
 - The monorepo (not two repos) keeps the `/proto` contract atomic across both components.
-- Layout: `/proto`, `/relay` (Go), `/daemon` (Rust), with one shared `CONTEXT.md`.
+- Layout: `/proto`, `/relay` (Go), `/daemon` (Rust), with one shared `GLOSSARY.md`.
