@@ -1,5 +1,7 @@
 package registry
 
+import "unicode/utf8"
+
 // WellFormedLabel reports whether (key, value) is safe to store as a Label in
 // EITHER stored namespace — safe meaning "renders as exactly one Selector
 // term, forever" (capability.ParseSelector). The rule is Selector grammar,
@@ -22,6 +24,12 @@ package registry
 //     never saw — see "Two write seams, one namespace" below.
 //   - relay-space read-back: store/registry.go's getNode, via
 //     wellFormedLabels(relayLabels) — closes rows a pre-#555 Relay wrote.
+//
+// #565 adds a sixth CALL SITE of this predicate — store/labelscan.go's
+// startup scan, plus the relay_labels_declined_total counter at the
+// read-back seams above — but not a sixth SEAM: both are READERS of this
+// predicate, reporting what it refuses or declines; neither one itself
+// refuses or declines anything. The count above stays FIVE.
 //
 // Why one predicate for two namespaces, not two: `registry` carries no proto
 // dependency (registry.go's package doc), so a predicate that must be
@@ -160,4 +168,44 @@ func wellFormedLabelBytes(s string) bool {
 		}
 	}
 	return true
+}
+
+// MaxLoggedLabelKeyBytes bounds a refused label key before it reaches a log or
+// a report.
+//
+// A wire key is attacker-controlled up to gRPC's message limit, so quoting it
+// is not enough: %q escapes control characters but preserves length, and a
+// reconnect-looping Node could otherwise write megabytes per connect. 128
+// bytes is far more than any legitimate key (the allowlist alphabet above is
+// [A-Za-z0-9._-], and the shipped examples are under twenty characters) and
+// still leaves a truncated key recognisable to the operator reading it.
+const MaxLoggedLabelKeyBytes = 128
+
+// BoundLogKey truncates k to MaxLoggedLabelKeyBytes ON A RUNE BOUNDARY, so a
+// multi-byte sequence is never cut in half into a lone continuation byte, and
+// reports whether it truncated.
+//
+// The rune backoff is the whole point and is easy to drop: a refused key is BY
+// DEFINITION outside the ASCII allowlist WellFormedLabel enforces, so it may
+// well end in a multi-byte sequence. A naive k[:128] of 127 ASCII bytes plus
+// one U+2028 yields invalid UTF-8 ending in a bare 0xe2 — which the stdlib log
+// handlers escape safely, but which a log shipper or index requiring valid
+// UTF-8 may drop or mangle. Losing that record loses the finding for the most
+// hostile key in the fleet, which is the one worth having.
+//
+// It lives HERE, beside the predicate that decides a key is refused, because
+// there is one hazard and there must be one helper: both the Hello ingress
+// (cmd/relay/tunnel.go) and the read-back scan (internal/store) bound the same
+// attacker-influenced key for the same reason, and a second copy is the drift
+// #488 exists to remove. A security review caught exactly that fork — the
+// second copy had dropped the rune backoff.
+func BoundLogKey(k string) (bounded string, truncated bool) {
+	if len(k) <= MaxLoggedLabelKeyBytes {
+		return k, false
+	}
+	cut := MaxLoggedLabelKeyBytes
+	for cut > 0 && !utf8.RuneStart(k[cut]) {
+		cut--
+	}
+	return k[:cut], true
 }

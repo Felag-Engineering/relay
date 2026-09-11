@@ -97,6 +97,40 @@ func TestHandler_SamplerErrorOmitsGaugeLine(t *testing.T) {
 	}
 }
 
+// TestHandler_LabelsDeclinedSeries asserts both relay_labels_declined_total
+// series render with unequal values (so a swapped namespace cannot pass) and
+// the counter TYPE, not a gauge.
+func TestHandler_LabelsDeclinedSeries(t *testing.T) {
+	m := New(GaugeSources{
+		LabelsDeclined: func() (node, relay int64) { return 3, 5 },
+	})
+	_, body := scrape(t, m)
+
+	if !strings.Contains(body, "# TYPE relay_labels_declined_total counter") {
+		t.Errorf("body missing counter TYPE line; body = %s", body)
+	}
+	for _, want := range []string{
+		`relay_labels_declined_total{namespace="node"} 3`,
+		`relay_labels_declined_total{namespace="relay"} 5`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; body = %s", want, body)
+		}
+	}
+}
+
+// TestHandler_NilLabelsDeclinedOmitsSeries mirrors
+// TestHandler_NilSamplerOmitsGaugeLine: a nil LabelsDeclined must omit both
+// series entirely, not fabricate zeros.
+func TestHandler_NilLabelsDeclinedOmitsSeries(t *testing.T) {
+	m := New(GaugeSources{})
+	_, body := scrape(t, m)
+
+	if strings.Contains(body, "relay_labels_declined_total") {
+		t.Errorf("body contains relay_labels_declined_total with LabelsDeclined nil; want it omitted. body = %s", body)
+	}
+}
+
 // TestIncDispatch_EveryOutcome drives IncDispatch across every jobs.Outcome
 // and asserts each lands in its own relay_dispatches_total{outcome=...} bucket.
 func TestIncDispatch_EveryOutcome(t *testing.T) {

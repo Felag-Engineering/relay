@@ -7,10 +7,38 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
+
+// labelNamespace closes the two stored label namespaces getNode's read-back
+// filter governs. Unexported and local to store: capability.Namespace exists
+// but store must not import capability (a layering inversion the composition
+// root's dependency graph forbids), and internal/metrics must not import
+// store (its package doc pins its dependencies to capability + jobs, see
+// LabelsDeclined below) — so neither existing enum can stand in for this one.
+type labelNamespace int
+
+const (
+	nsNode labelNamespace = iota
+	nsRelay
+)
+
+// nLabelNamespaces is the number of labelNamespace values.
+const nLabelNamespaces = 2
+
+// table returns the SQLite table ns is stored in, so the two string literals
+// fetchLabels/replaceLabels used to take as bare arguments stop being
+// free-floating and a namespace/table mismatch becomes a compile error at
+// every new call site instead of a typo a reviewer has to catch by eye.
+func (ns labelNamespace) table() string {
+	if ns == nsRelay {
+		return "relay_labels"
+	}
+	return "node_labels"
+}
 
 // sqliteRegistry implements registry.Repository against the nodes/node_labels/
 // relay_labels tables, mirroring internal/registry.InMemory's semantics
@@ -26,6 +54,14 @@ type sqliteRegistry struct {
 	// outlived the process would be a lie every read repeated.
 	connMu    sync.RWMutex
 	connected map[string]struct{}
+
+	// declined counts read-back EVENTS, by labelNamespace: one increment per
+	// stored pair wellFormedLabels declines to serve, once per Get, once per
+	// Node per List, once per Hello via Upsert's internal read-back (#565).
+	// NOT behind connMu: the read path must not take a lock just to count,
+	// and atomic.Int64 is already internal/metrics' pattern for exactly this
+	// shape of counter. Read out through Store.LabelsDeclined.
+	declined [nLabelNamespaces]atomic.Int64
 }
 
 var _ registry.Repository = (*sqliteRegistry)(nil)
@@ -87,7 +123,7 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		); err != nil {
 			return registry.Node{}, fmt.Errorf("insert node: %w", err)
 		}
-		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels()); err != nil {
+		if err := replaceLabels(ctx, tx, nsNode.table(), rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
 	} else {
@@ -105,12 +141,12 @@ func (r *sqliteRegistry) Upsert(rep registry.Report) (registry.Node, error) {
 		// enrolling_token_id and revoked_at are never touched here — provenance
 		// and revocation state are Relay-set/first-write-wins, exactly as
 		// registry.InMemory.Upsert preserves them on the update path.
-		if err := replaceLabels(ctx, tx, "node_labels", rep.NodeID, rep.NodeLabels()); err != nil {
+		if err := replaceLabels(ctx, tx, nsNode.table(), rep.NodeID, rep.NodeLabels()); err != nil {
 			return registry.Node{}, err
 		}
 	}
 
-	n, ok, err := getNode(ctx, tx, rep.NodeID)
+	n, ok, err := getNode(ctx, tx, rep.NodeID, &r.declined)
 	if err != nil {
 		return registry.Node{}, err
 	}
@@ -153,7 +189,7 @@ func (r *sqliteRegistry) SetRelayLabels(nodeID string, labels map[string]string)
 	if !exists {
 		return registry.ErrNotFound
 	}
-	if err := replaceLabels(ctx, tx, "relay_labels", nodeID, labels); err != nil {
+	if err := replaceLabels(ctx, tx, nsRelay.table(), nodeID, labels); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -271,7 +307,7 @@ func (r *sqliteRegistry) Count() (int, int, error) {
 // in the registry.
 func (r *sqliteRegistry) Get(nodeID string) (registry.Node, bool) {
 	ctx := context.Background()
-	n, ok, err := getNode(ctx, r.db, nodeID)
+	n, ok, err := getNode(ctx, r.db, nodeID, &r.declined)
 	if err != nil {
 		// registry.Repository.Get has no error return; a query failure here
 		// is treated as "not found" rather than panicking the caller.
@@ -292,7 +328,7 @@ func (r *sqliteRegistry) List() []registry.Node {
 	}
 	out := make([]registry.Node, 0, len(ids))
 	for _, id := range ids {
-		n, ok, err := getNode(ctx, r.db, id)
+		n, ok, err := getNode(ctx, r.db, id, &r.declined)
 		if err != nil || !ok {
 			continue
 		}
@@ -355,7 +391,22 @@ func countNodes(ctx context.Context, q queryer) (int, error) {
 
 // getNode loads one Node record (nodes row + both label tables). Returns
 // (Node{}, false, nil) if nodeID does not exist.
-func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool, error) {
+//
+// declined is threaded as an explicit parameter rather than read off a
+// receiver — getNode stays a free function taking its queryer as a
+// parameter, exactly as before this counter existed, because Upsert (below)
+// calls it while holding the transaction that is store.Open's single SQLite
+// connection (SetMaxOpenConns(1)). A method that ever reached for a *Store's
+// own r.db instead of the q it was given would block forever waiting for a
+// connection its own caller is holding open — a hang on every Hello, not a
+// data bug — so the counter travels as a pointer instead of a receiver,
+// making that hazard structurally unreachable rather than merely documented.
+// Asserted by TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle, which
+// reads this file's AST rather than probing the hazard — see that test's doc
+// for why a behavioural probe cannot report this particular failure — and by
+// TestUpsert_ReadBackDeclinesAndCountsInsideItsOwnTransaction for the
+// behaviour that CAN be observed.
+func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNamespaces]atomic.Int64) (registry.Node, bool, error) {
 	var (
 		certFingerprint, hostname, osName, kernel, arch string
 		ipAddresses                                     sql.NullString
@@ -388,16 +439,16 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 		return registry.Node{}, false, err
 	}
 
-	nodeLabels, err := fetchLabels(ctx, q, "node_labels", nodeID)
+	nodeLabels, err := fetchLabels(ctx, q, nsNode.table(), nodeID)
 	if err != nil {
 		return registry.Node{}, false, err
 	}
-	nodeLabels = wellFormedLabels(nodeLabels)
-	relayLabels, err := fetchLabels(ctx, q, "relay_labels", nodeID)
+	nodeLabels = wellFormedLabels(nsNode, nodeLabels, declined)
+	relayLabels, err := fetchLabels(ctx, q, nsRelay.table(), nodeID)
 	if err != nil {
 		return registry.Node{}, false, err
 	}
-	relayLabels = wellFormedLabels(relayLabels)
+	relayLabels = wellFormedLabels(nsRelay, relayLabels, declined)
 
 	lastSeenTime, err := parseTime(sql.NullString{String: lastSeen, Valid: true})
 	if err != nil {
@@ -476,7 +527,16 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 // than it did before the upgrade, silently. That is an accepted residual
 // (threat model R13), not a claim that nothing was lost, and it is why
 // docs/operations/enrollment.md tells operators to re-mint before upgrading.
-// A bounded signal at this seam, for BOTH namespaces, is #565.
+//
+// #565 adds a bounded signal at this seam, for BOTH namespaces, as two
+// separate things: declined below counts read-back EVENTS, not distinct
+// Labels — one increment per declined pair, per Get, per Node per List, per
+// Hello via Upsert's own read-back — so it is live but says nothing about
+// WHICH Nodes are affected. The authoritative "which Nodes" answer is the
+// one-shot startup scan (labelscan.go), which deliberately does NOT call
+// this function or go through getNode: reusing this filter at boot would
+// inflate the same read-back counter and destroy the distinction between the
+// two signals the design deliberately keeps separate.
 //
 // getNode is the single load path behind both Get and List, so this one
 // function, called once per namespace, covers every reader — the Control
@@ -505,12 +565,21 @@ func getNode(ctx context.Context, q queryer, nodeID string) (registry.Node, bool
 //
 // The filter can never lift a quarantine: registry.QuarantineKey/
 // QuarantineOn are "quarantine"/"on", both inside the allowlist.
-func wellFormedLabels(labels map[string]string) map[string]string {
+//
+// declined is threaded as an explicit parameter for the same reason getNode's
+// is: this stays a free function so no future call site can reach a
+// receiver's r.db and deadlock inside an in-flight transaction (see getNode's
+// doc). Every reject increments declined[ns] by one — per PAIR declined, not
+// per Node and not per call — which is what makes the counter's HELP text
+// honest about counting events rather than distinct Labels.
+func wellFormedLabels(ns labelNamespace, labels map[string]string, declined *[nLabelNamespaces]atomic.Int64) map[string]string {
 	out := make(map[string]string, len(labels))
 	for k, v := range labels {
 		if registry.WellFormedLabel(k, v) {
 			out[k] = v
+			continue
 		}
+		declined[ns].Add(1)
 	}
 	return out
 }

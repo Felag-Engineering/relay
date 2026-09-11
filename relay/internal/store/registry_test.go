@@ -2,6 +2,10 @@ package store
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"testing"
 	"time"
 
@@ -487,6 +491,15 @@ func TestGetNode_DoesNotServeMalformedLegacyNodeLabel(t *testing.T) {
 		t.Errorf("List NodeLabels: got %#v, want only {role: web}", list[0].NodeLabels)
 	}
 
+	// The counter must advance for the namespace this test forges (node) and
+	// stay untouched for the other (relay) — one Get plus one List, each
+	// declining the single forged pair once. Extended per #565 so the
+	// counter cannot be unwired from node-space while relay-space stays
+	// honest.
+	if node, relay := st.LabelsDeclined(); node != 2 || relay != 0 {
+		t.Errorf("LabelsDeclined() = (%d, %d), want (2, 0) after one Get and one List", node, relay)
+	}
+
 	// The Relay declines to SERVE the forged row; it must not have DELETED
 	// or rewritten it (invariant 7: node-space storage is the Node's own
 	// self-description, and the Relay never edits it — only the Node's next
@@ -562,6 +575,15 @@ func TestGetNode_DoesNotServeMalformedLegacyRelayLabel(t *testing.T) {
 		t.Errorf("List served the forged legacy relay label: %q", list[0].RelayLabels["env"])
 	}
 
+	// The counter must advance for the namespace this test forges (relay)
+	// and stay untouched for the other (node) — one Get plus one List, each
+	// declining the single forged pair once. Extended per #565 so the
+	// counter cannot be unwired from relay-space while node-space stays
+	// honest.
+	if node, relay := st.LabelsDeclined(); node != 0 || relay != 2 {
+		t.Errorf("LabelsDeclined() = (%d, %d), want (0, 2) after one Get and one List", node, relay)
+	}
+
 	// RED ON: "healing" the row by deleting or rewriting it instead of
 	// declining to serve it (ADR-0017's forge-to-attract cell) — the Relay
 	// declines to SERVE the forged row; it must not have DELETED or
@@ -574,5 +596,234 @@ func TestGetNode_DoesNotServeMalformedLegacyRelayLabel(t *testing.T) {
 	}
 	if stillThere != "prod, relay:quarantine=on" {
 		t.Errorf("the stored row must be unmodified: got %q", stillThere)
+	}
+}
+
+// TestGetNode_CountsDeclinedLabels is #565's Seam 2: getNode's read-back
+// filter must count every declined PAIR, per namespace, and nothing else —
+// not per call, not per Node, and never a well-formed pair. The fixture's
+// node-space and relay-space totals are DELIBERATELY UNEQUAL (one malformed
+// row vs. two) so a namespace mix-up cannot pass by accident, and a second,
+// entirely clean Node is read alongside the affected one so a scan-shaped
+// bug (counting every Node touched, rather than every pair declined) shows
+// up immediately.
+func TestGetNode_CountsDeclinedLabels(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{
+		NodeID: "node-affected",
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		t.Fatalf("Upsert node-affected: %v", err)
+	}
+	if _, err := reg.Upsert(registry.Report{
+		NodeID: "node-clean",
+	}.WithNodeLabels(map[string]string{"role": "db"})); err != nil {
+		t.Fatalf("Upsert node-clean: %v", err)
+	}
+	if err := reg.SetRelayLabels("node-clean", map[string]string{"env": "prod"}); err != nil {
+		t.Fatalf("SetRelayLabels node-clean: %v", err)
+	}
+
+	// Forged straight into the tables, AFTER both Upserts above, so neither
+	// Upsert's own internal read-back (registry.go:113) sees them and
+	// perturbs the "before any read" baseline below. One malformed
+	// node-space pair; two malformed relay-space pairs — deliberately
+	// unequal counts.
+	if _, err := st.db.Exec(
+		`INSERT INTO node_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-affected", "env", "prod, relay:quarantine=on",
+	); err != nil {
+		t.Fatalf("insert forged node_labels row: %v", err)
+	}
+	if _, err := st.db.Exec(
+		`INSERT INTO relay_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-affected", "tier", "pci/1",
+	); err != nil {
+		t.Fatalf("insert forged relay_labels row (tier): %v", err)
+	}
+	if _, err := st.db.Exec(
+		`INSERT INTO relay_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-affected", "owner", "team@sec",
+	); err != nil {
+		t.Fatalf("insert forged relay_labels row (owner): %v", err)
+	}
+
+	if node, relay := st.LabelsDeclined(); node != 0 || relay != 0 {
+		t.Fatalf("before any read: LabelsDeclined() = (%d, %d), want (0, 0)", node, relay)
+	}
+
+	if _, ok := reg.Get("node-affected"); !ok {
+		t.Fatal("Get(node-affected): not found")
+	}
+	if node, relay := st.LabelsDeclined(); node != 1 || relay != 2 {
+		t.Errorf("after Get(node-affected): LabelsDeclined() = (%d, %d), want (1, 2)", node, relay)
+	}
+
+	list := reg.List()
+	if len(list) != 2 {
+		t.Fatalf("List len: got %d, want 2", len(list))
+	}
+	if node, relay := st.LabelsDeclined(); node != 2 || relay != 4 {
+		t.Errorf("after List: LabelsDeclined() = (%d, %d), want (2, 4) — node-clean must contribute nothing", node, relay)
+	}
+}
+
+// TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle reads this package's
+// own source, for the same reason audit's TestKinds_ListsEveryDeclaredKind
+// does: the property is a shape the code must have, and no assertion over
+// behaviour can observe it.
+//
+// THE HAZARD. store.Open calls db.SetMaxOpenConns(1). Upsert opens a
+// transaction on that single connection and calls getNode(ctx, tx, ...) while
+// still holding it, committing only after getNode returns. A getNode that
+// reached for r.db instead of the tx it was handed would try to check out a
+// SECOND connection from a pool of one that this very call already holds — so
+// it would block until the commit, which is sequenced after the blocked call.
+// That is a deadlock on every Hello, not a data bug.
+//
+// WHY THIS IS A SOURCE GUARD AND NOT A BEHAVIOURAL ONE. A probe that actually
+// triggers the deadlock cannot report it. I tried: the blocked goroutine holds
+// the only connection forever (Upsert hardcodes context.Background(), so
+// nothing can cancel the query), so when the probe's own deadline fires and
+// calls t.Fatal, the store's cleanup then blocks in db.Close() waiting for
+// that transaction — and the test binary is killed by go test -timeout before
+// the framework ever prints the failure. The observed output is a bare
+// "panic: test timed out" with a goroutine dump and no diagnosis at all. So a
+// behavioural test here does not turn a deadlock into a failing test; it turns
+// it into a wedged binary that happens to exit non-zero. This guard fails in
+// milliseconds and says which line is wrong.
+//
+// RED ON: passing r.db (or s.db, or anything but the tx in scope) to getNode
+// inside Upsert, and on methodizing getNode such that it has a receiver to
+// reach a shared handle through at all.
+//
+// WHAT IT DOES NOT CATCH, stated so nobody mistakes it for a fence. It checks
+// two things: getNode has no receiver, and Upsert's second argument to it is
+// the identifier `tx`. So it would miss wellFormedLabels being methodized, and
+// it would miss a helper CALLED FROM getNode reaching a shared handle of its
+// own. It also false-positives on a correctly-scoped transaction held in a
+// variable named anything else. That narrowness is accepted: it fails in
+// milliseconds and names the line, which is worth more than the coverage it
+// gives up against a hazard whose only behavioural symptom is a hang that
+// cannot be reported from inside the test binary.
+func TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle(t *testing.T) {
+	t.Parallel()
+
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "registry.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse registry.go: %v", err)
+	}
+
+	// getNode must be a FREE function: a receiver is the thing that would make
+	// r.db reachable from inside it in the first place.
+	var found bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "getNode" {
+			return true
+		}
+		found = true
+		if fn.Recv != nil {
+			t.Error("getNode has a receiver: it must stay a free function so there is no " +
+				"shared *sql.DB reachable from inside it — see this test's doc for the deadlock")
+		}
+		return true
+	})
+	if !found {
+		t.Fatal("getNode not found in registry.go: this guard has gone stale and is proving nothing")
+	}
+
+	// And Upsert must hand it the transaction, never a shared handle.
+	var checked bool
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Upsert" || fn.Recv == nil {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || ident.Name != "getNode" || len(call.Args) < 2 {
+				return true
+			}
+			checked = true
+			arg, ok := call.Args[1].(*ast.Ident)
+			if !ok || arg.Name != "tx" {
+				t.Errorf("Upsert passes %s to getNode as its queryer, want the in-scope tx: "+
+					"anything else deadlocks on the single connection Upsert is already holding",
+					types.ExprString(call.Args[1]))
+			}
+			return true
+		})
+		return true
+	})
+	if !checked {
+		t.Fatal("no getNode call found inside Upsert: this guard has gone stale and is proving nothing")
+	}
+}
+
+// TestUpsert_ReadBackDeclinesAndCountsInsideItsOwnTransaction is the
+// behavioural half that CAN be asserted: with a forged relay_labels row
+// already present, a Hello's own read-back declines it and the counter
+// advances. It deliberately does not probe the deadlock — see
+// TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle for why that cannot
+// be observed from inside the test binary.
+func TestUpsert_ReadBackDeclinesAndCountsInsideItsOwnTransaction(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-hello"}); err != nil {
+		t.Fatalf("initial Upsert: %v", err)
+	}
+
+	// Forged AFTER the initial Upsert, exactly as a pre-#555 enrollment would
+	// have stored it, so the SECOND Upsert below is the first read-back to see it.
+	if _, err := st.db.Exec(
+		`INSERT INTO relay_labels (node_id, key, value) VALUES (?, ?, ?)`,
+		"node-hello", "env", "prod, relay:quarantine=on",
+	); err != nil {
+		t.Fatalf("insert forged relay_labels row: %v", err)
+	}
+
+	node, err := reg.Upsert(registry.Report{
+		NodeID: "node-hello",
+		Facts:  registry.Facts{Hostname: "host-hello"},
+	})
+	if err != nil {
+		t.Fatalf("Upsert (a Hello) with a forged relay_labels row present: %v", err)
+	}
+	if _, served := node.RelayLabels["env"]; served {
+		t.Error("Upsert's read-back served the forged relay_labels pair")
+	}
+	if n, r := st.LabelsDeclined(); n != 0 || r != 1 {
+		t.Errorf("LabelsDeclined() = (%d, %d), want (0, 1) after Upsert's own read-back declined the forged pair", n, r)
+	}
+}
+
+// TestLabelNamespaceTable pins the namespace-to-table mapping, which invariant
+// 7 rests on and which nothing else would catch.
+//
+// The two label namespaces are disjoint TABLES, and that disjointness is how
+// "a Node can never set a relay: label" is structural rather than enforced.
+// Since #565 both write sites and both read sites reach their table through
+// labelNamespace.table() instead of a literal — so a symmetric edit to that one
+// four-line function would route Node-reported labels into relay_labels and
+// back out again, and EVERY round-trip test would still pass, because the reads
+// flip with the writes. Only an assertion on the mapping itself sees it.
+//
+// *Fails if*: the two cases are swapped, or a table is renamed on one side only.
+func TestLabelNamespaceTable(t *testing.T) {
+	t.Parallel()
+
+	if got := nsNode.table(); got != "node_labels" {
+		t.Errorf("nsNode.table() = %q, want %q — node-reported labels must never reach relay_labels", got, "node_labels")
+	}
+	if got := nsRelay.table(); got != "relay_labels" {
+		t.Errorf("nsRelay.table() = %q, want %q", got, "relay_labels")
 	}
 }

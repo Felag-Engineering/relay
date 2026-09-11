@@ -69,9 +69,56 @@ $ curl --cacert ca-cert.pem \
      happens. Nothing is deleted and no quarantine can be lost (`quarantine`
      and `on` are both inside the allowlist), but targeting does change.
 
+  The Relay now tells you which Nodes, at every startup: a one-shot,
+  read-only scan logs affected Nodes as `stored label declined on
+  read-back` (fields: `namespace`, `node_id`, `key`, `key_truncated`,
+  `malformed_part`), followed by a `startup scan: stored labels declined on
+  read-back` summary per non-empty namespace naming exact
+  `labels_declined_at_scan`/`nodes_affected_at_scan` totals, `reported`
+  (capped at 50 per namespace), and `truncated`. The declined **value** is
+  deliberately never logged — read it from the store row or the token scope
+  you are re-minting, not from the log line. `relay_labels_declined_total{
+  namespace="relay"}` on `/metrics` is the ongoing alert signal between
+  startups, but it counts read-back *events*, not distinct Labels, and it is
+  traffic-driven: it stays flat both when nothing is wrong and when nothing
+  has read an affected Node since the fix, so it tells you the condition is
+  advancing, not that it is clean.
+
+  **The log is a sample, not a roster.** If `truncated` is `true`, the scan
+  named 50 findings for that namespace and counted the rest — so on a fleet
+  with one declined pair on each of 500 Nodes, 450 affected Nodes are in the
+  total and not in the log. Re-minting only the Nodes the log named, and
+  treating the condition as discharged, leaves the remainder silently
+  under-including from `relay:`-targeted Selectors. When `truncated` is set,
+  enumerate the rest directly against the store — the Control API cannot show
+  you a declined Label, because declining to serve it is the whole behaviour:
+
+  ```sh
+  # Every Node carrying a stored relay-space Label the Relay will not serve.
+  # Run against a COPY of the database, or with the Relay stopped: the Relay
+  # holds a single SQLite connection and this is a read you do not want to
+  # queue behind.
+  sqlite3 /var/lib/relay/relay.db \
+    "SELECT node_id, key FROM relay_labels
+      WHERE key GLOB '*[^A-Za-z0-9._-]*' OR value GLOB '*[^A-Za-z0-9._-]*' OR key = ''
+      ORDER BY node_id, key;"
+  ```
+
+  Swap `relay_labels` for `node_labels` for the other namespace, which
+  self-heals on the Node's next Hello and so is usually the less urgent half.
+  The `GLOB` pattern is the allowlist (`[A-Za-z0-9._-]`) inverted; it is a
+  convenience for enumeration, not the gate — `registry.WellFormedLabel` is
+  the gate, and it is what the Relay actually applies.
+
+  State plainly: **neither signal repairs anything.** The startup scan and
+  the counter make the condition detectable; they do not restore a single
+  Label. Re-mint and re-enroll is the only fix.
+
   Audit with `GET /api/v1/nodes` before you upgrade and compare the
-  `relay_labels` you get back afterwards; re-enrol any Node whose label the
-  new rule refuses, under a re-minted, conforming scope.
+  `relay_labels` you get back afterwards — this before/after comparison
+  remains the audit; the startup scan is how you find affected Nodes after an
+  upgrade you have already performed. Re-enrol any Node whose label the new
+  rule refuses, under a re-minted, conforming scope.
 - **`ttl_seconds`** — required, `> 0`, at most one year. Size it to the
   enrollment window, not to convenience: for a planned bulk run, hours or a day.
 - **`max_uses`** — optional; `<= 0` or absent means unlimited. For a planned run
