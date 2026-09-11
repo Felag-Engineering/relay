@@ -697,6 +697,16 @@ func TestGetNode_CountsDeclinedLabels(t *testing.T) {
 // RED ON: passing r.db (or s.db, or anything but the tx in scope) to getNode
 // inside Upsert, and on methodizing getNode such that it has a receiver to
 // reach a shared handle through at all.
+//
+// WHAT IT DOES NOT CATCH, stated so nobody mistakes it for a fence. It checks
+// two things: getNode has no receiver, and Upsert's second argument to it is
+// the identifier `tx`. So it would miss wellFormedLabels being methodized, and
+// it would miss a helper CALLED FROM getNode reaching a shared handle of its
+// own. It also false-positives on a correctly-scoped transaction held in a
+// variable named anything else. That narrowness is accepted: it fails in
+// milliseconds and names the line, which is worth more than the coverage it
+// gives up against a hazard whose only behavioural symptom is a hang that
+// cannot be reported from inside the test binary.
 func TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle(t *testing.T) {
 	t.Parallel()
 
@@ -792,5 +802,28 @@ func TestUpsert_ReadBackDeclinesAndCountsInsideItsOwnTransaction(t *testing.T) {
 	}
 	if n, r := st.LabelsDeclined(); n != 0 || r != 1 {
 		t.Errorf("LabelsDeclined() = (%d, %d), want (0, 1) after Upsert's own read-back declined the forged pair", n, r)
+	}
+}
+
+// TestLabelNamespaceTable pins the namespace-to-table mapping, which invariant
+// 7 rests on and which nothing else would catch.
+//
+// The two label namespaces are disjoint TABLES, and that disjointness is how
+// "a Node can never set a relay: label" is structural rather than enforced.
+// Since #565 both write sites and both read sites reach their table through
+// labelNamespace.table() instead of a literal — so a symmetric edit to that one
+// four-line function would route Node-reported labels into relay_labels and
+// back out again, and EVERY round-trip test would still pass, because the reads
+// flip with the writes. Only an assertion on the mapping itself sees it.
+//
+// *Fails if*: the two cases are swapped, or a table is renamed on one side only.
+func TestLabelNamespaceTable(t *testing.T) {
+	t.Parallel()
+
+	if got := nsNode.table(); got != "node_labels" {
+		t.Errorf("nsNode.table() = %q, want %q — node-reported labels must never reach relay_labels", got, "node_labels")
+	}
+	if got := nsRelay.table(); got != "relay_labels" {
+		t.Errorf("nsRelay.table() = %q, want %q", got, "relay_labels")
 	}
 }

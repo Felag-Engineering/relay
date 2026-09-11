@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -163,7 +162,7 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 		if len(refused) > 0 {
 			slog.Warn("refused malformed node labels", "node_id", nodeID,
 				"refused_count", len(refused),
-				"first_refused_key", fmt.Sprintf("%q", boundLogKey(refused[0])))
+				"first_refused_key", fmt.Sprintf("%q", boundedRefusedKey(refused[0])))
 		}
 		if _, err := s.reg.Upsert(registry.Report{
 			NodeID:            nodeID,
@@ -283,30 +282,6 @@ func (s *tunnelServer) Open(stream grpc.BidiStreamingServer[relayv1.DaemonMessag
 	}
 }
 
-// maxLoggedLabelKeyBytes bounds a refused label key before it reaches the log.
-//
-// A wire key is attacker-controlled up to gRPC's message limit, so quoting it
-// is not enough: %q escapes control characters but preserves length, and a
-// reconnect-looping Node could otherwise write megabytes per connect. 128
-// bytes is far more than any legitimate key (the allowlist alphabet is
-// [A-Za-z0-9._-], and the shipped examples are under twenty characters) and
-// still leaves a truncated key recognisable to the operator reading the line.
-const maxLoggedLabelKeyBytes = 128
-
-// boundLogKey truncates k on a rune boundary, so a multi-byte sequence is
-// never cut in half into a lone continuation byte. A refused key is by
-// definition outside the ASCII allowlist, so it may well contain one.
-func boundLogKey(k string) string {
-	if len(k) <= maxLoggedLabelKeyBytes {
-		return k
-	}
-	cut := maxLoggedLabelKeyBytes
-	for cut > 0 && !utf8.RuneStart(k[cut]) {
-		cut--
-	}
-	return k[:cut]
-}
-
 // nodeLabelsFromHello extracts node-space labels from Hello labels, returning
 // a map with bare keys (the "node:" prefix is stripped) and the RAW WIRE KEYS
 // of every label that ParseNodeLabel refused. Only keys with a "node:"
@@ -422,4 +397,13 @@ func argMatchersToArgSets(matchers []*relayv1.ArgMatcher) [][]string {
 		out[i] = append([]string(nil), m.GetValues()...)
 	}
 	return out
+}
+
+// boundedRefusedKey bounds a refused wire key for logging. It delegates to
+// registry.BoundLogKey, which owns the one rune-safe truncation for this one
+// hazard — see that function for why a second copy is not allowed (a security
+// review found exactly that fork in #565, with the rune backoff dropped).
+func boundedRefusedKey(k string) string {
+	bounded, _ := registry.BoundLogKey(k)
+	return bounded
 }

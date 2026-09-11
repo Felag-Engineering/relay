@@ -401,7 +401,11 @@ func countNodes(ctx context.Context, q queryer) (int, error) {
 // connection its own caller is holding open — a hang on every Hello, not a
 // data bug — so the counter travels as a pointer instead of a receiver,
 // making that hazard structurally unreachable rather than merely documented.
-// See TestUpsert_ReadBackInsideItsOwnTransaction.
+// Asserted by TestUpsert_ReadBackIsNeverRoutedThroughTheSharedHandle, which
+// reads this file's AST rather than probing the hazard — see that test's doc
+// for why a behavioural probe cannot report this particular failure — and by
+// TestUpsert_ReadBackDeclinesAndCountsInsideItsOwnTransaction for the
+// behaviour that CAN be observed.
 func getNode(ctx context.Context, q queryer, nodeID string, declined *[nLabelNamespaces]atomic.Int64) (registry.Node, bool, error) {
 	var (
 		certFingerprint, hostname, osName, kernel, arch string

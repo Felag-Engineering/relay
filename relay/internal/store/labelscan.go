@@ -32,6 +32,21 @@ import (
 // own doc records. It reads the RAW tables directly, not the filtered view
 // getNode returns, so it cannot become the read-modify-write path that
 // obligation forbids even by accident.
+//
+// # THE COST IS STEADY-STATE, NOT TRANSITIONAL
+//
+// Those two table scans run on EVERY process start, indefinitely — not only on
+// the one upgrade that introduced the gate, and including a large, fully-clean
+// fleet where the entire output is a single INFO line saying nothing was
+// declined. "Once per process" above means once per process, not once ever:
+// read it as a permanent boot cost, because a later reader who files it as a
+// one-time migration step will be surprised by it in a year.
+//
+// Accepted rather than optimised, because the alternatives are worse in kind
+// rather than degree: a per-read log re-emits N lines per fleet listing forever,
+// and a traffic-driven counter alone can never answer "which Nodes". The scan is
+// O(label rows) in time and O(cap) in memory, and it holds the single SQLite
+// connection only at boot, when nothing else is contending for it.
 
 const (
 	// maxDeclinedReported caps how many individual findings the scan
@@ -44,13 +59,6 @@ const (
 	// Labels/Nodes stay exact and Truncated says so, so the operator is told
 	// precisely how many were not listed rather than losing them silently.
 	maxDeclinedReported = 50
-
-	// maxDeclinedKeyBytes bounds a single reported key. Node-space keys are
-	// attacker-influenced (invariant 7, ADR-0017) and WellFormedLabel has no
-	// length cap by design (label.go) — a capped LINE COUNT each carrying an
-	// uncapped key would still be unbounded output, so the key itself must be
-	// capped too.
-	maxDeclinedKeyBytes = 128
 
 	// declinedProbeKey is a fixed, well-formed one-byte key used only to
 	// isolate a declined value from a declined key in declinedPart below. It
@@ -129,6 +137,22 @@ func (r DeclinedLabelReport) Any() bool {
 //
 // This never repairs, deletes, or rewrites anything and it never touches
 // getNode's read-back counters (Store.LabelsDeclined) — see scanDeclinedNamespace.
+//
+// # BOOT-ONLY, AND THAT IS AN OBLIGATION ON CALLERS, NOT A HABIT
+//
+// Call this from the composition root at startup and nowhere else. It holds the
+// process's ONLY SQLite connection (store.Open sets SetMaxOpenConns(1)) for
+// O(total label rows), because *sql.DB keeps that connection checked out until
+// rows.Close(). At boot nothing is contending for it. At runtime everything is:
+// an operator button, a periodic routine, or a "refresh" endpoint calling this
+// would block every Hello, every dispatch, every audit write and every other
+// store read behind it for the duration — the same single-connection hazard
+// getNode's tx parameter exists to avoid (see registry.go), reached from the
+// other direction.
+//
+// Callers must pass a BOUNDED context for the same reason. Nothing caps how
+// many Labels a Node may report, so the row count is not bounded by anything
+// this package controls.
 func (s *Store) ScanDeclinedLabels(ctx context.Context) (DeclinedLabelReport, error) {
 	relay, err := scanDeclinedNamespace(ctx, s.db, nsRelay)
 	if err != nil {
@@ -198,7 +222,7 @@ func scanDeclinedNamespace(ctx context.Context, q queryer, ns labelNamespace) (D
 			set.Truncated = true
 			continue
 		}
-		truncatedKey, wasTruncated := truncateKey(key)
+		truncatedKey, wasTruncated := registry.BoundLogKey(key)
 		set.Reported = append(set.Reported, DeclinedLabel{
 			NodeID:       nodeID,
 			Key:          truncatedKey,
@@ -240,16 +264,6 @@ func declinedPart(key, value string) DeclinedLabelPart {
 	default:
 		return DeclinedPartValue
 	}
-}
-
-// truncateKey byte-truncates k to maxDeclinedKeyBytes, reporting whether it
-// did. See maxDeclinedKeyBytes for why an uncapped key would still make a
-// capped line count unbounded output.
-func truncateKey(k string) (truncated string, wasTruncated bool) {
-	if len(k) <= maxDeclinedKeyBytes {
-		return k, false
-	}
-	return k[:maxDeclinedKeyBytes], true
 }
 
 // logNamespaceDeclined logs namespace's findings: one WARN per reported

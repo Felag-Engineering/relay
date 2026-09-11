@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -217,9 +218,23 @@ func TestScanDeclinedLabels_Logs(t *testing.T) {
 		t.Fatalf("ScanDeclinedLabels: %v", err)
 	}
 
-	lines := strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n")
+	// Scoped to THIS scan's own two messages rather than to the whole buffer.
+	// The exact count still matters — it is what catches findings emitted with
+	// no summary, or a summary emitted twice — but pinning the buffer's total
+	// would make any unrelated future Open-time log line fail this test for a
+	// reason that has nothing to do with what it asserts.
+	const (
+		findingMsg = "stored label declined on read-back"
+		summaryMsg = "startup scan: stored labels declined on read-back"
+	)
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+		if strings.Contains(line, findingMsg) || strings.Contains(line, summaryMsg) {
+			lines = append(lines, line)
+		}
+	}
 	if len(lines) != 4 {
-		t.Fatalf("log lines = %d, want 4 (2 findings + 2 summaries); log:\n%s", len(lines), logBuf.String())
+		t.Fatalf("scan log lines = %d, want 4 (2 findings + 2 summaries); log:\n%s", len(lines), logBuf.String())
 	}
 
 	type entry struct {
@@ -313,7 +328,7 @@ func TestScanDeclinedLabels_TruncatesLongKey(t *testing.T) {
 		t.Fatalf("Upsert: %v", err)
 	}
 
-	longKey := strings.Repeat("k", maxDeclinedKeyBytes+50)
+	longKey := strings.Repeat("k", registry.MaxLoggedLabelKeyBytes+50)
 	// The value, not the key, is what makes this pair malformed — the key
 	// alone is a well-formed (if oversized) run of allowed bytes.
 	insertLabel(t, st, nsNode, "node-long-key", longKey, "prod, relay:quarantine=on")
@@ -326,10 +341,130 @@ func TestScanDeclinedLabels_TruncatesLongKey(t *testing.T) {
 		t.Fatalf("len(Node.Reported) = %d, want 1", len(report.Node.Reported))
 	}
 	got := report.Node.Reported[0]
-	if len(got.Key) != maxDeclinedKeyBytes {
-		t.Errorf("reported key length = %d, want %d", len(got.Key), maxDeclinedKeyBytes)
+	if len(got.Key) != registry.MaxLoggedLabelKeyBytes {
+		t.Errorf("reported key length = %d, want %d", len(got.Key), registry.MaxLoggedLabelKeyBytes)
+	}
+	if !utf8.ValidString(got.Key) {
+		t.Errorf("reported key is not valid UTF-8: %q", got.Key)
 	}
 	if !got.KeyTruncated {
 		t.Error("KeyTruncated = false, want true")
+	}
+}
+
+// TestDeclinedPart_ClassifiesEveryQuadrant closes a coverage gap a code review
+// found: DeclinedPartBoth is returned by production code but was asserted by no
+// test, and declinedPart is the one function here whose correctness is argued
+// entirely from a comment (the probe decomposition) rather than from cases.
+//
+// All four quadrants of (keyOK, valueOK) are covered, including the one the
+// scan can never reach — a pair where BOTH halves are well-formed, which
+// WellFormedLabel accepts so scanDeclinedNamespace skips it before
+// declinedPart is consulted. It is asserted anyway: declinedPart is exported
+// to nothing but it IS reachable by a future caller that does not pre-filter,
+// and "what does it say about a valid pair" should have a written answer
+// rather than being discovered.
+//
+// *Fails if*: the probe keys are swapped, either probe's empty-side argument
+// changes (WellFormedLabel(key, "") isolates the key precisely because the
+// empty value is accepted by design), or the switch arms are reordered so that
+// a both-malformed pair reports as only one half.
+func TestDeclinedPart_ClassifiesEveryQuadrant(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		key, value string
+		want       DeclinedLabelPart
+	}{
+		// The three the scan actually produces.
+		{"malformed key only", "a=b", "web", DeclinedPartKey},
+		{"malformed value only", "env", "prod, relay:quarantine=on", DeclinedPartValue},
+		{"both malformed", "a=b", "prod, relay:quarantine=on", DeclinedPartBoth},
+
+		// An empty key is malformed BY ITSELF (WellFormedLabel's key != ""
+		// check), with a value that is fine — so "key", not "both".
+		{"empty key, well-formed value", "", "web", DeclinedPartKey},
+		// An empty VALUE is well-formed by design, so a bad key with an empty
+		// value is still "key" alone.
+		{"malformed key, empty value", "a=b", "", DeclinedPartKey},
+		// Empty key AND malformed value: both halves genuinely fail.
+		{"empty key, malformed value", "", "a,b", DeclinedPartBoth},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			if got := declinedPart(c.key, c.value); got != c.want {
+				t.Errorf("declinedPart(%q, %q) = %q, want %q", c.key, c.value, got, c.want)
+			}
+		})
+	}
+
+	// The fourth quadrant, pinned because it is a TRAP rather than a
+	// classification: declinedPart's documented precondition is that
+	// WellFormedLabel has already refused the pair, so at least one half is
+	// bad. Handed a pair that is actually FINE, the switch falls to its default
+	// arm and answers DeclinedPartValue — confidently, and wrongly.
+	//
+	// That is tolerable today because the only caller pre-filters on exactly
+	// that predicate, and widening the vocabulary to a fourth "nothing wrong"
+	// value for a case the scan cannot produce would be over-building. But the
+	// wrong answer should be written down rather than discovered, so a second
+	// caller that forgets to pre-filter has something to find. If this
+	// assertion ever fails, the fix is probably not to update it — it is to ask
+	// whether the new caller is honouring the precondition.
+	if got := declinedPart("env", "prod"); got != DeclinedPartValue {
+		t.Errorf("declinedPart on a WELL-FORMED pair = %q, want %q — not because that is correct, "+
+			"but because it is what the default arm does and a caller violating the precondition "+
+			"needs the behaviour documented", got, DeclinedPartValue)
+	}
+}
+
+// TestScanDeclinedLabels_TruncatesOnARuneBoundary is the case the all-ASCII
+// fixture above structurally cannot see, and the one a security review caught:
+// a refused key is BY DEFINITION outside WellFormedLabel's ASCII allowlist, so
+// it may end in a multi-byte sequence, and a naive k[:128] would cut it in half.
+//
+// 127 ASCII bytes plus one U+2028 is the minimal witness — byte 128 lands
+// inside the three-byte sequence, so a byte-cut yields a string ending in a
+// lone 0xe2. The stdlib handlers escape that safely, but a log shipper or index
+// requiring valid UTF-8 may drop the record — losing the finding for the most
+// hostile key in the fleet, which is the one worth having.
+//
+// *Fails if*: registry.BoundLogKey loses its rune backoff, or the scan stops
+// using it in favour of a local byte slice.
+func TestScanDeclinedLabels_TruncatesOnARuneBoundary(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-multibyte"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	key := strings.Repeat("k", registry.MaxLoggedLabelKeyBytes-1) + " "
+	if utf8.ValidString(key[:registry.MaxLoggedLabelKeyBytes]) {
+		t.Fatalf("fixture is not exercising the hazard: a byte-cut of %d bytes is still valid UTF-8",
+			registry.MaxLoggedLabelKeyBytes)
+	}
+	insertLabel(t, st, nsNode, "node-multibyte", key, "web")
+
+	report, err := st.ScanDeclinedLabels(context.Background())
+	if err != nil {
+		t.Fatalf("ScanDeclinedLabels: %v", err)
+	}
+	if len(report.Node.Reported) != 1 {
+		t.Fatalf("len(Node.Reported) = %d, want 1", len(report.Node.Reported))
+	}
+	got := report.Node.Reported[0]
+	if !got.KeyTruncated {
+		t.Error("KeyTruncated = false, want true")
+	}
+	if !utf8.ValidString(got.Key) {
+		t.Errorf("reported key is not valid UTF-8 — the rune boundary was not honoured: %q", got.Key)
+	}
+	// Backing off to the boundary means strictly fewer bytes than the cap.
+	if len(got.Key) >= registry.MaxLoggedLabelKeyBytes {
+		t.Errorf("reported key length = %d, want < %d after the rune backoff",
+			len(got.Key), registry.MaxLoggedLabelKeyBytes)
 	}
 }
