@@ -20,20 +20,17 @@ governs it. [README.md](README.md) is the outside view: what Relay is, and why.
 
 ## Ubiquitous language — use it exactly
 
-[GLOSSARY.md](GLOSSARY.md) is the canonical glossary. Use these terms in code, comments, commits,
-and docs; do not introduce synonyms. Most entries carry an `_Avoid_` line naming the synonyms
-this project has deliberately rejected — those are decisions, not suggestions.
+[GLOSSARY.md](GLOSSARY.md) is the canonical glossary — every term, and the synonyms this project
+has rejected. An `_Avoid_` line is a decision, not a suggestion. Use the canonical term in code,
+comments, commits, issue titles, test names and prose.
 
-- **Relay** — the central Go server. Not "hub/master/server".
+Two are worth naming here, because they are the pair that actually gets confused and the
+confusion is not cosmetic — one of these is an AI and the other must never be mistaken for one:
+
 - **relay-daemon** — the non-AI Rust daemon on each Node. **Never call it "agent".**
 - **AI-agent** — the AI orchestrator. The only thing called "agent", and always qualified.
-- **Node**, **Operation**, **Raw Exec**, **Policy**, **Job**, **Task**, **Selector**,
-  **Label** (`node:` / `relay:` / `tag:` / `state:`), **Facts**, **Enrollment Token** —
-  see GLOSSARY.md.
 
 Internal identifiers say `Relay` / `RELAY_`, never "gleipnir" (ADR-0016).
-
-If you find yourself needing a new domain term, add it to GLOSSARY.md in the same change.
 
 ## Architecture invariants — do not violate without a new ADR
 
