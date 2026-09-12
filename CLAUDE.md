@@ -77,13 +77,14 @@ it needs an ADR, not a quiet workaround.
    audited via git commits), but may never edit Nodes or `relay:` labels through it, and the
    model never bypasses Selectors → Policy → blast cap. It is never a desired-state spec:
    Relay does not auto-reconcile, ever. (ADR-0008)
-10. **One capability layer; every interface is an adapter over it, exposing the same
-    controls.** MCP, the Control API, the Admin Console — and any interface added later —
-    adapt the same control-plane capability layer. What may be done, who may do it, and how it
-    is recorded are decided once, inside that layer, never per interface; an interface that
-    reaches a Node any other way is a parallel control path, and there is never a reason to
-    build one. No adapter decides anything itself, and the `no_dispatch` structural guard
-    covers each of them. The Console is **not** read-only by design (ADR-0026 superseded
+10. **One capability layer; every interface is an adapter over it.** Ports and adapters: the
+    capability layer is the single implementation of what may be done, who may do it, and how it
+    is recorded, decided there and never per interface. An adapter exposes that layer and
+    **narrows only** — it may offer less than the layer allows, and it may never widen it,
+    reimplement any part of it, or decide anything itself. Which surface exposes what is in the
+    capability specifications, not here. Reaching a Node any other way is a parallel control
+    path, and there is never a reason to build one; the `no_dispatch` structural guard covers
+    each adapter. The Console is **not** read-only by design (ADR-0026 superseded
     ADR-0009's no-execution scope): where it executes, it does so plan-by-default, with
     step-up re-auth on a mutate apply, role-gated by the capability layer, and behind the
     root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026)

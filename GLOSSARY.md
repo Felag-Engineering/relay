@@ -422,9 +422,10 @@ asserted)
 The single Relay-side layer that decides — authorization, Selector resolution, the
 blast-radius cap, dispatch, and audit — and the only path to any of them. Every interface is
 an adapter over it (ports and adapters, with this layer as the core): the MCP surface, the
-Control API and the Admin Console today, and anything added later. All of them expose the
-same controls, so what may be done, who may do it, and how it is recorded are settled in one
-place rather than once per interface (ADR-0009, ADR-0010; invariant 10). It renders nothing
+Control API and the Admin Console today, and anything added later. Each adapter exposes this
+layer and may **narrow** what it offers; none may widen it, reimplement any part of it, or
+decide. So what may be done, who may do it, and how it is recorded are settled here rather than
+once per interface (ADR-0009, ADR-0010; invariant 10). It renders nothing
 and speaks no wire format; an adapter that decides anything itself is a bug, guarded
 structurally in the Console's case by `no_dispatch`. Its outbound collaborators are injected
 seams — Authorizer, CapChecker, AuditSink, FreezeStore, Conduit — so the layer depends on

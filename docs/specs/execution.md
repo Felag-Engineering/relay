@@ -230,8 +230,8 @@ for Raw Exec, which is the opposite of what the design wants.
 - **Invariant 5** (ADR-0004) — the cap is enforced **here, on the Relay, before dispatch**.
   Not on the Node, not by the caller.
 - **Invariant 10** (ADR-0009/0010/0026) — every interface is an adapter over this one layer,
-  exposing the same controls. The unexported dispatch constructor is the compile-enforced half;
-  `no_dispatch` covers the Console.
+  narrowing only. The unexported dispatch constructor is the compile-enforced half; `no_dispatch`
+  covers the Console.
 - **Invariant 12** (ADR-0011) — this pipeline **never evaluates Policy.** Not for real
   dispatch, not for hypotheticals. A matched-but-disconnected Node yields a Relay-side
   `unknown(offline)` conclusion rather than a guess.

@@ -173,6 +173,14 @@ constraints without asserting that the surface has shipped, and stays true when 
 The same edit dropped the surface headcount. The invariant opened "One capability layer, three
 thin surfaces"; three was a snapshot rather than a decision — the capability layer's own
 documentation anticipates "any future CLI", and ADR-0030 discusses the CLI that was built and
-then cut. The invariant now states the property instead: every interface is an adapter over the
-one layer, and all of them expose the same controls. GLOSSARY.md's **Capability layer** entry
-carries the matching vocabulary.
+then cut. The invariant now states the property instead — ports and adapters, with the capability layer
+as the single implementation and each interface an adapter over it.
+
+The first draft of that restatement said the adapters "all expose the same controls", which was
+wrong in a direction worth recording: it reads as a parity mandate, and this ADR is itself the
+counter-example. Console execution is gated behind a root-owned flag precisely so that surface
+*can* offer less than the layer allows, and `approve_request` registers only when a decider is
+configured (ADR-0029). An adapter **narrows only** — it may offer less, and may never widen,
+reimplement, or decide. Which surface exposes what belongs in the capability specifications,
+not in the invariant. GLOSSARY.md's **Capability layer** entry carries the matching
+vocabulary.
