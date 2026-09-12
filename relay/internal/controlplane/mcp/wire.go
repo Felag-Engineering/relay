@@ -216,7 +216,7 @@ type CertificateOutput struct {
 // decision in #120's plan). This is what makes list_operations legible
 // enough that a model chooses the right Operation, and builds valid args for
 // it, without trial-and-error. Raw Exec is deliberately absent from this
-// list: it is not an Operation (ADR-0003, CONTEXT.md) and has no
+// list: it is not an Operation (ADR-0003, GLOSSARY.md) and has no
 // OperationDescriptor on the wire; it surfaces through its own tool (#118)
 // and is always risk class mutate.
 type OperationItem struct {

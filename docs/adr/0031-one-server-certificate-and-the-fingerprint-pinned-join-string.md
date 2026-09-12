@@ -163,7 +163,7 @@ pinned CA bundle file becomes pinned CA fingerprint. Neither ADR's decision chan
 daemon still refuses an untrusted Relay, `Enroll` is still the single certless RPC, and
 the Relay still generates `node_id` itself.
 
-**New domain language** (CONTEXT.md, same change): **join string**. Note it is *not* a
-synonym for Enrollment Token — CONTEXT.md already lists "join key" as a term to avoid for
+**New domain language** (GLOSSARY.md, same change): **join string**. Note it is *not* a
+synonym for Enrollment Token — GLOSSARY.md already lists "join key" as a term to avoid for
 exactly that reason. The join string is the transport bundle; the token is one of its
 three fields.

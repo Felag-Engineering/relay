@@ -92,6 +92,6 @@ Node-side veto requires Node-side code.
 - Does **not** change the daemon tier. The relay-daemon remains the reference
   architecture and the only configuration that realizes "hand your fleet to an AI without
   handing it trust."
-- If accepted: CONTEXT.md gains a term for this execution mode, and the threat-model
+- If accepted: GLOSSARY.md gains a term for this execution mode, and the threat-model
   doc (v0.0.8) must cover it as an explicit reduced-assurance configuration with its own
   boundary diagram.

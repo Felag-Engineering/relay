@@ -129,7 +129,7 @@ permanent shim; this one's condition is written down and tracked.
 ## Naming
 
 An **MCP task handle** is not a Relay **Task** (per-Node execution unit, ADR-0004). The
-term is always written in full — CONTEXT.md already carries both entries and the
+term is always written in full — GLOSSARY.md already carries both entries and the
 disambiguation; no domain language shifts with this ADR.
 
 ## Consequences

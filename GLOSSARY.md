@@ -1,10 +1,11 @@
-# Relay
+# Glossary
 
-**Relay** is a fleet-administration control plane — this project. Non-AI daemons on
-managed Linux servers dial home to a central server and hold a persistent connection
-open; through that connection the central server can run administrative actions on the
-servers. An AI orchestrator drives the whole fleet by using the Relay as a tool,
-while per-server policy restricts what may actually run — defense in depth.
+The canonical vocabulary of this project. Every term below is the word to use — in code,
+comments, commits, issue titles, test names, and prose. Most carry an `_Avoid_` line naming
+the synonyms this project has deliberately rejected; those are decisions, not suggestions.
+
+What Relay is, and why it is shaped that way, is in [README.md](README.md). The invariants
+that constrain every change are in [CLAUDE.md](CLAUDE.md).
 
 **Gleipnir** is a different project: the first-party AI-agent system that will drive
 Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of
@@ -416,6 +417,22 @@ harness's own session logs, where the literal instruction lives. Keeping the lan
 is load-bearing — blurring them is how an audit trail becomes fiction.
 _Avoid_: "the principal" (for the pair), user id, requester (unqualified — say verified or
 asserted)
+
+**Capability layer**:
+The single Relay-side layer that decides — authorization, Selector resolution, the
+blast-radius cap, dispatch, and audit — and the only path to any of them. Every interface is
+an adapter over it (ports and adapters, with this layer as the core): the MCP surface, the
+Control API and the Admin Console today, and anything added later. Each adapter exposes this
+layer and may **narrow** what it offers; none may widen it, reimplement any part of it, or
+decide. So what may be done, who may do it, and how it is recorded are settled here rather than
+once per interface (ADR-0009, ADR-0010; invariant 10). It renders nothing
+and speaks no wire format; an adapter that decides anything itself is a bug, guarded
+structurally in the Console's case by `no_dispatch`. Its outbound collaborators are injected
+seams — Authorizer, CapChecker, AuditSink, FreezeStore, Conduit — so the layer depends on
+interfaces it defines rather than on the packages that satisfy them. Each capability it
+exposes is the unit one **capability specification** in `docs/specs/` describes, which is why
+a capability spec is true of every surface at once.
+_Avoid_: service layer, business logic, core, the backend, "the service"
 
 **Control API**:
 The REST/JSON surface (`/api/v1`, OpenAPI-described) through which humans' tooling and

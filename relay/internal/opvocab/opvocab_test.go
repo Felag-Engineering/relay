@@ -63,7 +63,7 @@ func TestOperations_RiskNeverUnspecified(t *testing.T) {
 }
 
 // TestOperations_RawExecAbsent pins that Raw Exec never appears in the
-// Operation vocabulary (it is not an Operation; ADR-0003/CONTEXT.md).
+// Operation vocabulary (it is not an Operation; ADR-0003/GLOSSARY.md).
 func TestOperations_RawExecAbsent(t *testing.T) {
 	for _, d := range Operations() {
 		if d.Name == "raw_exec" || d.Name == "" {

@@ -55,4 +55,27 @@ impossible after enrollment.
   (`docs/design/console-backend-coverage.md`).
 - `tag:` labels persist in the registry alongside `relay:` labels and appear in
   `list_nodes`/`describe_node`, Selectors, and Console views like any Label.
-- CONTEXT.md's **Label** entry is updated in the same change.
+- GLOSSARY.md's **Label** entry is updated in the same change.
+
+## Amendment (2026-09-08): invariant 7 restated as write authority, not as status
+
+This ADR's decision is unchanged. What changed is how CLAUDE.md invariant 7 summarises it.
+
+The invariant read that `tag:` labels "are operator-set through the control plane … for
+ad-hoc grouping and routine targeting" — present tense, for a namespace this ADR decided on
+but which has no write path and no storage on the Node record until label management lands
+(#430). A `tag:` Selector therefore resolves to the empty set rather than an error, and the
+surfaces do not agree about that: the Admin Console refuses a `tag:` filter with an
+explanatory error, while the MCP `list_nodes` schema advertises `tag:` to an AI-agent with no
+caveat, so the agent receives a false negative rather than a refusal. Issue #347 recorded the
+documentation half of this.
+
+The invariant now states the property this ADR actually establishes — that each namespace has
+exactly one writer and is immutable from every other side — rather than asserting that any
+given namespace is populated. Write authority is a rule that holds before and after #430; a
+claim about what is settable today is not. The `relay:` clause lost its "(enrollment-stamped,
+or `admin` + step-up)" parenthetical for the same reason: how the Relay comes to write a
+`relay:` label is mechanism, and its second half is likewise unbuilt.
+
+The surface disagreement above is a defect in its own right, not a documentation problem, and
+is not resolved here.

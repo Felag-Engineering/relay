@@ -4,10 +4,10 @@ Fleet maintenance targets operational state. "Run this on the Nodes still carryi
 Policy", "quarantine anything that cannot take work" — these are the everyday Selectors an
 operator reaches for, and today none of them can be written.
 
-Labels target; **Facts explicitly do not** (CONTEXT.md: "never used for targeting — that is the
+Labels target; **Facts explicitly do not** (GLOSSARY.md: "never used for targeting — that is the
 role of Labels"). But the things an operator wants to target here are *neither*. `Hello` carries
 `daemon_version` and `Facts` as **separate fields**, and the Policy and template-set fingerprints
-have their own CONTEXT.md entries as values "the daemon reports and the Relay records in the
+have their own GLOSSARY.md entries as values "the daemon reports and the Relay records in the
 registry". They are a third category — the Relay's own record of its relationship with a Node —
 and that category has no targeting mechanism.
 
@@ -29,7 +29,7 @@ nobody else; `state:` is set by **nobody at all**.
   Policy to 51% of the fleet and the mode flips, so the remaining 49% become "drifted" without
   anything about them changing, and a Selector targeting it **silently inverts mid-rollout**.
   It also smuggles desired-state past invariant #9 — computing "behind" requires a notion of what
-  the fleet *should* be on, and CONTEXT.md deliberately frames fingerprints as an observation
+  the fleet *should* be on, and GLOSSARY.md deliberately frames fingerprints as an observation
   ("confirm a rollout landed by string comparison"), never a target.
 
 - **The vocabulary is closed and lives in the contract.** Two shapes, both Node-local:
@@ -51,7 +51,7 @@ nobody else; `state:` is set by **nobody at all**.
   written against an operator-invented state term would silently stop matching the day someone
   changed what it meant.
 
-- **Drift is not a label, deliberately.** It stays what CONTEXT.md always said it was: an
+- **Drift is not a label, deliberately.** It stays what GLOSSARY.md always said it was: an
   observation, read off the fingerprint distribution. Targeting "the ones that are behind" is
   `state:policy-fingerprint=4b18…c02` — Node-local, objective, and stable under rollout.
 
@@ -96,7 +96,7 @@ nobody else; `state:` is set by **nobody at all**.
 
 ## Consequences
 
-- **Amends CONTEXT.md's `Selector` definition** — no longer purely "a label-based query" — and
+- **Amends GLOSSARY.md's `Selector` definition** — no longer purely "a label-based query" — and
   ADR-0006's and ADR-0020's namespace count, and **CLAUDE.md invariant #7**, which states that
   Labels use three namespaces. Human-merge lane, as ADR-0020 was.
 
@@ -105,7 +105,7 @@ nobody else; `state:` is set by **nobody at all**.
   recompute triggers on four separate events.
 
 - **`outdated` is pinned to ADR-0014's meaning** — below the dispatch minimum — which is what the
-  MCP wire already ships (`tools_execution.go`, asserted by `mcp_plan_test.go`). CONTEXT.md gains
+  MCP wire already ships (`tools_execution.go`, asserted by `mcp_plan_test.go`). GLOSSARY.md gains
   the entry; `docs/design/ui-advisory.md` uses the word for Policy-fingerprint drift and must be
   corrected in the same change.
 

@@ -35,7 +35,7 @@ const (
 	toolAuditReach  = "audit_reach"
 
 	// toolWatchEvents names the read RecordEventSubscription records (#539).
-	// "watch" rather than "stream_events": CONTEXT.md lists "event stream"
+	// "watch" rather than "stream_events": GLOSSARY.md lists "event stream"
 	// among the Event seam's rejected synonyms, and this name lands in the
 	// append-only trail forever — verb_noun, in this const block's own
 	// register, surface-neutral rather than screen-named, exactly like

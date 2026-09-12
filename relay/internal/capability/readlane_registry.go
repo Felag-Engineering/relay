@@ -103,7 +103,7 @@ const maxNodeIDBytes = 256
 //
 // They are a domain question, not a rendering one: a Policy fingerprint
 // exists precisely so an operator can confirm by string comparison that a
-// rollout landed everywhere (CONTEXT.md, ADR-0002). "How many Nodes report
+// rollout landed everywhere (GLOSSARY.md, ADR-0002). "How many Nodes report
 // this one" is that comparison, counted.
 type NodeDetail struct {
 	// Node is the registry record, as registry.Get returns it (a deep copy).

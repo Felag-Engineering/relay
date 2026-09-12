@@ -3,7 +3,7 @@
 // An Enrollment Token is the reusable, scoped, expiring, revocable credential a
 // relay-daemon presents to join the fleet. It authorizes enrollment only — it can
 // never run Operations. The token secret is stored as a SHA-256 hash and is never
-// logged. See CONTEXT.md ("Enrollment Token") and ADR-0006.
+// logged. See GLOSSARY.md ("Enrollment Token") and ADR-0006.
 package enroll
 
 import (

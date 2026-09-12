@@ -22,27 +22,74 @@ as a tool — while per-Node **Policy** restricts what may actually run. Defense
                                                                   ▼ execute Operation / Raw Exec
 ```
 
-## Why Relay
+## The two programs
+
+Relay is two programs, and everything else in the system is one of them or a thin adapter
+over one.
+
+The **Relay** is a central server, written in Go. It holds the registry of known Nodes,
+resolves which of them a request targets, authorizes the caller, caps how far a single
+action may reach, dispatches the work, and records what happened. It is also the private
+CA that mints each Node's identity at enrollment. It is the only thing that talks to the
+fleet, and the only thing an operator or an AI-agent talks to.
+
+The **relay-daemon** is a small daemon, written in Rust, installed on every managed
+server. It dials out to the Relay and holds one persistent connection open, so no managed
+server needs an inbound port. It receives Tasks, evaluates each against a Policy file that
+lives on its own disk and is owned by root, executes only what that Policy permits, and
+reports results. It is not an AI, does not reason, and never becomes either.
+
+Three surfaces reach the Relay: the MCP surface an AI-agent drives, the Control API that
+tooling calls, and the Admin Console a human uses. All three are adapters over one
+capability layer, so what may be done, who may do it, and how it is recorded are decided
+once rather than three times.
+
+## Philosophy
+
+Relay's purpose is to make a dangerous capability **bounded, attributed, previewable and
+survivable**, so that granting it is a rational decision rather than an act of faith.
+
+The phrasing matters. Relay does not try to avoid remote code execution — it *is* remote
+code execution, offered deliberately, and a design that pretended otherwise would be a
+worse one.
 
 Fleet tools like Ansible, Salt, and Chef were designed around a **trusted human
-operator** — the control plane faithfully amplifies whatever the operator says, and
-safety is procedure layered on top. Relay's founding assumption is the opposite: the
-operator may be wrong, compromised, or not human. Distrust of the operator is the
-architecture:
+operator**: the control plane faithfully amplifies whatever the operator says, and safety
+is procedure layered on top. That holds exactly as long as the operator is careful,
+honest, and human. Relay assumes none of those three.
 
-- **Typed, not shell.** The execution primitive is a fixed vocabulary of structured
-  Operations whose arguments cannot change what runs; arbitrary commands are a
-  conspicuous, regex-gated exception.
-- **The Node distrusts the Relay.** Every server enforces its own root-owned Policy
-  that nothing on the wire can widen — a fully compromised Relay or jailbroken AI-agent
-  still cannot exceed it.
-- **Every action is a bounded, attributed, previewable Job.** Blast-radius caps sized
-  by risk class, plan-before-apply, and a per-Account audit trail — guardrails the
-  caller cannot skip, because they live in the control plane, not in the caller's
-  goodwill.
+The answer here rests on one move: **the enforcement that matters lives on the machine
+being protected, not in the thing asking.** Every managed Node holds its own root-owned
+Policy that nothing on the wire can widen. A control that lives only in the control plane
+is advisory, because it evaporates the moment the control plane is owned. A control rooted
+on the Node does not.
 
-The pitch improves the more you distrust AI — which is precisely the right mood for
-giving one your fleet.
+Procedure is still kept — approval, step-up re-authentication, an emergency Freeze. What
+is rejected is procedure *standing alone*: every procedural control has a structural floor
+beneath it that holds when the person fails.
+
+That sets the design bar. The question is never "how hard is this to break into" but
+**"what is still true after it has been broken into."** A fully compromised Relay must
+still be unable to exceed what each Node already permits locally.
+
+The AI framing is not a separate concern. A jailbroken AI-agent is simply the most
+demanding instance of the general problem — untiring, fast, plausible, and wrong. A design
+that holds against it holds against a compromised human operator with stolen credentials,
+because the architecture never asked who was asking in the first place. Designing for the
+hostile agent is what makes the ordinary case safe.
+
+## Who Relay defends against
+
+The design must hold when each of these is true, individually or together:
+
+- The AI-agent is jailbroken or hallucinating, and is issuing instructions in earnest.
+- The Relay itself is fully compromised — an attacker holds the control plane.
+- A Node is compromised and is lying to the Relay about what it is.
+- The human operator is malicious or mistaken, and is using legitimate credentials.
+
+Each has a structural answer beneath whatever procedural one it also has. That is what the
+architecture invariants in [CLAUDE.md](CLAUDE.md) encode, and what
+[docs/security/threat-model.md](docs/security/threat-model.md) maps boundary by boundary.
 
 ## Core ideas
 
@@ -84,20 +131,32 @@ at process start; nothing sets or raises them via an API.
 /relay/        the Relay (Go): gRPC server, MCP server, Job engine, CA, registry, store
 /daemon/       the relay-daemon (Rust): connection, Policy engine, Operation executors
 /docs/adr/     architecture decision records
-CONTEXT.md     the domain glossary — read this before touching anything
-CLAUDE.md      instructions for AI agents working in this repo
-ROADMAP.md     versioned milestones toward v0.1.0-beta
+/docs/specs/   capability specifications — what each capability does today, every surface
+GLOSSARY.md    the domain glossary — read this before touching anything
+CLAUDE.md      instructions for AI agents working in this repo, and the invariants
+ROADMAP.md     deprecated; being retired
 ```
 
 ## Status
 
-Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical slice). See
-[ROADMAP.md](ROADMAP.md).
+Pre-release, and **not yet licensed for use** — publishing a `LICENSE` (source-available under
+the BSL) is a `v0.1.0-beta` deliverable and its parameters are still open.
+
+**`v0.1.0-beta`** — the first deployable vertical slice — is the next release. Because beta is
+specifically a *real-hardware* proof, several post-beta milestones were deliberately built ahead
+of it: the Template engine and shipped catalog, Accounts and access, the Control API, approval
+callout, and the MCP Tasks extension have all shipped. The Admin Console is in flight. The
+GitHub milestones are the authority on what is actually in progress.
 
 ## Documentation
 
-- **[CONTEXT.md](CONTEXT.md)** — the ubiquitous language. Every term here is canonical.
+- **[CLAUDE.md](CLAUDE.md)** — how to work in this repo, and the fourteen architecture invariants that constrain every change.
+- **[GLOSSARY.md](GLOSSARY.md)** — the ubiquitous language. Every term here is canonical.
+- **[docs/specs/](docs/specs/)** — capability specifications: what each capability does today, across MCP, the Control API, and the Admin Console.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
+- **[docs/security/threat-model.md](docs/security/threat-model.md)** — the trust boundaries, and which invariant defends each.
+- **[docs/api/](docs/api/)** — Control API reference and OpenAPI surface.
+- **[docs/testing/](docs/testing/)** — manual validation scripts, one per milestone.
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
 - **[docs/operations/relay-install.md](docs/operations/relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, flags/env, example `systemd` unit.
 - **[docs/operations/relay-daemon-install.md](docs/operations/relay-daemon-install.md)** — installing and running the relay-daemon on a Node: artifact, env config, Policy, the shipped unit.
@@ -108,4 +167,5 @@ Pre-release. Building toward **`v0.1.0-beta`** (the first deployable vertical sl
 - **[docs/operations/ca-disaster-recovery.md](docs/operations/ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
-- **[ROADMAP.md](ROADMAP.md)** — what we're building and in what order.
+- **[ROADMAP.md](ROADMAP.md)** — deprecated, and being retired. Historical milestones only;
+  GitHub milestones carry what is in flight.

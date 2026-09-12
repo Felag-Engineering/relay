@@ -447,7 +447,7 @@ func TestHandleRevokeToken_CascadeRecordsCarryPrincipalAndDerivedReason(t *testi
 	h := newTestHandler(d)
 
 	// The ASSERTED lane is exercised too, not just the verified one. The two are
-	// kept structurally apart (ADR-0027 decision 10, CONTEXT.md "Attribution"),
+	// kept structurally apart (ADR-0027 decision 10, GLOSSARY.md "Attribution"),
 	// and a cascade row that carried the verified lane while silently dropping
 	// the asserted one would be half-attributed in exactly the way that split
 	// exists to prevent. Nothing pinned it until the security review asked.

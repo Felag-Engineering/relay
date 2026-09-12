@@ -12,7 +12,7 @@ import (
 //
 // A fixed, recognizable prefix is a security feature, not branding: it is what
 // makes a leaked token greppable in a repository, a paste, or a CI log, and it
-// is what secret scanners key on. CONTEXT.md pins it (`glp_`).
+// is what secret scanners key on. GLOSSARY.md pins it (`glp_`).
 const TokenPrefix = "glp_"
 
 var (

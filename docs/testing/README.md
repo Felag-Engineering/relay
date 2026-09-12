@@ -61,7 +61,7 @@ ROADMAP promised — the same skepticism the product asks of its operators.
 
 ## Language and safety
 
-Scripts use the [CONTEXT.md](../../CONTEXT.md) ubiquitous language exactly (Relay,
+Scripts use the [GLOSSARY.md](../../GLOSSARY.md) ubiquitous language exactly (Relay,
 relay-daemon, Node, Operation, Raw Exec, Policy, Job, Task, Selector, Freeze, Plan, …).
 Steps that are destructive (revocation, wrong-CA probes) or that require real
 infrastructure or a published release are clearly marked so an operator can run the

@@ -138,7 +138,7 @@ Two properties fall out, and they are the whole point:
     records `requested_by` (**verified**), `on_behalf_of` (**asserted**), and
     `approved_by` (**verified**, with channel and plan-hash). The audit *schema* — not the
     renderer — keeps the lanes apart. A jailbroken agent can assert anything and forge
-    nothing; blurring the lanes is how an audit trail becomes fiction. See CONTEXT.md,
+    nothing; blurring the lanes is how an audit trail becomes fiction. See GLOSSARY.md,
     *Attribution*.
 
 11. **The approval request and every decision are first-class audit records**, not log
@@ -162,7 +162,7 @@ Two properties fall out, and they are the whole point:
 
 13. **Naming: an MCP task handle is not a Relay Task.** MCP's "task" is a client-polled
     handle for one long-running `tools/call`; a Relay **Task** is one Operation executing
-    on one Node. Always write "MCP task handle" in full. CONTEXT.md carries the
+    on one Node. Always write "MCP task handle" in full. GLOSSARY.md carries the
     disambiguation in this change.
 
 ### Informational: the Gleipnir-side rule

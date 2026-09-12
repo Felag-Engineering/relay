@@ -17,6 +17,17 @@ Behaviour, from the user's perspective. Not a file-by-file list.
 > `/proto`, say so here — CI runs those gates regardless, and the reviewer needs to know
 > the local run did not.
 
+## Capability spec
+
+- [ ] The governing spec in `docs/specs/` is still true of the code after this change
+- [ ] Or: no capability spec covers this area yet
+
+**Spec:** none applies / `docs/specs/<name>.md`
+
+> Capability specs are **human-authored** and the loop never edits one. A change that makes a
+> spec statement untrue stops and escalates — say which statement, below — so a human can
+> update the spec first.
+
 ## Security surface
 
 - [ ] Touches none of: `/proto`, Policy, execution, transport, mTLS, auth, blast caps, label authority

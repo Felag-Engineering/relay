@@ -6,13 +6,21 @@ driven through the `gh` CLI.
 
 ## Conventions
 
-- **`ROADMAP.md` is the planning spine, not the tracker.** Milestones and their acceptance
-  criteria live there and are human-owned. Issues decompose a milestone; they never
-  redefine one. Don't pull future milestones forward.
-- **Specs are files, not issues.** A spec lives at `docs/specs/<slug>.md` and is the canonical
-  record. Publish a tracking issue that links to it and assign that issue to the milestone —
-  the file holds the decisions, the issue is the work item. If a comment on the issue changes a
-  decision, fold it back into the file. See `docs/specs/README.md`.
+- **GitHub milestones are the planning spine.** They are human-owned, and they are the
+  authority on what is in flight. Issues decompose a milestone; they never redefine one. Don't
+  pull future milestones forward. `ROADMAP.md` is **deprecated and being retired** — read it
+  only for the acceptance criteria of milestones that have not yet migrated into a capability
+  specification, and never add to it.
+- **Capability specs are files; implementation specs are issues.** A *capability
+  specification* lives at `docs/specs/<capability>.md`, is durable, and is canonical for what
+  that capability does across every surface. An *implementation specification* **is** the
+  issue, and is disposable — it dies with its PR. The file holds behaviour; the issue holds
+  this one change. If a comment on the issue changes a decision, fold it back into the file.
+  See `docs/specs/README.md`.
+- **Promote before the issue closes.** A closed issue is not a record. Behaviour that is now
+  true → the capability spec; a hard-to-reverse, surprising, real-trade-off decision → an ADR;
+  a language shift → `GLOSSARY.md`; a change to an architecture invariant → `CLAUDE.md` plus an
+  ADR amendment, which is a conversation with a human.
 - **Tickets** are one issue each, published in dependency order so blocking edges can
   reference real issue numbers. Use GitHub's native sub-issue relationship where it fits;
   otherwise put a `Blocked by: #NNN` line in the body.
@@ -26,17 +34,20 @@ gh issue create --title "<title>" --body-file <path> --label <triage-label> [--m
 Apply the triage label from `triage-labels.md`. Set the milestone whenever the work belongs
 to one — an issue with no milestone is invisible to milestone-driving skills.
 
-**For a spec**, write the file first, then open a short tracking issue whose body links to it
-rather than duplicating it:
+**For a capability specification**, write the file first, then open a short tracking issue
+whose body links to it rather than duplicating it:
 
 ```
-# write docs/specs/<slug>.md from docs/specs/TEMPLATE.md, then:
-gh issue create --title "spec: <feature>" \
-  --body "Spec: [\`docs/specs/<slug>.md\`](docs/specs/<slug>.md) on \`<branch>\`" \
+# write docs/specs/<capability>.md from docs/specs/TEMPLATE.md, then:
+gh issue create --title "spec: <capability>" \
+  --body "Capability spec: [\`docs/specs/<capability>.md\`](docs/specs/<capability>.md) on \`<branch>\`" \
   --milestone "<milestone>"
 ```
 
 Two documents saying the same thing is how they drift. The link is the point.
+
+**For an implementation specification**, the issue body *is* the spec — write it there. Say
+which capability spec it changes, and what it will leave true when it merges.
 
 ## Decomposition: which skill
 
@@ -44,7 +55,7 @@ Both of these are **interactive skills run from your own install** — they are 
 this repo, because decomposition needs a human to approve the breakdown. Don't run both on the
 same work.
 
-- **`epic-decompose`** — a ROADMAP milestone whose shape is already understood. Milestone →
+- **`epic-decompose`** — a milestone whose shape is already understood. Milestone →
   self-contained, ~10-minute-reviewable issues. No spec needed.
 - **`to-tickets`** — one approved spec → tracer-bullet vertical slices with blocking edges.
   Use this when the work needed shaping, which is why a spec exists at all.

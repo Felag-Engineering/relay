@@ -7,7 +7,7 @@
 // The Relay contract: the single source of truth for the wire protocol
 // between the Relay and relay-daemons, and for the Operation vocabulary. Both the
 // Go Relay and the Rust relay-daemon generate their types from this file. See
-// ../../CONTEXT.md for the meaning of every term and ../../docs/adr/ for the why.
+// ../../GLOSSARY.md for the meaning of every term and ../../docs/adr/ for the why.
 //
 // This is a DRAFT spine for v0.0.1. Expect it to evolve as milestones land; it
 // captures the shapes implied by ADRs 0001-0013, not a frozen API.

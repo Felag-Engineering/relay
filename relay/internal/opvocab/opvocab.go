@@ -12,7 +12,7 @@
 // dispatch path.
 //
 // Raw Exec is deliberately NOT listed here: it is not an Operation
-// (ADR-0003, CONTEXT.md) and has no OperationDescriptor on the wire. It is
+// (ADR-0003, GLOSSARY.md) and has no OperationDescriptor on the wire. It is
 // always risk class mutate by definition (arbitrary commands are
 // unclassifiable) and surfaces through its own tool (#118), never this one.
 package opvocab

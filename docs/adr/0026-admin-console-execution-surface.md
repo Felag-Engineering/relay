@@ -153,3 +153,34 @@ click would counterfeit the strongest credential in the model. See "Consequences
   mutating routes. `docs/design/console-backend-coverage.md`'s sequencing holds: Accounts
   → Approval Callout → monitoring → admin → execution composer, so the execution composer
   is deliberately last, behind the step-up and approval machinery it depends on.
+
+## Amendment (2026-09-10): invariant 10 restated — the Console clause made conditional
+
+This ADR's decision is unchanged. What changed is how CLAUDE.md invariant 10 summarises it.
+
+The invariant read "The Console **does** execute (v0.7.0)" — present tense, for a surface this
+ADR authorised but which is not built. The composition root hardcodes execution off, no config
+key exists to turn it on, and `/console/run` renders a placeholder; #438 is the build. An agent
+reading the invariant as current fact would conclude the surface existed and needed only
+enabling, and a reviewer checking a Console diff against it would accept execution wiring no
+acceptance criterion here has been met for.
+
+The clause could not simply be deleted. It exists to correct ADR-0009's original no-execution
+scope, and removing it would reopen the assumption that the Console is read-only by design. It
+is now conditional — "where it executes, it does so plan-by-default…" — which states this ADR's
+constraints without asserting that the surface has shipped, and stays true when #438 lands.
+
+The same edit dropped the surface headcount. The invariant opened "One capability layer, three
+thin surfaces"; three was a snapshot rather than a decision — the capability layer's own
+documentation anticipates "any future CLI", and ADR-0030 discusses the CLI that was built and
+then cut. The invariant now states the property instead — ports and adapters, with the capability layer
+as the single implementation and each interface an adapter over it.
+
+The first draft of that restatement said the adapters "all expose the same controls", which was
+wrong in a direction worth recording: it reads as a parity mandate, and this ADR is itself the
+counter-example. Console execution is gated behind a root-owned flag precisely so that surface
+*can* offer less than the layer allows, and `approve_request` registers only when a decider is
+configured (ADR-0029). An adapter **narrows only** — it may offer less, and may never widen,
+reimplement, or decide. Which surface exposes what belongs in the capability specifications,
+not in the invariant. GLOSSARY.md's **Capability layer** entry carries the matching
+vocabulary.

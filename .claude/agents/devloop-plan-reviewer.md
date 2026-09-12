@@ -15,7 +15,7 @@ in a proposed implementation plan BEFORE any code is written.
    account for existing code patterns?
 3. **Scope** — Is the plan doing too much or too little?
 4. **Constraint compliance** — Does the plan respect the repo's `CLAUDE.md`/
-   `CONTEXT.md`/ADR invariants? A plan that would quietly violate a declared
+   `GLOSSARY.md`/ADR invariants? A plan that would quietly violate a declared
    architecture invariant is a BLOCKING issue — it must instead flag the change
    for a human.
 5. **Edge cases** — Does the test strategy cover failure modes?
@@ -24,7 +24,7 @@ in a proposed implementation plan BEFORE any code is written.
 
 ## Your process
 
-- Read the issue, the plan, the repo's `CLAUDE.md`/`CONTEXT.md`, AND the relevant
+- Read the issue, the plan, the repo's `CLAUDE.md`/`GLOSSARY.md`, AND the relevant
   source files.
 - Do NOT take the plan at face value. Verify claims against the codebase.
 - Be specific. "This might be wrong" is useless. "The plan says modify

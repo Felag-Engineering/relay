@@ -7,7 +7,7 @@ decisions across four ADRs.
 
 **Nothing here authorizes work.** Every item below touches at least one of the surfaces
 CLAUDE.md requires escalating — `proto`-adjacent contract, mTLS/auth/CA code, Policy
-distribution, `CONTEXT.md`, the `Makefile`, or CI. None of it goes through the dev-loop
+distribution, `GLOSSARY.md`, the `Makefile`, or CI. None of it goes through the dev-loop
 unreviewed regardless of sequencing.
 
 ## The decisions this rests on
@@ -176,7 +176,7 @@ fingerprint/trust-store instructions from ADR-0031. Fixes the already-stale clai
 `relay-install.md:112-116` that no packaged Relay unit exists — `relay/packaging/relay.service`
 landed in #362.
 
-### E11 · `CONTEXT.md` — **join string**
+### E11 · `GLOSSARY.md` — **join string**
 **Escalate: CLAUDE.md-flagged file.** Must record that it is *not* a synonym for
 Enrollment Token; the glossary already lists "join key" as a term to avoid, and the two
 entries would otherwise fight.
