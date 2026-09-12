@@ -131,7 +131,7 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | `tag:` parses but **matches nothing** — no storage on the Node record and no write path — so a `tag:` Selector silently returns an empty set instead of an error, **and the surfaces disagree about it**: the Console refuses a `tag:` filter with an error naming #430, while MCP advertises `tag:` in `list_nodes`' schema with no caveat, handing an AI-agent a false negative (#560). `relay:` labels are stamped at enrollment today; operator management of them (`admin` + step-up) is unbuilt. | #430, #347, #560 |
+| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; operator management of them (`admin` + step-up) is unbuilt. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 
 ### Writing or amending an invariant

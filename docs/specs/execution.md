@@ -44,7 +44,8 @@ One call, in this order. Each stage can only refuse; none can widen what a later
    the guardrail fails closed, at the cost of availability during a store blip.
 2. **Selector resolution.** The Selector is resolved against the registry into a concrete set
    of Nodes, across the four Label namespaces (invariant 7). `state:` predicates are evaluated
-   here, at resolution time, rather than stored.
+   here, at resolution time, rather than stored. The grammar, the namespaces and who may write
+   each are in `selectors-and-labels.md`.
 3. **Authorization.** The Principal is checked against the requested Action and Selector.
    **Caller-asserted attribution is stripped from the context first** — an authorization
    decision must never be able to read a value the caller supplied about itself.
@@ -336,6 +337,9 @@ sequential contract and the 10,000-Node read cap multiply.
 - **Engaging and releasing the Freeze** — `freeze.md`. This spec covers only the Freeze gate as
   a refusal on the dispatch path. Job cancellation is *in* scope here: it acts on a Job this
   capability created, and the engine owns it.
+- **Label namespaces, the Selector grammar, and `state:` derivation** —
+  `selectors-and-labels.md`. This spec consumes a resolved Node set; it does not define how one
+  is addressed.
 - **Querying Jobs, Tasks and the audit trail after the fact** — `audit-and-read-lane.md`.
 - **The Operation vocabulary itself** — `/proto` is the source of truth (invariant 8).
 - **Retry, scheduling, store-and-forward** — deliberately absent; re-targeting is the caller's
