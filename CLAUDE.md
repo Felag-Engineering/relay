@@ -205,11 +205,11 @@ redefines one; if a task appears to require one, stop and flag it.
 /docs/adr/       architecture decision records — the *why*.
 /docs/agents/    per-repo configuration agent skills read (tracker, labels, domain rules).
 /docs/api/       Control API reference and OpenAPI surface.
-/docs/design/    design docs for work not yet an ADR (console, enrollment, open decisions).
+/docs/design/    console/ is the Console's live per-screen specification, cited from source;
+                 the rest is pre-ADR design for work not yet decided.
 /docs/operations/  operator-facing runbooks (version stamping, packaging).
 /docs/security/  threat model — maps all fourteen invariants to the boundaries they defend.
 /docs/testing/   manual validation scripts, one per milestone (`validate-*.md`).
-/docs/reviews/   recorded review passes.
 /docs/specs/     capability specifications — what each capability does today, every surface.
 /docs/deferred.md   work agreed in principle, not yet specified; ADR at pickup.
 /docs/dev-fleet.md  the local Docker fleet: how to run Relay + real daemons.

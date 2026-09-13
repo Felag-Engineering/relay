@@ -8,7 +8,7 @@ import (
 )
 
 // Asserted-attribution request headers (#300,
-// docs/design/approval-and-attribution.md).
+// ADR-0027 decision 10; docs/specs/approval.md).
 //
 // Headers rather than tool arguments or a request-body field, for three
 // reasons. They are uniform across both surfaces — MCP rides Streamable HTTP,
