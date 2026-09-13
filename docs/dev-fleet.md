@@ -351,7 +351,7 @@ The difference between `call` and `call-tasks` is the whole shim: the same gated
 returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle
 to a Tasks-capable one. Both mint the same `taskId`.
 
-`docs/testing/validate-v0.5.1.md` is the script these commands discharge.
+These commands exercise the MCP Tasks extension end to end; `docs/specs/` carries what each capability is expected to do.
 
 ## Survive `down` / `up`
 

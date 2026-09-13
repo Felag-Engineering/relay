@@ -1,9 +1,14 @@
-# Manual validation — `v0.1.0-beta` (Vertical Slice)
+# Real-hardware validation — `v0.1.0-beta` (Vertical Slice)
 
-Delta script on top of [validate-v0.0.9-current.md](validate-v0.0.9-current.md) (the
-convention: [README.md](README.md)). **Prerequisite: the baseline script has passed**,
-including its step 20 (artifact verify-then-install), which requires the published
-`v0.1.0-beta` release.
+The runbook for proving the vertical slice **on real machines**. It is the one validation
+this project cannot automate, which is why it survived the retirement of the per-milestone
+manual scripts: everything else those scripts covered is discharged by `make verify`,
+`make test-integration`, `make test-crossbinary` and the dev fleet, and by the proof tables in
+[`docs/specs/`](../specs/). Real service managers, real package managers, real file ownership
+and real network paths are not.
+
+**Prerequisites:** the automated gates pass on the commit under test, the dev fleet comes up
+(`docs/dev-fleet.md`), and a `v0.1.0-beta` release is published.
 
 This milestone's acceptance is deliberately about **real machines**: *"Stand up a
 Relay, enroll ≥3 Nodes via a reusable token, drive a Selector-targeted Operation from
@@ -43,8 +48,8 @@ sign-off table.
 ## 1. Install the Relay from published artifacts (Relay host)
 
 On the Relay host, follow the verify-then-install sequence of
-[release-artifacts.md](../operations/release-artifacts.md) for the **relay** binary
-(glibc build), exactly as the baseline's step 20 did for the daemon:
+[release-artifacts.md](release-artifacts.md) for the **relay** binary (glibc build) — the
+same verify-then-install sequence [relay-install.md](relay-install.md) documents:
 
 ```sh
 VERSION="0.1.0-beta"
@@ -94,13 +99,14 @@ following it); ADR-0002/0011.
 
 ## 3. Bulk enrollment via config management (≥3 Nodes)
 
-Mint **one** reusable, scoped Enrollment Token over `/api/v1` (baseline step 4 —
-`relay:`-scoped, TTL-bounded; e.g. `{"scope":["relay:env=beta","relay:fleet=metal"],
+Mint **one** reusable, scoped Enrollment Token over `/api/v1` (see
+[enrollment.md](enrollment.md) — `relay:`-scoped, TTL-bounded; e.g. `{"scope":["relay:env=beta","relay:fleet=metal"],
 "ttl_seconds":86400,"max_uses":0}`). Then, following the documented bulk-enrollment
 workflow, have config management:
 
-1. verify-then-install the **daemon** artifact on every Node (baseline step 20
-   sequence, musl build, digest checked before install);
+1. verify-then-install the **daemon** artifact on every Node
+   ([relay-daemon-install.md](relay-daemon-install.md), musl build, digest checked before
+   install);
 2. place the Relay's **public** CA cert and the daemon's environment
    (`RELAY_ADDR`, `RELAY_ENROLLMENT_TOKEN`, `RELAY_CA_BUNDLE_PATH`,
    `RELAY_STATE_DIR`, `RELAY_POLICY_PATH`, `RELAY_NODE_LABELS` — per-Node values, e.g.
@@ -136,8 +142,10 @@ the client, in order:
 7. one deliberate Policy denial (e.g. `service.restart` of a non-allowed unit) —
    `denied_by_policy` with the rule, per Node.
 
-**Expect:** per-Node results/verdicts consistent with the baseline script's semantics,
-now across real machines and a real client. This step is also the vocabulary-legibility
+**Expect:** per-Node results and verdicts matching what
+[`docs/specs/execution.md`](../specs/execution.md) and
+[`docs/specs/plan-mode.md`](../specs/plan-mode.md) describe, now across real machines and a
+real client. This step is also the vocabulary-legibility
 spot check (ADR-0001/0003): the client should be able to choose Operations and
 arguments from the tool descriptions alone, without trial-and-error.
 
@@ -146,8 +154,7 @@ ADR-0003.
 
 ## 5. Audit read-back
 
-As baseline step 16, on the Relay host: the `audit decision` log lines for everything
-step 4 did, attributed to the control-plane principal; and (marked store-read — still
+On the Relay host: the `audit decision` log lines for everything step 4 did, attributed to the control-plane principal; and (marked store-read — still
 no dedicated audit read surface) the durable rows in the Relay's store, including the
 per-Node dispatch rows across all ≥3 Nodes.
 
@@ -206,7 +213,7 @@ the LICENSE deliverable.
 | Relay host / Node hostnames (≥3) | |
 | Config-management repo + commit | |
 | MCP client used | |
-| Baseline script (validate-v0.0.9-current.md) passed on | |
+| Automated gates green on commit | |
 | Steps passed | |
 | Steps skipped (and why) | |
 | Docs-followability run by (the "stranger") | |

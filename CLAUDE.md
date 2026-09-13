@@ -106,7 +106,7 @@ it needs an ADR, not a quiet workaround.
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
 the boundaries they defend; ADR-0020, ADR-0026, and ADR-0034 each record amending a specific
-numbered invariant; GLOSSARY.md, the `docs/testing/validate-*.md` suites, and
+numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
 several Go source comments cite them by number. Amend an invariant in place and record the
 amendment in its ADR. **Never renumber or drop one.**
 
@@ -209,7 +209,6 @@ redefines one; if a task appears to require one, stop and flag it.
                  the rest is pre-ADR design for work not yet decided.
 /docs/operations/  operator-facing runbooks (version stamping, packaging).
 /docs/security/  threat model — maps all fourteen invariants to the boundaries they defend.
-/docs/testing/   manual validation scripts, one per milestone (`validate-*.md`).
 /docs/specs/     capability specifications — what each capability does today, every surface.
 /docs/deferred.md   work agreed in principle, not yet specified; ADR at pickup.
 /docs/dev-fleet.md  the local Docker fleet: how to run Relay + real daemons.
