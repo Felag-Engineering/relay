@@ -205,7 +205,7 @@ want), and it can never collide with a Policy fingerprint.
 Dispatching a template to a Node that has not loaded it reports
 `unsupported` — **not** `failure`, and **not** `denied_by_policy`. Nothing
 executed and the Node's Policy was never consulted: it has no such Operation to
-decide about. Plan mode reports the same conclusion for the same Node
+decide about. A Policy preflight reports the same conclusion for the same Node
 (`verdict: "unsupported"`), so a Plan never promises a run that a dispatch will
 refuse.
 

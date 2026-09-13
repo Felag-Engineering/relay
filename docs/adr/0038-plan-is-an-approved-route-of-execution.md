@@ -65,7 +65,14 @@ spending limit; a Plan is an itemised invoice.
 
   The declared step index is an optimistic-concurrency check, not redundancy: a retried advance
   arriving after the cursor has moved is refused rather than re-running a step. That is how
-  invariant 4's at-most-once extends from Tasks to steps.
+  invariant 4's at-most-once extends from Tasks to steps — **provided the compare-and-advance is
+  transactional.** `approval.md` already states the rule this depends on: *"the bound is enforced
+  inside the claiming transaction, or it is not a bound."* The cursor must move to an in-flight
+  marker **before** the step dispatches, in one transaction with the step's Job creation,
+  mirroring the Task-level mark-dispatched-before-dispatch precedent. Without that, two advances
+  at the same still-current index both pass the check and both dispatch — and Task dedup does not
+  save it, because each advance mints a new Job with new Task IDs, so the daemon sees two
+  legitimately distinct Tasks.
 
 - **The AI-agent is the default driver; the advance path is the only execution path.** Driving
   belongs to the agent because the judgement that matters between steps — does the fleet still
@@ -73,22 +80,43 @@ spending limit; a Plan is an itemised invoice.
   be added later for unattended routes; it would call the same advance path, and gains no
   privilege by being internal.
 
-- **What runs is frozen forever; who it runs on is elastic within an approved ceiling.** The Plan
-  hash binds the route — the ordered steps, their Operations, their arguments, their normalised
-  Selectors, and the failure semantics. It does **not** bind a resolved Node set for every step,
-  because an agent-driven Plan spans real time and a pinned set goes stale: a Node that became
-  affected at step 2 would be silently excluded from step 5, which is precisely backwards for
-  remediation. Each step therefore re-resolves its Selector at advance time against a **fan-out
-  ceiling shown to and approved by the human**, and drift past the ceiling re-parks the Plan for
-  re-approval rather than proceeding.
+- **What runs and who it runs on are both frozen; the binding is by identity, never by count.**
+  The Plan hash binds the route — the ordered steps, their Operations, their arguments, their
+  normalised Selectors, the failure semantics — **and the resolved Node set the approver was
+  shown**. Every advance re-resolves, and **any Node not in the approved set re-parks the Plan
+  for re-approval.** There is no tolerance and no ceiling.
 
-  Today's single gated dispatch is the degenerate case of this rule — a one-step Plan whose
-  ceiling is the exact resolved count, i.e. zero tolerance — so ADR-0027's existing behaviour
-  falls out rather than being special-cased.
+  An earlier draft of this decision bound a fan-out *ceiling* instead, on the reasoning that an
+  agent-driven route spans real time and a pinned set goes stale — a Node that became affected at
+  step 2 would be silently excluded from step 5, which is backwards for remediation. That
+  reasoning walks the exclusion direction only. The inclusion direction is an attack: an approver
+  sees `{A,B,C}` under a ceiling of 10, and by step 5 the set is `{A,B,C,D}` — or `{D,E,F}`
+  entirely — with every step still dispatching under an approval given for different hosts. A
+  ceiling binds a number; it binds no identity. And invariant 7 is explicit that a compromised
+  Node **can forge its own `node:` labels**, so under a ceiling an attacker owning one Node could
+  elect itself into a human-approved route by forging the label the Plan's Selector matches.
+
+  Identity binding degrades that attack from *election into an approved route* to *causing a
+  re-park*, which is a denial of convenience and nothing more. It also keeps the property the
+  approval domain's plan hash already enforces and documents in its own source comment, so this
+  is the existing control extended to routes rather than a new and weaker one.
+
+  **Shrinkage is not drift.** A Node that has left the approved set — offline, or its labels
+  changed — is dropped from that step and recorded, never re-parked: a subset of what the human
+  approved is within what the human approved. The asymmetry runs in the safe direction, the same
+  way a Scope's omitted field does in ADR-0027. Additions re-park; removals proceed and are
+  reported.
+
+  Today's single gated dispatch is the one-step case of exactly this rule, so ADR-0027's existing
+  behaviour falls out rather than being special-cased.
 
 - **A Plan's approval requirement is derived from its strictest step, never declared.** The Gate
-  rules are evaluated against every step; the strictest requirement any step triggers governs the
-  whole Plan. If no step is gated, the Plan requires no approval and is not a way to manufacture
+  rules are evaluated against every step **at the approved resolved set**, never at a smaller
+  proposal-time count; the strictest requirement any step triggers governs the whole Plan. Naming
+  the fan-out matters: a route priced below the fan-out it is permitted to reach would be the
+  "what a route costs to approve is never something its requester gets to say" rule failing by
+  omission. Identity binding makes this exact rather than approximate — the approved set *is* the
+  fan-out, for every step, for the life of the Plan. If no step is gated, the Plan requires no approval and is not a way to manufacture
   one. This mirrors how an Approval grant's cost is derived at its Scope's widest admissible
   dispatch, and for the same reason: what a route costs to approve must never be something its
   requester gets to say.
@@ -186,12 +214,28 @@ spending limit; a Plan is an itemised invoice.
 
 ## Consequences
 
-- **No invariant is amended.** Invariant 1 is addressed above and holds unchanged; invariant 4 is
+- **No invariant is amended in substance — but two are amended in wording, and that is not the
+  same as nothing to do.** Invariant 1 is addressed above and holds unchanged; invariant 4 is
   extended from Tasks to steps by the cursor rather than relaxed; invariant 5's cap stays
   per-dispatch and is checked at every step; invariant 10 puts the Plan in the capability layer
-  with every surface an adapter over it. This ADR is therefore cheaper to land than its scope
-  suggests — but `docs/security/threat-model.md` still needs the new object added to the
-  boundaries it maps, which is the update CLAUDE.md warns goes silently wrong.
+  with every surface an adapter over it.
+
+  However, **invariant 10 says "plan-by-default" and invariant 12 says "plan mode"**, and both
+  spellings now mean the route rather than the preview. Those are terminology amendments to
+  `CLAUDE.md`, which is a conversation with a human and never a quiet edit — they are named here
+  so the work is visible rather than left to rot. Until they land, `docs/security/threat-model.md`
+  restates invariant 12 in the *new* wording while the invariant itself carries the old, so
+  consumer and source differ verbatim: exactly the drift CLAUDE.md warns about, and a reason to
+  land the amendment rather than leave it.
+
+- **This amends ADR-0013, which nobody noticed.** ADR-0013 said "**Plans (ADR-0011) still work
+  while frozen**" — human-signed-off, and the authority this ADR's own Freeze argument leans on.
+  Reassigning the word inverted it into a Freeze exemption for approved routes without anyone
+  editing the sentence. Amended in place; `docs/specs/freeze.md` was rewritten in the same change
+  to match, which until the amendment landed had the spec contradicting its governing ADR — and
+  CLAUDE.md's conflict table presumes the *spec* is the defect, so a reader resolving it by the
+  rules would have reinstated the exemption. The lesson generalises: **a rename's blast radius
+  includes every sentence that merely uses the word, and the ADR tier is where it hurts most.**
 
 - **Amends ADR-0011** — name and framing only; its four decisions are re-affirmed verbatim above.
   Its "terraform plan / Ansible check-mode" sentence is the origin of the collision and is
@@ -219,15 +263,35 @@ spending limit; a Plan is an itemised invoice.
   a value rather than re-specifying targeting. The aggregate-consent question in the last
   consequence below must be answered **before** the ceiling rises, not after.
 
+- **Four ADRs and the Console's UI language still carry the old spelling, and are named here
+  rather than swept.** ADR-0009 (`:13`), ADR-0026 (`:63`, `:134`, `:170`) and ADR-0027 (`:234`)
+  all say "plan-by-default" or "render the Plan", meaning the preview. None of them inverts the
+  way ADR-0013 did — they read as stale rather than dangerous — but the ADR tier carries human
+  sign-off by construction, so each is an amendment in front of a person and never a quiet edit.
+  Separately, `docs/design/console/` and `docs/design/ui-advisory.md` carry roughly twenty-five
+  uses including a literal button label (`"Plan" — not "Run"`). That one is not a sweep at all:
+  it is where the two meanings **collide on screen**, since the Console will render preflight
+  results *and* approved routes in the same queue, and it is user-facing copy. It wants a product
+  decision and its own issue.
+
+- **The code rename is a hard prerequisite, not a follow-up of convenience.** The capability
+  layer already defines `Service.Plan` and `PlanResult` for the *old* preview, and the audit kind
+  `AuditKindPlan` is spoken for. The first line of code for the route capability cannot be written
+  until those are renamed to their Policy-preflight spellings, so the rename PR blocks the whole
+  milestone and any issue decomposition must sequence it first.
+
 - **One breaking change on the control-plane surface**: the `plan` option becomes `preflight` on
   `run_operation`, `raw_exec`, `POST /api/v1/operations` and `POST /api/v1/raw-exec`. The
   `plan_hash` field on the approval surface is **unchanged and keeps its meaning**, which is the
   clearest evidence the word was reassigned in the right direction. Roughly 360 of the Go `Plan`
   mentions are `plan_hash`/`PlanHash` and survive untouched.
 
-- **New storage and a new lifecycle.** A Plan is durable: `proposed → pending-approval → approved
-  → executing → completed | abandoned | expired | revoked`, retained after execution as a record.
-  Per ADR-0025 the record holds steps, decisions and outcomes — never read output.
+- **New storage and a new lifecycle.** A Plan is durable. `plan.md` is the spec of record for the
+  states and this ADR does not restate them: an ungated Plan is created `approved` with its cursor
+  at 0, a gated one starts `pending-approval`, and every terminal state is terminal — none is
+  resumable. Retained after it ends; per ADR-0025 the record holds steps, decisions and outcomes,
+  **never read output**. The lifecycle is security-relevant rather than bookkeeping, because it is
+  what decides whether an advance is permitted at all.
 
 - **A half-executed Plan is a new operational state** that monitoring, the Console and the audit
   trail must all be able to show. A route stopped at step 3 is neither a success nor a failure, and

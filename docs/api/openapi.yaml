@@ -60,7 +60,7 @@ tags:
   - name: Execution
     description: |
       Run Operations and Raw Exec against a Selector's matched Nodes, or preview
-      the outcome with plan mode. Every route here goes through the shared
+      the outcome with a Policy preflight. Every route here goes through the shared
       capability layer.
   - name: Jobs
     description: Re-read a Job's per-Node results, or cancel one in flight (ADR-0013).
@@ -654,8 +654,8 @@ paths:
       summary: Engage the Relay-wide Freeze
       description: |
         Halts **all** new dispatch, every risk class, regardless of who asks
-        (ADR-0013). Plan mode still answers while frozen, so an operator can
-        keep investigating. Deliberately cheap and reason-free: engaging the
+        (ADR-0013). A Policy preflight still answers while frozen, so an operator
+        can keep investigating. Deliberately cheap and reason-free: engaging the
         emergency stop must never be the slower path.
 
         Persisted across Relay restarts.
@@ -983,7 +983,8 @@ components:
     Frozen:
       description: |
         The Relay-wide Freeze is engaged, so all new dispatch is refused
-        (ADR-0013). Plan mode still answers while frozen.
+        (ADR-0013). A Policy preflight still answers while frozen; an approved
+        Plan does not advance.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }

@@ -87,7 +87,7 @@ Deliberate properties (ADR-0014):
   the *connection* instead would make stale daemons invisible mid-upgrade; the
   registry is the upgrade dashboard.
 - **Refusals are per-Task outcomes** (`version_refused`), so a Job against a
-  mixed fleet reports honestly per Node rather than failing wholesale. Plan mode
+  mixed fleet reports honestly per Node rather than failing wholesale. A Policy preflight
   surfaces the same as an `outdated: true` hint per verdict.
 - The version compared is the daemon's build-stamped `--version`, which the
   release workflow guarantees equals the artifact filename and git tag

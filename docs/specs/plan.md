@@ -24,17 +24,18 @@ because it has no room inside it.
 
 ## The first cut, and why each cut is safe
 
-This specification describes **one Node at a time, linear, agent-driven**. Every reduction below
-is a constant or a refusal, never a different design — widening each one later changes a value
-or deletes a check, and re-specifies nothing.
+This specification describes **one Node at a time, linear, agent-driven**. Each reduction below
+says what widening it actually costs, because they are not all the same size: two are a bound
+raised or a check deleted, and two need their own design work. **A reader who only skims this
+table should not come away believing the whole cut is a config change.**
 
-| Reduced to | Widened later by | Why the cut is safe rather than merely small |
+| Reduced to | Cost to widen | Why the cut is safe rather than merely small |
 |---|---|---|
-| A fan-out ceiling of **1** | Raising the ceiling | The ceiling mechanism ADR-0038 decides is present and enforced; it is pinned at 1. At 1 the resolved Node set is trivially pinnable, so the hardest open problem in the design — a fan-out that moves between approval and step 5 — does not arise yet. |
-| **One Selector for the whole Plan**, not one per step | Per-step Selectors | The real case is "do these six things to this host", which one Selector expresses exactly, and which still expresses "do these six things to these forty hosts" when the ceiling rises. Per-step Selectors are cross-Node orchestration — a larger capability, not a wider one. |
-| **Linear**, no branches | See *Out of scope* | An agent that can halt, read more, and decline to continue already has most of what a branch offers. A branch buys latency, not capability. |
-| **Any failed step is terminal** | Per-step failure policy | If a step failed, the world is not what the approver assumed it was. Halting is the answer that cannot be wrong. |
-| **Agent-driven only** | A Relay-internal driver | Both call the same advance path (ADR-0038); an internal driver is a caller, not a second execution path. |
+| Fan-out bounded to **one Node** | **Design work.** ADR-0038 binds the approved Node set by identity and re-parks on any addition. At one Node that check is node-equality; at N it is set-membership over a set that may legitimately shrink. A predicate to generalise, not a number to raise. | The binding is the same property — the approver's set is the set — so widening changes how the check is written, never what it guarantees. At one Node the check is trivially exact. |
+| **One Selector for the whole Plan**, not one per step | **Its own ADR.** Per-step Selectors are cross-Node orchestration — a larger capability, not a wider one. | The real case is "do these six things to this host", which one Selector expresses exactly, and which still expresses "to these forty hosts" when the bound rises. Cross-Node sequencing is a different capability that this one does not block. |
+| **Linear**, no branches | **Its own design pass**, under the constraints in *Out of scope*. | An agent that can halt, read more, and decline to continue already has most of what a branch offers. A branch buys latency, not capability. |
+| **Any failed step is terminal** | A declared per-step failure policy — additive, and part of the hash. | If a step failed, the world is not what the approver assumed it was. Halting is the answer that cannot be wrong. |
+| **Agent-driven only** | **A new caller.** Both drive through the same advance path (ADR-0038). | An internal driver is a caller, not a second execution path, and gains no privilege by being internal. |
 | **No new approval surface** | — | A Plan parks through the existing Approval, exactly as an Approval grant does. |
 
 ## Surfaces
@@ -68,10 +69,16 @@ At proposal the Selector is resolved. If it matches anything other than **exactl
 Node**, the Plan is refused — with the matched count, so the refusal teaches. That refusal *is*
 the fan-out ceiling of ADR-0038, set to 1.
 
-At 1, the resolved set is pinned: the Plan hash binds the route **and** the single resolved Node.
-Every advance re-resolves and must yield that same Node. A Selector that now resolves elsewhere,
-to more than one Node, or to none, **re-parks the Plan for re-approval** rather than dispatching
-— which is ADR-0038's drift rule at a ceiling of 1.
+The Plan hash binds the route **and** the resolved Node — by identity, never by count (ADR-0038).
+Every advance re-resolves and must yield that same Node. A Selector that now resolves to a
+*different* Node, or to more than one, **re-parks the Plan for re-approval** rather than
+dispatching. Resolving to none is shrinkage rather than drift: there is nothing left to run on,
+so the step dispatches to nobody and is recorded, exactly as a fan-out that lost every Node would
+be.
+
+Binding identity rather than a count is what stops a compromised Node **forging its own `node:`
+labels** (invariant 7) to elect itself into a route a human approved for a different host. Under
+identity binding that attack can only cause a re-park.
 
 ### Relay holds the route; the agent holds only a cursor
 
@@ -91,6 +98,15 @@ advance call to tamper with, **because the call contains no description of the w
 The declared step index is not redundancy. It is an optimistic-concurrency check: a retried
 advance arriving after the cursor has moved is refused rather than re-running a step, which is
 how invariant 4's at-most-once reaches from Tasks up to steps.
+
+**The compare-and-advance is transactional, or it is not a bound.** `approval.md` states that
+rule for a Grant's use limit and it applies here identically. The cursor moves to an in-flight
+marker **before** the step dispatches, in one transaction with the step's Job creation — the same
+shape as the Task-level mark-dispatched-before-dispatch precedent in `execution.md`. Without it,
+two advances carrying the *same, still-current* index both pass the check and both dispatch,
+which an ordinary client retry on a timeout is enough to produce. Task-level dedup does not cover
+this: each advance mints a new Job with new Task IDs, so the daemon sees two legitimately
+distinct Tasks and runs both.
 
 ### What the gate costs is derived from the strictest step
 
@@ -118,6 +134,20 @@ walls, and every one of them is mandatory:
 - **The Freeze bites every advance.** An advance is new dispatch, so ADR-0013 applies with no new
   rule: a Freeze at step 3 stops step 4 and leaves step 3's in-flight Task running. A Plan is
   never a way around a Freeze because it was approved earlier.
+
+### An Approval grant may not release a Plan
+
+A Plan is gated by its derived requirement, and `approval.md` says a Grant is consulted **only
+after** the gate has decided approval is required — so without a rule here, a Grant would be
+consultable. It is not: **a Grant covers dispatches, never routes.**
+
+The reason is the difference the two objects exist to express. A Grant is *described* — an
+Account, a risk class, an Operation allow-list, a fan-out ceiling — and its walls are its entire
+security argument. A Plan is *enumerated*, and needs no walls because it has no room inside it.
+Letting a described Scope release an enumerated route inverts both: one Grant use would release N
+dispatches, amplifying the use limit that is the Grant's central bound, and **no human would ever
+see the route** — which is the one control the residual in `docs/security/threat-model.md` (R14)
+depends on. A Plan parks, or it does not run.
 
 ### A Plan composes nothing, and the Node never learns one exists
 
@@ -170,15 +200,16 @@ per ADR-0025 the record holds steps, decisions and outcomes — **never read out
 |---|---|
 | Empty plan | A Plan with no steps |
 | Too many steps | Over the configured per-Plan step bound (Relay configuration, invariant 11) |
-| Fan-out over ceiling | The Selector matched more than one Node — reported with the count |
+| Fan-out over bound | The Selector matched more than one Node — reported with the count |
 | No Node matched | The Selector matched nothing, or its only match is not connected |
 | Unauthorized to propose | Below the role floor of the strictest step |
 | Not approved | An advance against a Plan still pending, denied, or terminal |
 | Cursor mismatch | The declared step index is not the cursor's — a replay, a reorder, or a skip |
+| Step already in flight | An advance at the current index while that step is mid-dispatch — refused by the claim transaction, never queued |
 | Not the proposer | An Account other than the Plan's advancing it |
 | Expired / revoked | The window closed, or a human closed it |
 | Frozen | An advance while the Relay is frozen (ADR-0013) |
-| Node drifted | The Selector no longer resolves to the approved Node — the Plan re-parks |
+| Node drifted | The Selector resolves to a *different* Node, or to more than one — the Plan re-parks. Resolving to none is shrinkage, not drift: recorded, not refused |
 
 A **step's own** refusal — a Policy deny, an outdated daemon, a cap rejection — is not in this
 table. It is the step's Job refusing, reported as that Job's outcome, and it halts the Plan.
@@ -234,6 +265,11 @@ worse than naming none.
 - The rationale is stored verbatim in the asserted lane and never merged into the step list
 - Each step's Job is independently Policy-evaluated, capped, and audited under the Plan's ID
 - A Plan record survives completion and holds no read output
+- **Two concurrent advances at the same still-current index dispatch the step exactly once** —
+  the claim transaction, not the index comparison, is what makes this true
+- **A Selector resolving to a different Node re-parks rather than dispatching**, and resolving to
+  none is recorded as shrinkage rather than refused
+- An Approval grant does not release a Plan, at any granularity
 
 ### Performance
 
@@ -278,9 +314,15 @@ up as a decision rather than rediscovered as a gap.
 ## Open questions
 
 - **One decision now releases N dispatches, and nothing bounds N's blast in aggregate.**
-  Invariant 5's cap is per-dispatch and stays so. At a ceiling of 1 the step bound is an adequate
-  aggregate control, because a Plan can touch at most one Node. It stops being adequate the moment
-  the ceiling rises, and that is the question to answer **before** multi-Node lands, not after.
+  Invariant 5's cap is per-dispatch and stays so. At one Node the step bound is an adequate
+  aggregate control, because a Plan can touch at most one host. It stops being adequate the moment
+  the bound rises, and that is the question to answer **before** multi-Node lands, not after.
+- **An advance re-authenticates nothing.** The only per-advance identity check is that the caller
+  is the proposer, which a stolen proposer credential satisfies by definition — so a held-open
+  route is a standing capability for whoever holds that credential until the window closes.
+  Compare ADR-0026's Console apply, which demands step-up re-authentication on *every* mutate.
+  A route is not a browser session and the analogy is imperfect, but "approved once, advanced
+  many times, re-authenticated never" deserves a deliberate answer rather than an omission.
 - **How short should a Plan's window be?** ADR-0027's 24-hour ceiling is the outer bound, but a
   route held open is standing authority and the honest default is probably closer to an hour.
   Unlike a grant, a Plan has a natural clock: the incident that motivated it.
@@ -289,8 +331,19 @@ up as a decision rather than rediscovered as a gap.
   convenience that reintroduces the question of what the agent is allowed to decide.
 - **What does an approver see for step 4 that reads a file step 3 created?** The preflight verdict
   is honest but unhelpful — `unsupported` or a Policy deny may simply reflect a world that has not
-  happened yet. Nothing here is wrong; the presentation may be.
+  happened yet. This matters more than it first appears: diagnose-then-remediate is the motivating
+  case, later steps routinely depend on earlier ones, and so the verdicts are least informative
+  for exactly the steps an approver most wants assurance about. The capability rests on the human
+  being able to judge the route, and a screen of misleading verdicts pushes that judgement onto
+  the step list and the agent-authored rationale — the one field a compromised agent controls.
+  Nothing here is *wrong*; the presentation may be, and it is worth solving before the first
+  route is approved in anger.
 
 ## History
 
+- `2026-09-12` — Revised after adversarial plan and security reviews. The fan-out ceiling became
+  **identity binding** (a count binds nothing; a compromised Node could forge `node:` labels to
+  elect itself into an approved route), the cursor's compare-and-advance was made explicitly
+  transactional, an Approval grant was ruled out as a release path, and the first-cut table stopped
+  claiming every reduction widens for free.
 - `2026-09-12` — First written, from ADR-0038, specifying the one-Node cut. Nothing built.

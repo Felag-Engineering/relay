@@ -25,7 +25,7 @@ dispatch type and its constructor are unexported, so a parallel path fails to co
 |---|---|
 | **MCP** | The execution meta-tools: `run_operation` (typed Operation), `raw_exec` (arbitrary argv), `get_job`, `cancel_job` |
 | **Control API** | `POST /api/v1/operations`, `POST /api/v1/raw-exec`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/{id}/cancel` |
-| **Admin Console** | The execution composer — plan-by-default, step-up re-auth on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026). **Designed, not built** (v0.7.0). |
+| **Admin Console** | The execution composer — preflight-by-default, step-up re-auth on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026). **Designed, not built** (v0.7.0). |
 
 Raw Exec is deliberately *not* a separate path. It is this same pipeline carrying an argv
 instead of a typed Operation, always at the mutate risk class. Giving it its own route would be

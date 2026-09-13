@@ -374,7 +374,7 @@ $ docker compose down -v
 
 ## Where to read the audit trail
 
-Every dispatch, refusal, and plan is audited. Each such decision emits exactly
+Every dispatch, refusal, and Policy preflight is audited. Each such decision emits exactly
 one structured log line — carrying the principal, selector, operation/action
 kind, outcome counts, and job ID — to the Relay's logs:
 

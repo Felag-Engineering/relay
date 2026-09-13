@@ -18,6 +18,15 @@ assume a human can always regain control.
 - **Freeze halts all new Task dispatch, every risk class.** "I don't trust what's
   driving this" applies to reads (exfiltration) as much as mutations. **Plans
   (ADR-0011) still work while frozen** — observation is wanted during an incident.
+  **Amended by [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) (2026-09-12):
+  read that clause as "Policy preflights (ADR-0011) still work while frozen; every
+  advance of a Plan does not."** ADR-0038 reassigned the word *Plan* from the
+  no-execution preview — now **Policy preflight** — to an approved route of execution,
+  which inverted this sentence without anyone editing it: a Plan is now a thing that
+  *dispatches*, and an advance of one is new Task dispatch, so it meets this clause's
+  halt rather than its exemption. The exemption was always about observation, and it
+  stops where observation stops. "A human already approved this" is a statement about
+  authorization, and a Freeze is not an authorization check.
   In-flight Tasks keep running unless separately cancelled: indiscriminately killing
   half-finished installs creates the second incident.
 - **Asymmetric activation — engage cheap, release deliberate.** Engage: any

@@ -85,9 +85,12 @@ closes park-something-innocuous-then-mutate-the-world.
 
 A single gated dispatch is the **one-step** case of that, which is how it was first built and
 still how it behaves. Since ADR-0038 a Plan may carry several steps, and then the hash covers the
-route: **what runs is frozen by the hash; who it runs on is elastic within an approved ceiling**,
-re-resolved per step and re-parking past it. `plan.md` owns the route, the cursor and the
-lifecycle; this spec owns the decision that releases it.
+whole route *and* the resolved set — **the binding is by identity, never by count.** Every step
+re-resolves, and any Node not in the approved set re-parks; a Node that has *left* the set is
+shrinkage rather than drift, dropped from that step and recorded. A ceiling would bind a number
+and no identity, which is what a compromised Node forging its own `node:` labels (invariant 7)
+would need in order to elect itself into a route approved for other hosts. `plan.md` owns the
+route, the cursor and the lifecycle; this spec owns the decision that releases it.
 
 The **shape key** is a different address and must not be confused with it: it addresses *what*
 an approval is for, deliberately excluding the resolved fan-out, so that the queue can answer
@@ -97,7 +100,10 @@ diff — *"same as Tuesday, except the fan-out grew 1,180 → 2,214"*.
 **The shape key is never an authorization or release lookup.** A dispatch proceeds on a matching
 plan hash, or on a claimed Grant whose Scope covers it, and on nothing else. A release path that
 consulted the shape key would be an approval-gate bypass. An advance of an approved Plan proceeds
-on that Plan's hash and its cursor — the same rule, not a third release path.
+on that Plan's hash and its cursor — the same rule, not a third release path. **A Grant does not
+cover a route**: a Grant is described and a Plan is enumerated, and letting the first release the
+second would amplify a Grant's use limit N-fold while ensuring no human ever saw the route
+(`plan.md`).
 
 ### Deciding
 
@@ -131,8 +137,11 @@ Four rules govern it, and each closes a way the mechanism could invert:
 - **What a grant costs is derived, never declared.** The Requirement comes from evaluating the
   live gate at the Scope's widest admissible dispatch — never from anything the requester says.
   A multi-step **Plan** is priced the same way and for the same reason: the gate is evaluated
-  against every step and the strictest requirement any step triggers governs the whole route, so
-  one Raw Exec step prices the entire Plan at Raw Exec's floor (ADR-0038).
+  against every step **at the approved resolved set**, and the strictest requirement any step
+  triggers governs the whole route — so one Raw Exec step prices the entire Plan at Raw Exec's
+  floor (ADR-0038). Naming the fan-out is part of the rule, not a detail: a route priced at a
+  smaller proposal-time count than it is permitted to reach would be this same rule failing by
+  omission.
 - **The bound is enforced inside the claiming transaction**, or it is not a bound.
 
 A Grant is consulted **only after** the gate has decided approval is required — never as a way

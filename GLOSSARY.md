@@ -259,7 +259,9 @@ preflight never reaches an executor, it asks Policy a question
 The content address of a Plan — a hash over the ordered steps, their Operations and
 arguments, and the *resolved fan-out*. It is what an Approval commits to (ADR-0027):
 dispatch proceeds only if the Plan still hashes the same, and material drift re-parks for
-re-approval. A single gated dispatch is the **one-step** case, which is how it was first
+re-approval. The fan-out is bound **by identity, never by count** — any Node not in the
+approved set re-parks, while a Node that has left it is shrinkage, dropped and recorded
+(ADR-0038). A single gated dispatch is the **one-step** case, which is how it was first
 built and still how it behaves.
 _Avoid_: job hash, checksum, fingerprint (reserved for Policy and template-set fingerprints)
 
@@ -321,7 +323,9 @@ _Avoid_: approval policy (collides with **Policy**), approval rule, gate config 
 single rule)
 
 **Approval grant**:
-One human Approval covering a **bounded set of future dispatches** instead of one Plan —
+One human Approval covering a **described, bounded set of future dispatches** — where a
+**Plan** covers an *enumerated* one, and that difference is the whole distinction between
+them —
 decision 12's time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified
 **Grant** is the authorization rule above, and the two are unrelated mechanisms.
 
@@ -340,7 +344,9 @@ replaces. Every dispatch it releases audits to the same approval ID. **The ask i
 audit record**, separate from a single dispatch parking for approval (#546): the two are
 answered the same way but their blast radii are not comparable, and a trail that files
 them together says an ask for standing authority over many future dispatches is the same
-act as one Plan waiting for one answer.
+act as one enumerated route waiting for one answer. (Both are standing authority once
+answered; a Grant's walls are described and a Plan's contents are listed, which is why a
+Grant never releases a Plan — ADR-0038.)
 _Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
 blanket nor unbounded), standing approval, pre-authorization
 
@@ -492,7 +498,7 @@ _Avoid_: comment, note, tag
 **Admin Console**:
 The human-facing web UI for operators to observe the fleet, administer the control plane
 (enrollment lifecycle, revocation, registry/audit views), and — from v0.7.0 — execute:
-Operations and Raw Exec run from the Console, plan-by-default and with step-up re-auth
+Operations and Raw Exec run from the Console, preflight-by-default and with step-up re-auth
 on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026, superseding
 ADR-0009's no-execution scope). A thin adapter over the same operator capability layer as
 the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. Distinct
