@@ -217,6 +217,8 @@ path of every dispatch, including a read at the 10,000-Node cap; nothing measure
 
 ## History
 
+- `2026-09-12` — ADR-0038: the list of specs citing invariant 7 now names `policy-preflight`
+  (renamed from `plan-mode`) and `plan`.
 - `2026-09-12` — First written. Extracted because four capability specs cite this vocabulary
-  (execution, plan-mode, approval, query) and would otherwise restate invariant 7's namespace
+  (execution, policy-preflight, plan, approval, query) and would otherwise restate invariant 7's namespace
   rules four times.

@@ -36,10 +36,19 @@ than hidden behind a Principal the role gate happens to wave through.
 **Stops:** all new Task dispatch, every risk class. A frozen Relay refuses before Selector
 resolution and before authorization — the outermost gate in the pipeline.
 
+That includes **every advance of an approved Plan.** An advance is new dispatch, so it meets the
+same outermost gate with no special rule, and a Plan approved before the Freeze is not a way past
+one (`plan.md`, ADR-0038). The intuition worth naming, because it is the one that would build a
+bypass: "a human already approved this" is a statement about authorization, and a Freeze is not an
+authorization check.
+
 **Does not stop:**
 
-- **Plans.** Observation is exactly what is wanted during an incident, so plan mode answers while
-  frozen and reports the frozen state advisorily (ADR-0011, ADR-0013).
+- **Policy preflights.** Observation is exactly what is wanted during an incident, so a preflight
+  answers while frozen and reports the frozen state advisorily (ADR-0011, ADR-0013). This is the
+  exemption, and it is the only one: a preflight sends no Task.
+- **In-flight steps of an approved Plan.** The step already dispatched keeps running, on the same
+  reasoning as any in-flight Task below. **Advancing** that Plan does not — see *Stops*.
 - **In-flight Tasks.** They keep running unless separately cancelled. Indiscriminately killing
   half-finished package installs creates the second incident.
 - **Reads of the control plane.** The registry, the audit trail and the approval queue stay
@@ -112,9 +121,11 @@ state untouched.
 ## Governing ADRs and invariants
 
 - **ADR-0013** — cancellation and emergency Freeze: what it halts, the asymmetry, and the
-  deliberate exemption of Plans.
-- **ADR-0011** — Plans answer while frozen, which is a decision about Freeze as much as about
-  plan mode.
+  deliberate exemption of Policy preflights.
+- **ADR-0011** — preflights answer while frozen, which is a decision about Freeze as much as
+  about the preflight.
+- **ADR-0038** — a Plan is an approved route, and every advance of one is new dispatch. The Freeze
+  exemption covers preflights and stops at them.
 - **Invariant 5** — Freeze is not the blast cap and does not substitute for it; it sits outside
   and above.
 - **Invariant 10** — the decision is the capability layer's. A surface engages and renders; the
@@ -144,7 +155,7 @@ executor is the same class of wiring bug as an unauthorized one.
 | A refused engage or release changes nothing and is still audited | `TestEngageFreeze_RefusedIsNotEngagedAndIsAudited`, `TestReleaseFreeze_RefusedIsNotReleasedAndIsAudited` | capability |
 | A release requires a reason — including on the local lever | `TestReleaseFreeze_RequiresAReason`, `TestReleaseFreezeLocal_StillRequiresAReason` | capability |
 | The local lever bypasses the role gate deliberately | `TestFreezeLocalLever_BypassesTheRoleGate` | capability |
-| Plans answer while frozen, while real runs refuse | `TestPlanFrozenReportsAdvisoryWhileRunRefuses` | capability |
+| Preflights answer while frozen, while real runs refuse | `TestPlanFrozenReportsAdvisoryWhileRunRefuses` | capability |
 | Freeze engage/release works end to end over the API | `TestControlAPI_FreezeEngageRelease` | e2e |
 | Freeze state carries no database import into the state package | `TestNoDatabaseSQLImport` | compile-time |
 
@@ -157,6 +168,9 @@ Claims above with **no row**, and so nothing checking them:
   — the gate is on new dispatch only — but not asserted.
 - That the host lever is unreachable from any surface. True by the interface the API holds, and
   argued at the call site, but there is no structural test like `no_dispatch`.
+- That a Freeze stops the next **advance** of an approved Plan. Unbuilt rather than untested —
+  the capability does not exist yet (`plan.md`), and the claim sits in its testing backlog. It is
+  named here because this is where someone will look for it.
 
 ### Performance
 
@@ -193,6 +207,9 @@ nothing measures it.
 
 ## History
 
+- `2026-09-12` — ADR-0038: the exemption is **Policy preflights**, not "Plans". Every advance of
+  an approved Plan is new dispatch and is stopped. Before the rename this section read as though
+  a Freeze did not stop approved routes, which was the opposite of the rule.
 - `2026-09-12` — First written. Closes the dangling reference from `execution.md`'s out-of-scope
   section, and narrows from the originally proposed `freeze-and-cancellation.md`: cancellation
   moved into `execution.md`, since it acts on a Job that capability creates.

@@ -330,8 +330,12 @@ sequential contract and the 10,000-Node read cap multiply.
 ## Out of scope
 
 - **Policy evaluation** — the daemon's live engine, always (invariant 12).
-- **Plan mode and hypotheticals** — `plan-mode.md`. Plan carries no Task ID, sends no Task, and
-  cannot be deduped into execution.
+- **Policy preflight and hypotheticals** — `policy-preflight.md`. A preflight carries no Task ID,
+  sends no Task, and cannot be deduped into execution. Called *plan mode* until ADR-0038.
+- **The Plan — an approved route of execution** — `plan.md`. A Plan is the object *above* a Job:
+  each of its steps is an ordinary Job created by this spec's dispatch path, with its own cap
+  check, its own at-most-once Tasks and its own audit identity. There is no second dispatch path
+  and a Plan step is not a **Stage** (ADR-0038).
 - **Approval decisions, grants and scope** — `approval.md`. This spec covers only the gate's
   position and the park.
 - **Engaging and releasing the Freeze** — `freeze.md`. This spec covers only the Freeze gate as
@@ -373,6 +377,9 @@ sequential contract and the 10,000-Node read cap multiply.
 
 ## History
 
+- `2026-09-12` — ADR-0038: out-of-scope now names `policy-preflight.md` (renamed from
+  `plan-mode.md`) and `plan.md`. A Plan step is an ordinary Job created by this spec's dispatch
+  path — there is no second dispatch path.
 - `2026-09-10` — Corrects what the audit trail retains: a `read`'s output is **not** retained
   (ADR-0025), where this spec previously said all output was kept whole. Adds fan-out, ordering
   and timeouts; the Job/Task lifecycle; cancellation, moved in from the Freeze spec; zero-match

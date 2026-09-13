@@ -144,7 +144,7 @@ the client, in order:
 
 **Expect:** per-Node results and verdicts matching what
 [`docs/specs/execution.md`](../specs/execution.md) and
-[`docs/specs/plan-mode.md`](../specs/plan-mode.md) describe, now across real machines and a
+[`docs/specs/policy-preflight.md`](../specs/policy-preflight.md) describe, now across real machines and a
 real client. This step is also the vocabulary-legibility
 spot check (ADR-0001/0003): the client should be able to choose Operations and
 arguments from the tool descriptions alone, without trial-and-error.
