@@ -7,7 +7,7 @@ import (
 )
 
 // Attribution is the identity carried on every audit record, in **two
-// structurally distinct lanes** (docs/design/approval-and-attribution.md, #300).
+// structurally distinct lanes** (ADR-0027 decision 10, #300; docs/specs/approval.md).
 //
 // The distinction is the whole point, not a nicety:
 //

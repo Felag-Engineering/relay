@@ -12,7 +12,7 @@ import (
 // cleared the Authorizer, and the blast-radius cap has cleared the
 // CapChecker. It is unexported, and so is newDispatch, its only
 // constructor — this is the compile-enforced half of "one capability
-// layer" (ADR-0009/0010, ROADMAP invariant 10): no package outside
+// layer" (ADR-0009/0010, invariant 10): no package outside
 // capability can construct a dispatch, so a surface reaching around
 // Service.Run to dispatch directly fails to compile rather than relying on
 // review discipline. See dispatch_construction_test.go.

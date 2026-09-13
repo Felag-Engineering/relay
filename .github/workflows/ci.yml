@@ -33,6 +33,18 @@ jobs:
 
       - run: make fmt
 
+  # ---- docs: ADR-number uniqueness, and every test a capability spec cites ----
+  # Needs no toolchain: scripts/check-docs.sh is shell + grep over the tree. It is
+  # in `make verify`, so it must be a CI job too — verify mirrors CI job for job,
+  # and a gate that runs only locally is not a gate on a PR.
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - run: make docs-check
+
   # ---- relay: Go build, lint, race-detector tests ----
   relay:
     name: Relay (Go)

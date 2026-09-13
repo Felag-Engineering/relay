@@ -25,7 +25,7 @@ dispatch type and its constructor are unexported, so a parallel path fails to co
 |---|---|
 | **MCP** | The execution meta-tools: `run_operation` (typed Operation), `raw_exec` (arbitrary argv), `get_job`, `cancel_job` |
 | **Control API** | `POST /api/v1/operations`, `POST /api/v1/raw-exec`, `GET /api/v1/jobs/{id}`, `POST /api/v1/jobs/{id}/cancel` |
-| **Admin Console** | The execution composer — plan-by-default, step-up re-auth on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026). **Designed, not built** (v0.7.0). |
+| **Admin Console** | The execution composer — preflight-by-default, step-up re-auth on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026). **Designed, not built** (v0.7.0). |
 
 Raw Exec is deliberately *not* a separate path. It is this same pipeline carrying an argv
 instead of a typed Operation, always at the mutate risk class. Giving it its own route would be
@@ -44,7 +44,8 @@ One call, in this order. Each stage can only refuse; none can widen what a later
    the guardrail fails closed, at the cost of availability during a store blip.
 2. **Selector resolution.** The Selector is resolved against the registry into a concrete set
    of Nodes, across the four Label namespaces (invariant 7). `state:` predicates are evaluated
-   here, at resolution time, rather than stored.
+   here, at resolution time, rather than stored. The grammar, the namespaces and who may write
+   each are in `selectors-and-labels.md`.
 3. **Authorization.** The Principal is checked against the requested Action and Selector.
    **Caller-asserted attribution is stripped from the context first** — an authorization
    decision must never be able to read a value the caller supplied about itself.
@@ -329,13 +330,20 @@ sequential contract and the 10,000-Node read cap multiply.
 ## Out of scope
 
 - **Policy evaluation** — the daemon's live engine, always (invariant 12).
-- **Plan mode and hypotheticals** — `plan-mode.md`. Plan carries no Task ID, sends no Task, and
-  cannot be deduped into execution.
+- **Policy preflight and hypotheticals** — `policy-preflight.md`. A preflight carries no Task ID,
+  sends no Task, and cannot be deduped into execution. Called *plan mode* until ADR-0038.
+- **The Plan — an approved route of execution** — `plan.md`. A Plan is the object *above* a Job:
+  each of its steps is an ordinary Job created by this spec's dispatch path, with its own cap
+  check, its own at-most-once Tasks and its own audit identity. There is no second dispatch path
+  and a Plan step is not a **Stage** (ADR-0038).
 - **Approval decisions, grants and scope** — `approval.md`. This spec covers only the gate's
   position and the park.
 - **Engaging and releasing the Freeze** — `freeze.md`. This spec covers only the Freeze gate as
   a refusal on the dispatch path. Job cancellation is *in* scope here: it acts on a Job this
   capability created, and the engine owns it.
+- **Label namespaces, the Selector grammar, and `state:` derivation** —
+  `selectors-and-labels.md`. This spec consumes a resolved Node set; it does not define how one
+  is addressed.
 - **Querying Jobs, Tasks and the audit trail after the fact** — `audit-and-read-lane.md`.
 - **The Operation vocabulary itself** — `/proto` is the source of truth (invariant 8).
 - **Retry, scheduling, store-and-forward** — deliberately absent; re-targeting is the caller's
@@ -369,6 +377,9 @@ sequential contract and the 10,000-Node read cap multiply.
 
 ## History
 
+- `2026-09-12` — ADR-0038: out-of-scope now names `policy-preflight.md` (renamed from
+  `plan-mode.md`) and `plan.md`. A Plan step is an ordinary Job created by this spec's dispatch
+  path — there is no second dispatch path.
 - `2026-09-10` — Corrects what the audit trail retains: a `read`'s output is **not** retained
   (ADR-0025), where this spec previously said all output was kept whole. Adds fan-out, ordering
   and timeouts; the Job/Task lifecycle; cancellation, moved in from the Freeze spec; zero-match
@@ -376,4 +387,5 @@ sequential contract and the 10,000-Node read cap multiply.
 - `2026-09-08` — Gains *The three execution tiers*, which invariant 1 now delegates to for
   per-tier mechanism (ADR-0001 amendment, same date).
 - `2026-09-08` — First written, from the capability layer as it stands. Absorbs the milestone
-  acceptance criteria that ~15 tests currently cite as "the ROADMAP acceptance line".
+  acceptance criteria that ~15 tests cited as "the ROADMAP acceptance line"; those tests now cite
+  this file, and `ROADMAP.md` was retired on 2026-09-12.

@@ -93,7 +93,7 @@ type mintTokenAPIResponse struct {
 	MaxUses   int      `json:"max_uses"`
 }
 
-// TestControlAPI_EnrollmentTokenLifecycle drives ROADMAP acceptance
+// TestControlAPI_EnrollmentTokenLifecycle drives the v0.0.6 acceptance
 // criterion 1/4: the bootstrap credential mints a scoped Enrollment Token over
 // /api/v1; a daemon enrolls with it; a revoked token can no longer enroll.
 func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
@@ -158,7 +158,7 @@ func TestControlAPI_EnrollmentTokenLifecycle(t *testing.T) {
 	}
 }
 
-// TestControlAPI_NodeRevoke drives ROADMAP acceptance criterion 2/4:
+// TestControlAPI_NodeRevoke drives the v0.0.6 acceptance criterion 2/4:
 // revoking a Node over the API drops its Tunnel and blocks reconnection.
 func TestControlAPI_NodeRevoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -238,7 +238,7 @@ func TestControlAPI_NodeRevoke(t *testing.T) {
 	}
 }
 
-// TestControlAPI_FreezeEngageRelease drives ROADMAP acceptance criterion
+// TestControlAPI_FreezeEngageRelease drives the v0.0.6 acceptance criterion
 // 3/4: Freeze engaged over the API stops dispatch; release (with reason)
 // restores it; both audited (via the intrinsic capability.AuditSink, not
 // package api's recordLifecycle — see freeze.go).
@@ -324,7 +324,7 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 	}
 }
 
-// TestControlAPI_RequiresCredential drives ROADMAP acceptance criterion 4/4:
+// TestControlAPI_RequiresCredential drives the v0.0.6 acceptance criterion 4/4:
 // requests without the credential are refused on every /api/v1 route added
 // by this issue.
 func TestControlAPI_RequiresCredential(t *testing.T) {

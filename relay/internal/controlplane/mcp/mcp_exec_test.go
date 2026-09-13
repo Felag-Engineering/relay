@@ -200,7 +200,7 @@ func toolErrorText(t *testing.T, res *sdkmcp.CallToolResult) string {
 	return tc.Text
 }
 
-// TestMCP_RunOperation_PerNodeResults is the ROADMAP acceptance line: an
+// TestMCP_RunOperation_PerNodeResults is docs/specs/execution.md's acceptance line: an
 // MCP client calls run_operation(selector, "system.facts") and gets
 // per-Node results plus a Job id.
 func TestMCP_RunOperation_PerNodeResults(t *testing.T) {

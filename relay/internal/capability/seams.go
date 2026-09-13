@@ -445,5 +445,5 @@ type FrozenError struct{}
 
 func (*FrozenError) Error() string {
 	return "capability: dispatch refused: the Relay-wide Freeze is engaged (ADR-0013); no new Tasks dispatch " +
-		"until an admin releases the Freeze. Use plan mode to preview verdicts while frozen."
+		"until an admin releases the Freeze. Use a Policy preflight to preview verdicts while frozen."
 }

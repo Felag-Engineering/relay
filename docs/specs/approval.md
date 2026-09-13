@@ -78,10 +78,19 @@ rule; the reverse is refused. An unstated channel defaults to out-of-band.
 
 ### What an approval commits to
 
-An approval binds to a **plan hash** — a content address over the operation, its arguments, and
-the *resolved fan-out* — never to "the Job" in the abstract. If the Plan no longer matches at
-dispatch time, the Job **re-parks for re-approval** rather than running. That closes
-park-something-innocuous-then-mutate-the-world.
+An approval binds to a **plan hash** — a content address over the Plan's ordered steps, their
+Operations and arguments, and the *resolved fan-out* — never to "the Job" in the abstract. If the
+Plan no longer matches at dispatch time, it **re-parks for re-approval** rather than running. That
+closes park-something-innocuous-then-mutate-the-world.
+
+A single gated dispatch is the **one-step** case of that, which is how it was first built and
+still how it behaves. Since ADR-0038 a Plan may carry several steps, and then the hash covers the
+whole route *and* the resolved set — **the binding is by identity, never by count.** Every step
+re-resolves, and any Node not in the approved set re-parks; a Node that has *left* the set is
+shrinkage rather than drift, dropped from that step and recorded. A ceiling would bind a number
+and no identity, which is what a compromised Node forging its own `node:` labels (invariant 7)
+would need in order to elect itself into a route approved for other hosts. `plan.md` owns the
+route, the cursor and the lifecycle; this spec owns the decision that releases it.
 
 The **shape key** is a different address and must not be confused with it: it addresses *what*
 an approval is for, deliberately excluding the resolved fan-out, so that the queue can answer
@@ -90,7 +99,11 @@ diff — *"same as Tuesday, except the fan-out grew 1,180 → 2,214"*.
 
 **The shape key is never an authorization or release lookup.** A dispatch proceeds on a matching
 plan hash, or on a claimed Grant whose Scope covers it, and on nothing else. A release path that
-consulted the shape key would be an approval-gate bypass.
+consulted the shape key would be an approval-gate bypass. An advance of an approved Plan proceeds
+on that Plan's hash and its cursor — the same rule, not a third release path. **A Grant does not
+cover a route**: a Grant is described and a Plan is enumerated, and letting the first release the
+second would amplify a Grant's use limit N-fold while ensuring no human ever saw the route
+(`plan.md`).
 
 ### Deciding
 
@@ -123,6 +136,12 @@ Four rules govern it, and each closes a way the mechanism could invert:
   through this same gate, at a Requirement derived from the Scope's worst case.
 - **What a grant costs is derived, never declared.** The Requirement comes from evaluating the
   live gate at the Scope's widest admissible dispatch — never from anything the requester says.
+  A multi-step **Plan** is priced the same way and for the same reason: the gate is evaluated
+  against every step **at the approved resolved set**, and the strictest requirement any step
+  triggers governs the whole route — so one Raw Exec step prices the entire Plan at Raw Exec's
+  floor (ADR-0038). Naming the fan-out is part of the rule, not a detail: a route priced at a
+  smaller proposal-time count than it is permitted to reach would be this same rule failing by
+  omission.
 - **The bound is enforced inside the claiming transaction**, or it is not a bound.
 
 A Grant is consulted **only after** the gate has decided approval is required — never as a way
@@ -248,6 +267,10 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 
 - **Where the gate sits in the dispatch pipeline, and what a park leaves behind** —
   `execution.md`.
+- **The Plan a decision releases** — `plan.md`: the ordered steps, the cursor, the payload-free
+  advance, and the walls on an approved-but-incomplete route. A Plan parks through *this* gate and
+  is answered by an ordinary Approval, exactly as a request for an Approval grant is; it is
+  deliberately not a second decision surface.
 - **Policy** — a Node's own engine decides what may run; approval decides whether a caller may
   ask. They are unrelated mechanisms and neither substitutes for the other.
 - **Grants (authorization)** — the Relay-side rule for which Account may request which
@@ -275,5 +298,8 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 
 ## History
 
+- `2026-09-12` — ADR-0038: the plan hash generalised from one Operation to a route, the derived
+  requirement extended to a multi-step Plan, and `plan.md` named as the route's owner. No
+  behaviour here changed; a single gated dispatch is the one-step case.
 - `2026-09-11` — First written, from ADR-0027, ADR-0029 and the approval domain as it stands.
   Written because a dev-loop architect planning #482 reported the governing spec missing.

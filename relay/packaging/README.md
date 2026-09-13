@@ -55,7 +55,7 @@ $ systemctl status relay
 ## First credential
 
 The control plane authenticates per-Account API Tokens held in the Relay's own
-store ([ADR-0023](../../docs/adr/0023-per-account-api-tokens.md)) — there is
+store ([ADR-0023](../../docs/adr/0023-retire-the-shared-control-plane-credential.md)) — there is
 deliberately no shared secret in the config. Mint the first one after the Relay
 has started once:
 
@@ -121,7 +121,7 @@ optional.
 The Relay is upgraded by replacing the binary and restarting — the same
 config-management push as any other service. It never self-upgrades, and it
 never pushes binaries to Nodes
-([ADR-0014](../../docs/adr/0014-daemon-upgrades-flow-through-config-management.md));
+([ADR-0014](../../docs/adr/0014-daemon-lifecycle-iac-upgrades-version-gate.md));
 the Relay's only lever over daemon versions is `RELAY_MIN_DAEMON_VERSION`, which
 refuses to dispatch to Nodes below it.
 

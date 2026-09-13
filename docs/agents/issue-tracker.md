@@ -8,9 +8,8 @@ driven through the `gh` CLI.
 
 - **GitHub milestones are the planning spine.** They are human-owned, and they are the
   authority on what is in flight. Issues decompose a milestone; they never redefine one. Don't
-  pull future milestones forward. `ROADMAP.md` is **deprecated and being retired** — read it
-  only for the acceptance criteria of milestones that have not yet migrated into a capability
-  specification, and never add to it.
+  pull future milestones forward. A milestone's acceptance criteria live on its issues; durable
+  behaviour lives in the capability specification for that capability.
 - **Capability specs are files; implementation specs are issues.** A *capability
   specification* lives at `docs/specs/<capability>.md`, is durable, and is canonical for what
   that capability does across every surface. An *implementation specification* **is** the

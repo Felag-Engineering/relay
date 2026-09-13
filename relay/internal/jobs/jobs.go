@@ -2,7 +2,7 @@
 // the unit of dispatch, at-most-once execution, and blast-radius control
 // (ADR-0004). A Job comprises one Task per matched Node, grouped into Stages;
 // v1 permits exactly one Stage per Job so a post-1.0 staged rollout lands
-// without a data migration (ROADMAP).
+// without a data migration.
 //
 // These are domain mirrors of the relayv1 wire vocabulary (Outcome,
 // RiskClass, Operation/RawExec), following the registry.Facts precedent: this

@@ -171,7 +171,7 @@ func TestApprovalGrant_RequestApproveReleaseExhaust(t *testing.T) {
 		t.Errorf("spent grant = %+v, want inactive with 2 of 2 used", spent)
 	}
 
-	// 7. ROADMAP acceptance: "every covered Job auditing to the same approval
+	// 7. docs/specs/approval.md acceptance: "every covered Job auditing to the same approval
 	//    ID". One query over the grant's authorizing request returns the whole
 	//    story — including both Jobs the window released.
 	records, err := f.Deps.audit.ByApproval(context.Background(), created.Grant.RequestID)

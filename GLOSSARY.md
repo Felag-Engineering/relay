@@ -98,7 +98,11 @@ The persistence-model layer between a Job and its Tasks: a Job comprises one or 
 ordered stages, each a batch of Tasks. **In v1 a Job always has exactly one stage**
 (enforced in code and schema); the concept exists so post-1.0 staged rollout lands
 without a data migration. Not yet operator-facing — a scheduling/persistence detail.
-_Avoid_: phase, wave
+
+A Stage is **not** a **Plan** step and the two are never merged: a Stage orders batches
+*within one Operation's fan-out* (canary → remainder), where a Plan step is a whole Job
+running a different Operation. They are orthogonal axes and compose (ADR-0038).
+_Avoid_: phase, wave; step (that is a Plan's)
 
 **Task**:
 The execution of one Operation or Raw Exec on a single Node, as part of a Job (within a
@@ -167,7 +171,7 @@ failed to load, so its template vocabulary is empty (fail closed).
 _Avoid_: template hash, template version
 
 **`outdated`**:
-The registry and Plan flag for a Node whose daemon is **below the Relay's configured minimum
+The registry and preflight flag for a Node whose daemon is **below the Relay's configured minimum
 version**: it still connects, heartbeats and appears in the registry, but the Job engine refuses to
 send it Tasks, reported per-Task as `OUTCOME_VERSION_REFUSED` (ADR-0014). Surfaced as
 `state:outdated` (ADR-0034). It says nothing about Policy or template freshness — fingerprint
@@ -178,8 +182,8 @@ _Avoid_: version-gated, stale, behind, out of date (for Policy or template drift
 **`unsupported`**:
 The per-Node outcome for an Operation that is not in *that Node's* vocabulary — an unloaded
 Template Operation, or an unknown name. Nothing executed and Policy was never consulted, so it
-is neither a failure (nothing ran) nor a denial (the Node was never asked to decide). Plan mode
-reports the same conclusion for the same Node. Vocabulary is per-Node once templates exist;
+is neither a failure (nothing ran) nor a denial (the Node was never asked to decide). A Policy
+preflight reports the same conclusion for the same Node. Vocabulary is per-Node once templates exist;
 `list_operations`/`describe_node` report what a given Node actually has (ADR-0021).
 _Avoid_: unknown operation, not found, unimplemented
 
@@ -210,7 +214,9 @@ _Avoid_: server cert renewal, cert refresh
 
 **Freeze**:
 The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
-leaving in-flight Tasks running and Plans available. Cheap to engage — a **human**
+leaving in-flight Tasks running and **Policy preflights** answerable. An approved **Plan**
+gets no exemption: every advance is new dispatch, so a Freeze stops the next step and
+leaves the current one running (ADR-0038). Cheap to engage — a **human**
 `operator`+ Account via the Control API, or root on the Relay host via the host-side
 lever — and deliberate to release (`admin`, with an audited reason). Engaging is the one
 act in the system gated on an Account being human rather than on its role: a machine
@@ -228,22 +234,43 @@ fleet-wide (ADR-0013).
 _Avoid_: abort, kill, stop, interrupt
 
 **Plan**:
-The no-execution preview of a Job: the Relay resolves the Selector, checks
+An **approved route of execution**: an ordered list of steps an AI-agent proposes, a human
+approves once, and the agent then walks one step at a time. Relay stores the route and a
+monotonic **step cursor**; the agent advances by naming the Plan and the step it believes is
+next, and **nothing else** — so the advance call carries no description of the work and there
+is nothing in it to tamper with. The agent decides *whether* and *when* to continue; Relay
+decides *what* runs (ADR-0038). One step is one **Job**, never a **Stage**. A Plan composes
+nothing: each step is an independently Policy-evaluated, independently capped dispatch, and
+the daemon never learns a Plan exists.
+_Avoid_: script, program, workflow, runbook, playbook, batch, procedure; **plan mode** and
+**dry-run** (the preview is **Policy preflight**, below)
+
+**Policy preflight**:
+The no-execution preview of a dispatch: the Relay resolves the Selector, checks
 authorization and the blast-radius cap, and each matched daemon's live Policy engine
 answers whether it *would* allow the action (ADR-0011). Advisory and point-in-time —
-never a reservation, never a substitute for enforcement at execution.
-_Avoid_: dry-run, simulation, preview, check mode
+never a reservation, never a substitute for enforcement at execution. Called **plan mode**
+until ADR-0038 gave that word to the Plan above; the option is still spelled `plan` on the
+wire until the code follows.
+_Avoid_: plan, plan mode (both now mean the route); dry-run, simulation, check mode — a
+preflight never reaches an executor, it asks Policy a question
 
 **Plan hash**:
-The content address of a Plan — a hash over the Operation, its arguments, and the
-*resolved fan-out*. It is what an Approval commits to (ADR-0027): dispatch proceeds only
-if the Plan still hashes the same, and material drift re-parks the Job for re-approval.
+The content address of a Plan — a hash over the ordered steps, their Operations and
+arguments, and the *resolved fan-out*. It is what an Approval commits to (ADR-0027):
+dispatch proceeds only if the Plan still hashes the same, and material drift re-parks for
+re-approval. The fan-out is bound **by identity, never by count** — any Node not in the
+approved set re-parks, while a Node that has left it is shrinkage, dropped and recorded
+(ADR-0038). A single gated dispatch is the **one-step** case, which is how it was first
+built and still how it behaves.
 _Avoid_: job hash, checksum, fingerprint (reserved for Policy and template-set fingerprints)
 
 **Shape key**:
 The content address of *what* an approval is for, as opposed to *how much of it*: a hash
 over the Operation, its risk class, its **shape arguments**, and the **normalised
-Selector** — never the resolved fan-out, never an argument declared to be scale. For
+Selector** — never the resolved fan-out, never an argument declared to be scale. Over a
+multi-step **Plan** it addresses the route the same way, so "the last approved route that
+looked like this" stays a lookup. For
 **Raw Exec** every argv element is shape: there is nothing declared for the arbitrary-
 command path, and which element is "scale" is never guessed. For an **Approval grant** it
 hashes the **Scope** minus the window, the use limit and the fan-out ceiling. It exists so
@@ -296,7 +323,9 @@ _Avoid_: approval policy (collides with **Policy**), approval rule, gate config 
 single rule)
 
 **Approval grant**:
-One human Approval covering a **bounded set of future dispatches** instead of one Plan —
+One human Approval covering a **described, bounded set of future dispatches** — where a
+**Plan** covers an *enumerated* one, and that difference is the whole distinction between
+them —
 decision 12's time-boxed narrowing grant (ADR-0027). Always written in full: an unqualified
 **Grant** is the authorization rule above, and the two are unrelated mechanisms.
 
@@ -315,7 +344,9 @@ replaces. Every dispatch it releases audits to the same approval ID. **The ask i
 audit record**, separate from a single dispatch parking for approval (#546): the two are
 answered the same way but their blast radii are not comparable, and a trail that files
 them together says an ask for standing authority over many future dispatches is the same
-act as one Plan waiting for one answer.
+act as one enumerated route waiting for one answer. (Both are standing authority once
+answered; a Grant's walls are described and a Plan's contents are listed, which is why a
+Grant never releases a Plan — ADR-0038.)
 _Avoid_: Grant (unqualified), batch approval / blanket approval (a grant is neither
 blanket nor unbounded), standing approval, pre-authorization
 
@@ -467,7 +498,7 @@ _Avoid_: comment, note, tag
 **Admin Console**:
 The human-facing web UI for operators to observe the fleet, administer the control plane
 (enrollment lifecycle, revocation, registry/audit views), and — from v0.7.0 — execute:
-Operations and Raw Exec run from the Console, plan-by-default and with step-up re-auth
+Operations and Raw Exec run from the Console, preflight-by-default and with step-up re-auth
 on a mutate apply, behind the root-owned `console_execution` flag (ADR-0026, superseding
 ADR-0009's no-execution scope). A thin adapter over the same operator capability layer as
 the MCP surface (ADR-0003, ADR-0009); it renders decisions, it never makes them. Distinct

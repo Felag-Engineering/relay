@@ -12,7 +12,7 @@ import (
 
 const (
 	// defaultMaxEvents and defaultMaxAge are the retention bounds every
-	// production Bus uses (ROADMAP acceptance, #416): a per-publisher ring
+	// production Bus uses (acceptance criterion, #416): a per-publisher ring
 	// holds at most 1,000 events, or 10 minutes of them, whichever comes
 	// first. WithRetention overrides both, for tests only — per invariant
 	// 11 (Relay config is operator-set and unreachable from any API) there

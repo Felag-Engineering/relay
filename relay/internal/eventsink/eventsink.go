@@ -202,7 +202,7 @@ type registryObserver struct {
 // UpdateLastSeen is the load-bearing omission: it is the heartbeat, called
 // on every message from every connected Node. Publishing it would let a
 // 100k-Node fleet evict the connect/disconnect history the Console actually
-// needs from the ring buffer thirty times a second (ROADMAP acceptance).
+// needs from the ring buffer thirty times a second (acceptance criterion).
 func ObserveRegistry(r registry.Repository, b *events.Bus) registry.Repository {
 	return registryObserver{r: r, bus: b}
 }

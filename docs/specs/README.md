@@ -113,7 +113,8 @@ that does nothing yet is a design document wearing a spec's clothes.
 |---|---|
 | `execution.md` | Dispatch, fan-out, the blast-radius cap, at-most-once Tasks, the three Operation tiers, Raw Exec, cancellation |
 | `selectors-and-labels.md` | The four namespaces and who writes each, the closed `state:` vocabulary, resolution-time evaluation, what a compromised Node can forge |
-| `plan-mode.md` | Daemon-evaluated hypotheticals, plan-before-apply, the plan hash |
+| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply. Renamed from `plan-mode.md` by ADR-0038 |
+| `plan.md` | The approved route of execution: steps, the cursor, the derived requirement, the plan hash |
 | `approval.md` | Gate rules, callout, decisions and channels, approval Grants and scope |
 | `freeze.md` | Emergency Freeze — engage, release, and its survival across a restart |
 | `query.md` | Node, registry, Policy and vocabulary reads; `describe_node` |

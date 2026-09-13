@@ -134,7 +134,6 @@ at process start; nothing sets or raises them via an API.
 /docs/specs/   capability specifications — what each capability does today, every surface
 GLOSSARY.md    the domain glossary — read this before touching anything
 CLAUDE.md      instructions for AI agents working in this repo, and the invariants
-ROADMAP.md     deprecated; being retired
 ```
 
 ## Status
@@ -156,7 +155,7 @@ GitHub milestones are the authority on what is actually in progress.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.
 - **[docs/security/threat-model.md](docs/security/threat-model.md)** — the trust boundaries, and which invariant defends each.
 - **[docs/api/](docs/api/)** — Control API reference and OpenAPI surface.
-- **[docs/testing/](docs/testing/)** — manual validation scripts, one per milestone.
+- **[docs/operations/beta-hardware-validation.md](docs/operations/beta-hardware-validation.md)** — the one validation that cannot be automated: proving the vertical slice on real machines.
 - **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
 - **[docs/operations/relay-install.md](docs/operations/relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, flags/env, example `systemd` unit.
 - **[docs/operations/relay-daemon-install.md](docs/operations/relay-daemon-install.md)** — installing and running the relay-daemon on a Node: artifact, env config, Policy, the shipped unit.
@@ -167,5 +166,4 @@ GitHub milestones are the authority on what is actually in progress.
 - **[docs/operations/ca-disaster-recovery.md](docs/operations/ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
-- **[ROADMAP.md](ROADMAP.md)** — deprecated, and being retired. Historical milestones only;
-  GitHub milestones carry what is in flight.
+- **[docs/deferred.md](docs/deferred.md)** — work agreed in principle and not yet specified. Each gets an ADR when picked up.

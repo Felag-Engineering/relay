@@ -1,7 +1,7 @@
 // Package capability is the Relay's single capability layer: the pipeline
 // every control-path surface (MCP, the Control API, the Admin Console, any
 // future CLI) must go through to act on Nodes — Selector -> authz ->
-// blast-cap -> dispatch -> audit (ADR-0009/0010, ROADMAP invariant 10). No
+// blast-cap -> dispatch -> audit (ADR-0009/0010, invariant 10). No
 // surface may build a parallel path to a Node: the dispatch type and its
 // constructor are unexported, so a surface that tries to dispatch without
 // going through Service.Run fails to compile (dispatch.go,
@@ -390,7 +390,7 @@ func (s *Service) stateEval() StateEval {
 // authorize, and the cap check each short-circuit the remaining stages on
 // error (no dispatch — nothing was executed), but each refusal is itself
 // audited (recordRefusal) — refusals are the most interesting audit events
-// (ROADMAP acceptance for #102). Once dispatch is attempted, the audit
+// (acceptance criterion for #102). Once dispatch is attempted, the audit
 // record is always written, even if the dispatcher itself returns an error:
 // a dispatcher may execute some Nodes before failing on others, and a
 // partially-executed dispatch must never go unaudited. In that case Run

@@ -7,7 +7,7 @@
 // appear in the Relay. Its accessors return the domain interfaces defined in
 // internal/registry, internal/jobs, internal/audit, and internal/freeze —
 // never a concrete SQL-backed type — so a later Postgres swap is a change to
-// this package alone, with no caller changes (per the ROADMAP's
+// this package alone, with no caller changes (per the original milestone's
 // deferred-Postgres note).
 package store
 

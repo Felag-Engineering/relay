@@ -20,20 +20,17 @@ governs it. [README.md](README.md) is the outside view: what Relay is, and why.
 
 ## Ubiquitous language — use it exactly
 
-[GLOSSARY.md](GLOSSARY.md) is the canonical glossary. Use these terms in code, comments, commits,
-and docs; do not introduce synonyms. Most entries carry an `_Avoid_` line naming the synonyms
-this project has deliberately rejected — those are decisions, not suggestions.
+[GLOSSARY.md](GLOSSARY.md) is the canonical glossary — every term, and the synonyms this project
+has rejected. An `_Avoid_` line is a decision, not a suggestion. Use the canonical term in code,
+comments, commits, issue titles, test names and prose.
 
-- **Relay** — the central Go server. Not "hub/master/server".
+Two are worth naming here, because they are the pair that actually gets confused and the
+confusion is not cosmetic — one of these is an AI and the other must never be mistaken for one:
+
 - **relay-daemon** — the non-AI Rust daemon on each Node. **Never call it "agent".**
 - **AI-agent** — the AI orchestrator. The only thing called "agent", and always qualified.
-- **Node**, **Operation**, **Raw Exec**, **Policy**, **Job**, **Task**, **Selector**,
-  **Label** (`node:` / `relay:` / `tag:` / `state:`), **Facts**, **Enrollment Token** —
-  see GLOSSARY.md.
 
 Internal identifiers say `Relay` / `RELAY_`, never "gleipnir" (ADR-0016).
-
-If you find yourself needing a new domain term, add it to GLOSSARY.md in the same change.
 
 ## Architecture invariants — do not violate without a new ADR
 
@@ -109,7 +106,7 @@ it needs an ADR, not a quiet workaround.
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
 the boundaries they defend; ADR-0020, ADR-0026, and ADR-0034 each record amending a specific
-numbered invariant; ROADMAP.md, GLOSSARY.md, the `docs/testing/validate-*.md` suites, and
+numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
 several Go source comments cite them by number. Amend an invariant in place and record the
 amendment in its ADR. **Never renumber or drop one.**
 
@@ -131,7 +128,7 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | `tag:` parses but **matches nothing** — no storage on the Node record and no write path — so a `tag:` Selector silently returns an empty set instead of an error, **and the surfaces disagree about it**: the Console refuses a `tag:` filter with an error naming #430, while MCP advertises `tag:` in `list_nodes`' schema with no caveat, handing an AI-agent a false negative (#560). `relay:` labels are stamped at enrollment today; operator management of them (`admin` + step-up) is unbuilt. | #430, #347, #560 |
+| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; operator management of them (`admin` + step-up) is unbuilt. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 
 ### Writing or amending an invariant
@@ -208,14 +205,14 @@ redefines one; if a task appears to require one, stop and flag it.
 /docs/adr/       architecture decision records — the *why*.
 /docs/agents/    per-repo configuration agent skills read (tracker, labels, domain rules).
 /docs/api/       Control API reference and OpenAPI surface.
-/docs/design/    design docs for work not yet an ADR (console, enrollment, open decisions).
+/docs/design/    console/ is the Console's live per-screen specification, cited from source;
+                 the rest is pre-ADR design for work not yet decided.
 /docs/operations/  operator-facing runbooks (version stamping, packaging).
 /docs/security/  threat model — maps all fourteen invariants to the boundaries they defend.
-/docs/testing/   manual validation scripts, one per milestone (`validate-*.md`).
-/docs/reviews/   recorded review passes.
 /docs/specs/     capability specifications — what each capability does today, every surface.
+/docs/deferred.md   work agreed in principle, not yet specified; ADR at pickup.
 /docs/dev-fleet.md  the local Docker fleet: how to run Relay + real daemons.
-GLOSSARY.md      the ubiquitous language.   ROADMAP.md   deprecated; being retired.
+GLOSSARY.md      the ubiquitous language.
 ```
 
 ## Toolchains & commands
@@ -295,10 +292,11 @@ Specs and tickets name modules and contracts, **never file paths or code snippet
 stale within a sprint.
 
 **4. Work the current milestone.** **GitHub milestones are the authority on what is in flight**
-— read them with `gh`, don't infer the target from a file. `ROADMAP.md` is **deprecated** and
-being retired; its Status table is a hand-synced copy that has been observed badly stale. Until
-the migration finishes it is still the record of milestone acceptance criteria, so read it for
-those, and write any *new* acceptance criteria into a capability spec instead.
+— read them with `gh`, don't infer the target from a file. A milestone's acceptance criteria live
+on its issues; durable behaviour lives in the capability specification, never in a planning
+document. `ROADMAP.md` was retired on 2026-09-12: its status was a hand-synced copy of GitHub
+that went badly stale, and its acceptance criteria now live in `docs/specs/`. Git history has it
+if you need the milestone narrative.
 
 Milestones here were deliberately built out of order, and some are gated on things an agent
 cannot supply (real hardware, an open licensing decision). Issues decompose a milestone; they

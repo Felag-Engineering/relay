@@ -191,7 +191,7 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	}
 }
 
-// TestEngineOfflineNodeUnreachable is the ROADMAP acceptance line: a Job
+// TestEngineOfflineNodeUnreachable is docs/specs/execution.md's acceptance line: a Job
 // spanning an offline Node reports unreachable for it and real results for
 // the rest. It also covers #185's full-output-always plumbing: a successful
 // Dispatch's Stdout/Stderr/Truncated must reach the returned NodeResult, and
@@ -659,7 +659,7 @@ func TestWithExecutionRefusesWithoutFreeze(t *testing.T) {
 // — never internal/relay/v1 (the wire proto) or database/sql. #99 is
 // exactly the issue that tempts a real-Conduit author to reach for
 // relayv1.TaskRequest/TaskResult inside capability; this fails the build
-// if they do (ADR-0009/0010, ROADMAP invariant 10).
+// if they do (ADR-0009/0010, invariant 10).
 func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 	allowed := map[string]bool{
 		"context":      true,
@@ -749,7 +749,7 @@ func (s *spyJobEventSink) RecordJob(e JobEvent) {
 	s.events = append(s.events, e)
 }
 
-// TestEngine_JobEvents_CreatedThenCompleted is the ROADMAP acceptance line
+// TestEngine_JobEvents_CreatedThenCompleted is docs/specs/execution.md's acceptance line
 // for the event seam's Job publisher (#416): a Job fans out to N Nodes but
 // publishes exactly TWO events — JobCreated once, JobCompleted once — never
 // one per Task, with JobCompleted's Outcomes matching the real per-Node

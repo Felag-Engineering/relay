@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package main: surface_e2e_test.go is #121's milestone-proving integration
-// test — it proves the FULL v0.0.6 acceptance matrix (ROADMAP "Control
+// test — it proves the FULL v0.0.6 acceptance matrix ("Control
 // Surfaces: MCP & First API Slice") end to end, driven ONLY through the
 // public surfaces a real client would use: a real MCP SDK client over HTTPS
 // (run_operation/raw_exec/describe_node/list_nodes) and real /api/v1 HTTPS
@@ -418,7 +418,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 	})
 
-	// (4) plan_vs_apply (ROADMAP acceptance): on the unchanged fleet, a
+	// (4) plan_vs_apply (acceptance criterion): on the unchanged fleet, a
 	// plan=true verdict must match a subsequent real run's outcome, per
 	// NodeID, for both an allowed action (system.facts) and a denied one
 	// (raw_exec /bin/echo — DEFAULT-DENY, per (3) above).
@@ -498,7 +498,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		})
 	})
 
-	// (5) freeze_over_api (ROADMAP acceptance): engage over the API stops a
+	// (5) freeze_over_api (acceptance criterion): engage over the API stops a
 	// real MCP dispatch (the distinct "frozen" tool error) while plan=true
 	// keeps working (advisory, per ADR-0013); release with a reason restores
 	// dispatch. Must run before api_token_lifecycle so a later dispatch on
@@ -635,7 +635,7 @@ func TestSurfaceE2E_v006Acceptance(t *testing.T) {
 		}
 	})
 
-	// (7) auth_negative (ROADMAP acceptance): every MCP call and every
+	// (7) auth_negative (acceptance criterion): every MCP call and every
 	// /api/v1 route this issue exercises is refused without the credential.
 	t.Run("auth_negative", func(t *testing.T) {
 		t.Run("mcp", func(t *testing.T) {

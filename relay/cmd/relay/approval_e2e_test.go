@@ -259,7 +259,7 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 	}
 }
 
-// TestApprovalCallout_MachineCannotSatisfyItsOwnGate is the ROADMAP acceptance
+// TestApprovalCallout_MachineCannotSatisfyItsOwnGate is docs/specs/approval.md's acceptance
 // "a machine Account can never satisfy its own gate on any channel", proven
 // against the most permissive rule the config language can express:
 // requester_allowed: true, and the machine holding the admin role.

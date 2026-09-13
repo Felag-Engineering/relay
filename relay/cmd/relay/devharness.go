@@ -578,7 +578,7 @@ func harnessListInFlight(ctx context.Context, st *harnessState) harnessResponse 
 
 // harnessQueryAudit returns every audit.Record for job_id, or every Record if
 // job_id is empty — used to assert every dispatch/refusal is queryable
-// (ROADMAP acceptance for #102).
+// (acceptance criterion for #102).
 func harnessQueryAudit(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	var records []audit.Record
 	var err error

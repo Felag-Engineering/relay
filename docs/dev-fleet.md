@@ -351,7 +351,7 @@ The difference between `call` and `call-tasks` is the whole shim: the same gated
 returns a `pending_approval` result to an ordinary client and a `resultType: "task"` handle
 to a Tasks-capable one. Both mint the same `taskId`.
 
-`docs/testing/validate-v0.5.1.md` is the script these commands discharge.
+These commands exercise the MCP Tasks extension end to end; `docs/specs/` carries what each capability is expected to do.
 
 ## Survive `down` / `up`
 
@@ -374,7 +374,7 @@ $ docker compose down -v
 
 ## Where to read the audit trail
 
-Every dispatch, refusal, and plan is audited. Each such decision emits exactly
+Every dispatch, refusal, and Policy preflight is audited. Each such decision emits exactly
 one structured log line — carrying the principal, selector, operation/action
 kind, outcome counts, and job ID — to the Relay's logs:
 

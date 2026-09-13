@@ -4,7 +4,7 @@
 // it extends the #112 cross-binary devharness (crossbinary_e2e_test.go) to
 // drive the full capability pipeline (Selector -> authz -> blast-cap -> Job
 // engine -> dispatch -> audit, ADR-0009/0010) over real mTLS Tunnels against
-// real relay-daemon subprocesses, proving the ROADMAP v0.0.5 acceptance
+// real relay-daemon subprocesses, proving the v0.0.5 acceptance
 // end-to-end: over-cap rejection (both risk classes), a Job spanning an
 // offline Node, Freeze-stops-dispatch and cancel-kills-in-flight, Jobs/Tasks/
 // audit surviving a Relay restart, and — the hardest one — a Relay crash
