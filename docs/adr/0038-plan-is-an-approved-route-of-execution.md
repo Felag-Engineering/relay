@@ -207,9 +207,17 @@ spending limit; a Plan is an itemised invoice.
   **Freeze** entry corrected — a frozen Relay leaves *preflights* available, which is what it
   always meant.
 
-- **Two capability specifications**: `plan.md` for the new capability, and today's `plan-mode.md`
-  renamed to `policy-preflight.md` describing what exists now. Branching lands in the latter's
+- **Two capability specifications**: `plan.md` for the new capability, and `policy-preflight.md`
+  — today's `plan-mode.md`, renamed — describing what exists now. Branching lands in `plan.md`'s
   out-of-scope section as a candidate idea, in the register the Shadow mode entry already uses.
+
+- **The first implementation pins the fan-out ceiling at 1.** `plan.md` specifies a one-Node,
+  linear, agent-driven cut: the ceiling mechanism above is built and enforced, set to 1, and a
+  Selector matching anything else is refused at proposal with the count. That is not a weaker
+  design but the degenerate corner of this one — at a ceiling of 1 the resolved Node set is
+  trivially pinnable, so the elasticity rule's hard case does not arise, and widening later raises
+  a value rather than re-specifying targeting. The aggregate-consent question in the last
+  consequence below must be answered **before** the ceiling rises, not after.
 
 - **One breaking change on the control-plane surface**: the `plan` option becomes `preflight` on
   `run_operation`, `raw_exec`, `POST /api/v1/operations` and `POST /api/v1/raw-exec`. The
