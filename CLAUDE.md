@@ -106,7 +106,7 @@ it needs an ADR, not a quiet workaround.
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
 the boundaries they defend; ADR-0020, ADR-0026, and ADR-0034 each record amending a specific
-numbered invariant; ROADMAP.md, GLOSSARY.md, the `docs/testing/validate-*.md` suites, and
+numbered invariant; GLOSSARY.md, the `docs/testing/validate-*.md` suites, and
 several Go source comments cite them by number. Amend an invariant in place and record the
 amendment in its ADR. **Never renumber or drop one.**
 
@@ -211,8 +211,9 @@ redefines one; if a task appears to require one, stop and flag it.
 /docs/testing/   manual validation scripts, one per milestone (`validate-*.md`).
 /docs/reviews/   recorded review passes.
 /docs/specs/     capability specifications — what each capability does today, every surface.
+/docs/deferred.md   work agreed in principle, not yet specified; ADR at pickup.
 /docs/dev-fleet.md  the local Docker fleet: how to run Relay + real daemons.
-GLOSSARY.md      the ubiquitous language.   ROADMAP.md   deprecated; being retired.
+GLOSSARY.md      the ubiquitous language.
 ```
 
 ## Toolchains & commands
@@ -292,10 +293,11 @@ Specs and tickets name modules and contracts, **never file paths or code snippet
 stale within a sprint.
 
 **4. Work the current milestone.** **GitHub milestones are the authority on what is in flight**
-— read them with `gh`, don't infer the target from a file. `ROADMAP.md` is **deprecated** and
-being retired; its Status table is a hand-synced copy that has been observed badly stale. Until
-the migration finishes it is still the record of milestone acceptance criteria, so read it for
-those, and write any *new* acceptance criteria into a capability spec instead.
+— read them with `gh`, don't infer the target from a file. A milestone's acceptance criteria live
+on its issues; durable behaviour lives in the capability specification, never in a planning
+document. `ROADMAP.md` was retired on 2026-09-12: its status was a hand-synced copy of GitHub
+that went badly stale, and its acceptance criteria now live in `docs/specs/`. Git history has it
+if you need the milestone narrative.
 
 Milestones here were deliberately built out of order, and some are gated on things an agent
 cannot supply (real hardware, an open licensing decision). Issues decompose a milestone; they

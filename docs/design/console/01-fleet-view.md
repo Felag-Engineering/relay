@@ -71,7 +71,7 @@ namespaces, so the contextual "Run against these" can never be handed a set it c
 
 Facts (OS, kernel, hostname, IP, packages) are **not** filterable and **not** on the row. If an
 operator wants to target on OS, their config management stamps `node:os=ubuntu`. The discriminator
-is the ROADMAP scope rule: *what Ansible could check in check-mode is out of realm*.
+is the configuration-management scope rule (CLAUDE.md, *Out of realm*): *what Ansible could check in check-mode is out of realm*.
 
 ## Deviation states
 

@@ -134,7 +134,6 @@ at process start; nothing sets or raises them via an API.
 /docs/specs/   capability specifications — what each capability does today, every surface
 GLOSSARY.md    the domain glossary — read this before touching anything
 CLAUDE.md      instructions for AI agents working in this repo, and the invariants
-ROADMAP.md     deprecated; being retired
 ```
 
 ## Status
@@ -167,5 +166,4 @@ GitHub milestones are the authority on what is actually in progress.
 - **[docs/operations/ca-disaster-recovery.md](docs/operations/ca-disaster-recovery.md)** — CA key custody, backups, and the "burn it down" compromise runbook.
 - **[docs/operations/daemon-privilege-posture.md](docs/operations/daemon-privilege-posture.md)** — the hardened `systemd` unit and per-Operation privilege map for running relay-daemon in production.
 - **[docs/operations/version-stamping.md](docs/operations/version-stamping.md)** — what a build reports for `--version`, and how the daemon's version feeds the ADR-0014 `min-daemon-version` gate.
-- **[ROADMAP.md](ROADMAP.md)** — deprecated, and being retired. Historical milestones only;
-  GitHub milestones carry what is in flight.
+- **[docs/deferred.md](docs/deferred.md)** — work agreed in principle and not yet specified. Each gets an ADR when picked up.

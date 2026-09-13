@@ -122,7 +122,7 @@ pub(crate) fn cert_pubkey_matches_key(cert_pem: &str, key_pem: &str) -> Result<(
 /// Returns `Some(Identity)` only if all four files (`key.pem`, `cert.pem`,
 /// `ca_bundle.pem`, `node_id`) exist and both the cert and key parse
 /// successfully via `rustls_pki_types`. "Valid" means present-and-well-formed;
-/// expiry checking is a separate ROADMAP item (v0.0.2 cert rotation).
+/// expiry checking is a separate deferred item (v0.0.2 cert rotation).
 ///
 /// Returns `Err` if the cert's public key does not correspond to the private key,
 /// converting a torn-write lockout into a diagnosable error (FIX A, FIND-1).

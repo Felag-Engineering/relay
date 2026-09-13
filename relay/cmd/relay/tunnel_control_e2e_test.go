@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package main: tunnel_control_e2e_test.go proves the v0.0.4 acceptance
-// criteria (ROADMAP milestone "Execution Control & Policy Tooling") end to
+// criteria (milestone "Execution Control & Policy Tooling") end to
 // end, over the real mTLS Tunnel with a real relay-daemon subprocess:
 //
 //  1. TestE2E_CancelInFlightAndRaceWindow — cancel kills the process group and

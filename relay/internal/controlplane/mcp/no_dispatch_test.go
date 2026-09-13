@@ -240,7 +240,7 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 	return violations
 }
 
-// TestNoDispatchConstruction is the ROADMAP acceptance criterion for this
+// TestNoDispatchConstruction is docs/specs/execution.md's acceptance criterion for this
 // issue ("no read tool can reach dispatch"), extended by #118 to also cover
 // the execution tools: every non-test .go file in this directory is
 // classified via classifyFile (readFiles/execFiles above) — an unclassified

@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-// TestForeignPackageCannotConstructDispatch is the ROADMAP acceptance
+// TestForeignPackageCannotConstructDispatch is docs/specs/execution.md's acceptance
 // criterion for this issue: a package outside capability that tries to
 // build a dispatch value or call newDispatch must fail to compile, not
 // merely fail review. testdata/foreign/foreign.go attempts both. Building

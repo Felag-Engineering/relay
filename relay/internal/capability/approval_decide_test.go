@@ -733,7 +733,7 @@ func TestGrantDoesNotBindItsRequestToOneJob(t *testing.T) {
 	if withGrant != 2 {
 		t.Errorf("%d dispatch entries carry the GrantID, want 2 — a grant's full blast radius must be one query", withGrant)
 	}
-	// ROADMAP v0.5.0: "every covered Job auditing to the same approval ID".
+	// docs/specs/approval.md: "every covered Job auditing to the same approval ID".
 	// One window, one authorizing decision, one ID to query by.
 	if len(approvalIDs) != 1 {
 		t.Errorf("grant-released dispatches carry %d distinct approval IDs, want 1", len(approvalIDs))

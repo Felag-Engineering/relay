@@ -56,7 +56,7 @@ func TestAudit_ApprovalLinkRoundTrips(t *testing.T) {
 	}
 }
 
-// TestAudit_ByApprovalAnswersTheWholeStory is the ROADMAP's acceptance
+// TestAudit_ByApprovalAnswersTheWholeStory is docs/specs/approval.md's acceptance
 // criterion for grants: "every covered Job auditing to the same approval ID".
 //
 // One query over the grant's authorizing Request returns the park, the

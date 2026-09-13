@@ -1,6 +1,6 @@
 // At-most-once execution across a Relay restart (ADR-0004) — design note.
 //
-// This is the "written down, not just asserted" discipline the ROADMAP
+// This is the "written down, not just asserted" discipline this project
 // requires for the Job engine (v0.0.5 [4/8]/#99), feeding the crash test in
 // [8/8]/#103:
 //

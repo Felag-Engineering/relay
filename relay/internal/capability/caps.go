@@ -9,7 +9,7 @@ import (
 // DefaultReadCap and DefaultMutateCap are the blast-radius caps used when the
 // Relay's startup config supplies a non-positive value (see NewBlastCap). The
 // read-cap is generous; the mutate-cap — which Raw Exec always takes
-// (ADR-0012) — is small, matching the ROADMAP v0.0.5 deliverable.
+// (ADR-0012) — is small, matching the v0.0.5 deliverable.
 const (
 	DefaultReadCap   = 10000
 	DefaultMutateCap = 100

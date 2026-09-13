@@ -1,7 +1,7 @@
 # Self-serve enrollment — implementation breakdown
 
 Working document for the `v0.1.0-beta` "Self-serve evaluation" block
-([ROADMAP.md](../../ROADMAP.md) `v0.1.0-beta`). It expands the five issues recorded there
+([docs/specs/](../specs/) `v0.1.0-beta`). It expands the five issues recorded there
 into a dependency-ordered set, after the design conversation of 2026-08-18 settled eleven
 decisions across four ADRs.
 

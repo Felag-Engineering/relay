@@ -317,7 +317,7 @@ func TestMCP_RawExec_Plan_ArgvVerbatimMutateClass(t *testing.T) {
 	}
 }
 
-// TestMCP_Plan_PlanVsRealRunParity is the ROADMAP acceptance line for #119
+// TestMCP_Plan_PlanVsRealRunParity is docs/specs/plan-mode.md's acceptance line for #119
 // (also feeding #121): with Query and Dispatch configured consistently
 // (allow<->Success, deny<->DeniedByPolicy, offline<->Unreachable) on the
 // same unchanged fleet, a Plan's verdicts match a subsequent real run's

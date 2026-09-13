@@ -1,11 +1,11 @@
 # Manual end-to-end validation scripts
 
 Every milestone ships a **human-runnable manual validation script** in this directory,
-named `validate-vX.Y.Z.md`, that validates the milestone's ROADMAP acceptance criteria
+named `validate-vX.Y.Z.md`, that validates the milestone's acceptance criteria
 end to end on a running system. The automated suites (`make test`, `make test-integration`,
 `make test-crossbinary`, CI) remain the primary gate; these scripts exist so a human can
 prove, with their own hands and eyes, that the shipped surface actually behaves as the
-ROADMAP promised — the same skepticism the product asks of its operators.
+milestone promised — the same skepticism the product asks of its operators.
 
 ## The convention
 
@@ -16,7 +16,7 @@ ROADMAP promised — the same skepticism the product asks of its operators.
    [`validate-v0.1.0-beta.md`](validate-v0.1.0-beta.md),
    [`validate-v0.2.0.md`](validate-v0.2.0.md).
 
-2. **Steps map 1:1 to ROADMAP acceptance criteria.** Each step states the exact
+2. **Steps map 1:1 to the milestone's acceptance criteria.** Each step states the exact
    command(s), the expected observation, and which milestone/ADR acceptance item it
    discharges. An acceptance item that cannot be validated manually (CI-only gates,
    timing-dependent races, criteria needing infrastructure that does not exist yet) is
@@ -43,13 +43,14 @@ ROADMAP promised — the same skepticism the product asks of its operators.
    which were skipped and why, and the operator who ran it.
 
 6. **Writing or updating the milestone's script is part of the milestone's definition
-   of done.** ROADMAP.md carries a `Manual validation:` line in each future milestone's
-   Acceptance section; the milestone is not complete until its script exists, runs, and
-   has a recorded sign-off — **or the run is explicitly waived** (below).
+   of done.** The milestone is not complete until its script exists, runs, and has a
+   recorded sign-off — **or the run is explicitly waived** (below). Acceptance criteria live
+   on the milestone's issues; durable behaviour lives in `docs/specs/`, whose proof tables are
+   the automated half of the same question.
 
 7. **A waived run is recorded, never omitted.** The owner may close a milestone with the
    script written but unrun, accepting the automated suites as sufficient for that
-   milestone. When that happens, both the ROADMAP milestone entry and the script's own
+   milestone. When that happens, both the GitHub milestone and the script's own
    header say so: who waived it, when, and **what the run would have covered that CI
    cannot** — real service managers and system tooling, real file ownership and
    permissions, multi-machine behavior, and anything an operator can only judge by

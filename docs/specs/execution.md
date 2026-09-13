@@ -380,4 +380,5 @@ sequential contract and the 10,000-Node read cap multiply.
 - `2026-09-08` — Gains *The three execution tiers*, which invariant 1 now delegates to for
   per-tier mechanism (ADR-0001 amendment, same date).
 - `2026-09-08` — First written, from the capability layer as it stands. Absorbs the milestone
-  acceptance criteria that ~15 tests currently cite as "the ROADMAP acceptance line".
+  acceptance criteria that ~15 tests cited as "the ROADMAP acceptance line"; those tests now cite
+  this file, and `ROADMAP.md` was retired on 2026-09-12.
