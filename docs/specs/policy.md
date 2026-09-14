@@ -43,8 +43,9 @@ what Policy allows. A Task can be allowed by Policy and refused by the Relay; ne
 - A Policy has four kinds of entry, in any fragment:
   - **Native rules** — named allow and deny rules over the arguments of the four Native
     Operations.
-  - **Template definitions** — a name, a risk class, a fixed command structure, and typed
-    parameter slots. A slot's allowed values are declared inline on the definition.
+  - **Template definitions** — a name, a description, a risk class, a fixed command
+    structure, and typed parameter slots. A slot's allowed values are declared inline on the
+    definition. The Template language itself is `operations-and-templates.md`.
     **Defining a Template is what permits it.**
   - **The Raw Exec gate** — allow and deny patterns. Absent from every fragment, Raw Exec is off.
   - **Deny rules** — vetoes over any Native Operation, Template or Raw Exec command.
@@ -214,16 +215,12 @@ none is a commitment to an order.
 
 ## Open questions
 
-1. **Who sets a Template's risk class, and does the Relay trust it?** A Template's risk class is
-   written in a Node's Policy and reported by that Node; the Relay picks the read or mutate
-   blast cap from it. A compromised Node could report `read` for a mutating Template. Belongs to
-   `execution.md` and `operations-and-templates.md`; forced before Templates are dispatchable.
-2. **Does `invalid` become a `state:` label?** Targeting "every Node whose Policy is invalid"
+1. **Does `invalid` become a `state:` label?** Targeting "every Node whose Policy is invalid"
    wants one, which adds to the closed vocabulary. `selectors-and-labels.md`; forced when the
    invalid state is built.
-3. **What remains of `operations-and-templates.md`?** With Template definitions inside Policy, it
-   shrinks to the Native vocabulary and the Template language. Settle when that spec is worked
-   through.
+
+Resolved elsewhere: how the Relay trusts a Template's risk class, and what remains of
+`operations-and-templates.md`, were settled in that spec on `2026-09-13`.
 
 ## History
 

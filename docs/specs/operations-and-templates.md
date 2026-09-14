@@ -1,147 +1,206 @@
 # Operations and Templates
 
-**Status:** stub — aspirational, not yet worked through with the owner (`2026-09-13`).
+**Status:** aspirational — worked through with the owner on `2026-09-13`, awaiting their review
+of this draft. Describes intended behaviour, not the code (see the establishing phase in
+`README.md`).
 
 ## Purpose
 
 Operations are the typed vocabulary through which Relay acts on a Node: *restart this service*,
-*read this file*, *list listening ports*. They let an AI-agent administer a fleet without
-composing shell. The author of an Operation fixes what runs, and the caller only fills in
-validated values.
+*read this file*, *show disk usage*. They let an AI-agent administer a fleet without composing
+shell. Whoever authors an Operation fixes what runs; a caller only fills in values, and a value
+can never change which command runs.
 
-The vocabulary has two sources. **Native Operations** are compiled into the relay-daemon and
-frozen at four. **Template Operations** are shell templates with typed slots, written by a
-trusted operator in root-owned files on the Node. Relay ships a first-party read catalog of
-them. Templates are how the vocabulary grows. A recurring Raw Exec pattern should be promoted
-to a Template.
+The vocabulary has two sources. **Native Operations** are built into the relay-daemon and frozen
+at four. **Template Operations** are named commands an operator defines in a Node's Policy, with
+typed slots a caller fills. Templates are how the vocabulary grows.
+
+This spec owns what an Operation is, the risk-class contract, the Native vocabulary, the Template
+language, and how callers see and call the vocabulary — including when targeted Nodes do not
+share it. Where a Template is defined and which values a Node allows is `policy.md`.
 
 ## Surfaces
 
-- **Proto.** The vocabulary contract (`OperationDescriptor`: name and risk class;
-  `TemplateSnapshot` and `TemplateDescriptor`: per-Node templates with typed slots and no body).
-- **Daemon-local.** The Native registry and its validators. A template root beside the Policy
-  file, holding loose template files plus *template packs* (one directory each), including the
-  shipped `relay-read` catalog. `relay-daemon policy check` lints templates, and
-  `dump-operation-schema` emits the Native schema.
-- **Relay.** The Native vocabulary as model-facing descriptions (purpose, argument constraints,
-  example, and a shape or scale class per argument). It is kept honest by a daemon-generated
-  golden schema checked in CI.
-- **MCP.** `list_operations` returns the Native Operations, plus a Node's reported Templates when
-  given a Node ID. `run_operation` and `describe_node` also reach the vocabulary. Discovery
-  itself is `query.md`.
-- **Control API and Console.** They dispatch Native Operations by name. Uncertain: whether any
-  surface can dispatch a Template Operation today (see Open questions).
+- **`/proto`.** One descriptor shape for every Operation, Native or Template: name, description,
+  risk class, and named, typed arguments with their descriptions and allowed values.
+- **Daemon.** The Native executors and their validators; the Template renderer, which is the one
+  place a shell command is built; `relay-daemon policy check`, which validates Template
+  definitions with the engine that runs them.
+- **MCP.** `list_operations` describes the vocabulary reachable across a Selector;
+  `run_operation` calls any Operation by name. Discovery's shape is `query.md`.
+- **Control API and Console.** Dispatch any Operation, Native or Template, by name.
 
 ## Behaviour
 
-_To be established by interrogation._
+### Every Operation
 
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
+- An Operation has a name, a description, a risk class (`read` or `mutate`), and zero or more
+  named, typed arguments. A Template's arguments are called slots.
+- Arguments are matched by name. A call naming an argument the Operation does not have, omitting
+  a required one, or carrying a value not well-formed for its type is **malformed**: rejected
+  before Policy is consulted, with its own outcome, for Native and Template Operations alike.
+- An Operation may declare a timeout; otherwise the daemon-wide default applies. A caller may ask
+  for a shorter timeout and never a longer one.
+- Output is bounded by the daemon-wide output cap.
 
-- Every Operation, Native or Template, declares a risk class of `read` or `mutate`. A Template
-  without one fails to load.
-- The Native vocabulary is exactly `system.facts`, `file.read`, `service.restart` and
-  `pkg.install`. Adding a fifth needs a new ADR.
-- Native argument values are validated by the daemon against per-argument charsets and anchoring
-  rules. The Relay's published constraint text is proven equal to those validators by a golden
-  schema.
-- A caller's argument **names** are checked against the Operation's declared names on every
-  surface, through one shared check. An unknown or missing required name is a validation error,
-  never `denied_by_policy`. This is issue #345, and it is fixed.
-- A Template slot value is validated against its slot type (`identifier`, `integer`, `path`,
-  `enum`) and substituted as one single-quoted word. No value can add words, operators,
-  redirections or expansions.
-- Every template slot must be a standalone, whitespace-delimited token in the template body.
-- Templates load only from root-owned, non-symlinked, non-writable-by-others files. Any failure
-  (bad file, parse error, shadowing a Native name, duplicate name) fails the whole set. The Node
-  then has no Templates and reports an `unloadable` template-set fingerprint.
-- The daemon reports a template-set fingerprint beside its Policy fingerprint in `Hello` and in
-  every snapshot.
-- Dispatching an Operation that is not in a Node's vocabulary resolves `unsupported` on that
-  Node. That is neither a failure nor a Policy denial.
-- The shipped read catalog is exactly seven `read` Templates: process list, service status,
-  disk usage, listening ports, package inventory, bounded log tail and file checksum. The line
-  cap on the log tail is fixed by the template, not by a slot.
+### The Native vocabulary
+
+Exactly four, frozen. A fifth needs an ADR; new vocabulary is Templates.
+
+| Operation | Class | Arguments | Why it is Native |
+|---|---|---|---|
+| `system.facts` | `read` | none | Feeds the registry on connect |
+| `file.read` | `read` | `path` (required) | Re-checks the resolved target and reads only from the descriptor it checked — beyond what a shell command can do safely |
+| `service.restart` | `mutate` | `unit` (required; systemd unit charset, never a leading `-`) | Predates Templates; kept |
+| `pkg.install` | `mutate` | `name` (required), `version` (optional) | A purpose-built executor spanning package managers, with its own sandbox profile — safer than per-manager Templates through a root shell |
+
+A Native's argument values are validated by the daemon. The descriptor in `/proto` is generated
+from those validators, so what a caller is told and what the daemon enforces cannot drift.
+
+### The Template language
+
+- A Template is defined in Policy with a name, a `description`, a risk class, a body, optional
+  timeout, and slots, each with a type, a one-line description and an optional `allow` list. A
+  Template without a description, or a slot without one, is a Policy error.
+- A Template name may not shadow a Native Operation's name.
+- **The body runs through a shell.** Authors may use pipes, fallbacks and redirection.
+- **Every slot is substituted as exactly one single-quoted word** and must stand alone as a
+  whitespace-delimited token in the body. No value can add a word, an operator, a redirection or
+  an expansion. This quoting path is the single point invariant 1 rests on for the Template tier.
+- **Slot types are a closed set owned by the daemon:**
+
+  | Type | Well-formed | `allow` narrows by |
+  |---|---|---|
+  | `identifier` | Letters, digits and a small safe punctuation set, bounded length, never beginning with `-` | Exact values |
+  | `integer` | Decimal, bounded digits | Exact values |
+  | `path` | Strict canonical absolute path | Policy's glob dialect |
+
+  A slot with no `allow` accepts any well-formed value. Adding a type is a daemon release, a
+  change to this spec, and a red-team case.
+
+### Risk class and the blast cap
+
+- A Native's risk class is fixed in the daemon.
+- A Template's risk class is declared in each Node's Policy and reported by that Node.
+- **A Template dispatch takes the most restrictive class reported by the Nodes that report the
+  Template:** `read` only if every one of them reports `read`; otherwise `mutate`. The blast cap
+  follows that class (invariants 5 and 13).
+- The Task carries the class the Relay used. A daemon whose own Policy declares that Template
+  `mutate` refuses a Task dispatched as `read` — which also covers a reload between resolution
+  and execution.
+
+### Calling the vocabulary
+
+- Callers reach every Operation through generic tools: `list_operations` to learn what is
+  reachable across a Selector — descriptions, slots, types, allowed values, risk class and which
+  Nodes report each Operation — and `run_operation` to call one by name. The MCP tool list is
+  small and does not change when any Node's Policy changes.
+- A Template is dispatchable through every surface exactly as a Native is.
+
+### When targeted Nodes do not share a vocabulary
+
+- The Relay refuses a Template name that no targeted Node reports.
+- Otherwise, targeted Nodes that do not report the Template are **excluded before the risk class
+  and blast cap are decided**, and appear in the result as `unsupported` without being
+  dispatched. Class and cap are decided over the Nodes that remain.
+- A Node whose report is stale — the Template removed on reload after it was reported — answers
+  `unsupported` from its own daemon. `unsupported` is neither a failure nor a Policy denial.
+
+### The shipped read catalog
+
+- A package-owned Policy fragment (`policy.md`) of first-party `read` Templates: process list,
+  service status, disk usage, listening ports, package inventory, a bounded log tail, and file
+  checksum. Bounds such as the log tail's line count are fixed by the body, not by a slot.
+- It grows through normal review. Every change is a Policy change and lands in front of a human.
 
 ## Refusals
 
-_To be established by interrogation._
-
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
-
-- An unknown Operation name is refused at the surface, naming the problem and pointing at
-  `list_operations`.
-- A Template body is never sent to the Relay, and the Relay never renders or substitutes one.
-- Nothing on the wire can add, change or remove a Template on a Node.
+- **Unknown Operation.** A name no targeted Node reports is refused at the surface, pointing the
+  caller at `list_operations`.
+- **Malformed call.** Unknown or missing argument names and ill-formed values get their own
+  outcome, never `denied_by_policy`, so a typo never reads as a denial.
+- **Class mismatch.** A daemon refuses a Task dispatched under a lower risk class than its own
+  Policy declares.
+- **Policy errors in a Template definition** — a missing description, a slot not standing alone,
+  an unknown slot type, a name shadowing a Native — make the whole Policy `invalid` (`policy.md`).
+- **From the wire.** Nothing adds, changes or removes an Operation on a Node. The Relay never
+  renders or substitutes a Template body.
 
 ## Governing ADRs and invariants
 
-- **ADR-0001 / invariant 1**: three tiers ordered by trust. A caller's arguments can never change
-  which command runs. New vocabulary is Templates.
-- **ADR-0021**: the local Template tier, template packs, fingerprints, `unsupported`, the shipped
-  catalog, the Native freeze, and data-egress governance ("read" does not mean "safe to see").
-- **ADR-0012 / invariant 13**: every Operation's risk class is security-relevant contract and
-  chooses its blast cap.
-- **ADR-0015**: the daemon is the source of truth for what it enforces, and the golden schema
-  guards the Relay's description of it.
-- **ADR-0007 / invariant 8**: `/proto` is the single source of truth for the vocabulary contract.
-  Generated code is never hand-edited.
-- **ADR-0002 / invariant 2**: Templates share Policy's trust root. They are readable by the Relay
-  and never writable over the wire.
+- **Invariant 1 / ADR-0001** — nothing on the wire can compose or escalate a command. For
+  Templates this rests on the single quoting path and standalone slots; for Natives, on argv.
+- **Invariant 13 / ADR-0012** — every Operation declares a risk class, and it chooses the cap.
+  Binds through the most-restrictive rule and the daemon's class check.
+- **Invariant 5 / ADR-0004** — the blast cap is enforced on the Relay before dispatch, over the
+  Nodes remaining after exclusion.
+- **Invariant 8 / ADR-0007** — `/proto` is the single source of truth for the vocabulary.
+- **Invariant 7** — Node-reported facts are forgeable; a Template's reported class is treated as
+  one.
+- **ADR-0021 — needs amending.** Template definitions move into Policy; template packs and the
+  template-set fingerprint are retired; the Native freeze stands.
+- **ADR-0015 — needs amending.** Its trigger has fired: argument schemas move into `/proto` for
+  every Operation, generated from the daemon's validators.
+- **GLOSSARY.md — needs updating.** Template Operation, template pack (retired), template-set
+  fingerprint (retired), slot types.
 
 ## Seams and proof
 
-_Not yet written._
+_Not yet written._ This spec's claims are the backlog of its testing issue.
 
 ## Out of scope
 
-- **Dispatch, fan-out, blast caps, timeouts, cancellation, Raw Exec gating and the per-tier
-  mechanism table**: `execution.md`.
-- **Which argument values a Node allows**: `policy.md`. Validation decides whether a value is
-  well-formed. Policy decides whether it is allowed.
-- **Discovery reads** (`list_operations` shape, `describe_node` vocabulary view): `query.md`.
-- **How an argument's shape or scale class groups approvals**: `approval.md`.
-- **Distributing templates to Nodes**: the customer's config management (`daemon-installation.md`).
-  Signed courier distribution is a future decision, not this spec.
+- **Where Templates are defined, allowed values, fragments, reload and `invalid`**: `policy.md`.
+- **Dispatch, fan-out mechanics, cancellation, Raw Exec and the per-tier mechanism table**:
+  `execution.md`.
+- **The shape of `list_operations` and `describe_node`**: `query.md`.
+- **How Template calls group for approval**: `approval.md`. The first pass treats each distinct
+  Template call as its own shape.
+- **Getting Policy onto a Node**: the customer's config management (`daemon-installation.md`).
+
+## Accepted residual risk
+
+- **A Template's risk class is Node-reported.** Most-restrictive-wins still trusts Nodes when
+  every Node reporting a Template reports `read` — a dispatch to one compromised Node, or to a set
+  of them.
+- **An author can write an unsafe Template.** A slot handed to another interpreter, a value read
+  as a flag, a path escaping its root, a command that reads too much. The first pass has only the
+  quoting path, slot types and the existing lint to stop it.
+
+## Future work
+
+Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
+none is a commitment to an order.
+
+- **A stronger answer for a Template's risk class.** Candidates, none chosen: a class the Relay
+  pins per Template name, set by an operator; pinning at first observation and treating a
+  downgrade as an alarm; a Relay-side floor for names matching no registered read Template.
+- **Research: MCP with many tools and many targets.** How AI-agents and MCP clients behave with
+  large or changing tool lists, schemas that differ per target, and fleets of thousands — to
+  decide whether generic `run_operation` stays, or gives way to per-Template tools, a promoted
+  short list, or something else.
+- **Mixed-vocabulary dispatch.** Candidates: telling the caller before dispatch which Nodes will
+  be skipped; a fleet view of vocabulary drift; whether excluded Nodes count toward a mutate cap.
+- **Safe-Template authoring** (shape decided). An escalation catalogue beside the threat model —
+  every known way a Template can exceed its author's intent, each tagged mechanical or judgement,
+  extended by research into shell tricks, environment and `PATH`, locale, symlink-following,
+  privilege-changing and writing commands, and check-to-use races. Every mechanical entry becomes
+  a `policy check` rule that makes the Policy `invalid`, each with a red-team case; an authoring
+  guide shows safe and unsafe forms side by side.
+- **Per-Operation output bounds** tighter than the daemon-wide cap.
+- **Shape and scale declarations on Template slots**, for finer approval grouping.
 
 ## Open questions
 
-1. **Can a Template Operation actually be dispatched?** From reading the code, MCP
-   `run_operation` and the Control API both look an Operation up in the fleet-wide *Native*
-   vocabulary only, and refuse any other name as `unknown operation`. The one Template dispatch
-   found is in the cross-binary test harness, which bypasses the surfaces. If that reading is
-   right, the shipped catalog is listed but cannot be run. Is closing that gap in scope now, and
-   what should the Relay check before it forwards a Template name?
-2. **Whose risk class does the Relay trust for a Template?** The class comes from the Node's own
-   report. A compromised Node could label a `mutate` Template as `read` and get the generous read
-   cap. Options include: accept it (Policy on that Node is the gate anyway), always use the
-   mutate cap for Templates, or pin the class at the Relay. Invariant 7 treats Node-reported
-   facts as forgeable.
-3. **Name validation for Templates.** The argument-name check (#345) reads Native descriptors. Should
-   Template slot names be checked at the surface against the Node's reported slots, and what
-   happens when a Selector spans Nodes with different vocabularies?
-4. **Mixed-vocabulary fan-out.** One Selector across Nodes with and without a Template yields
-   partial `unsupported`. Is that the product behaviour, or should resolution narrow to Nodes
-   that report the Template, or refuse up front?
-5. **Is the freeze permanent?** `service.restart` and `pkg.install` are grandfathered Natives.
-   Should they migrate to Templates eventually, or stay forever?
-6. **Arguments in `/proto`.** ADR-0015 kept the argument schema out of `OperationDescriptor` until
-   something must ship it over the wire. `TemplateDescriptor` now carries typed slots on the wire
-   while Natives do not. Has the trigger already fired?
-7. **Slot-type vocabulary.** Four types today. Who may add one, and does a new slot type need the
-   Template red-team suite re-run as an acceptance gate?
-8. **A shape or scale class for Template slots.** Natives declare shape or scale per argument for
-   approval grouping. Templates carry no such declaration. Should template authors declare it, and
-   what is the default?
-9. **Third-party and operator packs.** Is a template pack a unit of versioning Relay understands
-   (name and version in the registry), or only a directory convention on the Node?
-10. **Output bounds.** Stdout and stderr are size-capped per Task. Should an Operation or Template
-    be able to declare its own tighter output bound as part of its contract (data egress)?
-11. **Per-Operation timeouts.** Natives declare a default timeout. Should Templates declare one,
-    and may a caller override it?
-12. **Catalog governance.** Is the shipped catalog a closed list that needs an ADR to add to, or
-    can it grow with normal review?
+None open. Questions this spec raised for others: `query.md` owns how `list_operations` stays
+legible across thousands of Nodes; `approval.md` owns Template-call grouping.
 
 ## History
 
+- `2026-09-13` — worked through with the owner. Native vocabulary stays at four; Template
+  definitions live in Policy and run through a shell with single-quoted standalone slots; three
+  closed slot types narrowed by `allow`; most-restrictive risk class over the Nodes reporting a
+  Template, checked again by the daemon; non-reporting Nodes excluded before the cap; generic
+  `list_operations`/`run_operation`; required descriptions; argument schemas into `/proto`.
+  Safe-Template authoring, stronger risk-class trust and MCP-at-scale research deferred.
 - `2026-09-13` — stub created to name the capability.
