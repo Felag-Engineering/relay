@@ -1,6 +1,7 @@
 # Audit and read lane
 
-**Status:** draft for human approval, checked against the code on `2026-09-13`.
+**Status:** aspirational — confirmed with the owner on `2026-09-14`; mostly built, with the
+alignments and gaps recorded below.
 
 ## Purpose
 
@@ -95,6 +96,22 @@ read lane is not a claim this draft makes.
   and fail their call if that audit write fails. Their composition roots supply the auditor in
   production; a nil audit dependency remains a test/construction accommodation in adapter code,
   not an authorised production posture.
+
+### Decided with the owner
+
+Confirmed on `2026-09-14`. Where these contradict an older statement above, these win until the
+spec is rewritten:
+
+- **That a read happened is always recorded; what it returned never is.** Every read — a
+  read-class Operation or a non-dispatching read — leaves a record of who read, through which
+  capability, aimed at what, and when. Its output is delivered to the caller and is never kept in
+  the audit trail (ADR-0025). A `mutate`'s captured output is kept with its audit record.
+- **A zero-match dispatch is audited as a refusal** (`execution.md`), not as a Job-level record.
+- **New audit events from other capabilities:** changes to a Node's security-relevant self-report
+  (`node-connection.md`), and an idempotent repeat that returned an existing Job (`execution.md`).
+- **Any `viewer` or above reads all audit metadata** in the first pass.
+- **One read lane.** MCP and Control API reads that record their own audit rather than going
+  through the capability read lane are a gap to close (invariant 10), as in `query.md`.
 
 ## Refusals
 
@@ -192,26 +209,25 @@ Claims above with **no row**, and so nothing checking them:
 - **Solving token-cascade audit write latency:** #563 is a store change, not a change to the
   requirement that the per-Node cascade remains auditable.
 
+## Future work
+
+- **Audit visibility scoped by role or audience**, including the approval-record scoping gap (#469).
+- **Retention periods and a durable export** for operational and SIEM use. Retaining read output
+  stays out: it would need a new human decision against ADR-0025.
+- **A per-Account activity model**, if the Console's agent-activity view (#424) needs more than
+  the audit trail. MCP is stateless.
+- **Tamper-evident audit** — hash-chained records, so a deleted or altered row is detectable.
+
 ## Open questions
 
-- Which audit-query and audit-export access should each role and Account be allowed to use? The
-  current Console routes are viewer reachable, while approval-record visibility has a known
-  principal-scoping gap in #469. A human decision is required before treating audit visibility
-  as per-Account or audience-scoped.
-- Should MCP and Control API reads be consolidated behind the capability read lane, and what
-  compatibility work would that require? Current adapter-local recording is behaviour, not proof
-  that the desired one-layer end state is complete.
-- What durable audit-query/export interface, retention period, and access controls are required
-  for operational or SIEM use? ADR-0025 deliberately leaves read-output retention unchanged;
-  any proposal to retain it requires a new human decision rather than an implementation detail.
-- What batching shape preserves honest per-Node audit shortfall reporting during Enrollment Token
-  revocation without serialising one commit per Node? #563 tracks that performance and failure
-  granularity decision.
-- Does activity by Account need a separate durable model beyond the current audit trail? #424's
-  Console agent-activity design is a surface request and must not be mistaken for a session
-  model; MCP is stateless.
+None open. Revocation audit batching (#563) belongs to `enrollment.md`.
 
 ## History
+
+- `2026-09-14` — Confirmed with the owner: a read is always recorded and its output never is;
+  aligned with zero-match refusals and new audit events; `viewer` reads all audit metadata in the
+  first pass; adapter-local read recording is a gap; scoping, retention/export, activity model and
+  tamper-evident audit moved to Future work; #563 moved to `enrollment.md`.
 
 - `2026-09-13` — Proposed draft written for human review; it describes current evidence and
   leaves unbuilt or unsettled access, export, and performance behaviour explicit.

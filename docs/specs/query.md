@@ -1,6 +1,7 @@
 # Query
 
-**Status:** draft for human approval, checked against the code on `2026-09-13`.
+**Status:** aspirational — confirmed with the owner on `2026-09-14`; mostly built, with the
+alignments and gaps recorded below.
 
 ## Purpose
 
@@ -78,6 +79,23 @@ No current query surface exposes a general registry search API, a Control API op
   single-Node read records the requested Node ID, including an ID that does not exist.
 - If the access record cannot be written, the read is refused before it consults the registry
   or returns content. Query-access records contain metadata about the read, never its result.
+
+### Aligned with the other capabilities, and decided
+
+Confirmed with the owner on `2026-09-14`. Where these contradict an older statement above, these
+win until the spec is rewritten:
+
+- **The Policy view shows the whole evaluated Policy,** Template command bodies included
+  (`policy.md`). The earlier "never returns a template body" no longer holds.
+- **`list_operations` takes a Selector** and reports each Operation reachable across it —
+  description, typed slots and allowed values, risk class, and which Nodes report it
+  (`operations-and-templates.md`). A single Node ID is the one-Node case.
+- **The template-set fingerprint is retired.** A Node read shows the Policy fingerprint, whether the
+  Policy is valid, and whether it enables Raw Exec.
+- **An unknown Node ID is refused** as "no such Node", on `describe_node` and `list_operations`
+  alike, and the refused read is still recorded.
+- **One capability layer.** Each surface holding its own narrow registry reader is a gap to close,
+  not an accepted adapter split (invariant 10).
 
 ## Refusals
 
@@ -181,26 +199,23 @@ Claims above with no row, and so nothing checking them:
 - Fleet health monitoring, metrics, desired-state reconciliation, configuration management,
   daemon upgrades, and an unbounded remote shell.
 
+## Future work
+
+- **Control API query routes** — fleet enumeration, the Policy view and vocabulary discovery. Not in
+  the first pass; each would adapt the existing capability, never add a reader of its own.
+- **Role restrictions tighter than `viewer`** for sensitive fleet data, if a tenant,
+  delegated-access or data-classification need appears.
+
 ## Open questions
 
-- **Does the current registry-read seam satisfy invariant 10?** The capability layer owns
-  audited `ListNodes` and `DescribeNode`, while MCP, the Control API, and Console also hold
-  surface-specific narrow registry readers and access-recording paths. A human must decide
-  whether the projections are acceptable adapters or whether this is a design gap; that
-  decision should precede claiming one capability layer in an approved spec.
-- **What query exposure should the Control API eventually have?** It currently offers only
-  `GET /api/v1/nodes/{node_id}`. A need for enumeration, effective-Policy display, or
-  vocabulary discovery should first establish the authorized audience, disclosure shape,
-  audit record, and whether a new surface would merely adapt the existing capability.
-- **Should an Account's role constrain high-sensitivity fleet discovery beyond `viewer`?**
-  Current code exposes reads to every authenticated Account. A decision is required if a
-  tenant, delegated-access, or data-classification requirement makes that floor too broad.
-- **What is the durable contract for a Node ID supplied to `list_operations` when the Node is
-  absent from the registry?** The current MCP surface uses the ID only to look up the cached
-  Template vocabulary and does not establish the Node exists. Decide before another surface
-  depends on it as an existence assertion.
+None open. The surface-specific registry readers are recorded above as a gap to close.
 
 ## History
+
+- `2026-09-14` — Confirmed with the owner. Aligned with the whole-Policy view, Selector-scoped
+  `list_operations` and the retired template-set fingerprint; an unknown Node ID is refused;
+  surface-specific readers are a gap to close; Control API query routes and tighter roles moved to
+  Future work.
 
 - 2026-09-13 — Proposed initial capability specification for explicit human approval; no
   product behaviour changed.

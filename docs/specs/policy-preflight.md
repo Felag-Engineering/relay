@@ -1,7 +1,7 @@
 # Policy preflight
 
-**Status:** current as of `2026-09-12`. Renamed from *plan mode* by ADR-0038, which gives the
-word **Plan** to the approved-route capability in [`plan.md`](plan.md).
+**Status:** aspirational — confirmed with the owner on `2026-09-14` as matching intent; built
+today, with the alignments below.
 
 > **The capability is Policy preflight; the option is still spelled `plan` on the wire.** ADR-0038
 > renames the capability and the option together, but only the first half is a documentation
@@ -102,6 +102,19 @@ The property the whole capability rests on: **on an unchanged fleet, a preflight
 real run's outcomes agree.** Same Selector, same authorization, same cap arithmetic, same engine
 answering. Divergence is a defect, not a caveat, and it is asserted end to end rather than argued.
 
+### Aligned with the other capabilities
+
+Settled elsewhere on `2026-09-13`/`14`, and applied to a preflight identically:
+
+- A `deny` verdict carries the reason kind from `policy.md`: `no_allow` (nothing permitted it) or
+  `denied` (a deny rule vetoed it). A malformed call — unknown argument, ill-formed value — is
+  refused before any Node is asked.
+- An empty Selector and a Selector matching no Nodes are refused exactly as for dispatch
+  (`selectors-and-labels.md`, `execution.md`).
+- Targeted Nodes that do not report a Template are reported `unsupported` without being queried
+  (`operations-and-templates.md`).
+- The request option is `preflight`, renamed from `plan` (ADR-0038).
+
 ## Refusals
 
 A preflight refuses in fewer cases than a dispatch, and the difference is the point.
@@ -192,18 +205,24 @@ cheap enough that a caller always does it.
 - **Shadow mode** — a standing per-Account setting converting every mutate into a preflight is a
   candidate idea, not a commitment, and does not exist.
 
+## Future work
+
+- **A compile-time guard against a Relay-computed verdict.** Invariant 12 holds today because no
+  such code path exists; a `no_verdicts` guard analogous to `no_dispatch` would make a
+  snapshot-consulting shortcut structurally unreachable.
+
 ## Open questions
 
-- **Nothing structurally forbids a Relay-computed verdict.** Invariant 12 is enforced by the code
-  having no such path, and by `unknown(offline)` being the observable consequence — but unlike
-  dispatch, there is no compile-time guard making a snapshot-consulting shortcut unreachable. A
-  `no_verdicts` guard analogous to `no_dispatch` would close that.
 - **Preflight/apply parity is asserted on an unchanged fleet only.** Drift between preflight and
   apply is what the approval plan hash exists to catch for gated work; for ungated work, nothing re-checks
   that the fleet did not move between the preview and the act, and nothing needs to — but a
   caller could reasonably believe otherwise.
 
 ## History
+
+- `2026-09-14` — Confirmed with the owner as matching intent; aligned with the Policy denial
+  reason kinds, malformed-call refusal, empty and zero-match Selector refusals, and Template
+  exclusion. The `no_verdicts` guard moved to Future work.
 
 - `2026-09-12` — Renamed from `plan-mode.md` by ADR-0038, which reassigns **Plan** to the
   approved-route capability. Behaviour unchanged; the option on the wire is still `plan` until the
