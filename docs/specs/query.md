@@ -1,6 +1,6 @@
 # Query
 
-**Status:** proposed draft for explicit human approval, based on code checked 2026-09-13. This document is not authoritative until a human approves it.
+**Status:** draft for human approval, checked against the code on `2026-09-13`.
 
 ## Purpose
 

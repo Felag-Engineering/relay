@@ -38,7 +38,7 @@ product surface: a refusal that does not explain itself sends an agent looking f
 
 ## Governing ADRs and invariants
 
-The ADRs that constrain this capability and the numbered `CLAUDE.md` invariants it touches, each
+The ADRs that constrain this capability and the numbered `AGENTS.md` invariants it touches, each
 with a sentence on *how* it binds here. If a change would contradict one, stop — that is a new
 ADR in front of a human, not a spec edit. If it touches nothing, say so explicitly; that is a
 useful claim to have reviewed.
@@ -83,6 +83,14 @@ Keep three kinds of claim apart:
   belongs here.
 
 *(none)* is an honest entry. It makes an unmeasured claim visible instead of unknown.
+
+## Approved design, not current behaviour *(optional)*
+
+Only if an ADR has approved work for this capability that is **not built**. List it here, each
+item naming its ADR and issue, so a reader cannot mistake an approved design for a current
+surface. Omit the section entirely when there is nothing to say — an empty one invites filling.
+
+Everything above this section describes today. Nothing in it does.
 
 ## Out of scope
 

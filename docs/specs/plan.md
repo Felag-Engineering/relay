@@ -245,7 +245,7 @@ holds none of its own. Nothing about it reaches `/proto`'s node plane.
 ### What proves each claim
 
 **Nothing yet — the capability is unbuilt, and this entire list is the backlog for its testing
-issue.** Per `CLAUDE.md`, one issue per capability is its testing issue, and a spec's "no row"
+issue.** Per `AGENTS.md`, one issue per capability is its testing issue, and a spec's "no row"
 list is that issue's scope. No test is named here, because naming one that does not exist is
 worse than naming none.
 

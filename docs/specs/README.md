@@ -7,6 +7,24 @@ A capability specification is **durable**. It is not a pre-implementation artifa
 stale once a feature ships — it is maintained as the capability evolves, and it is the answer
 to "what does Relay actually do here?" for anyone, human or agent, who has to work on it.
 
+## The establishing phase — every spec here is aspirational
+
+**Until the spec-driven-development cutover, every file in this directory describes what the
+owner wants Relay to do, not what the code does.** That holds whatever a spec's `**Status:**`
+line says. The set is being established by interrogating the owner one capability at a time;
+drift between a spec and the code is expected, and is the backlog the cutover works through.
+
+While this banner stands:
+
+- **A spec does not bind the code, and a disagreement with the code is not an escalation.** An
+  implementing agent works from its issue, the ADRs and the invariants — which bind exactly as
+  they always have — and treats a spec as context on intent, never as a requirement it must
+  satisfy or a conflict it must stop on.
+- **A stub is a legitimate file.** `**Status:** stub` means the capability belongs in the set
+  and has not yet been worked through; its *Open questions* are where that session starts.
+- The rules below describe how specs work **after** the cutover. The cutover is the change that
+  deletes this section, and it is a human's call.
+
 ## Who writes these
 
 **A human does, deliberately, in an interactive session.** A capability specification is never
@@ -17,12 +35,28 @@ an ADR and like the invariants.
 The loop that implements issues **reads** these and complies with them. If its work would make
 a statement here untrue, it stops and escalates so a human can update the spec first; it does
 not quietly edit the file and it does not quietly proceed. That is the same rule as *When
-documents and the code disagree* in [`CLAUDE.md`](../../CLAUDE.md), applied one step earlier.
+documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md), applied one step earlier.
 
 The reason for the asymmetry: these are the most impactful artifacts in the repo. Milestones,
 issues, tests and benchmarks all decompose from them, so an error here propagates into
 everything downstream — and a document an unattended agent may rewrite to match its own change
 cannot also be the thing that constrains it.
+
+## Status, and what `draft` means
+
+A spec's `**Status:**` line is the only header metadata. Three states are in use:
+
+| Status | Means | Cleared by |
+|---|---|---|
+| `current as of <date>` | Describes behaviour the code has today | Re-checking it against the code and moving the date |
+| `designed, not built, as of <date>` | The shape is decided; no code implements it | The implementation landing, which moves it to `current` |
+| `draft for human approval, checked against the code on <date>` | Drafted in an interactive session, not yet reviewed by a human | **The human merging it**, in the same change that moves the line to `current` |
+
+`draft` is a pre-merge state, not a tier. It does not appear on `main`: a reviewer either
+moves the line to `current as of <date>` as part of merging, or the spec does not merge.
+That keeps *When documents and the code disagree* unambiguous — every spec on `main`
+carries the same authority, and there is no half-approved spec for the conflict table to
+be silent about.
 
 ## The two tiers
 
@@ -31,7 +65,7 @@ cannot also be the thing that constrains it.
 | **Capability specification** | **here** | **Durable — maintained as the capability evolves** | **What does this capability currently do, across every surface?** |
 | Implementation specification | A GitHub issue | Disposable — dies with its PR | How does *this change* get made? |
 
-Above both sit the fourteen architecture invariants in [`CLAUDE.md`](../../CLAUDE.md), which
+Above both sit the fourteen architecture invariants in [`AGENTS.md`](../../AGENTS.md), which
 neither tier may contradict.
 
 ## Granularity is a judgement call
@@ -58,7 +92,7 @@ That is why `selectors-and-labels.md` exists rather than being restated four tim
 | Question | Where it lives |
 |---|---|
 | What is Relay, and why is it shaped that way? | `README.md` |
-| How do we work, and what must always be true? | `CLAUDE.md` |
+| How do we work, and what must always be true? | `AGENTS.md` |
 | What do we call things? | `GLOSSARY.md` |
 | Why is the system shaped this way? | `docs/adr/` |
 | What does capability X do today? | here |
@@ -77,7 +111,7 @@ That is why `selectors-and-labels.md` exists rather than being restated four tim
 - **If a spec and the code disagree, stop and escalate** — do not resolve it in either
   direction. The spec may be stale, or the code may have the bug the spec correctly describes,
   and a spec carries no human sign-off by construction. See *When documents and the code
-  disagree* in [`CLAUDE.md`](../../CLAUDE.md). That governs a disagreement you *discover*; when
+  disagree* in [`AGENTS.md`](../../AGENTS.md). That governs a disagreement you *discover*; when
   you are *making* a change, the spec leads and the code follows in the same PR.
 - Name modules, interfaces, and contracts. **Never file paths or code snippets** — they go
   stale within a sprint. The one exception is a snippet that encodes a decision more precisely
@@ -96,18 +130,18 @@ not a record. Before the PR merges, lift everything in it that outlives the chan
 - A decision that is hard to reverse **and** surprising without context **and** the result of a
   real trade-off → an **ADR**, cited by number rather than re-argued here.
 - A shift in domain language → **`GLOSSARY.md`**, in the same change.
-- A change to an architecture invariant → **`CLAUDE.md`** plus an amendment recorded in its
+- A change to an architecture invariant → **`AGENTS.md`** plus an amendment recorded in its
   ADR, which is a conversation with a human and never a quiet edit.
 
 If a decision touches Policy, execution, transport, mTLS, auth, `/proto`, blast caps, or label
-authority, it is not yours to settle in a spec at all — see the escalation list in `CLAUDE.md`.
+authority, it is not yours to settle in a spec at all — see the escalation list in `AGENTS.md`.
 
 ## The capability set
 
-A target for writing, not a claim that these files exist yet; the list is ratified as each spec
-lands, and it is expected to move as the shape becomes clearer. The System Model is deliberately
-absent: it is unbuilt (`v1.1.0`), and a spec saying what something "does today" for something
-that does nothing yet is a design document wearing a spec's clothes.
+The list is expected to move as the shape becomes clearer — a capability may split or merge
+during the establishing phase — so treat it as the current decomposition rather than a closed
+set. Rows marked *stub* exist so the capability is named; their content comes from the
+interrogation.
 
 | Spec | Covers |
 |---|---|
@@ -121,5 +155,13 @@ that does nothing yet is a design document wearing a spec's clothes.
 | `audit-and-read-lane.md` | The audited read lane, audit records, the retention posture |
 | `enrollment.md` | Enrollment Tokens, join strings, bundles, identity issuance and revocation |
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
+| `policy.md` *(stub)* | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |
+| `operations-and-templates.md` *(stub)* | The Operation vocabulary and its golden schema, risk classes, the frozen Native set, the local Template catalog |
+| `node-connection.md` *(stub)* | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
+| `relay-configuration.md` *(stub)* | Operator-set startup config unreachable from any API, secrets as file paths, `relay init`, Relay packaging |
+| `daemon-installation.md` *(stub)* | Installing and configuring the relay-daemon on a Node through the customer's config management |
+| `response-lane.md` *(stub)* | Quarantine, remediation and secret distribution targeted through `relay:` labels |
+| `system-model.md` *(stub)* | Services, Dependencies and Annotations: the advisory, git-backed model and its AI-immutable grounding facts |
+| `observability.md` *(stub)* | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
 
 Start from [`TEMPLATE.md`](TEMPLATE.md).

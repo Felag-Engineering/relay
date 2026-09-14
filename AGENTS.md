@@ -154,6 +154,11 @@ table with its issue number until it does.
 
 **Stop and escalate. Do not resolve it in either direction.**
 
+> **Until the spec-driven-development cutover, capability specs are aspirational** — they
+> describe intent, not the code, and drift from the code is expected. The two rows below that
+> name a capability spec do not apply yet; the invariant row always does. See the establishing
+> phase in `docs/specs/README.md`.
+
 That rule is deliberately absolute, because the right direction depends on which kind of
 statement disagreed — and getting it backwards is expensive in one specific way. Invariant 2
 says the Relay may never write a Node's Policy. An agent that found a write path and "fixed
@@ -361,7 +366,7 @@ If you are an agent implementing an issue: **stay in scope**, you have **no merg
 (open a PR; a human merges), and **stop and flag a human** rather than guess on a hard call.
 
 **Always escalate — never try to land without review** — anything touching `proto/`,
-`docs/adr/`, Policy/exec/transport/mTLS/auth code, `CLAUDE.md`/`GLOSSARY.md`, the `Makefile`,
+`docs/adr/`, Policy/exec/transport/mTLS/auth code, `AGENTS.md`/`GLOSSARY.md`, the `Makefile`,
 or CI; any failed build; any high-severity review finding. These are the security surface and
 the architecture invariants; they always land in front of a person. Editing an invariant is
 never a docs chore.

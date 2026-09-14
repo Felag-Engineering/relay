@@ -1,7 +1,6 @@
 # Accounts and access
 
-**Status:** proposed draft, assessed against the code on `2026-09-13`; it is not
-authoritative until a human explicitly approves it.
+**Status:** draft for human approval, checked against the code on `2026-09-13`.
 
 ## Purpose
 
@@ -53,8 +52,9 @@ created through the API.
 An API Token belongs to exactly one Account and has a non-secret ID, name, creation
 time, optional expiry, last-use time, and revocation state. At mint, the caller must
 explicitly choose a TTL; zero means no expiry. The plaintext `glp_…` credential is
-returned in the mint response exactly once. Relay stores and subsequently exposes
-neither its plaintext nor its hash.
+returned in the mint response exactly once. Relay stores a hash of the secret
+component and never the plaintext, and exposes neither afterwards: no read, list, or
+audit surface returns the plaintext or the hash.
 
 At authentication, a valid, unexpired, unrevoked API Token resolves to its enabled
 Account and current role. API Token verification updates the token's last-use time
@@ -171,6 +171,21 @@ composition-root configuration changes.
 | A disabled Account's Console session stops working | `TestConsole_DisablingAnAccountEndsItsConsoleSession` | Console |
 | Step-up requires a credential and is audited independently | `TestStepUp_RefreshesPresenceOnlyWithACredential` and `TestStepUp_SucceedsUnderItsOwnAuditKind` | Console |
 
+Claims above with **no row**, and so nothing checking them:
+
+- That an Account's authority is applied consistently across the Control API, MCP, and the
+  Console. Each surface proves its own gate; no cross-surface authorization-parity test
+  asserts that they agree. `query.md` records the same gap for the read floor, and the
+  first Open question below is whether that is an invariant-10 defect or an acceptable
+  adapter split.
+- That the founding-admin name is reserved against every creation path, rather than the
+  Control API route alone.
+- That `relay bootstrap-token` is additive and refuses a disabled founding admin. The
+  command implements both; no named test is cited here for either.
+- That no Account lifecycle route consumes the Console step-up capability today. This is an
+  asserted absence, and an absence that nothing guards is one a future route can remove
+  without failing a test.
+
 ### Performance
 
 | Characteristic | Contract | Measured by |
@@ -200,6 +215,9 @@ composition-root configuration changes.
 | What Console OIDC browser flow, if any, joins the existing local-password session flow? | Follow-up | A human chooses whether external browser identity is needed; `console_oidc` is reserved but not implemented. |
 | What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected fleet/operator scale or an audit/read-lane specification requires a caller-visible contract. |
 | Is preventing removal or demotion of the final enabled admin required, beyond the current self-target guard? | Blocks destructive Account lifecycle expansion | A human must choose the recovery and local-root model; current code permits another admin to make that state. |
+| How should a machine Account authenticate beyond a long-lived bearer API Token, and how is an Account's authority narrowed below its role — Grants over Operations × Selectors, per-Token scope — and on which engine? | Research (#578); no milestone | Today the role is the only Relay-side limit: an `operator` machine Account may request any Operation against any Node, bounded only by Freeze, the blast-radius cap, approval, and Node Policy, and its credential is unbound and as long-lived as its TTL. Any answer must keep a configured AI-agent connected without routine human re-authentication. `docs/deferred.md` records Grants as narrows-only and `relay:`-scoped when used as a security boundary; #285 proposes Cedar, evaluated jointly with the approval-rule grammar. |
+| Should per-Account rate limits bound a runaway AI-agent loop in time as well as in blast radius? | Unscheduled; decision open | #279 asks whether to pull the deferred per-Account Job-creation limit forward. |
+| Do approval audiences and `on_behalf_of` resolve from IdP group claims, and how does that join the existing-Account OAuth mapping? | Follow-up | `docs/deferred.md` names IdP-federated teams as the direction and rules out a native Relay org chart; nothing specifies the claim mapping. |
 
 ## History
 

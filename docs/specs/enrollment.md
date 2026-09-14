@@ -1,10 +1,6 @@
 # Enrollment
 
-> **Proposed capability specification — requires explicit human approval before it
-> becomes authoritative.** It records behaviour checked against the code on
-> 2026-09-13 and distinguishes the approved, unbuilt self-serve design below.
-
-**Status:** current as of 2026-09-13.
+**Status:** draft for human approval, checked against the code on `2026-09-13`.
 
 ## Purpose
 
@@ -144,7 +140,17 @@ relay-daemon enrollment path also require the relevant real-daemon integration c
 | A token cascade records each Node and catches a late record | `TestService_RevokeToken_RecordsEveryCascadedNode`, `TestService_RevokeToken_RecordsNodeFoundOnRescan` | capability |
 | Audit failure does not leave cascaded Nodes live | `TestService_RevokeToken_RecordFailureDoesNotStopTheCascade` | capability |
 | The Control API records mint and revoke lifecycle events | `TestMintThenRevokeToken_BothProduceAuditRows` | API |
-| A persisted daemon identity prevents a second enrollment | *(no named Rust test cited yet)* | relay-daemon |
+
+Claims above with **no row**, and so nothing checking them:
+
+- That a persisted daemon identity prevents a second enrollment, and that a failed
+  enrollment persists no partial identity. Both are daemon-side and would need a Rust
+  seam; neither is cited here.
+- That a daemon with neither a persisted identity nor both enrollment inputs fails closed
+  rather than opening a plaintext Node-plane connection.
+- That the one-year TTL ceiling holds. It is a Control API bound, not a token-service one:
+  `Create` refuses only a non-positive TTL, so a second minting path would not inherit the
+  ceiling.
 
 ### Performance
 

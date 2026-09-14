@@ -1,6 +1,6 @@
 # Audit and read lane
 
-**Status:** proposed draft, checked against the code as of `2026-09-13`; it requires explicit human approval before it is authoritative.
+**Status:** draft for human approval, checked against the code on `2026-09-13`.
 
 ## Purpose
 
@@ -74,6 +74,13 @@ read lane is not a claim this draft makes.
   A mutate-class dispatch audit record retains its captured output under the existing retention
   posture. This difference is based on the Operation risk class, not on the surface that reads
   the record.
+- The two retention decisions key on the risk class from opposite directions, deliberately and
+  not symmetrically. The audit sink retains unless the class is explicitly `read`; the query
+  lane strips unless the class is explicitly `mutate`. An unspecified class is therefore
+  retained by the sink and stripped by the lane. `risk_class` is non-null and written from the
+  Operation catalog, so an unspecified class is not reachable today, but the divergence is load
+  bearing: a schema or catalog change that made one reachable must not turn the query lane's
+  permissive default into a read-output disclosure.
 - A live event subscription records the subscription after validating and canonicalising the
   requested event kinds and before subscribing. The one `KindRead` record describes the kinds
   and resume request; it does not record events subsequently delivered by the stream. The event
