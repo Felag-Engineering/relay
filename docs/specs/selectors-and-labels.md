@@ -1,6 +1,7 @@
 # Selectors and Labels
 
-**Status:** current as of `2026-09-12`.
+**Status:** aspirational — being worked through with the owner (`2026-09-13`); the decisions
+log below has not yet been folded into the body.
 
 ## Purpose
 
@@ -201,6 +202,71 @@ path of every dispatch, including a read at the 10,000-Node cap; nothing measure
   are unrelated and neither substitutes for the other.
 - **Services and Dependencies** — the System Model desugars to Selectors but is advisory and
   unbuilt (invariant 9).
+
+## Decided in interrogation
+
+Running record of the owner's answers (establishing phase, `2026-09-13`), folded into the sections
+above when the spec is rewritten. The owner's picture: `node:` is what a Node reports about
+itself and nothing remote can change; `relay:` is applied by the Relay and edited by neither users
+nor Nodes; `tag:` is created by users to organise assets; `state:` tracks a Node's current
+condition. One writer each.
+
+- `2026-09-13` — **A `relay:` label exists only as the side effect of a Relay action.** No user
+  ever writes a `relay:` label directly. Each label is defined together with the action that
+  sets and clears it (e.g. quarantining a Node writes `relay:quarantine=on`); roles, step-up and
+  audit apply to the action. The set of `relay:` keys is closed and grows only when an action is
+  built — the full list need not be known now. Supersedes the #430 plan for direct `admin` +
+  step-up label management.
+- `2026-09-13` — **Enrollment writes one provenance label; a token may carry tags.** Enrolling
+  writes `relay:enrollment-token=<token ID>` — a fixed key and a value the Relay knows, meaning
+  exactly "joined through this token", so a leaked token's Nodes stay targetable by the security
+  lane. Free-form grouping previously carried as token scope (`zone=pci`, `team=payments`) moves
+  to `tag:` labels carried on the token and applied at enrollment — routine targeting only,
+  editable later by users. Token scope as a list of operator-chosen `relay:` labels is retired;
+  `enrollment.md` must follow.
+- `2026-09-13` — **`node:` has two sources in one namespace.** *Declared* labels
+  (`node:env=prod`, `node:role=web`) come from a root-owned file written by config management,
+  picked up on the same explicit reload as Policy and reported without a reconnect (replacing the
+  start-time environment variable). *Built-in* labels (`node:hostname`, `node:ip`, `node:os`,
+  `node:arch`) are filled in by the daemon from its Facts; their keys are reserved and a declared
+  label cannot set them. A multi-valued built-in (`node:ip`) matches when any value matches.
+  Every `node:` label is forgeable by its own Node; addressing one specific Node without trusting
+  it uses the Relay-assigned Node ID, bound to its certificate.
+- `2026-09-13` — **`tag:` follows ADR-0020, with MCP included.** An Account of `operator` or
+  above adds and removes tags on every surface, MCP included, so an AI-agent can organise the
+  fleet as it works. Standard authentication, no step-up; every write audited. Tags are
+  `key=value`, the same shape as every other label. Bulk tagging takes a Selector and is audited
+  as one action naming the Nodes it touched. Safe for an AI-agent because a tag grants no reach
+  it did not already have — every dispatch still passes the blast cap, Policy and approval — and
+  a tag is never a security-lane target. (ADR-0020 needs amending: its direct `relay:` label
+  management is superseded by the decision above.)
+- `2026-09-13` — **The `state:` vocabulary after the Policy decisions.** Markers: `offline`,
+  `outdated`, `cert-expiring`, **`policy-invalid`** (new — the Node reports its Policy
+  `invalid`), **`raw-exec-enabled`** (new — the Node's Policy enables Raw Exec). Facts:
+  `daemon-version`, `policy-fingerprint` (now covering Templates). Retired:
+  `template-unloadable`, `template-fingerprint`. The vocabulary stays closed; adding a term is a
+  change to this spec. `policy-invalid` and `raw-exec-enabled` derive from the Node's own report,
+  so a compromised Node can hide them — they find Nodes, they guarantee nothing.
+- `2026-09-13` — **The Selector grammar gains three narrow forms, and `relay:` is never
+  negated.** A value set for one key (`node:role=web|api`); globs within a value
+  (`node:hostname=web-*`, `*` and `?` as in Policy); and negation for `node:`, `tag:` and
+  `state:` only (`!tag:canary=true`, `!state:offline`). A negated `relay:` term is a parse error
+  — with negation, a `relay:` label the store declines to serve would otherwise make a
+  quarantined Node match `!relay:quarantine=on`. Terms are still ANDed, with no parentheses and
+  no OR across keys, so a Selector's blast radius stays legible at a glance.
+- `2026-09-13` — **Defaults, confirmed by the owner.** (a) Enrollment also writes
+  `relay:node-id=<id>`, the Relay-assigned ID bound to the certificate: unforgeable single-Node
+  addressing and a valid security-lane target, with a value set addressing a handful. (b) Globs
+  are allowed on `relay:` values; only negation is forbidden there. (c) An empty Selector still
+  matches every Node for reads and listing, but is refused for dispatch — the whole fleet must be
+  written deliberately (e.g. `node:hostname=*`). (d) Per Node, at most 64 declared `node:`
+  labels and 64 tags; keys up to 63 characters, values up to 255, in the existing safe charset.
+  (e) A malformed or over-limit declared-labels file means none of its labels apply; built-in
+  labels still do, and the Node reports a new `state:labels-invalid` marker — never a partial
+  load.
+
+**Not yet done:** folding these decisions into the sections above. Until then, where this log
+and the body disagree, this log is the owner's intent.
 
 ## Open questions
 
