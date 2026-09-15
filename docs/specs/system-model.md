@@ -1,6 +1,6 @@
 # System Model
 
-**Status:** stub — aspirational, not yet worked through with the owner (`2026-09-13`).
+**Status:** stub — deferred by the owner on `2026-09-14`; not in the first pass.
 
 ## Purpose
 
@@ -84,6 +84,18 @@ _Not yet written._
 - Scheduled health checks (Expectations) — deferred work in `docs/deferred.md`, not this spec.
 - Incident memory and long-horizon reasoning that belongs to an AI-agent harness rather than
   to Relay.
+
+## Decided in interrogation
+
+- `2026-09-14` — **The System Model stays in Relay's scope, deferred.** Not designed or built in the
+  first pass; this spec remains a stub. The owner sees a strong case for the model being recorded
+  and available in Relay, and is open to moving it out. The two cases, for when it is picked up:
+  - *In Relay:* one shared, audited record of what Services run where, available to every
+    consumer — Gleipnir, other AI-agents, humans on the Console — rather than locked inside one
+    AI-agent's memory.
+  - *Out of Relay (into Gleipnir or another consumer):* it is the AI-agent's understanding of the
+    fleet — intelligence, not mechanism — and Relay stays the arms and hands; a second store and a
+    second audit trail (git) sit awkwardly beside the Relay's own.
 
 ## Open questions
 

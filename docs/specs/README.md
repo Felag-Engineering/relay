@@ -160,7 +160,7 @@ interrogation.
 | `node-connection.md` *(stub)* | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
 | `relay-configuration.md` *(stub)* | Operator-set startup config unreachable from any API, secrets as file paths, `relay init`, Relay packaging |
 | `daemon-installation.md` *(stub)* | Installing and configuring the relay-daemon on a Node through the customer's config management |
-| `response-lane.md` *(stub)* | Quarantine, remediation and secret distribution targeted through `relay:` labels |
+| `quarantine-node.md` *(stub)* | Quarantining a distrusted Node: fencing it off from routine work, targeted only through `relay:` labels |
 | `system-model.md` *(stub)* | Services, Dependencies and Annotations: the advisory, git-backed model and its AI-immutable grounding facts |
 | `observability.md` *(stub)* | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
 

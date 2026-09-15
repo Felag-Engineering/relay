@@ -1,6 +1,7 @@
 # Accounts and access
 
-**Status:** draft for human approval, checked against the code on `2026-09-13`.
+**Status:** aspirational — confirmed with the owner on `2026-09-14`, awaiting their review of this
+draft. Describes intended behaviour, not the code (see the establishing phase in `README.md`).
 
 ## Purpose
 
@@ -18,12 +19,12 @@ Policy, approval, or the blast-radius cap.
 
 ## Surfaces
 
-| Surface | Current access to the capability |
+| Surface | Access to the capability |
 |---|---|
 | **Control API** | Admin-only Account lifecycle endpoints under `/api/v1/accounts`, API Token mint/list under `/api/v1/accounts/{id}/tokens`, and API Token revocation under `/api/v1/api-tokens/{token_id}`. Bearer API Tokens authenticate this surface. |
 | **MCP** | A per-Account API Token authenticates a headless caller. When configured, the endpoint is also an OAuth 2.1 protected resource: it publishes protected-resource metadata and accepts a verified external-IdP token that resolves to an existing Account. MCP does not expose Account or API Token administration. |
-| **Admin Console** | Human Accounts can sign in with a local password, establish a Console-only session, and sign out. Existing Console routes receive that session and its Account role. The Accounts and API Tokens administration screen described in `docs/design/console/15-accounts-and-tokens.md` is v0.7.0 work (#433), not current behaviour. |
-| **Local operator** | `relay bootstrap-token` creates an API Token for the stored founding admin using local access to the Relay store. It is the bootstrap escape from the authentication cycle and is not a network surface. |
+| **Admin Console** | Human Accounts sign in with a local password, establish a Console-only session, and sign out. Console routes receive that session and its Account role. The Accounts and API Tokens administration screen (#433) is in scope and not yet built; its step-up matrix is settled below. |
+| **Local operator** | `relay bootstrap-token` creates an API Token for the stored founding admin using local access to the Relay store. It is the bootstrap escape from the authentication cycle, and the recovery path when no enabled `admin` can act. It is not a network surface. |
 
 ## Behaviour
 
@@ -41,17 +42,51 @@ Operations and lifecycle work, and `admin` additionally has Raw Exec and Account
 administration authority. A role grants no permission beyond the relevant capability
 gate, and never overrides the relay-daemon's live Policy decision.
 
+**The role is the only Relay-side limit on an Account in the first pass.** An `operator`
+machine Account may request any Operation against any Node its role allows, bounded by Freeze,
+the blast-radius cap, approval and Node Policy — and by nothing narrower. Narrowing an Account
+below its role is Future work.
+
+### What each role may do elsewhere
+
+Other capabilities decide these, each in the capability layer; they are gathered here so a
+role's reach can be read in one place.
+
+| Act | Floor | Settled in |
+|---|---|---|
+| Read the registry, vocabulary and audit metadata | `viewer` | `query.md`, `audit-and-read-lane.md` |
+| Request an Operation | `operator` | `execution.md` |
+| Request Raw Exec | `admin` | `execution.md` |
+| Cancel any Job, not only one's own | `operator` | `execution.md` |
+| Add and remove `tag:` labels, on every surface including MCP | `operator` | `selectors-and-labels.md` |
+| Engage a Freeze over the Control API | `operator`, **human Account only** | `freeze.md` |
+| Release a Freeze over the Control API | `admin`, with a reason | `freeze.md` |
+| Decide an approval | the role floor the Action required | `approval.md` |
+| Issue an approval grant | second-person, out-of-band approval | `approval.md` |
+| Mint an Enrollment Token | `admin` | `enrollment.md` |
+| Administer Accounts and API Tokens | `admin` | this spec |
+
+### Account administration
+
 The Control API creates, lists, reads, re-roles, enables, and disables Accounts.
-Those endpoints currently require an authenticated `admin`; their successful writes
-record the acting principal in the audit trail. The API refuses an Account changing
-its own role or disabling itself. The founding-admin name is reserved and cannot be
-created through the API.
+Those acts require an authenticated `admin`; their successful writes record the acting
+principal in the audit trail. An Account may not change its own role or disable itself.
+The founding-admin name is reserved and cannot be created through any surface.
+
+**The last enabled `admin` cannot be disabled or demoted,** by itself or by another Account.
+The Relay always keeps at least one enabled `admin`; if none can act, recovery is
+`relay bootstrap-token` on the Relay host.
+
+**Account administration is authorized in the capability layer,** once, for every surface
+(invariant 10). Today each surface's route checks the role itself; that is a gap to close, not an
+accepted adapter split.
 
 ### API Tokens
 
 An API Token belongs to exactly one Account and has a non-secret ID, name, creation
 time, optional expiry, last-use time, and revocation state. At mint, the caller must
-explicitly choose a TTL; zero means no expiry. The plaintext `glp_…` credential is
+explicitly choose a TTL; zero means no expiry, so a configured AI-agent can stay connected
+without routine human re-authentication. The plaintext `glp_…` credential is
 returned in the mint response exactly once. Relay stores a hash of the secret
 component and never the plaintext, and exposes neither afterwards: no read, list, or
 audit surface returns the plaintext or the hash.
@@ -83,9 +118,9 @@ An OAuth session on MCP proves that a human authorized that *session*. MCP calls
 remain agent-grade for approval: OAuth attribution does not prove a human intended
 an individual model-generated call and does not raise its approval channel.
 
-### Console authentication and step-up
+### Console authentication
 
-The Console's current local sign-in accepts only an enabled human Account with a
+The Console's local sign-in accepts only an enabled human Account with a
 local password. Successful sign-in retires any presented session identifier, creates
 a new Console-only session, and records the verified Account, method, and source.
 The session cookie is host-only, Secure, HttpOnly, SameSite=Strict, and accompanied
@@ -98,27 +133,42 @@ and step-up throttling are recorded without naming a verified Account. Sign-out 
 the server-side session; disabling an Account also makes an already-issued Console
 session unusable.
 
-The Console authentication service can perform password step-up and records success,
-failure, and throttling separately from sign-in. Its freshness window is root-owned
-Relay configuration. **No current Accounts administration route consumes that
-step-up capability.** The proposal for #433 is that creating an Account, changing a
-role, minting a Token, and re-enabling an Account require step-up and audit; that is
-designed behaviour requiring human approval and implementation, not a claim about
-today's Control API.
+### Console step-up
+
+The Console authentication service performs password step-up and records success, failure, and
+throttling separately from sign-in. Its freshness window is root-owned Relay configuration.
+
+**Privilege-granting Account administration in the Console requires a fresh step-up**, and each
+is audited:
+
+- creating an `admin` Account;
+- raising an Account's role;
+- re-enabling a disabled Account;
+- minting an API Token for another Account;
+- resetting another human Account's Console password.
+
+**Only an `admin` may reset another Account's password.** In the first pass the admin sets the new
+password directly; an emailed self-service reset link is Future work. Setting another person's
+password is an Account-takeover path, which is why it sits in this matrix.
+
+Acts that only reduce privilege — disabling an Account, lowering a role, revoking a Token — do not
+require step-up. This is the matrix #433 implements.
 
 ## Refusals
 
-| Refusal | Current behaviour |
+| Refusal | Behaviour |
 |---|---|
 | Missing, malformed, expired, revoked, disabled, or otherwise invalid API Token | Authentication fails with one generic unauthorized response, without identifying the failing check. |
-| Non-admin Account lifecycle request | The Control API returns an admin-required refusal. |
+| Non-admin Account administration request | Refused as admin-required, on every surface. |
 | Invalid Account name, kind, or role; duplicate or reserved Account name | The create or update request is refused; names remain unique and the founding admin cannot be shadowed. |
-| Self role change or self-disable | The Control API refuses the mutation to avoid the direct self-lockout path. |
-| Token mint for a disabled or missing Account, missing TTL, invalid TTL, or invalid Token request | The Control API refuses minting and does not issue a credential. |
-| Unknown API Token at revocation | The Control API reports that the Token was not found; an already-revoked Token is accepted as the requested end state. |
+| Self role change or self-disable | Refused, to avoid the direct self-lockout path. |
+| Disabling or demoting the last enabled `admin` | Refused; the Relay always keeps one enabled `admin`. |
+| Privilege-granting Console act without a fresh step-up | Refused until the Account steps up. |
+| Token mint for a disabled or missing Account, missing TTL, invalid TTL, or invalid Token request | Minting is refused and no credential is issued. |
+| Unknown API Token at revocation | Reported as not found; an already-revoked Token is accepted as the requested end state. |
 | OAuth token failing any Relay check, unknown subject, disabled Account, absent required scope, or OAuth not configured | The MCP authentication path refuses without revealing which check failed; an unconfigured Relay publishes no OAuth metadata. |
-| Console sign-in failure | The Console returns the same credential failure for all identity or password failures; a throttle says when another attempt may be made. |
-| Machine Account attempting Console local-password sign-in | It is refused as the same indistinguishable Console credential failure. |
+| Console sign-in failure | The same credential failure for all identity or password failures; a throttle says when another attempt may be made. |
+| Machine Account attempting Console local-password sign-in | Refused as the same indistinguishable Console credential failure. |
 
 ## Governing ADRs and invariants
 
@@ -128,16 +178,17 @@ today's Control API.
   credential is a per-Account API Token, while local root performs bootstrap.
 - **ADR-0024** — makes Relay an OAuth protected resource only, requires existing-Account
   mapping, and preserves API Token authentication for headless callers.
-- **ADR-0009** and **ADR-0026** — bind the Console to the shared capability layer and
-  require step-up for Console privilege grants and mutate applies respectively. #433 has
-  not yet made its Account administration behaviour current.
+- **ADR-0009** and **ADR-0026** — bind the Console to the shared capability layer and require
+  step-up for Console privilege grants and mutate applies respectively. The step-up matrix above
+  is what the privilege-grant half means for Account administration.
 - **ADR-0027** — OAuth/MCP session attribution does not make individual MCP calls
   human-grade for approval.
 - **ADR-0028** — MCP is stateless; a machine Account has recent activity, never a
   durable connected session to terminate.
-- **ADR-0035** — account suspension is deferred and imposes no current state or route.
-- **Invariant 10** — surface adapters must not create a parallel authorization or
-  dispatch path; durable Account authority must remain consistent across surfaces.
+- **ADR-0013** — a Freeze is engaged over the API only by a human Account.
+- **ADR-0035** — account suspension is deferred and imposes no state or route.
+- **Invariant 10** — Account administration, like every other decision, is authorized once in the
+  capability layer; per-route role checks are a gap to close.
 - **Invariant 11** — OAuth issuer, audience, scope, and Console step-up freshness are
   root-owned Relay configuration, never API-managed runtime objects.
 
@@ -145,9 +196,10 @@ today's Control API.
 
 The Accounts domain and Token service own Account/Token state and verification. The
 control-plane authenticator resolves a credential to a principal; adapters consume
-that principal and their route roles. Console session and step-up state is separate
-from bearer-token authentication. The Account administration Console will need to
-call the same lifecycle capability rather than reproduce its own role or audit logic.
+that principal. Console session and step-up state is separate from bearer-token
+authentication. Account administration authorization belongs in the capability layer, so the
+Console screen (#433) and the Control API call the same lifecycle capability rather than
+reproducing role or audit logic.
 
 `make verify` is sufficient for a documentation-only change. Changes to authentication,
 OAuth configuration, Console sessions, or Account lifecycle are security-sensitive and
@@ -175,16 +227,18 @@ Claims above with **no row**, and so nothing checking them:
 
 - That an Account's authority is applied consistently across the Control API, MCP, and the
   Console. Each surface proves its own gate; no cross-surface authorization-parity test
-  asserts that they agree. `query.md` records the same gap for the read floor, and the
-  first Open question below is whether that is an invariant-10 defect or an acceptable
-  adapter split.
+  asserts that they agree — the same gap `query.md` records for the read floor.
+- That Account administration is authorized in the capability layer. It is not today (per-route
+  checks); this is the testing backlog for closing that gap.
+- That the last enabled `admin` cannot be disabled or demoted. Not built.
+- That the four privilege-granting Console acts require a fresh step-up, and that
+  privilege-reducing acts do not. Not built (#433).
 - That the founding-admin name is reserved against every creation path, rather than the
   Control API route alone.
 - That `relay bootstrap-token` is additive and refuses a disabled founding admin. The
   command implements both; no named test is cited here for either.
-- That no Account lifecycle route consumes the Console step-up capability today. This is an
-  asserted absence, and an absence that nothing guards is one a future route can remove
-  without failing a test.
+- That the role floors gathered in *What each role may do elsewhere* hold. Each is owned, and
+  proven or listed as unproven, by the spec named in that table.
 
 ### Performance
 
@@ -192,34 +246,65 @@ Claims above with **no row**, and so nothing checking them:
 |---|---|---|
 | API Token verification | Credential checks remain local to Relay and do not depend on IdP availability. | *(none)* |
 | OAuth verification | Uses cached/discovered IdP verification material; no latency contract is specified. | *(none)* |
-| Account and Token listing | No pagination or scale contract is currently specified. | *(none)* |
+| Account and Token listing | No pagination or scale contract is specified. | *(none)* |
 
 ## Out of scope
 
 - Relay is not an OAuth authorization server: no Relay token issuer, consent screen,
   authorization endpoint, client registration, or refresh-token service.
-- Group/team federation and per-Token scopes are not current behaviour. A future Grant
-  may narrow permissions, but it cannot widen Node Policy.
+- Group/team federation and per-Token scopes are not first-pass behaviour (Future work). A
+  narrowing mechanism may narrow permissions; it can never widen Node Policy.
 - Account suspension is deferred; revoking API Tokens, disabling an Account, and Freeze
-  are distinct existing controls with different effects.
+  are distinct controls with different effects.
 - API-managed identity-provider, role-ladder, step-up-window, listener, TLS, or other
   Relay configuration is forbidden by invariant 11.
-- Node identity and enrollment credentials belong to enrollment, not Accounts and access.
+- Node identity and enrollment credentials belong to `enrollment.md`.
+- What each role floor *does* inside another capability — cancellation, tagging, Freeze,
+  approval — is owned by that capability's spec.
+
+## Accepted residual risk
+
+- **An Account's role is its whole Relay-side authority.** A machine Account at `operator` may
+  request any Operation against any Node its role allows; only Freeze, the blast-radius cap,
+  approval and Node Policy bound it.
+- **A no-expiry API Token is a standing bearer credential.** Chosen so a configured AI-agent stays
+  connected; a stolen one is live until it is revoked or its Account is disabled.
+
+## Future work
+
+Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
+none is a commitment to an order.
+
+- **Narrowing an Account below its role (research, #578).** Per-Token scope, authorization Grants
+  over Operations × Selectors, and machine authentication stronger than a long-lived bearer API
+  Token — and on which engine (#285 proposes Cedar, evaluated jointly with the approval-rule
+  grammar). Any answer must keep a configured AI-agent connected without routine human
+  re-authentication, and a Grant used as a security boundary is narrows-only and `relay:`-scoped
+  (`docs/deferred.md`). Unrelated to an approval grant despite the name.
+- **Console OIDC sign-in.** An external browser identity flow beside local passwords;
+  `console_oidc` is reserved and unimplemented.
+- **Emailed password reset.** A reset link sent to the Account holder instead of an admin setting
+  the password directly.
+- **Per-Account rate limits (#279).** Bounding a runaway AI-agent loop in time as well as in blast
+  radius.
+- **IdP group claims for approval audiences** and `on_behalf_of`, joined to the existing-Account
+  OAuth mapping. `docs/deferred.md` names IdP-federated teams as the direction and rules out a
+  native Relay org chart.
 
 ## Open questions
 
 | Question | Classification | What forces the call |
 |---|---|---|
-| Does Account lifecycle authorization already satisfy invariant 10's single capability-layer requirement, or must #433 first introduce a shared lifecycle authorization seam? | Blocks #433 design | An architect needs a surface-parity design for the Console without treating the Control API's route gate as the lasting source of truth. |
-| Which actions beyond the four named in the Console design are privilege-granting and must demand step-up (disablement, Token revocation, password management, bootstrap recovery)? | Blocks #433 implementation | The human-approved Account administration spec must define the complete mutation matrix before decomposition. |
-| What Console OIDC browser flow, if any, joins the existing local-password session flow? | Follow-up | A human chooses whether external browser identity is needed; `console_oidc` is reserved but not implemented. |
-| What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected fleet/operator scale or an audit/read-lane specification requires a caller-visible contract. |
-| Is preventing removal or demotion of the final enabled admin required, beyond the current self-target guard? | Blocks destructive Account lifecycle expansion | A human must choose the recovery and local-root model; current code permits another admin to make that state. |
-| How should a machine Account authenticate beyond a long-lived bearer API Token, and how is an Account's authority narrowed below its role — Grants over Operations × Selectors, per-Token scope — and on which engine? | Research (#578); no milestone | Today the role is the only Relay-side limit: an `operator` machine Account may request any Operation against any Node, bounded only by Freeze, the blast-radius cap, approval, and Node Policy, and its credential is unbound and as long-lived as its TTL. Any answer must keep a configured AI-agent connected without routine human re-authentication. `docs/deferred.md` records Grants as narrows-only and `relay:`-scoped when used as a security boundary; #285 proposes Cedar, evaluated jointly with the approval-rule grammar. |
-| Should per-Account rate limits bound a runaway AI-agent loop in time as well as in blast radius? | Unscheduled; decision open | #279 asks whether to pull the deferred per-Account Job-creation limit forward. |
-| Do approval audiences and `on_behalf_of` resolve from IdP group claims, and how does that join the existing-Account OAuth mapping? | Follow-up | `docs/deferred.md` names IdP-federated teams as the direction and rules out a native Relay org chart; nothing specifies the claim mapping. |
+| What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected operator scale, or #433's screen needing a caller-visible contract. |
 
 ## History
 
+- `2026-09-14` — Confirmed with the owner. Role stays the only Relay-side limit in the first pass,
+  with narrowing below role (#578) as research; the last enabled `admin` cannot be disabled or
+  demoted, recovery through `relay bootstrap-token`; Console step-up is required for creating an
+  `admin`, raising a role, re-enabling an Account and minting a Token for another Account (#433);
+  Account administration authorized per surface route is a gap to close under invariant 10; Console
+  OIDC, per-Account rate limits (#279) and IdP group claims moved to Future work. Gathers the role
+  floors settled in other specs (cancel, tags, Freeze, approval grants).
 - `2026-09-13` — proposed draft assembled from current contracts, code, ADRs, Console design,
   and #433; awaiting explicit human approval.

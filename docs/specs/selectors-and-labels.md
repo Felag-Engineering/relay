@@ -50,9 +50,11 @@ Every Label is namespaced, and a namespace is immutable from every side but its 
 | `tag:` | An Account of `operator` or above, on any surface | The Node | Routine targeting; organising the fleet |
 | `state:` | **Nobody** — derived from the registry at resolution time | Anyone | Routine targeting on live condition |
 
-**Only `relay:` is a valid security-lane target.** Quarantine, remediation and
-secret-distribution targeting must target `relay:` and only `relay:`. The other three are routine
-targeting and never a security-lane target.
+**Only `relay:` is a valid security-lane target — with one exception for engaging a
+quarantine.** Remediation targets `relay:` and only `relay:`. Engaging a quarantine may target
+`relay:` or `tag:`, because no Node can write either; lifting one targets `relay:` only; `node:`
+and `state:` are never a quarantine target, because a Node controls them (`quarantine-node.md`).
+This amends invariant 7. `node:` and `state:` remain routine targeting only.
 
 The writers are structurally separated, not separated by permission: a report from a daemon
 cannot reach the `relay:` or `tag:` labels on its Node record, and a daemon can never revoke or
@@ -68,7 +70,7 @@ un-revoke itself.
   |---|---|---|
   | `relay:enrollment-token` | Enrollment | The ID of the Enrollment Token the Node joined through |
   | `relay:node-id` | Enrollment | The Relay-assigned Node ID, bound to the Node's certificate |
-  | `relay:quarantine` | The quarantine action (`response-lane.md`) | `on` while quarantined |
+  | `relay:quarantine` | Engaging a quarantine, by a `relay:` or `tag:` Selector resolved once to concrete Nodes; cleared only by lifting it (`quarantine-node.md`) | `on` while quarantined |
 
 - `relay:node-id` is the way to address one specific Node without trusting it, and is a valid
   security-lane target; a value set addresses a handful.
@@ -97,7 +99,8 @@ un-revoke itself.
 - Bulk tagging takes a Selector and is audited as **one action naming every Node it touched.**
   Every single write is audited.
 - A tag grants no reach its writer did not already have: every dispatch still passes the blast
-  cap, Policy and approval, and a tag is never a security-lane target.
+  cap, Policy and approval. A tag is never a security-lane target, except that a quarantine may be
+  engaged by `tag:` (`quarantine-node.md`); once engaged, only the resulting `relay:` label matters.
 
 ### Limits
 
@@ -287,9 +290,9 @@ path of every dispatch, including a read at the 10,000-Node cap; nothing measure
 - **Enrollment mechanics** — `enrollment.md`, which must follow this spec: tokens carry `tag:`
   labels, enrollment writes `relay:enrollment-token` and `relay:node-id`, and token scope as
   `relay:` labels is retired.
-- **What quarantine does, and who may quarantine** — `response-lane.md`. This spec defines only
+- **What quarantine does, and who may quarantine** — `quarantine-node.md`. This spec defines only
   that the action writes `relay:quarantine`.
-- **The incident ladder** (quarantine, revoke, Freeze) — `response-lane.md`, `freeze.md` and
+- **The incident ladder** (quarantine, revoke, Freeze) — `quarantine-node.md`, `freeze.md` and
   `enrollment.md`.
 - **Policy** — a Node's Policy governs what may run on it, not which Nodes are addressed.
 - **Getting the declared-labels file onto a Node** — the customer's config management
@@ -318,11 +321,9 @@ Wanted, deliberately not in the first pass.
 
 ## Open questions
 
-1. **Who may take the actions that write `relay:` labels, and with what ceremony?** Enrollment's
-   gate is `enrollment.md`'s; quarantine's is `response-lane.md`'s. Forced when quarantine is
-   built.
-2. **Does a tag outlive its Node's re-enrollment?** A Node re-enrolled under a new identity is a
-   new Node record; whether its tags follow is undecided. Forced when tags are stored.
+None open. Who may take the actions that write `relay:` labels is settled in `enrollment.md` and
+`quarantine-node.md`; a re-enrolled Node is a new record whose tags do not follow it
+(`enrollment.md`).
 
 ## History
 

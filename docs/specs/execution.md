@@ -56,7 +56,10 @@ One call, in this order. Each stage can only refuse; none can widen what a later
    - for a Template Operation, **refuses a name no matched Node reports**, and otherwise
      **excludes matched Nodes that do not report it** before anything below is decided. Excluded
      Nodes appear in the result as `unsupported` and are never dispatched
-     (`operations-and-templates.md`).
+     (`operations-and-templates.md`);
+   - **excludes every quarantined Node**, whatever namespace matched it, `relay:` included.
+     Excluded Nodes appear in the result as `quarantined` and are never dispatched; a dispatch
+     whose every matched Node is quarantined sends nothing (`quarantine-node.md`).
 4. **Authorization.** The Principal is checked against the requested Action and Selector.
    **Caller-asserted attribution is stripped from the context first** — an authorization
    decision must never be able to read a value the caller supplied about itself. Raw Exec
@@ -105,7 +108,7 @@ a Policy allow on the Node, with none shipped by default (ADR-0022).
 Operation arguments and Raw Exec argv are **the record of what was done**, and are audited
 verbatim. By contract a caller never passes a secret through one; this spec and
 `list_operations` say so to callers, and there is no secret slot type. Getting a secret onto a
-Node is secret distribution (`response-lane.md`), which is designed so a secret never becomes an
+Node is secret distribution, which is not yet designed (Future work in `quarantine-node.md`), which is designed so a secret never becomes an
 audited argument.
 
 ### Fan-out, ordering and timeouts
@@ -254,16 +257,18 @@ implying the audit trail can reproduce a read's content is wrong, and widening i
 one-way door.
 
 Outcomes: `success`, `failure`, `timeout`, `denied_by_policy`, `cancelled`, `unreachable`,
-`unacknowledged`, `version_refused`, `unsupported`. The zero value means *not yet resolved* — a Pending or
+`unacknowledged`, `version_refused`, `unsupported`, `quarantined`. The zero value means *not yet resolved* — a Pending or
 Dispatched Task has no outcome.
 
-Three of these never involved the Node running anything. `version_refused` is Relay-synthesized
+Four of these never involved the Node running anything. `version_refused` is Relay-synthesized
 under the ADR-0014 minimum-version gate: the Task was never sent, and its stderr explains that
 upgrades flow through the customer's config management because the Relay never pushes binaries.
 `unsupported` is either daemon-reported — the Operation name is not in that Node's vocabulary, so
 nothing executed and Policy was never consulted — or Relay-reported for a Node excluded at
 resolution because it does not report the Template; neither is a failure or a denial.
 `cancelled` on a Task left unsent by a halt carries the halt as its reason.
+`quarantined` is Relay-reported for a Node excluded at resolution because it carries
+`relay:quarantine=on`: the Task was never sent (`quarantine-node.md`).
 
 `unacknowledged` is the one outcome that does not know whether the Node ran anything: the Task was
 sent, and the relay-daemon's receipt did not arrive within the deadline (`node-connection.md`).
@@ -280,6 +285,7 @@ a per-Node **outcome**, where a Job did run and individual Nodes failed.
 | Empty Selector | A dispatch with no Selector | Name the Nodes; the whole fleet must be written deliberately |
 | `no_nodes_matched` | The Selector resolved to zero Nodes | The Selector as written, so a typo is visible |
 | Unknown Operation | No matched Node reports this Template | Point at `list_operations` |
+| All matched Nodes quarantined | Every Node the Selector resolved to is quarantined | Each Node reported `quarantined`; nothing is sent (`quarantine-node.md`) |
 | Unauthorized | The Principal may not request this Action on this Selector; Raw Exec without `admin` | Denied |
 | Blast cap | Resolved Node count exceeds the cap for the risk class | The class, the matched count, and the cap |
 | Pending approval | The Action requires approval and none covers it | A parked dispatch with its request ID and plan hash |
@@ -433,7 +439,7 @@ sequential contract and the 10,000-Node read cap multiply.
 - **Label namespaces, the Selector grammar, and `state:` derivation** —
   `selectors-and-labels.md`. This spec consumes a resolved Node set; it does not define how one
   is addressed.
-- **Getting a secret onto a Node** — secret distribution, `response-lane.md`.
+- **Getting a secret onto a Node** — secret distribution — not yet designed (Future work in `quarantine-node.md`).
 - **Querying Jobs, Tasks and the audit trail after the fact** — `audit-and-read-lane.md`.
 - **Retry, scheduling, store-and-forward** — deliberately absent; re-targeting is the caller's
   decision.
@@ -457,7 +463,7 @@ none is a commitment to an order.
 - **Protecting secrets a caller passes by mistake.** Candidates, none chosen: a `secret` slot
   type audited as a redaction plus a hash (and its process-list exposure on the Node); detection
   that refuses or flags a dispatch whose arguments look like credentials; and how either relates
-  to secret distribution in `response-lane.md`.
+  to secret distribution, once designed.
 
 ## Open questions
 
