@@ -5,7 +5,7 @@ comments, commits, issue titles, test names, and prose. Most carry an `_Avoid_` 
 the synonyms this project has deliberately rejected; those are decisions, not suggestions.
 
 What Relay is, and why it is shaped that way, is in [README.md](README.md). The invariants
-that constrain every change are in [CLAUDE.md](CLAUDE.md).
+that constrain every change are in [AGENTS.md](AGENTS.md).
 
 **Gleipnir** is a different project: the first-party AI-agent system that will drive
 Relay. It is a *consumer* of Relay (over MCP and the Control API), never a component of

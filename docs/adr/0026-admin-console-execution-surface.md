@@ -1,7 +1,7 @@
 # The Admin Console gains an execution surface
 
 Decision on issue #264, taken by the owner 2026-08-03, recorded here. It **supersedes the
-no-execution clause of [ADR-0009](0009-admin-console-web-ui.md)** and amends CLAUDE.md
+no-execution clause of [ADR-0009](0009-admin-console-web-ui.md)** and amends AGENTS.md
 invariant #10. The rest of ADR-0009 — thin adapter, internal-only exposure, Account auth,
 Policy read-only — stands unchanged.
 
@@ -156,7 +156,7 @@ click would counterfeit the strongest credential in the model. See "Consequences
 
 ## Amendment (2026-09-10): invariant 10 restated — the Console clause made conditional
 
-This ADR's decision is unchanged. What changed is how CLAUDE.md invariant 10 summarises it.
+This ADR's decision is unchanged. What changed is how AGENTS.md invariant 10 summarises it.
 
 The invariant read "The Console **does** execute (v0.7.0)" — present tense, for a surface this
 ADR authorised but which is not built. The composition root hardcodes execution off, no config

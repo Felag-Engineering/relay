@@ -158,7 +158,7 @@ is its client cert; at-most-once Task dedup blunts replay of a captured Task
 
 ## Architecture invariants → boundaries
 
-The table below maps each of the fourteen architecture invariants declared in `CLAUDE.md` to
+The table below maps each of the fourteen architecture invariants declared in `AGENTS.md` to
 the ADR(s) that back it, the trust boundary (or boundaries) it defends, the adversary it
 primarily counters, and its residual risk.
 
@@ -281,7 +281,7 @@ The live least-privilege verification (#224) remains outstanding; every other cr
 
 This document covers the product bet and kill criterion, the trust boundaries, the adversary
 catalogue, and the architecture-invariant → boundary map above. The mapping from every
-architecture invariant in `CLAUDE.md` to the boundary it defends now exists in the section
+architecture invariant in `AGENTS.md` to the boundary it defends now exists in the section
 above, produced by issue **#213**. The Ansible-MCP foil demo (issue #140) is out of scope
 for this milestone; it is a separate positioning exercise, not part of the threat model.
 

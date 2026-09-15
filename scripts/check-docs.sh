@@ -3,7 +3,7 @@
 # class of drift that has actually happened in this repo:
 #
 #   1. ADR numbers are unique. Citation-by-number is the repo's whole scheme
-#      (docs/adr/, CLAUDE.md's invariants, 220+ source comments). Two files once
+#      (docs/adr/, AGENTS.md's invariants, 220+ source comments). Two files once
 #      claimed ADR-0015, making every bare citation to it ambiguous.
 #   2. Every test a capability spec names in its proof table exists. A spec cites
 #      tests by name deliberately (docs/specs/TEMPLATE.md); a rename during

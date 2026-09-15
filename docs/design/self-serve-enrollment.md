@@ -6,7 +6,7 @@ into a dependency-ordered set, after the design conversation of 2026-08-18 settl
 decisions across four ADRs.
 
 **Nothing here authorizes work.** Every item below touches at least one of the surfaces
-CLAUDE.md requires escalating — `proto`-adjacent contract, mTLS/auth/CA code, Policy
+AGENTS.md requires escalating — `proto`-adjacent contract, mTLS/auth/CA code, Policy
 distribution, `GLOSSARY.md`, the `Makefile`, or CI. None of it goes through the dev-loop
 unreviewed regardless of sequencing.
 
@@ -177,7 +177,7 @@ fingerprint/trust-store instructions from ADR-0031. Fixes the already-stale clai
 landed in #362.
 
 ### E11 · `GLOSSARY.md` — **join string**
-**Escalate: CLAUDE.md-flagged file.** Must record that it is *not* a synonym for
+**Escalate: AGENTS.md-flagged file.** Must record that it is *not* a synonym for
 Enrollment Token; the glossary already lists "join key" as a term to avoid, and the two
 entries would otherwise fight.
 

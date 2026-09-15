@@ -171,7 +171,7 @@ jobs:
   # ---- proto-breaking: /proto is additive-only past the #39 rename (ADR-0014).
   # A PR that breaks wire compatibility (field renumber/delete, type change, file
   # move) must fail CI. Runs the same check as `make proto-breaking`, against the
-  # PR base revision. PR-only: main only advances via reviewed PRs (CLAUDE.md), and
+  # PR base revision. PR-only: main only advances via reviewed PRs (AGENTS.md), and
   # a push event has no natural single base commit to diff against, so the gate has
   # nothing meaningful to run there. ----
   proto-breaking:

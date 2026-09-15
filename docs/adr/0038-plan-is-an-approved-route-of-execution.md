@@ -222,10 +222,10 @@ spending limit; a Plan is an itemised invoice.
 
   However, **invariant 10 says "plan-by-default" and invariant 12 says "plan mode"**, and both
   spellings now mean the route rather than the preview. Those are terminology amendments to
-  `CLAUDE.md`, which is a conversation with a human and never a quiet edit — they are named here
+  `AGENTS.md`, which is a conversation with a human and never a quiet edit — they are named here
   so the work is visible rather than left to rot. Until they land, `docs/security/threat-model.md`
   restates invariant 12 in the *new* wording while the invariant itself carries the old, so
-  consumer and source differ verbatim: exactly the drift CLAUDE.md warns about, and a reason to
+  consumer and source differ verbatim: exactly the drift AGENTS.md warns about, and a reason to
   land the amendment rather than leave it.
 
 - **This amends ADR-0013, which nobody noticed.** ADR-0013 said "**Plans (ADR-0011) still work
@@ -233,7 +233,7 @@ spending limit; a Plan is an itemised invoice.
   Reassigning the word inverted it into a Freeze exemption for approved routes without anyone
   editing the sentence. Amended in place; `docs/specs/freeze.md` was rewritten in the same change
   to match, which until the amendment landed had the spec contradicting its governing ADR — and
-  CLAUDE.md's conflict table presumes the *spec* is the defect, so a reader resolving it by the
+  AGENTS.md's conflict table presumes the *spec* is the defect, so a reader resolving it by the
   rules would have reinstated the exemption. The lesson generalises: **a rename's blast radius
   includes every sentence that merely uses the word, and the ADR tier is where it hurts most.**
 

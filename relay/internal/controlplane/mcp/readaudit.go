@@ -65,7 +65,7 @@ type ReadAuditor interface {
 // layer already sets for Plan, whose audit-write failure fails the Plan. The
 // cost is real and worth stating plainly: a Relay that cannot write its audit
 // trail stops answering read tools rather than answering them invisibly. On
-// this side of the system that is the right way round (CLAUDE.md: prefer the
+// this side of the system that is the right way round (AGENTS.md: prefer the
 // more restrictive option).
 //
 // A nil auditor is the pre-#288 behaviour — debug log only — and exists so

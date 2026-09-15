@@ -88,7 +88,7 @@ The design must hold when each of these is true, individually or together:
 - The human operator is malicious or mistaken, and is using legitimate credentials.
 
 Each has a structural answer beneath whatever procedural one it also has. That is what the
-architecture invariants in [CLAUDE.md](CLAUDE.md) encode, and what
+architecture invariants in [AGENTS.md](AGENTS.md) encode, and what
 [docs/security/threat-model.md](docs/security/threat-model.md) maps boundary by boundary.
 
 ## Core ideas
@@ -133,7 +133,8 @@ at process start; nothing sets or raises them via an API.
 /docs/adr/     architecture decision records
 /docs/specs/   capability specifications — what each capability does today, every surface
 GLOSSARY.md    the domain glossary — read this before touching anything
-CLAUDE.md      instructions for AI agents working in this repo, and the invariants
+AGENTS.md      instructions for AI agents working in this repo, and the invariants
+CLAUDE.md      Claude Code's entry point — a one-line import of AGENTS.md
 ```
 
 ## Status
@@ -149,7 +150,7 @@ GitHub milestones are the authority on what is actually in progress.
 
 ## Documentation
 
-- **[CLAUDE.md](CLAUDE.md)** — how to work in this repo, and the fourteen architecture invariants that constrain every change.
+- **[AGENTS.md](AGENTS.md)** — how to work in this repo, and the fourteen architecture invariants that constrain every change.
 - **[GLOSSARY.md](GLOSSARY.md)** — the ubiquitous language. Every term here is canonical.
 - **[docs/specs/](docs/specs/)** — capability specifications: what each capability does today, across MCP, the Control API, and the Admin Console.
 - **[docs/adr/](docs/adr/)** — why the architecture is the way it is.

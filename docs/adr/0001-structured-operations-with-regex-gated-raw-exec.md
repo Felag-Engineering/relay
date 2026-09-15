@@ -48,7 +48,7 @@ Execution forms a three-tier model ordered by trust:
 
 Two corrections. Neither changes the decision above.
 
-**CLAUDE.md invariant 1 never summarised this ADR faithfully.** It read *"Operations are typed
+**AGENTS.md invariant 1 never summarised this ADR faithfully.** It read *"Operations are typed
 and native (argv, never `/bin/sh`)"* — collapsing the three-tier model above into two and
 omitting Template Operations entirely. While tier 2 was unbuilt the omission was invisible.
 Once ADR-0021 built it, the summary became an active defect in three ways: it was literally

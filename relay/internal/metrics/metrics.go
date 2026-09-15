@@ -13,7 +13,7 @@
 // (outcome/reason enums) and Relay-wide gauges. No metric here ever carries a
 // node_id, token, account, selector, or human-readable reason string — that
 // would be an unbounded-cardinality label and a secrets-in-metrics risk
-// (CLAUDE.md). This package has no execution capability: it only reads
+// (AGENTS.md). This package has no execution capability: it only reads
 // gauge-source closures and formats counters (invariant #10).
 //
 // relay_build_info (#249) is the one metric with free-form label values. It is

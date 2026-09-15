@@ -53,7 +53,7 @@
 # Claude Code's local workspace. Ignore everything by default, then re-include the
 # three directories that ARE product: the agent workflow this repo is developed with.
 # Cloud routines get a fresh clone and only see what is committed, so the pipeline
-# has to live in the tree (see "Routines & merge authority" in CLAUDE.md).
+# has to live in the tree (see "Routines & merge authority" in AGENTS.md).
 #
 # `/.claude/*` rather than `/.claude/` because git cannot re-include a path whose
 # parent directory is excluded.

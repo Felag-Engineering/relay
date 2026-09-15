@@ -338,7 +338,7 @@ func dispatchHarnessRequest(ctx context.Context, st *harnessState, req harnessRe
 // (enroll/token.go:174) and returns its plaintext credential.
 //
 // SECURITY: the plaintext token is returned to the socket client but MUST
-// NEVER be logged (CLAUDE.md: never log secrets).
+// NEVER be logged (AGENTS.md: never log secrets).
 func harnessCreateToken(ctx context.Context, deps *appDeps, req harnessRequest) harnessResponse {
 	ttl := time.Duration(req.TTLSeconds) * time.Second
 	if ttl <= 0 {
