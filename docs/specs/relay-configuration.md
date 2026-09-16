@@ -1,135 +1,242 @@
 # Relay configuration
 
-**Status:** stub — aspirational, not yet worked through with the owner (`2026-09-13`).
+**Status:** aspirational — worked through with the owner on `2026-09-15`, awaiting their review of
+this draft. Describes intended behaviour, not the code (see the establishing phase in
+`README.md`). It reverses part of invariant 11 and needs the ADR amendments named at the end.
 
 ## Purpose
 
-Relay configuration is the security floor an operator sets for a Relay before anything can
-authenticate to it: where it listens, which CA it trusts and signs with, which identity provider
-it believes, how far a single dispatch may reach, which dispatches wait for a human, and whether
-the Console exists at all. It is set on the host, at startup, and no credential of any role can
-reach it — so a stolen API Token or a jailbroken AI-agent can never raise its own limits.
+Relay configuration is what an operator fixes about a Relay: where it listens, which CA it signs
+with, which identity provider it believes, how far one dispatch may reach, which dispatches wait
+for a human, and whether the Console exists at all.
 
-It is also the operator's first contact with the product. Standing a Relay up should be a
-file-and-service concern owned by the customer's config management, short enough to be
-discoverable, and closed by default when the binary is run bare.
+It is **two tiers, split by what an attacker gains from changing the setting.**
+
+- The **security floor** is set on the host, in a root-owned file, and is unreachable from every
+  surface. It is the small set that decides *who may authenticate at all* and *whether the gate
+  exists*: listeners and TLS material, the identity provider Relay believes, the authentication
+  windows, the approval notification path, and whether the Console may execute.
+- **Operator settings** are runtime objects in the Relay's store, changed by a human `admin` in
+  the Console with step-up re-authentication, audited, taking effect on the next request. They
+  are the dials an operator genuinely turns as a fleet grows and confidence grows with it —
+  including the blast caps and the approval-gate rules.
+
+The tiering is the whole point: administering a Relay should not mean editing a file and
+restarting a service, and no dial an operator turns should hand a stolen credential the ability
+to authenticate as somebody else.
 
 ## Surfaces
 
-- **The host, not the wire.** Startup configuration arrives as environment variables and
-  equivalent command-line flags, delivered in production by a root-owned systemd unit and its
-  `EnvironmentFile`. No MCP tool, Control API operation or Console screen reads or writes it.
-- **The `relay` binary's local subcommands** — `bootstrap-token` and `console-password` today;
-  `relay init` is decided by ADR-0030 and not built. Each exists only because no credential
-  could yet exist to perform the act over the wire.
-- **The first-party installer** (`relay-install.sh`, ADR-0033) — decided, not built.
-- **Local operator levers that are not startup configuration** — the Freeze signal and its
-  release reason. Uncertain whether these belong here or wholly in `freeze.md`.
+| Surface | Access to the capability |
+|---|---|
+| **The host** | The security floor, as `RELAY_*` environment variables delivered by a root-owned systemd unit and its `EnvironmentFile`. Read at startup and on a reload signal |
+| **Admin Console** | Every operator setting: read, and changed by a human `admin` with step-up. The only surface that writes configuration. Also renders the non-secret security floor, read-only |
+| **Control API** | Reads the non-secret operator settings. **No write route exists, and none may be added** |
+| **MCP** | Reads the non-secret operator settings, so an AI-agent can explain a refusal against the value that caused it. No write tool |
+| **The `relay` binary's local subcommands** | `bootstrap-token` and `console-password` — first-boot acts that exist only because no credential can yet exist to perform them over the wire (ADR-0030) |
+
+There are **no configuration command-line flags.** The binary accepts `--version`, `--help` and
+its subcommands. One way to set a value means there is no precedence rule to reason about, and
+nothing sensitive in a process listing.
 
 ## Behaviour
 
-_To be established by interrogation._
+### The security floor
 
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
+Set on the host only. No code path exists from any request to any of these values.
 
-- No code path exists from a request on any surface to any configuration value: listeners, CA
-  directory, store path, blast caps, the node cap, enrollment rate limits, the minimum daemon
-  version, the `state:cert-expiring` fraction, the approval-gate rules path, the webhook, OAuth
-  issuer settings, Console enablement and session bounds, and the step-up window.
-- Every secret the Relay reads is named by a file path, never passed as a value.
-- A secret file that is group- or world-accessible refuses startup.
-- An environment variable overrides its equivalent flag.
-- The binary run with no configuration comes up closed: the control plane off, the Console off,
-  OAuth off, no approval gates.
-- A malformed minimum daemon version, an out-of-range `state:cert-expiring` fraction, and a
-  configured approval-gate path that cannot be loaded each refuse startup.
-- Configuration is read once at startup; changing it takes a restart.
-- The Relay needs no privilege: it runs as an unprivileged service account with an empty
-  capability set and a read-only filesystem outside its state directory.
-- Every `RELAY_*` setting the code reads appears in the shipped example `EnvironmentFile`.
-- `relay init` is one idempotent first-boot transaction: CA, store, founding admin Account, its
-  first API Token, a short-TTL first Enrollment Token and a rendered playbook — adopting, never
-  recreating, anything that already exists.
+| Setting | Why it is here |
+|---|---|
+| gRPC and control-plane listen addresses, hostname for the server certificate | Bound at startup; a listener cannot be configured over itself |
+| CA directory, store path | The trust anchor and the state; changing either is a different machine |
+| OAuth issuer, audience, account claim, required scope, public URL | Whoever names the issuer decides who can authenticate |
+| Console session maximum age and idle timeout, step-up freshness window | Authentication bounds. An `admin` who could widen their own step-up window has removed it |
+| `console_execution` | Invariant 10 requires it root-owned |
+| Approval webhook URL, secret file, timeout | Repointing it sends every approval request somewhere else and leaves the humans seeing nothing |
+| Every secret file path | Secrets are named by path, never supplied as values |
+
+A bare binary with no configuration **comes up closed**: the gRPC listener only, no control
+plane, no Console, no OAuth, no approval notification. The CA directory, store path and
+certificate hostname have **no defaults** — unset is a refusal naming the variable, because a
+development-shaped default is a production deployment inheriting it silently.
+
+### Operator settings
+
+Runtime objects in the store, with built-in defaults, changed in the Console by a human `admin`
+with step-up on every change, and audited with the setting, its old value, its new value, and
+who changed it. A change applies to the next request; nothing already past its check is
+revisited. Their `RELAY_*` variables are **not read** — a stale one left in the environment file
+refuses startup rather than being silently ignored.
+
+| Setting | Notes |
+|---|---|
+| Read and mutate blast caps | Raised and lowered as confidence grows |
+| Approval-gate rules | Added, edited and removed as confidence grows |
+| Minimum daemon version | Invariant 14's dispatch-level lever |
+| `state:cert-expiring` fraction | Feeds one derived label |
+| Enrollment rate limits, burst, tracked-IP ceiling | Flood protection tuned under load |
+| Node cap | Capacity |
+| Audit and Job retention, page-size limits | Housekeeping |
+| Per-Account Console preferences | Per-Account, not fleet-wide (#442) |
+
+**The blast caps and the approval-gate rules are Console-only.** No MCP tool and no Control API
+route reads or writes them beyond the read described above, and none may be added. The
+capability layer holds the decision, and the other adapters narrow to nothing — which is
+invariant 10's "an adapter may offer less", not a second control path. The practical effect is
+that only a human at a browser, re-entering their password, can widen the ceiling on what an
+AI-agent may do; a machine Account cannot hold a Console session at all.
+
+### Visibility
+
+Non-secret operator settings are readable by any authenticated Account on every surface, so an
+AI-agent that hits the mutate cap can name the cap it hit. The security floor is rendered in the
+Console only, non-secret values only: file paths, the CA directory and the contents of any
+secret file appear on no surface.
+
+### Changing the floor: reload, and what a reload will not do
+
+`SIGHUP` re-reads the floor from the environment file. The reload is **all-or-nothing**: the
+whole file is validated, and if any value is invalid, or if any *bind-time* setting has changed
+— listen addresses, CA directory, store path, certificate hostname — the entire reload is
+refused, the log names the setting and says a restart is required, and the running configuration
+is untouched. Nothing is ever half-applied, and a failed reload never exits the process.
+
+Every reload is audited as a host-lever act, in the same lane as the Freeze signal's
+`local-host`, listing what changed. Root on the box is a different root of authority from any
+credential, and that is why the lever exists there and nowhere else.
+
+The floor owns *which* file or directory is used. Changing the **contents** of TLS or CA material
+is not a settings change: the server certificate already re-issues into the running listener, and
+rotating the CA itself is a fleet-wide trust-anchor operation with its own steps and audit, not a
+field on a screen.
+
+### Validation
+
+Every value is validated at startup and at reload, and an invalid one is a refusal naming the
+setting — never a warning and a fallback to a default. A missing or unreadable floor file is a
+refusal.
+
+A configuration that **cannot work** is refused: the Console enabled without the control plane,
+OAuth configured without an issuer. A configuration that is coherent but **probably a mistake** —
+a mutate cap above the read cap — starts, with a prominent warning. The line is deliberate:
+refusing the second class would make the Relay argue with an operator who has decided to trust
+their fleet more.
+
+### Secret files
+
+Every secret is named by a path. The file must be **owned by root and not group- or
+world-readable**, or the Relay refuses to start naming the file. The shipped `EnvironmentFile` is
+`0640 root:relay`.
+
+### First boot
+
+Start the service, then `relay bootstrap-token` for the founding admin's first API Token and
+`relay console-password` for their first Console credential. Everything else — Accounts, Nodes,
+Enrollment Tokens, every operator setting — happens in the Console.
+
+The Relay itself needs no privilege: an unprivileged service account, an empty capability set,
+and a read-only filesystem outside its state directory.
 
 ## Refusals
 
-_To be established by interrogation._
-
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
-
-- Any attempt to change configuration through MCP, the Control API or the Console has no route
-  to refuse: the operation does not exist.
-- Startup is refused, with the offending setting named, on each validation failure listed above.
-- The `relay` binary refuses to grow a verb that a credentialed surface already covers.
+| Refusal | Cause |
+|---|---|
+| No route exists | A configuration write attempted over MCP or the Control API. There is no endpoint to refuse it |
+| Not authorized | An operator-setting change by a non-`admin`, a machine Account, or without fresh step-up |
+| Startup refused, setting named | An invalid value, a missing required value (CA directory, store path, certificate hostname), an unreadable floor file, a secret file that is not root-owned or is group- or world-readable, or an incoherent combination |
+| Startup refused, stale variable named | A `RELAY_*` variable for a setting that now lives in the store |
+| Reload refused | An invalid value, or a bind-time setting changed. The running configuration is unchanged and a restart is required |
 
 ## Governing ADRs and invariants
 
-- **Invariant 11 / ADR-0010** — configuration is operator-set at startup and unreachable from
-  any API; secrets are file paths; this spec is where that invariant's property is specified.
-- **ADR-0030** — the `relay` binary may perform an act only if no credential could exist to
-  perform it over the wire; bounds every local subcommand and `relay init`.
+- **Invariant 11 / ADR-0010** — the invariant this capability implements, and the one this draft
+  narrows: from *"configuration is unreachable from any API"* to *"anything that bounds who may
+  authenticate is unreachable from any API"*. Needs an ADR-0010 amendment.
+- **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
+  a parallel control path. `console_execution` stays root-owned.
+- **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
+  dispatch; this draft changes only where they are set. Needs an amendment recording that they
+  are operator settings rather than startup configuration.
+- **ADR-0027** — the approval gate. Its rules become store-backed and Console-editable; the
+  webhook path stays root-owned. Needs an amendment.
+- **ADR-0024** — OAuth issuer, audience, claim, scope and public URL are security floor.
 - **ADR-0023** — no shared control-plane secret exists in configuration; the first credential is
-  bootstrapped locally into the store.
-- **ADR-0024** — OAuth issuer, audience, claim, scope and public URL are Relay configuration.
-- **ADR-0033** — the installer ships inside the release and runs `relay init`; no `curl | sh`.
-- **Invariant 5 / ADR-0004, ADR-0012** — the per-class blast caps are configured here and
-  nowhere else.
-- **Invariant 14 / ADR-0014** — the minimum daemon version is the Relay's only lever over
-  daemon versions, and is configuration.
-- **Invariant 10 / ADR-0026** — the `console_execution` flag is root-owned configuration.
-- **ADR-0027** — approval-gate rules and the webhook secret are root-owned files.
+  bootstrapped locally.
+- **ADR-0030** — bounds the local subcommands, and is where `relay init` is decided.
+- **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
+  daemon versions; it becomes an operator setting.
+- **ADR-0033** — the installer, unbuilt.
 
 ## Seams and proof
 
-_Not yet written._
+Configuration is read once into a Config value at startup and replaced wholesale on a successful
+reload; operator settings are read through a store-backed settings seam that the capability layer
+consults, never a package-level variable a surface can reach. The Console's settings screens call
+that seam; no other adapter holds a writer.
+
+### What proves each claim
+
+| Behaviour | Proven by | Seam |
+|---|---|---|
+| The shipped `EnvironmentFile` covers every setting the binary reads | `TestRelayEnvExampleCoversTheConfigSurface`, `TestRelayEnvExemptionsAreReal` | packaging |
+| A gate-rules file that cannot be loaded fails closed | `TestLoadFailsClosed`, `TestLoadRefusesSymlink`, `TestLoadRefusesDirectory` | approval |
+| A webhook secret file with loose permissions is refused | `TestSecretFilePermissionsAreEnforced` | approval notify |
+
+Everything else in this spec is **unbuilt**. Today's binary takes flags and environment
+variables with the environment winning, silently falls back to a default on most invalid values,
+defaults the CA directory and store path to development-shaped relative paths, has no reload, no
+store-backed settings, no Console settings screen, and checks the mode but never the owner of a
+secret file. The gap is the backlog, not a defect to escalate.
 
 ## Out of scope
 
-- The founding admin Account, API Token minting and OAuth session semantics —
-  `accounts-and-access.md`.
-- Enrollment Tokens, join strings and enrollment bundles, including the one `init` renders —
-  `enrollment.md`.
+- The founding admin Account, Token minting, step-up and OAuth session semantics —
+  `accounts-and-access.md`. This spec owns only where their bounds are set.
+- Enrollment Tokens, join strings and bundles — `enrollment.md`.
 - What the blast caps, approval gates and Freeze *do* — `execution.md`, `approval.md`,
-  `freeze.md`. This spec owns only that they are set here.
-- Installing and configuring the relay-daemon on a Node — `daemon-installation.md`.
-- Relay's own health and logs — `observability.md`.
-- Runtime objects (Accounts, Tokens, Nodes, Jobs, approvals): managed over the wire, never here.
+  `freeze.md`.
+- Configuring the relay-daemon on a Node, which is flags and environment from the customer's
+  config management — `daemon-installation.md`.
+- Relay's own health, metrics and logs — `observability.md`.
+- Rotating CA or TLS material, which is an operation rather than a setting.
+
+## Accepted residual risk
+
+**A compromised human Console session can widen the fleet's ceiling.** With the blast caps and
+approval-gate rules in the store and no root-set bound above them, an attacker holding a human
+`admin` session and that Account's password can raise the mutate cap to the whole fleet and
+remove every approval gate, then dispatch within the limits they just set. Step-up and the audit
+trail are the controls; neither prevents it.
+
+This was decided deliberately: a root-set ceiling above the Console value was offered and
+declined in favour of one source of truth per setting. The threat model must record it — it
+weakens invariant 11's "the API can never raise its own limits" to "the API cannot, and a human
+in the Console can".
+
+## Future work
+
+- **`relay init`** — one idempotent first-boot command that **replaces** `bootstrap-token` and
+  `console-password` rather than joining them, so the binary loses two verbs as it gains one
+  (ADR-0030). The installer (ADR-0033) follows it.
+- **A root-set ceiling above the operator settings**, if the residual risk above proves real in
+  practice.
+- **Live reload of TLS material**, beyond the server certificate re-issue that already happens.
+- **Configuration history in the Console** — who changed which dial and when, rendered from the
+  audit trail rather than kept separately.
 
 ## Open questions
 
-1. **Invalid values fall back silently.** A malformed blast cap, node cap, enrollment rate or
-   boolean is logged as a warning and the default is used; only three settings refuse startup.
-   Should every malformed security-floor value refuse startup instead?
-2. **Documented defaults disagree with the binary.** The example `EnvironmentFile` says its
-   values are the defaults, but the binary's own defaults for the CA directory, store path and
-   hostname are relative, development-shaped paths. Which is the real default, and should a bare
-   binary ever write a CA into its working directory?
-3. **Env-over-flag precedence.** Today the environment wins over the flag. Is that the rule you
-   want, or should a conflict between the two refuse startup?
-4. **Is "restart to change" the contract?** There is no reload. Is that deliberate, and should
-   the spec promise it so nobody adds a SIGHUP reload of the security floor?
-5. **"Root-owned" is not what is checked.** Invariant 11 says a secret file must be root-owned
-   and not world-readable; the webhook secret check refuses group- or world-accessible modes
-   but does not check the owner, and the approval-gate file has a laxer bar. Which property do
-   you want, per file?
-6. **The `EnvironmentFile` mode is documented two ways** — `0600 root:relay` in the unit's
-   comments, `0640 root:relay` in the packaging guide and example. Which?
-7. **`relay init` and the installer are unbuilt.** Is their shape in ADR-0030/0033 still what
-   you want — including `init` writing a config that enables the control plane while the bare
-   binary stays closed?
-8. **The playbook inlines a live Enrollment Token** (ADR-0030, marked interim). Is a vault
-   placeholder now the target, and what TTL should `init`'s first token carry?
-9. **Should the Relay refuse a configuration that is coherent but dangerous** — Console enabled
-   without the control plane, a mutate cap above the read cap, a mutate cap of the whole fleet?
-10. **Should the running configuration be visible?** Nothing on any surface reports the
-    effective blast caps or gates. A read-only, non-secret echo would help an AI-agent explain a
-    refusal — or is any read of configuration over the wire a line you don't want crossed?
-11. **Is a config file the eventual shape?** ADR-0010 describes a root-owned config file; today
-    it is environment variables and flags. Is env-and-unit the permanent delivery mechanism?
-12. **Operator docs describe retired mechanisms.** The Relay install runbook still shows the
-    retired shared control-plane credential and says no packaged unit exists. Confirm the
-    runbook, not the ADRs, is stale.
+- **Does a second Relay against the same store see a settings change?** Single-Relay is assumed
+  throughout; if that ever stops being true, store-backed settings need a cache-invalidation
+  story that startup-only configuration never needed.
+- **The operator runbook describes retired mechanisms** — the shared control-plane credential and
+  "no packaged unit exists". Stale documentation rather than an open decision, but it is what an
+  operator reads first.
 
 ## History
 
-- `2026-09-13` — stub created to name the capability.
+- `2026-09-15` — First worked through with the owner. Split into a security floor and operator
+  settings; blast caps and approval-gate rules became Console-only operator settings with no
+  root-set bound; configuration flags dropped; `SIGHUP` reload of the floor adopted as
+  all-or-nothing; `relay init` deferred as the eventual replacement for the two local commands.
+- `2026-09-13` — Stub created to name the capability.
