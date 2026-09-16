@@ -2,7 +2,8 @@
 
 **Status:** aspirational — worked through with the owner on `2026-09-15`, awaiting their review of
 this draft. Describes intended behaviour, not the code (see the establishing phase in
-`README.md`). It reverses part of invariant 11 and needs the ADR amendments named at the end.
+`README.md`). Invariant 11 was rewritten and ADR-0010, ADR-0004, ADR-0012, ADR-0027 and
+ADR-0030 amended on 2026-09-15 to match.
 
 ## Purpose
 
@@ -149,20 +150,20 @@ and a read-only filesystem outside its state directory.
 
 ## Governing ADRs and invariants
 
-- **Invariant 11 / ADR-0010** — the invariant this capability implements, and the one this draft
-  narrows: from *"configuration is unreachable from any API"* to *"anything that bounds who may
-  authenticate is unreachable from any API"*. Needs an ADR-0010 amendment.
+- **Invariant 11 / ADR-0010** — the invariant this capability implements, narrowed on
+  2026-09-15 from *"configuration is unreachable from any API"* to *"no credential can change the
+  terms on which credentials are accepted"*. Recorded in ADR-0010's amendment of that date.
 - **Invariant 10 / ADR-0009, ADR-0026** — Console-only settings are an adapter offering less, not
   a parallel control path. `console_execution` stays root-owned.
 - **Invariant 5 / ADR-0004, ADR-0012** — the blast caps remain enforced on the Relay before
-  dispatch; this draft changes only where they are set. Needs an amendment recording that they
-  are operator settings rather than startup configuration.
-- **ADR-0027** — the approval gate. Its rules become store-backed and Console-editable; the
-  webhook path stays root-owned. Needs an amendment.
+  dispatch; only where they are set changed. Both ADRs carry a 2026-09-15 amendment saying so.
+- **ADR-0027** — the approval gate. Amended 2026-09-15: its rules are store-backed and
+  Console-edited; the webhook path stays root-owned.
 - **ADR-0024** — OAuth issuer, audience, claim, scope and public URL are security floor.
 - **ADR-0023** — no shared control-plane secret exists in configuration; the first credential is
   bootstrapped locally.
-- **ADR-0030** — bounds the local subcommands, and is where `relay init` is decided.
+- **ADR-0030** — bounds the local subcommands. Amended 2026-09-15: when `relay init` lands it
+  **replaces** `bootstrap-token` and `console-password` rather than joining them.
 - **Invariant 14 / ADR-0014** — the minimum daemon version stays the Relay's only lever over
   daemon versions; it becomes an operator setting.
 - **ADR-0033** — the installer, unbuilt.
@@ -209,9 +210,9 @@ remove every approval gate, then dispatch within the limits they just set. Step-
 trail are the controls; neither prevents it.
 
 This was decided deliberately: a root-set ceiling above the Console value was offered and
-declined in favour of one source of truth per setting. The threat model must record it — it
-weakens invariant 11's "the API can never raise its own limits" to "the API cannot, and a human
-in the Console can".
+declined in favour of one source of truth per setting. It is **R15** in
+`docs/security/threat-model.md`, accepted by the owner on 2026-09-15 — invariant 11's "the API
+can never raise its own limits" becomes "the API cannot, and a human in the Console can".
 
 ## Future work
 

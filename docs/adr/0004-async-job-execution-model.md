@@ -41,3 +41,11 @@ with exit code, captured output (size-capped), and duration.
 - The transport must let the relay-daemon persist seen Task IDs across reconnects to honour
   at-most-once.
 - Jobs and Tasks are the natural unit of audit.
+
+## Amendment (2026-09-15): where the blast cap is configured
+
+Invariant 5 is unchanged — the cap is enforced on the Relay, before dispatch. The read and
+mutate cap **values** moved from startup configuration to store-backed operator settings,
+changed by a human `admin` in the Console with step-up and audit. See the ADR-0010 amendment of
+the same date, and ADR-0012's, for the reasoning; `docs/specs/relay-configuration.md` for the
+behaviour.

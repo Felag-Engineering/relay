@@ -93,3 +93,75 @@ capability parity is a review rule, not a runtime dependency between surfaces.
   Grants can only narrow what Node Policy would allow, never widen it — the Node file
   is the root; the Relay layer only subtracts. Sequenced with the multi-principal RBAC
   milestone, not v1.
+
+## Amendment (2026-09-15): configuration splits into a security floor and operator settings
+
+**This one reverses part of a decision rather than restating it.** Invariant 11 read that
+Relay configuration is *"operator-set at startup and unreachable from any API"* — all of it,
+with no distinction between values. That is narrowed to: **anything that bounds who may
+authenticate is unreachable from any API.** Taken by the owner on 2026-09-15 while establishing
+`docs/specs/relay-configuration.md`, which specifies the result.
+
+### What changed
+
+Configuration becomes two tiers, split by what an attacker gains from changing the setting.
+
+The **security floor** stays exactly where it was — a root-owned file on the host, with no code
+path from any request: listen addresses, CA directory and store path, the OAuth issuer, audience,
+claim and scope, the Console session lifetimes and the step-up freshness window,
+`console_execution`, the approval webhook URL, secret file and timeout, and every secret file
+path. These decide *who can authenticate at all* and *whether the gate exists*.
+
+**Operator settings** become runtime objects in the Relay's store, changed by a human `admin` in
+the Admin Console with step-up re-authentication, audited with old and new values, taking effect
+on the next request: the read and mutate blast caps, the approval-gate rules, the minimum daemon
+version, the `state:cert-expiring` fraction, the enrollment rate limits, the node cap, retention
+and page-size limits.
+
+**The blast caps and the approval-gate rules are Console-only.** No MCP tool and no Control API
+route writes them, and none may be added: the capability layer holds the decision and the other
+adapters narrow to nothing, which is invariant 10's "an adapter may offer less", not a second
+control path. Only a human at a browser, re-entering their password, can widen what an AI-agent
+may reach — a machine Account cannot hold a Console session at all.
+
+Two smaller decisions came with it. There are **no configuration command-line flags**: one way to
+set a value, so there is no precedence rule and nothing sensitive in a process listing. And the
+floor is re-read on `SIGHUP`, **all-or-nothing** — an invalid value or a changed bind-time
+setting refuses the whole reload, names the setting, and leaves the running configuration
+untouched.
+
+### Why the original wording was too broad
+
+"Never Relay configuration" bundled two different things under one noun. The OAuth issuer and the
+step-up window decide who may authenticate and how recently they proved it; an `admin` who could
+edit those could mint themselves a new way in. The mutate blast cap is a dial an operator turns
+as their confidence in the fleet grows, and requiring a file edit and a service restart to turn
+it made the product worse without making that class of attack harder — the same `admin` could
+already dispatch up to the existing cap, repeatedly.
+
+Administering a Relay should not mean editing a file and restarting a service. What must stay
+true is narrower and sharper: **no credential can change the terms on which credentials are
+accepted.**
+
+### What is given up, and accepted
+
+The property "the API can never raise its own limits" becomes "the API cannot, and a human in the
+Console can". A compromised human Console session with that Account's password can raise the
+mutate cap to the whole fleet and delete every approval gate, then dispatch within the limits it
+just set. Step-up and the audit trail are the controls; neither prevents it.
+
+A root-set ceiling above the Console value — the file setting a maximum the Console could move
+within — was offered and **declined** in favour of one source of truth per setting. The owner
+accepted the residual risk explicitly on 2026-09-15; it is **R15** in
+`docs/security/threat-model.md` and is recorded in the capability spec.
+
+### Consumers
+
+- **Invariant 11** is rewritten in `AGENTS.md`, keeping its number.
+- **ADR-0004 and ADR-0012** are amended: the blast caps are still enforced on the Relay before
+  dispatch, and are now operator settings rather than startup configuration.
+- **ADR-0027** is amended: gate rules become store-backed and Console-editable; the webhook stays
+  root-owned.
+- `docs/security/threat-model.md` gains **R15** and restates invariant 11's row.
+- `docs/specs/relay-configuration.md` is the behaviour; every other spec citing invariant 11 for
+  a floor-tier value is unaffected.

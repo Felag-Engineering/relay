@@ -73,3 +73,13 @@ mutating routes). One implementation, three surfaces, in that order.
 Reopening #137 remains the escape hatch if operators ask for a terminal surface once the
 Console is real. This ADR does not reopen it; it draws the line that keeps `init` from
 doing so by accident.
+
+## Amendment (2026-09-15): `init` replaces the two local commands rather than joining them
+
+`init` remains unbuilt and deferred. What is now decided is its **shape when it lands**: it
+replaces `bootstrap-token` and `console-password` rather than being a third verb beside them, so
+the binary loses two verbs as it gains one. That keeps this ADR's boundary — the binary widening
+by accident, one convenient verb at a time, is the failure it exists to prevent.
+
+Until then first boot is those two commands, and everything else — Accounts, Nodes, Enrollment
+Tokens, every operator setting — happens in the Console. See `docs/specs/relay-configuration.md`.

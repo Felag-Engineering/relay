@@ -189,7 +189,8 @@ inert once the Node holds its certificate — but nothing enforces its removal, 
 built from an enrolled host would carry a live token.
 
 Delivering it through `systemd LoadCredential=` or the customer's secret store removes this, at
-the cost of a second supported path; both are named in *Future work*.
+the cost of a second supported path; both are named in *Future work*. Accepted by the owner on
+2026-09-15 and recorded as **R16** in `docs/security/threat-model.md`.
 
 ## Future work
 

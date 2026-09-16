@@ -85,15 +85,20 @@ it needs an ADR, not a quiet workaround.
     ADR-0009's no-execution scope): where it executes, it does so plan-by-default, with
     step-up re-auth on a mutate apply, role-gated by the capability layer, and behind the
     root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026)
-11. **The Control API manages runtime objects, never Relay configuration.** Relay config
-    (listeners, CA/TLS, auth bootstrap, blast caps) is **operator-set at startup and
-    unreachable from any API** — no code path exists from a request to any of those
-    values, so the API can never raise its own limits. Secrets are supplied as *file
-    paths*, never as values, so nothing sensitive lands in a process listing or a crash
-    dump; a file holding one must be root-owned and not world-readable, and the Relay
-    refuses to start otherwise. Delivered on a host by a root-owned unit file and
-    `EnvironmentFile` (`relay/packaging/`) — the mechanism may change, the property may
-    not. (ADR-0010; settled in #362)
+11. **No credential can change the terms on which credentials are accepted.** Whatever
+    bounds *who may authenticate, and how recently they proved it* — listeners, CA/TLS,
+    auth bootstrap, the identity provider Relay believes, session and step-up windows,
+    `console_execution`, and the approval notification path — is the **security floor**:
+    operator-set on the host and unreachable from every API, with no code path from a
+    request to any of those values. Configuration that merely *bounds reach* — blast
+    caps, approval-gate rules, the minimum daemon version, rate and capacity limits —
+    may be a runtime object, and where it is, it is changed only by a human Account with
+    step-up re-authentication and is audited. Secrets are supplied as *file paths*, never
+    as values, so nothing sensitive lands in a process listing or a crash dump; a file
+    holding one must be root-owned and not world-readable, and the Relay refuses to
+    start otherwise. Delivered on a host by a root-owned unit file and `EnvironmentFile`
+    (`relay/packaging/`) — the mechanism may change, the property may not.
+    (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; settled in #362)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
     (`PolicyQuery`, plan mode). Never reimplement Policy evaluation on the Relay side.
     (ADR-0011)
@@ -105,8 +110,8 @@ it needs an ADR, not a quiet workaround.
     dispatch-level minimum-version gate. (ADR-0014)
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
-the boundaries they defend; ADR-0020, ADR-0026, and ADR-0034 each record amending a specific
-numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
+the boundaries they defend; ADR-0010, ADR-0020, ADR-0026, and ADR-0034 each record amending a
+specific numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
 several Go source comments cite them by number. Amend an invariant in place and record the
 amendment in its ADR. **Never renumber or drop one.**
 

@@ -355,3 +355,25 @@ lose the rest.
 ("same as Tuesday, except fan-out grew 3 → 12"). It is the other half of beating fatigue
 and it is independent of everything above — it changes what an approver is shown, not what
 an approval covers — so it is tracked separately rather than folded in here.
+
+## Amendment (2026-09-15): gate rules are store-backed and Console-edited
+
+The gate's decisions are unchanged: what it gates, the rungs, the channel rule, quorum, audience,
+the requester exclusion, and the ceiling on any window. What changed is **where the rules live**.
+
+They were a root-owned JSON file named by configuration and loaded at startup. They are now
+runtime objects in the Relay's store, edited by a human `admin` in the **Admin Console only**,
+with step-up re-authentication, audited per rule with old and new values, taking effect on the
+next dispatch. No MCP tool and no Control API route writes them, and none may be added — an
+AI-agent must never be able to edit the gate that gates it, and Console-only keeps every writer a
+human by construction, since a machine Account cannot hold a Console session.
+
+**The webhook stays root-owned**: its URL, secret file and timeout remain security floor.
+Repointing the notification path sends every approval request to somewhere else and leaves the
+humans who should answer seeing nothing, which is a different class of act from tightening or
+loosening a rule.
+
+The reasoning, the tier split and the accepted residual risk — a compromised human Console
+session can remove every gate — are in the ADR-0010 amendment of the same date and in
+`docs/security/threat-model.md` **R15**. Behaviour is in `docs/specs/relay-configuration.md`;
+this ADR remains authoritative for what a rule means.
