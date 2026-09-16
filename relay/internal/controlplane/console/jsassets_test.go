@@ -15,7 +15,7 @@ package console
 //
 // # Why it SKIPS rather than fails without node
 //
-// This repository's toolchains are Go and Rust (CLAUDE.md); node is not one of
+// This repository's toolchains are Go and Rust (AGENTS.md); node is not one of
 // them and this must not make it one. Where node is present — every developer
 // box, and CI if it grows one — these run and catch the regression. Where it
 // is not, the text-level assertions in dayone_test.go still stand. A test that

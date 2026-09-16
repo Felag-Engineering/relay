@@ -97,7 +97,7 @@ nobody else; `state:` is set by **nobody at all**.
 ## Consequences
 
 - **Amends GLOSSARY.md's `Selector` definition** — no longer purely "a label-based query" — and
-  ADR-0006's and ADR-0020's namespace count, and **CLAUDE.md invariant #7**, which states that
+  ADR-0006's and ADR-0020's namespace count, and **AGENTS.md invariant #7**, which states that
   Labels use three namespaces. Human-merge lane, as ADR-0020 was.
 
 - **Selector resolution gains a second code path** alongside label matching. That is the cost of

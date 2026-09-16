@@ -4,7 +4,7 @@ How agent skills should consume this repo's domain documentation when exploring 
 
 ## Before exploring, read these
 
-- **`CLAUDE.md`** at the repo root — how to work here, plus the fourteen architecture
+- **`AGENTS.md`** at the repo root — how to work here, plus the fourteen architecture
   invariants. Each invariant names the ADR that governs it; use the list as the index into
   `docs/adr/`, which is faster than reading all 36.
 - **`GLOSSARY.md`** at the repo root — the canonical glossary. Single-context repo; there is
@@ -41,7 +41,7 @@ to `GLOSSARY.md` **in the same change** that introduces the term.
 
 In most repos, contradicting an ADR means surfacing it and proceeding. Here it does not.
 
-The invariants enumerated in `CLAUDE.md` govern remote code execution on a customer's fleet.
+The invariants enumerated in `AGENTS.md` govern remote code execution on a customer's fleet.
 If your output would violate one — Policy evaluation, the execution path, transport, mTLS,
 auth, the `/proto` contract, blast-radius caps, label authority — **stop and escalate to a
 human.** It needs a new ADR, not a workaround, and the ADR lands in front of a person.

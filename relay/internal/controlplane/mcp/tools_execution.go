@@ -86,7 +86,7 @@ func (a execAdapter) Plan(ctx context.Context, p capability.Principal, sel capab
 // execution tools' stricter sibling of attribution.go's logPrincipal, which
 // silently no-ops on !ok — fine for a read tool, not for an RCE surface.
 // Middleware always injects FoundingAdmin in production, so !ok is
-// unreachable there; "prefer the more restrictive option" (CLAUDE.md)
+// unreachable there; "prefer the more restrictive option" (AGENTS.md)
 // requires the explicit guard anyway.
 func requirePrincipal(ctx context.Context) (capability.Principal, error) {
 	p, ok := controlplane.PrincipalFromContext(ctx)

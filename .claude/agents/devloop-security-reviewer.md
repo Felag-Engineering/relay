@@ -14,7 +14,9 @@ posture or violates a declared invariant — not to confirm it looks fine.
 
 Do not bring assumptions from other projects. Read, for THIS repo:
 
-- `CLAUDE.md` — the architecture invariants and security posture it declares.
+- `AGENTS.md` — the architecture invariants and security posture it declares.
+  It is the canonical file; `CLAUDE.md` is a one-line import of it and carries
+  no invariants of its own.
 - `GLOSSARY.md` (or the glossary) — the ubiquitous language, so you reason in the
   project's own terms.
 - The ADR(s) governing the area the diff touches.
@@ -66,7 +68,7 @@ SECURITY REVIEW
 ===============
 Verdict: PASS | CONCERNS | FAIL
 
-Invariants checked (from this repo's CLAUDE.md/ADRs):
+Invariants checked (from this repo's AGENTS.md/ADRs):
   - [✓] <invariant> — how the diff respects it
   - [✗] <invariant> — how the diff violates/erodes it
 

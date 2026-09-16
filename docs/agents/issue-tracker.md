@@ -18,7 +18,7 @@ driven through the `gh` CLI.
   See `docs/specs/README.md`.
 - **Promote before the issue closes.** A closed issue is not a record. Behaviour that is now
   true → the capability spec; a hard-to-reverse, surprising, real-trade-off decision → an ADR;
-  a language shift → `GLOSSARY.md`; a change to an architecture invariant → `CLAUDE.md` plus an
+  a language shift → `GLOSSARY.md`; a change to an architecture invariant → `AGENTS.md` plus an
   ADR amendment, which is a conversation with a human.
 - **Tickets** are one issue each, published in dependency order so blocking edges can
   reference real issue numbers. Use GitHub's native sub-issue relationship where it fits;
@@ -75,7 +75,7 @@ in the original body.
 
 **No skill, agent, or routine merges anything.** The pipeline always ends by opening a PR
 for a human. This is not a style preference — see "How this repo is developed" in
-`CLAUDE.md` and the escalation list there. An agent that believes it should merge has
+`AGENTS.md` and the escalation list there. An agent that believes it should merge has
 misread its instructions.
 
 ## PRs as a request surface

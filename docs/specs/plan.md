@@ -1,20 +1,24 @@
 # Plan
 
-**Status:** designed, **not built**, as of `2026-09-12`. ADR-0038 decides the shape; this
-specifies the first cut of it. Nothing described here exists in code yet, and every claim below
-is in the testing backlog rather than proven — see *Seams and proof*.
+**Status:** aspirational — designed, **not built**; worked through with the owner on `2026-09-14`,
+awaiting their review of this draft. ADR-0038 decides the shape, amended by the decisions below;
+this specifies the first cut of it. Nothing described here exists in code yet, and every claim
+below is in the testing backlog rather than proven — see *Seams and proof*.
 
 ## Purpose
 
 A Plan is **an approved route of execution**: an ordered list of steps that an AI-agent proposes,
-a human approves once, and the agent then walks one step at a time.
+a human approves as a route, and the agent then walks one step at a time — with each `mutate` step
+released by its own approval, made against the route the approver already saw.
 
 It exists because diagnosis and remedy have different shapes. An AI-agent investigating an
 incident reads freely — reads are cheap and ungated — and arrives at a conclusion of the form
 *"six things need to happen to this host, in this order."* Relay's approval gate is built to
-answer one dispatch at a time, so that conclusion costs six human decisions. A gate asked six
-times is a gate answered without reading, and `approval.md` is explicit that fatigue is a
-security failure rather than a UX complaint.
+answer one dispatch at a time, so that conclusion arrives as six unrelated requests. A gate asked
+six times with no context is a gate answered without reading, and `approval.md` is explicit that
+fatigue is a security failure rather than a UX complaint. A Plan does not remove the per-mutation
+decision; it gives every one of them the route as context, fixes what each step is, and lets the
+reads in between run without asking.
 
 Relay already has one answer: the **Approval grant**, a *described* scope with walls around it —
 an Operation allow-list, a fan-out ceiling, a window. A Plan is the *enumerated* answer. A grant
@@ -36,7 +40,8 @@ table should not come away believing the whole cut is a config change.**
 | **Linear**, no branches | **Its own design pass**, under the constraints in *Out of scope*. | An agent that can halt, read more, and decline to continue already has most of what a branch offers. A branch buys latency, not capability. |
 | **Any failed step is terminal** | A declared per-step failure policy — additive, and part of the hash. | If a step failed, the world is not what the approver assumed it was. Halting is the answer that cannot be wrong. |
 | **Agent-driven only** | **A new caller.** Both drive through the same advance path (ADR-0038). | An internal driver is a caller, not a second execution path, and gains no privilege by being internal. |
-| **No new approval surface** | — | A Plan parks through the existing Approval, exactly as an Approval grant does. |
+| **No new approval surface** | — | A Plan, and each of its `mutate` steps, parks through the existing Approval, exactly as an Approval grant does. |
+| **One step per advance** | A batched advance — a convenience that reopens what the agent may decide. | Per-step is the conservative answer; each advance is one decision point for the agent and, for a `mutate` step, for a human. |
 
 ## Surfaces
 
@@ -46,7 +51,8 @@ table should not come away believing the whole cut is a config change.**
 | **Control API** | `GET /api/v1/plans`, `GET /api/v1/plans/{id}`, `POST /api/v1/plans/{id}/abandon`. Decisions land on the existing `/api/v1/approvals` routes. | Not built |
 | **Admin Console** | Renders a Plan in the approval queue and on a detail screen. **Composes nothing** — proposing a route is an agent act. | Not built |
 
-Proposing is deliberately MCP-only in this cut. That is an adapter offering **less** than the
+Proposing is deliberately MCP-only in this cut; the Console and Control API view a Plan, decide on
+it through approvals, and abandon it. That is an adapter offering **less** than the
 capability layer allows, which invariant 10 permits; it is never the layer deciding differently
 per surface.
 
@@ -84,8 +90,11 @@ identity binding that attack can only cause a re-park.
 
 The approved Plan and a monotonic **step cursor** live on the Relay. The agent advances by naming
 the Plan and the step index it believes is next, **and nothing else** — no Operation, no
-arguments, no Selector. Relay looks up that step of the approved route, dispatches what the human
-approved, and moves the cursor.
+arguments, no Selector. Relay looks up that step of the approved route and moves the cursor. A `read`
+step then dispatches what the human approved. **A `mutate` step parks for its own approval, bound
+to the Plan hash and that step**, and dispatches only once released — so the cursor still carries
+no description of the work, and a step approval can release only the step the route already
+names.
 
 This is the security core of the capability and the reason it is worth building. The obvious
 alternative — the agent holding the approved step list and dispatching each step itself — makes
@@ -108,24 +117,44 @@ which an ordinary client retry on a timeout is enough to produce. Task-level ded
 this: each advance mints a new Job with new Task IDs, so the daemon sees two legitimately
 distinct Tasks and runs both.
 
-### What the gate costs is derived from the strictest step
+### What the gate costs is derived from the strictest step, then again per step
 
-Gate rules are evaluated against **every** step. The strictest requirement any step triggers
-governs the whole Plan, and a Plan with no gated step requires no approval and is not a way to
-manufacture one. A single Raw Exec step therefore prices the entire Plan at Raw Exec's floor.
+Gate rules are evaluated against **every** step at proposal. The strictest requirement any step
+triggers governs the Plan's own approval, and a Plan with no gated step requires no approval and is
+not a way to manufacture one. A single Raw Exec step therefore prices the route's approval at Raw
+Exec's floor.
+
+At advance, each `mutate` step is gated again **on its own**: its approval is priced by that step's
+gate rule at the approved Node, and bound to the Plan hash and the step. A `read` step is not
+re-gated.
 
 This mirrors how an Approval grant's cost is derived at its Scope's widest admissible dispatch,
 and for the same reason: what a route costs to approve must never be something its requester gets
 to say.
 
-### An approved, incomplete Plan is grant-shaped
+### Every `mutate` step is approved at its own advance
 
-A Plan sitting at step 3 of 6 is standing authorization to dispatch steps 4–6 with no further
-human involvement — an Approval grant whose scope happens to be enumerated. It takes the same
-walls, and every one of them is mandatory:
+Approving a Plan approves the route — its steps, their order and its Node — as the context every
+later decision is made in. **It does not by itself release a mutation.** When the cursor reaches a
+`mutate` step, that step parks for its own approval, bound to the Plan hash and the step index,
+and dispatches only when released. The step approval uses the ordinary approval path, channels
+and audiences (`approval.md`); under the shipped in-band default it is a low-friction confirmation
+in the client.
 
-- **A window.** Root-owned Relay configuration (invariant 11), inside ADR-0027's 24-hour ceiling
-  and expected to be far shorter.
+The consequence is the reason for the rule: **a stolen proposer credential can run no mutation a
+human did not release at that step.** It can walk the `read` steps of a route a human approved, in
+order, on that one Node, until the window closes — and nothing more. Proposer-identity-only
+advance and per-step step-up re-authentication were weighed and declined.
+
+### An approved, incomplete Plan is grant-shaped for its reads
+
+A Plan sitting at step 3 of 6 is standing authorization to dispatch the remaining **`read`** steps
+with no further human involvement — an Approval grant whose scope happens to be enumerated — while
+each remaining `mutate` step still waits for its own approval. It takes a grant's walls, and every
+one of them is mandatory:
+
+- **A window.** Root-owned Relay configuration (invariant 11): **1 hour by default, capped at 4
+  hours**, matching approval grants.
 - **Revocable**, closing mid-route immediately.
 - **Expiry is terminal and never resumable.** An expired Plan stays where it stopped; the
   remaining steps need a new Plan and a new Approval.
@@ -180,6 +209,10 @@ be re-authored by the customer's own config management. Verdicts are therefore p
 are presented as **as-of-proposal**, never as current. A forecast presented as a fact is the
 failure ADR-0011 exists to prevent, one layer up.
 
+Verdicts for steps **after the first `mutate` step** are additionally labelled as **possibly
+depending on earlier steps**: an `unsupported` or a Policy deny there may only reflect a world
+steps 1–N have not yet produced.
+
 ### Lifecycle
 
 ```
@@ -204,6 +237,7 @@ per ADR-0025 the record holds steps, decisions and outcomes — **never read out
 | No Node matched | The Selector matched nothing, or its only match is not connected |
 | Unauthorized to propose | Below the role floor of the strictest step |
 | Not approved | An advance against a Plan still pending, denied, or terminal |
+| Step awaiting approval | An advance at a `mutate` step that has no released step approval — the step parks; this is a park, not a refusal |
 | Cursor mismatch | The declared step index is not the cursor's — a replay, a reorder, or a skip |
 | Step already in flight | An advance at the current index while that step is mid-dispatch — refused by the claim transaction, never queued |
 | Not the proposer | An Account other than the Plan's advancing it |
@@ -216,11 +250,13 @@ table. It is the step's Job refusing, reported as that Job's outcome, and it hal
 
 ## Governing ADRs and invariants
 
-- **ADR-0038** — the whole shape: Plan as an approved route, the cursor and the payload-free
-  advance, a step is a Job, the derived requirement, the grant-shaped walls, and the rename of
-  plan mode to Policy preflight.
-- **ADR-0027** — the Approval a gated Plan parks through, the plan hash it binds, channel
-  strength, and the 24-hour ceiling a Plan's window sits inside.
+- **ADR-0038 — needs amending.** The whole shape: Plan as an approved route, the cursor and the
+  payload-free advance, a step is a Job, the derived requirement, the grant-shaped walls, and the
+  rename of plan mode to Policy preflight. Amend for per-step approval of every `mutate` step and
+  the 4-hour window cap.
+- **ADR-0027** — the Approval a gated Plan and each of its `mutate` steps parks through, the plan
+  hash it binds, and channel strength. Its grant window, now 4 hours, is the ceiling a Plan's
+  window matches.
 - **ADR-0011** — the preflight that runs at proposal; the daemon's live engine answers, and the
   Relay never computes a verdict (**invariant 12**).
 - **ADR-0013** — the Freeze, which halts every advance and does not kill an in-flight step.
@@ -245,7 +281,7 @@ holds none of its own. Nothing about it reaches `/proto`'s node plane.
 ### What proves each claim
 
 **Nothing yet — the capability is unbuilt, and this entire list is the backlog for its testing
-issue.** Per `CLAUDE.md`, one issue per capability is its testing issue, and a spec's "no row"
+issue.** Per `AGENTS.md`, one issue per capability is its testing issue, and a spec's "no row"
 list is that issue's scope. No test is named here, because naming one that does not exist is
 worse than naming none.
 
@@ -254,6 +290,10 @@ worse than naming none.
 - An advance with a stale step index is refused and re-runs nothing
 - An advance cannot skip or reorder a step
 - An ungated Plan runs without an Approval; one gated step parks the whole Plan
+- **Every `mutate` step parks at advance for its own approval, bound to the Plan hash and step,
+  and a `read` step does not**
+- A step approval cannot release any step but the one it is bound to
+- A Plan's window defaults to 1 hour and cannot be configured above 4 hours
 - A Plan's requirement is the strictest step's, and a Raw Exec step prices the whole Plan
 - A Plan that drifts to a different Node re-parks instead of dispatching
 - A Freeze stops the next advance and leaves the in-flight step running
@@ -276,7 +316,7 @@ worse than naming none.
 | Characteristic | Contract | Measured by |
 |---|---|---|
 | Proposal | One Selector resolution plus one preflight per step, against one Node | *(none)* |
-| Advance | One dispatch — the same cost as an ungated single-Node run | *(none)* |
+| Advance | One dispatch — the same cost as an ungated single-Node run — plus, for a `mutate` step, one park and one decision | *(none)* |
 | Retained Plans | Bounded by the step bound and the window; swept on expiry | *(none)* |
 
 There are no benchmarks in this repository.
@@ -311,35 +351,43 @@ up as a decision rather than rediscovered as a gap.
   See `policy-preflight.md`, renamed from `plan-mode.md` by ADR-0038.
 - **The Approval a Plan parks through** — gate rules, channels, quorum, grants: `approval.md`.
 
+## Accepted residual risk
+
+- **A stolen proposer credential can walk a route's reads.** Until the window closes it can advance
+  every `read` step of an approved Plan, in order, on its one Node. It cannot release a mutation.
+- **The rationale is the agent's lever.** It is stored and rendered as an assertion, but a human
+  approving a route still reads it; a compromised agent's best move is making dangerous steps read
+  as routine.
+- **Later-step verdicts are least informative where they matter most.** Diagnose-then-remediate
+  routes depend on earlier steps, so their later verdicts are labelled rather than solved.
+
+## Future work
+
+Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost; none
+is a commitment to an order.
+
+- **Multi-Node Plans — answer aggregate blast first.** One decision releases N dispatches, and
+  invariant 5's cap is per dispatch. At one Node the step bound is an adequate aggregate control;
+  it stops being adequate the moment the fan-out bound rises, and an aggregate bound must be
+  decided **before** multi-Node lands, not after.
+- **Better presentation of dependent later steps** — so an approver judging step 4, which reads a
+  file step 3 creates, is not left with a screen of misleading verdicts and the agent-authored
+  rationale as the only guide.
+
 ## Open questions
 
-- **One decision now releases N dispatches, and nothing bounds N's blast in aggregate.**
-  Invariant 5's cap is per-dispatch and stays so. At one Node the step bound is an adequate
-  aggregate control, because a Plan can touch at most one host. It stops being adequate the moment
-  the bound rises, and that is the question to answer **before** multi-Node lands, not after.
-- **An advance re-authenticates nothing.** The only per-advance identity check is that the caller
-  is the proposer, which a stolen proposer credential satisfies by definition — so a held-open
-  route is a standing capability for whoever holds that credential until the window closes.
-  Compare ADR-0026's Console apply, which demands step-up re-authentication on *every* mutate.
-  A route is not a browser session and the analogy is imperfect, but "approved once, advanced
-  many times, re-authenticated never" deserves a deliberate answer rather than an omission.
-- **How short should a Plan's window be?** ADR-0027's 24-hour ceiling is the outer bound, but a
-  route held open is standing authority and the honest default is probably closer to an hour.
-  Unlike a grant, a Plan has a natural clock: the incident that motivated it.
-- **Is `advance` the right granularity, or should an agent be able to advance several steps at
-  once?** Per-step is the conservative answer and the one specified. A batched advance would be a
-  convenience that reintroduces the question of what the agent is allowed to decide.
-- **What does an approver see for step 4 that reads a file step 3 created?** The preflight verdict
-  is honest but unhelpful — `unsupported` or a Policy deny may simply reflect a world that has not
-  happened yet. This matters more than it first appears: diagnose-then-remediate is the motivating
-  case, later steps routinely depend on earlier ones, and so the verdicts are least informative
-  for exactly the steps an approver most wants assurance about. The capability rests on the human
-  being able to judge the route, and a screen of misleading verdicts pushes that judgement onto
-  the step list and the agent-authored rationale — the one field a compromised agent controls.
-  Nothing here is *wrong*; the presentation may be, and it is worth solving before the first
-  route is approved in anger.
+None open. Resolved on `2026-09-14`: advance re-authentication (every `mutate` step now needs its
+own approval), the window length (1 hour default, 4-hour cap), advance granularity (one step), and
+the dependent-verdict presentation and multi-Node aggregate blast (both Future work).
 
 ## History
+
+- `2026-09-14` — worked through with the owner. Every `mutate` step of an approved Plan now parks
+  for its own approval bound to the Plan hash and step; `read` steps advance on the route's
+  approval. Window 1 hour by default, capped at 4 hours. One step per advance; MCP-only proposing;
+  one Node, linear, halt kept, with multi-Node and aggregate blast in Future work; later-step
+  verdicts labelled as possibly dependent; an approval grant never releases a Plan. Open questions
+  on re-authentication, window, batching, dependent verdicts and aggregate blast resolved.
 
 - `2026-09-12` — Revised after adversarial plan and security reviews. The fan-out ceiling became
   **identity binding** (a count binds nothing; a compromised Node could forge `node:` labels to

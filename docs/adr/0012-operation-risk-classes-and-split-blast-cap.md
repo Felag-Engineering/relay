@@ -49,3 +49,20 @@ know which requests are safe to fan out.
   contract, which always escalates to a human in the dev-loop).
 - Audit and the Console can foreground mutations cheaply, since every Job now carries
   its class.
+
+## Amendment (2026-09-15): the caps are operator settings, not startup configuration
+
+This ADR's decision is unchanged: risk class is `/proto` contract, the cap is chosen by class,
+Raw Exec always takes the mutate cap, and the cap is enforced on the Relay before dispatch
+(invariant 5).
+
+What changed is **where the two values are set**. They were startup configuration, reachable only
+by editing a root-owned file and restarting; they are now operator settings in the Relay's store,
+changed by a human `admin` in the Console with step-up re-authentication and audited, taking
+effect on the next dispatch. No MCP tool or Control API route writes them. See the ADR-0010
+amendment of the same date for the reasoning, the tier split, and the residual risk the owner
+accepted; `docs/specs/relay-configuration.md` for the behaviour.
+
+The caps are a dial an operator turns as confidence in a fleet grows. Requiring a service restart
+to turn it did not make the class of attack it defends against harder — the same Account could
+already dispatch to the existing cap, repeatedly — and it made routine administration worse.

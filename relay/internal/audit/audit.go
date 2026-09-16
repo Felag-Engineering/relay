@@ -410,7 +410,7 @@ type Repository interface {
 	ByJob(ctx context.Context, jobID string) ([]Record, error)
 
 	// ByNode returns all Records for nodeID, ordered by Timestamp — the
-	// "which Node" accountability query (CLAUDE.md). Time-range querying is
+	// "which Node" accountability query (AGENTS.md). Time-range querying is
 	// deferred to the first query surface; no acceptance need yet.
 	ByNode(ctx context.Context, nodeID string) ([]Record, error)
 

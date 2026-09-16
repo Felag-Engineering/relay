@@ -19,7 +19,7 @@ security-critical control plane.
   subject CommonNames become `Relay` / `Relay CA`, and the daemon crate becomes
   `relay-daemon` (its `[[bin]]` was already `relay-daemon`).
 - **"Gleipnir" is retained in exactly two places, both legitimate:** (a) the separate
-  first-party AI-agent system that consumes Relay, as framed in GLOSSARY.md/CLAUDE.md/
+  first-party AI-agent system that consumes Relay, as framed in GLOSSARY.md/AGENTS.md/
   README.md; and (b) the historical repo name `gleipnir-relay` and everything that
   derives from it (clone URLs, the Go module path).
 - **The `relay.v1` rename is deliberately wire-breaking, and lands now.** The fully

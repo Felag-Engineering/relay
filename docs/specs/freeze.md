@@ -1,6 +1,7 @@
 # Freeze
 
-**Status:** current as of `2026-09-12`.
+**Status:** aspirational — confirmed with the owner on `2026-09-14` as matching intent; the first
+pass is what is built today.
 
 ## Purpose
 
@@ -22,7 +23,7 @@ half the traffic would be the wrong shape.
 |---|---|
 | **Control API** | `POST /api/v1/freeze/engage`, `POST /api/v1/freeze/release` |
 | **Relay host** | `SIGUSR1` engages, `SIGUSR2` releases — the local lever, see below |
-| **Admin Console** | Not built (#457, explicitly optional) |
+| **Admin Console** | Future work (#457) — not in the first pass |
 
 The host-side lever is **unreachable from any surface, by construction**: the Control API holds an
 interface carrying only the gated pair, so no route can reach the local path even by accident.
@@ -194,18 +195,31 @@ nothing measures it.
 - **Per-Account rate limits** — a decision still open, and a different control: rate limiting
   shapes normal traffic, Freeze stops abnormal traffic entirely.
 
+## Future work
+
+Deliberately not in the first pass: the built capability should work end to end before anything is
+added to it.
+
+- **Engaging from the Console** (#457).
+- **Approvals during a Freeze, stated as behaviour.** A pending request can still be decided while
+  frozen, nothing dispatches until release, and an approved request still expires on its own clock
+  and must be re-requested if the Freeze outlasts it. Settle once Plans and approvals are built.
+
 ## Open questions
 
-- **Nothing tests the human-Account requirement on API engage** (ADR-0013's 2026-08-24
+- **Nothing tests the human-Account requirement on API engage — a test is wanted in the first
+  pass** (ADR-0013's 2026-08-24
   amendment). It is the clause that prevents an AI-agent switching off its own overseers, and it
   is the least-covered statement in this capability.
-- **Engaging from the Console is unbuilt** (#457, marked optional for the demo). Until then an
-  operator at a browser must reach for the API or the host.
 - **The local lever is a signal, which is a thin interface for an audited act.** `SIGUSR2` carries
   a reason today through a side channel rather than in the signal itself. It works, and it is the
   kind of thing that looks obvious in a post-incident review if the reason went missing.
 
 ## History
+
+- `2026-09-14` — Confirmed with the owner: the built behaviour is the first pass. Console engage
+  and approvals-during-a-Freeze moved to Future work; a test for the human-Account engage rule is
+  wanted now.
 
 - `2026-09-12` — ADR-0038: the exemption is **Policy preflights**, not "Plans". Every advance of
   an approved Plan is new dispatch and is stopped. Before the rename this section read as though

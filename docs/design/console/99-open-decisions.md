@@ -4,7 +4,7 @@
 decided**. They are drawn in the wireframes because a wireframe is the cheap place to see an idea,
 not because anyone has ruled on them.
 
-Per CLAUDE.md, an implementing agent has **no merge authority** and must **stop and flag a human
+Per AGENTS.md, an implementing agent has **no merge authority** and must **stop and flag a human
 rather than guess on a hard call**. Every item in the first two sections is a hard call. Building
 past one turns a sketch into an accidental architecture, which is precisely the failure this file
 exists to prevent.
@@ -26,7 +26,7 @@ ones that are behind" — and today it is not expressible. Labels target; Facts 
 and daemon version and the fingerprints are *neither*, as `Hello` shows by carrying
 `daemon_version` and `Facts` as separate fields.
 
-**ADR-0034 is merged**, with the GLOSSARY.md and CLAUDE.md invariant #7 amendments. Its Consequences
+**ADR-0034 is merged**, with the GLOSSARY.md and AGENTS.md invariant #7 amendments. Its Consequences
 carry the review's additions: the registry must first persist liveness and certificate validity
 (#440), the `cert-expiring` window is 25% of `LeafValidity` remaining, `tag:` parsing lands in the
 same Selector change, and the security-lane assertion lives on the `relay:` write path (#430).
@@ -177,7 +177,7 @@ mode never [does]."* That is ADR-0014's meaning, shipped and under test.
 removed that concept from the UI regardless.
 
 The Console uses **`state:outdated`**, matching the wire. An earlier draft of these specs used
-`state:version-gated`, which was more legible in isolation and violated CLAUDE.md's no-synonyms
+`state:version-gated`, which was more legible in isolation and violated AGENTS.md's no-synonyms
 rule: an operator reading a Plan through MCP and the same Plan in the Console would have seen two
 words for one thing. Renaming the wire field instead was rejected — ADR-0014 mandates
 additive-only evolution within `relay.v1`, so a rename is a breaking contract change for a

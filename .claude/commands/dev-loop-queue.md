@@ -10,7 +10,7 @@ One tick, one issue, no waiting. Unlike `/dev-loop-drive`, this **never gates on
 it is built for a scheduled cloud routine running while nobody is available to review.
 
 It still **never merges.** Every tick ends at an open PR. The human remains the sole merge
-authority (see "Routines & merge authority" in `CLAUDE.md`).
+authority (see "Routines & merge authority" in `AGENTS.md`).
 
 `--max-open-prs N` overrides the default cap of **8**. `--dry-run` reports the decision and
 stops before creating a branch.

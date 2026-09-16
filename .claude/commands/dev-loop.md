@@ -100,7 +100,7 @@ question.
 
 **Underspecified (interactive)** → brainstorm, then Stage 2:
 
-1. **Explore the codebase first** (read `CLAUDE.md`/`GLOSSARY.md` and related files)
+1. **Explore the codebase first** (read `AGENTS.md`/`GLOSSARY.md` and related files)
    so your questions are informed. Persist findings to `.dev-loop/context.md`.
 2. Summarize what's clear.
 3. Ask clarifying questions **one at a time** with `AskUserQuestion` (max 5; stop
@@ -148,7 +148,7 @@ Otherwise proceed to Stage 3.
 
 **Use the `devloop-architect` agent.** Pass it: read the issue from
 `.dev-loop/issue.md`; if `.dev-loop/context.md` exists, read it as a starting point;
-follow its output format exactly. Do not restate CLAUDE.md — the agent reads it
+follow its output format exactly. Do not restate AGENTS.md — the agent reads it
 itself. Write its output to `.dev-loop/plan.md`.
 
 ### Stage 4 — Plan review (adversarial)
@@ -166,7 +166,7 @@ itself. Write its output to `.dev-loop/plan.md`.
 **Use the `devloop-developer` agent.** Pass it: read the issue from
 `.dev-loop/issue.md`; read the plan from `.dev-loop/plan.md`; on a revision cycle,
 read `.dev-loop/review-feedback.md`. Emphasize: code is written for humans; obey the
-repo's CLAUDE.md/GLOSSARY.md invariants and ubiquitous language; **do not run
+repo's AGENTS.md/GLOSSARY.md invariants and ubiquitous language; **do not run
 `git commit`/`git push`/`gh pr create`**; end with a `## Implementation Summary`.
 
 If the developer returns `No changes needed`, stop the pipeline, print the
@@ -230,7 +230,7 @@ Check whether the change shifts anything the project docs must track. Update in 
 same PR if so:
 
 - **`GLOSSARY.md`** — if the domain/ubiquitous language shifted (new or changed term).
-- **`CLAUDE.md`** — if conventions, layout, commands, or settled decisions changed.
+- **`AGENTS.md`** — if conventions, layout, commands, or settled decisions changed.
 - Any area-specific docs the repo keeps current (READMEs, ADR back-references).
 
 **`docs/specs/` is different — never edit a capability specification.** They are human-authored,
@@ -246,10 +246,10 @@ true.`
 
 Run `git diff --name-only`. If the change touches the repo's security/architecture
 surface (for this project: `proto/`, `docs/adr/`, Policy/exec/transport/mTLS/auth
-code, `CLAUDE.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow config), **use the
+code, `AGENTS.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow config), **use the
 `devloop-security-reviewer` agent** for a dedicated adversarial pass focused on the
 repo's declared security invariants. Pass it: read the issue, the plan, and
-`CLAUDE.md`/`GLOSSARY.md`/relevant ADRs; start from `git diff`; assume the change is
+`AGENTS.md`/`GLOSSARY.md`/relevant ADRs; start from `git diff`; assume the change is
 unsafe until proven otherwise.
 
 - **PASS** → proceed; carry its summary into the PR body.
@@ -266,7 +266,7 @@ If the diff does not touch the security surface, print:
 
 Inspect `git diff --name-only`. If the change touches the repo's security/architecture
 surface — for this project that means any of: `proto/`, `docs/adr/`, Policy/exec/
-transport/mTLS/auth code, `CLAUDE.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow
+transport/mTLS/auth code, `AGENTS.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow
 config — then:
 
 - Do **not** treat the PR as routine. Add a prominent **⚠️ Security surface** section
@@ -333,6 +333,6 @@ brainstorming fired, and whether the change touches the security surface.
 7. **Pass context by file, not by pasting.** Agents read `.dev-loop/*.md`.
 8. **Only the coordinator touches git.** The developer agent never commits, pushes,
    or opens PRs.
-9. **Honor the repo's CLAUDE.md/GLOSSARY.md and architecture invariants** at every
+9. **Honor the repo's AGENTS.md/GLOSSARY.md and architecture invariants** at every
    stage. When a change would touch a declared invariant, stop and flag a human
    rather than design around it.

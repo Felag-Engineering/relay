@@ -6,7 +6,7 @@ is authorized by appearing here.
 This list is the one part of the retired `ROADMAP.md` with no other home. Everything else it held
 moved: milestone status to GitHub milestones, behaviour to the capability specifications in
 [`docs/specs/`](specs/), decisions to [`docs/adr/`](adr/), and what must always be true to the
-architecture invariants in [`CLAUDE.md`](../CLAUDE.md).
+architecture invariants in [`AGENTS.md`](../AGENTS.md).
 
 Six of the entries below have no GitHub issue. That is why the file exists rather than the list
 being dissolved into the tracker — an item agreed in principle and recorded nowhere is an item

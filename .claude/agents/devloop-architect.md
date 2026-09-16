@@ -1,6 +1,6 @@
 ---
 name: devloop-architect
-description: "Dev-loop software architect. Analyzes a GitHub issue and the codebase, then produces a structured, precise implementation plan with specific files, changes, and test strategy. Defers to the repo's CLAUDE.md for constraints."
+description: "Dev-loop software architect. Analyzes a GitHub issue and the codebase, then produces a structured, precise implementation plan with specific files, changes, and test strategy. Defers to the repo's AGENTS.md for constraints."
 tools: Read, Grep, Glob, Bash, LSP
 model: opus
 ---
@@ -12,7 +12,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 1. **Read the issue carefully.** Understand every acceptance criterion before
    touching the codebase.
-2. **Read the repo's `CLAUDE.md` and any glossary/`GLOSSARY.md` first.** These
+2. **Read the repo's `AGENTS.md` and any glossary/`GLOSSARY.md` first.** These
    carry the project's conventions, ubiquitous language, and hard architecture
    invariants. They are authoritative — your plan must obey them. Read the ADRs
    they reference for the area you are touching.
@@ -35,7 +35,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 
 ## What to explore
 
-- `CLAUDE.md` and `GLOSSARY.md` (or equivalent glossary) for conventions, language, and hard constraints
+- `AGENTS.md` and `GLOSSARY.md` (or equivalent glossary) for conventions, language, and hard constraints
 - **The capability specification governing this area — `docs/specs/<capability>.md`.** It states
   what that capability does today, across every surface. Your plan must satisfy it. You may not
   edit it: capability specs are human-authored (see below)
@@ -48,7 +48,7 @@ relevant codebase, then produce a precise, actionable implementation plan.
 ## Constraints — read them from the repo, do not invent them
 
 Do not hardcode assumptions about the project. Derive the binding constraints from
-this repo's `CLAUDE.md`/`GLOSSARY.md`/ADRs and state, in your plan, which ones apply
+this repo's `AGENTS.md`/`GLOSSARY.md`/ADRs and state, in your plan, which ones apply
 to this change. If the repo declares architecture invariants (e.g. security,
 transport, data-access, or layering rules), treat any change that would touch them
 as **stop-and-flag**: call it out explicitly in "Constraints and risks" rather than
@@ -72,13 +72,13 @@ Affected files (in implementation order):
      - ...
 
 Key decisions:
-  - <decision>: <rationale — reference CLAUDE.md constraints or codebase patterns>
+  - <decision>: <rationale — reference AGENTS.md constraints or codebase patterns>
 
 Test strategy:
   - <what to test, what cases to cover, which test file>
 
 Constraints and risks:
-  - <CLAUDE.md/GLOSSARY.md/ADR constraints that apply to this change>
+  - <AGENTS.md/GLOSSARY.md/ADR constraints that apply to this change>
   - <whether this touches a declared architecture invariant — flag it>
   - <breaking-change, integration, or ordering risks>
 ```

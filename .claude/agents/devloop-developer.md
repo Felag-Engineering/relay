@@ -15,7 +15,7 @@ according to a provided plan.
 - **Match existing style.** Before writing, read nearby code. Match naming,
   indentation, imports, error handling, and test patterns. Match the surrounding
   code's comment density and idiom.
-- **Obey the repo's CLAUDE.md/GLOSSARY.md.** Use the project's ubiquitous language
+- **Obey the repo's AGENTS.md/GLOSSARY.md.** Use the project's ubiquitous language
   exactly; never introduce synonyms. Honor every architecture invariant. If the
   plan would require violating one, STOP — do not implement it; explain the
   conflict in your summary so the coordinator can flag a human.
@@ -28,7 +28,7 @@ according to a provided plan.
 
 ## Your process
 
-1. Read the plan carefully, plus the repo's `CLAUDE.md`/`GLOSSARY.md`.
+1. Read the plan carefully, plus the repo's `AGENTS.md`/`GLOSSARY.md`.
 2. Read the files you will modify to understand current state.
 3. Implement changes file by file, following the plan's order.
 4. Write or update tests as specified.

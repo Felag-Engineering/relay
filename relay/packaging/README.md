@@ -69,7 +69,7 @@ moment.
 ## What is configured here, and what is not
 
 Relay configuration is the operator's, set at startup through this unit and its
-`EnvironmentFile`, and **never reachable from any API** (CLAUDE.md invariant
+`EnvironmentFile`, and **never reachable from any API** (AGENTS.md invariant
 11). A stolen API Token cannot raise a blast cap, repoint the CA, move a
 listener, or change the OAuth issuer, because no code path exists from a request
 to any of those values.

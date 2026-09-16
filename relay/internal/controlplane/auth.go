@@ -1,7 +1,7 @@
 // Package controlplane is the Relay's control-plane HTTP surface: MCP (#117)
 // and the Control API (#116) mount onto the one *Server this package exposes,
 // behind a single shared bearer-auth Middleware. This is the only control path
-// — never build a parallel one (ADR-0009/0010, CLAUDE.md invariant 10).
+// — never build a parallel one (ADR-0009/0010, AGENTS.md invariant 10).
 //
 // Every request on this listener authenticates as an **Account**, presenting a
 // per-Account API Token (#296). The Relay stores only each token's SHA-256

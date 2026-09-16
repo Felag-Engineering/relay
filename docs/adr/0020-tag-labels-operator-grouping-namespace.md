@@ -43,7 +43,7 @@ impossible after enrollment.
 ## Consequences
 
 - Amends ADR-0006's two-namespace model to three (its `node:`/`relay:` authority rules
-  are unchanged; a pointer is added there) and CLAUDE.md invariant #7 in the same
+  are unchanged; a pointer is added there) and AGENTS.md invariant #7 in the same
   change → human-merge lane.
 - A hijacked `operator` session can rewrite `tag:` labels and thereby redirect *routine*
   Jobs — bounded, as ever, by Grants, Node Policy, and blast caps — but can never attract
@@ -59,7 +59,7 @@ impossible after enrollment.
 
 ## Amendment (2026-09-08): invariant 7 restated as write authority, not as status
 
-This ADR's decision is unchanged. What changed is how CLAUDE.md invariant 7 summarises it.
+This ADR's decision is unchanged. What changed is how AGENTS.md invariant 7 summarises it.
 
 The invariant read that `tag:` labels "are operator-set through the control plane … for
 ad-hoc grouping and routine targeting" — present tense, for a namespace this ADR decided on

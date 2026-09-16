@@ -17,7 +17,7 @@
 # capability back, that is a signal worth stopping on — it would mean something
 # privileged had moved to the wrong side of the tunnel.
 #
-# WHAT THIS UNIT PROTECTS, precisely (CLAUDE.md invariant 11): Relay
+# WHAT THIS UNIT PROTECTS, precisely (AGENTS.md invariant 11): Relay
 # configuration is set at startup by the operator, through this unit and its
 # EnvironmentFile, and is never reachable from any API. A stolen API Token
 # cannot raise a blast cap, repoint the CA, move a listener, or change the
