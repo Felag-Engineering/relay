@@ -1,100 +1,223 @@
 # Daemon installation
 
-**Status:** stub — aspirational, not yet worked through with the owner (`2026-09-13`).
+**Status:** aspirational — worked through with the owner on `2026-09-15`, awaiting their review of
+this draft. Describes intended behaviour, not the code (see the establishing phase in
+`README.md`).
 
 ## Purpose
 
 A Node joins the fleet only after something puts the relay-daemon on it. At fleet scale that
-something is the customer's config management, not a person. This capability covers what that
-config management is handed and what it does with it: the release artifacts, the verified
-install, the local files the daemon reads (Policy, Templates, its env config), the hardened
-service definition, upgrades, and taking a Node back out.
+something is the customer's config management, never a person. This capability covers what config
+management is handed and what it does with it: the release artifacts, the verified install, the
+local files the daemon reads, the hardened service definition, upgrades, and taking a Node back
+out.
 
-It exists because the daemon's per-Node footprint is the product's biggest adoption cost and
-also the reason the product can be trusted. Installing it has to be quick at 100k Nodes and
-still verify-then-install, so that the thing that distrusts the operator isn't delivered by
-`curl | sh`.
+The per-Node install is the product's biggest adoption cost **and** the reason it can be trusted:
+the daemon is where deny-by-default Policy lives, where at-most-once is enforced, and where the
+Relay's authority stops. So installation is deliberately the customer's act, performed by tools
+they already run, from artifacts they can verify before executing.
 
 ## Surfaces
 
-| Surface | Today |
+| Surface | What it does |
 |---|---|
-| Release artifacts | A `relay-daemon` binary under `SHA256SUMS`. No OS packages and no `relay-install.sh` exist yet, although ADR-0033 decides both. |
-| Service definition | A hardened systemd unit and an example `EnvironmentFile`, shipped as packaging for config management to place. |
-| Daemon-local files | The env file (address, CA bundle, Policy and template paths, `node:` Labels, state dir, Enrollment Token), Policy, the template directory, and the state directory holding identity and dedup markers. |
-| relay-daemon subcommands | Offline only: `--version`, `policy check`, `dump-operation-schema`. |
-| Enrollment bundles | A rendered Ansible or shell artifact, minted with its Enrollment Token (`enrollment.md` owns this). |
-| Relay / MCP / Control API / Console | None. The Relay never installs, configures or upgrades a daemon. That absence is deliberate (invariant 14), not a missing feature. |
+| **Release artifacts** | A `relay-daemon` binary under the release `SHA256SUMS`, a hardened systemd unit, and an example `EnvironmentFile` for config management to place |
+| **The customer's config management** | The only installer, configurer and upgrader. Ansible and shell are rendered as bundles; other tools are documented, not rendered |
+| **relay-daemon subcommands** | Offline only: `--version`, `policy check`, `dump-operation-schema` |
+| **Enrollment bundles** | A rendered artifact carrying the join string, minted with its Enrollment Token (`enrollment.md` owns minting) |
+| **Relay, MCP, Control API, Console** | Nothing. The Relay never installs, configures or upgrades a daemon, and its only lever over versions is the dispatch-level minimum-version gate. The absence is the invariant (invariant 14), not a gap |
 
 ## Behaviour
 
-_To be established by interrogation._
+### What gets installed
 
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
+The binary, the unit, an environment file, and — **only when no Policy file exists** — the
+shipped default Policy: reads allowed with the confidentiality deny-list, mutate and Raw Exec
+opt-in (ADR-0022). A re-run converges the binary and unit and never touches a Policy or Template
+the operator has edited.
 
-- Every installable artifact ships under the release's `SHA256SUMS`, and the documented install always verifies the digest before the artifact is executed.
-- The daemon is installed, configured and upgraded only by the customer's config management. It never self-upgrades, and the Relay never pushes a binary.
-- The daemon's OS package installs the shipped default read-only Policy as a conffile, so a fresh Node comes up read-only rather than deny-all. An upgrade never overwrites a Policy the operator has edited.
-- A missing or unreadable Policy file means deny-all. A Policy or template file that is group- or world-writable is refused.
-- Node code requests file modes and never forces them. The operator's umask is a ceiling nothing in the daemon widens. A umask that makes the state directory unusable fails loudly, and no Task runs unrecorded.
-- The shipped unit runs the daemon as root, bounded to `CAP_DAC_READ_SEARCH`, with `/etc` read-only, so even a compromised daemon cannot rewrite its own Policy or Templates.
-- The Enrollment Token is used only when no identity is persisted, and is inert on every later start.
-- A freshly installed Node needs only its config file and its `node:` Labels to enroll. After that, config management stays authoritative for the Relay address.
-- There is no daemon container image.
-- Decommissioning a Node is a Relay-side revoke plus config management removing the daemon and its state directory.
+That "place if absent" rule is what keeps a fresh Node from the worst first impression: enrolled,
+healthy, and refusing everything. A missing Policy still means deny-all at runtime — the safety
+net stays; installation simply avoids landing on it.
+
+There is no daemon container image. A component whose job is to hold the host's own authority is
+not delivered as a container.
+
+### A fresh Node's configuration
+
+Two lines: the **join string** — Relay address, CA fingerprint and Enrollment Token in one
+pasteable value (ADR-0031) — and the Node's `node:` Labels. The daemon pins the CA from the
+fingerprint and writes its bundle into the state directory, so no CA path is configured by hand.
+
+The Enrollment Token is used only when no identity is persisted and is inert on every later
+start. It lives in the `0600` environment file config management already writes; config
+management is expected to remove it after first start, and nothing enforces that. That is a
+known posture, not an oversight — see *Accepted residual risk*.
+
+After enrollment, config management stays authoritative for the Relay address.
+
+### Privilege, and what a default Node can do
+
+The shipped unit runs the daemon as root, bounded to `CAP_DAC_READ_SEARCH`, with `/etc`
+read-only — so even a compromised daemon cannot rewrite its own Policy or Templates.
+
+**A default Node cannot install packages or mutate the filesystem outside its state directory.**
+Where a Node must, the customer places a documented drop-in relaxing the sandbox, and that
+decision is visible in a file on that Node. The relaxation is never the default.
+
+A Task refused by the sandbox must say so **as a sandbox refusal**, distinct from a command that
+ran and failed. An operator reading "failed" where the truth is "this Node's unit forbids it"
+files a bug; an AI-agent reading it retries.
+
+### File modes
+
+The daemon requests modes and never forces them: the operator's umask is a ceiling nothing in
+Node code widens (ADR-0036). A Policy or Template file that is group- or world-writable is
+refused. A umask that makes the state directory unusable fails loudly — no Task ever runs
+unrecorded, because at-most-once depends on that directory.
+
+### Upgrades and restarts
+
+Config management swaps the artifact and restarts the unit. The daemon never self-upgrades and
+the Relay never pushes a binary.
+
+On restart the daemon stops accepting new Tasks, lets in-flight work finish within the shutdown
+grace, then exits. Anything still running when the grace expires is killed and reported as an
+**interrupted Task** with its own terminal outcome — never retried, because at-most-once is not
+negotiable and an interrupted `pkg.install` is exactly the thing that must not run twice. The
+outcome has to be legible enough that an AI-agent treats it as terminal.
+
+A Policy or Template change is the same act: push the files, restart the unit. Dedup markers in
+the state directory carry at-most-once across the reconnect.
+
+Downgrades are permitted by installation; the Relay refuses to dispatch to a Node below the
+configured minimum version. A rendered bundle pins a version and digest, and a customer pinning
+their own version wins — the bundle's pin is a starting default, not a constraint.
+
+### Decommissioning
+
+Revoke at the Relay **first**, then let config management remove the daemon, the unit and the
+state directory. A removed daemon holding a live certificate is the worse of the two states.
+
+Policy and Templates are left behind: they are the operator's files. A revoked Node that keeps
+dialling is refused at the transport and visible in the audit trail; the Relay never reaches back
+to stop it.
+
+### Release integrity
+
+Every installable artifact ships under the release `SHA256SUMS`, and no documented install path
+executes an artifact before verifying its digest. The component that distrusts the operator is
+not delivered by `curl | sh` (ADR-0033).
 
 ## Refusals
 
-_To be established by interrogation._
-
-Candidate claims, from the ADRs and the code — each to be confirmed, changed or dropped:
-
-- The daemon refuses to start if its identity or dedup store cannot be opened.
-- The daemon refuses a Policy or template file whose ownership or mode is unsafe.
-- There is no install path that skips digest verification.
+| Refusal | Cause |
+|---|---|
+| Daemon refuses to start | Its identity or dedup store cannot be opened; a Policy or Template file is group- or world-writable; the state directory is unusable under the operator's umask |
+| Deny-all | No Policy file, or one that cannot be read |
+| Sandbox refusal | A Task needing privilege the unit does not grant — reported distinctly from a command that ran and failed |
+| Refused at the transport | A revoked Node that keeps dialling |
+| Below minimum version | The Relay declines to dispatch; installation itself permits any version |
+| No route exists | Any attempt to install, configure or upgrade a daemon from the Relay. There is no such path to refuse |
 
 ## Governing ADRs and invariants
 
-- **ADR-0033** — no `curl | sh`. The installer ships inside the release. The daemon gets OS packages before the Relay does. Policy is installed as a conffile, never overwritten. No hosted repository before v1.0.0. No daemon image.
-- **ADR-0014** — upgrades flow only through config management. The daemon never self-upgrades and the Relay never pushes binaries.
-- **ADR-0036** — a declared file mode is a ceiling, and nothing in node code may widen what the operator's umask removed.
-- **ADR-0032** — the rendered enrollment playbook pins a daemon version and digest built into the Relay. The OS package is the intended end state. The boundary with `enrollment.md` runs through this ADR.
-- **ADR-0022** — the shipped default Policy allows reads with a confidentiality deny-list. Mutate and Raw Exec are opt-in.
-- **ADR-0002** — Policy is a local, root-owned file. No installation path may deliver or change it over the wire.
-- **ADR-0037** *(Proposed, not accepted)* — an agentless SSH tier with no daemon at all. See Open questions.
-- **Invariant 14** — the installation path is config management's, and never the Relay's.
-- **Invariant 2** — nothing installed can let the Relay write Policy.
-- **Invariant 4** — the state directory's modes protect at-most-once. ADR-0036 shows the umask interaction fails closed.
+- **Invariant 14 / ADR-0014** — installation and upgrade are config management's, never the
+  Relay's; the minimum-version gate is the Relay's only lever.
+- **Invariant 2 / ADR-0002** — nothing in the install path lets the Relay deliver or change
+  Policy. Policy reaches a Node only through the customer's config management.
+- **Invariant 4** — the state directory's modes protect at-most-once, and the umask interaction
+  fails closed.
+- **ADR-0033** — no `curl | sh`; the installer ships inside the release; Policy installs as a
+  conffile once packages exist; no hosted repository before v1.0.0; no daemon image.
+- **ADR-0036** — a declared file mode is a ceiling; Node code never widens what the umask removed.
+- **ADR-0032** — the rendered bundle pins a daemon version and digest built into the Relay.
+- **ADR-0031** — the join string: address, CA fingerprint and Enrollment Token in one value.
+- **ADR-0022** — the shipped default Policy allows reads with a confidentiality deny-list.
+- **ADR-0037** *(Proposed, not accepted)* — an agentless SSH tier. Tracked as a possible future
+  path; see *Future work*.
 
 ## Seams and proof
 
-_Not yet written._
+Installation has no Relay-side seam by construction — that absence is the capability's central
+property. On the Node, the loaders for Policy and Templates own mode enforcement, the identity
+and dedup stores own the state directory, and the unit owns privilege.
+
+### What proves each claim
+
+| Behaviour | Proven by | Seam |
+|---|---|---|
+| A group- or world-writable Policy file is refused | `loader_rejects_group_or_world_writable`, `loader_accepts_secure_modes` | daemon |
+| A group- or world-writable Template file is refused | `group_or_world_writable_file_is_refused`, `secure_modes_are_accepted` | daemon |
+| A tightened umask never lets a Task run unrecorded | `umask_tightened_dedup_directory_never_executes_unrecorded` | daemon |
+| Dedup markers are written with restrictive permissions | `marker_permissions_are_restrictive` | daemon |
+| The shipped example env file covers every setting the daemon reads | `env_example_covers_the_config_surface`, `exemptions_are_real` | packaging |
+| A signalled daemon exits cleanly rather than hanging | `sigterm_while_idle_reconnecting_exits_zero_immediately` | daemon e2e |
+
+Claims above with **no row**, and so nothing checking them:
+
+- That the install places the shipped default Policy only when absent, and never overwrites an
+  edited one. The rule is the whole reason a fresh Node is useful, and no install path asserts it.
+- That an in-flight Task cut short by a restart is reported as interrupted and never retried.
+  Shutdown grace exists; the terminal outcome and its legibility are unbuilt.
+- That a sandbox refusal is distinguishable from a command that ran and failed. This is the
+  difference between "hardened by default" being a good default and being a support burden.
+- That no documented install path executes an unverified artifact. Stated by ADR-0033, asserted
+  by nothing.
+- That the unit's syscall filter behaves on a real systemd host. Still a manual check, and the
+  unit ships as the default only once it is done.
 
 ## Out of scope
 
-- Minting Enrollment Tokens, rendering bundles, identity issuance and revocation → `enrollment.md`.
-- The connection a running daemon holds, and the minimum-version gate → `node-connection.md`.
-- What Policy may say and how it is evaluated → `policy.md`. What a Template may define → `operations-and-templates.md`.
-- Installing and configuring the Relay host, `relay init`, the Relay's unit and env file → `relay-configuration.md`.
+- Minting Enrollment Tokens, rendering bundles, identity issuance and revocation —
+  `enrollment.md`.
+- The connection a running daemon holds, reconnect and the minimum-version gate —
+  `node-connection.md`.
+- What Policy may say and how it is evaluated — `policy.md`; what a Template may define —
+  `operations-and-templates.md`.
+- The Relay host's own installation and configuration — `relay-configuration.md`.
 - Authoring Policy for a customer. Policy authoring stops at the clipboard (invariant 2).
-- A hosted package repository. ADR-0033 rules it out before v1.0.0.
+- A hosted package repository, ruled out before v1.0.0 (ADR-0033).
+- Non-systemd init systems, non-Linux hosts and containers-as-hosts: unaddressed, not promised.
+
+## Accepted residual risk
+
+**The Enrollment Token sits in plaintext on a fresh Node.** It is in a `0600` root-owned
+environment file until config management removes it, so it is readable by root-equivalent access
+and lands in backups and host images taken before first start. It is short-lived, scoped, and
+inert once the Node holds its certificate — but nothing enforces its removal, and a golden image
+built from an enrolled host would carry a live token.
+
+Delivering it through `systemd LoadCredential=` or the customer's secret store removes this, at
+the cost of a second supported path; both are named in *Future work*.
+
+## Future work
+
+- **OS packages (`.deb`, `.rpm`)**, with the default Policy as a conffile so an upgrade never
+  overwrites an edited one (ADR-0033). The packaging decision that makes "place if absent"
+  unnecessary.
+- **`relay-install.sh`**, shipped inside the release (ADR-0033).
+- **`LoadCredential=` for the Enrollment Token**, closing the residual risk above.
+- **In-place Policy and Template reload**, so tightening Policy across a fleet costs no restarts.
+  Deliberately not first-pass: it is a second path by which the privileged side's authority
+  changes.
+- **Agentless SSH (ADR-0037)** — tracked as a possible future path, and out of this capability.
+  A Node with no daemon has no local Policy engine, no argument-level deny-by-default and no
+  at-most-once, so the Relay would become the only thing deciding. If it is ever adopted it needs
+  its own capability spec and its own ADR rather than a row in this one.
 
 ## Open questions
 
-1. **What is the day-one install artifact?** ADR-0033 decides OS packages for the daemon first and a `relay-install.sh`, but neither exists. Today it is a bare binary plus unit and env file placed by hand or by a playbook. Is the `.deb`/`.rpm` still the intended shape, and which distributions must it cover?
-2. **How is the Enrollment Token supplied?** Today it sits in plaintext in a `0600` env file, and the packaging notes call that interim, pointing at systemd `LoadCredential=`. Is the token-in-env-file posture acceptable for beta, or must it move before a real fleet?
-3. **The join string versus today's config.** ADR-0031 says a fresh Node's config is two lines, `RELAY_JOIN` and `RELAY_NODE_LABELS`, and removes `RELAY_CA_BUNDLE_PATH`. The daemon still needs the CA bundle path and the address. Is the two-line install the contract this spec should state?
-4. **Where does the shipped default Policy land when there is no package?** The conffile decision prevents "enrolls, looks healthy, denies everything". A Node installed from the bare binary still hits that trap. Should the daemon or the playbook guarantee a default, or is deny-all the correct outcome for a bare install?
-5. **Which config-management tools are first-class?** The rendered bundles are Ansible and shell. Are Puppet, Chef and Salt out, documented-only, or rendered formats?
-6. **What exactly does decommissioning promise?** Today it is a revoke plus removing the daemon and state directory. Should uninstalling leave the Policy and templates behind (conffile semantics), and should the Relay ever notice that a revoked Node's daemon is still dialling?
-7. **Upgrade restarts and in-flight Tasks.** An upgrade is an artifact swap followed by a restart. What should happen to a Task running when config management restarts the daemon: a grace period (there is a shutdown-grace setting today), then what outcome?
-8. **Policy and Template reload.** A Policy change is a file push plus a daemon restart. Is restart-to-reload the intended contract, or is an in-place reload wanted? How does that interact with the `/etc` read-only unit?
-9. **The `pkg.install` privilege exception.** The unit documents a drop-in that relaxes `ProtectSystem` and the capability bound for Nodes running `pkg.install` or filesystem-mutating Raw Exec. Is shipping that relaxation part of installation, or something the customer must choose to do?
-10. **Is the hardened unit's syscall filter verified on a real systemd host?** The unit says the live check is still a required manual step. Does beta ship it as the default before that check?
-11. **Does agentless SSH belong in this capability?** ADR-0037 proposes an agentless SSH tier to remove the per-Node install cost this spec exists to manage. Is it a live option, and if so is it "installation: none" here, a tier in `execution.md`, or out of realm?
-12. **Non-systemd and non-Linux Nodes.** Only a systemd unit ships. Are OpenRC, containers-as-hosts or other operating systems out of realm, or unaddressed?
-13. **Does the rendered playbook's pinned daemon version** (ADR-0032) ever conflict with a customer pinning their own version, and which one wins?
+- **Which distributions do packages promise?** Unanswerable until packages are scheduled, and the
+  answer sets the CI matrix and the signing-key story.
+- **Does a restart-interrupted Task have a distinct outcome on the wire, or is it an existing
+  one?** It is contract (`/proto`) either way, so it is decided before it is built.
 
 ## History
 
-- `2026-09-13` — stub created to name the capability.
+- `2026-09-15` — First worked through with the owner. Bare binary plus unit and env file as the
+  day-one artifact, with packages deferred; the install places the default Policy only when
+  absent; the two-line join-string configuration adopted; hardened unit by default with a
+  documented drop-in for mutate-capable Nodes; restart grace with an interrupted-Task outcome;
+  revoke-then-remove decommissioning; agentless SSH kept out of the capability and tracked.
+- `2026-09-13` — Stub created to name the capability.
