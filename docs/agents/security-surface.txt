@@ -1,0 +1,64 @@
+# The security and architecture surface, as path globs. One per line; `#` comments.
+# Read by scripts/security-surface.sh. This is the only copy: AGENTS.md's escalation
+# list, the dev-loop, pr-respond and CI all derive from it. Amend here, never a copy.
+#
+# Matching is by bash `[[ path == glob ]]` with globstar semantics, against paths
+# relative to the repo root.
+
+# The wire contract and the Operation vocabulary (invariant 8)
+proto/**
+
+# Decisions and the instructions agents are bound by
+docs/adr/**
+AGENTS.md
+CLAUDE.md
+GLOSSARY.md
+docs/agents/security-surface.txt
+docs/security/**
+
+# The gates themselves
+Makefile
+.github/**
+scripts/**
+.claude/**
+
+# Relay: execution, Policy reads, transport, auth, the CA and the capability layer
+relay/internal/capability/**
+relay/internal/authz/**
+relay/internal/consoleauth/**
+relay/internal/controlplane/auth*.go
+relay/internal/controlplane/oauth*.go
+relay/internal/controlplane/consolesession*.go
+relay/internal/controlplane/server.go
+relay/internal/controlplane/mcp/**
+relay/internal/controlplane/api/**
+relay/internal/ca/**
+relay/internal/enroll/**
+relay/internal/revocation/**
+relay/internal/transport/**
+relay/internal/dispatch/**
+relay/internal/approval/**
+relay/internal/policyview/**
+relay/internal/freeze/**
+relay/internal/nodevocab/**
+relay/internal/opvocab/**
+relay/cmd/relay/main.go
+relay/packaging/**
+
+# Daemon: everything is privileged, but these are the lines
+daemon/src/policy.rs
+daemon/src/policy_check.rs
+daemon/src/selfref.rs
+daemon/src/executor.rs
+daemon/src/raw_exec.rs
+daemon/src/templates.rs
+daemon/src/catalog.rs
+daemon/src/operations/**
+daemon/src/dedup.rs
+daemon/src/dispatch.rs
+daemon/src/tunnel.rs
+daemon/src/identity.rs
+daemon/src/enroll.rs
+daemon/src/renew.rs
+daemon/src/config.rs
+daemon/src/main.rs

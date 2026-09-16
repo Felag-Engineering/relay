@@ -7,56 +7,64 @@ A capability specification is **durable**. It is not a pre-implementation artifa
 stale once a feature ships — it is maintained as the capability evolves, and it is the answer
 to "what does Relay actually do here?" for anyone, human or agent, who has to work on it.
 
-## The establishing phase — every spec here is aspirational
+## The establishing phase — per spec, not per repo
 
-**Until the spec-driven-development cutover, every file in this directory describes what the
-owner wants Relay to do, not what the code does.** That holds whatever a spec's `**Status:**`
-line says. The set is being established by interrogating the owner one capability at a time;
-drift between a spec and the code is expected, and is the backlog the cutover works through.
+**A spec binds the loop only once it has been migrated to the claim format**, which
+`TEMPLATE.md` describes and `scripts/check-docs.sh` enforces: Behaviour and Refusals hold only
+what is true of `main` today, every claim carries an ID, and everything decided-but-unbuilt sits
+under *Designed, not built* with a milestone. Migration happens one spec at a time, in an
+interactive session (`/spec-author --migrate <spec>`), using `/spec-drift` to sort the claims.
 
-While this banner stands:
+Until a spec is migrated its status is `aspirational` (worked through with the owner, drift from
+the code expected) or `stub` (named, not yet worked through). Such a spec is **context, not a
+requirement**: an implementing agent works from its issue, the ADRs and the invariants — which
+bind exactly as they always have — and treats the spec as intent. A disagreement between an
+unmigrated spec and the code is not an escalation.
 
-- **A spec does not bind the code, and a disagreement with the code is not an escalation.** An
-  implementing agent works from its issue, the ADRs and the invariants — which bind exactly as
-  they always have — and treats a spec as context on intent, never as a requirement it must
-  satisfy or a conflict it must stop on.
-- **A stub is a legitimate file.** `**Status:** stub` means the capability belongs in the set
-  and has not yet been worked through; its *Open questions* are where that session starts.
-- The rules below describe how specs work **after** the cutover. The cutover is the change that
-  deletes this section, and it is a human's call.
+The establishing phase ends for the repo when no spec carries either legacy status. Nothing
+else changes on that day: the rules below already apply to every migrated spec.
 
 ## Who writes these
 
-**A human does, deliberately, in an interactive session.** A capability specification is never
-authored or edited by an unattended run. An agent working alongside a human may draft and argue
-and revise — that is what interactive sessions are for — but the artifact is human-owned, like
-an ADR and like the invariants.
+**A human does, co-authored, in an interactive session.** A capability specification is never
+authored or edited by an unattended run. `/spec-author` is that session: an agent interrogates,
+drafts, argues and revises; the human decides, and the artifact is theirs, like an ADR and like
+the invariants. The same holds for ADRs, `GLOSSARY.md` and the invariants — co-authored, human-
+driven, never unattended.
 
 The loop that implements issues **reads** these and complies with them. If its work would make
-a statement here untrue, it stops and escalates so a human can update the spec first; it does
-not quietly edit the file and it does not quietly proceed. That is the same rule as *When
+a claim here untrue, it stops and escalates so a human can update the spec first; it does not
+quietly edit the claim and it does not quietly proceed. That is the same rule as *When
 documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md), applied one step earlier.
+
+The loop does maintain the parts of a spec that are *evidence* rather than intent: the proof
+rows, the Performance rows, the History lines and the Status line, and it promotes a claim from
+*Designed, not built* into Behaviour when the PR that makes it true lands — same ID, same words.
+The authority table in [`docs/agents/workflow.md`](../agents/workflow.md) is the full split.
 
 The reason for the asymmetry: these are the most impactful artifacts in the repo. Milestones,
 issues, tests and benchmarks all decompose from them, so an error here propagates into
 everything downstream — and a document an unattended agent may rewrite to match its own change
 cannot also be the thing that constrains it.
 
-## Status, and what `draft` means
+## Claims and status
 
-A spec's `**Status:**` line is the only header metadata. Three states are in use:
+A spec is a set of **claims** — single statements a test can be pointed at — each with a stable
+ID `<PREFIX>-<n>`. The prefix is declared in the spec's header and is unique across this
+directory; `n` is never reused. IDs are what let a design say which claims it delivers, an issue
+name the claims it implements, and a PR's proof rows cite them.
+
+A claim lives in one of two places, and status follows from which:
 
 | Status | Means | Cleared by |
 |---|---|---|
-| `current as of <date>` | Describes behaviour the code has today | Re-checking it against the code and moving the date |
-| `designed, not built, as of <date>` | The shape is decided; no code implements it | The implementation landing, which moves it to `current` |
-| `draft for human approval, checked against the code on <date>` | Drafted in an interactive session, not yet reviewed by a human | **The human merging it**, in the same change that moves the line to `current` |
+| `current as of <date>` | Every claim is in Behaviour or Refusals and was checked against the code on that date; *Designed, not built* is absent | Re-checking it against the code and moving the date |
+| `designed, not built, as of <date>` | Behaviour is true today **and** *Designed, not built* has rows tagged with a milestone | The loop promoting the last Designed claim, which moves the line to `current` |
+| `aspirational — …` | Legacy, unmigrated: intent worked through with the owner, drift expected, not binding | `/spec-author --migrate` |
+| `stub — …` | Legacy, named but not worked through | `/spec-author` |
 
-`draft` is a pre-merge state, not a tier. It does not appear on `main`: a reviewer either
-moves the line to `current as of <date>` as part of merging, or the spec does not merge.
-That keeps *When documents and the code disagree* unambiguous — every spec on `main`
-carries the same authority, and there is no half-approved spec for the conflict table to
-be silent about.
+`check-docs` enforces the first two shapes and ignores the last two. There is no `draft`: a spec
+change is a PR, and the human merging it is the approval.
 
 ## The two tiers
 
@@ -108,11 +116,12 @@ That is why `selectors-and-labels.md` exists rather than being restated four tim
 - **Keep it current.** A change that alters what a capability does is not finished until its
   capability spec says so. A spec that describes behaviour the code no longer has is worse
   than no spec, because it is believed.
-- **If a spec and the code disagree, stop and escalate** — do not resolve it in either
-  direction. The spec may be stale, or the code may have the bug the spec correctly describes,
-  and a spec carries no human sign-off by construction. See *When documents and the code
-  disagree* in [`AGENTS.md`](../../AGENTS.md). That governs a disagreement you *discover*; when
-  you are *making* a change, the spec leads and the code follows in the same PR.
+- **If a migrated spec and the code disagree, stop and escalate** — do not resolve it in
+  either direction. The spec may be stale, or the code may have the bug the spec correctly
+  describes. See *When documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md). That
+  governs a disagreement you *discover*; when you are *making* a change, the spec leads and the
+  code follows in the same PR — through the chain in
+  [`docs/agents/workflow.md`](../agents/workflow.md).
 - Name modules, interfaces, and contracts. **Never file paths or code snippets** — they go
   stale within a sprint. The one exception is a snippet that encodes a decision more precisely
   than prose can (a state machine, a schema, a type shape); trim it to the decision, not a
@@ -164,4 +173,4 @@ interrogation.
 | `system-model.md` *(stub)* | Services, Dependencies and Annotations: the advisory, git-backed model and its AI-immutable grounding facts |
 | `observability.md` *(stub)* | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
 
-Start from [`TEMPLATE.md`](TEMPLATE.md).
+Start from [`TEMPLATE.md`](TEMPLATE.md), and run `/spec-check` before opening the PR.
