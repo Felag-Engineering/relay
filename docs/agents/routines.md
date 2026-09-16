@@ -4,14 +4,29 @@ How this repo is driven by scheduled Claude Code cloud routines while nobody is 
 
 ## What a routine runs
 
+Two routines, both from `docs/agents/workflow.md`'s unattended set — nothing above GATE 3 ever
+runs on a schedule.
+
 ```
 /dev-loop-queue
 ```
 
 One tick takes one `loop:ready` issue, runs the full `/dev-loop` pipeline on it unattended, and
 opens a PR. It never merges and never waits for one, which is what makes it safe to fire on a
-schedule for weeks. The wave-based `/dev-loop-drive` is **not** in this repo on purpose: it gates
-each wave on human merges and stalls when nobody is there. Keep it local, for interactive use.
+schedule for weeks.
+
+```
+/pr-respond --non-interactive
+```
+
+One tick takes the oldest open loop PR with unaddressed human review comments, fixes what was
+asked, re-runs the full gate and both reviewers, pushes, and replies per thread. Questions and
+anything that would change a spec claim are escalated with `loop:needs-human`, never answered
+on your behalf. A sensible cadence is every hour while you are reviewing and twice a day
+otherwise; it exits in seconds when there is nothing to respond to.
+
+Both need the Codex CLI on the environment for the second reviewer. Without it every review
+gate runs single-vendor and the PR body says so — degraded, and stated, never silent.
 
 ## Environment
 
@@ -57,8 +72,9 @@ To stop permanently rather than temporarily, disable the routine at claude.ai/co
 
 1. **Merge the workflow to `main`.** Cloud sessions see only what is committed. A skill sitting
    on a branch does not exist.
-2. **Run `/triage`** over the untriaged backlog. `loop:ready` is the entire queue; three issues
-   is one day, not three weeks.
+2. **Flip `loop:proposed` to `loop:ready`** for the issues you have read. `loop:ready` is the
+   entire queue; three issues is one day, not three weeks. Order matters less than it looks:
+   the queue skips anything whose `Blocked by:` is still open.
 3. **Prefer independent issues** when triaging. Work that depends on an unmerged PR cannot be
    done by a loop that never merges.
 4. **Check the environment's setup script** actually installs `buf`.

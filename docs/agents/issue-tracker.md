@@ -48,19 +48,24 @@ Two documents saying the same thing is how they drift. The link is the point.
 **For an implementation specification**, the issue body *is* the spec — write it there. Say
 which capability spec it changes, and what it will leave true when it merges.
 
-## Decomposition: which skill
+## Decomposition
 
-Both of these are **interactive skills run from your own install** — they are not vendored into
-this repo, because decomposition needs a human to approve the breakdown. Don't run both on the
-same work.
+`/decompose <milestone>` (vendored, `.claude/commands/decompose.md`) turns a **merged** design
+plan under `docs/design/plans/` into issues: one per reviewable step, each naming the spec claims
+it promotes, its acceptance criteria, its `Blocked by:` edges and its milestone, plus the
+capability's testing issue. Issues are created as `loop:proposed`; a human flips each to
+`loop:ready`. It is interactive — you approve the list before anything is created.
 
-- **`epic-decompose`** — a milestone whose shape is already understood. Milestone →
-  self-contained, ~10-minute-reviewable issues. No spec needed.
-- **`to-tickets`** — one approved spec → tracer-bullet vertical slices with blocking edges.
-  Use this when the work needed shaping, which is why a spec exists at all.
+An issue body's first lines are the contract the loop reads:
 
-Rule of thumb: if you can write the acceptance criteria without arguing with yourself, use
-`epic-decompose`. If you can't, it needed a spec.
+```
+Spec: docs/specs/<capability>.md — claims XX-4, XX-5
+Design: docs/design/plans/<slug>.md §Sequence step 2
+Blocked by: #NNN | none
+```
+
+A bug skips all of that: write it by hand with acceptance criteria, label it `bug`, and
+`loop:ready` when it is specified. Bugs never get specs.
 
 ## When a skill says "fetch the relevant ticket"
 

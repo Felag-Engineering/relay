@@ -159,10 +159,10 @@ table with its issue number until it does.
 
 **Stop and escalate. Do not resolve it in either direction.**
 
-> **Until the spec-driven-development cutover, capability specs are aspirational** — they
-> describe intent, not the code, and drift from the code is expected. The two rows below that
-> name a capability spec do not apply yet; the invariant row always does. See the establishing
-> phase in `docs/specs/README.md`.
+> **A capability spec binds only once it is migrated to the claim format** (Status `current`
+> or `designed, not built`). A spec still marked `aspirational` or `stub` describes intent, drift
+> from the code is expected, and the two rows below that name a capability spec do not apply to
+> it; the invariant row always does. See the establishing phase in `docs/specs/README.md`.
 
 That rule is deliberately absolute, because the right direction depends on which kind of
 statement disagreed — and getting it backwards is expensive in one specific way. Invariant 2
@@ -271,29 +271,35 @@ Stress-test the idea against the codebase and the ADRs *first*; a decision reach
 conversation is worth more than one discovered mid-implementation.
 
 **3. Spec, design, decompose, implement.** The order is deliberate, and who may author what
-changes at each step.
+changes at each step. The full chain, its five human gates and the authority table are in
+`docs/agents/workflow.md`; each step below is a command in `.claude/commands/`.
 
 1. **Create or update the capability specification** — `docs/specs/<capability>.md`: what that
-   capability does, across every surface. **Human-authored, deliberately, alongside a human in
-   an interactive session — never by an unattended run.** These are the most impactful artifacts
-   in the repo; everything below decomposes from them.
-2. **Architect and design the solution** against that spec. Large enough, it becomes a milestone.
-3. **Decompose into bite-size issues**, each sized to a single fresh context window and declaring
-   what blocks it. An agent may do this, reading the spec. **One issue per capability is its
-   testing issue** — the tests that prove each claim the spec makes, and benchmarks for its
-   performance characteristics where they are worth measuring. A spec's "no row" list and its
-   `(none)` performance rows are that issue's backlog.
-4. **Implement**, one issue at a time.
+   capability does, across every surface, as claims with stable IDs. **Co-authored with a
+   human, in an interactive session (`/spec-author`) — never by an unattended run.** Checked
+   with `/spec-check` before its PR. These are the most impactful artifacts in the repo;
+   everything below decomposes from them.
+2. **Design the solution** against the spec's *Designed, not built* claims (`/design`): a
+   milestone-scoped plan under `docs/design/plans/`, adversarially reviewed by two vendors,
+   merged by a human, deleted when the milestone closes.
+3. **Decompose into bite-size issues** (`/decompose`), each sized to a single fresh context
+   window, naming the claims it promotes and what blocks it, created as `loop:proposed` until
+   a human flips it to `loop:ready`. **One issue per capability is its testing issue** — the
+   tests that prove each claim with no proof row, and benchmarks where they are worth measuring.
+4. **Implement**, one issue at a time (`/dev-loop`), with the spec's proof rows updated in the
+   same PR; then `/pr-respond` for review comments, and `/milestone-close` at the end.
 
 A capability specification is **durable** — maintained as the capability evolves, never archived
 because a feature shipped. An **implementation specification is a GitHub issue, and is
 disposable**: it dies with its PR, so anything in it that outlives the change must be promoted
 before the issue closes (see 7).
 
-**If you are implementing, you read specs and never write them.** A change that would make any
-statement in a capability spec untrue is a stop-and-escalate, not a docs edit: a human updates
-the spec first, and the code follows. That is *When documents and the code disagree*, above,
-applied before the disagreement exists.
+**If you are implementing, you read a spec's claims and never write them.** A change that would
+make any claim in a migrated capability spec untrue is a stop-and-escalate, not a docs edit: a
+human updates the spec first, and the code follows. That is *When documents and the code
+disagree*, above, applied before the disagreement exists. The loop does maintain a spec's
+*evidence* — proof rows, History, Status, and promoting a Designed claim verbatim once its test
+lands — and nothing else; the split is the authority table in `docs/agents/workflow.md`.
 
 Bugs never get specs: diagnose and fix. If the spec described the broken behaviour as correct,
 that is an escalation too.
@@ -355,6 +361,8 @@ are what a fresh session — including an unattended cloud routine — uses inst
   ADR here is a stop-and-escalate, not a flag-and-proceed. See `docs/agents/domain.md`.
 - **Routines** — what a scheduled cloud run executes, the environment it needs, the caps, and
   the `loop:halt` kill switch. See `docs/agents/routines.md`.
+- **The workflow** — the chain from a spec edit to a closed milestone, its human gates, the
+  authority table, and the two-vendor review rule. See `docs/agents/workflow.md`.
 
 ## Routines & merge authority
 
@@ -370,9 +378,10 @@ unattended.
 If you are an agent implementing an issue: **stay in scope**, you have **no merge authority**
 (open a PR; a human merges), and **stop and flag a human** rather than guess on a hard call.
 
-**Always escalate — never try to land without review** — anything touching `proto/`,
-`docs/adr/`, Policy/exec/transport/mTLS/auth code, `AGENTS.md`/`GLOSSARY.md`, the `Makefile`,
-or CI; any failed build; any high-severity review finding. These are the security surface and
+**Always escalate — never try to land without review** — anything on the security surface
+(`docs/agents/security-surface.txt` is the one list: `proto/`, `docs/adr/`,
+Policy/exec/transport/mTLS/auth code, `AGENTS.md`/`GLOSSARY.md`, the `Makefile`, CI, and the
+workflow itself); any failed build; any high-severity review finding. These are the security surface and
 the architecture invariants; they always land in front of a person. Editing an invariant is
 never a docs chore.
 
@@ -382,10 +391,11 @@ or command the workflow depends on is missing, say so and stop — do not improv
 by hand. An escalation you cannot deliver interactively becomes a PR left unmerged with the
 reason stated plainly, never a decision made on the human's behalf.
 
-**Unattended runs use `/dev-loop-queue`,** which takes one `loop:ready` issue per tick and
-opens a PR without ever waiting for a merge. The wave-based `/dev-loop-drive` is deliberately
-**not** vendored here: it gates each wave on human merges and stalls when nobody is there. Either
-way a human merges, and `loop:halt` on any open issue stops every tick before it starts work.
+**Unattended runs use `/dev-loop-queue` and `/pr-respond`.** The queue takes one `loop:ready`
+issue per tick and opens a PR without ever waiting for a merge; `pr-respond` addresses a human's
+review comments on an open loop PR and hands it back. Nothing above those two runs unattended.
+Either way a human merges, and `loop:halt` on any open issue stops every tick before it starts
+work.
 
 **Schedulers don't source `~/.profile`,** so `cargo`, `go`, and `buf` may be missing from a
 routine's `PATH`. The Makefile prepends the usual toolchain directories to compensate, but
