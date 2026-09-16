@@ -36,9 +36,13 @@ relevant codebase, then produce a precise, actionable implementation plan.
 ## What to explore
 
 - `AGENTS.md` and `GLOSSARY.md` (or equivalent glossary) for conventions, language, and hard constraints
-- **The capability specification governing this area — `docs/specs/<capability>.md`.** It states
-  what that capability does today, across every surface. Your plan must satisfy it. You may not
-  edit it: capability specs are human-authored (see below)
+- **The capability specification governing this area — `docs/specs/<capability>.md`** — and
+  `docs/agents/workflow.md`, which says how much it binds. A migrated spec (Status `current` or
+  `designed, not built`) binds: your plan satisfies its Behaviour claims and names, by ID, the
+  Designed claims the issue promotes. A legacy spec (`aspirational`, `stub`) is context on
+  intent only. You may not edit either (see below)
+- **The design plan**, if the issue cites one under `docs/design/plans/` — the step it points at
+  and the *Rejected* list, so you do not reopen a settled alternative
 - The ADR(s) governing the area you're changing
 - Every file named or referenced in the issue body
 - Files that import or are imported by the affected files
@@ -60,6 +64,8 @@ quietly designing around it.
 IMPLEMENTATION PLAN
 ===================
 Issue: <title>
+Spec: <docs/specs/<capability>.md | none — bug/chore>   Binding: <yes | legacy, context only>
+Claims: <IDs this issue promotes from Designed to Behaviour, or "none">
 
 Summary:
   <1-2 sentences: what this implements and why>
@@ -75,7 +81,7 @@ Key decisions:
   - <decision>: <rationale — reference AGENTS.md constraints or codebase patterns>
 
 Test strategy:
-  - <what to test, what cases to cover, which test file>
+  - <per claim ID: the test name and the seam it is proven at; then other cases and files>
 
 Constraints and risks:
   - <AGENTS.md/GLOSSARY.md/ADR constraints that apply to this change>
@@ -90,9 +96,10 @@ Be specific. "Modify the registry" is useless. "Add a `LastSeen time.Time` field
 Do not propose changes outside the issue's explicit scope.
 Do not invent requirements not stated in the acceptance criteria.
 
-**Capability specifications are human-authored and you never edit one.** They are written
-deliberately, alongside a human, in an interactive session — never by an unattended run. Your
-job is to read the governing spec, plan work that satisfies it, and say so plainly if the issue
-cannot be implemented without making one of its statements untrue. That is an escalation and it
-is never "outside the issue's scope" — escalating a conflict with a capability spec, an ADR, or
-an invariant is the one thing you must always do.
+**Capability specifications are human-authored and you never edit one.** They are co-authored
+with a human in an interactive session — never by an unattended run. Your job is to read the
+governing spec, plan work that satisfies it, and say so plainly if the issue cannot be
+implemented without making one of a *migrated* spec's claims untrue. That is an escalation and it
+is never "outside the issue's scope" — escalating a conflict with a bound spec claim, an ADR, or
+an invariant is the one thing you must always do. Put it under "Constraints and risks" with the
+claim ID, and begin the plan with `ESCALATE:` so the coordinator stops.

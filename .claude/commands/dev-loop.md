@@ -1,338 +1,199 @@
 ---
-description: "Pull a GitHub issue, architect a solution, review the plan adversarially, implement it, build/lint/test, security- and code-review it, and open a PR for a human to merge."
+description: "Implement one GitHub issue end to end: plan, adversarial plan review (Claude + Codex), implement, full verify, code review (Claude + Codex), security review when the surface is touched, spec proof update, and open a PR for a human to merge. Never merges."
 argument-hint: "<issue-number> [--non-interactive]"
-allowed-tools: Bash(*), Read, Edit, Write, Grep, Glob, LSP, Agent, AskUserQuestion
+allowed-tools: Bash(*), Read, Edit, Write, Grep, Glob, LSP, Agent
 ---
 
-# Agentic Development Loop
+# Dev loop
 
-You are a development pipeline coordinator. Execute the following pipeline for
-GitHub issue **#$ARGUMENTS**.
-
-This loop **never merges.** It always ends by opening a PR for a human to review
-and merge — the human is the sole merge authority. Do not run `gh pr merge`.
+You are the coordinator for one issue: **#$ARGUMENTS**. The stages, the gates and what you may
+touch are in `docs/agents/workflow.md`; this file is the order of operations. It **never
+merges** — a human is the sole merge authority — and it never edits a spec's claims, an ADR,
+`AGENTS.md` or `GLOSSARY.md`.
 
 ## Flags
 
-Parse `$ARGUMENTS` for the issue number and optional flags:
+`--non-interactive` (`-y`): unattended. Where a stage would need a human, **comment on the
+issue, label it `loop:needs-human`, and STOP.** Interactive mode differs in one way only: it
+prints the escalation to you instead of commenting, so you can fix the issue and rerun. The
+loop never asks questions in either mode — an issue that needs shaping goes back through
+`/decompose` or a hand edit, not through a conversation mid-pipeline.
 
-- `--non-interactive` (or `-y`) — **unattended mode.** Never call `AskUserQuestion`
-  or otherwise block on the user. If a stage would need a human decision (an
-  underspecified issue in triage, an architecture invariant that would be violated),
-  **post a comment on the issue explaining what's needed and STOP** instead of
-  asking. This is the mode for `/loop /dev-loop <n> --non-interactive` and for the
-  driver command running you in parallel.
-
-## Current repo context
+## Repo context
 
 !git remote get-url origin 2>/dev/null || echo "no remote"
 !git branch --show-current
 !git status --short
 
----
-
 ## Shared state
 
-All pipeline artifacts go in `.dev-loop/` at the repo root. It is created at the
-start and **removed at the end**, and is **never committed** (Stage 7 stages
-specific files only). If the repo does not already ignore it, that is fine — it is
-transient scratch.
+`.dev-loop/` at the repo root: created at the start, **removed at the end, never committed**.
+Agents read these files; do not paste their contents into prompts.
 
-- `.dev-loop/issue.md` — the canonical issue body (Stage 1, maybe rewritten in 1.5)
-- `.dev-loop/context.md` — codebase exploration notes (Stage 1.5, reused by the architect)
-- `.dev-loop/plan.md` — the architecture plan (Stage 3, maybe revised in Stage 4)
-- `.dev-loop/review-feedback.md` — accumulated review feedback across cycles
-- `.dev-loop/refined-spec.md` — refined issue spec from brainstorming (1.5, if triggered)
-
-These files are the source of truth for passing context between agents. When a stage
-says "pass the plan", tell the agent to **read `.dev-loop/plan.md`** — do not paste
-file contents into agent prompts.
+- `issue.md` — title, body, and comments (decisions land in comments)
+- `plan.md` — the implementation plan
+- `review-feedback.md` — every reviewer's findings, per cycle, with what was done about each
+- `verify.log` — the last full gate's output
 
 ---
 
-## Pipeline
+## Stage 0 — Setup
 
-Execute these stages **in order**. Report a clear status line after each one.
+`gh auth status` must succeed. `rm -rf .dev-loop && mkdir -p .dev-loop`. Tree clean and on the
+default branch, `git fetch origin` done. Dirty tree → stop.
 
-### Stage 0 — Setup
+**Duplicate guard.** If `git ls-remote --heads origin 'loop/issue-<n>-*'` or
+`gh pr list --state open --search "head:loop/issue-<n>-"` returns anything, print
+`already started: <ref>` and stop. The queue relies on this.
 
-Verify `gh auth status` succeeds. If not, stop immediately and tell the user.
+**Toolchain preflight.** `go`, `cargo`, `buf`, `protoc` on `PATH` (`make proto-tools` installs
+`buf`). Missing → in interactive mode stop and say which lane cannot be verified; unattended,
+comment and stop. **Never silently run half the gate.**
 
-Then reset the workspace and confirm a clean tree on the default branch:
+## Stage 1 — Fetch
+
+`gh issue view <n> --json title,body,labels,milestone,comments` → `.dev-loop/issue.md` as
+`# <title>`, the body, then `## Comments` with each comment dated. Parse and print:
+
+- `Spec:` line and `claims <IDs>` if present; the spec's Status line (`current`/`designed` =
+  binding, `aspirational`/`stub` = context only, none = bug or chore);
+- `Design:` line if present; `Blocked by:` — any listed issue still open → stop
+  (`blocked by #k`); unattended, label `loop:blocked` and stop.
+
+## Stage 1.5 — Triage
+
+Underspecified if **two or more** hold: no acceptance criteria; ambiguous scope ("improve",
+"rework"); no trigger or input; no error or edge cases; body under ~50 words. An issue that
+promotes claims but names none (`Spec:` without IDs, on a migrated spec) is underspecified on
+its own.
+
+Well-specified → Stage 2. Underspecified → list the gaps (comment + `loop:needs-human`
+unattended; print them interactively) and stop. The fix is a better issue, not a conversation.
+
+## Stage 2 — Branch
+
+`git checkout -b loop/issue-<n>-<slug> origin/<default>` — under 60 chars, lowercase, hyphens.
+
+## Stage 2.5 — Scope gate
+
+Skip Stages 3 and 4 only if **all** hold: well-specified; the issue names ≤ 2 files; the change
+is one function, component or config value; **`scripts/security-surface.sh -` over those paths
+prints nothing**; the issue names no spec claims. On skip, write a minimal `plan.md` (title,
+acceptance criteria, files, `Note: scope-gate skip`) and go to Stage 5.
+
+## Stage 3 — Plan
+
+**Use the `devloop-architect` agent**: read `issue.md`, follow its output format. Write to `plan.md`. A plan beginning `ESCALATE:` → the issue cannot be done
+without making a bound claim, an invariant or an ADR untrue: interactive, surface it and stop;
+unattended, comment with the claim ID, label `loop:needs-human`, delete the branch, stop.
+
+## Stage 4 — Plan review
+
+**Use the `devloop-plan-reviewer` agent** on `issue.md` + `plan.md`. Record its findings in
+`review-feedback.md` under `## Plan review`. (One vendor here: a bad plan is caught again at
+code review, where both run, and a Codex pass per plan is cost without coverage.)
+
+Any BLOCKING → `devloop-architect` again with the findings; overwrite `plan.md`. **Max 2
+cycles.** A BLOCKING item still standing → escalate as in Stage 3.
+
+## Stage 5 — Implement
+
+**Use the `devloop-developer` agent**: read `issue.md`, `plan.md`, and on a revision cycle
+`review-feedback.md`. It never commits, pushes, opens PRs, or edits `docs/specs/`, `docs/adr/`,
+`AGENTS.md`, `GLOSSARY.md`. `No changes needed` → print why, delete the branch, stop.
+
+Append its summary to `review-feedback.md` under `## Cycle <c> — Implementation` (`c` starts
+at 1).
+
+## Stage 5.5 — Verify: the full gate
 
 ```bash
-rm -rf .dev-loop && mkdir -p .dev-loop
-git status --short    # must be clean apart from intentional local files; if dirty, stop and ask
+make verify 2>&1 | tee .dev-loop/verify.log
 ```
 
-### Stage 1 — Fetch issue
+This mirrors CI job for job. If the diff touches `proto/`, `verify-proto` must not have
+skipped: grep the log for `skip` notices. **A skipped gate is reported as skipped, never as
+passed**, and a proto change with a skipped proto gate is a stop.
 
-`gh issue view <issue-number> --json title,body,labels,assignees`. Parse the issue
-number from `$ARGUMENTS` (ignore trailing flags). Write the issue to
-`.dev-loop/issue.md`:
+Failure → `devloop-developer` with the failure output (fix the root cause; never skip, disable
+or relax a test or lint). **Max 2 attempts**, then escalate (interactive: surface; unattended:
+comment, label `loop:needs-human`, push the branch as-is with `[WIP]` so the work is not lost,
+stop).
 
-```
-# <title>
+Record in `review-feedback.md` under `## Verify`: the command, every lane it covered, and any
+lane that skipped.
 
-<body>
-```
+## Stage 6 — Code review, two vendors
 
-All later stages read the issue from this file. Print the title and a short summary.
+In parallel: **the `devloop-code-reviewer` agent** (reads issue, plan, `review-feedback.md`,
+`git diff origin/<default>...HEAD`) and `scripts/codex-review.sh diff`. Merge, deduplicate,
+append under `## Cycle <c> — Code review`.
 
-### Stage 1.5 — Issue triage
+- All clear → Stage 6.5.
+- Blocking findings → increment `c`, back to Stage 5 with the findings. **Max 2 review
+  cycles.** After cycle 2, every finding neither fixed nor justified in writing goes under
+  **Unresolved** in the PR body, and the PR gets `loop:needs-human`. Never proceed silently.
+- A reviewer verdict containing `ESCALATE` → escalate as in Stage 3 (the PR still opens, as
+  `[WIP]`, so the human sees the diff).
 
-An issue is **underspecified** if **2 or more** of these hold:
+## Stage 6.5 — Security review, when the surface is touched
 
-1. No acceptance criteria (no bullets/checkboxes/"should" statements for the done-state)
-2. Ambiguous scope ("improve", "better", "rework" without concrete changes)
-3. Missing trigger/input (doesn't say what drives the behavior)
-4. No error/edge-case consideration
-5. Single-sentence body (under ~50 words excluding boilerplate)
+`scripts/security-surface.sh origin/<default>` prints the matching paths, or nothing.
 
-Print which criteria matched and your verdict (`well-specified` / `underspecified`).
+Nothing → print `Stage 6.5: no security-surface paths` and continue.
 
-**Well-specified** → Stage 2.
+Otherwise, in parallel: **the `devloop-security-reviewer` agent** and
+`scripts/codex-review.sh security`. PASS from both → carry the summaries into the PR body.
+CONCERNS fixable in scope → Stage 5 once (counts as a review cycle). FAIL, or anything that
+would need an invariant or ADR to change → escalate as in Stage 3; the PR opens as `[WIP]`.
+The PR body gets a **Security surface** section listing the paths and why each changed.
 
-**Underspecified + `--non-interactive`** → do **not** brainstorm. Post a comment on
-the issue listing the matched gaps and what's needed to make it actionable, then
-STOP the pipeline (no branch, no PR). An unattended run must never block on a
-question.
+## Stage 6.6 — Spec proof
 
-**Underspecified (interactive)** → brainstorm, then Stage 2:
+If the plan's `Spec:` line names a spec: **use the `spec-proof-updater` agent** with the spec
+path, the issue, the claim IDs, and the diff. It adds proof rows, promotes only the named claims
+the diff tests (same ID, same words), appends History, moves Status, and runs `make docs-check`.
+Its **Findings** go into the PR body. A claim it did not promote for lack of a test is a
+finding, not a failure — the human decides whether the PR is complete.
 
-1. **Explore the codebase first** (read `AGENTS.md`/`GLOSSARY.md` and related files)
-   so your questions are informed. Persist findings to `.dev-loop/context.md`.
-2. Summarize what's clear.
-3. Ask clarifying questions **one at a time** with `AskUserQuestion` (max 5; stop
-   when the spec is clear). Prefer multiple-choice.
-4. Propose a refined spec: summary, acceptance-criteria checklist, scope boundaries
-   (in/out), error/edge cases. Write it to `.dev-loop/refined-spec.md`.
-5. Get user approval.
-6. Update the issue: `gh issue edit <issue-number> --body-file .dev-loop/refined-spec.md`
-7. `cp .dev-loop/refined-spec.md .dev-loop/issue.md`
+If the diff shifts the domain language or a convention `AGENTS.md` records, do not edit
+`GLOSSARY.md` or `AGENTS.md`: note it under **Escalations** in the PR body. READMEs the diff
+makes stale may be updated.
 
-### Stage 2 — Create branch
+If a spec changed, re-run `make docs-check`; if any buildable file changed since Stage 5.5,
+re-run `make verify`.
 
-```bash
-git fetch origin
-DEFAULT=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#origin/##' || echo main)
-git checkout -b loop/issue-<issue-number>-<slugified-title> origin/$DEFAULT
-```
+## Stage 7 — Commit and open the PR
 
-Keep the branch name under 60 chars, lowercase, hyphens only.
-
-### Stage 2.5 — Scope gate (skip architect + plan-reviewer on trivial issues)
-
-Skip Stages 3 and 4 and go to Stage 5 only if **all** hold:
-
-1. Triage returned `well-specified`.
-2. The issue names the file(s) to modify (≤ 2 files).
-3. The change is localized (one function/component/config value) — not cross-cutting,
-   not a new feature, and **does not touch the security surface** (see Stage 6.7).
-
-On skip, write a minimal `.dev-loop/plan.md`:
+Stage the files the plan and Stage 6.6 touched by name — never `git add -A`, never `.dev-loop/`.
 
 ```
-IMPLEMENTATION PLAN
-===================
-Issue: <title>
-Summary: <copy the acceptance criteria>
-Affected files: <paths from the issue>
-Note: scope-gate skip — no architect pass.
+<type>(<area>): <issue title>
+
+<two lines: what became true, which claims>
+
+Closes #<n>
+<the attribution line the session requires>
 ```
 
-Print: `✅ Stage 2.5: scope gate matched, skipping architect/plan-reviewer.`
-Otherwise proceed to Stage 3.
+`git push -u origin <branch>` then `gh pr create`, title `<type>(<area>): <issue title>`, body:
 
-### Stage 3 — Architect
+- `Closes #<n>`; **Spec** and **Claims** (promoted; not promoted and why); **Design** step
+- **Verification**: the exact gate, every lane, every skipped lane, and whether CI was relied on
+- **Reviews**: plan (Claude), code and security (both vendors) — verdicts, cycles used, or
+  "Codex: absent"
+- **Security surface** section, if Stage 6.5 ran
+- **Unresolved** and **Escalations**, if any (and the `loop:needs-human` label)
+- the plan in a `<details>` block; a line that this was produced by the dev-loop and **must be
+  merged by a human**; the attribution line the session requires.
 
-**Use the `devloop-architect` agent.** Pass it: read the issue from
-`.dev-loop/issue.md`; if `.dev-loop/context.md` exists, read it as a starting point;
-follow its output format exactly. Do not restate AGENTS.md — the agent reads it
-itself. Write its output to `.dev-loop/plan.md`.
-
-### Stage 4 — Plan review (adversarial)
-
-**Use the `devloop-plan-reviewer` agent.** Pass it: read the issue and
-`.dev-loop/plan.md`; verify claims against the codebase (prefer LSP).
-
-- **APPROVE** → Stage 5.
-- **REVISE** → run `devloop-architect` again (read issue + current plan + the
-  reviewer's corrections; produce a revised plan). Overwrite `.dev-loop/plan.md`,
-  then Stage 5.
-
-### Stage 5 — Implement
-
-**Use the `devloop-developer` agent.** Pass it: read the issue from
-`.dev-loop/issue.md`; read the plan from `.dev-loop/plan.md`; on a revision cycle,
-read `.dev-loop/review-feedback.md`. Emphasize: code is written for humans; obey the
-repo's AGENTS.md/GLOSSARY.md invariants and ubiquitous language; **do not run
-`git commit`/`git push`/`gh pr create`**; end with a `## Implementation Summary`.
-
-If the developer returns `No changes needed`, stop the pipeline, print the
-explanation, and exit — no branch commit or PR.
-
-Append the implementation summary to `.dev-loop/review-feedback.md` under
-`## Cycle <cycle> — Implementation` (initialize `cycle = 1` on first entry here).
-
-### Stage 5.5 — Verify locally (the full gate — this is now the merge gate)
-
-Reviewers must read **green** code — and since CI may be unavailable (quota/offline),
-this local run is the *only* thing verifying the PR before a human merges it. So run the
-**full** suite CI would run, not a subset.
-
-1. **Toolchain preflight.** Confirm the toolchains the full gate needs are on `PATH` —
-   derive the list from the gate itself (the `verify` target's lanes, or the CI
-   workflow jobs; e.g. for Gleipnir: `go`, `node`/`npm`, `sqlc`, `buf`). If a required
-   one is missing, **stop** and tell the user which lane can't be verified. Never
-   silently skip half the suite and call it green.
-
-2. **Run the repo's full pre-merge gate:**
-   ```bash
-   make verify
-   ```
-   `verify` mirrors the PR CI jobs (build + lint/format + race tests + daemon tests +
-   integration + cross-binary). **If the repo has no such aggregate target,** enumerate
-   what its CI actually runs from `.github/workflows/*.yml` and run every one of those
-   `make`/toolchain commands locally — do **not** settle for `make test` if CI also runs
-   race / integration / cross-binary / lint jobs. Only if there is no CI workflow to
-   mirror, fall back to `make build && make lint && make test`.
-
-3. **Proto drift (conditional):** if the diff touches `/proto`, also run
-   `make proto-tools && make proto-check` (needs `protoc`; if it's missing, **stop** and
-   say so — a proto change must not go out unverified).
-
-If any step fails, **use the `devloop-developer` agent** to fix the root cause (pass the
-failure output inline; do not skip/disable/relax tests or lints; do not commit). Re-run
-the gate. **Max 2 fix attempts**; if it still fails, stop and surface it to the user (or,
-in `--non-interactive` mode, comment on the issue and stop).
-
-Record in `.dev-loop/review-feedback.md` **exactly which gate ran and that it passed** —
-the command and the lanes it covered (e.g. "`make verify` ✅ — build, lint, race,
-daemon, integration, cross-binary"). Stage 7 copies this into the PR body as the
-local-verification signal the human merges on.
-
-### Stage 6 — Code review
-
-**Use the `devloop-code-reviewer` agent.** Pass it: read the issue, the plan, and
-`.dev-loop/review-feedback.md`; start from `git diff`; verify each planned change;
-verify the repo's declared invariants; readability is the top priority.
-
-- **APPROVE** → Stage 6.5.
-- **CHANGES_REQUESTED** → append feedback under `## Cycle <cycle> — Review Feedback`,
-  increment `cycle`, go back to Stage 5.
-- **Max 2 review cycles.** If cycle 2 still requests changes, log a warning and
-  proceed to Stage 6.5 anyway.
-
-### Stage 6.5 — Docs freshness
-
-Check whether the change shifts anything the project docs must track. Update in the
-same PR if so:
-
-- **`GLOSSARY.md`** — if the domain/ubiquitous language shifted (new or changed term).
-- **`AGENTS.md`** — if conventions, layout, commands, or settled decisions changed.
-- Any area-specific docs the repo keeps current (READMEs, ADR back-references).
-
-**`docs/specs/` is different — never edit a capability specification.** They are human-authored,
-deliberately and interactively (`docs/specs/README.md`); the loop reads them and complies with
-them. If this change makes any statement in the governing spec untrue, do **not** update the
-spec and do **not** proceed quietly: name the false statement under Escalations in the PR body
-and stop. A human updates the spec first, and the code follows.
-
-If nothing needs updating, print: `Stage 6.5: project docs are current; capability spec still
-true.`
-
-### Stage 6.6 — Security review (when the security surface is touched)
-
-Run `git diff --name-only`. If the change touches the repo's security/architecture
-surface (for this project: `proto/`, `docs/adr/`, Policy/exec/transport/mTLS/auth
-code, `AGENTS.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow config), **use the
-`devloop-security-reviewer` agent** for a dedicated adversarial pass focused on the
-repo's declared security invariants. Pass it: read the issue, the plan, and
-`AGENTS.md`/`GLOSSARY.md`/relevant ADRs; start from `git diff`; assume the change is
-unsafe until proven otherwise.
-
-- **PASS** → proceed; carry its summary into the PR body.
-- **CONCERNS / FAIL** → if the finding is fixable in scope, loop back to Stage 5 with
-  the findings (counts as a review cycle). If it would require violating or amending a
-  declared invariant, **stop and surface it to the user** (interactive) or **comment
-  on the issue and stop** (`--non-interactive`) — never design around an invariant.
-
-If the diff does not touch the security surface, print:
-`Stage 6.6: no security-surface changes — skipping security review.`
-(Optionally still run a lightweight pass for execution-adjacent changes.)
-
-### Stage 6.7 — Security-surface check
-
-Inspect `git diff --name-only`. If the change touches the repo's security/architecture
-surface — for this project that means any of: `proto/`, `docs/adr/`, Policy/exec/
-transport/mTLS/auth code, `AGENTS.md`, `GLOSSARY.md`, the `Makefile`, or CI/workflow
-config — then:
-
-- Do **not** treat the PR as routine. Add a prominent **⚠️ Security surface** section
-  to the PR body listing exactly which sensitive paths changed and why.
-- If the change would alter a declared architecture invariant, you should already have
-  stopped earlier; if it surfaced only now, halt and surface it to the user before
-  opening the PR.
-
-This loop never auto-merges regardless; this step ensures the human reviewer's
-attention is aimed at the sensitive parts.
-
-### Stage 7 — Commit and open the PR
-
-1. **Re-verify only if code changed after Stage 5.5** (a review/security loop-back, or
-   doc edits that touch buildable files). If anything changed since the last green
-   gate, re-run the **full gate** (`make verify`, per Stage 5.5) and fix via the
-   `devloop-developer` agent (max 2 attempts) before committing. If nothing changed
-   since Stage 5.5, the tree is already green — proceed.
-
-2. **Commit** (stage specific files, never `git add -A`, never stage `.dev-loop/`):
-
-   ```bash
-   git add <file1> <file2> ...
-   git commit -m "feat: <issue-title> (#<issue-number>)
-
-   Implemented via the agentic dev-loop.
-
-   Closes #<issue-number>
-   Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
-   ```
-
-3. **Push and open the PR (do not merge):**
-
-   ```bash
-   git push -u origin <branch-name>
-   gh pr create --title "feat: <issue-title>" --body "<pr-body>"
-   ```
-
-   PR body includes: `Closes #<issue-number>`; a brief summary; the plan in a
-   `<details>` block; review cycles used; whether docs were updated; a
-   **✅ Local verification** line naming the exact gate that passed and the lanes it
-   covered (e.g. "`make verify` — build, lint, race, daemon, integration,
-   cross-binary") and noting whether CI was relied on — this is the signal a human
-   merges on when CI is unavailable; the security review verdict (Stage 6.6) if it ran;
-   the **⚠️ Security surface** section from Stage 6.7 if it applies; and a note that this
-   was generated by the dev-loop and **must be merged by a human**.
-
-4. **Clean up:** `rm -rf .dev-loop`.
-
-Print a final summary: issue number, PR URL, review cycles used, whether
-brainstorming fired, and whether the change touches the security surface.
+`rm -rf .dev-loop`. Print: issue, PR URL, cycles, skipped lanes, security surface yes/no,
+escalations.
 
 ## Rules
 
-1. **Never merge.** Open the PR; a human merges. Do not run `gh pr merge`.
-2. **Do not skip stages** except where explicitly allowed (Stage 2.5 scope gate,
-   Stage 5 "no changes needed" exit). No other shortcuts.
-3. **Use the named agents** (`devloop-architect`, `devloop-plan-reviewer`,
-   `devloop-developer`, `devloop-code-reviewer`). Don't do their work yourself.
-4. **Report progress** after each stage (e.g. `✅ Stage 3 complete: plan produced`).
-5. **Stop on errors** — `gh` unauthenticated, dirty tree, build catastrophically
-   failing, git failures: stop and tell the user.
-6. **Respect scope.** Only change files the plan identifies. No unrelated refactors.
-7. **Pass context by file, not by pasting.** Agents read `.dev-loop/*.md`.
-8. **Only the coordinator touches git.** The developer agent never commits, pushes,
-   or opens PRs.
-9. **Honor the repo's AGENTS.md/GLOSSARY.md and architecture invariants** at every
-   stage. When a change would touch a declared invariant, stop and flag a human
-   rather than design around it.
+1. **Never merge.** 2. **Do not skip stages** except the scope gate and the two early exits.
+3. **Use the named agents**; do not do their work yourself. 4. **Pass context by file.**
+5. **Only the coordinator touches git.** 6. **Respect scope**: only files the plan names.
+7. **Stop on errors** rather than improvise. 8. **A spec's claims, an ADR, an invariant, the
+glossary: never yours to change.** Escalate with the ID.
