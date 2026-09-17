@@ -35,6 +35,8 @@ Numbers are identifiers, not sequence. Build in this order:
    [06](06-policy-author.md), [07](07-policy-fix-from-deny.md), then
    [05](05-composer-and-plan.md) — the composer last, behind the step-up and approval machinery it
    depends on.
+   [18](18-settings.md) and [19](19-approval-rules.md) follow step-up and store-backed settings
+   (#590); neither mounts until its backend exists.
 
 **Two defects gate all of it, and both are already tracked — neither needs a specification:**
 

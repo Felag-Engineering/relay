@@ -74,9 +74,12 @@ are the most informative rows here. Read-class rows say "output not retained" (A
 All four namespaces on one row, visually distinct per `00-foundations.md`, with a one-line
 explainer of who sets each. Two actions, both v0.7.0:
 
-- **Edit `tag:` labels** — `operator`, standard auth, no step-up.
-- **Set/remove `relay:` labels** — `admin` **plus step-up**. This is the quarantine lever, and it
-  sits at the bottom of the incident ladder: quarantine < revoke < Freeze.
+- **Add and remove `tag:` labels on this Node** — `operator`, standard auth, no step-up, audited.
+  The bulk form is on the Fleet view (spec 01).
+- **Quarantine this Node** — `operator`+, with a reason; lifting is a human `admin` with step-up.
+  The rules are spec 16's. No control on this screen writes a `relay:` label directly, because no
+  Account may (invariant 7, amended 2026-09-16); `relay:quarantine=on` is only ever the side effect
+  of engaging a quarantine.
 
 `node:` labels are read-only here and everywhere. `state:` labels are derived and settable by
 nobody, including admins — render them, never an edit affordance. The fingerprint rows in the

@@ -25,7 +25,7 @@ This screen puts them in one place, ordered, with their blast radius stated.
 
 | Rung | Fences | Engage | Lift | Reversible |
 |---|---|---|---|---|
-| **Quarantine** a Node | one Node | `admin` + step-up | `admin` + step-up | yes |
+| **Quarantine** Nodes | the resolved Nodes, within the `mutate` blast cap | `operator`+, machine Accounts allowed, reason | human `admin` + step-up, reason | yes |
 | **Revoke** a Node | one Node | `admin` + step-up | — | **no** |
 | **Freeze** the fleet | everything | `operator`+ | `admin` + reason | yes |
 
@@ -67,15 +67,31 @@ Setting `relay:quarantine=on` on a Node.
 > failure that matters. Decided **2026-08-26**, before any writer exists — which is
 > the cheap moment, since after one ships this becomes a fleet-wide migration of a
 > security-lane label. The constants are `registry.QuarantineKey` /
-> `registry.QuarantineOn`; the label-management work (#430) must write through
-> them, and no surface may spell the string itself. `admin` + step-up, per ADR-0020. Reached here by explicit
-Node IDs, or by a Selector containing **only `relay:` predicates** — a `node:`, `tag:` or `state:`
-term is refused (ADR-0034, #430). A filtered fleet view resolves to Node IDs before it arrives
-here; the filter itself is routine-lane. Also from Node detail (spec 02) for the single-Node case.
+> `registry.QuarantineOn`; the quarantine capability must write through
+> them, and no surface may spell the string itself.
 
-Because it is a `relay:` label, it is Node-immutable and is a valid security-lane target — which is
-the entire reason quarantine works at all. A compromised Node can forge its own `node:` labels; it
-can never remove `relay:quarantine`.
+**Revised 2026-09-16** to match invariant 7 as amended (ADR-0006, ADR-0020) and
+`docs/specs/quarantine-node.md`. The earlier text here — `admin` + step-up for both acts, through a
+generic `relay:` label write, `relay:`-only targets — is superseded. No Account writes a `relay:`
+label directly; `relay:quarantine=on` is written only by engaging a quarantine and cleared only by
+lifting one.
+
+- **Engage:** `operator` or above, machine Accounts included, with a required reason. Targets a
+  Selector of only `relay:` and `tag:` terms — explicit Node IDs, `relay:enrollment-token=…`, or
+  `tag:incident=4412`. A `node:` or `state:` term is refused. From a filtered Fleet view the
+  Console sends the resolved Node IDs, never the filter. The Selector resolves once; the confirm
+  step shows the exact Nodes before anything is written, and the result shows them again. One
+  engage counts against the `mutate` blast cap, so the confirm step says how many Nodes that is and
+  refuses above the cap — a fleet-wide fence is a Freeze. Also from Node detail (spec 02) for one
+  Node.
+- **Lift:** a **human** `admin` with step-up and a required reason. Targets `relay:` terms only —
+  in the Console, the quarantined Nodes selected on this screen's current-state list. A `tag:`
+  can never release a Node.
+- **Nothing is sent to a quarantined Node, reads included**, and the Node is not told. Tasks
+  already running keep running; say so beside the control, and point at Cancel.
+
+Because `relay:quarantine` is Node-immutable, a compromised Node can never remove it — which is the
+entire reason quarantine works at all.
 
 ## Revoke
 

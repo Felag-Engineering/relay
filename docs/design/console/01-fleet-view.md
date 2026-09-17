@@ -73,6 +73,20 @@ Facts (OS, kernel, hostname, IP, packages) are **not** filterable and **not** on
 operator wants to target on OS, their config management stamps `node:os=ubuntu`. The discriminator
 is the configuration-management scope rule (AGENTS.md, *Out of realm*): *what Ansible could check in check-mode is out of realm*.
 
+### Tagging a selection (v0.7.0)
+
+From a filtered view an `operator` can **add or remove one `tag:` label on every Node in the current
+selection** — the bulk form of Node detail's per-Node tag control (spec 02). This is what makes a
+tag-based quarantine fast mid-incident: filter, tag `incident=4412`, then engage by that tag from
+spec 16.
+
+- The Console resolves the filter to Node IDs and sends **the IDs, never the filter**, so the set
+  tagged is the set on screen even if labels change between render and click.
+- The confirm step names the count and the tag; the result lists the Nodes changed. Audited per
+  Node, with actor.
+- Standard auth, no step-up (ADR-0020). A `node:` or `state:` label has no edit affordance, here or
+  anywhere.
+
 ## Deviation states
 
 Rendered in the State column and counted on the rollup card.
