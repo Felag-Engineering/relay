@@ -473,6 +473,9 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-17` — Console adapter for `cancel_job` shipped: Job detail and the Agents stream
+  gained a Cancel control over the same capability-layer cancel, gated `operator`-or-above
+  (#595). Spec is still `aspirational`; proof not recorded per the legacy-spec rule.
 - `2026-09-14` — worked through with the owner. Fan-out stays sequential (concurrent is future
   work); a `mutate` Job halts on its first failure; a dispatch hands back its Job before finishing,
   as an MCP task where the client supports it, with an idempotency key so a re-issued request

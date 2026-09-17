@@ -46,6 +46,7 @@ func TestAuthorizeControl_Floors(t *testing.T) {
 		{capability.ControlRevokeNode, accounts.RoleAdmin},
 		{capability.ControlFreezeEngage, accounts.RoleOperator},
 		{capability.ControlFreezeRelease, accounts.RoleAdmin},
+		{capability.ControlCancelJob, accounts.RoleOperator},
 	}
 
 	for _, tc := range cases {
@@ -127,13 +128,14 @@ func TestAuthorizeControl_FreezeEngageIsHumanOnly(t *testing.T) {
 	})
 }
 
-// TestAuthorizeControl_MachineAdminKeepsTheOtherFour confirms the human-only
+// TestAuthorizeControl_MachineAdminKeepsTheOthers confirms the human-only
 // rule is scoped to Freeze engage alone. An Ansible playbook minting an
-// Enrollment Token is the standup path ADR-0010 requires to work, and a
-// machine admin releasing the Freeze is deliberately still allowed: release
-// is the deliberate rung, and gating it on humanity as well would leave an
-// incident with no automated way back.
-func TestAuthorizeControl_MachineAdminKeepsTheOtherFour(t *testing.T) {
+// Enrollment Token is the standup path ADR-0010 requires to work, a machine
+// admin releasing the Freeze is deliberately still allowed — release is the
+// deliberate rung, and gating it on humanity as well would leave an incident
+// with no automated way back — and a machine admin cancelling a Job is the
+// AI-agent stopping its own dispatch that #346 requires to work.
+func TestAuthorizeControl_MachineAdminKeepsTheOthers(t *testing.T) {
 	gate := NewRoleGate()
 	ctx := context.Background()
 
@@ -142,10 +144,20 @@ func TestAuthorizeControl_MachineAdminKeepsTheOtherFour(t *testing.T) {
 		capability.ControlRevokeEnrollmentToken,
 		capability.ControlRevokeNode,
 		capability.ControlFreezeRelease,
+		capability.ControlCancelJob,
 	} {
 		if err := gate.AuthorizeControl(ctx, machine(accounts.RoleAdmin), act); err != nil {
 			t.Errorf("AuthorizeControl(%s, machine admin) = %v, want nil", act, err)
 		}
+	}
+}
+
+// TestAuthorizeControl_MachineOperatorMayCancelAJob pins #346's decision on
+// its own: cancel is not human-only at any role, unlike Freeze engage.
+func TestAuthorizeControl_MachineOperatorMayCancelAJob(t *testing.T) {
+	gate := NewRoleGate()
+	if err := gate.AuthorizeControl(context.Background(), machine(accounts.RoleOperator), capability.ControlCancelJob); err != nil {
+		t.Fatalf("AuthorizeControl(cancel_job, machine operator) = %v, want nil (#346: an AI-agent may cancel its own dispatch)", err)
 	}
 }
 
@@ -182,6 +194,7 @@ func TestAuthorizeControl_CorruptRoleSatisfiesNothing(t *testing.T) {
 		capability.ControlRevokeNode,
 		capability.ControlFreezeEngage,
 		capability.ControlFreezeRelease,
+		capability.ControlCancelJob,
 	} {
 		if err := gate.AuthorizeControl(context.Background(), p, act); err == nil {
 			t.Errorf("AuthorizeControl(%s, role %q) = nil, want a refusal", act, p.Role)

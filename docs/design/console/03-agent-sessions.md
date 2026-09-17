@@ -154,6 +154,14 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
 - [ ] A read card states that output is not retained, and the scrollback genuinely has none.
 - [ ] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
       audited; in v0.6.0 no control here reaches the capability layer.
+      **Partially met (#595).** The control is built, gated by the capability layer exactly as
+      Job detail's is (13-job-detail.md), and audited: it renders on a dispatch row whose Job is
+      still running, drawn on that Job's newest row, backed by one `QueryJobs{State: Running}`
+      read. What is not yet true is "an in-flight dispatch appears here" itself — this stream is
+      built from dispatch audit records, and the Job engine writes that record only AFTER the
+      dispatch call returns (the capability layer's `Run`), so a Job still running almost never has
+      a dispatch row on this page yet to draw the control on. Closing this waits on a dispatch
+      handing back its Job before finishing (execution.md, designed).
 - [ ] Polling collapses; an Account doing 200 `get_job` calls does not push everything else off.
 - [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
 - [ ] With no Account active in the window the screen says so plainly and does not fabricate

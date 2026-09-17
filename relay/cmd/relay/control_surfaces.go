@@ -272,6 +272,13 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
+		// Cancel (#595): the Console's one write seam. d.capability already
+		// implements CancelJob — the same method the Control API and MCP
+		// call — so no adapter is built for it; the role floor (operator,
+		// for any Job) and the audit row live in the capability layer, not
+		// here. Execution stays false, unchanged: Cancel cannot run
+		// anything, only ask something already running to stop.
+		Cancel: d.capability,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux))
 }

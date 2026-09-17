@@ -61,6 +61,14 @@ var screenFuncs = template.FuncMap{
 	// join renders a string slice for display.
 	"join": func(sep string, xs []string) string { return strings.Join(xs, sep) },
 
+	// cancelControl builds a JobCancel for a per-row template (#595): a
+	// screen that draws a row per Job — the Agents stream — cannot
+	// pre-build one JobCancel per row in the handler without duplicating
+	// cancelJobAction's escaping there too, so the template does it here
+	// instead, at the one place both screens already call
+	// {{template "job-cancel" ...}}.
+	"cancelControl": func(action, token string) JobCancel { return JobCancel{Action: action, CSRFToken: token} },
+
 	// plural picks a suffix and NOTHING ELSE — the number is supplied by the
 	// template right beside it ({{.Count}} {{plural .Count "Node" "Nodes"}}).
 	// Fleet screens count things constantly and "1 Nodes" reads as a bug in

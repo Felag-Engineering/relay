@@ -40,11 +40,13 @@ package console
 // with none. See handleAgents and buildAgents below.
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"sort"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -153,6 +155,19 @@ type agentCall struct {
 	// TheRailShowsTheFirstCallOnThePage counts the substring "ago" on the
 	// whole body, which a relative FirstWhen would break.
 	FirstWhen string
+
+	// Dispatch is set in agentCallFrom when kindOf(f.Kind) is rowDispatch
+	// (#595) — a dispatch audit record names a Job, which is what the
+	// running-Jobs check below (handleAgents) needs to know before it may
+	// offer Cancel on this row at all.
+	Dispatch bool
+
+	// CancelAction is set AFTER buildAgents/collapseRuns has run, in
+	// handleAgents — never inside agentCallFrom or collapseRuns — so it can
+	// never affect collapsing: two otherwise-identical dispatch rows must
+	// still fold into one run regardless of which one ends up carrying the
+	// control. Non-empty on at most one row per Job, its newest.
+	CancelAction string
 }
 
 // collapsible reports whether c may be folded into an adjacent identical row.
@@ -323,6 +338,26 @@ type agentsView struct {
 	// it, not the fleet's.
 	Scrolled   bool
 	NewestHref string
+
+	// CSRFToken is what a per-row Cancel form needs (#595); the template
+	// builds each row's JobCancel with the cancelControl func and this
+	// field, rather than the handler pre-building one per row.
+	CSRFToken string
+
+	// CancelTrailError is set when the running-Jobs read (handleAgents)
+	// failed: no control renders anywhere on the page, and PageNote's note
+	// says why rather than silently omitting every control.
+	CancelTrailError bool
+
+	// CancelTruncated is set when the running-Jobs read's own page was not
+	// the whole result (capability.MaxPageSize hit): Cancel is offered here
+	// only for the newest MaxPageSize running Jobs, and the page says so.
+	CancelTruncated bool
+
+	// CancelRunningLimit is capability.MaxPageSize, rendered rather than
+	// hardcoded into the template so the CancelTruncated note stays true if
+	// that constant ever changes.
+	CancelRunningLimit int
 }
 
 func handleAgents(d Deps) http.HandlerFunc {
@@ -393,7 +428,79 @@ func handleAgents(d Deps) http.HandlerFunc {
 		// buildAgents.
 		fc, fr := collapseSummary(v.Calls)
 		v.PageNote = pageNote(fc, fr, agentsPageSize, v.Older, v.Scrolled)
+
+		v.CSRFToken = p.CSRFToken
+		role := accounts.Role(caller.Role)
+		wantsCancel := false
+		for _, c := range v.Calls {
+			if c.Dispatch && c.JobID != "" {
+				wantsCancel = true
+				break
+			}
+		}
+		// Cancel is offered per-row only when cancelOffered says the role and
+		// the route both admit it, AND there is at least one dispatch row to
+		// offer it on — a viewer, or a page of nothing but reads and
+		// approvals, makes no extra read at all (#595).
+		if cancelOffered(d, role) && wantsCancel {
+			assignAgentsCancelActions(r.Context(), d, caller, &v)
+			if refusedUnaudited(w, lane, "whether these Jobs are still running") {
+				return
+			}
+		}
 		renderScreen(w, p, agentsTmpl, v)
+	}
+}
+
+// assignAgentsCancelActions makes the ONE extra lane read Cancel needs on
+// this screen (#595) and sets v.CancelAction on at most one call per Job —
+// its newest row, so a Job with several dispatch rows on the page draws
+// exactly one button rather than one per row.
+//
+// The read is a single QueryJobs{State: Running}, not a per-JobID probe.
+// That trade-off is deliberate and costs something worth stating: the State
+// predicate lands in the outer WHERE (store/jobquery.go's buildJobWhere), so
+// this is the SAME unscoped per-Job aggregate Activity's Job lane already
+// runs on every page view (activity.go) — no new cost class — and it is paid
+// only by an operator-or-above page that shows a dispatch row, never by a
+// viewer: an operator refresh now costs two of their OWN read rows on this
+// stream (the query_audit row this page already wrote, plus this one),
+// alternating and never folding into each other. The alternative, probing
+// per distinct JobID, is each an AUDITED read (ADR-0025, recordQueryRead)
+// that lands as its own KindRead row on THIS SAME STREAM (isAgentCallKind
+// admits rowRead) with a distinct JobID collapseRuns cannot fold — a
+// handful of operator refreshes during an incident would push the
+// operator's own probes onto the page whose purpose is showing AI-agent
+// calls, crowding out the very calls it exists to show. The real fix — a
+// State/JobIDs predicate pushed into the derived tables — is a store change
+// outside this issue, named as the follow-up in the PR body.
+func assignAgentsCancelActions(ctx context.Context, d Deps, caller capability.Principal, v *agentsView) {
+	running := jobs.JobStateRunning
+	pg, err := d.Queries.QueryJobs(ctx, caller,
+		capability.JobFilter{State: &running}, capability.PageRequest{Limit: capability.MaxPageSize})
+	if err != nil {
+		// No controls anywhere on the page: a control this read could not
+		// confirm is still running must not render as though it could.
+		v.CancelTrailError = true
+		return
+	}
+	if pg.Next != "" {
+		v.CancelTruncated = true
+		v.CancelRunningLimit = capability.MaxPageSize
+	}
+	runningSet := make(map[string]bool, len(pg.Jobs))
+	for _, j := range pg.Jobs {
+		runningSet[j.JobID] = true
+	}
+
+	claimed := map[string]bool{}
+	for i := range v.Calls {
+		c := &v.Calls[i]
+		if !c.Dispatch || c.JobID == "" || claimed[c.JobID] || !runningSet[c.JobID] {
+			continue
+		}
+		c.CancelAction = cancelJobAction(c.JobID)
+		claimed[c.JobID] = true
 	}
 }
 
@@ -775,6 +882,7 @@ func agentCallFrom(f trailFacts) agentCall {
 		Outcome:    OutcomeLabel(f.Outcome),
 		JobID:      f.JobID,
 		ReadClass:  f.Kind == audit.KindRead,
+		Dispatch:   kindOf(f.Kind) == rowDispatch,
 		// Every row stands for itself until collapseRuns says otherwise.
 		Calls: 1,
 	}
@@ -1055,6 +1163,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
           {{with .Selector}}<code class="selector">{{.}}</code>{{end}}
           {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
           {{if .JobHref}}<a href="{{.JobHref}}">job {{short .JobID}}</a>{{end}}
+          {{if .CancelAction}}{{template "job-cancel" (cancelControl .CancelAction $.CSRFToken)}}{{end}}
         </div>
         {{with .Deny}}{{template "deny-block" .}}{{end}}
         {{if .RepeatDeny}}<div class="repeatdeny">Same Operation and rule as above.</div>{{end}}
@@ -1068,6 +1177,12 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
     {{end}}
     {{if .PageNote}}
     <p class="gap">{{.PageNote}}{{if .Scrolled}} <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.{{else if .Older}} <a href="{{.OlderHref}}">Older</a>.{{end}}</p>
+    {{end}}
+    {{if .CancelTrailError}}
+    <p class="gap">Whether these Jobs are still running could not be read, so Cancel is not offered here; open a Job to cancel it.</p>
+    {{end}}
+    {{if .CancelTruncated}}
+    <p class="note">Cancel is offered here only for the newest {{.CancelRunningLimit}} running Jobs.</p>
     {{end}}
   </div>
 </div>

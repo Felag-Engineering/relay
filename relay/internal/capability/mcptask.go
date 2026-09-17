@@ -197,12 +197,16 @@ func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (
 //   - A Job exists, so an approved dispatch is or was running. Cancelling goes
 //     through the ORDINARY CancelJob path, unchanged — same honest-cancel
 //     semantics (ADR-0013: a Task that already finished reports its real
-//     outcome, never a fabricated `cancelled`), same audit record. There is no
-//     second cancel implementation here.
-//   - Still parked, so there is nothing running to stop. Only the handle is
-//     marked. The approval Request is left exactly as it was: pending, visible
-//     in the queue, decidable by a human, and re-attachable by a re-drive of
-//     the same Plan.
+//     outcome, never a fabricated `cancelled`), same audit record, and it
+//     INHERITS CancelJob's operator floor (#595): p must satisfy
+//     AuthorizeControl(ControlCancelJob) or this returns that refusal before
+//     the handle itself is touched.
+//   - Still parked, so there is nothing running to stop and CancelJob is never
+//     called. Only the handle is marked, and that stays owner-scoped and
+//     UNGATED by role: s.mcpTasks.Get already requires p.AccountID to own the
+//     handle, and there is no Job for AuthorizeControl to gate. The approval
+//     Request is left exactly as it was: pending, visible in the queue,
+//     decidable by a human, and re-attachable by a re-drive of the same Plan.
 //
 // The second case is the security boundary this method exists to hold. See the
 // file header: nothing below writes to s.approvals, and that absence is the

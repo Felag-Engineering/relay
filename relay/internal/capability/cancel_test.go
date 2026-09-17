@@ -61,7 +61,7 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 		now:       func() time.Time { return at },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
 
 	principal := Principal{Account: "alice", Role: "operator"}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
@@ -133,13 +133,114 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 		now:       func() time.Time { return time.Now().UTC() },
 	}
 	audit := &spyAuditSink{}
-	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
 
-	err := svc.CancelJob(context.Background(), Principal{Account: "alice"}, "job-does-not-exist")
+	err := svc.CancelJob(context.Background(), Principal{Account: "alice", Role: "operator"}, "job-does-not-exist")
 	if !errors.Is(err, jobs.ErrJobNotFound) {
 		t.Errorf("CancelJob(unknown) error = %v, want jobs.ErrJobNotFound", err)
 	}
 	if len(audit.cancelCalls) != 0 {
 		t.Errorf("RecordCancel calls = %d, want 0 (nothing true happened, so nothing is recorded)", len(audit.cancelCalls))
+	}
+}
+
+// TestCancelJobRefusesBelowOperatorBeforeTouchingAnyTask: when the Authorizer
+// refuses ControlCancelJob, CancelJob returns that refusal before disp.cancel
+// is ever called — no Task changes state, RecordCancel is never called, and
+// the refusal is recorded through refuseControl with the Principal and an
+// empty JobID (the refusal precedes any existence check, so the id is
+// caller-authored text — see CancelJob's doc comment).
+func TestCancelJobRefusesBelowOperatorBeforeTouchingAnyTask(t *testing.T) {
+	refusal := errors.New("cancelling a Job requires operator")
+	authz := &spyAuthorizer{controlErr: refusal}
+	audit := &spyAuditSink{}
+	conduit := newFakeConduit(nil)
+	e := &jobEngine{
+		conduit: conduit,
+		newID:   sequentialIDs("id-"),
+		now:     func() time.Time { return time.Now().UTC() },
+	}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: authz}
+
+	principal := Principal{Account: "eve", Role: "viewer"}
+	err := svc.CancelJob(context.Background(), principal, "job-1")
+	if !errors.Is(err, refusal) {
+		t.Fatalf("CancelJob error = %v, want it to wrap %v", err, refusal)
+	}
+	if got := authz.controlCalls; len(got) != 1 || got[0] != ControlCancelJob {
+		t.Fatalf("controlCalls = %v, want exactly [ControlCancelJob]", got)
+	}
+	if len(audit.cancelCalls) != 0 {
+		t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(audit.entries))
+	}
+	got := audit.entries[0]
+	if got.Kind != AuditKindRefusal {
+		t.Errorf("audit entry Kind = %v, want AuditKindRefusal", got.Kind)
+	}
+	if got.Principal != principal {
+		t.Errorf("refusal Principal = %+v, want %+v", got.Principal, principal)
+	}
+	if got.JobID != "" {
+		t.Errorf("refusal JobID = %q, want empty — the refusal precedes any existence check", got.JobID)
+	}
+}
+
+// TestCancelJobRefusalDoesNotRevealWhetherTheJobExists: an unknown Job ID
+// plus a refusing Authorizer returns the refusal, never jobs.ErrJobNotFound —
+// a refused caller learns nothing about the Job.
+func TestCancelJobRefusalDoesNotRevealWhetherTheJobExists(t *testing.T) {
+	refusal := errors.New("cancelling a Job requires operator")
+	authz := &spyAuthorizer{controlErr: refusal}
+	jobsRepo, tasksRepo := testEngineStore(t)
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   newFakeConduit(nil),
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Now().UTC() },
+	}
+	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz}
+
+	err := svc.CancelJob(context.Background(), Principal{Account: "eve", Role: "viewer"}, "job-does-not-exist")
+	if errors.Is(err, jobs.ErrJobNotFound) {
+		t.Fatalf("CancelJob(unknown, refused) error = %v, must not reveal jobs.ErrJobNotFound", err)
+	}
+	if !errors.Is(err, refusal) {
+		t.Fatalf("CancelJob error = %v, want it to wrap %v", err, refusal)
+	}
+}
+
+// TestCancelJobAuthorizesWithoutAssertions: an authorization decision must
+// never read caller-asserted attribution off the context (assertions.go), so
+// AuthorizeControl must see none even when the caller set some.
+func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
+	authz := &assertionSpyAuthorizer{}
+	jobsRepo, tasksRepo := testEngineStore(t)
+	at := time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC)
+	jobID := "job-1"
+	if err := jobsRepo.CreateJob(context.Background(), jobs.Job{ID: jobID, CreatedAt: at}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   newFakeConduit(nil),
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return at },
+	}
+	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz}
+
+	ctx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "ops-team"})
+	if err := svc.CancelJob(ctx, Principal{Account: "alice", Role: "operator"}, jobID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	if !authz.called {
+		t.Fatal("the Authorizer was never called; this test proves nothing")
+	}
+	if !authz.sawAssertions.IsZero() {
+		t.Errorf("AuthorizeControl saw caller-asserted attribution %+v — it must never be able to", authz.sawAssertions)
 	}
 }

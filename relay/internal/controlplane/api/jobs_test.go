@@ -267,6 +267,27 @@ func TestCancelJob_UnknownIDIsA404(t *testing.T) {
 	}
 }
 
+// A cancel refused by the capability layer's role floor (#595) renders 403,
+// not 500 — writeJobError recognizes authz.ErrUnauthorized exactly like
+// writeFreezeError and writeExecutionError do.
+func TestCancelJob_ARefusalIsA403(t *testing.T) {
+	refusal := authz.NewRoleGate().AuthorizeControl(context.Background(),
+		capability.Principal{Account: "eve", Role: string(accounts.RoleViewer)}, capability.ControlCancelJob)
+	if refusal == nil {
+		t.Fatal("a viewer's AuthorizeControl(cancel_job) returned nil; this test's premise is wrong")
+	}
+	exec := &fakeExecutor{cancelErr: refusal}
+	h := newJobFixture(t, accounts.RoleViewer, exec, fakeJobs{}, &fakeReadAuditor{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/jobs/job-7/cancel", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "operator") {
+		t.Errorf("body = %q, want it to name the required role %q", rec.Body.String(), "operator")
+	}
+}
+
 // A cancel is NOT read-audited: it changes state and is recorded by the
 // capability layer's own RecordCancel, so recording it here too would
 // double-audit the same act.

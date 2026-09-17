@@ -490,6 +490,21 @@ type StepUp struct {
 	WindowText string
 }
 
+// --- The Cancel control ------------------------------------------------------
+
+// JobCancel is the Cancel control's rendered data (#595): a form that posts
+// to one Job's cancel route, plus the CSRF token every Console POST needs.
+// Its type lives in cancel.go, beside cancelJobAction, which is the only
+// builder of Action; this doc lives here beside step-up because the two
+// controls are compared on purpose below.
+//
+// Unlike [StepUp], Cancel carries no re-authentication: step-up exists for a
+// mutate APPLY (ADR-0026), and Cancel is never that — it only asks something
+// already running to stop, which is cheap to engage by design, the same
+// asymmetry ADR-0013 gives the Freeze (engage cheap, release deliberate).
+// There is nothing here to be careful granting, because Cancel can never
+// make the fleet do more than it was already doing.
+
 // --- Pin to compare ---------------------------------------------------------
 
 // The pin bar's type is pinState in compare.go, beside the builder that
@@ -635,5 +650,11 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   <input id="stepup-password" name="password" type="password" autocomplete="current-password" required>
   {{with .WindowText}}<p class="stepupwindow">{{.}}</p>{{end}}
   <button type="submit">Authorise</button>
+</form>{{end}}
+
+{{define "job-cancel"}}<form class="jobcancel" method="post" action="{{.Action}}">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <button type="submit">Cancel</button>
+  <span class="jcnote">Cancel stops this Job&#39;s in-flight Tasks and nothing future; the incident ladder is for that.</span>
 </form>{{end}}
 `))

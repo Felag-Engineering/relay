@@ -228,6 +228,7 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	revoke a Node                admin      ADR-0020's incident ladder
 //	engage the Freeze            operator   ADR-0013 (+ human-only, #397)
 //	release the Freeze           admin      ADR-0013
+//	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14), #346
 //
 // Enrollment sits at admin because a token's scope becomes the enrolling
 // Node's relay: labels — the namespace the security-sensitive lane targets
@@ -235,6 +236,9 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // secret-distribution paths will treat as authoritative. That is a more
 // durable position than any single dispatch, which is why it cannot sit
 // below the role that may run one.
+//
+// Cancel's floor applies to ANY Job, not only one the caller dispatched, and
+// is not human-only: an AI-agent must be able to stop its own dispatch.
 func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
 	switch act {
 	case capability.ControlMintEnrollmentToken:
@@ -247,6 +251,8 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 		return accounts.RoleOperator, "engaging the Freeze", true, true
 	case capability.ControlFreezeRelease:
 		return accounts.RoleAdmin, "releasing the Freeze", false, true
+	case capability.ControlCancelJob:
+		return accounts.RoleOperator, "cancelling a Job", false, true
 	default:
 		return "", "", false, false
 	}

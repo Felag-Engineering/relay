@@ -103,7 +103,8 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/raw-exec":   floorCapability,
 
 	// Jobs (#357). Reading a Job is a read (audited, ADR-0025); cancelling one
-	// goes through the capability layer.
+	// is floored by AuthorizeControl(ControlCancelJob) at operator, inside the
+	// capability layer (#595).
 	"GET /api/v1/jobs/{id}":         floorNone,
 	"POST /api/v1/jobs/{id}/cancel": floorCapability,
 

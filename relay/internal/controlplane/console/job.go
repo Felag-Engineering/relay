@@ -57,6 +57,19 @@ package console
 // lane has already stripped output for every Task whose class is not mutate;
 // this page then declines to render it a second time, so a wrong guess about
 // an Operation's class cannot turn into retained output on screen.
+//
+// # The page's one control (v0.7.0, #595)
+//
+// Cancel is offered to operator and above while any Task is unresolved, and
+// it is the capability layer's decision, not this page's — cancelOffered
+// (cancel.go) only narrows what is drawn to what routesFor would let this
+// session reach. The result block below the header reads the job_cancel
+// audit record (cancelRecord), never a query-string flash, so a crafted link
+// cannot make this page claim a Task "was asked to stop" that never was.
+// That read is CONDITIONAL — only when something is cancelled or still in
+// flight — so a complete Job with nothing cancelled pays exactly what it did
+// before this issue (TestJob_TenThousandNodesRendersNoList's
+// auditCalls == 1 guard).
 
 import (
 	"context"
@@ -66,6 +79,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -166,6 +180,13 @@ type taskRow struct {
 	// every Node, so clustering on it would report agreement between Nodes
 	// that this Relay never observed.
 	RuleKnown bool
+
+	// Sent is true when this Task's DispatchedAt is non-zero (#595). It is
+	// what the cancelled group clusters on: MarkCancelled (store/tasks.go)
+	// only transitions a still-Pending Task and never sets DispatchedAt, so
+	// a zero value on a cancelled Task means it never left the Relay at
+	// all, and a non-zero one means it was sent and then stopped.
+	Sent bool
 }
 
 // outcomeGroup is one collapsible block: every Node that reported one outcome.
@@ -230,6 +251,12 @@ type outputCluster struct {
 	// can say "N fired this rule" only when that is what happened.
 	RuleKnown bool
 
+	// NeverSent mirrors taskRow.Sent (inverted) for the cluster's rows, set
+	// only in the cancelled group (#595): it is what lets the label say
+	// "N never sent" for one cluster and "N sent and then stopped" for the
+	// other, so the two kinds never read as one "identical" thing.
+	NeverSent bool
+
 	// Representative is true for a cluster rendered as "N identical, here is
 	// one". A cluster of one is not a cluster and renders as itself.
 	Representative bool
@@ -281,7 +308,39 @@ type jobView struct {
 	// what is missing from it.
 	TrailError bool
 
+	// Cancel is the rendered control (#595), set only when v.InFlight is
+	// above zero AND cancelOffered(d, caller's role) is true. Nil omits the
+	// control entirely rather than rendering a disabled one — the same
+	// mount-time-absence posture every gated route in this package takes.
+	Cancel *JobCancel
+
+	// CancelRequest is set when a job_cancel audit record exists for this
+	// Job (cancelRecord) — the non-forgeable source for "a cancel was asked
+	// for, by whom, when". Nil when no cancel was ever requested, which
+	// includes a Job whose Tasks read cancelled because IT was halted some
+	// other way (a future incident-ladder action): the page must not
+	// attribute that to a cancel request it cannot prove happened.
+	CancelRequest *cancelRequest
+
+	// CancelledCount mirrors sum.Counts[jobs.OutcomeCancelled] — the exact
+	// count from the aggregate, never a count of rows this page fetched.
+	CancelledCount int
+
+	// CancelTrailError is set when the job_cancel record could not be read.
+	// The rest of the page is unaffected: the groups below come from the
+	// Tasks, not from this read.
+	CancelTrailError bool
+
 	Found bool
+}
+
+// cancelRequest is the rendered form of one job_cancel audit record: who
+// asked and when. capability.AuditRow's Principal/Verified/Timestamp,
+// projected the same way v.Principal/v.Verified already are above.
+type cancelRequest struct {
+	Principal string
+	Verified  bool
+	At        time.Time
 }
 
 func handleJob(d Deps) http.HandlerFunc {
@@ -328,7 +387,7 @@ func handleJob(d Deps) http.HandlerFunc {
 			return
 		}
 
-		v := buildJobView(ctx, d, r, caller, found.Jobs[0])
+		v := buildJobView(ctx, d, r, caller, accounts.Role(caller.Role), pg.CSRFToken, found.Jobs[0])
 		if refusedUnaudited(w, lane, "this Job's record") {
 			return
 		}
@@ -342,7 +401,7 @@ func renderMissingJob(w http.ResponseWriter, pg Page, jobID string) {
 	renderScreen(w, pg, jobTmpl, jobView{ID: jobID})
 }
 
-func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capability.Principal, sum capability.JobSummary) jobView {
+func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capability.Principal, role accounts.Role, csrfToken string, sum capability.JobSummary) jobView {
 	v := jobView{
 		Found:     true,
 		ID:        sum.JobID,
@@ -352,14 +411,31 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		// The DECLARED class, from tasks.risk_class — not this package's
 		// name-list inference. A Template Operation the Console has never
 		// heard of is still classified by the catalog that dispatched it.
-		RiskClass: sum.RiskClass,
-		Risk:      RiskLabel(sum.RiskClass),
-		ReadClass: sum.RiskClass == jobs.RiskClassRead,
-		Principal: sum.Requester,
-		Verified:  sum.RequesterAccountID != "",
-		FanOut:    sum.Total,
-		InFlight:  sum.Unresolved,
-		Bar:       barFrom(sum.Counts),
+		RiskClass:      sum.RiskClass,
+		Risk:           RiskLabel(sum.RiskClass),
+		ReadClass:      sum.RiskClass == jobs.RiskClassRead,
+		Principal:      sum.Requester,
+		Verified:       sum.RequesterAccountID != "",
+		FanOut:         sum.Total,
+		InFlight:       sum.Unresolved,
+		Bar:            barFrom(sum.Counts),
+		CancelledCount: sum.Counts[jobs.OutcomeCancelled],
+	}
+
+	if sum.Unresolved > 0 && cancelOffered(d, role) {
+		v.Cancel = &JobCancel{Action: cancelJobAction(sum.JobID), CSRFToken: csrfToken}
+	}
+	// Conditional on purpose (#595): the read exists to explain a cancel, and
+	// a Job with nothing cancelled and nothing in flight has nothing a
+	// cancel could explain. This is what keeps
+	// TestJob_TenThousandNodesRendersNoList's auditCalls==1 guard true —
+	// see the file header.
+	if v.CancelledCount > 0 || sum.Unresolved > 0 {
+		if row, ok, err := cancelRecord(ctx, d, caller, sum.JobID); err != nil {
+			v.CancelTrailError = true
+		} else if ok {
+			v.CancelRequest = &cancelRequest{Principal: row.Principal, Verified: row.Verified.AccountID != "", At: row.Timestamp}
+		}
 	}
 
 	// The dispatch record, as ONE bounded row rather than the Job's whole
@@ -439,6 +515,29 @@ func dispatchRecord(ctx context.Context, d Deps, caller capability.Principal, jo
 	return trail.Rows[0], true, nil
 }
 
+// cancelRecord reads the newest job_cancel audit record for jobID — one
+// bounded row, shaped exactly like dispatchRecord above, and for the same
+// reason: it is the non-forgeable source for "a cancel was asked for, by
+// whom, when", so the result block never has to trust a query-string flash.
+// The read lane orders newest first, so Limit 1 is the most recent request
+// if more than one was ever made.
+func cancelRecord(ctx context.Context, d Deps, caller capability.Principal, jobID string) (capability.AuditRow, bool, error) {
+	trail, err := d.Queries.QueryAudit(ctx, caller, capability.AuditFilter{
+		JobID: jobID,
+		Kinds: []string{audit.KindJobCancel},
+	}, capability.PageRequest{Limit: 1})
+	if err != nil {
+		return capability.AuditRow{}, false, err
+	}
+	if len(trail.Rows) == 0 {
+		// NORMAL, not an error: a Job whose Tasks read cancelled without ever
+		// being asked to (a halted mutate Job, say) has no job_cancel row at
+		// all, and the page must not invent one.
+		return capability.AuditRow{}, false, nil
+	}
+	return trail.Rows[0], true, nil
+}
+
 // jobGroups builds one group per outcome the Job actually produced, ordered by
 // interest, fetching at most one bounded page of Tasks for each.
 //
@@ -496,7 +595,8 @@ func jobGroups(ctx context.Context, d Deps, caller capability.Principal, sum cap
 			}
 		}
 
-		if o == jobs.OutcomeDeniedByPolicy {
+		switch o {
+		case jobs.OutcomeDeniedByPolicy:
 			// The spec's "when they differ, group by rule" — so when they do
 			// NOT differ, there is exactly one cluster and the page can say so.
 			//
@@ -510,7 +610,22 @@ func jobGroups(ctx context.Context, d Deps, caller capability.Principal, sum cap
 			if known && len(g.Clusters) == 1 && !g.Sampled && g.Listed > 1 {
 				g.SharedRule = g.Clusters[0].Key
 			}
-		} else {
+		case jobs.OutcomeCancelled:
+			// Never sent and sent-then-stopped are two different facts (#595)
+			// and must never merge into one "identical" row: the deny
+			// branch's rule (above) clusters on the thing that AGREES; here
+			// the two clusters are the two things that CANNOT agree with each
+			// other. But within the "sent" side, cancelKey also keys on
+			// Output — a sent-then-stopped Task carries captured output just
+			// like any other resolved Task (daemon/src/executor.rs's
+			// Outcome::Cancelled returns it), so three of them reporting
+			// different output must not fold into one cluster either, the
+			// same rule the default branch below applies to every other
+			// outcome. cluster is !readClass for the same reason: a
+			// read-class Job's output is already withheld, so there is
+			// nothing to cluster on.
+			g.Clusters = clusterRows(rows, cancelKey, !readClass)
+		default:
 			// readClass suppresses the "N reported identical output" label: on
 			// a read Job there IS no retained output, every row's is the empty
 			// string, and saying they all reported the same thing describes the
@@ -531,6 +646,22 @@ func denyRuleKey(r taskRow) string {
 		return ""
 	}
 	return r.Deny.Rule
+}
+
+// cancelKey clusters the cancelled group first by whether the Task ever left
+// the Relay (#595) — "which of two facts about this cancel is true of this
+// Task", which must never merge into one cluster no matter how many rows
+// share either one — and, within the "sent" side, by Output too: a
+// sent-then-stopped Task can carry different captured output from another
+// one, and folding those into a single "identical" cluster would drop
+// output clusterRows exists to keep visible everywhere else on this page.
+// "\x00" cannot appear in Sent-plus-Output, so the two sides of the key
+// never collide with each other.
+func cancelKey(r taskRow) string {
+	if r.Sent {
+		return "sent\x00" + r.Output
+	}
+	return "never sent"
 }
 
 // rulesAreKnown reports whether every listed deny carried the daemon's own
@@ -596,6 +727,7 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 		NodeHref: "/console/nodes/" + t.NodeID,
 		ExitCode: t.ExitCode,
 		ShowExit: hasRealExitStatus(t.Outcome, t.ExitCode) && t.ExitCode != 0,
+		Sent:     !t.DispatchedAt.IsZero(),
 	}
 	// "Not mutate", not "is read": an unrecognised or unspecified class must
 	// default to withholding the bytes, matching the read lane's own strip
@@ -676,7 +808,7 @@ func clusterRows(rows []taskRow, key func(taskRow) string, cluster bool) []outpu
 	out := make([]outputCluster, 0, len(order))
 	for _, k := range order {
 		rs := byKey[k]
-		c := outputCluster{Key: k, Count: len(rs), Rows: rs, Deny: rs[0].Deny, RuleKnown: rs[0].RuleKnown}
+		c := outputCluster{Key: k, Count: len(rs), Rows: rs, Deny: rs[0].Deny, RuleKnown: rs[0].RuleKnown, NeverSent: !rs[0].Sent}
 		if len(rs) >= clusterFloor && cluster {
 			// "N identical — here is one." Rendering 9,797 identical rows is
 			// the behaviour clustering exists to prevent; the label says how
@@ -787,6 +919,7 @@ var jobTmpl = newScreen("job", `
     <span class="chip" data-state="{{.State}}">{{.State}}</span>
     {{if .InFlight}}<span class="overcap">{{.InFlight}} still in flight</span>{{end}}
     <span class="dim">dispatched {{stamp .Created}}</span>
+    {{with .Cancel}}{{template "job-cancel" .}}{{end}}
   </div>
 </section>
 
@@ -800,6 +933,29 @@ for it — and the Job's own id is not one.{{end}}</p>
 <p class="gap">The dispatch record for this Job could not be read, so what was asked for — the
 arguments, the on-behalf-of claim, and any approval — is missing from the header above. The
 outcomes below are unaffected: they come from the Tasks, not from the trail.</p>
+{{end}}
+
+{{if .CancelRequest}}
+<div class="cancelresult">
+  <p>Cancel requested by {{template "trust-chip" (trust .CancelRequest.Principal .CancelRequest.Verified)}}
+  at {{stamp .CancelRequest.At}}. Cancel only ever asks.</p>
+  {{if .CancelledCount}}
+  <p><b>{{.CancelledCount}}</b> {{plural .CancelledCount "Task reads" "Tasks read"}} cancelled. The
+  cancelled group below shows which never left the Relay and which were stopped after they were sent.</p>
+  {{else}}
+  <p>No Task reads cancelled.</p>
+  {{end}}
+  {{if .InFlight}}
+  <p><b>{{.InFlight}}</b> still in flight. Each one already sent was asked to stop where its Node is connected
+  — best-effort — and each will report what actually happened, which may be its real outcome if it finished
+  first.</p>
+  {{end}}
+  <p>Tasks that had already finished keep the outcome they really had.</p>
+</div>
+{{end}}
+{{if .CancelTrailError}}
+<p class="gap">The cancel request for this Job could not be read, so who asked for it and when is
+missing above. The groups below are unaffected: they come from the Tasks, not from this record.</p>
 {{end}}
 
 {{if .Bar.Total}}{{template "outcome-bar" .Bar}}{{end}}
@@ -846,6 +1002,18 @@ it, at any age, because a screen that did would become the durable place read ou
         {{end}}
       </div>
       {{with .Deny}}{{template "deny-block" .}}{{end}}
+    {{end}}
+  {{else if eq .Label "cancelled"}}
+    {{range .Clusters}}
+      <div class="cluster">
+        <div class="clabel"><b>{{.Count}}</b> {{plural .Count "Node" "Nodes"}}
+          {{if .NeverSent}}never sent &mdash; marked cancelled on the Relay{{else}}sent and then stopped &mdash; the Node reported cancelled{{end}}{{if .Representative}} &mdash; one shown{{end}}.</div>
+        {{range .Rows}}
+          <div class="trow"><a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a></div>
+          {{with .Output}}<pre class="taskout">{{.}}</pre>{{end}}
+          {{if .Clipped}}<p class="note">Shown to the first 2 KB of what the Relay stored.</p>{{end}}
+        {{end}}
+      </div>
     {{end}}
   {{else}}
     {{range .Clusters}}

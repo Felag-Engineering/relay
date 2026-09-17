@@ -193,6 +193,11 @@ var consoleReadAudit = map[string]readAuditRule{
 		why: "the v0.7.0 composer placeholder (#438). It renders no data at all today; " +
 			"the screen that replaces it dispatches, and dispatch is audited by Service.Run",
 	},
+	"POST /console/jobs/{job_id}/cancel": {
+		path: "",
+		why: "a write, not a read (#595): the capability layer records the cancel as " +
+			"job_cancel with its Principal, and a refusal as a refusal",
+	},
 }
 
 const (

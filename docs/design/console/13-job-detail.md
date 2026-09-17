@@ -80,8 +80,15 @@ shows its audited metadata only (ADR-0025).
       exist is worse than no link.
 - [x] Cancel (v0.7.0) is offered only while Tasks are in flight, and its effect is described
       accurately; in v0.6.0 no control on this page reaches the capability layer.
-      The v0.6.0 half is met and asserted (no `<form>`, no `<button>`, no POST anywhere on the
-      screen). Cancel itself is v0.7.0 and deliberately absent.
+      **Built (#595).** Cancel renders for `operator` and above while any Task is unresolved,
+      decided by the capability layer's `AuthorizeControl(ControlCancelJob)` — this page only
+      narrows what is drawn to what the route table would let the session reach, and decides
+      nothing itself. No step-up: Cancel only ever asks, never a mutate apply, and it is not
+      behind `console_execution` (that flag scopes the composer and dispatch, and Cancel cannot
+      run anything). The result block reads the Job's `job_cancel` audit record — never a
+      query-string flash — and says which cancelled Tasks never left the Relay and which were
+      stopped after being sent, qualifies the still-in-flight count as best-effort ("where its
+      Node is connected"), and leaves every already-resolved Task's real outcome untouched.
 - [ ] The Plan block does not change while the Job runs.
       **Partially met.** Everything the block renders is fixed at dispatch — risk class,
       fan-out (every Task is created before the first one runs), and the plan hash the bound

@@ -31,8 +31,15 @@ func (testAuthorizer) Authorize(context.Context, capability.Principal, jobs.Acti
 }
 
 // AuthorizeControl completes capability.Authorizer's administrative half
-// (#397). The MCP surface exposes no enrollment, revocation, or Freeze tool,
-// so nothing in these tests reaches it — it exists to satisfy the interface.
+// (#397). It is NOT unreachable: cancel_job and tasks/cancel now reach
+// AuthorizeControl(ControlCancelJob) through capability.Service.CancelJob
+// (#595), and this allow-all answer is what lets this file's cancel tests
+// through without asserting on the role floor themselves. The real floor —
+// a viewer refused, an operator permitted — is proven once in
+// internal/authz's control_test.go and end-to-end in
+// cmd/relay/mcp_account_auth_e2e_test.go against the production
+// authz.RoleGate; this fixture stays allow-all so execution tests here can
+// focus on the dispatch/cancel behaviour rather than re-proving the gate.
 func (testAuthorizer) AuthorizeControl(context.Context, capability.Principal, capability.ControlAction) error {
 	return nil
 }
