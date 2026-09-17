@@ -1,0 +1,46 @@
+# Relay dev-fleet — demo Template pack (issue #389)
+#
+# DEV-ONLY. A template pack (ADR-0021) — one immediate subdirectory of the
+# template root, per the layout documented on the `templates` module
+# (daemon/src/templates.rs), modelled on
+# daemon/packaging/templates.d/relay-read/catalog.toml.
+#
+# FILE PLACEMENT:
+#   /etc/relay-daemon/templates.d/relay-demo/catalog.toml
+#   (root-owned, not group/world-writable — the loader refuses it otherwise.)
+#
+# Loading is fail-closed and WHOLE-SET (TemplateSet::load): one insecure or
+# unparsable file in the template root leaves the Node with NO Template
+# Operations at all, and it reports the `unloadable` fingerprint sentinel —
+# never a partial vocabulary that looks healthy.
+#
+# STATUS: loaded and Policy-enforced today — visible through
+# `list_operations` and `describe_node`'s `template_vocabulary` — but NOT YET
+# DISPATCHABLE. The Relay resolves only the four frozen Native Operations at
+# dispatch time (buildOperationAction); a template name returns
+# `unknown operation`. Making a Template callable is #626 (security surface,
+# needs an ADR: a Template's risk class is Node-reported, and that value
+# picks the blast cap and matches the approval gate) and is explicitly out of
+# scope here. The successful mutate this issue delivers arrives by Raw Exec
+# instead (see docker/fixtures/policy.web.toml); both bodies below invoke the
+# very same script Raw Exec uses, so nothing in this pack changes when #626
+# lands.
+#
+# Slotless is a decision, not an omission: this fixture models exactly one
+# service, so a slot whose value space has one member would be decoration,
+# and ADR-0021's slot machinery is already exercised by the shipped
+# relay-read catalog.
+#
+# Names shadow nothing: the Native vocabulary is frozen at four —
+# system.facts, file.read, service.restart, pkg.install — and
+# TemplateSet::load refuses a shadow. svc.* is also not raw_exec.
+
+[[template]]
+name = "svc.status"
+risk_class = "read"
+body = "/usr/local/bin/dev-fleet-service status"
+
+[[template]]
+name = "svc.restart"
+risk_class = "mutate"
+body = "/usr/local/bin/dev-fleet-service restart"

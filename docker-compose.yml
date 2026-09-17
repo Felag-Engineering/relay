@@ -30,6 +30,12 @@ x-daemon-base: &daemon-base
   healthcheck:
     # The daemon writes the `node_id` file only after a successful enrollment
     # (identity.persist_identity), so this gates health on enrollment success.
+    #
+    # Deliberately NOT extended to also probe the dev-fleet demo service
+    # (#389): gating container health on that fixture would make a Node look
+    # broken exactly when #622 injects the fault it exists to demonstrate. A
+    # down demo service is observed through `dev-fleet-service status`, never
+    # through `docker compose ps`.
     test: ["CMD", "test", "-f", "/var/lib/relay-daemon/node_id"]
     interval: 3s
     timeout: 3s
@@ -228,6 +234,11 @@ services:
       - control-credential:/credential:ro
       - bootstrap-shared:/bootstrap
 
+  # daemon-1 and daemon-2 are the `role=web` Nodes: docker/daemon-entrypoint.sh
+  # starts the dev-fleet demo service (#389) on each. It binds 127.0.0.1:8080
+  # INSIDE its own container only — deliberately not published as a compose
+  # `ports:` mapping, so only that Node's own Tasks (via Raw Exec) ever reach
+  # it.
   daemon-1:
     <<: *daemon-base
     # Sets the container's kernel hostname, which gather_facts() reads as the
@@ -239,7 +250,8 @@ services:
       RELAY_DOMAIN: "relay"
       RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
       HOSTNAME: "dev-node-1"
       RELAY_NODE_LABELS: "role=web"
     volumes:
@@ -256,13 +268,18 @@ services:
       RELAY_DOMAIN: "relay"
       RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
       HOSTNAME: "dev-node-2"
       RELAY_NODE_LABELS: "role=web"
     volumes:
       - bootstrap-shared:/bootstrap:ro
       - daemon2-state:/var/lib/relay-daemon
 
+  # role=db deliberately diverges from daemon-1/daemon-2: it runs no demo
+  # service and its Policy (policy.db.toml) omits the dev-fleet-service
+  # raw-exec allow, so deny-by-default refuses the repair here and a
+  # fleet-wide Raw Exec returns `success` beside `denied_by_policy` (#389).
   daemon-3:
     <<: *daemon-base
     hostname: "dev-node-3"
@@ -271,7 +288,8 @@ services:
       RELAY_DOMAIN: "relay"
       RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
       RELAY_STATE_DIR: "/var/lib/relay-daemon"
-      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.toml"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
       HOSTNAME: "dev-node-3"
       RELAY_NODE_LABELS: "role=db"
     volumes:

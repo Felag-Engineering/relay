@@ -1,0 +1,101 @@
+# Relay dev-fleet — relay-daemon Policy fixture (the `role=web` Nodes)
+#
+# DEV-ONLY. This is a fixture Policy for the local `docker compose` dev fleet
+# (docs/dev-fleet.md), not a production Policy. It is deliberately small and its
+# allow/deny choices are picked to make the documented walkthrough deterministic
+# (system.facts allowed; service.restart sshd denied).
+#
+# SECURITY / ADR-0002: Policy is Node-rooted and remotely-immutable. In the dev
+# fleet this file is baked into the daemon image (COPY => owned by root:root,
+# mode 0644), so the daemon's fail-closed loader (which refuses any Policy file
+# that is group/world-writable or owned by a non-root, non-euid user) accepts
+# it. The Policy therefore arrives *with the image* and is enforced locally by
+# the daemon — it never travels over the wire and the Relay can never change it.
+#
+# The syntax and semantics (deny-by-default, deny-beats-allow, positional
+# argument matching, "*" wildcard) are documented in daemon/policy.example.toml.
+#
+# This file and policy.db.toml (the `role=db` Node) are intentionally
+# near-identical. The ONLY differences are the two `svc.*` [[operation]]
+# blocks below and the `dev-fleet-service` raw-exec allow — so a future edit
+# to the shared parts (service.restart, system.facts, file.read, the
+# systemctl raw-exec allow, the --force/rm denies) goes into BOTH files unless
+# the divergence itself is the point.
+
+# Allow `service.restart` only for nginx and php-fpm. Restarting any other
+# service (notably sshd) is denied — this is the deterministic Policy-denied
+# example in docs/dev-fleet.md.
+[[operation]]
+name = "service.restart"
+allowed_args = [["nginx", "php-fpm"]]
+
+# Allow `system.facts` with no arguments — the happy-path Operation the dev-fleet
+# walkthrough fans out across every Node.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Allow `file.read` for any path (wildcard). The [[deny]] rule below for
+# /etc/shadow overrides this allow for that specific path (deny-beats-allow).
+[[operation]]
+name = "file.read"
+allowed_args = [["*"]]
+
+# Deny `file.read /etc/shadow` even though file.read allows "*" above.
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+# The demo Template pack's two bodies (docker/fixtures/templates.d/relay-demo)
+# are DEV-ONLY Operations, not yet dispatchable (#626) — the [[operation]]
+# blocks below exist so that, once #626 lands, this Node's structured Policy
+# already covers them. Neither has arguments to constrain.
+[[operation]]
+name = "svc.status"
+allowed_args = []
+
+[[operation]]
+name = "svc.restart"
+allowed_args = []
+
+# Raw Exec regex gate (ADR-0001). Allow only `systemctl status|restart` of the
+# two demo units (nginx|php-fpm); the daemon matches the allow pattern against
+# the WHOLE command (ADR-0019, amended 2026-09-16), so writing it as ^...$
+# reads as what it matches. Deny --force and a bare `rm` anywhere, even if an
+# allow regex also matched.
+# The unit set is narrowed to match the structured `service.restart` allow above
+# so `systemctl restart sshd` is denied via Raw Exec too — the walkthrough's
+# deny example is consistent whether driven structured or raw.
+#
+# The `systemctl` allow above is INERT on this busybox image (there is no
+# systemctl to run) — left in place and noted, not built on.
+#
+# The dev-fleet-service allow below is what makes this Node's demo mutate
+# real (#389). Why this pattern is safe:
+#   - `evaluate_raw_exec` matches allow patterns against `argv.join(" ")` as a
+#     FULL match: `compile_allow_regex` wraps every pattern as `\A(?:pattern)\z`
+#     (ADR-0019, amended 2026-09-16). Writing it `^...$` makes the file say
+#     what it matches and keeps the anchoring lint quiet.
+#   - The whitespace guard (#612) refuses any argv element containing
+#     whitespace BEFORE the allow pass, so `argv.join(" ")` is injective: the
+#     command Policy matched is exactly the argv that runs.
+#   - The verb set is a closed alternation of three literals. No `.*`, no
+#     slot, no caller-controlled path component. `stop` is absent here and
+#     absent from the script — the agent may repair the fleet, never break
+#     it (the fault is injected out of band by #622).
+#   - Deny-beats-allow is preserved: the deny pass above runs first, against
+#     the joined command, every raw element, and every canonical element.
+#     Neither `--force` nor a word-boundary `rm` occurs anywhere in
+#     `/usr/local/bin/dev-fleet-service start|restart|status` — re-check this
+#     if the path is ever renamed.
+#   - The daemon never composes: Raw Exec is argv-only, never `/bin/sh`
+#     (invariant 1).
+[raw_exec]
+allow = [
+    "^/usr/bin/systemctl (status|restart) (nginx|php-fpm)$",
+    "^/usr/local/bin/dev-fleet-service (start|restart|status)$",
+]
+deny = [
+    "--force",
+    "\\brm\\b",
+]

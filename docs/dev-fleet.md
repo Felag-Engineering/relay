@@ -36,15 +36,20 @@ never invokes it.
 | `approver` | A one-shot helper that creates the `dev-approver` **human** Account and mints its credential. It exists because the approval gate forbids self-approval — see [The approval gate](#the-approval-gate) below. Then it exits. |
 | `console-admin` | A one-shot helper that creates the `admin` **human** Account the Admin Console signs in. Then it exits. |
 | `console-password` | A one-shot helper that sets that Account's Console password with `relay console-password`. Separate from `console-admin` because the two acts carry different authorities — see [The Admin Console](#the-admin-console) below. Then it exits. |
-| `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. |
+| `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
 
 Security-relevant choices, made explicit:
 
 - **Policy arrives with the image, never over the wire (ADR-0002).** The fixture
-  Policy (`docker/fixtures/policy.toml`) is `COPY`d into the daemon image, so it
-  lands as `root:root 0644` and passes the daemon's fail-closed loader (which
-  refuses a group/world-writable Policy, or one owned by a non-root user). The
-  Relay can query a Node's Policy fingerprint but can never change the Policy.
+  Policy is now **two** files, `docker/fixtures/policy.web.toml` and
+  `policy.db.toml`, both `COPY`d into the daemon image root-owned `0644`,
+  passing the daemon's fail-closed loader (which refuses a group/world-writable
+  Policy, or one owned by a non-root user). The Relay can query a Node's Policy
+  fingerprint but can never change the Policy. The demo Template pack
+  (`docker/fixtures/templates.d/relay-demo/`) arrives the same way and under
+  the same rule — ADR-0002 applies to templates verbatim, and its loader is
+  fail-closed **whole-set**: a bad mode on one template file empties the
+  Node's entire template vocabulary and reports the `unloadable` fingerprint.
 - **The CA private key never reaches a daemon.** `ca-key.pem` lives only on the
   `relay-data` volume. The short-lived `bootstrap` helper mounts that volume
   read-only to copy out `ca-cert.pem`; the long-lived daemon containers never
@@ -326,6 +331,116 @@ Two properties worth watching, because they are the point of the design:
 - The decision arrives on a credential the requesting MCP session does not hold. That is
   what `channel: out-of-band` records — evidence, not an assumption about the client.
 
+## A mutate that really runs — and the two that cannot
+
+### The fixture limit, stated plainly
+
+`service.restart` and `pkg.install` cannot complete on `busybox:stable-musl`: there is no
+service manager and no package manager on this image. `service.restart` terminates in
+`outcome=failure` with `stderr="spawn systemctl: No such file or directory"` and **no
+`exit_code` key** — the documented contract for a Task that never ran a process, not a
+defect (see [issue #389](https://github.com/Felag-Engineering/gleipnir-relay/issues/389)).
+
+This was deliberately **not** papered over: a fake `systemctl` that reports success without
+a service manager would bake a lie into the fixture, and a dev fleet that fakes success is
+worse than one that fails legibly. That reasoning does not weaken because there is an
+audience.
+
+`service.restart sshd` remains the deterministic **deny** beat below and never needed
+`systemctl` to exist — the daemon refuses before it execs.
+
+### The real service
+
+`busybox httpd` serves a real docroot on `127.0.0.1:8080`
+(`/srv/dev-fleet-service/www/index.html`), started by `docker/daemon-entrypoint.sh` on the
+Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`), and managed by the root-owned
+`/usr/local/bin/dev-fleet-service`. It has three subcommands and no more — there is
+deliberately no `stop` (see [Why `start|restart|status` and not `stop`](#why-startrestartstatus-and-not-stop)
+below):
+
+| Subcommand | Exit code | Meaning |
+| --- | --- | --- |
+| `status` | `0` | serving — prints `state=running pid=… port=…` |
+| `status` | `3` | not serving — prints `state=down port=…` |
+| `start` | `0` / `1` | idempotent: already serving, or started successfully / failed to start |
+| `restart` | `0` / `1` | stopped and restarted successfully / could not act |
+| anything else | `2` | usage |
+
+Every one of those success-or-down exit codes comes from a live HTTP fetch of that file,
+never from an assumption (the usage exit `2` is the one exception — it is reached before any
+probe). State is recorded at `/var/lib/dev-fleet-service/state` (`pid=`, `port=`,
+`started_epoch=`) only after an observed successful probe, and stdout/stderr from `httpd`
+are captured at `/var/lib/dev-fleet-service/httpd.log`. There is deliberately no `state=` key
+in that file: it is never rewritten after a probe-verified start, so a stored `state=running`
+would go on claiming liveness after an out-of-band kill — `pid` and `started_epoch` are
+enough to prove a restart happened, and neither one can lie about the present.
+
+### The Raw Exec beat
+
+Use `raw_exec(selector=…, argv=[…])` for this — **never `run_operation`**, since the vehicle
+for a working mutate here is Raw Exec, not the Template pack (see below).
+
+Preflight without dispatching:
+
+```
+raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
+```
+
+returns per-Node verdicts allow/allow/deny — no parking, no execution.
+
+The repair:
+
+```
+raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
+```
+
+returns a `pending_approval` result (every Raw Exec parks under
+`dev-raw-exec-always-needs-a-human`) carrying `request_id` and `plan_hash`. Approve it as
+`dev-approver`:
+
+```console
+$ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/decision \
+    '{"approve":true,"plan_hash":"<plan_hash>","reason":"repair the dev-fleet demo service"}'
+```
+
+then **re-issue the same `raw_exec` call unchanged** — approving releases a Plan, it does
+not itself dispatch. Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
+`outcome=denied_by_policy`. The verdict is the daemon's, never the Relay's (ADR-0002 /
+ADR-0011).
+
+The independent read — proof that a mutate really happened, taken through a different
+Operation and a different tier — before and after the restart:
+
+```
+run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
+```
+
+`pid` and `started_epoch` both change on the web Nodes; the db Node fails to read a file it
+never had.
+
+### Why `start|restart|status` and not `stop`
+
+The agent must be able to repair the fleet and never to break it; the fault is injected out
+of band (#622). The script has no `stop` subcommand and the Policy has no allow for one, so
+both layers say the same thing.
+
+### The template pack — loaded and enforced, not yet dispatchable
+
+`svc.restart` (`mutate`) and `svc.status` (`read`) are visible through
+`list_operations(node_id="<a web node id>")` and `describe_node(...)`'s
+`template_vocabulary` (with a real `template_set_fingerprint`; the literal `unloadable`
+there means the pack failed to load). They are in each Node's Policy vocabulary — allowed on
+the web fixture, absent from the db fixture.
+
+**They cannot be called yet:** the Relay resolves only the four Native Operations at
+dispatch, so `run_operation(operation="svc.restart")` returns `unknown operation`. Making a
+Template callable is tracked in
+[issue #626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626).
+
+After the rebuild, `list_nodes()` shows **two distinct `policy_fingerprint` values** across
+the fleet, because `daemon-3` now loads a different Policy file — the registry's drift
+signal, visible for real.
+
 ## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
 
 Relay serves the MCP Tasks extension (SEP-2663, ADR-0028), but **no shipping MCP client
@@ -395,7 +510,10 @@ exist yet — it is future work. For now the logs and the store are the trail.
 Each daemon needs its **own** state volume for a stable per-Node identity across
 restarts, so daemons are explicit services rather than replicas. To add a Node,
 copy a `daemon-N` service block (bump the name, `HOSTNAME`, and its
-`daemonN-state` volume, and register the new volume under `volumes:`).
+`daemonN-state` volume, and register the new volume under `volumes:`). That copy
+silently inherits `RELAY_POLICY_PATH` and a `role=` label, both of which must
+be chosen deliberately — `policy.web.toml` + `role=web` to get the demo
+service and the repair allow, `policy.db.toml` + `role=db` to get neither.
 
 ## Cleanup
 

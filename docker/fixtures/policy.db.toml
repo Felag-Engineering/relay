@@ -1,4 +1,4 @@
-# Relay dev-fleet — relay-daemon Policy fixture
+# Relay dev-fleet — relay-daemon Policy fixture (the `role=db` Node)
 #
 # DEV-ONLY. This is a fixture Policy for the local `docker compose` dev fleet
 # (docs/dev-fleet.md), not a production Policy. It is deliberately small and its
@@ -14,6 +14,19 @@
 #
 # The syntax and semantics (deny-by-default, deny-beats-allow, positional
 # argument matching, "*" wildcard) are documented in daemon/policy.example.toml.
+#
+# This file and policy.web.toml (the `role=web` Nodes) are intentionally
+# near-identical. The ONLY differences are the two `svc.*` [[operation]]
+# blocks and the `dev-fleet-service` raw-exec allow, both ABSENT here — so a
+# future edit to the shared parts (service.restart, system.facts, file.read,
+# the systemctl raw-exec allow, the --force/rm denies) goes into BOTH files
+# unless the divergence itself is the point.
+#
+# This Node runs NO demo service: it carries neither the svc.* Policy
+# vocabulary nor the dev-fleet-service raw-exec allow, so deny-by-default
+# refuses the repair command here. That is what makes a fleet-wide Raw Exec
+# against the demo script return a MIXED result set (success on the two
+# `role=web` Nodes, denied_by_policy here) rather than a uniform one.
 
 # Allow `service.restart` only for nginx and php-fpm. Restarting any other
 # service (notably sshd) is denied — this is the deterministic Policy-denied
@@ -47,6 +60,12 @@ args = [["/etc/shadow"]]
 # The unit set is narrowed to match the structured `service.restart` allow above
 # so `systemctl restart sshd` is denied via Raw Exec too — the walkthrough's
 # deny example is consistent whether driven structured or raw.
+#
+# The `systemctl` allow above is INERT on this busybox image (there is no
+# systemctl to run) — left in place and noted, not built on.
+#
+# No dev-fleet-service allow here (deliberately): this Node has no demo
+# service, so a Raw Exec repair attempt falls through to deny-by-default.
 [raw_exec]
 allow = [
     "^/usr/bin/systemctl (status|restart) (nginx|php-fpm)$",
