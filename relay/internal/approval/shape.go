@@ -244,17 +244,24 @@ func canonicalTerms(sel []SelectorTerm) []SelectorTerm {
 // without invalidating the approval.
 //
 // Account and Operation names are lower-cased HERE AND ONLY HERE, because
-// Grant.Covers compares both with strings.EqualFold. SelectorNamespace is NOT
-// folded: Scope.Validate accepts it case-sensitively, so "Node" is not a
-// namespace at all.
-func HashGrantShape(s Scope) string {
+// Grant.Covers compares both with strings.EqualFold.
+//
+// The namespace field is always empty for a Scope (#482: a Scope has no
+// namespace term). It carries a pre-#482 Grant's legacy pin only through
+// [Grant.ShapeKey], via hashGrantShape below, so every stored shape_key
+// (pinned or not) recomputes byte-identically.
+func HashGrantShape(s Scope) string { return hashGrantShape(s, "") }
+
+// hashGrantShape is HashGrantShape's body, taking the legacy namespace pin
+// separately since it is a Grant-level fact (#482) and not part of Scope.
+func hashGrantShape(s Scope, legacyNamespacePin string) string {
 	h := sha256.New()
 
 	writeField(h, "shape", ShapeKeyVersion)
 	writeField(h, "domain", "grant")
 	writeField(h, "risk", RiskClassName(s.RiskClass))
 	writeField(h, "account", strings.ToLower(s.Account))
-	writeField(h, "namespace", s.SelectorNamespace)
+	writeField(h, "namespace", legacyNamespacePin)
 	fmt.Fprintf(h, "raw_exec=%t\n", s.RawExec)
 
 	ops := make([]string, 0, len(s.Operations))

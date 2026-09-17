@@ -219,6 +219,31 @@ func TestCreateGrant_RefusesAnAbsentWindow(t *testing.T) {
 	}
 }
 
+// TestCreateGrant_RefusesTheRetiredSelectorNamespace is #482, acceptance 1: a
+// Grant's Scope has no namespace term, and a body that still carries
+// selector_namespace is REFUSED with 400 naming the field — never silently
+// ignored, which would price the grant as if the field had been honoured.
+// decodeJSON's DisallowUnknownFields is what does the refusing; this pins
+// that it still reaches a nested "scope" object.
+func TestCreateGrant_RefusesTheRetiredSelectorNamespace(t *testing.T) {
+	g := &fakeGrants{grant: testGrant()}
+	h := newGrantFixture(t, accounts.RoleOperator, g)
+
+	body := validGrantBody()
+	body["scope"].(map[string]any)["selector_namespace"] = "node"
+	rec := do(t, h, http.MethodPost, "/api/v1/approval-grants", body)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(rec.Body.String(), "selector_namespace") {
+		t.Errorf("body = %s, want the refusal to name the retired field", rec.Body)
+	}
+	if g.lastRequest.Scope.Account != "" {
+		t.Error("a body carrying selector_namespace reached the capability layer — refused, not ignored")
+	}
+}
+
 // TestCreateGrant_MapsDomainRefusals: each refusal reaches the caller as the
 // status that describes it, with the domain's own sentence in the detail. An
 // operator told only "rejected" learns nothing except to try again wider.

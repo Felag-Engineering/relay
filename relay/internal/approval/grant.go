@@ -69,8 +69,8 @@ var (
 	ErrGrantUnbounded = errors.New("approval: grant is not bounded")
 
 	// ErrGrantInvalid is returned by Validate for a Scope that is malformed
-	// rather than unbounded — an unknown namespace, or a name the storage
-	// encoding cannot represent. Kept distinct from ErrGrantUnbounded so a
+	// rather than unbounded — a name the storage encoding cannot represent, or
+	// a retired namespace pin. Kept distinct from ErrGrantUnbounded so a
 	// surface can tell "you did not close this wall" from "this is not a thing
 	// you can write", which are different mistakes to an operator.
 	ErrGrantInvalid = errors.New("approval: grant is malformed")
@@ -117,12 +117,6 @@ type Scope struct {
 	// thing this type can express, and it should read that way at the call
 	// site and in the audit trail.
 	RawExec bool
-
-	// SelectorNamespace optionally narrows to dispatches whose Selector used
-	// this namespace. Empty means "any namespace", which is the ONE permitted
-	// widening default in this type: a namespace is a targeting mechanism
-	// rather than a capability, and the real bounds are the ones above.
-	SelectorNamespace string
 }
 
 // MaxGrantWindow bounds how long any Grant may last, whatever its config says.
@@ -169,6 +163,15 @@ type Grant struct {
 	// config would quietly rewrite history.
 	Summary string
 
+	// LegacyNamespacePin is the Selector namespace a Grant stored before #482
+	// was pinned to. Only the store's read path sets it. Validate refuses it,
+	// so a new Grant can never carry one. A pinned Grant was PRICED over that
+	// one namespace but COVERED any dispatch whose Selector merely used it, so
+	// it may have been approved more cheaply than work it could release.
+	// Ignoring the pin would widen it further, so a Grant carrying one covers
+	// nothing (see Active).
+	LegacyNamespacePin string
+
 	CreatedAt time.Time
 
 	// RevokedAt is set when an operator ends the Grant early. A window is a
@@ -195,6 +198,10 @@ func (g Grant) Validate() error {
 	}
 	if err := g.Scope.Validate(); err != nil {
 		return fmt.Errorf("approval: grant %q: %w", g.ID, err)
+	}
+	if g.LegacyNamespacePin != "" {
+		return fmt.Errorf("%w: grant %q pins selector namespace %q, and namespace pinning is not part of a Scope",
+			ErrGrantInvalid, g.ID, g.LegacyNamespacePin)
 	}
 
 	if g.ExpiresAt.IsZero() || !g.ExpiresAt.After(g.StartsAt) {
@@ -242,17 +249,16 @@ func (s Scope) Validate() error {
 			return fmt.Errorf("%w: operation name %q contains a comma, which the grant encoding reserves as a separator", ErrGrantInvalid, op)
 		}
 	}
-	switch s.SelectorNamespace {
-	case "", "node", "relay", "tag", "state":
-	default:
-		return fmt.Errorf("%w: scope has unknown selector namespace %q (want node, relay, tag, or state)", ErrGrantInvalid, s.SelectorNamespace)
-	}
 	return nil
 }
 
 // Active reports whether g may cover anything at now: not revoked, inside its
-// window, and not exhausted.
+// window, not exhausted, and not a pre-#482 namespace-pinned Grant (fail
+// closed, see LegacyNamespacePin).
 func (g Grant) Active(now time.Time) bool {
+	if g.LegacyNamespacePin != "" {
+		return false
+	}
 	if !g.RevokedAt.IsZero() {
 		return false
 	}
@@ -269,6 +275,10 @@ func (g Grant) Active(now time.Time) bool {
 // the registry can make a borderline case go the permissive way. Every check is
 // a conjunction, and the fan-out check is the ceiling that stops a grant
 // written for a handful of Nodes covering the fleet after the registry grows.
+//
+// A Scope has no namespace term (#482), so no dispatch is covered or refused
+// because of the label namespaces its Selector used. That is why
+// RequirementForScope prices every Grant over all of them.
 func (g Grant) Covers(d Dispatch, now time.Time) bool {
 	if !g.Active(now) {
 		return false
@@ -280,9 +290,6 @@ func (g Grant) Covers(d Dispatch, now time.Time) bool {
 		return false
 	}
 	if d.FanOut > g.Scope.MaxFanOut {
-		return false
-	}
-	if g.Scope.SelectorNamespace != "" && !hasNamespace(d.Namespaces, g.Scope.SelectorNamespace) {
 		return false
 	}
 	if d.RawExec {
@@ -331,9 +338,6 @@ func SummarizeScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string 
 	}
 
 	where := "any Selector"
-	if s.SelectorNamespace != "" {
-		where = "Selectors using " + s.SelectorNamespace + ":"
-	}
 
 	return fmt.Sprintf(
 		"%s [%s] requested by %s, %s, up to %d node(s) per dispatch, at most %d dispatch(es), from %s until %s",
@@ -361,7 +365,10 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 	writeField(h, "kind", "grant")
 	writeField(h, "account", s.Account)
 	writeField(h, "risk", RiskClassName(s.RiskClass))
-	writeField(h, "namespace", s.SelectorNamespace)
+	// Retained as an always-empty field so the digest of every unpinned Scope
+	// (the only kind that can now exist) is byte-identical to what
+	// approval_requests.plan_hash already stores (#482).
+	writeField(h, "namespace", "")
 	writeCount(h, "max_fan_out", s.MaxFanOut)
 	// raw_exec is a bool, not an int; writeCount takes an int and there is no
 	// bool primitive, so this stays a direct Fprintf.
@@ -389,26 +396,33 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 // approval_grants, so it is always exactly recomputable and can never go stale
 // against the Scope it describes — which is why migration 0022 adds a shape_key
 // column to approval_requests and deliberately none here.
-func (g Grant) ShapeKey() string { return HashGrantShape(g.Scope) }
+//
+// A legacy pinned Grant (LegacyNamespacePin, #482) keeps the key it was stored
+// under, so the shape-key backfill still recomputes it exactly and the diff
+// callout never shows a dead pinned Grant as "same shape" as a live unpinned
+// one.
+func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamespacePin) }
 
 // knownNamespaces are the label namespaces a Selector may use (ADR-0006,
-// ADR-0020, ADR-0034). RequirementForScope walks them when a Scope does not
-// pin one. Adding a namespace here only ADDS probes to RequirementForScope's
-// own worst-case walk, so — considered in isolation — a Scope that does not
-// pin a namespace can only derive a STRICTER Requirement as the vocabulary
-// grows, never a laxer one.
+// ADR-0020, ADR-0034). RequirementForScope ALWAYS walks every one. A Scope has
+// no namespace term (#482), so a Grant can cover a dispatch whose Selector
+// uses any of them, and in any combination. Probing each namespace on its own
+// and merging strictest-wins is exactly that worst case, because a gate Match
+// names at most one namespace and a multi-namespace dispatch matches the union
+// of what its single-namespace probes match.
 //
-// That claim is about RequirementForScope by itself; it says nothing about
-// whether the Requirement it derives is what a covered dispatch actually
-// needs. When a Scope DOES pin SelectorNamespace, RequirementForScope derives
-// the Requirement over only that ONE namespace, while Grant.Covers admits any
-// dispatch whose namespace list merely CONTAINS the pinned one — so a
-// multi-namespace dispatch can be covered by a Grant approved against a
-// single-namespace Requirement. That asymmetry is a pre-existing approval-gate
-// bypass, reachable on main today via a pinned "node" Scope; it predates this
-// change and is not fixed by it. Escalated as its own issue (#482) because
-// changing Covers or RequirementForScope is a real change to approval/authz
-// semantics, not something to fold quietly into a labels change.
+// Before #482 a pinned Scope was priced over its one namespace while Covers
+// admitted any dispatch CONTAINING it, so a Grant could release work needing a
+// stronger approval than it was issued under. That class of defect is removed
+// by removing the pin, not by patching either side.
+//
+// This list is now load-bearing: dropping a namespace a gate rule can name
+// would let a Grant be priced below a rule in that namespace. Rule.Validate
+// (gate.go) accepts a Match.SelectorNamespace by consulting THIS list rather
+// than a second hardcoded set, so the two vocabularies cannot drift apart —
+// there is only one to widen or narrow, and widening it here is exactly what
+// widens what a rule may name (TestRequirementForScopeProbesEveryKnownNamespace,
+// TestKnownNamespacesMatchGateRuleNamespaces).
 var knownNamespaces = []string{"node", "relay", "tag", "state"}
 
 // RequirementForScope derives what a Grant over s must satisfy: the STRICTEST
@@ -422,8 +436,8 @@ var knownNamespaces = []string{"node", "relay", "tag", "state"}
 //
 // It evaluates the gate at the Scope's WORST CASE: the fan-out ceiling (the
 // widest dispatch the grant admits), every Operation in the allow-list, Raw
-// Exec if opted in, and — when the Scope does not pin a namespace — every
-// namespace a Selector could use. Merging those to the strictest is the same
+// Exec if opted in, and every namespace a Selector could use (a Scope never
+// narrows by namespace). Merging those to the strictest is the same
 // mergeStricter the Gate itself uses for overlapping rules.
 //
 // gated is false when nothing the Grant could cover would have parked at all.
@@ -431,15 +445,10 @@ var knownNamespaces = []string{"node", "relay", "tag", "state"}
 // only ungated work grants nothing, and storing one would put a live
 // authorization in the table for no reason.
 func RequirementForScope(s Scope, evaluate func(Dispatch) (Requirement, []string, bool)) (Requirement, []string, bool) {
-	namespaces := knownNamespaces
-	if s.SelectorNamespace != "" {
-		namespaces = []string{s.SelectorNamespace}
-	}
-
 	// Each probe is the widest dispatch this Scope admits for one
 	// (operation, namespace) pair — the fan-out ceiling, not some typical size.
 	var probes []Dispatch
-	for _, ns := range namespaces {
+	for _, ns := range knownNamespaces {
 		for _, op := range s.Operations {
 			probes = append(probes, Dispatch{
 				RiskClass:  s.RiskClass,

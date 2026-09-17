@@ -466,3 +466,182 @@ func TestGrantByRequestIsNotFoundForAPlainRequest(t *testing.T) {
 		t.Fatalf("err = %v, want ErrGrantNotFound", err)
 	}
 }
+
+// TestLegacyNamespacePinnedGrantReleasesNoDispatch is #482's primary proof,
+// against a real SQLite store: a Grant written before namespace pinning was
+// removed from a Scope — here reproducing the issue's worked example, a
+// dispatch whose Selector used both relay: and node: — must release nothing,
+// even though it was approved and would have released it under the old
+// containment semantics (Grant.Covers used to admit any dispatch whose
+// namespace list merely CONTAINED the pinned one).
+//
+// The unpinned control below is the same Grant, the same dispatch, and the
+// same approved Request, minus the UPDATE that pins it — it must release. That
+// is what proves the refusal above is caused by the pin and not by something
+// else about this Scope or dispatch.
+func TestLegacyNamespacePinnedGrantReleasesNoDispatch(t *testing.T) {
+	t.Run("pinned", func(t *testing.T) {
+		ctx := context.Background()
+		st, db := openStore(t)
+		repo, approvals := st.Grants(), st.Approvals()
+
+		if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
+			t.Fatalf("CreateGrant: %v", err)
+		}
+		authorize(t, approvals, "req-grant-1")
+
+		if _, err := db.Exec(
+			`UPDATE approval_grants SET scope_selector_namespace = 'node' WHERE grant_id = 'grant-1'`,
+		); err != nil {
+			t.Fatalf("pin the stored grant: %v", err)
+		}
+
+		d := storeDispatch()
+		d.Namespaces = []string{"relay", "node"}
+
+		if _, ok, err := repo.ClaimGrant(ctx, d, gNow); err != nil {
+			t.Fatalf("ClaimGrant: %v", err)
+		} else if ok {
+			t.Fatal("a legacy namespace-pinned grant released a dispatch outside its priced namespace")
+		}
+
+		stored, err := repo.GetGrant(ctx, "grant-1")
+		if err != nil {
+			t.Fatalf("GetGrant: %v", err)
+		}
+		if stored.Uses != 0 {
+			t.Errorf("Uses = %d, want 0 — a refused claim must not spend a use", stored.Uses)
+		}
+		if stored.LegacyNamespacePin != "node" {
+			t.Errorf("LegacyNamespacePin = %q, want %q", stored.LegacyNamespacePin, "node")
+		}
+
+		active, err := repo.ActiveGrants(ctx, gNow)
+		if err != nil {
+			t.Fatalf("ActiveGrants: %v", err)
+		}
+		for _, g := range active {
+			if g.ID == "grant-1" {
+				t.Error("a legacy namespace-pinned grant appeared in the active list")
+			}
+		}
+
+		// The operator can still revoke it for the record.
+		if _, err := repo.RevokeGrant(ctx, "grant-1", "ana", "closing a dead pinned grant", gNow); err != nil {
+			t.Errorf("RevokeGrant on a legacy-pinned grant: %v", err)
+		}
+	})
+
+	t.Run("unpinned control", func(t *testing.T) {
+		ctx := context.Background()
+		repo, approvals := grantStore(t)
+
+		if err := repo.CreateGrant(ctx, storeGrant("grant-1", 5)); err != nil {
+			t.Fatalf("CreateGrant: %v", err)
+		}
+		authorize(t, approvals, "req-grant-1")
+
+		d := storeDispatch()
+		d.Namespaces = []string{"relay", "node"}
+
+		if _, ok, err := repo.ClaimGrant(ctx, d, gNow); err != nil {
+			t.Fatalf("ClaimGrant: %v", err)
+		} else if !ok {
+			t.Fatal("an unpinned grant of the identical Scope did not release the identical dispatch — the pin, not the dispatch, must be what refuses the pinned case")
+		}
+
+		stored, err := repo.GetGrant(ctx, "grant-1")
+		if err != nil {
+			t.Fatalf("GetGrant: %v", err)
+		}
+		if stored.Uses != 1 {
+			t.Errorf("Uses = %d, want 1", stored.Uses)
+		}
+	})
+}
+
+// TestWorkedExample482ReleasesOnlyAtTwoApprovals is the issue's worked
+// example end to end, against a real SQLite store: a Scope that could cover a
+// dispatch whose Selector uses BOTH relay: and node: is priced by
+// RequirementForScope at the STRICTEST rule any single-namespace probe would
+// face — here, a gate rule demanding 2 approvals for relay: and only 1
+// otherwise — so the derived Requirement is Count 2. ClaimGrant must refuse
+// the relay+node dispatch after only one approval and release it only once
+// the second lands. This is the property #482 restores: before it, the same
+// Scope pinned to "node" would have priced at Count 1 (the "any" rule alone)
+// while still covering this dispatch by containment.
+func TestWorkedExample482ReleasesOnlyAtTwoApprovals(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openStore(t)
+	repo, approvals := st.Grants(), st.Approvals()
+
+	gate, err := approval.NewGate([]approval.Rule{
+		{Name: "relay-two", Match: approval.Match{SelectorNamespace: "relay"}, Require: approval.Requirement{Count: 2}},
+		{Name: "any", Match: approval.Match{}, Require: approval.Requirement{Count: 1}},
+	})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+
+	g := storeGrant("grant-1", 5)
+	requirement, rules, gated := approval.RequirementForScope(g.Scope, gate.Evaluate)
+	if !gated || requirement.Count != 2 {
+		t.Fatalf("RequirementForScope = (%+v, %v, gated=%v), want Count 2, gated true", requirement, rules, gated)
+	}
+	if err := repo.CreateGrant(ctx, g); err != nil {
+		t.Fatalf("CreateGrant: %v", err)
+	}
+
+	r := approval.NewGrantRequest(g, "acct-g", "gleipnir-prod", rules,
+		approval.Requirement{Count: requirement.Count, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		gNow.Add(-time.Minute))
+	if err := approvals.Create(ctx, r); err != nil {
+		t.Fatalf("create authorizing request: %v", err)
+	}
+
+	d := storeDispatch()
+	d.Namespaces = []string{"relay", "node"}
+
+	// One approval short of the count:2 quorum is not authorization yet.
+	if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: r.PlanHash,
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("first approval: %v", err)
+	}
+	if _, ok, err := repo.ClaimGrant(ctx, d, gNow); err != nil || ok {
+		t.Fatalf("ClaimGrant at 1 of 2 approvals: ok=%v err=%v, want a park", ok, err)
+	}
+
+	// The second distinct approver completes the quorum, and only then does
+	// the relay+node dispatch release.
+	if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+		AccountID: "acct-bo", Account: "bo", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: r.PlanHash,
+		DeciderHuman: true, At: gNow.Add(-time.Minute),
+	}, gNow.Add(-time.Minute)); err != nil {
+		t.Fatalf("second approval: %v", err)
+	}
+	if _, ok, err := repo.ClaimGrant(ctx, d, gNow); err != nil || !ok {
+		t.Fatalf("ClaimGrant at 2 of 2 approvals: ok=%v err=%v, want a release", ok, err)
+	}
+}
+
+// TestCreateGrantRefusesALegacyNamespacePin: the store validates too, so a
+// Grant carrying a legacy namespace pin is impossible to WRITE going forward —
+// only the read path (scanGrant) may ever populate LegacyNamespacePin.
+func TestCreateGrantRefusesALegacyNamespacePin(t *testing.T) {
+	ctx := context.Background()
+	repo, _ := grantStore(t)
+
+	bad := storeGrant("grant-bad", 5)
+	bad.LegacyNamespacePin = "node"
+
+	if err := repo.CreateGrant(ctx, bad); !errors.Is(err, approval.ErrGrantInvalid) {
+		t.Fatalf("CreateGrant: err = %v, want ErrGrantInvalid", err)
+	}
+	if _, err := repo.GetGrant(ctx, "grant-bad"); !errors.Is(err, approval.ErrGrantNotFound) {
+		t.Errorf("GetGrant: err = %v, want ErrGrantNotFound — the refused write must not land", err)
+	}
+}

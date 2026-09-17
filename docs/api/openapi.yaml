@@ -377,15 +377,20 @@ paths:
         Answer it at the `decision_path` in the response, which is the ordinary
         out-of-band decision route.
 
-        Every scope field except `selector_namespace` is required, and the
-        omissions are refused rather than defaulted. That is the opposite of a
-        gate rule, and deliberately: on a rule's `match`, an omitted field gates
-        *more* dispatches; on a scope it would pre-approve *more*.
+        Every scope field is required, and the omissions are refused rather
+        than defaulted. That is the opposite of a gate rule, and deliberately:
+        on a rule's `match`, an omitted field gates *more* dispatches; on a
+        scope it would pre-approve *more*.
+
+        A scope has no namespace term (#482). A body carrying
+        `selector_namespace` is refused with `400`, never ignored, and what a
+        grant costs is derived over every label namespace a Selector could
+        use — not just one it happened to name.
 
         | Refusal | Result |
         |---|---|
         | Role below the floor for the most powerful thing the scope can release | `403` |
-        | Malformed scope — unknown namespace, comma in an operation name | `400` |
+        | Malformed body or scope — an unknown field (including the retired `selector_namespace`), a comma in an operation name | `400` |
         | Unbounded scope or window, or one past the 24h / 1000-use maxima | `422` |
         | Nothing the scope could cover would have been gated at all | `422` |
 
@@ -1698,9 +1703,9 @@ components:
       type: object
       required: [account, risk_class, max_fan_out, operations, raw_exec]
       description: |
-        The wall around a grant. Every field but `selector_namespace` is
-        required, and an omission is refused rather than defaulted — on a scope,
-        omission is the *unsafe* direction.
+        The wall around a grant. Every field is required, and an omission is
+        refused rather than defaulted — on a scope, omission is the *unsafe*
+        direction.
       properties:
         account:
           type: string
@@ -1742,13 +1747,6 @@ components:
             this type can express, and it should read that way. Setting it
             raises the role floor for the grant's own approval to the Raw Exec
             floor.
-        selector_namespace:
-          type: string
-          enum: [node, relay, tag, state]
-          description: |
-            Optionally narrows to dispatches whose Selector used this namespace.
-            Absent means any — the one permitted widening default here, because
-            a namespace is a targeting mechanism rather than a capability.
 
     CreateApprovalGrantRequest:
       type: object
@@ -1815,6 +1813,9 @@ components:
             inside its window, and not exhausted. Answered by the Relay rather
             than left for each client to recompute from the timestamps and get
             subtly wrong.
+
+            A grant stored before namespace pinning was removed (#482) that
+            carried a pin is never active: it covers nothing.
         created_at: { type: string, format: date-time }
         revoked_at: { type: string, format: date-time }
         revoked_by: { type: string }

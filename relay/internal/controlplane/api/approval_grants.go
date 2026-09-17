@@ -58,15 +58,16 @@ type ApprovalGrantService interface {
 // would pre-approve more (unsafe). There is no field here whose omission
 // quietly widens the grant, and the domain refuses any that is missing rather
 // than filling in a default.
+//
+// There is deliberately no selector_namespace (#482). decodeJSON refuses
+// unknown fields, so a body still carrying one gets a 400 naming the field,
+// never a Grant priced as if the field were honoured.
 type grantScopeRequest struct {
 	Account    string   `json:"account"`
 	RiskClass  string   `json:"risk_class"`
 	MaxFanOut  int      `json:"max_fan_out"`
 	Operations []string `json:"operations"`
 	RawExec    bool     `json:"raw_exec"`
-	// SelectorNamespace is the one optional field: a namespace is a targeting
-	// mechanism rather than a capability, and the real bounds are above.
-	SelectorNamespace string `json:"selector_namespace,omitempty"`
 }
 
 // createGrantRequest is POST /api/v1/approval-grants' body.
@@ -148,12 +149,11 @@ func renderGrant(g approval.Grant, now time.Time) grantResponse {
 		GrantID:   g.ID,
 		RequestID: g.RequestID,
 		Scope: grantScopeRequest{
-			Account:           g.Scope.Account,
-			RiskClass:         approval.RiskClassName(g.Scope.RiskClass),
-			MaxFanOut:         g.Scope.MaxFanOut,
-			Operations:        ops,
-			RawExec:           g.Scope.RawExec,
-			SelectorNamespace: g.Scope.SelectorNamespace,
+			Account:    g.Scope.Account,
+			RiskClass:  approval.RiskClassName(g.Scope.RiskClass),
+			MaxFanOut:  g.Scope.MaxFanOut,
+			Operations: ops,
+			RawExec:    g.Scope.RawExec,
 		},
 		Summary:      g.Summary,
 		StartsAt:     rfc3339(g.StartsAt),
@@ -236,12 +236,11 @@ func handleCreateGrant(d Deps) http.HandlerFunc {
 
 		grant, request, err := d.ApprovalGrants.RequestGrant(r.Context(), p, capability.GrantRequest{
 			Scope: approval.Scope{
-				Account:           body.Scope.Account,
-				RiskClass:         risk,
-				MaxFanOut:         body.Scope.MaxFanOut,
-				Operations:        body.Scope.Operations,
-				RawExec:           body.Scope.RawExec,
-				SelectorNamespace: body.Scope.SelectorNamespace,
+				Account:    body.Scope.Account,
+				RiskClass:  risk,
+				MaxFanOut:  body.Scope.MaxFanOut,
+				Operations: body.Scope.Operations,
+				RawExec:    body.Scope.RawExec,
 			},
 			StartsAt:  startsAt,
 			ExpiresAt: expiresAt,

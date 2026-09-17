@@ -444,14 +444,14 @@ func grantRowLine(g approval.Grant) string {
 			what += ", and raw exec"
 		}
 	}
-	where := "any namespace"
-	if g.Scope.SelectorNamespace != "" {
-		where = g.Scope.SelectorNamespace + ": Selectors"
-	}
+	// A Scope has no namespace term (#482), so this row never carries one. This
+	// caller is fed only by ActiveGrants (buildApprovalRows), and Grant.Active
+	// refuses a pre-#482 legacy-pinned Grant, so a dead pin can never reach
+	// here to render as if it still covered anything.
 	return strings.Join([]string{
 		"Grant",
 		what,
-		where,
+		"any namespace",
 		"up to " + itoa(g.Scope.MaxFanOut) + " Nodes per dispatch",
 		itoa(g.MaxUses) + " dispatches",
 		"until " + g.ExpiresAt.UTC().Format("2006-01-02 15:04Z"),
@@ -883,6 +883,12 @@ type grantCard struct {
 	MaxUses    int
 	Progress   string
 
+	// LegacyNamespacePin is set only for a Grant stored before #482 removed
+	// namespace pinning. Such a Grant is never Active and covers nothing (see
+	// approval.Grant.Active); the card says so rather than reusing the prose
+	// written for a live Scope.
+	LegacyNamespacePin string
+
 	Revoked      bool
 	RevokedBy    string
 	RevokedAt    string
@@ -1152,23 +1158,24 @@ func buildGrantCard(ctx context.Context, d Deps, caller capability.Principal, g 
 	ops := append([]string(nil), g.Scope.Operations...)
 	sort.Strings(ops)
 	namespace := "any namespace"
-	if g.Scope.SelectorNamespace != "" {
-		namespace = g.Scope.SelectorNamespace + ":"
+	if g.LegacyNamespacePin != "" {
+		namespace = "retired " + g.LegacyNamespacePin + ": pin — covers nothing"
 	}
 	c := grantCard{
-		Present:    true,
-		Account:    g.Scope.Account,
-		Risk:       RiskLabel(g.Scope.RiskClass),
-		Operations: ops,
-		RawExec:    g.Scope.RawExec,
-		Namespace:  namespace,
-		MaxFanOut:  g.Scope.MaxFanOut,
-		Starts:     g.StartsAt.UTC().Format("2006-01-02 15:04:05Z"),
-		Expires:    g.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
-		MaxUses:    g.MaxUses,
-		Progress:   g.Progress(),
-		Revoked:    g.Revoked(),
-		JobCap:     releasedJobCap,
+		Present:            true,
+		Account:            g.Scope.Account,
+		Risk:               RiskLabel(g.Scope.RiskClass),
+		Operations:         ops,
+		RawExec:            g.Scope.RawExec,
+		Namespace:          namespace,
+		LegacyNamespacePin: g.LegacyNamespacePin,
+		MaxFanOut:          g.Scope.MaxFanOut,
+		Starts:             g.StartsAt.UTC().Format("2006-01-02 15:04:05Z"),
+		Expires:            g.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
+		MaxUses:            g.MaxUses,
+		Progress:           g.Progress(),
+		Revoked:            g.Revoked(),
+		JobCap:             releasedJobCap,
 	}
 	if c.Revoked {
 		c.RevokedBy = g.RevokedBy
@@ -1302,11 +1309,14 @@ const unspecifiedActionKind = "unspecified"
 // is that it renders ONLY WHAT IS GENUINELY STORED and NAMES WHAT IT CANNOT
 // COMPARE.
 //
-// A GRANT gets real numbers. HashGrantShape covers the account, the risk class,
-// the namespace, the raw-exec opt-in and the Operations set, and DELIBERATELY
-// EXCLUDES the fan-out ceiling, the window and the use limit — so two Grants
-// sharing a shape key can differ only in those three, and all three are columns
-// on approval_grants. That is exactly the spec's headline sentence.
+// A GRANT gets real numbers. HashGrantShape covers the account, the risk
+// class, the raw-exec opt-in and the Operations set, and DELIBERATELY EXCLUDES
+// the fan-out ceiling, the window and the use limit — so two Grants sharing a
+// shape key can differ only in those three, and all three are columns on
+// approval_grants. That is exactly the spec's headline sentence. The
+// namespace field it hashes is only ever a legacy pin (#482): a Scope has no
+// namespace term, so it is empty for every Grant this Console can create and
+// carries meaning only for a pre-#482 Grant.
 //
 // A PLAN gets shape identity plus a scale-argument diff. The shape key already
 // guarantees the Operation, its risk class, its shape arguments and the
@@ -1684,9 +1694,16 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 {{else if .Grant.Present}}
 <section class="panel">
   <h3>The Scope</h3>
+  {{if .Grant.LegacyNamespacePin}}
+  <p class="note"><b>This Grant covers nothing.</b> It was stored before namespace pinning was
+  removed from a Scope (#482) and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
+  Ignoring the pin would widen what it covers, so approving it releases no dispatch; revoke it to
+  close it for the record.</p>
+  {{else}}
   <p class="note">This Request's subject is a <b>Scope</b> rather than one Plan. Approving it
   pre-approves every dispatch inside these walls until the window closes, so the walls are the whole
   of what is being agreed to.</p>
+  {{end}}
   <details class="scope">
     <summary>Expand the Scope</summary>
     <dl class="kv">
@@ -1717,8 +1734,10 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <p class="note"><b>Approving a Grant requires expanding this Scope at least once.</b> That
   enforcement arrives with the decision controls in the administration milestone; this Console
   cannot decide anything yet, so nothing here is gating on it.</p>
+  {{if not .Grant.LegacyNamespacePin}}
   <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>, so
   a Grant is never cheaper to approve than the work it replaces.</p>
+  {{end}}
 </section>
 {{else}}
 <section class="panel">
