@@ -20,8 +20,11 @@ var ErrInvalidCursor = errors.New("jobs: invalid pagination cursor")
 // JobState is a Job's derived lifecycle state, distinct from a single Task's
 // DispatchState: a Job is JobStateRunning while at least one of its Tasks is
 // still Pending or Dispatched, and JobStateComplete once every Task is
-// Resolved. A zero-Task Job (the fan-out matched nothing) is Complete —
-// nothing is left to happen, so there is nothing to wait for.
+// Resolved. A zero-Task Job is Complete — nothing is left to happen, so
+// there is nothing to wait for. No new dispatch creates one: a zero-match
+// dispatch has been refused before any Job exists since #571, but rows
+// written before that still exist in older stores, so this derivation must
+// keep handling them.
 type JobState int
 
 const (

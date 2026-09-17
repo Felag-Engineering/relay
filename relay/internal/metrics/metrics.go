@@ -45,8 +45,11 @@ import (
 // (added to the order alongside OutcomeUnsupported, #291).
 const nOutcomes = 9
 
-// nRefusalKinds is the number of capability.RefusalKind values (Frozen..Internal).
-const nRefusalKinds = 4
+// nRefusalKinds sizes the refusals counter array to cover every
+// capability.RefusalKind value, including the ones IncRefusal folds into
+// RefusalInternal's slot (see IncRefusal) rather than rendering their own
+// series.
+const nRefusalKinds = int(capability.RefusalNoNodesMatched) + 1
 
 // ServerCertListener names the listener whose server certificate rotated. It
 // is a closed two-value enum rather than a string so the label it renders is
@@ -155,6 +158,8 @@ func refusalLabel(k capability.RefusalKind) string {
 		return "unauthorized"
 	case capability.RefusalBlastCap:
 		return "blast_cap"
+	case capability.RefusalNoNodesMatched:
+		return "no_nodes_matched"
 	default:
 		return "internal"
 	}
@@ -183,6 +188,7 @@ var refusalOrder = []capability.RefusalKind{
 	capability.RefusalUnauthorized,
 	capability.RefusalBlastCap,
 	capability.RefusalInternal,
+	capability.RefusalNoNodesMatched,
 }
 
 // Metrics is the real capability.MetricsSink and enroll.EnrollmentObserver,
@@ -213,10 +219,17 @@ func (m *Metrics) IncDispatch(o jobs.Outcome) {
 }
 
 // IncRefusal records one dispatch refusal by kind (capability.MetricsSink).
+// Only kinds with their own series in refusalOrder get their own slot;
+// everything else — RefusalPendingApproval included, since a park is not a
+// refusal and is counted here only for today's accounting — folds into
+// RefusalInternal's slot. This keeps today's accounting for parks unchanged;
+// giving parks their own series is out of scope here.
 func (m *Metrics) IncRefusal(k capability.RefusalKind) {
-	idx := int(k)
-	if idx < 0 || idx >= nRefusalKinds {
-		idx = int(capability.RefusalInternal)
+	idx := int(capability.RefusalInternal)
+	switch k {
+	case capability.RefusalFrozen, capability.RefusalUnauthorized, capability.RefusalBlastCap,
+		capability.RefusalInternal, capability.RefusalNoNodesMatched:
+		idx = int(k)
 	}
 	m.refusals[idx].Add(1)
 }

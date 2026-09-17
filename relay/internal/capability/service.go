@@ -386,11 +386,12 @@ func (s *Service) stateEval() StateEval {
 }
 
 // Run is the pipeline every surface must call to act on Nodes: check the
-// Freeze, resolve the Selector, authorize the Principal, check the
-// blast-radius cap, dispatch, then audit — in that order. The Freeze gate,
-// authorize, and the cap check each short-circuit the remaining stages on
-// error (no dispatch — nothing was executed), but each refusal is itself
-// audited (recordRefusal) — refusals are the most interesting audit events
+// Freeze, resolve the Selector, authorize the Principal, refuse a Selector
+// that matched no Nodes, check the blast-radius cap, dispatch, then audit —
+// in that order. The Freeze gate, authorize, the no-Nodes-matched check, and
+// the cap check each short-circuit the remaining stages on error (no
+// dispatch — nothing was executed), but each refusal is itself audited
+// (recordRefusal) — refusals are the most interesting audit events
 // (acceptance criterion for #102). Once dispatch is attempted, the audit
 // record is always written, even if the dispatcher itself returns an error:
 // a dispatcher may execute some Nodes before failing on others, and a
@@ -429,6 +430,25 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// anything the caller asserted (see assertions.go).
 	if err := s.authz.Authorize(withoutAssertions(ctx), p, act, sel); err != nil {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
+	}
+
+	// A Selector that resolved to zero Nodes is refused HERE — after
+	// authorization, before the blast cap, the approval gate and the
+	// dispatcher — so:
+	//   (a) no Job ID is minted, CreateJob is never called, and no zero-Node
+	//       request is parked: there is no Node to show an approver and
+	//       nothing for a dispatcher to run.
+	//   (b) it deliberately comes AFTER authorization: a caller who may not
+	//       ask gets the same "unauthorized" refusal whatever the fleet
+	//       holds, and learns nothing about whether any Selector matches
+	//       (AGENTS.md section 9: prefer the more restrictive option).
+	//   (c) it is audited as a refusal (recordRefusal), not as a job-level
+	//       dispatch row.
+	//   (d) Service.Plan reports the same condition as NoNodesMatched rather
+	//       than refusing it — ADR-0011: "A Plan never hard-fails on
+	//       guardrails — it reports."
+	if len(nodes) == 0 {
+		return nil, s.recordRefusal(ctx, p, sel, act, RefusalNoNodesMatched, &NoNodesMatchedError{Selector: sel.String()})
 	}
 
 	if err := s.cap.Check(act.RiskClass, len(nodes)); err != nil {
@@ -543,12 +563,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	return res.results, nil
 }
 
-// recordRefusal audits a Freeze-engaged, authz-deny, or cap-reject
-// short-circuit — the dispatcher was never reached, so there is no JobID or
-// Results, only the refusal's Reason. It also increments the MetricsSink for
-// kind. It returns refusalErr, joined with a wrapped audit-write error if the
-// audit write itself failed, so a failed audit write is never silently
-// swallowed.
+// recordRefusal audits a Freeze-engaged, authz-deny, no-Nodes-matched, or
+// cap-reject short-circuit — the dispatcher was never reached, so there is
+// no JobID or Results, only the refusal's Reason. It also increments the
+// MetricsSink for kind. It returns refusalErr, joined with a wrapped
+// audit-write error if the audit write itself failed, so a failed audit
+// write is never silently swallowed.
 func (s *Service) recordRefusal(ctx context.Context, p Principal, sel Selector, act jobs.Action, kind RefusalKind, refusalErr error) error {
 	s.metrics.IncRefusal(kind)
 	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, Selector: sel, Action: act, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}

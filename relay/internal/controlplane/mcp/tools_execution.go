@@ -144,11 +144,17 @@ func verdictString(v capability.VerdictStatus) string {
 
 // renderPlan renders a capability.PlanResult as the tool's PlanOutput:
 // verdicts sorted by NodeID for a stable response (mirrors renderJob), and
-// would_be_rejected derived from pr.CapExceeded (reason "exceeds_cap") or,
-// absent that, pr.Frozen (reason "frozen"). A Plan can be both over-cap and
-// Frozen at once (Service.Plan computes Frozen before the cap check); the
-// over-cap report takes priority here since it is the reason the query
-// fan-out never even ran (Verdicts is empty in that case too).
+// would_be_rejected derived from pr.NoNodesMatched (reason
+// "no_nodes_matched"), else pr.CapExceeded (reason "exceeds_cap"), else
+// pr.Frozen (reason "frozen"). A zero match is reported first because
+// Verdicts is empty and nothing would dispatch even after a Freeze lifted —
+// the same "the reason nothing was asked" rule that already puts
+// exceeds_cap ahead of frozen. Zero-match and over-cap cannot occur together
+// under BlastCap, whose caps are clamped positive. A Plan can otherwise be
+// both over-cap and Frozen at once (Service.Plan computes Frozen before the
+// cap check); the over-cap report takes priority there since it is the
+// reason the query fan-out never even ran (Verdicts is empty in that case
+// too).
 func renderPlan(pr capability.PlanResult) PlanOutput {
 	verdicts := make([]PerNodeVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
@@ -164,6 +170,8 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 
 	out := PlanOutput{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
 	switch {
+	case pr.NoNodesMatched:
+		out.WouldBeRejected = &WouldBeRejected{Reason: "no_nodes_matched"}
 	case pr.CapExceeded != nil:
 		out.WouldBeRejected = &WouldBeRejected{
 			Reason:  "exceeds_cap",
@@ -180,7 +188,8 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 // planAndRender runs act against sel through exec.Plan and renders the
 // result — plan=true's counterpart to dispatchAndRender. err from exec.Plan
 // is ONLY an authz-refusal or infra failure (renderRunError's existing
-// cases): cap/Freeze are reported INSIDE pr, never as an error (ADR-0011).
+// cases): cap/Freeze/no-Nodes-matched are reported INSIDE pr, never as an
+// error (ADR-0011).
 func planAndRender(ctx context.Context, exec Executor, p capability.Principal, sel capability.Selector, act jobs.Action) (PlanOutput, error) {
 	pr, err := exec.Plan(ctx, p, sel, act)
 	if err != nil {
@@ -298,7 +307,12 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (Exec
 // error the SDK renders (IsError=true, message = err.Error()): a Freeze
 // refusal becomes a distinct, legible "the Relay is frozen" message; a
 // blast-radius cap rejection is returned verbatim (CapExceededError.Error()
-// already states matched/cap/class); anything else is wrapped generically.
+// already states matched/cap/class); a zero-match refusal is returned
+// verbatim too (NoNodesMatchedError.Error() already carries the token and
+// the canonical Selector) — err itself, not just the unwrapped
+// NoNodesMatchedError, so a joined audit-write failure stays visible to the
+// caller (errors.As still finds the type on the joined err); anything else
+// is wrapped generically.
 func renderRunError(err error) error {
 	var frozenErr *capability.FrozenError
 	if errors.As(err, &frozenErr) {
@@ -307,6 +321,10 @@ func renderRunError(err error) error {
 	var capErr *capability.CapExceededError
 	if errors.As(err, &capErr) {
 		return capErr
+	}
+	var nnmErr *capability.NoNodesMatchedError
+	if errors.As(err, &nnmErr) {
+		return err
 	}
 	return fmt.Errorf("mcp: dispatch failed: %w", err)
 }
@@ -407,9 +425,9 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 
 // dispatchAndRender runs act against sel through exec, then renders the
 // full per-Node result set — the shared body of run_operation and raw_exec
-// once each has built its own jobs.Action. A zero-match Run (no Node matched
-// the Selector) renders as {results: []} without ever reading a Job back;
-// Run never reached the dispatcher, so there is no Job.
+// once each has built its own jobs.Action. A zero-match dispatch is refused
+// by the capability layer as no_nodes_matched and comes back as a tool error
+// via renderRunError.
 //
 // A PARKED dispatch (ADR-0027) is the one non-nil error from Run that is not a
 // refusal, and it is rendered as a successful result carrying
@@ -432,6 +450,10 @@ func dispatchAndRender(ctx context.Context, exec Executor, results JobResultRead
 		}
 		return RunOrPlanOutput{}, renderRunError(err)
 	}
+	// *capability.Service can never return a zero-length nodeResults with a
+	// nil error (a zero-match Selector is refused as no_nodes_matched before
+	// this call returns). This branch exists only so an out-of-contract
+	// Executor can't index an empty slice below.
 	if len(nodeResults) == 0 {
 		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil
 	}
@@ -495,8 +517,9 @@ const resultShapeClause = "Result shape: per-Node exit_code is present only when
 	"exited with a status — a Task that never executed (denied_by_policy, unreachable, version_refused) or " +
 	"was killed without one (timeout, cancelled, spawn failure) has no exit_code key at all, and outcome is " +
 	"the authoritative state. job_id is present only when a Job was created; it is absent on plan=true " +
-	"responses (a Plan executes nothing) and zero-match dispatches, so an absent job_id always means " +
-	"nothing was dispatched."
+	"responses (a Plan executes nothing) and on a dispatch parked for approval, so an absent job_id always " +
+	"means nothing was dispatched. A Selector that matches no Nodes is refused as no_nodes_matched and " +
+	"creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched."
 
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build

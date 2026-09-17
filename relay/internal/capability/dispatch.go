@@ -53,9 +53,10 @@ type NodeResult struct {
 }
 
 // dispatchResult is what dispatcher.run returns: the Job's identity plus its
-// per-Node results. jobID is entry-level (one Job per Run) rather than a
-// per-NodeResult field so it survives a zero-match dispatch, which the audit
-// stage must still record.
+// per-Node results. jobID is entry-level (one Job per Run) rather than read
+// off results, so a dispatcher that fails before producing any result still
+// reports its Job to the audit stage. A zero-match dispatch never reaches the
+// dispatcher (Service.Run refuses it as no_nodes_matched).
 type dispatchResult struct {
 	jobID   string
 	results []NodeResult

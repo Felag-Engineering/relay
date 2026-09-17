@@ -299,8 +299,9 @@ type PerNodeVerdict struct {
 // WouldBeRejected reports why real dispatch (plan=false against the same
 // Selector/Action) would currently be refused, without erroring the Plan
 // itself (ADR-0011/0013: a Plan reports guardrails, never hard-fails on
-// them). "exceeds_cap" carries Matched/Cap/Class; "frozen" carries neither —
-// the Relay-wide Freeze is not Selector/Action-specific.
+// them). Three reasons: "exceeds_cap" carries Matched/Cap/Class; "frozen" and
+// "no_nodes_matched" carry neither — the Freeze is Relay-wide, and the zero
+// count is already the top-level Matched.
 type WouldBeRejected struct {
 	Reason  string `json:"reason"`
 	Matched int    `json:"matched,omitempty"`
@@ -309,10 +310,10 @@ type WouldBeRejected struct {
 }
 
 // PlanOutput is plan=true's result shape: the resolved fan-out size, the
-// per-Node verdicts (empty when WouldBeRejected is set — the query fan-out
-// is skipped over-cap), an optional would-be-rejected report, and a fixed
-// point-in-time advisory string (ADR-0011: Policy may change between plan
-// and apply).
+// per-Node verdicts (empty over-cap, since the fan-out is skipped, and when
+// no Node matched — there was no Node to ask), an optional would-be-rejected
+// report, and a fixed point-in-time advisory string (ADR-0011: Policy may
+// change between plan and apply).
 type PlanOutput struct {
 	Matched         int              `json:"matched"`
 	Verdicts        []PerNodeVerdict `json:"verdicts"`
@@ -325,14 +326,15 @@ type PlanOutput struct {
 // superseding #119's byte-identical-to-#118 freeze): it is present exactly
 // when a Job was created, and absent on a plan=true response (a Plan
 // executes nothing — an empty "job_id" read as a missing/failed id) and on
-// a zero-match plan=false run (Run never reached the dispatcher, so there
-// is no Job to read back). An absent job_id therefore always means "nothing
-// was dispatched", never a failed id. Results is always an array — empty,
-// never null, when nothing was dispatched (plan=true or zero-match). Plan
-// is omitempty, populated only when plan=true.
+// a parked dispatch (nothing was dispatched, so there is no Job to read
+// back yet). A zero-match dispatch is refused as no_nodes_matched and never
+// produces this shape at all. An absent job_id therefore always means
+// "nothing was dispatched", never a failed id. Results is always an array —
+// empty, never null, when nothing was dispatched (plan=true or a parked
+// dispatch). Plan is omitempty, populated only when plan=true.
 type RunOrPlanOutput struct {
-	JobID   string          `json:"job_id,omitempty" jsonschema:"Present only when a Job was created (a real dispatch that matched at least one Node); use it with get_job/cancel_job. Absent on plan=true responses and zero-match dispatches — an absent job_id always means nothing was dispatched, never a failed id."`
-	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or zero Nodes matched)."`
+	JobID   string          `json:"job_id,omitempty" jsonschema:"Present only when a Job was created (every dispatch that ran; a Selector matching no Nodes is refused as no_nodes_matched and creates no Job); use it with get_job/cancel_job. Absent on plan=true and pending_approval responses — an absent job_id always means nothing was dispatched, never a failed id."`
+	Results []PerNodeResult `json:"results" jsonschema:"Always an array, never null: one entry per matched Node on a real dispatch, empty when nothing was dispatched (plan=true or a parked dispatch)."`
 	Plan    *PlanOutput     `json:"plan,omitempty"`
 	// PendingApproval is set when the dispatch PARKED for human approval
 	// (ADR-0027) instead of running. When it is present, job_id is absent and

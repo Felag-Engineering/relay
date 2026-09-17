@@ -400,9 +400,7 @@ Claims above with **no row**, and so nothing checking them:
 - A `read`'s output is not retained while a `mutate`'s is.
 - Caller-asserted attribution is stripped before the authorization decision. Nothing references
   `withoutAssertions` from a test, and this one guards an authorization input.
-- A zero-match dispatch is refused as `no_nodes_matched` with no Job. The existing
-  `TestRecordDispatchZeroMatchOneJobLevelRow` proves the superseded behaviour — a job-level audit
-  row for a zero-match Job — and is not evidence for this claim.
+- A zero-match dispatch is refused as `no_nodes_matched` with no Job.
 - An empty Selector is refused for dispatch.
 - Nodes not reporting a Template are excluded before the cap and reported `unsupported`.
 - A `mutate` Job halts on its first `failure`, `timeout` or `unacknowledged`; unsent Tasks resolve `cancelled`; a
@@ -492,6 +490,10 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-17` — a zero-match dispatch is now refused as `no_nodes_matched` before any Job
+  exists on every dispatch surface and audited as a refusal, while a Policy preflight reports
+  it as `would_be_rejected` (#571). Spec is still `aspirational`; proof not recorded per the
+  legacy-spec rule.
 - `2026-09-17` — a machine Account may cancel only a Job it requested; humans at `operator` or above still cancel any Job. Requires the requester recorded on the Job at creation (#614, and its prerequisite issue).
 - `2026-09-17` — Console adapter for `cancel_job` shipped: Job detail and the Agents stream
   gained a Cancel control over the same capability-layer cancel, gated `operator`-or-above

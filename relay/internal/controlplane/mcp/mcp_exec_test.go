@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -409,6 +410,75 @@ func TestMCP_Frozen_RefusesBothExecutionTools(t *testing.T) {
 	}
 	if text := toolErrorText(t, res2); !strings.Contains(text, "the Relay is frozen") {
 		t.Errorf("raw_exec while frozen error = %q, want it to contain %q", text, "the Relay is frozen")
+	}
+}
+
+// TestMCP_ZeroMatch_RefusesBothExecutionTools is #571's core acceptance line
+// on the MCP surface: a Selector matching no Nodes is refused as a tool
+// error carrying no_nodes_matched and the canonical Selector, creates no
+// Job, and is audited as a refusal — never as a job-level dispatch row.
+func TestMCP_ZeroMatch_RefusesBothExecutionTools(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "selector": "node:role=nonexistent"})
+	if !res.IsError {
+		t.Fatal("run_operation against a zero-match Selector: IsError = false, want true")
+	}
+	if text := toolErrorText(t, res); !strings.Contains(text, "no_nodes_matched") || !strings.Contains(text, "node:role=nonexistent") {
+		t.Errorf("run_operation zero-match error = %q, want it to contain %q and %q", text, "no_nodes_matched", "node:role=nonexistent")
+	}
+
+	res2 := callTool(t, session, "raw_exec", map[string]any{"argv": []string{"/bin/true"}, "selector": "node:role=nonexistent"})
+	if !res2.IsError {
+		t.Fatal("raw_exec against a zero-match Selector: IsError = false, want true")
+	}
+	if text := toolErrorText(t, res2); !strings.Contains(text, "no_nodes_matched") || !strings.Contains(text, "node:role=nonexistent") {
+		t.Errorf("raw_exec zero-match error = %q, want it to contain %q and %q", text, "no_nodes_matched", "node:role=nonexistent")
+	}
+
+	// deterministicIDs' first minted Job ID for a fresh testServer — neither
+	// call above may have consumed it.
+	if _, err := ts.store.Jobs().GetJob(context.Background(), "job-id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("GetJob(job-id-1) error = %v, want jobs.ErrJobNotFound (a zero-match dispatch must create no Job)", err)
+	}
+
+	records, err := ts.store.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("Audit().List: %v", err)
+	}
+	var refusals []audit.Record
+	for _, rec := range records {
+		if rec.Kind != audit.KindRefusal {
+			continue
+		}
+		if rec.Selector != "node:role=nonexistent" {
+			continue
+		}
+		refusals = append(refusals, rec)
+	}
+	if len(refusals) != 2 {
+		t.Fatalf("zero-match refusal records = %+v, want exactly 2", refusals)
+	}
+	foundOperation, foundRawExec := false, false
+	for _, rec := range refusals {
+		switch {
+		case rec.ActionKind == "operation" && rec.OperationName == "system.facts":
+			foundOperation = true
+		case rec.ActionKind == "raw_exec":
+			foundRawExec = true
+		}
+	}
+	if !foundOperation {
+		t.Errorf("no refusal record with ActionKind=operation/OperationName=system.facts among %+v", refusals)
+	}
+	if !foundRawExec {
+		t.Errorf("no refusal record with ActionKind=raw_exec among %+v", refusals)
+	}
+	for _, rec := range records {
+		if rec.Kind == audit.KindDispatch && rec.Selector == "node:role=nonexistent" {
+			t.Errorf("found a KindDispatch record for a zero-match dispatch: %+v", rec)
+		}
 	}
 }
 

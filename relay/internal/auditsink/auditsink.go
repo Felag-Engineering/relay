@@ -121,12 +121,14 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 
 // Record implements capability.AuditSink. A Dispatch entry with Results
 // fans out to one audit.Record PER NodeResult (ADR-0004: Tasks are the audit
-// unit) so each is independently queryable by NodeID; a zero-match dispatch
-// (no Results) still gets exactly one job-level Record, with an empty
-// NodeID, so the attempt remains queryable by JobID. A Refusal entry (authz-
-// deny or cap-reject: the dispatcher was never reached) gets exactly one
-// Record with the refusal's Reason, jobs.OutcomeUnspecified, no NodeID, and
-// JobID copied verbatim from e.JobID — empty for a role-floor refusal that
+// unit) so each is independently queryable by NodeID; a Dispatch entry with
+// no Results (a dispatcher that failed before producing any) still gets
+// exactly one job-level Record with an empty NodeID. A zero-match dispatch
+// is refused in capability.Service.Run and arrives here as a Refusal entry.
+// A Refusal entry (authz-deny, cap-reject, or no_nodes_matched: the
+// dispatcher was never reached) gets exactly one Record with the refusal's
+// Reason, jobs.OutcomeUnspecified, no NodeID, and JobID copied verbatim from
+// e.JobID — empty for a role-floor refusal that
 // precedes any existence check (refuseControl), and set only when
 // Service.CancelJob's machine-Account scoping (#614) refused after
 // resolving jobID to a real Job (refuseCancel/authorizeMachineCancel); never
@@ -175,9 +177,10 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 
 	// A parked dispatch (#269, ADR-0027). It must be handled BEFORE the
 	// dispatch fall-through below: an entry with no Results looks exactly like
-	// a zero-Node dispatch, so without this branch a park would be recorded as
-	// something that ran. Reason carries the Relay-authored summary and the
-	// request ID, which is what makes the park answerable later.
+	// a Dispatch with no Results, so without this branch a park would be
+	// recorded as something that ran. Reason carries the Relay-authored
+	// summary and the request ID, which is what makes the park answerable
+	// later.
 	if e.Kind == capability.AuditKindApprovalRequested {
 		base.Kind = audit.KindApprovalRequested
 		base.Reason = e.Reason
@@ -188,7 +191,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 
 	// A request for a batch/window Grant (#546). Same no-Results shape as a
 	// park and handled before the same fall-through, for the same reason: it
-	// would otherwise be recorded as a zero-Node dispatch. Its own kind
+	// would otherwise be recorded as a Dispatch with no Results. Its own kind
 	// because a Grant is an ask for standing authority over many dispatches,
 	// which is not the act approval_requested names.
 	if e.Kind == capability.AuditKindApprovalGrantRequested {
@@ -214,8 +217,8 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 
 	// A decision on a parked dispatch (#270, ADR-0027). Like a park it must be
 	// handled before the dispatch fall-through, and for the same reason: it
-	// carries no Results, so the fall-through would record it as a zero-Node
-	// dispatch — an answer to a question rendered as something that ran.
+	// carries no Results, so the fall-through would record it as a Dispatch
+	// with no Results — an answer to a question rendered as something that ran.
 	if e.Kind == capability.AuditKindApprovalDecided {
 		base.Kind = audit.KindApprovalDecided
 		base.Reason = e.Reason
@@ -392,8 +395,9 @@ func decisionChannel(c approval.Channel) string {
 // metadata — never e.Action.OperationArgs, e.Action.RawExecArgv, or any
 // NodeResult's Stdout/Stderr/Truncated — so a decision line can never leak
 // request content or captured output, even though the store retains both.
-// matched and counts are dispatch-only (zero value/empty otherwise, and
-// zero-match dispatch itself passes matched=0 and an empty counts string).
+// matched and counts are dispatch-only (zero value/empty otherwise, and a
+// Dispatch entry with no Results passes matched=0 and an empty counts
+// string).
 func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, counts string) {
 	attrs := []any{
 		"kind", kind,

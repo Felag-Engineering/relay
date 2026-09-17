@@ -106,6 +106,9 @@ func TestPlanReturnsPerNodeVerdictsNoJobOrTask(t *testing.T) {
 	if pr.CapExceeded != nil {
 		t.Errorf("PlanResult.CapExceeded = %+v, want nil", pr.CapExceeded)
 	}
+	if pr.NoNodesMatched {
+		t.Error("PlanResult.NoNodesMatched = true, want false (the Selector matched two Nodes)")
+	}
 	if len(pr.Verdicts) != 2 {
 		t.Fatalf("PlanResult.Verdicts = %+v, want 2 entries", pr.Verdicts)
 	}
@@ -277,6 +280,62 @@ func TestPlanFrozenReportsAdvisoryWhileRunRefuses(t *testing.T) {
 	var frozenErr *FrozenError
 	if !errors.As(runErr, &frozenErr) {
 		t.Fatalf("Run() error = %v, want errors.As to find a *FrozenError", runErr)
+	}
+}
+
+// TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses is the no-Nodes-
+// matched parity line (#571, ADR-0011): a Selector resolving to zero Nodes is
+// reported by a Policy preflight (NoNodesMatched, err nil, no query fan-out)
+// while Run against the SAME Service refuses it as a *NoNodesMatchedError
+// before any Job exists — mirrors TestPlanFrozenReportsAdvisoryWhileRunRefuses.
+func TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses(t *testing.T) {
+	reg := seedOneNode(t)
+	var log []string
+	conduit := newFakeConduit(&log)
+
+	jobsRepo, tasksRepo := testEngineStore(t)
+	audit := &spyAuditSink{}
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+	)
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	pr, err := svc.Plan(context.Background(), Principal{Account: "alice"}, sel, act)
+	if err != nil {
+		t.Fatalf("Plan() with a zero-match Selector should report, not error: %v", err)
+	}
+	if !pr.NoNodesMatched {
+		t.Error("PlanResult.NoNodesMatched = false, want true")
+	}
+	if pr.Matched != 0 {
+		t.Errorf("PlanResult.Matched = %d, want 0", pr.Matched)
+	}
+	if len(pr.Verdicts) != 0 {
+		t.Errorf("PlanResult.Verdicts = %+v, want empty (no Node to ask)", pr.Verdicts)
+	}
+	if pr.CapExceeded != nil {
+		t.Errorf("PlanResult.CapExceeded = %+v, want nil", pr.CapExceeded)
+	}
+	if len(log) != 0 {
+		t.Errorf("Conduit was touched (log = %v), want no Query calls on a zero-match Policy preflight", log)
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Kind != AuditKindPlan {
+		t.Errorf("audit.entries = %+v, want exactly one AuditKindPlan entry", audit.entries)
+	}
+
+	_, runErr := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
+	var nnmErr *NoNodesMatchedError
+	if !errors.As(runErr, &nnmErr) {
+		t.Fatalf("Run() error = %v, want errors.As to find a *NoNodesMatchedError", runErr)
+	}
+	if _, err := jobsRepo.GetJob(context.Background(), "id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("jobsRepo.GetJob(id-1) error = %v, want ErrJobNotFound (Run must create no Job)", err)
 	}
 }
 

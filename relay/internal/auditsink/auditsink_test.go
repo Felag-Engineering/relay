@@ -207,35 +207,57 @@ func TestRecordDispatchLogsDecisionLine(t *testing.T) {
 	}
 }
 
-func TestRecordDispatchZeroMatchOneJobLevelRow(t *testing.T) {
+// TestRecordZeroMatchRefusalRecordsActorOperationAndSelector is #571's audit
+// acceptance line: a zero-match dispatch arrives at the AuditSink as a
+// Refusal entry (capability.Service.Run refuses it before any Job exists),
+// and is recorded as one KindRefusal row carrying the actor, the Selector,
+// and the Action — never a job-level KindDispatch row.
+func TestRecordZeroMatchRefusalRecordsActorOperationAndSelector(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
 
+	sel := capability.Selector{Predicates: []capability.Predicate{{Namespace: capability.NamespaceNode, Key: "role", Value: "db"}}}
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	nnmErr := &capability.NoNodesMatchedError{Selector: sel.String()}
+
 	entry := capability.AuditEntry{
-		Kind:      capability.AuditKindDispatch,
-		Principal: capability.Principal{Account: "alice"},
-		Selector:  capability.Selector{},
-		Action:    jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead},
-		JobID:     "job-empty",
-		Results:   nil,
+		Kind:      capability.AuditKindRefusal,
+		Principal: principal,
+		Selector:  sel,
+		Action:    act,
+		Reason:    nnmErr.Error(),
 	}
 
 	if err := sink.Record(context.Background(), entry); err != nil {
 		t.Fatalf("Record: %v", err)
 	}
 
-	byJob, err := repo.ByJob(context.Background(), "job-empty")
+	records, err := repo.List(context.Background())
 	if err != nil {
-		t.Fatalf("ByJob: %v", err)
+		t.Fatalf("List: %v", err)
 	}
-	if len(byJob) != 1 {
-		t.Fatalf("ByJob(job-empty) returned %d records, want 1", len(byJob))
+	if len(records) != 1 {
+		t.Fatalf("List returned %d records, want 1", len(records))
 	}
-	if byJob[0].NodeID != "" {
-		t.Errorf("zero-match record NodeID = %q, want empty", byJob[0].NodeID)
+	rec := records[0]
+	if rec.Kind != audit.KindRefusal {
+		t.Errorf("Kind = %q, want %q (not %q)", rec.Kind, audit.KindRefusal, audit.KindDispatch)
 	}
-	if byJob[0].Kind != audit.KindDispatch {
-		t.Errorf("zero-match record Kind = %q, want %q", byJob[0].Kind, audit.KindDispatch)
+	if rec.Principal != principal.Attribution() {
+		t.Errorf("Principal = %q, want %q", rec.Principal, principal.Attribution())
+	}
+	if rec.Selector != "node:role=db" {
+		t.Errorf("Selector = %q, want %q", rec.Selector, "node:role=db")
+	}
+	if rec.OperationName != "system.facts" {
+		t.Errorf("OperationName = %q, want %q", rec.OperationName, "system.facts")
+	}
+	if rec.ActionKind != "operation" {
+		t.Errorf("ActionKind = %q, want %q", rec.ActionKind, "operation")
+	}
+	if !strings.Contains(rec.Reason, "no_nodes_matched") {
+		t.Errorf("Reason = %q, want it to contain %q", rec.Reason, "no_nodes_matched")
 	}
 }
 

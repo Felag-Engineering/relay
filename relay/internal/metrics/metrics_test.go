@@ -189,6 +189,7 @@ func TestIncRefusal_EveryKind(t *testing.T) {
 		{capability.RefusalUnauthorized, "unauthorized"},
 		{capability.RefusalBlastCap, "blast_cap"},
 		{capability.RefusalInternal, "internal"},
+		{capability.RefusalNoNodesMatched, "no_nodes_matched"},
 	}
 	for _, k := range kinds {
 		m.IncRefusal(k.kind)
@@ -203,6 +204,21 @@ func TestIncRefusal_EveryKind(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q; body = %s", want, body)
 		}
+	}
+}
+
+// TestIncRefusal_PendingApprovalStillCountsAsInternal pins IncRefusal's
+// normalisation: RefusalPendingApproval is not a refusal (a park, not a
+// denial) and rides the counter only for today's accounting, so it lands in
+// RefusalInternal's slot rather than a series of its own.
+func TestIncRefusal_PendingApprovalStillCountsAsInternal(t *testing.T) {
+	m := New(GaugeSources{})
+	m.IncRefusal(capability.RefusalPendingApproval)
+
+	_, body := scrape(t, m)
+	want := `relay_refusals_total{reason="internal"} 1`
+	if !strings.Contains(body, want) {
+		t.Errorf("body missing %q; body = %s", want, body)
 	}
 }
 

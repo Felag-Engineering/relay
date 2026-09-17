@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -248,6 +250,15 @@ func TestControlAPI_FreezeEngageRelease(t *testing.T) {
 
 	_, deps, base, client, credential := startControlAPIServer(t)
 
+	// A Node must be enrolled for the post-release dispatch below to prove
+	// anything: the post-release check requires runErr == nil, and with an
+	// empty registry the empty Selector matches no Nodes and is refused as
+	// no_nodes_matched (#571), so that check would genuinely fail. Seeding one
+	// Node here gives the dispatch a Node to reach.
+	if _, err := deps.registry.Upsert(registry.Report{NodeID: "node-freeze-e2e"}); err != nil {
+		t.Fatalf("seed registry: %v", err)
+	}
+
 	engageResp := controlAPIRequest(t, client, http.MethodPost, base+"/api/v1/freeze/engage", credential, nil)
 	defer engageResp.Body.Close() //nolint:errcheck
 	if engageResp.StatusCode != http.StatusOK {
@@ -431,6 +442,110 @@ func TestControlAPI_ExecutionRoutesAreWired(t *testing.T) {
 			t.Fatalf("status = %d, want 401 — the execution routes sit behind the same Authenticator as every other /api/v1 route", resp.StatusCode)
 		}
 	})
+}
+
+// TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses is #571's
+// Control API end-to-end acceptance line, driven through the real
+// composition root: with no Node enrolled, a Selector matching nothing is
+// refused as a 422 no_nodes_matched problem+json (plan omitted), while
+// plan:true reports the same condition as would_be_rejected data (ADR-0011)
+// — for both execution routes — and the audit trail carries the refusal,
+// never a job-level dispatch row.
+func TestControlAPI_ZeroMatchPreflightReportsWhatDispatchRefuses(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	_, deps, base, client, credential := startControlAPIServer(t)
+
+	routes := []struct {
+		path string
+		body map[string]any
+	}{
+		{"/api/v1/operations", map[string]any{"operation": "system.facts", "selector": "node:role=nonexistent"}},
+		{"/api/v1/raw-exec", map[string]any{"argv": []string{"/bin/true"}, "selector": "node:role=nonexistent"}},
+	}
+
+	for _, rt := range routes {
+		planBody := map[string]any{}
+		for k, v := range rt.body {
+			planBody[k] = v
+		}
+		planBody["plan"] = true
+
+		planResp := controlAPIRequest(t, client, http.MethodPost, base+rt.path, credential, planBody)
+		defer planResp.Body.Close() //nolint:errcheck
+		if planResp.StatusCode != http.StatusOK {
+			t.Fatalf("%s plan:true status = %d, want 200", rt.path, planResp.StatusCode)
+		}
+		var plan struct {
+			WouldBeRejected *struct {
+				Reason string `json:"reason"`
+			} `json:"would_be_rejected"`
+		}
+		if err := json.NewDecoder(planResp.Body).Decode(&plan); err != nil {
+			t.Fatalf("%s: decode plan: %v", rt.path, err)
+		}
+		if plan.WouldBeRejected == nil || plan.WouldBeRejected.Reason != "no_nodes_matched" {
+			t.Fatalf("%s plan:true would_be_rejected = %+v, want {reason: no_nodes_matched}", rt.path, plan.WouldBeRejected)
+		}
+
+		realResp := controlAPIRequest(t, client, http.MethodPost, base+rt.path, credential, rt.body)
+		defer realResp.Body.Close() //nolint:errcheck
+		if realResp.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s status = %d, want 422", rt.path, realResp.StatusCode)
+		}
+		if ct := realResp.Header.Get("Content-Type"); ct != "application/problem+json" {
+			t.Errorf("%s: Content-Type = %q, want application/problem+json", rt.path, ct)
+		}
+		var p struct {
+			Title  string `json:"title"`
+			Detail string `json:"detail"`
+		}
+		if err := json.NewDecoder(realResp.Body).Decode(&p); err != nil {
+			t.Fatalf("%s: decode problem: %v", rt.path, err)
+		}
+		if p.Title != "no nodes matched" {
+			t.Errorf("%s: title = %q, want %q", rt.path, p.Title, "no nodes matched")
+		}
+		if !strings.Contains(p.Detail, "no_nodes_matched") {
+			t.Errorf("%s: detail = %q, want it to contain %q", rt.path, p.Detail, "no_nodes_matched")
+		}
+	}
+
+	records, err := deps.audit.List(ctx)
+	if err != nil {
+		t.Fatalf("deps.audit.List: %v", err)
+	}
+	var refusals []audit.Record
+	for _, r := range records {
+		if r.Selector != "node:role=nonexistent" {
+			continue
+		}
+		if r.Kind == audit.KindDispatch {
+			t.Errorf("found a KindDispatch record for a zero-match dispatch: %+v", r)
+		}
+		if r.Kind == audit.KindRefusal {
+			refusals = append(refusals, r)
+		}
+	}
+	if len(refusals) != 2 {
+		t.Fatalf("zero-match refusal records = %+v, want exactly 2", refusals)
+	}
+	foundOperation, foundRawExec := false, false
+	for _, r := range refusals {
+		switch {
+		case r.ActionKind == "operation" && r.OperationName == "system.facts":
+			foundOperation = true
+		case r.ActionKind == "raw_exec":
+			foundRawExec = true
+		}
+	}
+	if !foundOperation {
+		t.Errorf("no refusal record with ActionKind=operation/OperationName=system.facts among %+v", refusals)
+	}
+	if !foundRawExec {
+		t.Errorf("no refusal record with ActionKind=raw_exec among %+v", refusals)
+	}
 }
 
 // -----------------------------------------------------------------------
