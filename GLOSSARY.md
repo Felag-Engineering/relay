@@ -349,8 +349,8 @@ decision 12's time-boxed narrowing grant (ADR-0027). Always written in full: an 
 **Grant** is the authorization rule above, and the two are unrelated mechanisms.
 
 Where an Approval binds to a **Plan hash**, an Approval grant binds to a **Scope** (the
-requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*, optionally a
-Selector namespace) plus a **window** and a **use limit**. Those walls are its entire
+requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*; no Selector
+namespace since 2026-09-16, ADR-0027) plus a **window** and a **use limit**. Those walls are its entire
 security argument, so every one of them is mandatory and an unbounded Scope cannot be
 stored. It exists because fatigue is a security property: forty elicitations produce forty
 rubber stamps, and a rubber-stamped Approval is worse than none.

@@ -398,3 +398,40 @@ Relay's store without saying how a fresh Relay gets any. Owner decision, 2026-09
 Until store-backed rules are built, today's behaviour stands and `docs/specs/approval.md` must
 describe it as current: an optional root-owned file, and **no gate at all** when none is
 configured.
+
+## Amendment (2026-09-16): matching rules intersect their audiences, and grants no longer pin a namespace
+
+Two owner decisions of the same date. The first changes how overlapping rules combine; the second
+removes a Scope term decision 3 above relies on.
+
+### Overlapping rules intersect their audiences
+
+When more than one rule matches a dispatch — or a grant's worst case — the combined Requirement took
+the strictest count, channel, requester exclusion and window, but the **union** of the audiences,
+with an unrestricted audience absorbing every other. The reasoning was that an intersection could
+be empty and leave a Request no one may decide, presenting as a mysterious permanent park.
+
+The union defeats the rule it merges. With `{relay:… → audience [secops]}` and
+`{node:… → audience [ops]}`, a dispatch matching both could be approved by `ops` alone; add a broad
+rule with no audience and anyone could approve it. Found by the security review of the
+pinning-removal change (#482, #602), where removing pinning made it reachable through every grant —
+but it was always true of the gate itself.
+
+**Decided:** audiences **intersect**. A rule with no audience is unrestricted and narrows nothing,
+so it is the identity of the intersection, not its absorber. **An empty intersection is refused up
+front** — at dispatch, and at grant request — with a refusal that names the rules whose audiences
+share no approver. The "mysterious permanent park" the union existed to avoid is avoided by refusing
+explicitly, which also tells the operator which rules to reconcile. Count, channel, requester
+exclusion and window keep their strictest-wins merge.
+
+**Given up, and accepted:** a gate configuration with disjoint audiences on overlapping rules now
+refuses the dispatches they both match, where it used to let either group approve. That is the
+intended reading of such a configuration; an operator who meant "either" writes one rule with both
+audiences.
+
+### Grants no longer pin a namespace
+
+Decision 3's "every namespace a Selector could use **when the Scope does not pin one**" loses its
+condition: a Scope has no namespace term (`docs/specs/approval.md`; #482). A grant is always priced
+over every namespace, and — per the above — its audience is the intersection across every rule
+that worst case matches. A stored grant that carried a pin releases nothing.
