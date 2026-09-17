@@ -241,6 +241,12 @@ has got to:
 
 Decided with the owner on `2026-09-17`, narrowing the `2026-09-14` rule for machine Accounts.
 
+**The rule follows the Account's kind, not how it signed in.** An AI-agent driving a *human*
+Account's OAuth session is a human Principal here, and may cancel any Job — although ADR-0024 calls
+MCP-originated calls agent-grade whatever identity authorizes them. Accepted by the owner on
+`2026-09-17` for now, as with the human-only Freeze engage; revisit with the Accounts work (#578).
+Threat model R19.
+
 **Cancel only ever asks.** It never fabricates a `cancelled` outcome for a Task that won the
 race and completed; the daemon reports what actually happened through the normal result path.
 A Task that transitions `Pending → Dispatched` inside the cancel window runs to completion
@@ -454,6 +460,10 @@ sequential contract and the 10,000-Node read cap multiply.
   decision.
 
 ## Accepted residual risk
+
+- **An AI-agent in a human Account's OAuth session cancels as a human.** Machine limits key on the
+  Account's kind, so a model driving a human operator's OAuth session may cancel any Job. Accepted
+  on `2026-09-17` (R19); revisit with #578.
 
 - **A careless caller can still put a secret into the audit trail.** The contract that
   arguments are never secrets is only a contract; nothing detects a credential passed as an
