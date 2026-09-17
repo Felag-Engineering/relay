@@ -33,6 +33,7 @@ package console
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 
@@ -137,9 +138,17 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 				Heading: "The Relay refused this cancel: " + err.Error() + ". The Job continues.",
 			})
 		default:
+			// "Did not complete" would be a claim this branch cannot back:
+			// CancelJob returns an error here even when disp.cancel itself
+			// succeeded and only RecordCancel failed to write, in which
+			// case Tasks WERE stopped. The raw error is logged, not echoed
+			// to the screen, matching readFailed's convention (screen.go)
+			// of naming the failure in the operator's terms rather than
+			// printing the underlying error text.
+			slog.Error("console cancel request returned an error", "job_id", jobID, "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			renderScreen(w, pg, cancelResultTmpl, cancelResultView{
-				Heading:  "The cancel did not complete: " + err.Error() + ". Some Tasks may already have been stopped.",
+				Heading:  "The cancel returned an error. Some Tasks may already have been stopped.",
 				JobHref:  "/console/jobs/" + url.PathEscape(jobID),
 				JobLabel: "Open the Job to see where each one is.",
 			})

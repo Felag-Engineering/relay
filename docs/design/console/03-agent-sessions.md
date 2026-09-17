@@ -159,8 +159,8 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
       still running, drawn on that Job's newest row, backed by one `QueryJobs{State: Running}`
       read. What is not yet true is "an in-flight dispatch appears here" itself — this stream is
       built from dispatch audit records, and the Job engine writes that record only AFTER the
-      dispatch call returns (execution.go's `Run`), so a Job still running almost never has a
-      dispatch row on this page yet to draw the control on. Closing this waits on a dispatch
+      dispatch call returns (the capability layer's `Run`), so a Job still running almost never has
+      a dispatch row on this page yet to draw the control on. Closing this waits on a dispatch
       handing back its Job before finishing (execution.md, designed).
 - [ ] Polling collapses; an Account doing 200 `get_job` calls does not push everything else off.
 - [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.

@@ -970,7 +970,7 @@ func TestJob_CancelResultSaysWhichIsWhich(t *testing.T) {
 			t.Errorf("the cancel result does not say %q", want)
 		}
 	}
-	if !strings.Contains(body, "success") {
+	if !strings.Contains(successGroupOf(t, body), "node-ok") {
 		t.Error("the success group did not survive alongside the cancel result")
 	}
 }
@@ -1049,6 +1049,42 @@ func cancelledGroupOf(t *testing.T, body string) string {
 	}
 	t.Fatal("the page has no cancelled group at all")
 	return ""
+}
+
+// TestJob_CancelledSentTasksKeepDistinctOutput is the code-review fix for
+// #595: cancelKey used to key every sent-then-stopped Task the same
+// ("sent, then stopped"), which dropped its captured output from the
+// cancelled branch's template entirely and, at clusterFloor or above, folded
+// Tasks that reported different output into a single "one shown" cluster —
+// the same collapse the default branch's own key-by-output rule exists to
+// prevent everywhere else on this page. daemon/src/executor.rs's
+// Outcome::Cancelled still returns stdout/stderr for a Task that was
+// stopped after it started, so this output is real and must render.
+func TestJob_CancelledSentTasksKeepDistinctOutput(t *testing.T) {
+	var tasks []capability.TaskRow
+	for i := 0; i < 3; i++ {
+		row := sentThenCancelled(fmt.Sprintf("node-sent-%d", i))
+		row.Stdout = []byte(fmt.Sprintf("stopped at step %d", i))
+		tasks = append(tasks, row)
+	}
+	tasks = append(tasks, mutateTask("node-never", jobs.OutcomeCancelled, ""))
+
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+	group := cancelledGroupOf(t, body)
+
+	for i := 0; i < 3; i++ {
+		want := fmt.Sprintf("stopped at step %d", i)
+		if !strings.Contains(group, want) {
+			t.Errorf("the cancelled group does not render %q; a sent-then-stopped Task's captured output was dropped", want)
+		}
+	}
+	if strings.Contains(group, "one shown") {
+		t.Error("3 sent-then-stopped Tasks with different output collapsed to a single representative row")
+	}
+	if !strings.Contains(group, "never sent") {
+		t.Error("the never-sent Task's cluster did not survive alongside the sent ones")
+	}
 }
 
 // TestJob_CancelTrailFailureStillRendersTheJob: the job_cancel record cannot

@@ -494,10 +494,12 @@ func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
 			wantSubstr: "",
 		},
 		{
-			// The evasion Deps.Cancel makes newly possible (#595): it is
-			// wired to the same *capability.Service Deps.Approvals and
-			// Deps.Queries already were, so an anonymous interface matching
-			// Run's signature recovers dispatch from the Cancel seam too.
+			// The SAME pre-existing hole (#595), reached through a third
+			// door: Deps.Cancel is wired to the same *capability.Service
+			// Deps.Approvals and Deps.Queries already were, so an anonymous
+			// interface matching Run's signature recovers dispatch from the
+			// Cancel seam too — nothing this issue added made Run reachable,
+			// it only added another seam that fails to close it.
 			name: "anonymous interface recovering Run from the cancel seam",
 			src: `package console
 import (

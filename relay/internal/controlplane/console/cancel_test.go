@@ -173,7 +173,12 @@ func TestCancel_ARealSessionPostReachesTheCapabilityLayerAndRedirects(t *testing
 	}
 }
 
-func TestCancel_APostWithoutTheSessionTokenIsRefusedAndNeverCancels(t *testing.T) {
+// TestCancel_ABearerLaneCancelPostIsRefusedAndNeverCancels covers the BEARER
+// lane: sessionCSRFValid fails closed with no ConsoleSession on the context
+// at all (security.go), which is what an Authorization: Bearer request aimed
+// at this POST route always is. The signed-in session lane — the one a
+// browser actually uses — is covered by the two tests below.
+func TestCancel_ABearerLaneCancelPostIsRefusedAndNeverCancels(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	q := &fakeQueries{jobs: []capability.JobSummary{runningJobSummary(tasks)}, tasks: tasks}
 	canceller := &fakeCanceller{}
@@ -182,6 +187,85 @@ func TestCancel_APostWithoutTheSessionTokenIsRefusedAndNeverCancels(t *testing.T
 	rec := request(t, h, http.MethodPost, cancelJobAction(testJobID))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if len(canceller.calls) != 0 {
+		t.Errorf("canceller calls = %d, want 0", len(canceller.calls))
+	}
+}
+
+// TestCancel_ARealSessionPostWithNoCSRFTokenIsRefused is the session lane's
+// half of the CSRF proof: a genuine signed-in cookie, but the form carries no
+// csrf_token field at all. submittedCSRFToken then compares the session's
+// real token against the empty string, which consoleauth.CSRFTokensEqual
+// must never call a match.
+func TestCancel_ARealSessionPostWithNoCSRFTokenIsRefused(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{jobs: []capability.JobSummary{runningJobSummary(tasks)}, tasks: tasks}
+	canceller := &fakeCanceller{}
+	f := newLoginFixtureWith(t, func(d *Deps) {
+		d.Queries = q
+		d.Cancel = canceller
+	})
+
+	rec, cookies := f.signIn(t, "mike", consolePassword)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("sign-in status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	session := cookieNamed(cookies, consoleauth.SessionCookieName)
+	if session == nil {
+		t.Fatal("no session cookie was set")
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, cancelJobAction(testJobID), strings.NewReader(""))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := f.do(t, postReq, session)
+
+	if postRec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", postRec.Code, postRec.Body.String())
+	}
+	if len(canceller.calls) != 0 {
+		t.Errorf("canceller calls = %d, want 0", len(canceller.calls))
+	}
+}
+
+// TestCancel_ARealSessionPostWithTheWrongCSRFTokenIsRefused is the same
+// session lane with a token that is well-formed but not the session's own —
+// the shape an attacker's forged form would actually submit, as opposed to
+// leaving the field off entirely.
+func TestCancel_ARealSessionPostWithTheWrongCSRFTokenIsRefused(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{jobs: []capability.JobSummary{runningJobSummary(tasks)}, tasks: tasks}
+	canceller := &fakeCanceller{}
+	f := newLoginFixtureWith(t, func(d *Deps) {
+		d.Queries = q
+		d.Cancel = canceller
+	})
+
+	rec, cookies := f.signIn(t, "mike", consolePassword)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("sign-in status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	session := cookieNamed(cookies, consoleauth.SessionCookieName)
+	if session == nil {
+		t.Fatal("no session cookie was set")
+	}
+
+	getRec := f.do(t, httptest.NewRequest(http.MethodGet, jobPath(""), nil), session)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET Job page = %d, want 200; body %s", getRec.Code, getRec.Body.String())
+	}
+	token := renderedCSRFToken(getRec.Body.String())
+	if token == "" {
+		t.Fatal("the Job page rendered no CSRF token")
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, cancelJobAction(testJobID),
+		strings.NewReader("csrf_token="+token+"-wrong"))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := f.do(t, postReq, session)
+
+	if postRec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", postRec.Code, postRec.Body.String())
 	}
 	if len(canceller.calls) != 0 {
 		t.Errorf("canceller calls = %d, want 0", len(canceller.calls))

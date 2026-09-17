@@ -353,6 +353,11 @@ type agentsView struct {
 	// the whole result (capability.MaxPageSize hit): Cancel is offered here
 	// only for the newest MaxPageSize running Jobs, and the page says so.
 	CancelTruncated bool
+
+	// CancelRunningLimit is capability.MaxPageSize, rendered rather than
+	// hardcoded into the template so the CancelTruncated note stays true if
+	// that constant ever changes.
+	CancelRunningLimit int
 }
 
 func handleAgents(d Deps) http.HandlerFunc {
@@ -481,6 +486,7 @@ func assignAgentsCancelActions(ctx context.Context, d Deps, caller capability.Pr
 	}
 	if pg.Next != "" {
 		v.CancelTruncated = true
+		v.CancelRunningLimit = capability.MaxPageSize
 	}
 	runningSet := make(map[string]bool, len(pg.Jobs))
 	for _, j := range pg.Jobs {
@@ -1176,7 +1182,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
     <p class="gap">Whether these Jobs are still running could not be read, so Cancel is not offered here; open a Job to cancel it.</p>
     {{end}}
     {{if .CancelTruncated}}
-    <p class="note">Cancel is offered here only for the newest 500 running Jobs.</p>
+    <p class="note">Cancel is offered here only for the newest {{.CancelRunningLimit}} running Jobs.</p>
     {{end}}
   </div>
 </div>

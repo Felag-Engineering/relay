@@ -615,8 +615,16 @@ func jobGroups(ctx context.Context, d Deps, caller capability.Principal, sum cap
 			// and must never merge into one "identical" row: the deny
 			// branch's rule (above) clusters on the thing that AGREES; here
 			// the two clusters are the two things that CANNOT agree with each
-			// other, so cancelKey keys on cancelKind rather than on Output.
-			g.Clusters = clusterRows(rows, cancelKey, true)
+			// other. But within the "sent" side, cancelKey also keys on
+			// Output — a sent-then-stopped Task carries captured output just
+			// like any other resolved Task (daemon/src/executor.rs's
+			// Outcome::Cancelled returns it), so three of them reporting
+			// different output must not fold into one cluster either, the
+			// same rule the default branch below applies to every other
+			// outcome. cluster is !readClass for the same reason: a
+			// read-class Job's output is already withheld, so there is
+			// nothing to cluster on.
+			g.Clusters = clusterRows(rows, cancelKey, !readClass)
 		default:
 			// readClass suppresses the "N reported identical output" label: on
 			// a read Job there IS no retained output, every row's is the empty
@@ -640,14 +648,18 @@ func denyRuleKey(r taskRow) string {
 	return r.Deny.Rule
 }
 
-// cancelKey clusters the cancelled group by whether the Task ever left the
-// Relay (#595). It is not the same question output-clustering asks —
-// "did they say the same thing" — it is "which of two facts about this
-// cancel is true of this Task", and the two answers must never merge into
-// one cluster no matter how many rows share either one.
+// cancelKey clusters the cancelled group first by whether the Task ever left
+// the Relay (#595) — "which of two facts about this cancel is true of this
+// Task", which must never merge into one cluster no matter how many rows
+// share either one — and, within the "sent" side, by Output too: a
+// sent-then-stopped Task can carry different captured output from another
+// one, and folding those into a single "identical" cluster would drop
+// output clusterRows exists to keep visible everywhere else on this page.
+// "\x00" cannot appear in Sent-plus-Output, so the two sides of the key
+// never collide with each other.
 func cancelKey(r taskRow) string {
 	if r.Sent {
-		return "sent, then stopped"
+		return "sent\x00" + r.Output
 	}
 	return "never sent"
 }
@@ -998,6 +1010,8 @@ it, at any age, because a screen that did would become the durable place read ou
           {{if .NeverSent}}never sent &mdash; marked cancelled on the Relay{{else}}sent and then stopped &mdash; the Node reported cancelled{{end}}{{if .Representative}} &mdash; one shown{{end}}.</div>
         {{range .Rows}}
           <div class="trow"><a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a></div>
+          {{with .Output}}<pre class="taskout">{{.}}</pre>{{end}}
+          {{if .Clipped}}<p class="note">Shown to the first 2 KB of what the Relay stored.</p>{{end}}
         {{end}}
       </div>
     {{end}}

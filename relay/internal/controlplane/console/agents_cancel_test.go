@@ -5,12 +5,16 @@ package console
 // row, backed by exactly one extra lane read that a viewer never pays for.
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -139,7 +143,45 @@ func TestAgents_TruncatedRunningSetSaysSo(t *testing.T) {
 	d := cancelDeps(q, &fakeCanceller{})
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	if !strings.Contains(body, "newest 500 running Jobs") {
-		t.Error("a truncated running-Jobs page does not say Cancel is offered only for the newest 500")
+	want := fmt.Sprintf("newest %d running Jobs", capability.MaxPageSize)
+	if !strings.Contains(body, want) {
+		t.Errorf("a truncated running-Jobs page does not say %q", want)
+	}
+}
+
+// TestAgents_CancelFormCarriesARealCSRFToken proves the per-row control on
+// this screen is wired into the SAME session CSRF token every other Console
+// form uses (screen.go's Page.CSRFToken), through a real signed-in session
+// rather than the bearer lane cancel_test.go's other route tests use — a
+// control with no token, or with the bearer lane's necessarily-empty one,
+// would submit to a POST route Secure refuses on sight (security.go).
+func TestAgents_CancelFormCarriesARealCSRFToken(t *testing.T) {
+	rows := []capability.AuditRow{dispatchRow("job-1", "node-a")}
+	q := &fakeQueries{rows: rows, jobs: []capability.JobSummary{{JobID: "job-1", State: jobs.JobStateRunning}}}
+	canceller := &fakeCanceller{}
+	f := newLoginFixtureWith(t, func(d *Deps) {
+		d.Queries = q
+		d.Cancel = canceller
+	})
+
+	rec, cookies := f.signIn(t, "mike", consolePassword)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("sign-in status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	session := cookieNamed(cookies, consoleauth.SessionCookieName)
+	if session == nil {
+		t.Fatal("no session cookie was set")
+	}
+
+	agentsRec := f.do(t, httptest.NewRequest(http.MethodGet, "/console/agents", nil), session)
+	if agentsRec.Code != http.StatusOK {
+		t.Fatalf("GET /console/agents = %d, want 200; body %s", agentsRec.Code, agentsRec.Body.String())
+	}
+	body := agentsRec.Body.String()
+	if !strings.Contains(body, `class="jobcancel"`) {
+		t.Fatal("the Agents page rendered no Cancel control for its one running Job")
+	}
+	if renderedCSRFToken(body) == "" {
+		t.Error("the Agents page's Cancel form carries no CSRF token")
 	}
 }
