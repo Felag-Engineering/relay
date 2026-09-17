@@ -39,14 +39,16 @@ Agents read these files; do not paste their contents into prompts.
 
 ## Stage 0 — Setup
 
-`gh auth status` must succeed. `rm -rf .dev-loop && mkdir -p .dev-loop`. Tree clean and on the
-default branch, `git fetch origin` done. Dirty tree → stop.
+`gh auth status` must succeed. `rm -rf .dev-loop && mkdir -p .dev-loop`. Tree clean, `git fetch
+origin` done. Dirty tree → stop. On the default branch, or — when a `dev-loop-runner` runs this in
+its own worktree — on that worktree's throwaway branch; Stage 2 branches from `origin/<default>`
+either way.
 
 **Duplicate guard.** If `git ls-remote --heads origin 'loop/issue-<n>-*'` or
 `gh pr list --state open --search "head:loop/issue-<n>-"` returns anything, print
 `already started: <ref>` and stop. The queue relies on this.
 
-**Toolchain preflight.** `go`, `cargo`, `buf`, `protoc` on `PATH` (`make proto-tools` installs
+**Toolchain preflight.** `go`, `cargo`, `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` on `PATH` or in `$(go env GOPATH)/bin` (`make proto-tools` installs
 `buf`). Missing → in interactive mode stop and say which lane cannot be verified; unattended,
 comment and stop. **Never silently run half the gate.**
 
@@ -108,7 +110,7 @@ at 1).
 ## Stage 5.5 — Verify: the full gate
 
 ```bash
-make verify 2>&1 | tee .dev-loop/verify.log
+make verify 2>&1 | tee .dev-loop/verify.log     # RELAY_SMOKE_PORT=<port> when running in parallel
 ```
 
 This mirrors CI job for job. If the diff touches `proto/`, `verify-proto` must not have
