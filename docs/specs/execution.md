@@ -229,9 +229,17 @@ has got to:
 - **Dispatched** — asked to cancel over its Tunnel, best-effort.
 - **Resolved** — left alone, keeping its truthful outcome.
 
-**Who may cancel is decided in the capability layer** (invariant 10): an Account of `operator`
-or above may cancel **any** Job, not only its own — an on-call operator must be able to stop an
-AI-agent's or another operator's Job mid-incident. A `viewer` may not.
+**Who may cancel is decided in the capability layer** (invariant 10):
+
+- A **human** Account of `operator` or above may cancel **any** Job, not only its own — an on-call
+  operator must be able to stop an AI-agent's or another operator's Job mid-incident.
+- A **machine** Account of `operator` or above may cancel **only a Job it requested.** A
+  jailbroken AI-agent must not be able to stop other people's rollouts. Whether a machine Account
+  requested a Job is read from the requester recorded on the Job when it was created; where no
+  requester is recorded, the cancel is refused — fail closed, never assumed.
+- A `viewer` may not cancel.
+
+Decided with the owner on `2026-09-17`, narrowing the `2026-09-14` rule for machine Accounts.
 
 **Cancel only ever asks.** It never fabricates a `cancelled` outcome for a Task that won the
 race and completed; the daemon reports what actually happened through the normal result path.
@@ -290,6 +298,7 @@ a per-Node **outcome**, where a Job did run and individual Nodes failed.
 | Blast cap | Resolved Node count exceeds the cap for the risk class | The class, the matched count, and the cap |
 | Pending approval | The Action requires approval and none covers it | A parked dispatch with its request ID and plan hash |
 | Unauthorized cancel | A `viewer`, or any Account below `operator`, asks to cancel a Job | Denied; the Job continues |
+| Machine cancels another's Job | A machine Account asks to cancel a Job it did not request, or one with no recorded requester | Denied, audited; the Job continues |
 | Internal | Freeze state unreadable, or the approval check failed | Refused — the guardrail fails closed |
 
 **Known information disclosure, accepted deliberately.** Because the Freeze gate runs before
@@ -398,7 +407,7 @@ Claims above with **no row**, and so nothing checking them:
   supports SEP-2663.
 - A repeated idempotency key returns the existing Job; the same key with different arguments is
   refused.
-- Only `operator` or above may cancel a Job, any Job; a `viewer` is refused.
+- Only `operator` or above may cancel a Job; a `viewer` is refused. A human at that floor may cancel any Job; a machine Account only a Job recorded as requested by it, and a Job with no recorded requester is refused to a machine.
 - Raw Exec requires `admin` on the Relay.
 
 This list is compiled by hand and will be wrong again; `make docs-check` verifies only that a
@@ -473,6 +482,7 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-17` — a machine Account may cancel only a Job it requested; humans at `operator` or above still cancel any Job. Requires the requester recorded on the Job at creation (#614, and its prerequisite issue).
 - `2026-09-17` — Console adapter for `cancel_job` shipped: Job detail and the Agents stream
   gained a Cancel control over the same capability-layer cancel, gated `operator`-or-above
   (#595). Spec is still `aspirational`; proof not recorded per the legacy-spec rule.
