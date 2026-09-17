@@ -249,12 +249,18 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 // machineCancelFixture builds a *Service wired for CancelJob's
 // machine-Account scoping tests below (owner decision 2026-09-17,
 // execution.md §Cancellation, #614): a real Job in the engine store, an
-// allow-all role-floor Authorizer (spyAuthorizer), and a spyJobQuery that
-// answers jobID's requester however the caller sets jobsResult. It mirrors
-// the other CancelJob fixtures in this file rather than New(), so the test
-// stays a white-box exercise of authorizeMachineCancel/refuseCancel without
-// the rest of New's wiring guards.
-func machineCancelFixture(t *testing.T, jobID string, jobQ *spyJobQuery) (*Service, *spyAuditSink) {
+// allow-all role-floor Authorizer (spyAuthorizer), and jobQ wired verbatim —
+// a *spyJobQuery answering jobID's requester however the caller sets
+// jobsResult/jobsErr, or a literal nil to exercise the "no job query wired"
+// fail-closed case (authorizeMachineCancel's s.jobQ == nil branch): passing
+// the JobQuery interface type, not *spyJobQuery, is what keeps a nil
+// argument an actually-nil interface rather than a non-nil interface
+// wrapping a nil *spyJobQuery, which would panic instead of exercising the
+// branch. It mirrors the other CancelJob fixtures in this file rather than
+// New(), so the test stays a white-box exercise of
+// authorizeMachineCancel/refuseCancel without the rest of New's wiring
+// guards.
+func machineCancelFixture(t *testing.T, jobID string, jobQ JobQuery) (*Service, *spyAuditSink) {
 	t.Helper()
 	jobsRepo, tasksRepo := testEngineStore(t)
 	at := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
@@ -340,6 +346,72 @@ func TestCancelJobRefusesMachineCancellingAJobWithNoRecordedRequester(t *testing
 	}
 	if len(audit.cancelCalls) != 0 {
 		t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+	}
+	if len(audit.entries) != 1 || audit.entries[0].JobID != jobID {
+		t.Fatalf("refusal audit entries = %+v, want exactly one carrying JobID %q — the lookup found a real Job",
+			audit.entries, jobID)
+	}
+}
+
+// TestCancelJobRefusesMachineWithEmptyAccountIDAgainstEmptyRequester guards
+// authorizeMachineCancel's `requester == ""` check specifically: an empty
+// AccountID (a Principal built without one — see Principal.AccountID's doc
+// comment) must never be treated as matching an unresolved, equally-empty
+// RequesterAccountID. A `requester != accountID` comparison ALONE would let
+// "" == "" authorize this by accident; the explicit empty check is what
+// closes it.
+func TestCancelJobRefusesMachineWithEmptyAccountIDAgainstEmptyRequester(t *testing.T) {
+	const jobID = "job-empty-both"
+	machine := Principal{AccountID: "", Account: "gleipnir-nightly", Role: "operator", Kind: "machine"}
+	jobQ := &spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: ""}}}}
+	svc, audit := machineCancelFixture(t, jobID, jobQ)
+
+	err := svc.CancelJob(context.Background(), machine, jobID)
+	if !errors.Is(err, ErrJobNotRequestedByCaller) {
+		t.Fatalf("CancelJob error = %v, want ErrJobNotRequestedByCaller", err)
+	}
+	if len(audit.cancelCalls) != 0 {
+		t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+	}
+}
+
+// TestCancelJobFailsClosedWhenTheRequesterCannotBeResolved is a table test
+// over authorizeMachineCancel's three "the lookup never confirmed a real
+// Job" cases: a query error, no job query wired at all, and jobID matching
+// no Job. Every case refuses with the SAME caller-visible
+// ErrJobNotRequestedByCaller, is audited as a refusal, and — because none of
+// them resolved jobID to a real Job — the refusal's audit JobID is empty,
+// exactly like a role-floor refusal (see refuseCancel/authorizeMachineCancel).
+func TestCancelJobFailsClosedWhenTheRequesterCannotBeResolved(t *testing.T) {
+	const jobID = "job-unresolvable"
+	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
+
+	cases := []struct {
+		name string
+		jobQ JobQuery // nil means no job query wired at all
+	}{
+		{"query error", &spyJobQuery{jobsErr: errors.New("store: unavailable")}},
+		{"no job query wired", nil},
+		{"unknown Job ID", &spyJobQuery{jobsResult: JobPage{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, audit := machineCancelFixture(t, jobID, tc.jobQ)
+
+			err := svc.CancelJob(context.Background(), machine, jobID)
+			if !errors.Is(err, ErrJobNotRequestedByCaller) {
+				t.Fatalf("CancelJob error = %v, want ErrJobNotRequestedByCaller", err)
+			}
+			if len(audit.cancelCalls) != 0 {
+				t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+			}
+			if len(audit.entries) != 1 || audit.entries[0].Kind != AuditKindRefusal {
+				t.Fatalf("audit entries = %+v, want exactly one AuditKindRefusal", audit.entries)
+			}
+			if audit.entries[0].JobID != "" {
+				t.Errorf("refusal JobID = %q, want empty — the lookup never resolved a real Job", audit.entries[0].JobID)
+			}
+		})
 	}
 }
 

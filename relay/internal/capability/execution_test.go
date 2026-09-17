@@ -667,6 +667,12 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		"encoding/hex": true,
 		"errors":       true,
 		"fmt":          true,
+		// log/slog joined with #614: authorizeMachineCancel logs a job-query
+		// failure it must not fold into the caller-facing refusal reason,
+		// the same operational-detail-stays-server-side posture auditsink's
+		// own logging already keeps. Stdlib, no proto, no database/sql — the
+		// same admission bar every other entry here clears.
+		"log/slog": true,
 		// sort joined with #539: RecordEventSubscription canonicalises its
 		// caller-supplied kind list (sort + dedup) before it is bounded and
 		// recorded, so a subscription's read record is grouped by shape

@@ -280,6 +280,47 @@ func TestRecordRefusalOneRowNoNodeID(t *testing.T) {
 	}
 }
 
+// TestRecordRefusalPersistsJobIDWhenSet is #614's regression test for the
+// refusal branch dropping e.JobID: Service.CancelJob's machine-Account
+// scoping (authorizeMachineCancel/refuseCancel) attributes a refusal to a
+// real, already-resolved Job by setting AuditEntry.JobID, and that value
+// must reach the PERSISTED audit.Record — not just be accepted by the
+// in-memory capability.AuditEntry shape — or "which Job did this Account's
+// refused cancel target" is unanswerable from the trail.
+func TestRecordRefusalPersistsJobIDWhenSet(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC))))
+
+	entry := capability.AuditEntry{
+		Kind:      capability.AuditKindRefusal,
+		Principal: capability.Principal{Account: "gleipnir-prod", Kind: "machine"},
+		Reason:    "capability: cancel refused: this Job was not requested by the caller, or its requester is not recorded",
+		JobID:     "job-resolved-not-mine",
+	}
+
+	if err := sink.Record(context.Background(), entry); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("List returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindRefusal {
+		t.Errorf("Kind = %q, want %q", rec.Kind, audit.KindRefusal)
+	}
+	if rec.JobID != entry.JobID {
+		t.Errorf("JobID = %q, want %q — the machine-scoping refusal's resolved Job ID must be persisted", rec.JobID, entry.JobID)
+	}
+	if rec.NodeID != "" {
+		t.Errorf("NodeID = %q, want empty (refusal never reaches a Node)", rec.NodeID)
+	}
+}
+
 // TestRecordRefusalLogsDecisionLine is #181's DoD #3 for the refusal Kind:
 // Record emits exactly one structured decision line carrying the refusal
 // Reason, and — DoD #2 — that line never contains the raw-exec argv (the
