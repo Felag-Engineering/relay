@@ -366,6 +366,12 @@ up as a decision rather than rediscovered as a gap.
 Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost; none
 is a commitment to an order.
 
+- **Evidence-linked Plans.** A proposed Plan carries references to the audited read Jobs that
+  observed the fault it addresses, so an approver checks the claims against what Relay actually
+  saw rather than against the AI-agent's prose. Promoted from #208 (closed 2026-09-16), which
+  called it the linchpin of a fast, trustworthy approval; ADR-0038 built the route and left the
+  evidence out.
+
 - **Multi-Node Plans — answer aggregate blast first.** One decision releases N dispatches, and
   invariant 5's cap is per dispatch. At one Node the step bound is an adequate aggregate control;
   it stops being adequate the moment the fan-out bound rises, and an aggregate bound must be

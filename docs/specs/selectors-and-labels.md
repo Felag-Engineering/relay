@@ -54,7 +54,7 @@ Every Label is namespaced, and a namespace is immutable from every side but its 
 quarantine.** Remediation targets `relay:` and only `relay:`. Engaging a quarantine may target
 `relay:` or `tag:`, because no Node can write either; lifting one targets `relay:` only; `node:`
 and `state:` are never a quarantine target, because a Node controls them (`quarantine-node.md`).
-This amends invariant 7. `node:` and `state:` remain routine targeting only.
+This is invariant 7 as amended on 2026-09-16 (ADR-0006, ADR-0020). `node:` and `state:` remain routine targeting only.
 
 The writers are structurally separated, not separated by permission: a report from a daemon
 cannot reach the `relay:` or `tag:` labels on its Node record, and a daemon can never revoke or
@@ -222,7 +222,7 @@ disclosed residual (threat-model register R13) with operator-facing remediation.
 - **ADR-0006 — needs amending.** Enrollment no longer stamps operator-chosen token scope as
   `relay:` labels; it writes `relay:enrollment-token` and `relay:node-id`, and a token carries
   `tag:` labels instead.
-- **ADR-0020 — needs amending.** Its direct post-enrollment `relay:` label management (`admin` +
+- **ADR-0020 — amended 2026-09-16.** Its direct post-enrollment `relay:` label management (`admin` +
   step-up) is superseded: `relay:` labels are written only by defined actions. Its `tag:` design
   stands, extended to MCP.
 - **ADR-0034 — needs amending.** The `state:` vocabulary gains `policy-invalid`,
