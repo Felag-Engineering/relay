@@ -3574,7 +3574,8 @@ mod raw_exec_redteam {
         // Raw Exec argument can carry a secret (e.g. an `Authorization:
         // Bearer <token>` header value), and this reason lands verbatim in
         // `deciding_rule`, the Task result and the daemon log — so it is
-        // checked separately below with a stronger property than a bound.
+        // checked separately below, against a short secret rather than these
+        // `long_texts` fixtures (see that check for why).
         //
         // The fixtures are deliberately NOT uniform-width: with an ASCII byte
         // ahead of 4-byte codepoints, byte index REASON_FRAGMENT_BUDGET falls
@@ -3656,31 +3657,39 @@ mod raw_exec_redteam {
             }
         }
 
-        // The later-element guard reason: stronger than a size bound, the
-        // caller's text must not appear in the reason AT ALL, at any length —
-        // it may be a secret (a `curl -H "Authorization: Bearer <token>"`
-        // argument), not merely a long one.
-        for (label, text) in &long_texts {
-            let longer = text.repeat(4);
-            for candidate in [text.as_str(), longer.as_str()] {
-                let secret_argv = argv(&["prog", "ok", &format!("{candidate} x")]);
-                let reason = reason_of(
-                    empty_policy.evaluate_raw_exec(&secret_argv),
-                    "later-element guard reason",
-                    label,
-                );
-                assert!(
-                    reason.contains("argv[2]"),
-                    "later-element guard reason ({label}): must name the offending index; \
-                     got {reason:?}"
-                );
-                assert!(
-                    !reason.contains(candidate),
-                    "later-element guard reason ({label}): must never quote the caller's \
-                     argument text, which may hold a secret; got {reason:?}"
-                );
-            }
-        }
+        // The later-element guard reason must name the offending index and
+        // must NEVER quote the caller's argument text, since a Raw Exec
+        // argument can carry a secret (e.g. an `Authorization: Bearer
+        // <token>` header value). This is deliberately a SHORT secret, not
+        // one of the `long_texts` fixtures above: those all exceed the
+        // `REASON_FRAGMENT_BUDGET` (120-character) fragment budget, so the
+        // pre-fix code — which quoted up to that budget and truncated the
+        // rest — would ALSO fail to find the whole fixture in its
+        // (truncated) reason, making `!reason.contains(candidate)` pass
+        // against the old, buggy behaviour and prove nothing. A secret well
+        // under that budget is quoted in full by the pre-fix code, so
+        // finding it absent here is what actually distinguishes "never
+        // quoted" from "a truncated quote that happens not to contain the
+        // whole fixture". See
+        // `raw_exec::secret_bearing_whitespace_argument_never_appears_in_deny_reason`
+        // for the end-to-end property, through `run_raw_exec`'s Task result
+        // rather than `evaluate_raw_exec` alone.
+        let secret = "Authorization: Bearer s3cr3t-value";
+        let secret_argv = argv(&["prog", "-H", secret]);
+        let reason = reason_of(
+            empty_policy.evaluate_raw_exec(&secret_argv),
+            "later-element guard reason",
+            "short secret",
+        );
+        assert!(
+            reason.contains("argv[2]"),
+            "later-element guard reason: must name the offending index; got {reason:?}"
+        );
+        assert!(
+            !reason.contains(secret),
+            "later-element guard reason: must never quote the caller's argument text, which \
+             may hold a secret; got {reason:?}"
+        );
     }
 
     // ---------------------------------------------------------------------------
