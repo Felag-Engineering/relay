@@ -79,3 +79,21 @@ or `admin` + step-up)" parenthetical for the same reason: how the Relay comes to
 
 The surface disagreement above is a defect in its own right, not a documentation problem, and
 is not resolved here.
+
+## Amendment (2026-09-16): `tag:` may engage a quarantine, and no Account writes `relay:` directly
+
+Owner decision, 2026-09-16 (#582). Two decisions above are superseded; the rest stand.
+
+- **"`tag:` is never a security-lane target"** is narrowed: engaging a quarantine may target
+  `tag:`. Lifting may not, and remediation and secret distribution still target `relay:` only. The
+  reasoning and the accepted residual are in ADR-0006's amendment of the same date.
+- **"Post-enrollment `relay:` label management exists now … `admin` + step-up"** is superseded
+  before it was built. No Account sets or removes a `relay:` label directly. Each `relay:` key is
+  defined together with the action that writes it, and roles, step-up and audit apply to that
+  action: a quarantine is engaged by `operator` or above (machine Accounts allowed, counted against
+  the `mutate` blast cap) and lifted only by a human `admin` with step-up. A generic `relay:` write
+  would make the namespace's meaning whatever its last editor intended; binding each key to an
+  action keeps it legible. The incident ladder is unchanged: quarantine < revoke < Freeze.
+
+`tag:` storage and its write path are still unbuilt (#430); until they exist, a `tag:` term is
+refused at parse on every surface, quarantine included.

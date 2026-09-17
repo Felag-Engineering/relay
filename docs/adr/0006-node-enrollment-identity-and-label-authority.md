@@ -148,3 +148,35 @@ The entries below are historical. The body above is authoritative.
   renewal over mTLS").
 - **2026-08-07 — two namespaces extended to three:** ADR-0020 added the operator-set `tag:`
   grouping namespace and post-enrollment `relay:` label management (see note in the body).
+
+## Amendment (2026-09-16): the security lane targets labels no Node can write; quarantine may engage by `tag:`
+
+Owner decision, 2026-09-16 (#582), settling what `docs/specs/selectors-and-labels.md` and
+`docs/specs/quarantine-node.md` had asserted ahead of any amendment. Invariant 7 is rewritten in
+`AGENTS.md`, keeping its number.
+
+**What changed.** The two operating rules in *Consequences* are narrowed for one act. Remediation
+and any Operation that distributes secrets or data still target `relay:` and only `relay:`, for
+the reasons given there. **Engaging a quarantine may target `relay:` or `tag:`.** Lifting one
+targets `relay:` only. `node:` and `state:` remain forbidden for every security-lane act.
+
+**Why the rule could be narrowed without losing what it protected.** The rule exists so that a
+compromised Node cannot attract itself into, or drop itself out of, an action aimed at it. That
+property is about *who can write the label*, and no Node can write `tag:` any more than `relay:`.
+What distinguishes the acts is direction: remediation and secret distribution *give* something to
+the Nodes they resolve to, so a mis-shaped target is a grant; a quarantine only ever *reduces*
+what may run, so a mis-shaped target over- or under-fences. `tag:` is what an operator reaches for
+mid-incident (`tag:incident=4412`), and requiring an enumeration of `relay:node-id` terms slows
+the containment act the lane exists for.
+
+**Why lifting stays `relay:`-only.** Lifting widens again. An edited tag must never release Nodes
+nobody meant to release.
+
+**The pairing of quarantine with remediation and secret distribution as one lane** is loosened
+accordingly: quarantine is its own act (`quarantine-node.md`); remediation is ordinary Operations
+and Plans on `relay:` targets; secret distribution is Future work there.
+
+**What is given up, and accepted.** Whoever can write tags before an engage decides which Nodes
+that engage resolves to — an `operator` or an AI-agent holding an `operator` machine Account. The
+engage resolves once, shows the caller the exact Nodes, and every tag write is audited; nothing
+prevents it. Recorded as **R17** in `docs/security/threat-model.md`.

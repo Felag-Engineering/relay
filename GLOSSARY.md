@@ -124,15 +124,17 @@ A key/value tag on a Node used by Selectors to target it. Lives in one of four
 non-overlapping namespaces, each immutable from the other sides: **node-space** (`node:…`,
 rooted on the Node and set out-of-band via config management; the Relay records but never
 modifies or removes them; authoritative for routine targeting, trusted only as much as the
-Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment or managed
-post-enrollment by an `admin` with step-up — and immutable to the Node; reserved for the
-security-sensitive lane), or **tag-space** (`tag:…`, set by operators through the control
-plane with standard auth; immutable to the Node; ad-hoc grouping and routine targeting only,
-never a valid security-lane target — ADR-0020), or **state-space** (`state:…`, derived by the Relay
+Node), **relay-space** (`relay:…`, set by the Relay — stamped at enrollment, or written as the
+side effect of a defined Relay action such as a quarantine, never by an Account directly — and
+immutable to the Node; reserved for the security-sensitive lane), or **tag-space** (`tag:…`, set
+by operators through the control plane with standard auth; immutable to the Node; grouping and
+routine targeting, and a valid target for *engaging* a quarantine only — ADR-0020, amended
+2026-09-16), or **state-space** (`state:…`, derived by the Relay
 from the registry, set by nobody — not the Node, not an operator, not an `admin` — evaluated at
 Selector-resolution time, closed vocabulary, for routine targeting only and never a valid
-security-lane target — ADR-0034). Remediation/quarantine and secret-distribution
-Selectors target `relay:` labels only. A stored Label must render as exactly one
+security-lane target — ADR-0034). Remediation and secret-distribution Selectors target
+`relay:` labels only; engaging a quarantine may target `relay:` or `tag:`, lifting one `relay:`
+only (ADR-0006, amended 2026-09-16). A stored Label must render as exactly one
 Selector term, enforced as an allowlist rather than by example: the key is non-empty and
 every byte of key and value is in `[A-Za-z0-9._-]`. A violating Label is refused at
 ingress, never sanitised — sanitising would let the Relay itself manufacture a value

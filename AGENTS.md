@@ -62,11 +62,14 @@ it needs an ADR, not a quiet workaround.
    management and never by the Relay; `relay:` by the Relay and never by the Node; `tag:` by an
    operator through the control plane and never by the Node; `state:` by nobody at all — it is
    Relay-derived from the registry, evaluated at Selector-resolution time from a closed
-   vocabulary. **Only `relay:` is a valid security-lane target**: quarantine, remediation and
-   secret-distribution targeting must target `relay:` and only `relay:`. The other three are for
-   routine targeting and are never a security-lane target. A compromised Node can forge its own
-   `node:` labels, and can influence `state:` by lying in `Hello`, but never `relay:` or `tag:`.
-   (ADR-0006, ADR-0020, ADR-0034)
+   vocabulary. No Account writes a `relay:` label directly: each `relay:` key is written only as
+   the side effect of the Relay action that defines it. **The security lane targets only labels
+   no Node can write.** Remediation and secret distribution target `relay:` and only `relay:`.
+   Engaging a quarantine — which only ever reduces what may run — may target `relay:` or `tag:`;
+   lifting one targets `relay:` only. `node:` and `state:` are for routine targeting and are
+   never a security-lane target. A compromised Node can forge its own `node:` labels, and can
+   influence `state:` by lying in `Hello`, but never `relay:` or `tag:`.
+   (ADR-0006, ADR-0020, ADR-0034; amended 2026-09-16)
 8. **`/proto` is the single source of truth** for the wire protocol and Operation vocabulary.
    Change the contract there; regenerate both sides. Don't hand-edit generated code. (ADR-0007)
 9. **The System Model is advisory; its grounding facts are AI-immutable.** The AI-agent may
@@ -110,8 +113,8 @@ it needs an ADR, not a quiet workaround.
     dispatch-level minimum-version gate. (ADR-0014)
 
 **The numbering is a public interface.** `docs/security/threat-model.md` maps all fourteen to
-the boundaries they defend; ADR-0010, ADR-0020, ADR-0026, and ADR-0034 each record amending a
-specific numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
+the boundaries they defend; ADR-0006, ADR-0010, ADR-0020, ADR-0026, and ADR-0034 each record
+amending a specific numbered invariant; GLOSSARY.md, `docs/security/threat-model.md`, and
 several Go source comments cite them by number. Amend an invariant in place and record the
 amendment in its ADR. **Never renumber or drop one.**
 
@@ -133,7 +136,7 @@ and that rule is the only thing keeping it honest.
 
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
-| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; operator management of them (`admin` + step-up) is unbuilt. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
+| 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
 | 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
 
 ### Writing or amending an invariant
