@@ -500,6 +500,14 @@ func approvalStandingFor(req approval.Request, caller capability.Principal) appr
 		s.Waiting = waitingNo
 		return s
 	}
+	if req.Require.AudienceMalformed() {
+		// The domain admits no decider for a malformed audience (a blank
+		// entry), so it is definitely not waiting on this caller. Consuming
+		// the domain predicate rather than re-deciding it is invariant 10: an
+		// adapter narrows only.
+		s.Waiting = waitingNo
+		return s
+	}
 	if len(req.Require.Audience) == 0 {
 		return s
 	}
@@ -967,6 +975,16 @@ type approvalView struct {
 	Audience         []string
 	RequesterAllowed bool
 
+	// AudienceMalformed is Requirement.AudienceMalformed() — a blank entry in
+	// the audience — carried through as its own flag rather than left for the
+	// template to infer from Audience. A malformed audience is NON-EMPTY (it
+	// names at least one blank entry), so rendering it through the same
+	// {{with .Audience}} branch as a real audience would read as "these named
+	// Accounts may decide", when the domain admits none of them (#608 cycle
+	// 2). The predicate is consumed from the domain, never re-decided here
+	// (invariant 10: an adapter narrows only).
+	AudienceMalformed bool
+
 	// CallerIsExcludedRequester makes the exclusion EXPLICIT to the one person
 	// it affects, rather than leaving them to work out why nothing is
 	// addressed to them.
@@ -1050,26 +1068,27 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 	ttl := req.ExpiresAt.Sub(now)
 	lapsed := req.State == approval.StatePending && req.PastDeadline(now)
 	v := approvalView{
-		Found:            true,
-		ID:               req.ID,
-		Summary:          req.Summary,
-		Operation:        approvalOperation(req),
-		Risk:             RiskLabel(req.RiskClass),
-		PlanHash:         req.PlanHash,
-		Requester:        req.RequestedBy,
-		Verified:         req.RequestedByID != "",
-		State:            approvalState(req, now),
-		Pending:          req.State == approval.StatePending && !lapsed,
-		Signed:           countApprovals(req),
-		Required:         req.Require.Count,
-		Audience:         req.Require.Audience,
-		RequesterAllowed: req.Require.RequesterAllowed,
-		Created:          req.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
-		Expires:          req.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
-		TTL:              renderTTL(ttl),
-		Urgent:           ttl > 0 && ttl <= expiryPressure,
-		MatchedRules:     req.MatchedRules,
-		JobID:            req.JobID,
+		Found:             true,
+		ID:                req.ID,
+		Summary:           req.Summary,
+		Operation:         approvalOperation(req),
+		Risk:              RiskLabel(req.RiskClass),
+		PlanHash:          req.PlanHash,
+		Requester:         req.RequestedBy,
+		Verified:          req.RequestedByID != "",
+		State:             approvalState(req, now),
+		Pending:           req.State == approval.StatePending && !lapsed,
+		Signed:            countApprovals(req),
+		Required:          req.Require.Count,
+		Audience:          req.Require.Audience,
+		AudienceMalformed: req.Require.AudienceMalformed(),
+		RequesterAllowed:  req.Require.RequesterAllowed,
+		Created:           req.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
+		Expires:           req.ExpiresAt.UTC().Format("2006-01-02 15:04:05Z"),
+		TTL:               renderTTL(ttl),
+		Urgent:            ttl > 0 && ttl <= expiryPressure,
+		MatchedRules:      req.MatchedRules,
+		JobID:             req.JobID,
 	}
 	v.CallerIsExcludedRequester = approvalStandingFor(req, caller).ExcludedRequester
 	if req.JobID != "" {
@@ -1777,7 +1796,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <h3>Quorum and expiry</h3>
   <dl class="kv">
     <dt>quorum</dt><dd><b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{range .Approvers}} · {{.Account}} signed{{with .Ago}} {{.}}{{end}}{{end}}</dd>
-    {{with .Audience}}<dt>audience</dt><dd>{{join ", " .}}</dd>{{else}}<dt>audience</dt><dd>unrestricted — the role floor for deciding is enforced by the capability layer, not by this screen</dd>{{end}}
+    {{if .AudienceMalformed}}<dt>audience</dt><dd><b>malformed</b> — this rule's audience contains a
+    blank entry, so <b>no Account may decide it</b>; this request will expire unsigned</dd>
+    {{else}}{{with .Audience}}<dt>audience</dt><dd>{{join ", " .}}</dd>{{else}}<dt>audience</dt><dd>unrestricted — the role floor for deciding is enforced by the capability layer, not by this screen</dd>{{end}}{{end}}
     <dt>expires</dt><dd>{{.Expires}} · {{.TTL}}</dd>
   </dl>
   {{if not .RequesterAllowed}}<p class="note">The requester may not sign their own request; a second

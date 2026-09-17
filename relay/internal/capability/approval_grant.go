@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -79,6 +80,24 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 		if err := s.approvalAuthz.AuthorizeApprovalDecision(withoutAssertions(ctx), p, in.Scope.ActionKind()); err != nil {
 			return approval.Grant{}, approval.Request{}, err
 		}
+	}
+
+	// A blank audience entry never becomes an approver: refused here, before
+	// any ID is minted or anything written, so a non-validating ApprovalGate
+	// cannot leave an Approval grant whose authorizing Request reads back
+	// unrestricted.
+	//
+	// req.Audience is the MERGED audience RequirementForScope derives across
+	// every namespace probe (mergeStricter/unionAudience), and that merge
+	// itself never lets an unrestricted probe absorb a malformed one — a blank
+	// entry survives the merge (see unionAudience) — so this check still fires
+	// even when only one probe's Requirement was malformed. A real
+	// *approval.Gate can no longer produce a malformed Requirement in the
+	// first place (Rule.Validate), so this guards any other ApprovalGate
+	// implementation.
+	if err := approval.ValidateAudience(req.Audience); err != nil {
+		return approval.Grant{}, approval.Request{}, fmt.Errorf(
+			"capability: grant approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
 	}
 
 	now := s.clock()

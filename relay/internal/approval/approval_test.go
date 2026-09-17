@@ -562,3 +562,193 @@ func TestRelayedAnswerStillCannotSatisfyTwoPersonRule(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRequesterExcluded — naming an approver does not turn one party into two", err)
 	}
 }
+
+// --- #608: a blank audience entry must never widen to "unrestricted" ---
+
+func TestValidateAudience(t *testing.T) {
+	tests := []struct {
+		name     string
+		audience []string
+		wantErr  bool
+	}{
+		{name: "nil", audience: nil},
+		{name: "empty", audience: []string{}},
+		{name: "named accounts", audience: []string{"ana", "bo"}},
+		{name: "lone blank entry", audience: []string{""}, wantErr: true},
+		{name: "lone whitespace entry", audience: []string{"  "}, wantErr: true},
+		{name: "named account plus blank", audience: []string{"ana", ""}, wantErr: true},
+		{name: "named account plus tab", audience: []string{"ana", "\t"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			before := append([]string(nil), tc.audience...)
+			err := ValidateAudience(tc.audience)
+			if tc.wantErr && !errors.Is(err, ErrAudienceBlankEntry) {
+				t.Fatalf("err = %v, want ErrAudienceBlankEntry", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+			// ValidateAudience must never trim, filter or rewrite: it only
+			// reports.
+			if len(tc.audience) != len(before) {
+				t.Fatalf("ValidateAudience mutated the input slice: got %v, want %v", tc.audience, before)
+			}
+			for i := range before {
+				if tc.audience[i] != before[i] {
+					t.Fatalf("ValidateAudience mutated entry %d: got %q, want %q", i, tc.audience[i], before[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBlankAudienceEntryRejectedAtLoad(t *testing.T) {
+	tests := []struct {
+		name     string
+		audience []string
+	}{
+		{name: "lone blank", audience: []string{""}},
+		{name: "lone whitespace", audience: []string{"  "}},
+		{name: "named account plus blank", audience: []string{"ana", ""}},
+		{name: "lone tab", audience: []string{"\t"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewGate([]Rule{{
+				Name:    "blank-rule",
+				Require: Requirement{Count: 1, Audience: tc.audience},
+			}})
+			if !errors.Is(err, ErrAudienceBlankEntry) {
+				t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
+			}
+			if !strings.Contains(err.Error(), "blank-rule") {
+				t.Errorf("error = %q, want it to name the rule", err)
+			}
+		})
+	}
+}
+
+// TestBlankAudienceEntryCannotPadPastQuorumCheck: Rule.Validate's "count N
+// with an audience smaller than N cannot ever be satisfied" check counts
+// len(Audience). A blank entry must not be allowed to pad that count into
+// looking like a real second member — the blank check must run first.
+//
+// The Count 2 / Audience [""] case is the one that actually proves the
+// ordering: len([""]) == 1 == Count-1, so were the blank check to run AFTER
+// the quorum-size check, the quorum check would itself refuse it first (1 <
+// 2) and the test would pass for the wrong reason without ever reaching the
+// audience check at all. It must still be ErrAudienceBlankEntry, not the
+// quorum-size error.
+func TestBlankAudienceEntryCannotPadPastQuorumCheck(t *testing.T) {
+	tests := []struct {
+		name     string
+		audience []string
+	}{
+		{name: "blank entry alone, one short of quorum", audience: []string{""}},
+		{name: "blank entry padding a named account up to quorum size", audience: []string{"ana", ""}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewGate([]Rule{{
+				Name:    "padded",
+				Require: Requirement{Count: 2, Audience: tc.audience},
+			}})
+			if !errors.Is(err, ErrAudienceBlankEntry) {
+				t.Fatalf("err = %v, want ErrAudienceBlankEntry — a blank entry must never be accepted as a distinct decider", err)
+			}
+		})
+	}
+}
+
+// TestAudienceWithBlankEntryPermitsNoApprover is the domain-level regression:
+// a Request that somehow carries a malformed audience (e.g. a legacy stored
+// row) must admit NO decider, never fall back to "unrestricted".
+func TestAudienceWithBlankEntryPermitsNoApprover(t *testing.T) {
+	r := newTestRequest(t, req(1, true, "ana", ""))
+
+	if !r.Require.AudienceMalformed() {
+		t.Fatal("AudienceMalformed() = false, want true for an audience containing a blank entry")
+	}
+
+	if _, err := r.Decide(approveBy("acct-ana", "ana"), t0.Add(time.Minute)); !errors.Is(err, ErrNotInAudience) {
+		t.Fatalf("approval by a NAMED account against a malformed audience: err = %v, want ErrNotInAudience", err)
+	}
+
+	deny := approveBy("acct-ana", "ana")
+	deny.Approve = false
+	if _, err := r.Decide(deny, t0.Add(time.Minute)); !errors.Is(err, ErrNotInAudience) {
+		t.Fatalf("denial against a malformed audience: err = %v, want ErrNotInAudience", err)
+	}
+
+	whitespace := newTestRequest(t, req(1, true, " "))
+	if _, err := whitespace.Decide(approveBy("acct-cy", "cy"), t0.Add(time.Minute)); !errors.Is(err, ErrNotInAudience) {
+		t.Fatalf("a whitespace-only audience must refuse every decider: err = %v, want ErrNotInAudience", err)
+	}
+
+	// Contrast: the genuinely unrestricted case (no audience at all) is
+	// unchanged by this fix.
+	unrestricted := newTestRequest(t, req(1, true))
+	if _, err := unrestricted.Decide(approveBy("acct-cy", "cy"), t0.Add(time.Minute)); err != nil {
+		t.Fatalf("unrestricted audience refused a decider: %v", err)
+	}
+}
+
+// --- unionAudience: an empty side must never absorb a malformed one ---
+// (#608 cycle 2, security finding 1)
+
+// TestUnionAudienceGenuineEmptyStillAbsorbsARestrictedSide pins the ADR-0027
+// amendment-2026-09-16 behaviour this fix must NOT change: a genuinely empty
+// (unrestricted) audience still absorbs a WELL-FORMED restricted one, in
+// either order.
+func TestUnionAudienceGenuineEmptyStillAbsorbsARestrictedSide(t *testing.T) {
+	if got := unionAudience(nil, []string{"ana", "bo"}); got != nil {
+		t.Errorf("unionAudience(nil, restricted) = %v, want nil (unrestricted absorbs)", got)
+	}
+	if got := unionAudience([]string{"ana", "bo"}, nil); got != nil {
+		t.Errorf("unionAudience(restricted, nil) = %v, want nil (unrestricted absorbs)", got)
+	}
+}
+
+// TestUnionAudienceNeverLetsAnEmptySideAbsorbAMalformedOne is the regression:
+// before this fix, unionAudience's "either side is empty means unrestricted"
+// shortcut fired on len(side) == 0 alone, so a malformed side merging with a
+// genuinely empty (unrestricted) one — or with a well-formed restricted one,
+// via the general dedup path missing the blank entry check entirely — could
+// launder a blank entry away. The merged result must still be malformed,
+// whichever side the blank entry started on.
+func TestUnionAudienceNeverLetsAnEmptySideAbsorbAMalformedOne(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+	}{
+		{name: "malformed then empty", a: []string{""}, b: nil},
+		{name: "empty then malformed", a: nil, b: []string{""}},
+		{name: "malformed then well-formed restricted", a: []string{"ana", ""}, b: []string{"bo"}},
+		{name: "well-formed restricted then malformed", a: []string{"bo"}, b: []string{"ana", ""}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := unionAudience(tc.a, tc.b)
+			if err := ValidateAudience(got); !errors.Is(err, ErrAudienceBlankEntry) {
+				t.Fatalf("unionAudience(%v, %v) = %v (err %v), want a result that is still malformed — a blank entry must survive the merge", tc.a, tc.b, got, err)
+			}
+		})
+	}
+}
+
+// TestMergeStricterPreservesAMalformedAudience is the same property one level
+// up: Gate.Evaluate and RequirementForScope both merge matching Requirements
+// with mergeStricter, and a malformed audience on either side must make the
+// MERGED Requirement malformed too, not just the unmerged inputs.
+func TestMergeStricterPreservesAMalformedAudience(t *testing.T) {
+	malformed := Requirement{Count: 1, Audience: []string{""}, Channel: ChannelOutOfBand, TTL: time.Hour}
+	unrestricted := Requirement{Count: 1, Channel: ChannelOutOfBand, TTL: time.Hour}
+
+	if merged := mergeStricter(malformed, unrestricted); !merged.AudienceMalformed() {
+		t.Errorf("mergeStricter(malformed, unrestricted).Audience = %v, want it to stay malformed", merged.Audience)
+	}
+	if merged := mergeStricter(unrestricted, malformed); !merged.AudienceMalformed() {
+		t.Errorf("mergeStricter(unrestricted, malformed).Audience = %v, want it to stay malformed", merged.Audience)
+	}
+}

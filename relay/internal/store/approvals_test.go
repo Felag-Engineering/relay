@@ -210,6 +210,156 @@ func TestExpiredRequestIsNotDecidable(t *testing.T) {
 	}
 }
 
+// --- #608: a blank audience entry must never be storable, and a stored row
+// that somehow carries one must fail closed rather than read back
+// unrestricted ---
+
+// TestCreateRefusesBlankAudienceEntry: the comma-joined require_audience
+// column cannot represent a lone blank entry, so Create must refuse rather
+// than write a row that would read back unrestricted.
+func TestCreateRefusesBlankAudienceEntry(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+
+	for _, tc := range []struct {
+		name     string
+		audience []string
+	}{
+		{name: "lone blank", audience: []string{""}},
+		{name: "named account plus blank", audience: []string{"ana", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := pendingRequest("req-blank", "hash-blank", 1, time.Hour)
+			r.Require.Audience = tc.audience
+
+			if err := repo.Create(ctx, r); !errors.Is(err, approval.ErrAudienceBlankEntry) {
+				t.Fatalf("Create: err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
+			}
+			if _, err := repo.Get(ctx, "req-blank"); !errors.Is(err, approval.ErrNotFound) {
+				t.Fatalf("Get after a refused Create: err = %v, want ErrNotFound — nothing must have been written", err)
+			}
+		})
+	}
+}
+
+// TestStoredAudienceWithBlankEntryFailsClosed simulates a row Create can no
+// longer produce (a prior build, or an ApprovalGate implementation other than
+// *approval.Gate): the require_audience column corrupted directly via SQL.
+// The read must PRESERVE the blank entry rather than filter it, and every
+// decision path must fail closed on it.
+func TestStoredAudienceWithBlankEntryFailsClosed(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name   string
+		column string
+	}{
+		// "ana," and "ana, ,bo" are the sharpest proofs that a malformed
+		// stored audience admits NO decider: both scan to an audience
+		// containing a previously-named account plus a blank, and pre-fix a
+		// decision by that named account would have gone through unrefused.
+		// They do not reproduce this issue's own worked example, though: a
+		// column of exactly "" (from a stored Audience of [""]) scans back
+		// byte-identical to a genuinely unrestricted audience, so that legacy
+		// row can never be distinguished from an intentionally unrestricted
+		// one by any read, so it is not — and cannot be — exercised here;
+		// operators who had such a rule should revoke any outstanding
+		// Approval grants approved under it (#608). "," and " " also fail
+		// closed, but their stored column scans to an audience with no
+		// named account at all either way.
+		{name: "trailing comma", column: "ana,"},
+		{name: "lone comma", column: ","},
+		{name: "lone space", column: " "},
+		{name: "named plus two blanks", column: "ana, ,bo"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, db := openStore(t)
+			repo := st.Approvals()
+
+			r := pendingRequest("req-corrupt", "hash-corrupt", 1, time.Hour)
+			r.Require.Audience = []string{"ana"}
+			if err := repo.Create(ctx, r); err != nil {
+				t.Fatalf("Create: %v", err)
+			}
+			if _, err := db.ExecContext(ctx,
+				`UPDATE approval_requests SET require_audience = ? WHERE request_id = ?`,
+				tc.column, "req-corrupt"); err != nil {
+				t.Fatalf("corrupt require_audience: %v", err)
+			}
+
+			got, err := repo.Get(ctx, "req-corrupt")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if !got.Require.AudienceMalformed() {
+				t.Fatalf("AudienceMalformed() = false for stored column %q, want true (audience preserved as %v)",
+					tc.column, got.Require.Audience)
+			}
+
+			d := approval.Decision{
+				AccountID: "acct-ana", Account: "ana", Approve: true,
+				Channel: approval.ChannelOutOfBand, PlanHash: "hash-corrupt", At: storeNow.Add(time.Minute),
+			}
+			if _, err := repo.RecordDecision(ctx, "req-corrupt", d, storeNow.Add(time.Minute)); !errors.Is(err, approval.ErrNotInAudience) {
+				t.Fatalf("RecordDecision by a previously-named account: err = %v, want ErrNotInAudience", err)
+			}
+
+			reread, err := repo.Get(ctx, "req-corrupt")
+			if err != nil {
+				t.Fatalf("Get after refused decision: %v", err)
+			}
+			if len(reread.Decisions) != 0 || reread.State != approval.StatePending {
+				t.Fatalf("a refused decision must not be recorded: decisions=%d state=%v", len(reread.Decisions), reread.State)
+			}
+
+			// A malformed pending Request must still be able to expire — the
+			// read never errors on it, and the sweeper must not be able to
+			// get stuck on a row it cannot parse.
+			expired, err := repo.ExpirePending(ctx, storeNow.Add(2*time.Hour))
+			if err != nil {
+				t.Fatalf("ExpirePending: %v", err)
+			}
+			if len(expired) != 1 || expired[0].ID != "req-corrupt" || expired[0].State != approval.StateExpired {
+				t.Fatalf("ExpirePending = %v, want the corrupted row to expire normally", expired)
+			}
+		})
+	}
+}
+
+// TestUnrestrictedAudienceStillRoundTripsAsUnrestricted is the regression
+// guard on the fix itself: a genuinely empty audience (the documented
+// "unrestricted") must still round-trip as empty and admit any decider, the
+// exact behaviour a malformed-audience check must not disturb.
+func TestUnrestrictedAudienceStillRoundTripsAsUnrestricted(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+
+	r := pendingRequest("req-open", "hash-open", 1, time.Hour)
+	r.Require.Audience = nil
+	if err := repo.Create(ctx, r); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	got, err := repo.Get(ctx, "req-open")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Require.Audience) != 0 {
+		t.Fatalf("Audience = %v, want empty", got.Require.Audience)
+	}
+	if got.Require.AudienceMalformed() {
+		t.Fatal("AudienceMalformed() = true for a genuinely empty audience, want false")
+	}
+
+	d := approval.Decision{
+		AccountID: "acct-cy", Account: "cy", Approve: true,
+		Channel: approval.ChannelOutOfBand, PlanHash: "hash-open", At: storeNow.Add(time.Minute),
+	}
+	if _, err := repo.RecordDecision(ctx, "req-open", d, storeNow.Add(time.Minute)); err != nil {
+		t.Fatalf("RecordDecision by an unlisted account against an unrestricted audience: %v", err)
+	}
+}
+
 // TestByPlanHashReturnsTheMostRecent is what the dispatch path relies on to
 // release an approved Plan.
 func TestByPlanHashReturnsTheMostRecent(t *testing.T) {

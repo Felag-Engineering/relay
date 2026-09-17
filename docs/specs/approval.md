@@ -397,6 +397,15 @@ None open. Deciding from the Console (#435) is in scope, not open.
 
 ## History
 
+- `2026-09-17` — a blank (empty or whitespace-only) audience entry is now refused, naming
+  the rule and `require.audience`, when gate rules load, when an Approval grant is
+  requested, when a dispatch parks, and when an approval Request is stored — nothing trims
+  or drops an entry. A stored audience still carrying a blank entry (e.g. `"ana,"`) admits
+  no decider, and merging audiences never lets an unrestricted side absorb a malformed one.
+  Limit: a row an earlier build wrote from an audience of exactly `[""]` is stored
+  identically to an unrestricted audience and still reads back unrestricted; a comma inside
+  an entry is a separate, unfixed widening. Spec is still `aspirational`, unmigrated to
+  claim IDs; evidence not recorded here (#608).
 - `2026-09-16` — namespace pinning removed from approval-grant Scope in code: the Control
   API field and any MCP grant tool are gone, a request still naming it is refused with 400,
   a Grant's requirement is now derived over every namespace, and a stored pinned Grant covers

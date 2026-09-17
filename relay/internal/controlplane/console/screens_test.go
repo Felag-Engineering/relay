@@ -3704,6 +3704,48 @@ func TestApprovals_AnUnattributedRequestIsNotYourOwn(t *testing.T) {
 	}
 }
 
+// TestApprovals_ABlankAudienceEntryIsNotWaitingOnAnyone is #608's Console
+// regression: the domain admits no decider for a malformed audience (one
+// containing a blank entry), so it must never render as waiting on a named
+// caller who happens to also be listed. Pre-fix, ["ana", ""] rendered as
+// waiting on ana — a Request she in fact cannot sign.
+func TestApprovals_ABlankAudienceEntryIsNotWaitingOnAnyone(t *testing.T) {
+	req := approval.Request{
+		ID:      "ap-blank",
+		Require: approval.Requirement{Count: 1, Audience: []string{"ana", ""}},
+	}
+	caller := capability.Principal{AccountID: "acct-2", Account: "ana"}
+
+	if st := approvalStandingFor(req, caller); st.Waiting != waitingNo {
+		t.Errorf("Waiting = %q, want %q — a malformed audience admits no decider", st.Waiting, waitingNo)
+	}
+}
+
+// TestApproval_ABlankAudienceEntryRendersAsMalformedNotAsAPlainList is #608
+// cycle 2's Console regression (security finding 4): rendering ["ana", ""]
+// through the same {{with .Audience}} branch as a real audience reads as "ana
+// may decide" — a Request she in fact cannot sign, because the domain admits
+// no decider for a malformed audience. The card must say so plainly instead,
+// consuming Requirement.AudienceMalformed() rather than re-deciding it.
+func TestApproval_ABlankAudienceEntryRendersAsMalformedNotAsAPlainList(t *testing.T) {
+	req := approval.Request{
+		ID: "ap-blank", State: approval.StatePending,
+		Require:   approval.Requirement{Count: 1, Audience: []string{"ana", ""}},
+		CreatedAt: testNow.Add(-time.Minute), ExpiresAt: testNow.Add(time.Hour),
+	}
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{req}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-blank").Body.String())
+
+	if !strings.Contains(content, "malformed") || !strings.Contains(content, "no Account may decide it") {
+		t.Errorf("card does not state the audience is malformed: %s", content)
+	}
+	if strings.Contains(content, "<dd>ana, </dd>") || strings.Contains(content, "<dd>ana,</dd>") {
+		t.Error("card rendered the malformed audience as a plain list, which reads as \"ana may decide\"")
+	}
+}
+
 // TestApproval_DiffNamesWhatChangedOnAGrant is the spec's headline sentence,
 // rendered from stored columns and nothing else: "same scope as what you
 // approved — except the fan-out ceiling grew".
