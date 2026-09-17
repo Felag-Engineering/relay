@@ -63,7 +63,11 @@ func (g *sqliteGrants) CreateGrant(ctx context.Context, gr approval.Grant) error
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		gr.ID, gr.RequestID,
 		gr.Scope.Account, approval.RiskClassName(gr.Scope.RiskClass), gr.Scope.MaxFanOut,
-		strings.Join(gr.Scope.Operations, ","), boolToInt(gr.Scope.RawExec), gr.Scope.SelectorNamespace,
+		strings.Join(gr.Scope.Operations, ","), boolToInt(gr.Scope.RawExec),
+		// Always empty: no Grant created after #482 is pinned. Validate refuses
+		// LegacyNamespacePin, and this literal means no field can reintroduce a
+		// pin.
+		"",
 		formatTime(roundTripTime(gr.StartsAt)), formatTime(roundTripTime(gr.ExpiresAt)),
 		gr.MaxUses, gr.Uses, gr.Summary, formatTime(roundTripTime(gr.CreatedAt)),
 		nullTime(gr.RevokedAt), gr.RevokedBy, gr.RevokeReason,
@@ -296,7 +300,7 @@ func scanGrant(scan func(dest ...any) error) (approval.Grant, error) {
 	if err := scan(
 		&gr.ID, &gr.RequestID,
 		&gr.Scope.Account, &riskClass, &gr.Scope.MaxFanOut, &ops,
-		&rawExec, &gr.Scope.SelectorNamespace,
+		&rawExec, &gr.LegacyNamespacePin,
 		&starts, &expires, &gr.MaxUses, &gr.Uses, &gr.Summary, &created,
 		&revoked, &gr.RevokedBy, &gr.RevokeReason,
 	); err != nil {

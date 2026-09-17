@@ -175,46 +175,84 @@ func TestReadGrantNeverCoversMutate(t *testing.T) {
 	}
 }
 
+// TestSelectorNamespaceNarrows is now a GATE-RULE test, not a Grant/Scope one:
+// #482 removed namespace pinning from a Scope entirely, so the only namespace
+// narrowing left in this package is Match.SelectorNamespace on a gate Rule.
+// The name is kept (docs/specs/selectors-and-labels.md:255 cites it as proof
+// that "a relay:-namespace Selector narrows as expected" at the approval
+// seam) so that citation stays true without an edit to the spec.
 func TestSelectorNamespaceNarrows(t *testing.T) {
-	g := validGrant()
-	g.Scope.SelectorNamespace = "relay"
+	gate, err := NewGate([]Rule{{
+		Name:    "relay-lane",
+		Match:   Match{SelectorNamespace: "relay"},
+		Require: Requirement{Count: 1},
+	}})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
 
 	wrong := coveredDispatch()
 	wrong.Namespaces = []string{"tag"}
-	if g.Covers(wrong, grantNow) {
-		t.Error("grant scoped to relay: covered a tag: Selector")
+	if _, _, gated := gate.Evaluate(wrong); gated {
+		t.Error("a rule matching relay: gated a tag: Selector")
 	}
 
 	right := coveredDispatch()
 	right.Namespaces = []string{"relay"}
-	if !g.Covers(right, grantNow) {
-		t.Error("grant scoped to relay: did not cover a relay: Selector")
+	if _, _, gated := gate.Evaluate(right); !gated {
+		t.Error("a rule matching relay: did not gate a relay: Selector")
+	}
+
+	both := coveredDispatch()
+	both.Namespaces = []string{"relay", "node"}
+	if _, _, gated := gate.Evaluate(both); !gated {
+		t.Error("a rule matching relay: did not gate a dispatch whose Selector also used node:")
 	}
 }
 
 // TestSelectorNamespaceState is TestSelectorNamespaceNarrows' sibling for
-// ADR-0034's fourth namespace: a Scope must be able to pin "state", and it
-// narrows the same way "relay" and "tag" do.
+// ADR-0034's fourth namespace: a gate Rule must be able to match "state", and
+// it narrows the same way "relay" and "tag" do. Kept as a gate-rule test for
+// the same reason (docs/specs/selectors-and-labels.md:255).
 func TestSelectorNamespaceState(t *testing.T) {
-	s := validScope()
-	s.SelectorNamespace = "state"
-	if err := s.Validate(); err != nil {
-		t.Fatalf("Scope with selector_namespace \"state\" did not validate: %v", err)
+	if err := (Rule{Name: "r", Match: Match{SelectorNamespace: "state"}, Require: Requirement{Count: 1}}).Validate(); err != nil {
+		t.Fatalf("a rule matching selector_namespace \"state\" did not validate: %v", err)
 	}
 
-	g := validGrant()
-	g.Scope.SelectorNamespace = "state"
+	gate, err := NewGate([]Rule{{
+		Name:    "state-lane",
+		Match:   Match{SelectorNamespace: "state"},
+		Require: Requirement{Count: 1},
+	}})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
 
 	wrong := coveredDispatch()
 	wrong.Namespaces = []string{"node"}
-	if g.Covers(wrong, grantNow) {
-		t.Error("grant scoped to state: covered a node: Selector")
+	if _, _, gated := gate.Evaluate(wrong); gated {
+		t.Error("a rule matching state: gated a node: Selector")
 	}
 
 	right := coveredDispatch()
 	right.Namespaces = []string{"state"}
-	if !g.Covers(right, grantNow) {
-		t.Error("grant scoped to state: did not cover a state: Selector")
+	if _, _, gated := gate.Evaluate(right); !gated {
+		t.Error("a rule matching state: did not gate a state: Selector")
+	}
+}
+
+// TestCoversIgnoresSelectorNamespaces is #482's central property: a Scope has
+// no namespace term, so Covers's decision does not vary with the dispatch's
+// namespace list at all.
+func TestCoversIgnoresSelectorNamespaces(t *testing.T) {
+	g := validGrant()
+
+	for _, namespaces := range [][]string{nil, {"node"}, {"relay", "node"}, {"state"}, {"tag"}} {
+		d := coveredDispatch()
+		d.Namespaces = namespaces
+		if !g.Covers(d, grantNow) {
+			t.Errorf("Covers(namespaces=%v) = false, want true — a Scope has no namespace term", namespaces)
+		}
 	}
 }
 
@@ -302,6 +340,32 @@ func TestValidGrantValidates(t *testing.T) {
 	}
 }
 
+// --- fail closed: a pre-#482 pinned Grant covers nothing ---
+
+// TestLegacyNamespacePinnedGrantCoversNothing is #482's fail-closed guarantee
+// at the domain level: a Grant read back with a legacy namespace pin is never
+// Active and never covers anything, whatever namespaces the dispatch carries.
+// Ignoring the pin would widen the Grant beyond what it was priced for, which
+// is the exact defect #482 removes.
+func TestLegacyNamespacePinnedGrantCoversNothing(t *testing.T) {
+	g := validGrant()
+	g.LegacyNamespacePin = "node"
+
+	if g.Active(grantNow) {
+		t.Error("a legacy-pinned grant is Active; it must fail closed")
+	}
+	for _, namespaces := range [][]string{{"node"}, {"relay", "node"}, nil} {
+		d := coveredDispatch()
+		d.Namespaces = namespaces
+		if g.Covers(d, grantNow) {
+			t.Errorf("Covers(namespaces=%v) = true for a legacy-pinned grant, want false", namespaces)
+		}
+	}
+	if err := g.Validate(); !errors.Is(err, ErrGrantInvalid) {
+		t.Errorf("Validate() = %v, want ErrGrantInvalid for a grant carrying a legacy namespace pin", err)
+	}
+}
+
 // --- the approver-facing text ---
 
 // TestSummarizeScopeStatesEveryBound: the approver must be able to read what
@@ -347,6 +411,87 @@ func TestOperationNameWithACommaIsRefused(t *testing.T) {
 
 	if err := s.Validate(); err == nil {
 		t.Fatal("an operation name containing the encoding's separator validated")
+	}
+}
+
+// --- pricing a Grant over every namespace (#482) ---
+
+// TestRequirementForScopeProbesEveryKnownNamespace: RequirementForScope must
+// walk every known namespace unconditionally, because a Scope has no
+// namespace term to narrow the walk with. RequirementForScope had zero direct
+// unit tests before #482; this fails if the walk is ever narrowed back to a
+// pinned namespace.
+func TestRequirementForScopeProbesEveryKnownNamespace(t *testing.T) {
+	var probed []string
+	recorder := func(d Dispatch) (Requirement, []string, bool) {
+		if len(d.Namespaces) != 1 {
+			t.Fatalf("probe carried %d namespaces, want exactly 1: %v", len(d.Namespaces), d.Namespaces)
+		}
+		probed = append(probed, d.Namespaces[0])
+		return Requirement{Count: 1}, []string{"r"}, true
+	}
+
+	if _, _, gated := RequirementForScope(validScope(), recorder); !gated {
+		t.Fatal("RequirementForScope reported ungated with an evaluate func that always gates")
+	}
+
+	seen := map[string]bool{}
+	for _, ns := range probed {
+		seen[ns] = true
+	}
+	want := []string{"node", "relay", "tag", "state"}
+	if len(seen) != len(want) {
+		t.Fatalf("probed namespaces = %v, want exactly %v", probed, want)
+	}
+	for _, ns := range want {
+		if !seen[ns] {
+			t.Errorf("RequirementForScope never probed namespace %q", ns)
+		}
+	}
+}
+
+// TestKnownNamespacesMatchGateRuleNamespaces pins that Rule.Validate accepts
+// exactly knownNamespaces (what RequirementForScope prices a Grant over) and
+// nothing else. Rule.Validate consults knownNamespaces directly rather than a
+// second hardcoded set (gate.go), so there is only one vocabulary to drift —
+// this is a regression test for that single source, not a comparison between
+// two independently-maintained lists.
+func TestKnownNamespacesMatchGateRuleNamespaces(t *testing.T) {
+	for _, ns := range knownNamespaces {
+		r := Rule{Name: "r", Match: Match{SelectorNamespace: ns}, Require: Requirement{Count: 1}}
+		if err := r.Validate(); err != nil {
+			t.Errorf("a gate rule matching selector_namespace %q did not validate: %v", ns, err)
+		}
+	}
+	bad := Rule{Name: "r", Match: Match{SelectorNamespace: "tenant"}, Require: Requirement{Count: 1}}
+	if err := bad.Validate(); err == nil {
+		t.Error("a gate rule matching an unknown namespace validated; knownNamespaces has drifted from Rule.Validate's vocabulary")
+	}
+}
+
+// TestRequirementForScopeTakesTheStrictestNamespaceRule is #482's worked
+// example, straight through the derivation: a Scope covering "relay:node"
+// dispatches must be priced at the STRICTER of a namespace-specific rule and
+// a namespace-agnostic one, because the derivation cannot know in advance
+// which namespaces a covered dispatch's Selector will use.
+func TestRequirementForScopeTakesTheStrictestNamespaceRule(t *testing.T) {
+	gate, err := NewGate([]Rule{
+		{Name: "relay-two", Match: Match{SelectorNamespace: "relay"}, Require: Requirement{Count: 2}},
+		{Name: "any", Match: Match{}, Require: Requirement{Count: 1}},
+	})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+
+	requirement, names, gated := RequirementForScope(validScope(), gate.Evaluate)
+	if !gated {
+		t.Fatal("RequirementForScope reported ungated with a gate that matches everything")
+	}
+	if requirement.Count != 2 {
+		t.Errorf("Count = %d, want 2 (the strictest rule the relay: probe hits)", requirement.Count)
+	}
+	if want := "any,relay-two"; strings.Join(names, ",") != want {
+		t.Errorf("MatchedRules = %v, want %s", names, want)
 	}
 }
 
@@ -400,12 +545,9 @@ func TestGrantShapeKey_DistinguishesScopeWalls(t *testing.T) {
 	rawExec := validScope()
 	rawExec.RawExec = true
 
-	otherNamespace := validScope()
-	otherNamespace.SelectorNamespace = "relay"
-
 	distinct := map[string]Scope{
 		"base": base, "account": otherAccount, "risk": otherRisk,
-		"ops": otherOps, "more ops": moreOps, "raw exec": rawExec, "namespace": otherNamespace,
+		"ops": otherOps, "more ops": moreOps, "raw exec": rawExec,
 	}
 	seen := make(map[string]string, len(distinct))
 	for name, s := range distinct {
@@ -424,14 +566,14 @@ func TestGrantShapeKey_DistinguishesScopeWalls(t *testing.T) {
 		t.Error("a case-only difference in the account or an Operation name changed the shape key, but Grant.Covers folds both")
 	}
 
-	// And NOT where it does not fold: Scope.Validate accepts SelectorNamespace
-	// case-sensitively, so "Node" is not a namespace at all.
-	unfolded := validScope()
-	unfolded.SelectorNamespace = "node"
-	upper := validScope()
-	upper.SelectorNamespace = "Node"
-	if HashGrantShape(unfolded) == HashGrantShape(upper) {
-		t.Error("the selector namespace was case-folded, but nothing that matches it folds")
+	// A legacy-pinned Grant's ShapeKey differs from an unpinned Grant of the
+	// same Scope: the pin is a Grant-level fact (#482), carried only through
+	// Grant.ShapeKey, and it must not collapse a dead pinned Grant onto a live
+	// unpinned one.
+	pinned := validGrant()
+	pinned.LegacyNamespacePin = "node"
+	if pinned.ShapeKey() == validGrant().ShapeKey() {
+		t.Error("a legacy-pinned Grant shares a shape key with an unpinned Grant of the same Scope")
 	}
 }
 
@@ -459,21 +601,68 @@ func TestGrantRequestCarriesTheGrantsShapeKey(t *testing.T) {
 // instead of a silently re-pointed stored hash: this test must be written and
 // observed green against unmodified HEAD, BEFORE grant.go is touched, so that
 // green-after actually proves byte-identical rather than merely asserting it.
+//
+// The golden below was recaptured UNPINNED, at unmodified HEAD, for #482: a
+// Scope no longer has a SelectorNamespace field, and HashScope's "namespace"
+// field is now always written empty (grant.go), so the digest of an unpinned
+// Scope must stay byte-identical to what it always was.
 func TestHashScopeDigestIsPinned(t *testing.T) {
 	startsAt := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	expiresAt := time.Date(2026, 8, 16, 14, 0, 0, 0, time.UTC)
 
 	s := Scope{
-		Account:           "gleipnir-prod",
-		RiskClass:         jobs.RiskClassMutate,
-		MaxFanOut:         10,
-		Operations:        []string{"service.restart", "pkg.install"},
-		RawExec:           true,
-		SelectorNamespace: "relay",
+		Account:    "gleipnir-prod",
+		RiskClass:  jobs.RiskClassMutate,
+		MaxFanOut:  10,
+		Operations: []string{"service.restart", "pkg.install"},
+		RawExec:    true,
 	}
 
-	const want = "df94e374dad73de3588ba88c560909becc982393e1fd7a78282dd6ccd251d3fc"
+	const want = "07b601d832fc522f3719d39cf09a1c595b3362d70a9d799a3ad66efd2a592d30"
 	if got := HashScope(s, startsAt, expiresAt, 20); got != want {
 		t.Errorf("HashScope digest moved:\n got  %s\n want %s\nHashScope is a live binding on stored grant plan_hash values and must not change", got, want)
+	}
+}
+
+// TestGrantShapeKeyDigestIsPinned is TestHashScopeDigestIsPinned's sibling for
+// HashGrantShape: stored approval_requests.shape_key depends on it staying
+// byte-identical for an unpinned Scope. Golden captured at the same unmodified
+// HEAD, for the same Scope.
+func TestGrantShapeKeyDigestIsPinned(t *testing.T) {
+	s := Scope{
+		Account:    "gleipnir-prod",
+		RiskClass:  jobs.RiskClassMutate,
+		MaxFanOut:  10,
+		Operations: []string{"service.restart", "pkg.install"},
+		RawExec:    true,
+	}
+
+	const want = "c6ed815e37c974fb7843d3de43ab093bc40d42afc4fd37adb2035bfc0f5748b2"
+	if got := HashGrantShape(s); got != want {
+		t.Errorf("HashGrantShape digest moved:\n got  %s\n want %s\nshape_key is a stored binding and must not change for an unpinned Scope", got, want)
+	}
+}
+
+// TestLegacyPinnedGrantShapeMatchesItsHeadDigest is the pinned counterpart:
+// before #482, HashGrantShape hashed Scope.SelectorNamespace directly. After
+// #482, a legacy pin reaches the same bytes only through Grant.ShapeKey (via
+// hashGrantShape's separate legacyNamespacePin parameter), so a Grant stored
+// pinned to "relay" before this change must still resolve to the digest it
+// always had.
+func TestLegacyPinnedGrantShapeMatchesItsHeadDigest(t *testing.T) {
+	g := Grant{
+		Scope: Scope{
+			Account:    "gleipnir-prod",
+			RiskClass:  jobs.RiskClassMutate,
+			MaxFanOut:  10,
+			Operations: []string{"service.restart", "pkg.install"},
+			RawExec:    true,
+		},
+		LegacyNamespacePin: "relay",
+	}
+
+	const want = "2545f3134b32c07ae7551e4938cc0d9c4c00b4f758a467c4f031570623bfb32c"
+	if got := g.ShapeKey(); got != want {
+		t.Errorf("legacy-pinned Grant.ShapeKey() moved:\n got  %s\n want %s\na stored shape_key for a pre-#482 pinned Grant must still recompute exactly", got, want)
 	}
 }

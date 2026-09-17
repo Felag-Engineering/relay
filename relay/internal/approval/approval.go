@@ -230,7 +230,10 @@ func mergeStricter(a, b Requirement) Requirement {
 	// intersection would make the Request undecidable by anyone — a
 	// configuration mistake that presents as a mysterious permanent park. The
 	// union is used instead, and the narrowing that matters (Count,
-	// RequesterAllowed, Channel) is applied above.
+	// RequesterAllowed, Channel) is applied above. This is an owner-accepted
+	// residual risk (ADR-0027 amendment 2026-09-16): overlapping rules can
+	// widen who may decide; Count, Channel, RequesterAllowed and TTL still
+	// merge strictest-wins.
 	out.Audience = unionAudience(out.Audience, b.Audience)
 	return out
 }

@@ -3486,6 +3486,28 @@ func TestApprovals_GrantOccupiesExactlyOneRow(t *testing.T) {
 	}
 }
 
+// TestApprovals_LegacyNamespacePinnedGrantHasNoScopeLine: a pre-#482 pinned
+// Grant is never Active, so it never appears in ActiveGrants — the only
+// source buildApprovalRows indexes grants from — and its queue row renders
+// with no Scope line at all, exactly as any other Grant ActiveGrants excludes
+// (revoked, expired, exhausted) would, even though this Grant's window is
+// open and it is neither revoked nor exhausted.
+func TestApprovals_LegacyNamespacePinnedGrantHasNoScopeLine(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	g.LegacyNamespacePin = "node"
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String())
+
+	if strings.Contains(content, "any namespace") {
+		t.Error("a legacy-pinned grant's row rendered a Scope line — it must never appear in the active list at all")
+	}
+	if strings.Contains(content, "up to 200 Nodes per dispatch") {
+		t.Error("a legacy-pinned grant's row named its Scope; ActiveGrants must have excluded it")
+	}
+}
+
 // TestApprovals_SameShapeIsGroupedAndTheKeyIsNeverRendered.
 //
 // The grouping is the anti-fatigue hint; the key is an unsalted SHA-256 over a
@@ -3917,6 +3939,33 @@ func TestApproval_ScopeIsAClosedDisclosure(t *testing.T) {
 	}
 	if !strings.Contains(content, "at most <b>200</b> Nodes per dispatch") {
 		t.Error("the Scope disclosure does not carry the fan-out ceiling")
+	}
+}
+
+// TestApproval_LegacyNamespacePinnedGrantCardReadsAsCoveringNothing is #482's
+// Console proof: a Grant stored before namespace pinning was removed from a
+// Scope reaches this card through GrantForApproval — which, unlike
+// ActiveGrants, does not filter by Active — and it must not read as if it
+// still pre-approves anything.
+func TestApproval_LegacyNamespacePinnedGrantCardReadsAsCoveringNothing(t *testing.T) {
+	g := consoleGrant("grant-1", "ap-grant", 200, 20)
+	g.LegacyNamespacePin = "node"
+	d := renderableDeps()
+	d.Approvals = &fakeApprovals{pending: []approval.Request{grantRequest(g, approval.StatePending)}, grants: []approval.Grant{g}}
+
+	content := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals/ap-grant").Body.String())
+
+	if !strings.Contains(content, "This Grant covers nothing.") {
+		t.Error("a legacy namespace-pinned grant's card does not say it covers nothing")
+	}
+	if !strings.Contains(content, "retired pin") || !strings.Contains(content, "<code>node</code>") {
+		t.Errorf("the card does not name the retired pin: %s", content)
+	}
+	if strings.Contains(content, "pre-approves every dispatch inside these walls") {
+		t.Error("a legacy-pinned grant's card still claims to pre-approve dispatches")
+	}
+	if strings.Contains(content, "widest admissible dispatch") {
+		t.Error("a legacy-pinned grant's card still claims a quorum derived at this Scope's widest admissible dispatch")
 	}
 }
 

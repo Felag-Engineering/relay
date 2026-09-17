@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -162,6 +163,60 @@ func TestRequestGrantDerivesTheStrictestRequirement(t *testing.T) {
 	}
 	if narrow.Require.Count != 1 {
 		t.Errorf("Count = %d, want 1 — a ceiling below the rule's floor cannot release a dispatch that rule would gate", narrow.Require.Count)
+	}
+}
+
+// TestRequestGrantWorkedExample482ParksAtTwoApprovals is #482's worked
+// example straight through RequestGrant: a gate holding a namespace-specific
+// rule and a namespace-agnostic one must price a Grant at the STRICTER of the
+// two, because the Grant's Scope has no namespace term and so can release a
+// dispatch touching either.
+func TestRequestGrantWorkedExample482ParksAtTwoApprovals(t *testing.T) {
+	gate, err := approval.NewGate([]approval.Rule{
+		{Name: "relay-two", Match: approval.Match{SelectorNamespace: "relay"},
+			Require: approval.Requirement{Count: 2, Channel: approval.ChannelOutOfBand, TTL: time.Hour}},
+		{Name: "any", Match: approval.Match{},
+			Require: approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}},
+	})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	s, approvals, _, _ := grantMgmtFixture(t, gate, &spyApprovalAuthorizer{})
+
+	_, request, err := s.RequestGrant(context.Background(), machineRequester, grantRequestFixture())
+	if err != nil {
+		t.Fatalf("RequestGrant: %v", err)
+	}
+	if request.Require.Count != 2 {
+		t.Fatalf("Require.Count = %d, want 2 — the strictest rule a covered dispatch could face", request.Require.Count)
+	}
+	// RequirementForScope sorts MatchedRules (grant.go), so a plain slices.Equal
+	// is exact here rather than order-insensitive.
+	if want := []string{"any", "relay-two"}; !slices.Equal(request.MatchedRules, want) {
+		t.Errorf("MatchedRules = %v, want %v", request.MatchedRules, want)
+	}
+
+	// One approval is one of two, not a release.
+	approvals.approve(t, request.ID, "acct-ana", "ana", apNow)
+	updated := approvals.byID[request.ID]
+	if updated.Satisfied(apNow) {
+		t.Fatal("one approval satisfied a count:2 requirement")
+	}
+	if got := updated.Progress(); got != "1 of 2" {
+		t.Errorf("Progress() = %q, want %q", got, "1 of 2")
+	}
+
+	// And the worked example's own dispatch — relay: and node: together —
+	// really does face the stricter requirement the Grant was priced at.
+	d := approval.Dispatch{
+		RiskClass:  jobs.RiskClassMutate,
+		FanOut:     3,
+		Namespaces: []string{"relay", "node"},
+		Account:    "gleipnir-prod",
+		Operation:  "service.restart",
+	}
+	if req, _, gated := gate.Evaluate(d); !gated || req.Count < 2 {
+		t.Errorf("gate.Evaluate(worked-example dispatch) = (%+v, gated=%v), want Count >= 2", req, gated)
 	}
 }
 

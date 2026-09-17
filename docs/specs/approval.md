@@ -397,6 +397,11 @@ None open. Deciding from the Console (#435) is in scope, not open.
 
 ## History
 
+- `2026-09-16` — namespace pinning removed from approval-grant Scope in code: the Control
+  API field and any MCP grant tool are gone, a request still naming it is refused with 400,
+  a Grant's requirement is now derived over every namespace, and a stored pinned Grant covers
+  nothing. Spec is still `aspirational`, unmigrated to claim IDs; evidence not recorded here
+  (#482).
 - `2026-09-14` — worked through with the owner. A default gate file ships: `read` ungated,
   `mutate` and Raw Exec at in-band confirmation, second-person and out-of-band kept and
   configurable. Approval grants stay but narrow — one Account, no namespace pinning, never Raw

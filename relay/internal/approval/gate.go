@@ -97,6 +97,19 @@ func hasNamespace(have []string, want string) bool {
 	return false
 }
 
+// isKnownNamespace reports whether ns is exactly one of knownNamespaces
+// (grant.go), case-sensitively. It is the single vocabulary check behind
+// Rule.Validate's selector_namespace acceptance, so that list can never drift
+// from what RequirementForScope prices a Grant over.
+func isKnownNamespace(ns string) bool {
+	for _, known := range knownNamespaces {
+		if known == ns {
+			return true
+		}
+	}
+	return false
+}
+
 // Rule pairs a Match with the Requirement it imposes.
 type Rule struct {
 	// Name is an operator-chosen label, carried into the audit record so a
@@ -137,11 +150,18 @@ func (r Rule) Validate() error {
 	if r.Match.MinFanOut < 0 {
 		return fmt.Errorf("approval: rule %q: min_fan_out must not be negative", r.Name)
 	}
-	switch r.Match.SelectorNamespace {
-	case "", "node", "relay", "tag", "state":
-	default:
+	// Consults knownNamespaces (grant.go) rather than a second hardcoded list:
+	// that is the one vocabulary a Grant is priced over, and a namespace added
+	// there without being added here would let a Grant be priced below a rule
+	// this Validate would happily accept. The accepted set and the error text
+	// are unchanged — knownNamespaces is exactly {node, relay, tag, state} —
+	// and the comparison stays case-SENSITIVE, unlike hasNamespace's matching
+	// of a dispatch's namespaces, because this validates a rule's own
+	// configuration rather than something the Selector grammar has already
+	// normalized.
+	if ns := r.Match.SelectorNamespace; ns != "" && !isKnownNamespace(ns) {
 		return fmt.Errorf("approval: rule %q: unknown selector namespace %q (want node, relay, tag, or state)",
-			r.Name, r.Match.SelectorNamespace)
+			r.Name, ns)
 	}
 	return nil
 }

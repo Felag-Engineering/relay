@@ -71,12 +71,11 @@ func seedGrantRequest(t *testing.T, st *Store, requestID, grantID string, scope 
 
 func backfillScope() approval.Scope {
 	return approval.Scope{
-		Account:           "gleipnir-prod",
-		RiskClass:         jobs.RiskClassMutate,
-		MaxFanOut:         10,
-		Operations:        []string{"service.restart", "pkg.install"},
-		RawExec:           true,
-		SelectorNamespace: "node",
+		Account:    "gleipnir-prod",
+		RiskClass:  jobs.RiskClassMutate,
+		MaxFanOut:  10,
+		Operations: []string{"service.restart", "pkg.install"},
+		RawExec:    true,
 	}
 }
 
@@ -108,6 +107,32 @@ func TestBackfill_RecomputesGrantRequestsExactly(t *testing.T) {
 	}
 	if approval.IsLegacyShapeKey(restored) {
 		t.Error("a recomputable grant request was stamped legacy")
+	}
+}
+
+// TestBackfill_RecomputesALegacyPinnedGrantRequestExactly is
+// TestBackfill_RecomputesGrantRequestsExactly's sibling for a pre-#482 row: a
+// Grant stored with a namespace pin (scope_selector_namespace still holding a
+// value) must recompute to exactly the shape key a Grant carrying that value
+// as LegacyNamespacePin would produce — because that is what scanGrant reads
+// it back as.
+func TestBackfill_RecomputesALegacyPinnedGrantRequestExactly(t *testing.T) {
+	st, db := openStore(t)
+	scope := backfillScope()
+	seedGrantRequest(t, st, "req-grant", "grant-1", scope)
+	if _, err := db.Exec(`UPDATE approval_grants SET scope_selector_namespace = 'node' WHERE grant_id = 'grant-1'`); err != nil {
+		t.Fatalf("pin the stored grant: %v", err)
+	}
+
+	blankShapeKeys(t, db)
+	if err := backfillShapeKeys(context.Background(), db); err != nil {
+		t.Fatalf("backfillShapeKeys: %v", err)
+	}
+
+	restored := shapeKeyOf(t, db, "req-grant")
+	want := approval.Grant{Scope: scope, LegacyNamespacePin: "node"}.ShapeKey()
+	if restored != want {
+		t.Errorf("restored key = %q, want the legacy-pinned Grant's own key %q", restored, want)
 	}
 }
 

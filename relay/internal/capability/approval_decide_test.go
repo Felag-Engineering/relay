@@ -583,6 +583,85 @@ func TestGrantReleasesAGatedDispatchWithoutParking(t *testing.T) {
 	}
 }
 
+// TestLegacyNamespacePinnedGrantParksInsteadOfReleasing is #482's fail-closed
+// guarantee at the dispatch seam: a Grant stored with a pre-#482 namespace
+// pin must not release a dispatch it would have released under the old
+// containment semantics.
+//
+// The Selector deliberately carries a real node: term (and a relay: one) —
+// NOT an empty Selector. An empty Selector's Namespaces list is nil, and
+// hasNamespace(nil, "node") is already false, so a test built on Selector{}
+// would pass even for a WRONG fix that moved the pin check into Covers by
+// containment rather than into Active: it would never actually exercise the
+// pin. This dispatch's Namespaces is exactly what the pin used to CONTAIN.
+//
+// The unpinned control below proves the park is caused by the pin and not by
+// something else about this Selector or registry: the identical dispatch,
+// against the identical Grant minus LegacyNamespacePin, must release.
+func TestLegacyNamespacePinnedGrantParksInsteadOfReleasing(t *testing.T) {
+	run := func(t *testing.T, g approval.Grant) (parked bool, disp *spyDispatcher, claims int) {
+		t.Helper()
+		reg := registry.NewInMemory()
+		if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+		if err := reg.SetRelayLabels("node-a", map[string]string{"quarantine": "on"}); err != nil {
+			t.Fatalf("SetRelayLabels: %v", err)
+		}
+
+		store := &memGrants{grant: g}
+		d := &spyDispatcher{jobID: "job-1"}
+		s := New(reg,
+			WithAuthorizer(&spyAuthorizer{}),
+			WithCapChecker(&spyCapChecker{}),
+			WithAuditSink(&spyAuditSink{}),
+			WithFreeze(&fakeFreezeStore{}),
+			WithApprovals(gateEverything(t, 1), newMemApprovals(), &spyApprovalAuthorizer{}),
+			WithApprovalGrants(store),
+			WithClock(func() time.Time { return apNow }),
+		)
+		s.disp = d
+
+		sel, err := ParseSelector("relay:quarantine=on,node:role=web")
+		if err != nil {
+			t.Fatalf("ParseSelector: %v", err)
+		}
+
+		_, err = s.Run(context.Background(), machineRequester, sel, mutateAct())
+		var pe *ParkedError
+		return errors.As(err, &pe), d, store.claims
+	}
+
+	t.Run("pinned", func(t *testing.T) {
+		g := coveringGrant()
+		g.LegacyNamespacePin = "node"
+
+		parked, disp, claims := run(t, g)
+		if !parked {
+			t.Fatal("Run did not park — a legacy namespace-pinned grant must cover nothing")
+		}
+		if disp.called {
+			t.Error("the dispatcher was called; a legacy-pinned grant must not release a dispatch")
+		}
+		if claims != 0 {
+			t.Errorf("claims = %d, want 0 — Covers must refuse before a use is ever counted", claims)
+		}
+	})
+
+	t.Run("unpinned control", func(t *testing.T) {
+		parked, disp, claims := run(t, coveringGrant())
+		if parked {
+			t.Fatal("Run parked with an unpinned Grant of the identical Scope — the pin, not the Selector, must be what parks the pinned case")
+		}
+		if !disp.called {
+			t.Error("the dispatcher was not called; an unpinned Grant covering this dispatch must release it")
+		}
+		if claims != 1 {
+			t.Errorf("claims = %d, want 1", claims)
+		}
+	})
+}
+
 // TestGrantIsConsultedOnlyAfterTheGate: a grant can never CREATE a requirement,
 // and an ungated deployment must be unaffected by one entirely.
 func TestGrantIsConsultedOnlyAfterTheGate(t *testing.T) {
