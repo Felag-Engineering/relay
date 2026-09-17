@@ -57,7 +57,8 @@ role's reach can be read in one place.
 | Read the registry, vocabulary and audit metadata | `viewer` | `query.md`, `audit-and-read-lane.md` |
 | Request an Operation | `operator` | `execution.md` |
 | Request Raw Exec | `admin` | `execution.md` |
-| Cancel any Job, not only one's own | `operator` | `execution.md` |
+| Cancel any Job, not only one's own | `operator`, **human Account only** | `execution.md` |
+| Cancel a Job it requested | `operator`, machine Account | `execution.md` |
 | Add and remove `tag:` labels, on every surface including MCP | `operator` | `selectors-and-labels.md` |
 | Engage a Freeze over the Control API | `operator`, **human Account only** | `freeze.md` |
 | Release a Freeze over the Control API | `admin`, with a reason | `freeze.md` |
