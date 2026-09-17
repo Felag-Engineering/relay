@@ -22,8 +22,10 @@ because you are one of several running at once:
    runner's worktree.
 2. **Stage 0's clean-tree check** means a clean tree in this worktree. You start on a throwaway
    branch; Stage 2 creates the real `loop/issue-<n>-…` branch from `origin/<default>` as usual.
-3. **Every `make verify` runs with `RELAY_SMOKE_PORT=<the port you were given>`** in its
-   environment, so your smoke test does not reach another runner's Relay.
+3. **Every `make` runs with `RELAY_SMOKE_PORT=<the port you were given>` and
+   `GOLANGCI_LINT_CACHE=<worktree>/.dev-loop/golangci-cache`** in its environment, so your smoke
+   test does not reach another runner's Relay and golangci-lint never reads results for another
+   runner's files from the shared cache (the first batch hit a false staticcheck failure that way).
 4. **Never end your turn while anything is still running.** Ending a turn stops the pipeline
    silently: nothing wakes you when a background command finishes. A command that can outlast one
    tool call — `make verify`, a Codex review — runs in the background, and you then wait in the
