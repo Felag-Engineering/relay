@@ -1,7 +1,8 @@
 # 14 — Approval queue
 
 **No artboard** (the single card is artboard 6). The list of what is waiting. **Milestone v0.6.0**
-read-only; **v0.7.0** to decide.
+shipped it read-only; **#453** (pulled forward from v0.7.0) added deciding on the object — this
+screen stays structurally read-only, unchanged.
 
 **Governing:** ADR-0027, ADR-0029, invariants #13.
 **Backend:** pending-approval Job state; the decision endpoint; the shape key (D10).
@@ -73,9 +74,11 @@ should not have to find their own item in someone else's list.
       a park creates no Job to count Tasks on (#462, blocked on #469). The tiebreak is creation
       time and then id, which is arbitrary but stable.
 - [x] No decision is possible without opening the approval object, except bulk deny with step-up.
-      Stronger than asked in v0.6.0: **no control of any kind exists on either screen**, and the
-      Console's approval seam has no decision method, no `RequestGrant` and no `RevokeGrant` on
-      it — the criterion is a fact about the interface. Every filter is an anchor. Bulk deny is
+      Still true after #453 added deciding, now enforced two ways rather than one: **the queue
+      itself carries no control of any kind** — the Console's approval seam (`ApprovalReader`) has
+      no decision method, no `RequestGrant` and no `RevokeGrant` on it, a fact about the interface
+      — and the decision ROUTE, `POST /console/approvals/{approval_id}/decision`, exists only on
+      the object's path and matches no queue row. Every filter is still an anchor. Bulk deny stays
       v0.7.0.
 - [x] A Grant occupies exactly one row.
       Structural: the queue lists Requests and there is exactly one Request per Grant. The Jobs a

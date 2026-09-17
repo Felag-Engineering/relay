@@ -1,7 +1,8 @@
 # 08 — Approval object
 
 **Artboard 6.** One pending action awaiting human sign-off. The highest-stakes rendering in the
-system. **Milestone v0.6.0** read-only; **v0.7.0** to decide.
+system. **Milestone v0.6.0** shipped it read-only; **#453** (pulled forward from v0.7.0) added
+deciding — approve/deny behind step-up, for a Plan only, never a Grant.
 
 **Governing:** ADR-0027, ADR-0029, `approval-and-attribution.md`, invariants #13.
 **Backend:** pending-approval Job state and the decision endpoint (the Approval Callout
@@ -102,14 +103,28 @@ and Activity (spec 04) shows either.
       box breaks the line rhythm of the paragraph the whole card is built around. **Stated limit:**
       all of this is asserted from the stylesheet, not from a browser. The 390px rendering and the
       one in-sentence link both still need the manual pass.
-- [ ] Approve and Deny are visually identical in weight; neither is focused on load.
-      **(v0.7.0.)** No decision control exists in v0.6.0.
-- [ ] Neither decision submits without step-up. **(v0.7.0.)**
+- [x] Approve and Deny are visually identical in weight; neither is focused on load.
+      **(#453.)** One class, `.decideanswer`, renders both buttons; the stylesheet carries no rule
+      keyed on `value="approve"`/`value="deny"` to diverge them, and neither button carries
+      `autofocus`. Asserted from the markup and the stylesheet
+      (`TestDecide_ApproveAndDenyAreVisuallyIdentical`), the same stated limit as the 390px
+      criterion above: a browser has not painted the two pixel-for-pixel identical.
+- [x] Neither decision submits without step-up. **(#453.)** A password field is inline on the
+      decision form itself and `POST /console/approvals/{id}/decision` verifies it, in the same
+      request, immediately before calling `capability.Service.DecideApproval` — never a separate
+      re-auth round trip. **Deviation from the window model this criterion implies:** step-up is
+      demanded on **every** decision rather than consulting the five-minute recent-auth window
+      (`StepUpFresh`/`ErrStepUpRequired` stay uncalled) — approving three requests costs three
+      passwords. Stricter than the window, which invariant 10 permits (an adapter may offer less,
+      never more), and it is what kills the one-click rubber stamp this whole screen exists to
+      prevent.
 - [ ] A Grant cannot be approved without its Scope having been expanded.
-      **(v0.7.0 for the enforcement.)** v0.6.0 ships the closed `<details>` disclosure carrying
-      every Scope field, the derived worst-case Requirement, and the Jobs released so far — and
-      states the rule. There is no submit control to gate, and the copy does not pretend
-      otherwise.
+      **(Deferred beyond #453.)** v0.6.0 shipped the closed `<details>` disclosure; #453 added the
+      decision control for a Plan but deliberately **refuses to decide a Grant at all** rather than
+      deciding one without the expansion gate — the card renders no form for a Grant-shaped
+      Request, and a POST against one is refused (409, "this Console does not enforce that yet").
+      Answering a Grant still goes through the Control API. The enforcement itself — requiring the
+      expansion before a decision is accepted — remains unbuilt.
 - [x] The diff callout is present whenever a comparable prior approval exists, and its absence is
       stated when one does not.
       It renders **only what is genuinely stored**: for a Grant, the real numbers (the fan-out
@@ -120,8 +135,11 @@ and Activity (spec 04) shows either.
       rendered. All three absences are stated — no prior of this shape, a shape that was never
       computed, and inputs missing from the audit trail. Nothing is ever parsed out of the
       summary.
-- [ ] The decision is bound to the plan hash; a plan that changed is not approvable.
-      **(v0.7.0.)** v0.6.0 renders the plan hash as the thing a decision commits to.
+- [x] The decision is bound to the plan hash; a plan that changed is not approvable.
+      **(#453.)** The hidden `plan_hash` field is what the surface submits (never re-derived from
+      the record), and `DecideApproval` refuses a hash that does not match with
+      `approval.ErrPlanChanged`, rendered as "the Plan moved since this page was rendered; reload
+      and read it again — your answer was not recorded."
 
 ### Deviation from the card order above
 

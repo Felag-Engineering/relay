@@ -272,15 +272,25 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
-		// Cancel (#595): the Console's one write seam. d.capability already
-		// implements CancelJob — the same method the Control API and MCP
-		// call — so no adapter is built for it; the role floor is operator,
-		// the scope beyond it differs by Account kind (human: any Job,
-		// machine: only a Job it requested — #614), and both that and the
-		// audit row live in the capability layer, not here. Execution stays
-		// false, unchanged: Cancel cannot run anything, only ask something
-		// already running to stop.
+		// Cancel (#595): one of the Console's two write seams. d.capability
+		// already implements CancelJob — the same method the Control API and
+		// MCP call — so no adapter is built for it; the role floor is
+		// operator, the scope beyond it differs by Account kind (human: any
+		// Job, machine: only a Job it requested — #614), and both that and
+		// the audit row live in the capability layer, not here. Execution
+		// stays false, unchanged: Cancel cannot run anything, only ask
+		// something already running to stop.
 		Cancel: d.capability,
+		// Decide (#453): the Console's other write seam, and the same
+		// *capability.Service the Control API's out-of-band decision
+		// endpoint (POST /api/v1/approvals/{id}/decision) and MCP's
+		// approve_request call — so quorum, audience, requester exclusion,
+		// channel strength and the audit record stay one implementation.
+		// Execution stays false, unchanged: this route composes nothing, it
+		// answers a Plan the Relay already built (decide.go's header).
+		// d.consoleAuth is already wired above as Auth, so step-up needs no
+		// new wiring.
+		Decide: d.capability,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux))
 }

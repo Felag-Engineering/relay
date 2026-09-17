@@ -1,7 +1,8 @@
 package console
 
-// approvals.go is the queue (spec 14) and the single approval object (spec 08),
-// both READ-ONLY in v0.6.0.
+// approvals.go is the queue (spec 14) and the single approval object (spec
+// 08). The queue is read-only, structurally; the object carries the decision
+// control since #453 — see the two section headers below.
 //
 // # Why there is no Approve button here, and will not be one on a row
 //
@@ -41,16 +42,17 @@ package console
 // machine's own description, and re-deriving a number from it would hand back
 // the fidelity the summary was invented to protect.
 //
-// # v0.6.0 is read-only, structurally
+// # The queue stays structurally read-only; the object does not
 //
-// The Console's approval seam (seams.go) has five reads on it and no decision
-// method, no RequestGrant and no RevokeGrant. The acceptance criterion "zero
-// mutating routes in the Console" is therefore a fact about the interface
-// rather than a property of these handlers, and #435 adds deciding through the
-// capability layer's decision method — the same one the Control API calls, so
-// quorum, audience, requester exclusion and channel strength stay one
-// implementation. On these two screens that also means NO FORM, NO BUTTON and
-// NO INPUT: every filter below is an anchor.
+// The Console's approval seam (seams.go) has five reads on it and STILL no
+// decision method, no RequestGrant and no RevokeGrant — deciding (#453) is
+// reached through ApprovalDecider, its OWN seam in decide.go, for the same
+// reason JobCanceller lives in cancel.go rather than here. The queue below
+// remains read-only exactly as before: NO FORM, NO BUTTON and NO INPUT, every
+// filter an anchor. The approval OBJECT is now the one place in the Console a
+// decision can be made, which is the point of the header above — deciding
+// happens on the object, never in the list, and that reasoning does not
+// weaken because a demo wants fewer clicks.
 
 import (
 	"context"
@@ -61,6 +63,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -1010,6 +1013,55 @@ type approvalView struct {
 	// authorize a Scope and the store could not say. The card renders neither
 	// the Scope nor the Plan action block, and says which question is open.
 	GrantUnreadable bool
+
+	// Decide carries the decision form's data (#453). Nil means no control —
+	// for every reason: the seams are unwired, the caller's role is below the
+	// floor, this Request is not pending, the caller is the excluded
+	// requester, the caller already signed, this Request authorizes a Grant,
+	// or the Grant lookup itself failed. See buildApprovalView for the full
+	// conjunction, and the five fields below for which specific reason the
+	// card names when Decide is nil.
+
+	// CallerAlreadySigned is true when the caller's OWN Account already
+	// recorded a Decision on this Request (count:2's partial-state case).
+	// Computed with BOTH sides of the identity comparison non-empty,
+	// following approvalStandingFor's stated rule (approvalStandingFor's
+	// doc): comparing "" to "" would mark every unattributed decision as the
+	// caller's own. CallerSignedAt is that decision's stamp, for the card's
+	// "you signed this at …" sentence.
+	CallerAlreadySigned bool
+	CallerSignedAt      string
+
+	// DecideSeamsUnwired and CallerRoleBelowFloor name two more of the five
+	// reasons the card can offer no control, purely for that explanation —
+	// neither is a security decision, both mirror what decideOffered already
+	// decided rather than re-deciding it. CallerRoleBelowFloor is real and
+	// reachable: the CARD's own mount floor is RoleViewer, so a viewer can
+	// read a pending Request perfectly well and simply is not offered the
+	// control the operator-floor decide route requires.
+	DecideSeamsUnwired   bool
+	CallerRoleBelowFloor bool
+
+	Decide *approvalDecideControl
+}
+
+// approvalDecideControl is the decision form's rendered data (#453).
+//
+// Authorising is the step-up prompt's object (spec 11: "a step-up prompt must
+// state what it is authorising"), built from the stored Relay-authored
+// Summary plus the Operation category — never re-derived or parsed out of
+// prose. See decideAuthorising.
+type approvalDecideControl struct {
+	Action      string
+	CSRFToken   string
+	PlanHash    string
+	Authorising string
+}
+
+// decideAuthorising builds the step-up prompt's object from fields the
+// domain already computed, never by parsing Summary further.
+func decideAuthorising(operation, summary string) string {
+	return "Authorising this " + operation + ": " + summary
 }
 
 func handleApproval(d Deps) http.HandlerFunc {
@@ -1046,7 +1098,7 @@ func handleApproval(d Deps) http.HandlerFunc {
 		// a trail that cannot record. The latch keeps the second case a
 		// refusal without restructuring the builders (screen.go).
 		d, lane := latched(d)
-		v := buildApprovalView(r.Context(), d, caller, req, d.now())
+		v := buildApprovalView(r.Context(), d, caller, req, d.now(), p.CSRFToken)
 		if refusedUnaudited(w, lane, "this approval's audit trail") {
 			return
 		}
@@ -1064,7 +1116,7 @@ func handleApproval(d Deps) http.HandlerFunc {
 // matches Job detail. Do not "optimise" the audit away — but do keep the count
 // bounded and honest, because each of those reads is also this principal's own
 // exposure on the read-egress screen.
-func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal, req approval.Request, now time.Time) approvalView {
+func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal, req approval.Request, now time.Time, csrfToken string) approvalView {
 	ttl := req.ExpiresAt.Sub(now)
 	lapsed := req.State == approval.StatePending && req.PastDeadline(now)
 	v := approvalView{
@@ -1108,6 +1160,13 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 		if dec.Approve {
 			v.Approvers = append(v.Approvers, row)
 		}
+		// Both sides non-empty, following approvalStandingFor's stated rule:
+		// comparing "" to "" would mark every unattributed Decision as the
+		// caller's own.
+		if dec.AccountID != "" && caller.AccountID != "" && dec.AccountID == caller.AccountID {
+			v.CallerAlreadySigned = true
+			v.CallerSignedAt = row.At
+		}
 	}
 
 	grant, lookup := grantForApproval(ctx, d, req.ID)
@@ -1124,6 +1183,30 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 		v.GrantUnreadable = true
 	}
 	v.Diff = buildApprovalDiff(ctx, d, caller, req, grant, lookup, v.Action, now)
+
+	v.DecideSeamsUnwired = d.Decide == nil || d.Auth == nil
+	v.CallerRoleBelowFloor = !accounts.Role(caller.Role).AtLeast(accounts.RoleOperator)
+
+	// Every one of these is an EXPLANATION of a refusal the domain would make
+	// anyway, never the control itself: the POST is refused by the
+	// capability layer and the domain regardless of what was drawn here
+	// (invariant 10 — an adapter narrows only). Decide is populated only when
+	// every one holds, so the absence of a form is never the only thing
+	// standing between a caller and a decision.
+	if decideOffered(d, accounts.Role(caller.Role)) &&
+		v.Pending &&
+		!v.CallerIsExcludedRequester &&
+		!v.CallerAlreadySigned &&
+		!v.Grant.Present &&
+		!v.GrantUnreadable &&
+		!v.AudienceMalformed {
+		v.Decide = &approvalDecideControl{
+			Action:      decideApprovalAction(req.ID),
+			CSRFToken:   csrfToken,
+			PlanHash:    req.PlanHash,
+			Authorising: decideAuthorising(v.Operation, v.Summary),
+		}
+	}
 	return v
 }
 
@@ -1831,18 +1914,53 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 </section>
 {{end}}
 
-{{if .Pending}}
-<p class="gap"><b>Deciding is not available in this Console yet.</b> Approve and deny arrive with
-step-up re-authentication, because a session proves a human authorised the session and step-up
-proves a human intended this act. Until then, answer through the Control API's decision endpoint —
-which is the same code path, and will stay the one that decides.</p>
-{{else if eq .State "expired"}}
-<p class="gap"><b>The TTL lapsed at {{.Expires}}.</b> The dispatch was never released and this
-request can no longer be answered. The requester has to ask again, which creates a new Request with
-its own plan hash — an approval is a decision about a moment, not a standing permission.</p>
+{{with .Decide}}
+<form method="post" action="{{.Action}}" class="decideform">
+  <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+  <input type="hidden" name="plan_hash" value="{{.PlanHash}}">
+  <label for="decide-reason">Reason (optional) — the only part of the record that says why</label>
+  <textarea id="decide-reason" name="reason" rows="2"></textarea>
+  <label for="decide-password">{{.Authorising}}</label>
+  <input id="decide-password" name="password" type="password" autocomplete="current-password" required>
+  <div class="decideanswers">
+    <button type="submit" name="answer" value="approve" class="decideanswer">Approve</button>
+    <button type="submit" name="answer" value="deny" class="decideanswer">Deny</button>
+  </div>
+</form>
 {{else}}
-<p class="gap"><b>This request was {{.State}}.</b> The decisions above name who answered, over which
-channel, and when. Approvals are not re-openable: a late answer cannot revive a resolved Request.</p>
+  {{if .Pending}}
+    {{if .CallerIsExcludedRequester}}
+    <p class="gap"><b>You cannot decide this one.</b> You are the requester this rule excludes — see
+    above for why. A second, distinct Account has to answer. Answer through the Control API's
+    decision endpoint if a different Account needs to.</p>
+    {{else if .CallerAlreadySigned}}
+    <p class="gap"><b>You already signed this at {{.CallerSignedAt}}.</b> A second, distinct approver
+    is needed to complete this request's quorum — deciding again would not be that second signature.
+    A different Account can still answer, here or through the Control API.</p>
+    {{else if or .Grant.Present .GrantUnreadable}}
+    <p class="gap"><b>This Console does not decide a Grant.</b> {{if .GrantUnreadable}}The Grant store
+    could not be read, so this Console cannot tell whether this Request authorizes a Scope or a single
+    Plan, and will not decide either while that is unknown.{{else}}This Request authorizes a Scope, not
+    one Plan, and spec 08 requires a Grant's Scope to have been expanded at least once before it is
+    approved — this Console does not enforce that yet.{{end}} Answer it through the Control API.</p>
+    {{else if .DecideSeamsUnwired}}
+    <p class="gap"><b>Deciding is not wired into this Relay's Console.</b> Answer through the Control
+    API's decision endpoint instead — the same code path, and the one that always decides.</p>
+    {{else if .CallerRoleBelowFloor}}
+    <p class="gap"><b>Your role cannot decide this.</b> Deciding requires the operator role or above.
+    Answer through the Control API if your Account holds it.</p>
+    {{else}}
+    <p class="gap"><b>Deciding is not offered to you on this Request.</b> Answer through the Control
+    API's decision endpoint instead — the same code path, and the one that always decides.</p>
+    {{end}}
+  {{else if eq .State "expired"}}
+  <p class="gap"><b>The TTL lapsed at {{.Expires}}.</b> The dispatch was never released and this
+  request can no longer be answered. The requester has to ask again, which creates a new Request with
+  its own plan hash — an approval is a decision about a moment, not a standing permission.</p>
+  {{else}}
+  <p class="gap"><b>This request was {{.State}}.</b> The decisions above name who answered, over which
+  channel, and when. Approvals are not re-openable: a late answer cannot revive a resolved Request.</p>
+  {{end}}
 {{end}}
 {{end}}
 `)

@@ -32,6 +32,11 @@ package console
 // configuration — Execution — is a mirror the composition root sets, not a value
 // this package can read from anywhere.
 //
+// There are now TWO write seams on Deps — JobCanceller (cancel.go, #595) and
+// ApprovalDecider (decide.go, #453) — and neither lives in this file, on
+// purpose: each gets its own file so this file's "every seam here is
+// read-only" claim stays true of seams.go without qualification.
+//
 // The filtered, paginated, per-principal audit/Job query lane landed in the
 // capability layer as issue #441 — see QueryReader below. Job detail was the
 // first screen to migrate onto it (#423) and reads nothing else: its counts
@@ -123,16 +128,17 @@ type AuditReader interface {
 // ApprovalReader is the approval queue and the approval object, read-only
 // (ADR-0027). *capability.Service satisfies all five methods.
 //
-// DecideApproval is absent, and so are RequestGrant and RevokeGrant. That
-// absence is v0.6.0's acceptance criterion "zero mutating routes in the
-// Console": there is no method here a handler could call to change an approval,
-// open a window, or close one. RevokeGrant is worth naming explicitly because
-// it is the one a future editor is most likely to add — closing a window feels
+// DecideApproval is still absent FROM THIS INTERFACE, which is still
+// read-only — the decision method lives on ApprovalDecider in decide.go
+// (#453), for the same reason JobCanceller lives in cancel.go rather than
+// here: this file's "every seam here is read-only" header stays true without
+// qualification. RequestGrant and RevokeGrant both remain absent from every
+// seam this package holds. RevokeGrant is worth naming explicitly because it
+// is the one a future editor is most likely to add — closing a window feels
 // safer than opening one — and it is still a write on the approval mechanism.
-// Deciding arrives in v0.7.0 (#435) behind step-up, and when it does it comes
-// through the capability layer's decision method, which is the same one the
-// Control API calls, so quorum, audience, requester-exclusion and channel
-// strength are one implementation.
+// Deciding, where it is offered, comes through the capability layer's
+// decision method, the same one the Control API and MCP call, so quorum,
+// audience, requester-exclusion and channel strength stay one implementation.
 //
 // The three reads beyond the queue are what the approval object renders:
 // LastApprovedOfSameShape is the anti-fatigue diff's lookup (#415, D10),

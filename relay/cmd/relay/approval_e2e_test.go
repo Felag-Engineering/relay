@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,8 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -47,12 +50,21 @@ const gateAllMutates = `{
 
 // startGatedRelay boots the composition root with approval gating on and one
 // Node in the registry, so a dispatch resolves to a real fan-out.
-func startGatedRelay(t *testing.T, rules string) *relayFixture {
+//
+// extra is appended to the startRelay call — opt-in and source-compatible,
+// so both existing callers of this function (this file and
+// approval_grant_e2e_test.go) are untouched. approval_console_e2e_test.go
+// (#453) is the first caller to pass WithConfig(func(c *Config) {
+// c.ConsoleEnabled = true }): without it, cfg.ConsoleEnabled defaults false
+// (main.go) and consoleSurface{} is never appended (main.go), so every
+// /console/ request would 404 — this is the option that fixes that.
+func startGatedRelay(t *testing.T, rules string, extra ...FixtureOption) *relayFixture {
 	t.Helper()
 	path := writeGateConfig(t, rules)
-	f := startRelay(t, WithControlPlane(), WithConfig(func(c *Config) {
+	opts := append([]FixtureOption{WithControlPlane(), WithConfig(func(c *Config) {
 		c.ApprovalGatePath = path
-	}))
+	})}, extra...)
+	f := startRelay(t, opts...)
 	if _, err := f.Deps.registry.Upsert(registry.Report{NodeID: "node-e2e-1"}); err != nil {
 		t.Fatalf("seed registry: %v", err)
 	}
@@ -263,6 +275,16 @@ func TestApprovalCallout_ParkDecideRun(t *testing.T) {
 // "a machine Account can never satisfy its own gate on any channel", proven
 // against the most permissive rule the config language can express:
 // requester_allowed: true, and the machine holding the admin role.
+//
+// The CONSOLE leg (#453, criterion 3) is added at the end. The claim there is
+// subtle and deliberately narrow: the DOMAIN permits a machine to decide
+// SOMEONE ELSE's request (capability.TestMachineMayDecideSomeoneElsesRequest),
+// so "a machine cannot approve at all" is true of THIS SURFACE, not of the
+// system — and it is true here for two independent reasons: the bearer lane
+// dies at Secure's sessionCSRFValid (no ConsoleSession in context, 403,
+// before handleDecideApproval ever runs), and consoleauth.resolve refuses to
+// even START a session for a non-human Kind, so the machine cannot obtain a
+// Console session to try again with the right lane.
 func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	const permissive = `{
   "rules": [
@@ -273,7 +295,7 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
     }
   ]
 }`
-	f := startGatedRelay(t, permissive)
+	f := startGatedRelay(t, permissive, WithConfig(func(c *Config) { c.ConsoleEnabled = true }))
 	machine := mintAccount(t, f, "gleipnir-prod", accounts.KindMachine, accounts.RoleAdmin)
 
 	parkResp := restartMutate(t, f, machine)
@@ -299,6 +321,43 @@ func TestApprovalCallout_MachineCannotSatisfyItsOwnGate(t *testing.T) {
 	defer retry.Body.Close() //nolint:errcheck
 	if retry.StatusCode != http.StatusAccepted {
 		t.Fatalf("re-drive status = %d, want it still parked", retry.StatusCode)
+	}
+
+	// The CONSOLE leg (#453, criterion 3). First: the machine's API token
+	// aimed at the Console's decision route dies on the BEARER lane — Secure
+	// runs before the mux, so this never reaches handleDecideApproval at all.
+	consoleResp := controlAPIRequest(t, f.ClientFor(machine), http.MethodPost,
+		f.ControlBase+"/console/approvals/"+parked.RequestID+"/decision", machine, nil)
+	defer consoleResp.Body.Close() //nolint:errcheck
+	if consoleResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("machine bearer-lane Console decide status = %d, want 403", consoleResp.StatusCode)
+	}
+
+	// Second, and independent of the first: the machine cannot even obtain a
+	// Console session to retry on the right lane. gleipnir-prod holds no
+	// Console password (mintAccount never sets one) and consoleauth.resolve
+	// refuses a non-human Kind before a password is even compared, so this is
+	// the SAME generic refusal an unknown username gets — no user
+	// enumeration, and no session cookie is set.
+	loginClient := consoleClient(t, f)
+	getResp, err := loginClient.Get(f.ControlBase + console.LoginPath)
+	if err != nil {
+		t.Fatalf("GET login page: %v", err)
+	}
+	getBody := readAll(t, getResp)
+	token := consoleHiddenField(t, getBody, "csrf_token")
+
+	form := url.Values{"username": {"gleipnir-prod"}, "password": {"whatever"}, "csrf_token": {token}}
+	signInResp, err := loginClient.PostForm(f.ControlBase+console.LoginPath, form)
+	if err != nil {
+		t.Fatalf("POST sign-in: %v", err)
+	}
+	defer signInResp.Body.Close() //nolint:errcheck
+	if signInResp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("machine sign-in status = %d, want 401 (no session obtained)", signInResp.StatusCode)
+	}
+	if cookieNamedFromResponse(signInResp, consoleauth.SessionCookieName) != nil {
+		t.Error("a session cookie was set for a machine Account's sign-in attempt")
 	}
 }
 
