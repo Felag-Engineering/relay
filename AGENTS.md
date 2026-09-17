@@ -248,8 +248,10 @@ Two toolchains. The `Makefile` wraps both — prefer it.
 bitten.** CI additionally runs the race detector, the proto-drift and proto-breaking gates,
 the operation-schema and OpenAPI drift checks, the devharness absence check, and both
 cross-binary suites. Work can pass the inner loop and fail CI on a class of problem the author
-never looked at. `make verify` mirrors CI job for job; it is deliberately slow and deliberately
-not what you run on every save.
+never looked at. `make verify` mirrors CI gate for gate; it is deliberately slow and deliberately
+not what you run on every save. On a pull request CI skips the gates a change cannot reach — the
+toolchain jobs for documentation-only changes, the proto gates when neither `/proto` nor its
+generated code moved (`scripts/ci-changed-paths.sh`); pushes to `main` run everything.
 
 - **Go (relay):** standard `go` toolchain; `gofmt`/`go vet`/`golangci-lint`.
 - **Rust (daemon):** stable toolchain; `cargo fmt`/`cargo clippy -- -D warnings`. Build the

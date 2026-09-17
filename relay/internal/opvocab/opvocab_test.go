@@ -116,7 +116,7 @@ func TestOperations_Legible(t *testing.T) {
 // for what it actually enforces. Its offline `dump-operation-schema`
 // subcommand emits a canonical JSON schema, committed at
 // testdata/operations.schema.json ("make gen-opschema"; regenerated and
-// diffed by the opschema-drift CI job). goldenSchema below //go:embeds that
+// diffed by the opschema-drift CI step). goldenSchema below //go:embeds that
 // exact file — go:embed cannot reach above its own package tree, which is
 // WHY the golden lives inside relay/internal/opvocab/testdata/, not at the
 // repo root.
