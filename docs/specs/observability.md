@@ -85,7 +85,9 @@ metadata only — never arguments, never output.
 
 **Neither Relay nor relay-daemon ever logs a token, private key, secret value, Operation
 argument, Raw Exec argv or command output.** Read output is audited but not retained (ADR-0025),
-and so cannot reach a log or a metric either.
+and so cannot reach a log or a metric either. One exception is accepted for now: a Policy
+denial's text can quote caller-supplied text, and so an argument, into the daemon log
+(`policy.md`, Accepted residual risk; threat model R20).
 
 ### The daemon stays dark
 
@@ -144,7 +146,7 @@ Claims above with **no row**, and so nothing checking them:
   structural test — like `no_dispatch` for adapters — is what would keep it true.
 - That series count is independent of fleet size. Provable by construction today; nothing asserts
   it, and a histogram added later is how it would break.
-- That neither binary ever logs a secret, an argument or command output. Asserted for enrollment
+- That neither binary ever logs a secret, an argument or command output (R20 excepted). Asserted for enrollment
   tokens only (`TestNoSecretInLogs`); nothing covers Operation arguments or Raw Exec argv.
 - That the per-decision log line and the audit record cannot disagree.
 - That the metrics listener exposes no execution path — the `no_dispatch` guard covers the other
@@ -167,6 +169,12 @@ Claims above with **no row**, and so nothing checking them:
 - Monitoring the customer's own services on their Nodes. Out of realm: that is their existing
   monitoring, not Relay.
 
+## Accepted residual risk
+
+- **Policy denial text can carry an argument into the daemon log.** Accepted by the owner on
+  `2026-09-17`; the risk, its compensating control and its fix are recorded in `policy.md` and
+  threat model R20.
+
 ## Future work
 
 - **OpenTelemetry** — OTLP export and traces. Prometheus text is the committed format; OTel is an
@@ -187,6 +195,8 @@ Claims above with **no row**, and so nothing checking them:
 
 ## History
 
+- `2026-09-17` — with the owner: a Policy denial quoting caller text into the daemon log is an
+  accepted exception to never logging arguments (`policy.md`, R20; #619).
 - `2026-09-15` — First worked through with the owner. Metrics move to a third, loopback-bound
   listener with an unauthenticated health endpoint; operational signals added (latency, queue
   depth, pending approvals, reconnect churn, enrollment refusals, store size, webhook failures,
