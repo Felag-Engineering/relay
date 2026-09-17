@@ -224,6 +224,8 @@ Resolved elsewhere: how the Relay trusts a Template's risk class, and what remai
 
 ## History
 
+- `2026-09-17` — Raw Exec allow patterns now require a whole-command match, and any argv
+  element containing whitespace is denied before allow patterns run (#589).
 - `2026-09-13` — worked through with the owner. Policy and Templates collapse into one concept in
   a drop-in directory of fragments; explicit reload; any error invalidates the whole Policy and
   is reported; config management is the only delivery path (superseding the 2026-07-07
