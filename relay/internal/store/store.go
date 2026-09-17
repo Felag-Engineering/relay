@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -87,11 +88,62 @@ func WithLogger(l *slog.Logger) Option {
 	}
 }
 
+// busyTimeoutMillis is how long SQLite waits on a locked database before
+// returning SQLITE_BUSY, in milliseconds. Applied through the DSN (see
+// sqliteDSN) rather than a one-shot pragma, since it is per-connection.
+const busyTimeoutMillis = 5000
+
+// sqliteDSN builds the modernc.org/sqlite DSN for path, with foreign_keys and
+// a busy_timeout applied through the driver's _pragma query parameter rather
+// than a one-shot db.Exec. Both pragmas are per-connection SQLite state: a
+// pragma run once through Exec applies only to whichever connection the pool
+// happens to hand back, and is silently lost on any connection database/sql
+// opens afterwards (to replace one it discarded, or to grow the pool). The
+// driver instead runs every _pragma value as "pragma <value>" on each new
+// connection it opens (modernc.org/sqlite's applyQueryParams), so a
+// replacement connection gets both settings exactly like the first one.
+//
+// The DSN is built as an escaped "file:" URI, not path+"?_pragma=...", for
+// two reasons. First, the driver only treats the string as a URI — and lets
+// SQLite's own URI parser decode %-escapes in the path — when it starts with
+// "file:"; otherwise it parses the DSN itself and cuts the path at the FIRST
+// "?", so a path containing "?" (or "#", "%", a space) would either be
+// truncated or would eat the pragma parameters. EscapedPath, not
+// url.URL.String(), does that escaping: String() renders a relative path as
+// "file://path/...", which SQLite reads as a URI authority rather than part
+// of the path. filepath.Abs guards the same case for a relative path or one
+// starting with "//", and resolves a relative path against the working
+// directory, matching sql.Open on a plain path.
+//
+// sqliteDSN assumes a POSIX path (as does the rest of this package and its
+// production deployment target); it has not been exercised against a
+// Windows-style path such as a DOS drive letter or UNC prefix.
+func sqliteDSN(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve store path %q: %w", path, err)
+	}
+
+	q := url.Values{}
+	q.Add("_pragma", "foreign_keys(1)")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeoutMillis))
+
+	u := url.URL{Path: abs}
+	return "file:" + u.EscapedPath() + "?" + q.Encode(), nil
+}
+
 // Open opens (creating if necessary) the SQLite database at path, applies
-// pragmas for correctness on a single-writer workload (WAL mode, foreign
-// keys, a busy timeout so concurrent readers don't immediately fail, and a
-// single connection so SQLite's single-writer constraint is never raced),
+// pragmas for correctness on a single-writer workload, restricts the pool to
+// a single connection so SQLite's single-writer constraint is never raced,
 // and applies every embedded migration that has not yet been applied.
+//
+// foreign_keys and busy_timeout are set through the DSN (sqliteDSN) rather
+// than a one-shot Exec, because they are per-connection: every connection
+// the pool opens, including one opened to replace a discarded connection,
+// gets both. journal_mode=WAL is different — it is a property of the
+// database file itself, so once one connection sets it every later
+// connection to that file is already in WAL — and is applied once below with
+// a plain Exec.
 func Open(path string, opts ...Option) (*Store, error) {
 	// SQLite does not create missing parent directories itself (nor does the
 	// WAL journal_mode pragma), so create it first. 0o700 also keeps the
@@ -102,7 +154,12 @@ func Open(path string, opts ...Option) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open("sqlite", path)
+	dsn, err := sqliteDSN(path)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database %q: %w", path, err)
 	}
@@ -113,16 +170,17 @@ func Open(path string, opts ...Option) (*Store, error) {
 	// SQLITE_BUSY races without a connection-pool-aware retry strategy.
 	db.SetMaxOpenConns(1)
 
-	pragmas := []string{
-		`PRAGMA journal_mode = WAL`,
-		`PRAGMA foreign_keys = ON`,
-		`PRAGMA busy_timeout = 5000`,
+	// sql.Open is lazy and never dials, so a bad DSN or a failing
+	// DSN-supplied pragma would otherwise surface for the first time on the
+	// journal_mode Exec below, misleadingly reported as a pragma failure.
+	if err := db.Ping(); err != nil {
+		db.Close() //nolint:errcheck
+		return nil, fmt.Errorf("open sqlite database %q: %w", path, err)
 	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			db.Close() //nolint:errcheck
-			return nil, fmt.Errorf("apply pragma %q: %w", p, err)
-		}
+
+	if _, err := db.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		db.Close() //nolint:errcheck
+		return nil, fmt.Errorf("apply pragma %q: %w", `PRAGMA journal_mode = WAL`, err)
 	}
 
 	// Options are applied before migrate so a caller-supplied WithLogger is
