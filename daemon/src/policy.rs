@@ -12,12 +12,14 @@
 //! - **Argument-level granularity**: allow and deny rules constrain individual
 //!   argument positions, not just the operation name.
 //! - **Raw Exec regex-gated** (ADR-0001): Raw Exec commands are only permitted
-//!   when the full `argv.join(" ")` matches an allow regex and no deny regex
-//!   matches the joined command, any raw argv element, or any canonical
-//!   element (the joined command re-split on whitespace — ADR-0019); the Deny
-//!   reason names which form matched. A Raw Exec whose `argv[0]` is not a
-//!   single non-empty program token (empty, or containing whitespace) is
-//!   refused (ADR-0019).
+//!   when an allow regex matches the joined `argv.join(" ")` **in full** — the
+//!   daemon enforces the whole-command match itself (ADR-0019, amended
+//!   2026-09-16) — and no deny regex matches the joined command, any raw argv
+//!   element, or any canonical element (the joined command re-split on
+//!   whitespace — ADR-0019); the Deny reason names which form matched. Every
+//!   argv element must be free of whitespace, and `argv[0]` must be
+//!   non-empty: any offending element is refused before the allow pass runs
+//!   (ADR-0019, amended 2026-09-16).
 //!
 //! **Not yet wired**: this module provides a pure evaluation API. Task-dispatch
 //! wiring lands in a later v0.0.3 issue.
@@ -80,7 +82,9 @@ struct DenyRuleRaw {
 
 /// The `[raw_exec]` section from the Policy file.
 ///
-/// `allow` patterns are tested against `argv.join(" ")`.
+/// `allow` patterns are tested against the WHOLE joined `argv.join(" ")` —
+/// the daemon compiles each pattern to a full match (ADR-0019, amended
+/// 2026-09-16), so anchoring is enforced, not merely recommended.
 /// `deny` patterns are tested against `argv.join(" ")`, each raw argv element,
 /// and each canonical element (the joined command re-split on whitespace —
 /// ADR-0019).
@@ -215,11 +219,17 @@ pub enum PolicyError {
     /// An invalid regex in the Policy file is treated as a load failure
     /// (fail-closed): a partial policy that skips a bad pattern would silently
     /// widen the allow surface.
-    #[error("invalid regex pattern {pattern:?}: {source}")]
+    ///
+    /// `hint` is empty except for the one known allow-side edge case (a
+    /// verbose-mode pattern ending in an unterminated `#` comment — see
+    /// [`compile_allow_regex`]), where it names the fix so the error is
+    /// actionable rather than a bare "unclosed group" from the wrapped text.
+    #[error("invalid regex pattern {pattern:?}: {source}{hint}")]
     InvalidRegex {
         pattern: String,
         #[source]
         source: regex::Error,
+        hint: String,
     },
 }
 
@@ -263,8 +273,9 @@ fn policy_fingerprint(bytes: &[u8]) -> String {
 pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
     let file: PolicyFile = toml::from_str(s)?;
 
-    let raw_allow = compile_regexes(file.raw_exec.allow)?;
-    let raw_deny = compile_regexes(file.raw_exec.deny)?;
+    let raw_allow =
+        compile_regexes(file.raw_exec.allow, compile_allow_regex).map_err(with_allow_regex_hint)?;
+    let raw_deny = compile_regexes(file.raw_exec.deny, compile_deny_regex)?;
 
     Ok(Policy {
         operations: file.operation,
@@ -275,18 +286,111 @@ pub fn from_toml_str(s: &str) -> Result<Policy, PolicyError> {
     })
 }
 
-fn compile_regexes(patterns: Vec<String>) -> Result<Vec<CompiledRe>, PolicyError> {
+/// Compiles a `[raw_exec] deny` pattern verbatim — deny semantics are
+/// unchanged by the ADR-0019 amendment (2026-09-16): a deny still matches
+/// wherever its pattern matches (joined command, raw element, or canonical
+/// element), never a full match.
+fn compile_deny_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    Regex::new(pattern)
+}
+
+/// Compiles a `[raw_exec] allow` pattern so it matches only the WHOLE joined
+/// command (ADR-0019, amended 2026-09-16): allow patterns no longer match as
+/// a substring anywhere in `argv.join(" ")`.
+///
+/// Two steps, in order:
+/// 1. Validate `pattern` alone with `Regex::new`. This must run FIRST:
+///    wrapping a pattern that is invalid on its own must never turn it into a
+///    valid one. `a)|(?:b` is invalid alone but would become valid once
+///    wrapped in a bare `(?:...)` group — validating first closes that.
+/// 2. Compile `\A(?:pattern)\z`. `\A`/`\z` are used instead of `^`/`$` so the
+///    anchors hold no matter what inline flags the author sets (an `(?m)`
+///    inside the group cannot make `^`/`$` match a line boundary and thereby
+///    reach past the wrapper); the non-capturing group keeps a top-level
+///    alternation whole, so `a|b` wraps to `\A(?:a|b)\z`, matching the whole
+///    command against "a" OR "b", not `\Aa` OR `b\z`.
+///
+/// **Known edge case (fail-closed, not a bug):** a verbose-mode (`(?x)`)
+/// pattern that ends in a `#` end-of-line comment with no trailing newline
+/// swallows the appended `)\z` into that comment, so the wrapped compile
+/// fails and the whole Policy is refused as `InvalidRegex`. There is no
+/// silent-success case here: the wrapped regex either compiles to the
+/// intended full match or fails to compile at all, so this only ever costs
+/// availability (a load failure), never a security property — but see the
+/// module's test for what a load failure does to the Node's Policy (deny-all,
+/// ADR-0002's fail-closed loader).
+fn compile_allow_regex(pattern: &str) -> Result<Regex, regex::Error> {
+    Regex::new(pattern)?;
+    Regex::new(&format!(r"\A(?:{pattern})\z"))
+}
+
+fn compile_regexes(
+    patterns: Vec<String>,
+    compile: fn(&str) -> Result<Regex, regex::Error>,
+) -> Result<Vec<CompiledRe>, PolicyError> {
     patterns
         .into_iter()
         .map(|pattern| {
-            Regex::new(&pattern)
+            compile(&pattern)
                 .map(|re| CompiledRe {
                     pattern: pattern.clone(),
                     re,
                 })
-                .map_err(|source| PolicyError::InvalidRegex { pattern, source })
+                .map_err(|source| PolicyError::InvalidRegex {
+                    pattern,
+                    source,
+                    hint: String::new(),
+                })
         })
         .collect()
+}
+
+/// Textual hint for the one known [`compile_allow_regex`] edge case: a
+/// verbose-mode (`(?x)`) pattern whose last line is an unterminated `#`
+/// comment. Wrapping appends `)\z` *after* the author's pattern text, and a
+/// verbose-mode end-of-line comment with no trailing newline swallows
+/// whatever follows it on that line — turning a pattern that compiles alone
+/// into one that does not once wrapped. Purely textual (never re-runs the
+/// compiler), so it may miss unusual spellings of the flag; it exists to make
+/// a confusing "unclosed group" error actionable, not to classify every
+/// `InvalidRegex`.
+fn verbose_trailing_comment_hint(pattern: &str) -> String {
+    let looks_verbose = [
+        "(?x)", "(?x:", "(?xi)", "(?ix)", "(?xs)", "(?sx)", "(?xm)", "(?mx)",
+    ]
+    .iter()
+    .any(|flag| pattern.contains(flag));
+    if !looks_verbose {
+        return String::new();
+    }
+    let last_line = pattern.rsplit('\n').next().unwrap_or(pattern);
+    if last_line.contains('#') {
+        " (a verbose-mode ((?x)) pattern must not end in a `#` comment with no trailing \
+          newline; add a trailing newline after the comment)"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Attaches [`verbose_trailing_comment_hint`] to an `InvalidRegex` error from
+/// the ALLOW list. Only the allow side's wrapping ([`compile_allow_regex`])
+/// can turn this pattern shape from compiling into non-compiling, so the hint
+/// is computed here rather than generically in [`compile_regexes`].
+fn with_allow_regex_hint(err: PolicyError) -> PolicyError {
+    match err {
+        PolicyError::InvalidRegex {
+            pattern, source, ..
+        } => {
+            let hint = verbose_trailing_comment_hint(&pattern);
+            PolicyError::InvalidRegex {
+                pattern,
+                source,
+                hint,
+            }
+        }
+        other => other,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -476,6 +580,10 @@ impl LintReport {
 ///    (`Warning`) — see [`allow_is_shadowed_by_deny`].
 /// 5. `[[deny]]` rules whose `args` contain a `"*"` or an empty inner list and
 ///    can therefore never fire (`Warning`) — see [`lint_deny_arg_noops`].
+/// 6. A `[raw_exec]` allow pattern not anchored `^...$` (`Warning`) — its
+///    meaning changed with the ADR-0019 amendment (2026-09-16): allow patterns
+///    now match the WHOLE command, so an unanchored pattern no longer matches
+///    as a substring anywhere in it — see [`lint_raw_exec_allow_anchoring`].
 ///
 /// **Known limitations** (documented, not attempted):
 /// - Shadowing by the *union* of multiple deny rules (set-cover) is not
@@ -531,8 +639,19 @@ pub fn lint_with_vocabulary(
 
     let mut findings = Vec::new();
 
-    lint_raw_exec_regexes(&file.raw_exec.allow, "allow", &mut findings);
-    lint_raw_exec_regexes(&file.raw_exec.deny, "deny", &mut findings);
+    lint_raw_exec_regexes(
+        &file.raw_exec.allow,
+        "allow",
+        compile_allow_regex,
+        &mut findings,
+    );
+    lint_raw_exec_regexes(
+        &file.raw_exec.deny,
+        "deny",
+        compile_deny_regex,
+        &mut findings,
+    );
+    lint_raw_exec_allow_anchoring(&file.raw_exec.allow, &mut findings);
 
     let known = |name: &str| {
         operations::risk_class(name).is_some() || template_names.iter().any(|t| t == name)
@@ -613,15 +732,122 @@ pub fn non_canonical_path_denial(path: &str) -> Decision {
 }
 
 /// Checks every pattern in a `[raw_exec]` allow/deny list for regex validity.
-fn lint_raw_exec_regexes(patterns: &[String], section: &str, findings: &mut Vec<LintFinding>) {
+///
+/// Compiled with the same function `from_toml_str` uses for that section
+/// (`compile_allow_regex` for "allow", `compile_deny_regex` for "deny"), so
+/// the lint verdict can never diverge from load-time behavior — an allow
+/// pattern the wrapping step cannot validate (see `compile_allow_regex`'s doc
+/// comment) is caught here too, with the same hint.
+fn lint_raw_exec_regexes(
+    patterns: &[String],
+    section: &str,
+    compile: fn(&str) -> Result<Regex, regex::Error>,
+    findings: &mut Vec<LintFinding>,
+) {
     for (i, pattern) in patterns.iter().enumerate() {
-        if let Err(e) = Regex::new(pattern) {
+        if let Err(e) = compile(pattern) {
+            let hint = verbose_trailing_comment_hint(pattern);
             findings.push(LintFinding {
                 severity: LintSeverity::Error,
                 location: format!("[raw_exec].{section}[{i}]"),
-                message: format!("invalid regex {pattern:?}: {e}"),
+                message: format!("invalid regex {pattern:?}: {e}{hint}"),
             });
         }
+    }
+}
+
+/// Flags a `[raw_exec]` allow pattern that COMPILES (an invalid pattern is
+/// already an `Error` from [`lint_raw_exec_regexes`]) but is not anchored at
+/// both ends — its meaning changed with the ADR-0019 amendment (2026-09-16):
+/// allow patterns now match the WHOLE joined command (the daemon wraps every
+/// pattern as `\A(?:pattern)\z`), so an unanchored pattern no longer matches
+/// as a substring anywhere in the command. `Warning`, not `Error`: the file is
+/// still valid and evaluates exactly as written, just possibly not as the
+/// author intended before this release; `--strict` makes it a pipeline gate.
+///
+/// A leading inline flag group (`(?i)^...$`) is skipped before the start-anchor
+/// check, so a flag-prefixed anchored pattern does not false-alarm under
+/// `--strict` (see [`strip_leading_flag_group`]).
+///
+/// **Known limit (documented, conservative):** a textually anchored top-level
+/// alternation (`^a|b$`) does not warn even though only the `b` branch is
+/// actually anchored at the start (the pattern parses as `(^a)|(b$)`) — its
+/// meaning still narrowed by the ADR-0019 amendment, same as an unanchored
+/// pattern, but this textual check cannot see inside the alternation.
+fn lint_raw_exec_allow_anchoring(patterns: &[String], findings: &mut Vec<LintFinding>) {
+    for (i, pattern) in patterns.iter().enumerate() {
+        if compile_allow_regex(pattern).is_err() {
+            // Already an Error from lint_raw_exec_regexes; don't pile on.
+            continue;
+        }
+        if !allow_pattern_is_anchored(pattern) {
+            findings.push(LintFinding {
+                severity: LintSeverity::Warning,
+                location: format!("[raw_exec].allow[{i}]"),
+                message: format!(
+                    "allow pattern {pattern:?} is not anchored ^...$: its meaning changed in \
+                     this release -- allow patterns now match the WHOLE command (ADR-0019, \
+                     amended 2026-09-16), so it no longer matches as a substring anywhere in \
+                     the command; write it as ^...$ so it says what it matches"
+                ),
+            });
+        }
+    }
+}
+
+/// `true` if `pattern` is textually anchored at both the start (`^` or
+/// `\A`) and the end (`$` or `\z`, the latter's own leading backslash not
+/// itself escaped).
+///
+/// `\A`/`\z` count as anchors deliberately: they mean the same thing an
+/// unwrapped `^`/`$` did before this release, and warning on them would be a
+/// false alarm under `--strict` for an author who already wrote the
+/// full-match form. See [`lint_raw_exec_allow_anchoring`]'s doc comment for
+/// this test's documented limits.
+fn allow_pattern_is_anchored(pattern: &str) -> bool {
+    let body = strip_leading_flag_group(pattern);
+    let starts_anchored = body.starts_with('^') || body.starts_with(r"\A");
+
+    let ends_anchored = if let Some(rest) = pattern.strip_suffix('$') {
+        // An escaped `\$` must not count: count the run of trailing
+        // backslashes immediately before the `$` — an EVEN count means the
+        // `$` itself is unescaped (each pair is a literal backslash).
+        rest.chars().rev().take_while(|&c| c == '\\').count() % 2 == 0
+    } else if let Some(rest) = pattern.strip_suffix(r"\z") {
+        // Same test for the backslash that introduces `\z` itself: an ODD
+        // number of further backslashes before it would escape it away.
+        rest.chars().rev().take_while(|&c| c == '\\').count() % 2 == 0
+    } else {
+        false
+    };
+
+    starts_anchored && ends_anchored
+}
+
+/// Strips a single leading inline flag group (`(?i)`, `(?im)`, `(?-s)`, ...)
+/// from `pattern`, if present, so [`allow_pattern_is_anchored`] checks for `^`
+/// / `\A` after it rather than treating a flag-prefixed anchor as unanchored
+/// (an author writing `(?i)^/bin/echo$` means the same full-match intent as
+/// `^/bin/echo$`).
+///
+/// Deliberately narrow: only a group whose contents are drawn from the
+/// regex crate's flag letters (`imsxU`) and `-` (separating positive from
+/// negative flags) counts. A scoped flag group (`(?i:...)`), a non-capturing
+/// group (`(?:...)`), a named group, or a lookaround is left untouched and
+/// falls through to the ordinary anchor check on the pattern as written.
+fn strip_leading_flag_group(pattern: &str) -> &str {
+    let Some(rest) = pattern.strip_prefix("(?") else {
+        return pattern;
+    };
+    let Some(close) = rest.find(')') else {
+        return pattern;
+    };
+    let flags = &rest[..close];
+    let is_bare_flag_group = !flags.is_empty() && flags.chars().all(|c| "imsxU-".contains(c));
+    if is_bare_flag_group {
+        &rest[close + 1..]
+    } else {
+        pattern
     }
 }
 
@@ -1010,11 +1236,25 @@ impl Policy {
 
     /// Evaluate whether the Raw Exec command `argv` may run.
     ///
-    /// Semantics (ADR-0001, ADR-0002, ADR-0019):
+    /// Semantics (ADR-0001, ADR-0002, ADR-0019, amended 2026-09-16):
     /// - No shell is invoked; `argv` is the exact argument vector the executor
     ///   will pass to `execv`. The join here is only for regex matching.
-    /// - Allow patterns are tested against `argv.join(" ")` (the **joined
-    ///   form** — not the canonical elements) — unchanged by ADR-0019.
+    /// - Allow patterns are tested against `argv.join(" ")`, and must match it
+    ///   **in FULL** — the daemon enforces this itself (`compile_allow_regex`
+    ///   compiles every allow pattern to `\A(?:pattern)\z`), so an author's
+    ///   unanchored pattern behaves exactly as an anchored one. This removed
+    ///   the substring-match footgun `mod raw_exec_redteam` used to document
+    ///   as intended.
+    /// - Every argv element must be free of whitespace (`char::is_whitespace`,
+    ///   the definition `split_whitespace` below already uses), and `argv[0]`
+    ///   must additionally be non-empty. An offending element is Deny **before
+    ///   the allow pass runs**, with a reason naming its index — see the
+    ///   "whitespace guard" below. Once the guard passes, joining is lossless
+    ///   *between the two argvs it could otherwise conflate*: no element
+    ///   contains the separator the join introduces, so no other argv joins to
+    ///   the identical string (an empty non-`argv[0]` element is allowed and
+    ///   contributes nothing to the joined string either way, so it cannot
+    ///   create such a collision).
     /// - Deny patterns are tested against three forms; **any** match denies:
     ///   1. the joined command;
     ///   2. each raw `argv[i]` — catches deny patterns that are substrings of
@@ -1034,19 +1274,15 @@ impl Policy {
     ///   names **which** form matched and the text it matched, so an operator
     ///   can reconcile the verdict against the argv they sent (a canonical
     ///   element need not appear in argv at all).
-    /// - **`argv[0]` must be exactly one non-empty program token** (ADR-0019):
-    ///   an empty or whitespace-bearing `argv[0]` is Deny (fail closed). The
-    ///   joined form is a lossy projection of argv, so without this an allow
-    ///   pattern could approve a joined string whose `argv[0]` is not the
-    ///   program that will actually execute (`["systemctl restart", "nginx"]`
-    ///   joins identically to the legitimate three-element form). Invariant #1:
-    ///   an argument must never change *which* command runs.
-    /// - Deny pass is evaluated first (deny-beats-allow), then the `argv[0]`
-    ///   guard, then the allow pass. The guard runs **after** the deny pass on
-    ///   purpose: a command a deny pattern would have attributed keeps that
-    ///   attribution (`rule: Some(RawExecDeny)`), and the guard only catches
-    ///   what no deny pattern claimed. Both orders Deny, so this is an
-    ///   audit-legibility choice, not a semantic one.
+    /// - Order: **deny pass, then the whitespace guard, then the allow pass**.
+    ///   The guard runs **after** the deny pass on purpose: a command a deny
+    ///   pattern would have attributed keeps that attribution
+    ///   (`rule: Some(RawExecDeny)`), and the guard only catches what no deny
+    ///   pattern claimed. Both orders Deny, so this is an audit-legibility
+    ///   choice, not a semantic one. The guard runs before the allow pass so
+    ///   no allow pattern — however written — can approve a command whose
+    ///   element boundaries are ambiguous (invariant #1: an argument must
+    ///   never change *which* command runs).
     /// - Deny-by-default: no allow match → deny with `rule: None`.
     pub fn evaluate_raw_exec(&self, argv: &[String]) -> Decision {
         // Empty argv is always denied (nothing to run).
@@ -1088,33 +1324,56 @@ impl Policy {
             }
         }
 
-        // --- argv[0] guard (ADR-0019) ---------------------------------------
-        // Fail closed: the program to execute must be exactly one non-empty
-        // argv element. Whitespace is the Unicode definition, matching
-        // `split_whitespace` above so the guard and the canonical split agree
-        // on what a separator is. Runs after the deny pass so an attributable
-        // deny keeps its attribution, and before the allow pass so no allow
-        // pattern can approve an argv[0] that is not a single program token.
+        // --- Whitespace guard (ADR-0019, amended 2026-09-16) -----------------
+        // Fail closed: `argv[0]` must be exactly one non-empty program token,
+        // and every OTHER element must carry no whitespace at all — an allow
+        // pattern now matches the whole joined command, so an element boundary
+        // the gate cannot see would let an argument reshape what the pattern
+        // is really matching against. Whitespace is the Unicode definition,
+        // matching `split_whitespace` above so the guard and the canonical
+        // split agree on what a separator is. Runs after the deny pass so an
+        // attributable deny keeps its attribution, and before the allow pass
+        // so no allow pattern can approve an argv whose element boundaries are
+        // ambiguous. Returns the FIRST offending element, by index.
         //
-        // `argv[0]` is caller-controlled and goes into `deciding_rule` and the
-        // audit trail, so it is bounded by `reason_fragment` like every other
-        // quoted fragment on this path. This reason is the CHEAPEST one to
-        // provoke — it needs no allow and no deny pattern, so even an empty
-        // Policy emits it — which is exactly why it must not be able to carry
-        // a caller-sized payload.
-        if argv[0].is_empty() || argv[0].chars().any(char::is_whitespace) {
-            return Decision::Deny {
-                reason: format!(
-                    "raw exec argv[0] {:?} is not a single program token (empty or containing \
-                     whitespace): the program to execute must be exactly one argv element \
-                     (ADR-0019)",
-                    reason_fragment(&argv[0])
-                ),
-                rule: None,
-            };
+        // Each element quoted into a reason is caller-controlled and goes into
+        // `deciding_rule` and the audit trail, so it is bounded by
+        // `reason_fragment` like every other quoted fragment on this path. The
+        // `argv[0]` reason is the CHEAPEST one to provoke — it needs no allow
+        // and no deny pattern, so even an empty Policy emits it — which is
+        // exactly why it must not be able to carry a caller-sized payload.
+        for (i, elem) in argv.iter().enumerate() {
+            if i == 0 {
+                if elem.is_empty() || elem.chars().any(char::is_whitespace) {
+                    return Decision::Deny {
+                        reason: format!(
+                            "raw exec argv[0] {:?} is not a single program token (empty or \
+                             containing whitespace): the program to execute must be exactly one \
+                             argv element (ADR-0019)",
+                            reason_fragment(elem)
+                        ),
+                        rule: None,
+                    };
+                }
+            } else if elem.chars().any(char::is_whitespace) {
+                return Decision::Deny {
+                    reason: format!(
+                        "raw exec argv[{i}] {:?} contains whitespace: no Raw Exec argument may \
+                         carry whitespace, so the command Policy matched is exactly the argv \
+                         that runs; pass such an argument through a Template Operation \
+                         (ADR-0019)",
+                        reason_fragment(elem)
+                    ),
+                    rule: None,
+                };
+            }
         }
 
-        // --- Allow pass -----------------------------------------------------
+        // --- Allow pass -------------------------------------------------
+        // `re` is the full-match regex `compile_allow_regex` compiled
+        // (`\A(?:pattern)\z`): matching the joined command against it is
+        // already a whole-command test, so the call below needs no change
+        // from a substring `is_match` — only what `re` means changed.
         for compiled in &self.raw_allow {
             if compiled.re.is_match(&joined) {
                 return Decision::Allow(Rule::RawExecAllow {
@@ -1562,6 +1821,225 @@ deny = ["restart nginx"]
             matches!(&decision, Decision::Deny { rule: None, .. }),
             "/bin/echo hi must be denied by default; got {decision:?}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Raw Exec allow: whole-command match (ADR-0019, amended 2026-09-16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn raw_exec_allow_pattern_must_match_whole_command() {
+        // A substring no longer admits: the joined command must match the
+        // allow pattern IN FULL.
+        let policy =
+            from_toml_str("[raw_exec]\nallow = [\"/bin/echo\"]\n").expect("policy must parse");
+        let decision = policy.evaluate_raw_exec(&args(&["/bin/echo", "hi"]));
+        assert!(
+            matches!(&decision, Decision::Deny { rule: None, .. }),
+            "a pattern matching only a prefix of the joined command must no \
+             longer admit it; got {decision:?}"
+        );
+
+        // Unanchored but exact: the whole joined command IS "/bin/echo hi".
+        let policy =
+            from_toml_str("[raw_exec]\nallow = [\"/bin/echo hi\"]\n").expect("policy must parse");
+        let decision = policy.evaluate_raw_exec(&args(&["/bin/echo", "hi"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Allow(Rule::RawExecAllow { pattern })
+                if pattern == "/bin/echo hi"
+            ),
+            "an unanchored pattern that exactly equals the whole joined command must allow, \
+             and RawExecAllow.pattern must be the author's original string, not the wrapped \
+             one; got {decision:?}"
+        );
+
+        // An already-anchored pattern behaves identically.
+        let policy =
+            from_toml_str("[raw_exec]\nallow = [\"^/bin/echo hi$\"]\n").expect("policy must parse");
+        let decision = policy.evaluate_raw_exec(&args(&["/bin/echo", "hi"]));
+        assert!(
+            matches!(decision, Decision::Allow(_)),
+            "an already-anchored pattern must behave identically; got {decision:?}"
+        );
+
+        // The non-capturing group pins the top-level alternation whole: an
+        // unwrapped `\A/bin/true` (without the group) would wrongly admit
+        // "/bin/true x" via a leftmost \A match with no \z on that branch.
+        let policy = from_toml_str("[raw_exec]\nallow = [\"/bin/true|/bin/false\"]\n")
+            .expect("policy must parse");
+        let decision = policy.evaluate_raw_exec(&args(&["/bin/true", "x"]));
+        assert!(
+            matches!(&decision, Decision::Deny { rule: None, .. }),
+            "the alternation must be wrapped so the WHOLE command must match one branch \
+             end-to-end, not just a leftmost prefix; got {decision:?}"
+        );
+        let decision = policy.evaluate_raw_exec(&args(&["/bin/false"]));
+        assert!(
+            matches!(decision, Decision::Allow(_)),
+            "the other alternative, matching the whole command, must still allow; got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn raw_exec_allow_wrapping_cannot_validate_an_invalid_pattern() {
+        // "a)|(?:b" is invalid alone (a stray closing paren) but would become
+        // valid if merely wrapped in a bare (?:...) group without validating
+        // the pattern alone first — compile_allow_regex must reject it.
+        let result = from_toml_str("[raw_exec]\nallow = ['a)|(?:b']\n");
+        match &result {
+            Err(PolicyError::InvalidRegex { pattern, .. }) => {
+                assert_eq!(pattern, "a)|(?:b");
+            }
+            other => panic!("expected InvalidRegex; got {other:?}"),
+        }
+
+        let report = lint("[raw_exec]\nallow = ['a)|(?:b']\n");
+        assert!(report.parse_error.is_none());
+        let errors: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "lint must report exactly one Error; got {:?}",
+            report.findings
+        );
+        assert!(errors[0].location.contains("[raw_exec].allow[0]"));
+    }
+
+    #[test]
+    fn raw_exec_allow_verbose_trailing_comment_load_and_lint_agree() {
+        // A verbose-mode pattern whose last line is an unterminated `#`
+        // comment: compile_allow_regex's wrapping step appends `)\z` AFTER
+        // this text, and the open-ended comment always swallows it — the
+        // wrapped compile fails ("unclosed group") even though the pattern
+        // compiles fine unwrapped. Both entry points must refuse the file
+        // (fail-closed): a load failure here drops the daemon's live Policy
+        // to deny-all (main.rs's fail-closed startup path), never to a
+        // partially-loaded Policy.
+        let toml = "[raw_exec]\nallow = ['(?x)^/bin/true$ # comment']\n";
+
+        match from_toml_str(toml) {
+            Err(PolicyError::InvalidRegex { pattern, hint, .. }) => {
+                assert_eq!(pattern, "(?x)^/bin/true$ # comment");
+                assert!(
+                    hint.contains("verbose-mode"),
+                    "the InvalidRegex hint must name the verbose-mode trailing-comment fix; \
+                     got {hint:?}"
+                );
+            }
+            other => panic!("expected InvalidRegex (fail-closed); got {other:?}"),
+        }
+
+        let report = lint(toml);
+        assert!(report.parse_error.is_none());
+        let errors: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .collect();
+        assert_eq!(
+            errors.len(),
+            1,
+            "the lint must agree with the loader and refuse the same pattern; got {:?}",
+            report.findings
+        );
+        assert!(errors[0].location.contains("[raw_exec].allow[0]"));
+        assert!(
+            errors[0].message.contains("verbose-mode"),
+            "the lint message must carry the same hint as the loader; got {:?}",
+            errors[0].message
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Raw Exec allow anchoring lint (ADR-0019, amended 2026-09-16)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn lint_warns_on_unanchored_raw_exec_allow() {
+        let patterns = ["/bin/echo", "^/bin/echo", "/bin/echo$", r"^/bin/echo \$"];
+        for pattern in patterns {
+            let toml = format!("[raw_exec]\nallow = ['{pattern}']\n");
+            let report = lint(&toml);
+            assert!(
+                report.parse_error.is_none(),
+                "pattern {pattern:?}: got {:?}",
+                report.parse_error
+            );
+            let warnings: Vec<_> = report
+                .findings
+                .iter()
+                .filter(|f| f.severity == LintSeverity::Warning)
+                .collect();
+            assert_eq!(
+                warnings.len(),
+                1,
+                "pattern {pattern:?}: got {:?}",
+                report.findings
+            );
+            assert!(warnings[0].location.contains("[raw_exec].allow[0]"));
+            assert!(
+                warnings[0].message.contains("WHOLE command"),
+                "pattern {pattern:?}: got {:?}",
+                warnings[0].message
+            );
+        }
+    }
+
+    #[test]
+    fn lint_does_not_warn_on_anchored_raw_exec_allow() {
+        // `(?i)^/bin/echo$` pins that a leading inline flag group is skipped
+        // before the start-anchor check (review of #589's plan).
+        let patterns = [
+            "^/bin/echo$",
+            r"\A/bin/echo\z",
+            r"^/bin/echo \\$",
+            "(?i)^/bin/echo$",
+        ];
+        for pattern in patterns {
+            let toml = format!("[raw_exec]\nallow = ['{pattern}']\n");
+            let report = lint(&toml);
+            assert!(
+                report.parse_error.is_none(),
+                "pattern {pattern:?}: got {:?}",
+                report.parse_error
+            );
+            assert!(
+                report.findings.is_empty(),
+                "pattern {pattern:?} must not warn; got {:?}",
+                report.findings
+            );
+        }
+    }
+
+    #[test]
+    fn lint_does_not_warn_anchoring_on_deny_patterns() {
+        let report = lint("[raw_exec]\ndeny = [\"--force\"]\n");
+        assert!(report.parse_error.is_none());
+        assert!(
+            report.findings.is_empty(),
+            "a deny-only Policy must not trigger the allow-anchoring lint; got {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn lint_invalid_allow_gets_error_not_anchoring_warning() {
+        let report = lint("[raw_exec]\nallow = [\"[invalid\"]\n");
+        assert!(report.parse_error.is_none());
+        assert_eq!(
+            report.findings.len(),
+            1,
+            "an invalid pattern must get exactly one finding (Error), not also \
+             an anchoring Warning; got {:?}",
+            report.findings
+        );
+        assert_eq!(report.findings[0].severity, LintSeverity::Error);
     }
 
     // -----------------------------------------------------------------------
@@ -2241,7 +2719,9 @@ deny = ["[invalid"]
 /// Adversarial, table-driven red-team suite against `evaluate_raw_exec`'s
 /// matching model: regex anchoring, argv-join ambiguity, and the deny/allow
 /// asymmetry (deny is tested against the joined command, any raw element, OR
-/// any canonical element; allow is tested against the joined command only).
+/// any canonical element; allow is now tested against the WHOLE joined
+/// command — ADR-0019, amended 2026-09-16 — and every argv element is guarded
+/// against whitespace before the allow pass runs at all).
 ///
 /// Test-only: this module never touches `evaluate_raw_exec`, `from_toml_str`,
 /// `compile_regexes`, the loader, or the lint code above. It asserts current
@@ -2250,7 +2730,11 @@ deny = ["[invalid"]
 /// a standalone `#[ignore]`d test while the fix was an open ADR-gated decision;
 /// that decision is ADR-0019 (canonical-element deny matching + the argv[0]
 /// whitespace guard), so the test is now enabled and pins the fix, with the
-/// neighbouring shapes added as Axis 7 rows.
+/// neighbouring shapes added as Axis 7 rows. The #214 "documented-intended"
+/// unanchored-allow footgun this module used to pin as accepted was removed
+/// outright by the 2026-09-16 amendment: an unanchored allow pattern now
+/// matches the whole command, so it can no longer admit a hostile argv merely
+/// because the pattern text appears somewhere inside the joined string.
 ///
 /// `redteam_cases()` is the single extension point later red-team issues
 /// (e.g. argv-smuggling/encoding) append rows to.
@@ -2293,13 +2777,15 @@ mod raw_exec_redteam {
         Allow,
         /// `Decision::Deny` with a specific `Rule::RawExecDeny` attributed.
         DenyByPattern,
-        /// `Decision::Deny` with `rule: None` from the ADR-0019 `argv[0]`
-        /// guard (argv[0] empty or containing whitespace). Structurally
+        /// `Decision::Deny` with `rule: None` from the ADR-0019 whitespace
+        /// guard: `argv[0]` empty or containing whitespace, or ANY other
+        /// element containing whitespace (amended 2026-09-16). Structurally
         /// identical to `DenyByDefault` in `Decision`, so the table
-        /// distinguishes the two by the reason naming `argv[0]`.
+        /// distinguishes the two by the reason starting with `"raw exec
+        /// argv["`.
         DenyByGuard,
         /// `Decision::Deny` with `rule: None` because no allow pattern
-        /// matched — and specifically *not* the `argv[0]` guard.
+        /// matched — and specifically *not* the whitespace guard.
         DenyByDefault,
     }
 
@@ -2328,22 +2814,22 @@ mod raw_exec_redteam {
                 name: "anchored_allow_rejects_prefix_injection",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/bin/sh", "-c", "/usr/bin/systemctl restart nginx"],
-                expect: Expect::DenyByDefault,
-                note: "argv[0] is the literal /bin/sh (no shell is invoked — ADR-0001), so the joined form starts with /bin/sh and the anchored ^ fails",
+                expect: Expect::DenyByGuard,
+                note: "argv[2] \"/usr/bin/systemctl restart nginx\" carries whitespace, so the ADR-0019 whitespace guard now refuses this before any allow pattern runs; the anchored-^ coverage this row used to pin moved to unanchored_allow_full_match_denies_foreign_argv0 and interp_unanchored_allow_full_match_denies_shell_argv0 below, whose argv has no whitespace and so reaches the (now full-match) allow pass",
             },
             Case {
-                name: "unanchored_allow_admits_foreign_argv0",
+                name: "unanchored_allow_full_match_denies_foreign_argv0",
                 policy_toml: "[raw_exec]\nallow = [\"/usr/bin/systemctl (status|restart) nginx\"]\n",
                 argv: &["/bin/rm", "-rf", "/var/log", "&&", "/usr/bin/systemctl", "restart", "nginx"],
-                expect: Expect::Allow,
-                note: "documented-intended (#214): an operator's unanchored 'obvious' pattern is only ever a substring match anywhere in the joined command, so it admits a hostile argv whose real argv[0] is /bin/rm; RE2-style substring semantics are by design (module doc), and the mitigation is operator anchoring (policy.example.toml:94), never an engine change",
+                expect: Expect::DenyByDefault,
+                note: "the #214 unanchored-substring footgun this row used to document as intended is gone: an allow pattern now matches the WHOLE joined command (ADR-0019, amended 2026-09-16), so a pattern that merely APPEARS as a substring of the joined command no longer admits the hostile argv whose real argv[0] is /bin/rm",
             },
             Case {
                 name: "anchored_allow_blocks_same_foreign_argv0",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/bin/rm", "-rf", "/var/log", "&&", "/usr/bin/systemctl", "restart", "nginx"],
                 expect: Expect::DenyByDefault,
-                note: "paired contrast with unanchored_allow_admits_foreign_argv0: the identical hostile argv is refused once the allow pattern is anchored, proving anchoring is the mitigation",
+                note: "paired contrast with unanchored_allow_full_match_denies_foreign_argv0: the identical hostile argv is refused whether the allow pattern is anchored or not, since full-match is now enforced either way",
             },
             // --- Axis 2: argv-join ambiguity ---------------------------------
             Case {
@@ -2351,14 +2837,14 @@ mod raw_exec_redteam {
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx"],
                 expect: Expect::Allow,
-                note: "documented-intended (#214): three-element argv, the intended shape; paired with join_collapse_two_args_same_decision_merged_element to show the joined gate cannot distinguish this from a different real argv",
+                note: "the intended three-element shape; paired with join_collapse_two_args_same_decision_merged_element, which used to get the identical decision from the same joined string but is now refused by the ADR-0019 whitespace guard before the two argvs can be confused (R10 closed)",
             },
             Case {
                 name: "join_collapse_two_args_same_decision_merged_element",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart nginx"],
-                expect: Expect::Allow,
-                note: "documented-intended (#214): the second element carries the space that used to separate two argv elements; argv.join(\" \") (policy.rs:749) is blind to the element boundary, so this two-element argv gets the identical decision as join_collapse_two_args_same_decision_two_elements though the real argv differs",
+                expect: Expect::DenyByGuard,
+                note: "argv[1] \"restart nginx\" carries whitespace, so the ADR-0019 whitespace guard (amended 2026-09-16) refuses this before the allow pass ever runs — no two distinct argvs can share a joined form anymore (R10 closed)",
             },
             Case {
                 name: "join_single_element_whole_command",
@@ -2394,15 +2880,22 @@ mod raw_exec_redteam {
                 name: "interp_anchored_allow_rejects_shell_wrapper_argv0",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/ansible-playbook /etc/ansible/site.yml$\"]\n",
                 argv: &["/bin/sh", "-c", "/usr/bin/ansible-playbook /etc/ansible/site.yml"],
-                expect: Expect::DenyByDefault,
-                note: "interpreter-flavored sibling of anchored_allow_rejects_prefix_injection: argv[0] is the literal /bin/sh (no shell is invoked — ADR-0001), so the joined form starts with /bin/sh and the anchored ^ fails; anchoring at argv[0] blocks this interpreter-smuggling attempt",
+                expect: Expect::DenyByGuard,
+                note: "interpreter-flavored sibling of anchored_allow_rejects_prefix_injection: argv[2] carries whitespace, so the ADR-0019 whitespace guard refuses this before the allow pass ever runs",
             },
             Case {
-                name: "interp_unanchored_allow_admits_shell_argv0",
+                name: "interp_unanchored_allow_full_match_denies_shell_argv0",
+                policy_toml: "[raw_exec]\nallow = [\"/usr/bin/ansible-playbook\"]\n",
+                argv: &["/bin/sh", "-c", "/usr/bin/ansible-playbook"],
+                expect: Expect::DenyByDefault,
+                note: "no argv element carries whitespace, so this row isolates full-match rather than the guard: the allow pattern must now match the WHOLE joined command (ADR-0019, amended 2026-09-16), and \"/usr/bin/ansible-playbook\" alone does not equal \"/bin/sh -c /usr/bin/ansible-playbook\" — the #214 substring-admits-a-shell-argv0 footgun this row used to pin as intended is gone",
+            },
+            Case {
+                name: "interp_shell_c_script_with_spaces_refused_by_guard",
                 policy_toml: "[raw_exec]\nallow = [\"/usr/bin/ansible-playbook\"]\n",
                 argv: &["/bin/sh", "-c", "/usr/bin/ansible-playbook --check"],
-                expect: Expect::Allow,
-                note: "documented-intended (#214)-class footgun: an unanchored 'obvious' pattern is only ever a substring match anywhere in the joined command, so it admits a hostile argv whose real argv[0] is a shell — the tool name merely appears later as data; same class as unanchored_allow_admits_foreign_argv0, mitigation is operator anchoring, NOT a code bug, NOT a new finding",
+                expect: Expect::DenyByGuard,
+                note: "the pre-amendment argv for interp_unanchored_allow_full_match_denies_shell_argv0: argv[2] \"/usr/bin/ansible-playbook --check\" carries whitespace, so the ADR-0019 guard refuses it before the (now full-match) allow pass would even get to say no",
             },
             Case {
                 name: "interp_env_wrapper_full_anchor_allows_intended",
@@ -2413,60 +2906,67 @@ mod raw_exec_redteam {
             },
             Case {
                 name: "interp_env_wrapper_argv0_anchor_admits_arbitrary_interpreter",
-                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/env \"]\n",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/env .*$\"]\n",
                 argv: &["/usr/bin/env", "bash", "-c", "id"],
                 expect: Expect::Allow,
-                note: "KEY interpreter-smuggling result, materially higher severity than the others: even anchoring at argv[0]+space is INSUFFICIENT when argv[0] is an exec-wrapper (/usr/bin/env), because env re-dispatches to argv[1] and thus reaches bash — a plausible, seemingly-careful anchored allow still yields arbitrary command execution; not a code bug (the engine matched the pattern exactly; the regex engine has no model of which binaries re-dispatch, and denylisting them would be an ADR-gated binary-semantics change), so no finding is filed, but operator guidance (top item to fold into #225 policy-authoring docs / threat model) is: anchor the WHOLE command for wrapper interpreters (env, xargs, nice, timeout, sudo, nohup, setsid, ...), never just argv[0]",
+                note: "KEY interpreter-smuggling result, materially higher severity than the others, and it SURVIVES full-match: even a pattern anchored end-to-end (^...$) is INSUFFICIENT when argv[0] is an exec-wrapper (/usr/bin/env) and the author writes a trailing .*, because env re-dispatches to argv[1] and thus reaches bash — a plausible, seemingly-careful anchored allow still yields arbitrary command execution; not a code bug (the engine matched the pattern exactly; the regex engine has no model of which binaries re-dispatch, and denylisting them would be an ADR-gated binary-semantics change), so no finding is filed, but operator guidance is: anchor the WHOLE command for wrapper interpreters (env, xargs, nice, timeout, sudo, nohup, setsid, ...), never just argv[0]+space, and never a trailing .*",
+            },
+            Case {
+                name: "interp_env_wrapper_prefix_only_allow_now_denied",
+                policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/env \"]\n",
+                argv: &["/usr/bin/env", "bash", "-c", "id"],
+                expect: Expect::DenyByDefault,
+                note: "the OLD R4 pattern (anchored at argv[0]+space only, no trailing .* and no closing $): under full-match this no longer admits anything, since \"^/usr/bin/env \" cannot match the whole command \"/usr/bin/env bash -c id\" end-to-end. Contrast interp_env_wrapper_argv0_anchor_admits_arbitrary_interpreter, whose trailing .* is what keeps the re-dispatch footgun alive under full-match",
             },
             // --- Axis 5: whitespace / control bytes vs the space-join (policy.rs:813) ---
             Case {
                 name: "ctl_tab_in_arg_breaks_anchored_class_allow",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx\tevil"],
-                expect: Expect::DenyByDefault,
-                note: "the space-join emits a single ASCII space between elements; an embedded tab stays INSIDE the element rather than becoming a separator, so the regex sees the restart target as \"nginx<TAB>evil\" — the restrictive character class matches \"nginx\" and then $ meets the tab (not end-of-string), so the anchored allow fails closed; pins that control bytes are outside [A-Za-z0-9@._-] and cannot satisfy the anchored allow",
+                expect: Expect::DenyByGuard,
+                note: "argv[2] \"nginx<TAB>evil\" carries whitespace, so the ADR-0019 whitespace guard refuses this before any allow pattern runs; the original allow-side pin (the character class rejects the tab) is now moot, since the guard fires first",
             },
             Case {
                 name: "ctl_cr_in_arg_breaks_anchored_class_allow",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx\revil"],
-                expect: Expect::DenyByDefault,
-                note: "same mechanism as ctl_tab_in_arg_breaks_anchored_class_allow with an embedded carriage return instead of a tab — CR also stays inside the element and is outside [A-Za-z0-9@._-], so the anchored allow fails closed",
+                expect: Expect::DenyByGuard,
+                note: "same mechanism as ctl_tab_in_arg_breaks_anchored_class_allow with an embedded carriage return instead of a tab: the ADR-0019 whitespace guard now refuses this before any allow pattern runs, so the original allow-side pin is moot",
             },
             Case {
                 name: "ctl_nul_in_arg_breaks_anchored_class_allow",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx\0"],
                 expect: Expect::DenyByDefault,
-                note: "an embedded NUL likewise cannot satisfy [class]$ at the gate, so this fails closed too — independently, any NUL anywhere in argv also fails closed at execv, pinned end-to-end by raw_exec.rs::nul_in_argv_fails_closed_at_executor",
+                note: "NUL is not Unicode whitespace, so the ADR-0019 guard does not fire; an embedded NUL still cannot satisfy [class]$ at the gate, so this fails closed too — independently, any NUL anywhere in argv also fails closed at execv, pinned end-to-end by raw_exec.rs::nul_in_argv_fails_closed_at_executor",
             },
             Case {
                 name: "ctl_newline_in_arg_dot_does_not_cross",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl restart .+$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx\n; rm -rf /"],
-                expect: Expect::DenyByDefault,
-                note: "pins RE2-style semantics: `.` does NOT match newline by default, so `.+` matches only \"nginx\" and cannot cross the embedded newline to reach the trailing \"; rm -rf /\"; with content after the newline and a non-multiline $, the anchored allow fails closed",
+                expect: Expect::DenyByGuard,
+                note: "argv[2] carries an embedded newline, so the ADR-0019 whitespace guard refuses this before any allow pattern runs; the original allow-side pin (RE2-style `.` not crossing a newline) is now moot, since the guard fires first",
             },
             Case {
                 name: "ctl_trailing_newline_defeats_dollar_anchor",
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl restart nginx$\"]\n",
                 argv: &["/usr/bin/systemctl", "restart", "nginx\n"],
-                expect: Expect::DenyByDefault,
-                note: "pins the Rust `regex` crate's non-multiline $ semantics: $ matches only end-of-haystack and does NOT match before a trailing newline (contrast PCRE/Perl, where $ matches before a final \\n), so a trailing newline in the last element defeats the anchored allow and fails closed",
+                expect: Expect::DenyByGuard,
+                note: "argv[2] \"nginx\\n\" carries a trailing newline, so the ADR-0019 whitespace guard refuses this before any allow pattern runs; the original allow-side pin (the non-multiline $ semantics) is now moot, since the guard fires first",
             },
             Case {
                 name: "ctl_slash_s_matches_unicode_nbsp",
-                policy_toml: "[raw_exec]\nallow = ['^x y\\sz$']\n",
+                policy_toml: "[raw_exec]\nallow = ['(?s).*']\ndeny = ['y\\sz']\n",
                 argv: &["x", "y\u{00A0}z"],
-                expect: Expect::Allow,
-                note: "semantics pin: Unicode-mode \\s (the regex crate default) matches U+00A0 NBSP, in addition to tab/CR/LF; operator relevance: a \\s-based deny DOES catch NBSP used as a separator. Trivial fixture, not an escalation. The NBSP sits in a NON-argv[0] element deliberately: under the ADR-0019 guard an argv[0] carrying NBSP (Unicode whitespace) is refused outright, which would mask the \\s pin this row exists for",
+                expect: Expect::DenyByPattern,
+                note: "semantics pin, moved to the DENY side: an NBSP-bearing element can no longer reach the allow pass at all (the ADR-0019 guard would refuse it first), so the \\s-matches-U+00A0-NBSP pin now lives on a deny, which the deny pass evaluates before the guard ever runs. Unicode-mode \\s (the regex crate default) matches NBSP in addition to tab/CR/LF; operator relevance: a \\s-based deny DOES catch NBSP used as a separator",
             },
             Case {
                 name: "ctl_slash_s_does_not_match_nul",
                 policy_toml: "[raw_exec]\nallow = ['^x y\\sz$']\n",
                 argv: &["x", "y\0z"],
                 expect: Expect::DenyByDefault,
-                note: "semantics pin, paired with ctl_slash_s_matches_unicode_nbsp (same fixture shape): \\s does NOT match NUL, so an operator writing \\s to catch 'any separator' catches NBSP/tab/CR/LF but not NUL; NUL is likewise not Unicode whitespace, so it neither trips the ADR-0019 argv[0] guard nor splits a canonical element. Independently inert either way, since a NUL-bearing argv fails closed at execv regardless (executor test). NOT a new finding",
+                note: "semantics pin, paired with ctl_slash_s_matches_unicode_nbsp (a different fixture now — that row moved its \\s pin to a deny since an NBSP-bearing element can no longer reach the allow pass): \\s does NOT match NUL, so an operator writing \\s to catch 'any separator' catches NBSP/tab/CR/LF but not NUL; NUL is likewise not Unicode whitespace, so it neither trips the ADR-0019 guard nor splits a canonical element. Independently inert either way, since a NUL-bearing argv fails closed at execv regardless (executor test). NOT a new finding",
             },
             Case {
                 name: "ctl_join_emits_ascii_space_matched_by_slash_s",
@@ -2630,6 +3130,37 @@ mod raw_exec_redteam {
                 expect: Expect::DenyByGuard,
                 note: "an EMPTY argv[0] is not a program either: the join emits a leading space so a (peculiar) allow can match, but execv would get \"\" and fail with ENOENT. Refusing it at the gate removes a 'Policy said yes' audit record for a command that can never run — same guard, same monotonic direction",
             },
+            // --- ADR-0019 (amended 2026-09-16): the guard now covers EVERY
+            // element, not just argv[0]. `allow = ['(?s).*']` and no deny, so
+            // only the guard itself can produce a Deny on these rows.
+            Case {
+                name: "guard_tab_in_later_element_refused",
+                policy_toml: "[raw_exec]\nallow = ['(?s).*']\n",
+                argv: &["systemctl", "restart", "nginx\tx"],
+                expect: Expect::DenyByGuard,
+                note: "a tab in a NON-argv[0] element is refused by the amended guard before the (fully permissive) allow pattern is ever consulted",
+            },
+            Case {
+                name: "guard_nbsp_in_later_element_refused",
+                policy_toml: "[raw_exec]\nallow = ['(?s).*']\n",
+                argv: &["systemctl", "restart", "nginx\u{00A0}x"],
+                expect: Expect::DenyByGuard,
+                note: "U+00A0 NBSP is Unicode whitespace, so a NON-argv[0] element carrying it is refused by the amended guard, same as a tab or newline",
+            },
+            Case {
+                name: "guard_newline_in_later_element_refused",
+                policy_toml: "[raw_exec]\nallow = ['(?s).*']\n",
+                argv: &["systemctl", "restart", "nginx\nx"],
+                expect: Expect::DenyByGuard,
+                note: "a newline in a NON-argv[0] element is refused by the amended guard, even though the permissive `(?s).*` allow would otherwise match it (dot-matches-newline) — the guard runs before the allow pass",
+            },
+            Case {
+                name: "guard_empty_later_element_allowed",
+                policy_toml: "[raw_exec]\nallow = ['(?s).*']\n",
+                argv: &["systemctl", "", "restart"],
+                expect: Expect::Allow,
+                note: "an empty element past argv[0] is NOT refused (only emptiness AT argv[0] is): the guard only checks non-argv[0] elements for whitespace, and an empty string contains none",
+            },
             Case {
                 name: "guard_runs_after_deny_pass_so_attribution_is_kept",
                 policy_toml: "[raw_exec]\nallow = [\".*\"]\ndeny = [\"^--force$\"]\n",
@@ -2647,8 +3178,9 @@ mod raw_exec_redteam {
                 .unwrap_or_else(|e| panic!("case {}: policy TOML failed to parse: {e}", case.name));
             let decision = policy.evaluate_raw_exec(&argv(case.argv));
             // `DenyByGuard` and `DenyByDefault` are both `Deny { rule: None }`;
-            // the ADR-0019 guard is the one whose reason names argv[0], and
-            // each expectation asserts the *absence* of the other.
+            // the ADR-0019 whitespace guard is the one whose reason starts
+            // with "raw exec argv[", and each expectation asserts the
+            // *absence* of the other.
             let matched = match (case.expect, &decision) {
                 (Expect::Allow, Decision::Allow(_)) => true,
                 (
@@ -2659,10 +3191,10 @@ mod raw_exec_redteam {
                     },
                 ) => true,
                 (Expect::DenyByGuard, Decision::Deny { rule: None, reason }) => {
-                    reason.contains("argv[0]")
+                    reason.starts_with("raw exec argv[")
                 }
                 (Expect::DenyByDefault, Decision::Deny { rule: None, reason }) => {
-                    !reason.contains("argv[0]")
+                    !reason.starts_with("raw exec argv[")
                 }
                 _ => false,
             };
@@ -2742,7 +3274,11 @@ mod raw_exec_redteam {
     // must never change *which* command runs; for Raw Exec that is argv[0].
     // The guard is fail-closed, so the Deny carries `rule: None` and a reason
     // naming argv[0]; it runs AFTER the deny pass (so an attributable deny
-    // keeps its attribution) and BEFORE the allow pass.
+    // keeps its attribution) and BEFORE the allow pass. Since the 2026-09-16
+    // amendment the same guard also covers every OTHER argv element (a
+    // non-empty element carrying whitespace is refused too) — this test keeps
+    // its original argv[0]-only scope; the every-element case is
+    // `whitespace_in_any_argv_element_refused_naming_its_index` below.
     #[test]
     fn argv0_refused_unless_single_program_token() {
         // A permissive allow and no deny, so nothing but the guard can produce
@@ -2803,6 +3339,96 @@ mod raw_exec_redteam {
             ),
             "an argv that trips BOTH the deny pass and the argv[0] guard must be attributed to \
              the deny pattern (deny pass runs first); got {decision:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // Whitespace guard — ADR-0019, amended 2026-09-16: EVERY argv element,
+    // not just argv[0]
+    // -------------------------------------------------------------------
+    //
+    // Once an allow pattern must match the WHOLE joined command, an argument
+    // that carries whitespace can shift what the pattern is really matching
+    // against without the gate seeing an element boundary move. This test
+    // pins the every-element half of the guard; `argv0_refused_unless_
+    // single_program_token` above keeps pinning the argv[0]-only half.
+    #[test]
+    fn whitespace_in_any_argv_element_refused_naming_its_index() {
+        let policy = from_toml_str("[raw_exec]\nallow = ['(?s).*']\n").expect("policy must parse");
+
+        // Every Unicode-whitespace shape, plus leading/trailing ASCII space,
+        // in a NON-argv[0] element (argv[2]) — must be refused, naming the
+        // index and pointing to a Template Operation as the remedy.
+        for bad in [
+            "a b",
+            "a\tb",
+            "a\nb",
+            "a\rb",
+            "a\u{00A0}b",
+            "a\u{2028}b",
+            " a",
+            "a ",
+        ] {
+            let decision = policy.evaluate_raw_exec(&argv(&["prog", "ok", bad]));
+            assert!(
+                matches!(
+                    &decision,
+                    Decision::Deny { rule: None, reason }
+                    if reason.contains("argv[2]") && reason.contains("Template")
+                ),
+                "argv[2] {bad:?} carries whitespace and must be refused, naming the index and \
+                 a Template Operation as the remedy; got {decision:?}"
+            );
+        }
+
+        // The FIRST offending element is named, not a later one.
+        let decision = policy.evaluate_raw_exec(&argv(&["prog", "a b", "c d"]));
+        match &decision {
+            Decision::Deny { rule: None, reason } => {
+                assert!(
+                    reason.contains("argv[1]"),
+                    "the first offending element (argv[1]) must be named; got {reason:?}"
+                );
+                assert!(
+                    !reason.contains("argv[2]"),
+                    "only the FIRST offending element may be named, not a later one too; \
+                     got {reason:?}"
+                );
+            }
+            other => panic!("expected a Deny; got {other:?}"),
+        }
+
+        // An empty element past argv[0] is allowed — only argv[0]'s emptiness
+        // is refused.
+        let decision = policy.evaluate_raw_exec(&argv(&["prog", "", "x"]));
+        assert!(
+            matches!(decision, Decision::Allow(_)),
+            "an empty NON-argv[0] element must not be refused; got {decision:?}"
+        );
+
+        // NUL is not Unicode whitespace, so it does not trip this guard
+        // either (it fails closed later, at execv).
+        let decision = policy.evaluate_raw_exec(&argv(&["prog", "a\0b"]));
+        assert!(
+            matches!(decision, Decision::Allow(_)),
+            "a NUL-bearing element must not be refused by the whitespace guard; got {decision:?}"
+        );
+
+        // Ordering: the deny pass still runs first and keeps its attribution
+        // even when the guard would also fire on the same argv.
+        let with_deny = from_toml_str("[raw_exec]\nallow = ['(?s).*']\ndeny = ['^--force$']\n")
+            .expect("policy must parse");
+        let decision = with_deny.evaluate_raw_exec(&argv(&["prog", "--force x"]));
+        assert!(
+            matches!(
+                &decision,
+                Decision::Deny {
+                    rule: Some(Rule::RawExecDeny { pattern }),
+                    ..
+                } if pattern == "^--force$"
+            ),
+            "an argv that trips BOTH the deny pass and the whitespace guard must be attributed \
+             to the deny pattern (deny pass runs first); got {decision:?}"
         );
     }
 
@@ -3401,6 +4027,18 @@ deny = ["--force", "\\brm\\b"]
             .expect("PB3 fixed raw_exec policy must parse")
     }
 
+    // -------------------------------------------------------------------
+    // PB4 fixture — the whitespace guard in isolation, no deny at all.
+    // -------------------------------------------------------------------
+
+    fn raw_exec_pb4_policy() -> Policy {
+        // DOTALL (`(?s)`), unlike PB3's plain `.*`, so this policy's allow
+        // pass would admit ANY argv (newlines included) if it ever ran —
+        // isolating the guard as the only thing that can produce a Deny.
+        from_toml_str("[raw_exec]\nallow = ['(?s).*']\n")
+            .expect("PB4 fixed raw_exec policy must parse")
+    }
+
     /// `denied` paired with an `arg` that is drawn from `denied` itself about
     /// half the time (via `prop::sample::select`) and from the same
     /// `arb_safe_token()` domain otherwise. Independent sampling of `arg` and
@@ -3497,7 +4135,8 @@ deny = ["--force", "\\brm\\b"]
 
         // ---------------------------------------------------------------
         // PB3 `raw_exec_deny_beats_allow` — mirrors `evaluate_raw_exec`
-        // exactly, including the ADR-0019 argv[0] guard.
+        // exactly, including the ADR-0019 whitespace guard (amended
+        // 2026-09-16 to cover every element, not just argv[0]).
         // ---------------------------------------------------------------
         #[test]
         fn raw_exec_deny_beats_allow(argv in arb_argv_with_secret()) {
@@ -3511,7 +4150,7 @@ deny = ["--force", "\\brm\\b"]
                 prop_assert!(is_deny, "empty argv must always be denied");
             } else {
                 // Mirrors the engine's order exactly: deny pass, then the
-                // ADR-0019 argv[0] guard, then the allow pass.
+                // whitespace guard, then the allow pass.
                 //
                 // "secret" is a literal regex, so is_match <=> contains; deny
                 // is tested against the joined string, any raw element, OR any
@@ -3524,10 +4163,13 @@ deny = ["--force", "\\brm\\b"]
                 let hits = joined.contains("secret")
                     || argv.iter().any(|a| a.contains("secret"))
                     || joined.split_whitespace().any(|c| c.contains("secret"));
-                // The guard: argv[0] must be exactly one non-empty program
-                // token. `arb_argv_elem()` is full-Unicode and 0-8 chars, so it
-                // generates both empty and whitespace-bearing argv[0] regularly.
-                let guarded = argv[0].is_empty() || argv[0].chars().any(char::is_whitespace);
+                // The guard: argv[0] must be non-empty, and EVERY element
+                // (including argv[0]) must carry no `char::is_whitespace`
+                // char. `arb_argv_elem()` is full-Unicode and 0-8 chars, so it
+                // generates both empty and whitespace-bearing elements
+                // regularly, in every position.
+                let guarded = argv[0].is_empty()
+                    || argv.iter().any(|a| a.chars().any(char::is_whitespace));
                 if hits {
                     // Deny-beats-allow AND deny-beats-guard: a deny pattern
                     // keeps its attribution even when the guard would also fire.
@@ -3538,21 +4180,59 @@ deny = ["--force", "\\brm\\b"]
                     prop_assert!(
                         attributed,
                         "argv containing 'secret' must be denied by the deny pattern, with the \
-                         pattern attributed, despite the .* allow (and despite the argv[0] guard)"
+                         pattern attributed, despite the .* allow (and despite the whitespace \
+                         guard)"
                     );
                 } else if guarded {
                     let is_guard_deny = matches!(
                         &decision,
-                        Decision::Deny { rule: None, reason } if reason.contains("argv[0]")
+                        Decision::Deny { rule: None, reason } if reason.starts_with("raw exec argv[")
                     );
                     prop_assert!(
                         is_guard_deny,
-                        "an empty or whitespace-bearing argv[0] with no deny hit must be refused \
-                         by the ADR-0019 guard"
+                        "an empty argv[0], or any element carrying whitespace, with no deny hit \
+                         must be refused by the ADR-0019 guard"
                     );
                 } else {
+                    // No element carries whitespace, so the joined string has
+                    // no newline (the join separator is an ASCII space, not a
+                    // newline) and `.*` (no DOTALL) matches all of it.
                     let is_allow = matches!(decision, Decision::Allow(_));
                     prop_assert!(is_allow, "argv not containing 'secret' must be allowed by .*");
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------
+        // PB4 `raw_exec_whitespace_element_never_allowed` — the whitespace
+        // guard in isolation: no deny pattern exists at all, and the allow
+        // pattern is permissive enough (DOTALL) to admit anything the guard
+        // does not refuse first.
+        // ---------------------------------------------------------------
+        #[test]
+        fn raw_exec_whitespace_element_never_allowed(argv in arb_argv()) {
+            let policy = raw_exec_pb4_policy();
+            let decision = policy.evaluate_raw_exec(&argv);
+
+            if !argv.is_empty() {
+                let guarded = argv[0].is_empty()
+                    || argv.iter().any(|a| a.chars().any(char::is_whitespace));
+                if guarded {
+                    let is_guard_deny = matches!(
+                        &decision,
+                        Decision::Deny { rule: None, reason } if reason.starts_with("raw exec argv[")
+                    );
+                    prop_assert!(
+                        is_guard_deny,
+                        "an empty argv[0], or any element carrying whitespace, must be refused \
+                         by the whitespace guard; got {decision:?}"
+                    );
+                } else {
+                    prop_assert!(
+                        matches!(decision, Decision::Allow(_)),
+                        "with no deny pattern and a DOTALL allow, a whitespace-clean, \
+                         non-empty-argv[0] argv must be allowed; got {decision:?}"
+                    );
                 }
             }
         }

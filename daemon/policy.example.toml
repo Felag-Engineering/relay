@@ -96,14 +96,24 @@ args = [["/etc/shadow"]]
 # regex list. The daemon joins argv with a single space and tests the result.
 #
 #   allow — list of RE2-compatible regexes; the joined command must match at
-#            least one to be considered. Anchored (^...$) is recommended.
+#            least one IN FULL to be considered. The daemon enforces the
+#            whole-command match itself, as if each pattern were written
+#            ^(?:...)$, so anchoring is no longer a recommendation — it is
+#            what the pattern already does either way. `relay-daemon policy
+#            check` warns on an allow pattern not written ^...$, because its
+#            meaning changed in this release: it used to match as a substring
+#            anywhere in the command (ADR-0019, amended 2026-09-16).
 #   deny  — list of RE2-compatible regexes tested against THREE forms: the
 #            joined command, each individual argv element, AND each CANONICAL
 #            element — the joined command re-split on whitespace (ADR-0019).
 #            Any match → deny, even if an allow regex also matched
 #            (deny-beats-allow). The deny message names which of the three
 #            forms matched and the text it matched, since a canonical element
-#            need not appear literally in the argv that was sent.
+#            need not appear literally in the argv that was sent. Deny
+#            semantics are otherwise unchanged by this release: a merged or
+#            tab-separated spelling of a denied token is still caught by the
+#            canonical pass, and the deny pass still runs before the
+#            whitespace guard below, so its attribution is kept.
 #
 # Writing a deny (ADR-0019): the canonical pass is what makes an element-
 # anchored deny hold. `^--force$` fires whether the caller sends the token on
@@ -113,24 +123,28 @@ args = [["/etc/shadow"]]
 # appears in the command; do not write it against a merged spelling
 # (`^--force x$`), which matches only that one raw element.
 #
-# argv[0] — the program to execute — must be exactly one non-empty token: a Raw
-# Exec whose argv[0] is empty or contains whitespace is refused (ADR-0019),
-# because the joined form cannot show which program an argv like
-# ["systemctl restart", "nginx"] would really run. Consequence for operators: a
-# program whose own path contains a space (/opt/Some App/bin/tool) cannot be run
-# via Raw Exec at all — invoke it through a space-free path (a symlink in
-# /usr/local/bin) or, better, promote it to an Operation.
+# No argv element may contain whitespace (Unicode: space, tab, CR, LF, NBSP,
+# ...). Such a command is refused before any allow pattern runs, and the
+# reason names the element's index. An empty argv[0] is refused; an empty
+# later argument is allowed. Joining is therefore lossless: the command the
+# allow pattern sees is exactly the argv that runs. Consequences for
+# operators: Raw Exec cannot pass an argument containing whitespace (a commit
+# message, a path with a space, a quoted search term), and cannot run a
+# program whose own path contains a space. Such a command needs a Template
+# Operation (ADR-0021), whose slots are typed and quoted by its author. For a
+# spaced program path, a space-free symlink also works.
 #
-# Standing guidance: gate Raw Exec by a tight, fully-anchored ALLOW list. A
-# deny list is a backstop, never the primary control — and anchor the WHOLE
-# command for wrapper interpreters (env, xargs, nice, timeout, sudo, nohup,
-# setsid, ...), which re-dispatch to their own arguments.
+# Standing guidance: a deny list is a backstop, never the primary control.
+# Write the WHOLE command for wrapper interpreters (env, xargs, nice, timeout,
+# sudo, nohup, setsid, ...); a trailing .* such as ^/usr/bin/env .*$ still
+# re-dispatches to anything.
 #
 # No allow regex → all Raw Exec commands denied (deny-by-default).
 # ---------------------------------------------------------------------------
 [raw_exec]
 # Allow `systemctl status|restart <unit>` where the unit name is alphanumeric
-# (plus @, ., _, -). Anchored to prevent prefix/suffix injection.
+# (plus @, ., _, -). Written ^...$ so it reads as what it matches; the daemon
+# matches the whole command either way.
 allow = [
     "^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$",
 ]

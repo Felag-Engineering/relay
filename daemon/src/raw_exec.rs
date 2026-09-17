@@ -170,12 +170,13 @@ allow = ["^/bin/echo hello$"]
         ));
         let marker_str = marker.to_string_lossy().into_owned();
 
-        // allow = ["^/bin/echo"] — the joined argv "/bin/sh -c ..." does NOT
-        // match, so deny-by-default fires before any process is spawned.
+        // argv[2] (the shell script) contains whitespace, so the ADR-0019
+        // whitespace guard refuses this before any allow pattern runs, and
+        // deny-by-default is moot here — no process is spawned either way.
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/echo"]
+allow = ["^/bin/echo .+$"]
 "#,
         )
         .expect("policy must parse");
@@ -253,7 +254,7 @@ deny = ["secret"]
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/echo"]
+allow = ["^/bin/echo .+$"]
 "#,
         )
         .expect("policy must parse");
@@ -290,7 +291,7 @@ allow = ["^/bin/echo"]
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/echo"]
+allow = ["^/bin/echo .+$"]
 "#,
         )
         .expect("policy must parse");
@@ -339,7 +340,7 @@ allow = ["^/bin/echo"]
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/echo"]
+allow = ["^/bin/echo .+$"]
 "#,
         )
         .expect("policy must parse");

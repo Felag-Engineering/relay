@@ -1698,12 +1698,12 @@ deny = ["secret"]
     /// compile-time proof that it cannot record a dedup marker.
     #[test]
     fn policy_query_spawns_no_process_and_records_no_dedup() {
-        // Policy that allows /bin/sh so the verdict is "allowed" — proving the
-        // test exercises the allow path, not the deny path.
+        // Policy that allows /bin/sh -c <script> so the verdict is "allowed"
+        // — proving the test exercises the allow path, not the deny path.
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/sh"]
+allow = ["^/bin/sh -c .+$"]
 "#,
         )
         .expect("policy must parse");
@@ -1720,7 +1720,11 @@ allow = ["^/bin/sh"]
         ));
         let marker_str = marker.to_string_lossy().into_owned();
 
-        let cmd = format!("echo x > {marker_str}");
+        // A whitespace-free redirect: an ordinary `echo x > marker` script
+        // would put a space inside argv[2], which the ADR-0019 guard now
+        // refuses before the allow pattern is even consulted. This assumes
+        // `std::env::temp_dir()` contains no whitespace, true on CI.
+        let cmd = format!(":>{marker_str}");
         let query =
             make_policy_query_raw_exec("pq-no-spawn", vec!["/bin/sh".into(), "-c".into(), cmd]);
 
@@ -1807,22 +1811,21 @@ allow = ["^/bin/sh"]
         let state_dir = TempDir::new("dedup-cancel");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
-        // Policy allows the sleep command via raw exec.
+        // Policy allows the sleep command via raw exec. A single-argument
+        // sleep, not `/bin/sh -c "sleep 30"`: the shell-script form's
+        // argv[2] would carry whitespace, which the ADR-0019 guard now
+        // refuses before any allow pattern runs.
         let policy = from_toml_str(
             r#"
 [raw_exec]
-allow = ["^/bin/sh "]
+allow = ["^/bin/sleep [0-9]+$"]
 "#,
         )
         .expect("parse policy");
 
         let task = make_task_raw_exec(
             "cancel-dedup-id-1",
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "sleep 30".to_string(),
-            ],
+            vec!["/bin/sleep".to_string(), "30".to_string()],
         );
 
         // Send cancel before the dispatch future is awaited. The signal is buffered
