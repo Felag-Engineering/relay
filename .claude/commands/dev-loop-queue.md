@@ -6,8 +6,8 @@ allowed-tools: Bash(*), Read, Grep, Glob, Agent, Skill
 
 # Dev-loop queue drainer (routine-driven)
 
-One tick, one issue, no waiting. Unlike `/dev-loop-drive`, this **never gates on a merge** —
-it is built for a scheduled cloud routine running while nobody is available to review.
+One tick, one issue, no waiting. This **never gates on a merge** — it is built for a scheduled
+cloud routine running while nobody is available to review.
 
 It still **never merges.** Every tick ends at an open PR. The human remains the sole merge
 authority (see "Routines & merge authority" in `AGENTS.md`).
@@ -44,7 +44,8 @@ and a review queue nobody can face. Stopping is the correct outcome, not a failu
 ## Stage 2 — Pick the next issue
 
 Eligible: open, labelled `loop:ready`, and **not** labelled `loop:in-progress`,
-`loop:blocked`, `loop:needs-human`, `decision`, or `idea`.
+`loop:blocked`, `loop:needs-human`, `loop:proposed`, `decision`, or `idea`. (`loop:proposed` is
+what `/decompose` creates; only a human flips it to `loop:ready` — see `docs/agents/workflow.md`.)
 
 ```bash
 gh issue list --label loop:ready --state open --limit 50 \
@@ -54,6 +55,9 @@ gh issue list --label loop:ready --state open --limit 50 \
       | sort_by(.number)'
 ```
 
+Then drop any issue whose body has a `Blocked by: #k` line where `#k` is still open
+(`gh issue view k --json state`). A blocked issue is not an error; it is simply not next.
+
 Then drop any issue that already has a branch or an open PR:
 
 ```bash
@@ -61,9 +65,8 @@ gh pr list --state open --json headRefName -q '[.[].headRefName]'
 git ls-remote --heads origin 'loop/*'
 ```
 
-An issue with `loop/<number>` on either list has been started — **skip it.** `/dev-loop` has no
-duplicate-PR guard of its own, so this is the only thing standing between an hourly routine and
-two PRs for the same issue.
+An issue with a `loop/issue-<number>-` branch on either list has been started — **skip it.**
+`/dev-loop` has the same guard in its Stage 0; this one is cheaper and runs first.
 
 Take the **lowest-numbered** survivor. None left → print `queue empty` and end the tick
 successfully. An empty queue is not an error; it means a human needs to triage more work.
@@ -98,9 +101,10 @@ Exactly one of these, every time, including on failure:
 
 - **PR opened** → `gh issue edit <n> --remove-label loop:in-progress`. Leave `loop:ready` in
   place; the issue is done when the PR merges, which is not this tick's business.
-- **Pipeline stopped and commented** (underspecified, invariant touched, escalation) →
-  remove `loop:in-progress`, add `loop:needs-human`, remove `loop:ready`. The issue must leave
-  the eligible set, or the next tick picks it up again and stops again, forever.
+- **Pipeline stopped and commented** (underspecified, a bound spec claim, invariant or ADR
+  touched, a failed gate, an unresolved finding) → remove `loop:in-progress`, add
+  `loop:needs-human` (the pipeline usually already has), remove `loop:ready`. The issue must
+  leave the eligible set, or the next tick picks it up again and stops again, forever.
 - **Crashed or ran out of context** → remove `loop:in-progress` and add `loop:needs-human` with
   a comment saying what happened. A claim left set silently removes the issue from the queue for
   good.
@@ -109,8 +113,9 @@ Never leave `loop:in-progress` set at the end of a tick.
 
 ## Stage 6 — Report
 
-One short summary: the issue taken, the PR number, whether `make verify` was fully green, and
-**explicitly whether any gate was skipped.** In a cloud environment `buf` may be absent, which
+One short summary: the issue taken, the PR number, whether `make verify` was fully green,
+whether both reviewers ran on each gate or Codex was absent, and **explicitly whether any gate
+was skipped.** In a cloud environment `buf` may be absent, which
 skips the proto-drift and proto-breaking checks with a notice — a skipped gate is not a passed
 gate, and the human reading this in three weeks needs it stated, not implied.
 

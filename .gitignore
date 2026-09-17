@@ -30,11 +30,10 @@
 /relay/*.sqlite
 *.local.yaml
 
-# Dev-loop run logs and issue drafts (transient)
-/scripts/dev-loop/logs/
-
-# Implementer's escalation marker (never merged)
-/DECISION_NEEDED.md
+# Transient workflow scratch: dev-loop, spec-check/drift, decompose. Never committed.
+/.dev-loop/
+/.spec-check/
+/.decompose/
 
 # Editor / OS
 .DS_Store

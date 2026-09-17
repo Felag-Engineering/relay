@@ -24,6 +24,8 @@ real lane, add an explicit `needs-triage` label rather than continuing to infer 
 
 These have no canonical equivalent; skills should preserve them rather than overwrite:
 
+- `loop:proposed` — created by `/decompose` from a merged design plan. Not eligible until a
+  human flips it to `loop:ready`; that flip is a gate (`docs/agents/workflow.md`).
 - `loop:in-progress` — currently being worked. Do not pick up.
 - `loop:blocked` — waiting on a dependency. Not eligible even though it may look ready.
 - `loop:done` — merged.

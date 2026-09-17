@@ -42,6 +42,9 @@ according to a provided plan.
   and PR creation belong to the coordinator. You only edit files and run the build.
 - **Never weaken a security or architecture invariant** to make a change fit. Flag
   it instead.
+- **Never edit anything under `docs/specs/`, `docs/adr/`, `AGENTS.md` or `GLOSSARY.md`.**
+  The spec's evidence rows are updated by a separate agent after review; its claims, and the
+  rest, are the human's. If the plan needs a spec claim to be different, STOP and say so.
 
 ## If you receive review feedback
 

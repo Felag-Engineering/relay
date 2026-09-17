@@ -5,29 +5,36 @@ and sees only what is in the tree. Anything living in `~/.claude` does not exist
 unattended run is concerned.
 
 ```
-commands/dev-loop-queue.md   what a routine runs: one loop:ready issue per tick, no merge waiting
-commands/dev-loop.md         the pipeline it invokes, in --non-interactive mode
-agents/devloop-*.md          the five subagents dev-loop dispatches to
+commands/dev-loop-queue.md   routine: one loop:ready issue per tick, no merge waiting
+commands/pr-respond.md       routine: address human review comments on an open loop PR
+commands/dev-loop.md         the pipeline the queue invokes, in --non-interactive mode
+commands/spec-author.md      interactive: co-author a spec, ADR, glossary entry or invariant
+commands/spec-check.md       interactive: docs-only conflict check for a changed spec
+commands/spec-drift.md       interactive: classify a spec's claims as built or unbuilt
+commands/design.md           interactive: design plan from Designed claims, two-vendor reviewed
+commands/decompose.md        interactive: merged plan → loop:proposed issues
+commands/milestone-close.md  interactive: delete the plan, flip the spec's Status
+agents/devloop-*.md          the five subagents dev-loop and pr-respond dispatch to
+agents/design-*.md           the design architect and its adversarial reviewer
+agents/decomposer.md, spec-conflict-reviewer.md, spec-proof-updater.md
 ```
+
+The chain these form, and who may touch what, is `docs/agents/workflow.md`.
 
 `worktrees/` and `settings.local.json` stay ignored: local state, not product.
 
-## Deliberately minimal
+## What is vendored, and why
 
-This directory holds only what is reachable from a scheduled run. `/dev-loop` grants no `Skill`
-tool and names no skill, and the subagents get `Read, Grep, Glob, Bash, LSP` only — so an
-authoring skill in the tree would be unreachable weight an unattended agent still reads. In a
-repo that ships remote code execution, fewer instruction files on the agent's path is the safer
-default.
+Everything on the chain in `docs/agents/workflow.md` lives here, because a cloud routine sees
+only the tree. The two unattended commands (`dev-loop-queue`, `pr-respond`) grant no `Skill`
+tool and no `AskUserQuestion`; the interactive ones (`spec-author`, `design`, `decompose`,
+`milestone-close`) do, and are never scheduled. Subagents get the narrowest tool set their job
+needs — reviewers cannot edit, the developer cannot commit, the proof updater can edit only a
+spec's evidence rows.
 
-Two things are therefore **not** vendored:
-
-- **`/dev-loop-drive`** — the wave driver. It gates each wave on human merges and stalls when
-  nobody is there, which is the whole reason `dev-loop-queue` exists. Interactive use only.
-- **The authoring skills** (`to-spec`, `to-tickets`, `grill-with-docs`, `tdd`, `triage`, …) from
-  [`mattpocock/skills`](https://github.com/mattpocock/skills). Shaping and specifying are
-  interactive acts that need a human to interrogate; they run at your desk, from your own
-  install. Add them here only if you intend to start ad-hoc cloud sessions that use them.
+Codex is the second reviewer on the design, code and security gates, reached through
+`scripts/codex-review.sh`, read-only. When the plugin is absent the gate runs single-vendor and
+says so.
 
 ## Repo-specific configuration
 
