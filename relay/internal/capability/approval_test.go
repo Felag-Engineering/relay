@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -222,6 +223,75 @@ func TestGatedDispatchParksAndSendsNothing(t *testing.T) {
 	if len(store.byID) != 1 {
 		t.Errorf("stored %d requests, want exactly 1", len(store.byID))
 	}
+}
+
+// blankAudienceGate is a minimal ApprovalGate that hands back a Requirement
+// carrying a blank audience entry — something a real *approval.Gate can no
+// longer produce (approval.Rule.Validate), so this stands in for any other
+// ApprovalGate implementation checkApproval's own guard must defend against.
+type blankAudienceGate struct {
+	req   approval.Requirement
+	rules []string
+}
+
+func (g blankAudienceGate) Evaluate(approval.Dispatch) (approval.Requirement, []string, bool) {
+	return g.req, g.rules, true
+}
+
+// TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite is #608's
+// dispatch-path (park) regression: the park path has no capability-level
+// audience check of its own on main, and relies entirely on
+// approval.Rule.Validate to have kept a blank entry out of the gate in the
+// first place. A non-validating ApprovalGate must still be refused here,
+// before an Approval grant is claimed or a Request is created.
+func TestGatedDispatchRefusesABlankAudienceEntryBeforeAnyWrite(t *testing.T) {
+	store := newMemApprovals()
+	gate := blankAudienceGate{
+		req:   approval.Requirement{Count: 1, Audience: []string{"ana", ""}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		rules: []string{"blank-rule"},
+	}
+	s, disp := approvalFixture(t, []string{"node-a"}, gate, store, func() time.Time { return apNow })
+
+	_, err := s.Run(context.Background(), Principal{AccountID: "acct-g", Account: "gleipnir-prod"}, Selector{}, mutateAct())
+	if !errors.Is(err, approval.ErrAudienceBlankEntry) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
+	}
+	if !strings.Contains(err.Error(), "require.audience") || !strings.Contains(err.Error(), "blank-rule") {
+		t.Errorf("error = %q, want it to mention require.audience and the offending rule", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was called; a refused dispatch must never reach it")
+	}
+	if len(store.byID) != 0 {
+		t.Error("a refused dispatch must not create an approval request")
+	}
+}
+
+// namespaceVaryingAudienceGate is a fake ApprovalGate whose answer depends on
+// which namespace it is asked about: the "node" namespace's Requirement
+// carries a blank audience entry, every other namespace's is unrestricted (no
+// audience named at all).
+//
+// It exists to drive approval.RequirementForScope's namespace probing
+// (grant.go): RequirementForScope calls Evaluate once per known namespace and
+// merges the results with mergeStricter, which unions the audiences
+// (unionAudience). Before #608 cycle 2's fix, unionAudience's "either side is
+// empty means unrestricted" shortcut fired on ANY empty side, so merging the
+// "node" probe's malformed Requirement with a later unrestricted probe threw
+// the blank entry away and the merged Requirement read back unrestricted —
+// defeating RequestGrant's own ValidateAudience backstop, which only ever
+// sees the MERGED result. A single-call fake like blankAudienceGate cannot
+// exercise this: the hazard is specifically in the merge across several
+// Evaluate calls, which only RequirementForScope (and Gate.Evaluate, for a
+// real Gate merging several matching rules) ever does.
+type namespaceVaryingAudienceGate struct{}
+
+func (namespaceVaryingAudienceGate) Evaluate(d approval.Dispatch) (approval.Requirement, []string, bool) {
+	if len(d.Namespaces) > 0 && d.Namespaces[0] == "node" {
+		return approval.Requirement{Count: 1, Audience: []string{""}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+			[]string{"node-rule"}, true
+	}
+	return approval.Requirement{Count: 1, Channel: approval.ChannelOutOfBand, TTL: time.Hour}, []string{"catch-all"}, true
 }
 
 // TestUngatedDispatchIsUntouched: an empty gate must leave the pre-approval

@@ -1,6 +1,7 @@
 package approval
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,20 @@ func TestLoadFailsClosed(t *testing.T) {
 			},
 			want: "unknown selector namespace",
 		},
+		{
+			name: "empty audience entry",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"blank-approver","require":{"count":1,"audience":[""]}}]}`, 0o600)
+			},
+			want: `rule "blank-approver": require.audience`,
+		},
+		{
+			name: "whitespace-only audience entry",
+			path: func(t *testing.T) string {
+				return writeConfig(t, `{"rules":[{"name":"ws-approver","require":{"count":1,"audience":["ana","  "]}}]}`, 0o600)
+			},
+			want: `rule "ws-approver": require.audience`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -182,5 +197,24 @@ func TestLoadRefusesSymlink(t *testing.T) {
 func TestLoadRefusesDirectory(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load accepted a directory as a gate config")
+	}
+}
+
+// TestLoadRefusesBlankAudienceEntryRatherThanNormalising is the #608
+// regression: pre-fix, a rule whose audience was exactly [""] loaded
+// successfully and read back as an UNRESTRICTED audience (an empty entry
+// stored and joined comes back indistinguishable from no audience at all).
+// Loading must refuse it and name the rule, never silently drop the entry.
+func TestLoadRefusesBlankAudienceEntryRatherThanNormalising(t *testing.T) {
+	cfg := `{"rules":[{"name":"blank-approver","require":{"count":1,"audience":[""]}}]}`
+	g, err := Load(writeConfig(t, cfg, 0o600))
+	if g != nil {
+		t.Errorf("Load returned a non-nil Gate on a blank audience entry: %+v", g.Rules())
+	}
+	if !errors.Is(err, ErrAudienceBlankEntry) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
+	}
+	if !strings.Contains(err.Error(), "blank-approver") {
+		t.Errorf("error = %q, want it to name the rule", err)
 	}
 }

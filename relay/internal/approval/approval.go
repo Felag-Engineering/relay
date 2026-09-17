@@ -49,6 +49,12 @@ var (
 	// audience.
 	ErrNotInAudience = errors.New("approval: decider is not in the required audience")
 
+	// ErrAudienceBlankEntry is returned where an audience containing an empty
+	// or whitespace-only entry would be accepted. A blank entry names no
+	// Account; it is refused rather than dropped, because dropping the last
+	// named entry turns a restricted audience into an unrestricted one.
+	ErrAudienceBlankEntry = errors.New("approval: audience contains an empty or whitespace-only entry")
+
 	// ErrDuplicateDecider is returned when one Account tries to satisfy two
 	// slots of a count:2 requirement. Quorum means *distinct* people; without
 	// this, count:2 is decoration.
@@ -160,7 +166,9 @@ type Requirement struct {
 
 	// Audience is the set of Account names that may decide. Empty means "any
 	// Account the surface would let decide" — the surface enforces the role
-	// floor, since role gating belongs to the capability layer, not here.
+	// floor, since role gating belongs to the capability layer, not here. An
+	// audience containing a blank entry is malformed and admits no decider; it
+	// is never read as empty.
 	Audience []string
 
 	// RequesterAllowed permits the requesting Account to satisfy a slot. False
@@ -184,6 +192,30 @@ const DefaultTTL = 4 * time.Hour
 // this is the config surface's limit, so an operator cannot accidentally
 // require more approvers than the deployment has.
 const MaxCount = 2
+
+// ValidateAudience reports whether audience contains a blank entry: empty or
+// whitespace-only. A nil or empty slice is the documented "unrestricted" and
+// returns nil.
+//
+// It NEVER trims, filters or rewrites audience — it only reports. Dropping a
+// blank entry rather than refusing it is exactly the widening this guards
+// against: [""] would become [] (unrestricted) and ["ana", ""] would become
+// ["ana"], silently changing what the rule meant.
+func ValidateAudience(audience []string) error {
+	for i, a := range audience {
+		if strings.TrimSpace(a) == "" {
+			return fmt.Errorf("%w (entry %d of %d)", ErrAudienceBlankEntry, i+1, len(audience))
+		}
+	}
+	return nil
+}
+
+// AudienceMalformed reports whether q's Audience contains a blank entry. A
+// malformed audience admits no decider (fail closed): see Request.inAudience
+// and Request.Decide.
+func (q Requirement) AudienceMalformed() bool {
+	return ValidateAudience(q.Audience) != nil
+}
 
 // normalized returns r with defaults applied.
 func (r Requirement) normalized() Requirement {
@@ -238,11 +270,24 @@ func mergeStricter(a, b Requirement) Requirement {
 	return out
 }
 
-// unionAudience merges two audiences, deduplicated and ordered. An empty
-// audience means "unrestricted", so it absorbs the other.
+// unionAudience merges two audiences, deduplicated and ordered. A genuinely
+// empty audience means "unrestricted" (ADR-0027), so it absorbs a WELL-FORMED
+// restricted side — that absorption is the accepted amendment-2026-09-16 risk
+// and is unchanged here.
+//
+// It must never absorb a MALFORMED side the same way. A blank entry means
+// "this rule's own audience is broken", not "this rule has no audience", so an
+// unrestricted probe merging with a malformed one must not launder it into
+// unrestricted: the malformed side's blank entry is carried into the result
+// instead, so the merged Requirement is still AudienceMalformed() and every
+// caller that checks it (Request.Decide, capability.RequestGrant,
+// capability.checkApproval) still fires. Only when NEITHER side is malformed
+// does the "empty absorbs" shortcut apply.
 func unionAudience(a, b []string) []string {
-	if len(a) == 0 || len(b) == 0 {
-		return nil
+	if ValidateAudience(a) == nil && ValidateAudience(b) == nil {
+		if len(a) == 0 || len(b) == 0 {
+			return nil
+		}
 	}
 	seen := make(map[string]struct{}, len(a)+len(b))
 	out := make([]string, 0, len(a)+len(b))
@@ -502,6 +547,9 @@ func (r Request) Decide(d Decision, now time.Time) (Request, error) {
 			return r, ErrMachineSelfDecision
 		}
 	}
+	if r.Require.AudienceMalformed() {
+		return r, fmt.Errorf("%w: the audience of this request contains an empty or whitespace-only entry, so no Account may decide it", ErrNotInAudience)
+	}
 	if !r.inAudience(d.Account) {
 		return r, ErrNotInAudience
 	}
@@ -548,8 +596,19 @@ func (r Request) Expire(now time.Time) (Request, error) {
 }
 
 // inAudience reports whether account may decide. An empty Audience is
-// unrestricted (the surface still applies its role floor).
+// unrestricted (the surface still applies its role floor). A MALFORMED
+// audience — one containing a blank entry — admits nobody: it is never read as
+// empty, so a stored row that somehow carries one fails closed instead of
+// widening to unrestricted.
 func (r Request) inAudience(account string) bool {
+	// Unreachable today: Decide already returns before calling inAudience when
+	// AudienceMalformed() is true, so both checks never fire on the same call.
+	// Kept anyway as a backstop against any future caller of inAudience that
+	// does not go through Decide's ordering — this method's own doc comment
+	// promises the malformed answer regardless of caller.
+	if r.Require.AudienceMalformed() {
+		return false
+	}
 	if len(r.Require.Audience) == 0 {
 		return true
 	}

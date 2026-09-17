@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -309,6 +310,63 @@ func TestRequestGrantRefusesUnboundedScopes(t *testing.T) {
 				t.Error("a refused grant request must leave nothing behind")
 			}
 		})
+	}
+}
+
+// TestRequestGrantRefusesABlankAudienceEntry is #608's Approval-grant-request
+// path regression. A real *approval.Gate can no longer derive a Requirement
+// carrying a blank audience entry (approval.Rule.Validate), so blankAudienceGate
+// stands in for any other ApprovalGate implementation: the refusal here must
+// hold regardless of what produced the Requirement, and it must run AFTER the
+// role floor (TestRequestGrantRefusedByRoleFloorWritesNothing already proves
+// that ordering) but before any ID is minted or anything written.
+func TestRequestGrantRefusesABlankAudienceEntry(t *testing.T) {
+	gate := blankAudienceGate{
+		req:   approval.Requirement{Count: 1, Audience: []string{"ana", ""}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+		rules: []string{"blank-rule"},
+	}
+	s, approvals, grants, audit := grantMgmtFixture(t, gate, &spyApprovalAuthorizer{})
+
+	_, _, err := s.RequestGrant(context.Background(), machineRequester, grantRequestFixture())
+	if !errors.Is(err, approval.ErrAudienceBlankEntry) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry)", err)
+	}
+	if !strings.Contains(err.Error(), "require.audience") || !strings.Contains(err.Error(), "blank-rule") {
+		t.Errorf("error = %q, want it to mention require.audience and the offending rule", err)
+	}
+	if len(approvals.byID) != 0 || len(grants.byID) != 0 {
+		t.Error("a refused grant request must leave nothing behind")
+	}
+	for i := range audit.entries {
+		if audit.entries[i].Kind == AuditKindApprovalGrantRequested {
+			t.Errorf("a refused grant request must not be audited as requested: %+v", audit.entries[i])
+		}
+	}
+}
+
+// TestRequestGrantRefusesAMergedAudienceThatWouldOtherwiseAbsorbABlankEntry is
+// #608 cycle 2's security-review regression (finding 1): RequirementForScope
+// probes every known namespace and merges the results with mergeStricter, and
+// that merge must never let an unrestricted probe's audience absorb another
+// probe's malformed one. namespaceVaryingAudienceGate returns a blank
+// audience entry for the "node" probe and no audience at all for every other
+// probe; only the FIXED unionAudience keeps the merged Requirement malformed
+// through that merge, so this fails on the pre-fix union (which would return
+// an unrestricted merged audience) and passes once it is fixed.
+func TestRequestGrantRefusesAMergedAudienceThatWouldOtherwiseAbsorbABlankEntry(t *testing.T) {
+	s, approvals, grants, audit := grantMgmtFixture(t, namespaceVaryingAudienceGate{}, &spyApprovalAuthorizer{})
+
+	_, _, err := s.RequestGrant(context.Background(), machineRequester, grantRequestFixture())
+	if !errors.Is(err, approval.ErrAudienceBlankEntry) {
+		t.Fatalf("err = %v, want errors.Is(err, ErrAudienceBlankEntry) — the merge must not have laundered the node probe's blank entry away", err)
+	}
+	if len(approvals.byID) != 0 || len(grants.byID) != 0 {
+		t.Error("a refused grant request must leave nothing behind")
+	}
+	for i := range audit.entries {
+		if audit.entries[i].Kind == AuditKindApprovalGrantRequested {
+			t.Errorf("a refused grant request must not be audited as requested: %+v", audit.entries[i])
+		}
 	}
 }
 

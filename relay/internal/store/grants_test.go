@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -644,4 +645,71 @@ func TestCreateGrantRefusesALegacyNamespacePin(t *testing.T) {
 	if _, err := repo.GetGrant(ctx, "grant-bad"); !errors.Is(err, approval.ErrGrantNotFound) {
 		t.Errorf("GetGrant: err = %v, want ErrGrantNotFound — the refused write must not land", err)
 	}
+}
+
+// TestGrantWhoseStoredAudienceHasABlankEntryAuthorizesNothing is #608's
+// Approval-grant-path regression. An Approval grant's own approver audience
+// lives on its authorizing Request, which Create can no longer write with a
+// blank entry
+// (TestCreateRefusesBlankAudienceEntry, on the approvals side) — so this
+// simulates a row from before that fix, corrupted directly via SQL.
+//
+// The control case (no corruption) proves the assertion below is not
+// vacuously true: without it, ClaimGrant returning false after corruption
+// would pass on main too, since ClaimGrant already requires an approved
+// Request regardless of audience.
+func TestGrantWhoseStoredAudienceHasABlankEntryAuthorizesNothing(t *testing.T) {
+	ctx := context.Background()
+
+	newAuthorizedGrant := func(t *testing.T) (approval.GrantRepository, approval.Repository, *sql.DB) {
+		t.Helper()
+		st, db := openStore(t)
+		repo, approvals := st.Grants(), st.Approvals()
+		if err := repo.CreateGrant(ctx, storeGrant("grant-1", 2)); err != nil {
+			t.Fatalf("CreateGrant: %v", err)
+		}
+		r := approval.NewRequest("req-grant-1", "hash-req-grant-1", "acct-g", "gleipnir-prod",
+			storeAction, []string{"node-a"}, approval.SelectorShape{}, []string{"batch-rule"},
+			approval.Requirement{Count: 1, Audience: []string{"ana"}, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+			gNow.Add(-time.Minute))
+		if err := approvals.Create(ctx, r); err != nil {
+			t.Fatalf("create authorizing request: %v", err)
+		}
+		return repo, approvals, db
+	}
+
+	t.Run("control: an uncorrupted named audience authorizes the grant normally", func(t *testing.T) {
+		repo, approvals, _ := newAuthorizedGrant(t)
+		if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+			AccountID: "acct-ana", Account: "ana", Approve: true,
+			Channel: approval.ChannelOutOfBand, PlanHash: "hash-req-grant-1",
+			DeciderHuman: true, At: gNow.Add(-time.Minute),
+		}, gNow.Add(-time.Minute)); err != nil {
+			t.Fatalf("RecordDecision by the named approver: %v", err)
+		}
+		if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || !ok {
+			t.Fatalf("ClaimGrant: ok=%v err=%v, want a claim — an approved Approval grant with a well-formed audience must be claimable", ok, err)
+		}
+	})
+
+	t.Run("corrupted: a blank audience entry refuses the decision and the grant is never claimable", func(t *testing.T) {
+		repo, approvals, db := newAuthorizedGrant(t)
+		if _, err := db.ExecContext(ctx,
+			`UPDATE approval_requests SET require_audience = ? WHERE request_id = ?`,
+			"ana,", "req-grant-1"); err != nil {
+			t.Fatalf("corrupt require_audience: %v", err)
+		}
+
+		if _, err := approvals.RecordDecision(ctx, "req-grant-1", approval.Decision{
+			AccountID: "acct-ana", Account: "ana", Approve: true,
+			Channel: approval.ChannelOutOfBand, PlanHash: "hash-req-grant-1",
+			DeciderHuman: true, At: gNow.Add(-time.Minute),
+		}, gNow.Add(-time.Minute)); !errors.Is(err, approval.ErrNotInAudience) {
+			t.Fatalf("RecordDecision against a malformed audience: err = %v, want ErrNotInAudience", err)
+		}
+
+		if _, ok, err := repo.ClaimGrant(ctx, storeDispatch(), gNow); err != nil || ok {
+			t.Fatalf("ClaimGrant: ok=%v err=%v, want no claim — the authorizing request was never approved", ok, err)
+		}
+	})
 }

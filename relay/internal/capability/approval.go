@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -240,6 +241,19 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	req, rules, gated := s.gate.Evaluate(d)
 	if !gated {
 		return approvalDecision{proceed: true}, nil
+	}
+	// A blank audience entry never becomes an approver: refused here, before
+	// any Approval grant is claimed or any Request is created, so a non-validating
+	// ApprovalGate cannot park a dispatch behind a Request that reads back
+	// unrestricted. This is the single call site for whatever Evaluate
+	// returns, including a Requirement *approval.Gate merged from several
+	// matching rules (mergeStricter): that merge never lets an unrestricted
+	// rule's audience absorb a malformed one — a blank entry survives the
+	// merge (see unionAudience) — so a merge upstream cannot defeat this
+	// check. A real *approval.Gate can no longer produce a malformed
+	// Requirement in the first place (approval.Rule.Validate).
+	if err := approval.ValidateAudience(req.Audience); err != nil {
+		return approvalDecision{}, fmt.Errorf("capability: dispatch approval requirement from rules %s: require.audience: %w", strings.Join(rules, ", "), err)
 	}
 
 	now := time.Now().UTC()

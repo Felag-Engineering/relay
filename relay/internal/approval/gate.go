@@ -137,6 +137,10 @@ func (r Rule) Validate() error {
 	if r.Require.TTL < 0 {
 		return fmt.Errorf("approval: rule %q: ttl must not be negative", r.Name)
 	}
+	if err := ValidateAudience(r.Require.Audience); err != nil {
+		return fmt.Errorf("approval: rule %q: require.audience: %w; an audience names the Accounts that may decide and a blank entry names none, so remove it or name an Account",
+			r.Name, err)
+	}
 	// A rule that excludes the requester and has an audience of exactly the
 	// requester can never be satisfied. We cannot know the requester at load
 	// time, but we CAN catch the unconditional version: count 2 with a

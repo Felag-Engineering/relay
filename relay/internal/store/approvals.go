@@ -21,6 +21,16 @@ var _ approval.Repository = (*sqliteApprovals)(nil)
 
 // Create persists a new pending Request.
 func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error {
+	// The comma-joined require_audience column cannot represent a lone blank
+	// entry: strings.Join([]string{""}, ",") == "", which encodes identically
+	// to an unrestricted audience. So a Request whose audience contains a
+	// blank entry must be impossible to store — the same stance Scope.Validate
+	// takes on a comma inside an Operation name (grant.go). This is the one
+	// write chokepoint for both the park path (capability.checkApproval) and
+	// the Approval-grant path (capability.RequestGrant).
+	if err := approval.ValidateAudience(r.Require.Audience); err != nil {
+		return fmt.Errorf("insert approval request %q: require_audience: %w", r.ID, err)
+	}
 	_, err := a.db.ExecContext(ctx, `
 		INSERT INTO approval_requests (
 			request_id, job_id, plan_hash, shape_key, requested_by_id, requested_by,
@@ -151,6 +161,12 @@ func scanApproval(scan func(dest ...any) error) (approval.Request, error) {
 	// interpret becomes undecidable instead of decidable by the weakest floor.
 	r.ActionKind = approval.ParseActionKind(actionKind)
 	r.RiskClass = approval.ParseRiskClassName(riskClass)
+	// Blank entries in a non-empty column (e.g. "ana,", ",", " ") are
+	// deliberately PRESERVED here, never filtered: the domain fails closed on
+	// them (approval.Requirement.AudienceMalformed), and this read never
+	// errors on one, since erroring would break Pending and ExpirePending for
+	// every row in the queue — including the malformed one, which must still
+	// be able to expire.
 	r.Require.Audience = splitList(audience)
 	r.Require.RequesterAllowed = reqAllowed != 0
 	r.Require.Channel = approval.Channel(channel)
@@ -364,8 +380,12 @@ func nullString(s string) any {
 	return s
 }
 
-// splitList is the inverse of strings.Join for the comma-separated list
-// columns. An empty column is an empty slice, never []string{""}.
+// splitList is the inverse of strings.Join for every comma-separated list
+// column (matched_rules and require_audience here, Scope.Operations in
+// grants.go). An empty column is an empty slice, never []string{""}, and it
+// must never drop an empty element from a non-empty column: callers that need
+// blank entries treated as malformed (approval.Requirement.AudienceMalformed)
+// rely on this function preserving rather than filtering them.
 func splitList(s string) []string {
 	if s == "" {
 		return nil
