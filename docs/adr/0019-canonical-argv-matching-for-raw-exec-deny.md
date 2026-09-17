@@ -124,3 +124,60 @@ v0.8.0's Template Operations exist to make unnecessary.
   the neighbouring shapes land as red-team table rows (Axis 7) alongside it.
 - The #225 residual-risk register records R1 (#227) as **fixed**, with the joined-form
   lossiness above carried as its narrowed remainder.
+
+## Amendment (2026-09-16): allow patterns match the whole command, and no argv element carries whitespace
+
+**This reverses part of the residual section above.** That section named two ways to close the
+joined form's lossiness — reject ambiguous argv outright, or join on a separator that cannot
+appear in an element — and declined both as breaking changes to Policy authoring. The owner took
+the first on 2026-09-16, while working through `docs/specs/policy.md`, together with a second
+change the July red-team (#214) had recorded as "by design".
+
+### What changed
+
+1. **An allow pattern must match the whole joined command.** The daemon enforces the full match;
+   it does not rely on the author writing `^…$`. A pattern that already anchors behaves exactly as
+   before. A pattern that relied on substring semantics — `/usr/bin/systemctl (status|restart)
+   nginx`, matching anywhere in the line — now matches only a command that *is* that text, so
+   `/bin/rm -rf /var/log && /usr/bin/systemctl restart nginx` is denied by default rather than
+   admitted. #214 called the substring behaviour intended and made anchoring the operator's
+   mitigation; that is withdrawn. A safety property of the exceptional tier should not depend on
+   every operator remembering two characters.
+2. **Every argv element is refused if it is empty-or-whitespace-bearing — not only `argv[0]`.**
+   The existing `argv[0]` guard (same whitespace definition, `char::is_whitespace`) extends to
+   every element; an empty `argv[0]` stays refused, and an empty later element is allowed (it
+   carries no boundary ambiguity). With no whitespace inside any element, joining on a space and
+   re-splitting is lossless: the joined line the allow pattern sees is exactly the argv that runs,
+   and the canonical elements equal the raw elements.
+
+Deny semantics are unchanged: deny still runs first, over the joined command, each raw element
+and each canonical element, and still beats allow.
+
+### What it closes
+
+- **R10** in `docs/security/threat-model.md` — the argument-boundary lossiness — is closed rather
+  than accepted: `["systemctl","restart nginx"]` is now refused, so no two distinct argvs share a
+  joined form. The multi-token whole-command deny that was whitespace-fragile is no longer
+  fragile, because a tab or NBSP inside an element is refused before any pattern runs.
+- The unanchored-allow footgun, carried in the red-team table as documented-intended
+  (`unanchored_allow_admits_foreign_argv0`, `interp_unanchored_allow_admits_shell_argv0`), becomes
+  a denial those rows must now assert.
+
+### What is given up, and accepted
+
+- **Raw Exec cannot pass an argument containing whitespace**, with no override: a commit message,
+  a path with a space, a quoted search term. The remedy is the one this ADR already names for a
+  spaced `argv[0]` — a Template, whose slots are typed and quoted by the author (ADR-0021). Raw Exec
+  is the conspicuous exception to a typed vocabulary (invariant 1), and a command that needs rich
+  arguments is exactly the command that should not be regex-gated.
+- **A deployed unanchored allow pattern stops matching on upgrade.** The failure is closed —
+  denial, never widening — and the deny reason is the ordinary deny-by-default one, so
+  `relay-daemon policy check` must warn on an allow pattern whose meaning changed (one without
+  `^` and `$`) so an operator finds it before the upgrade rather than after. Both in-tree
+  patterns (`policy.example.toml`, the dev-fleet fixture) already anchor.
+
+### Consumers
+
+`docs/specs/policy.md` (already states both claims), `docs/security/threat-model.md` R10 and
+invariant #1's row, `daemon/policy.example.toml` guidance, and the `raw_exec_redteam` rows named
+above. Implementation is tracked by its own issue.
