@@ -377,3 +377,24 @@ The reasoning, the tier split and the accepted residual risk — a compromised h
 session can remove every gate — are in the ADR-0010 amendment of the same date and in
 `docs/security/threat-model.md` **R15**. Behaviour is in `docs/specs/relay-configuration.md`;
 this ADR remains authoritative for what a rule means.
+
+## Amendment (2026-09-16): the shipped default gate is seeded into the store on first boot
+
+Completes the 2026-09-15 amendment above, which moved gate rules from a root-owned file into the
+Relay's store without saying how a fresh Relay gets any. Owner decision, 2026-09-16.
+
+- **A Relay whose store holds no gate rules at first start seeds the shipped default** — `read`
+  ungated; `mutate` and Raw Exec at in-band confirmation (ADR-0029); second-person and
+  out-of-band available to raise any rule to. The seed is one audited act attributed to the
+  system, not to an Account.
+- **After that the store is the only source.** No file is read, and the startup refusal for an
+  unloadable gate file retires with the file: there is nothing left to fail to load. An `admin`
+  who deletes every rule has done so in the Console with step-up and audit — the residual already
+  accepted as R15 — and the Relay does not re-seed on a later start.
+- **Declined:** parking every mutation until an admin configures a rule (a fresh Relay could do
+  nothing mutating without a Console visit), and a root-owned file that seeds the store (two
+  sources for one setting, which the 2026-09-15 amendment chose to avoid).
+
+Until store-backed rules are built, today's behaviour stands and `docs/specs/approval.md` must
+describe it as current: an optional root-owned file, and **no gate at all** when none is
+configured.
