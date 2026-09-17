@@ -7,7 +7,8 @@
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
 .PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
-        test-relay test-relay-race test-daemon test-strict-umask lint-relay lint-daemon \
+        test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
+        test-strict-umask-daemon lint-relay lint-daemon lint-tools tools \
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
@@ -24,7 +25,9 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
-# job for job, so "it passes locally" means the same thing it means in CI.
+# gate for gate, so "it passes locally" means the same thing it means in CI.
+# (CI groups several gates per job to share one toolchain setup and build cache;
+# the gates themselves are these same targets.)
 #
 # It is deliberately slower than `make test` — race builds and two e2e suites —
 # and deliberately not what you run on every save. Run it before opening a PR.
@@ -39,7 +42,7 @@ verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
 
-# Operation-schema drift (ci.yml: opschema-drift). Regenerates the committed
+# Operation-schema drift (ci.yml: the daemon job's opschema-drift step). Regenerates the committed
 # schema from the daemon binary and fails if it moved.
 opschema-check: gen-opschema
 	git diff --exit-code -- relay/internal/opvocab/testdata/operations.schema.json
@@ -64,7 +67,7 @@ gen-apiclient:
 	cd relay && go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) \
 		-config internal/apiclient/config.yaml ../docs/api/openapi.yaml
 
-# Contract gate (ci.yml: openapi): generate a client from the committed spec,
+# Contract gate (ci.yml: the relay job's OpenAPI steps): generate a client from the committed spec,
 # COMPILE it, and assert the mapping is total — every operationId the spec
 # declares has a client method. Generation alone would not catch a schema name
 # that collides with a generated wrapper type; compilation would not catch an
@@ -76,7 +79,7 @@ apiclient-check: gen-apiclient
 	cd relay && go build -tags apiclient ./internal/apiclient/ \
 		&& go test -tags apiclient ./internal/apiclient/ -count=1
 
-# OpenAPI contract gate (ci.yml: openapi). Validates docs/api/openapi.yaml as a
+# OpenAPI contract gate (ci.yml: the relay job's OpenAPI steps). Validates docs/api/openapi.yaml as a
 # real OpenAPI 3.1 document and checks it against the route table the server
 # actually mounts (api.Routes()), in BOTH directions — an undocumented route and
 # a documented-but-unserved one each fail. It runs in the Go toolchain rather
@@ -85,7 +88,7 @@ apiclient-check: gen-apiclient
 openapi-check:
 	cd relay && go test ./internal/controlplane/api/ -run 'TestOpenAPISpec|TestServedRoutes' -count=1
 
-# The two proto gates (ci.yml: proto-drift, proto-breaking), skipped with a
+# The two proto gates (ci.yml: the proto job's proto-drift and proto-breaking steps), skipped with a
 # notice when buf is unavailable.
 verify-proto:
 	@if command -v buf >/dev/null 2>&1; then \
@@ -148,6 +151,14 @@ proto-tools:
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
 
+# golangci-lint at a pinned version (full module path required: v2 module). Pinned
+# here rather than in ci.yml so every `go install` pin lives in one place: CI keys
+# its cached tool binaries on these lines, so bumping a version rebuilds the cache.
+lint-tools:
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+tools: proto-tools lint-tools
+
 # Documentation gates: ADR numbers are unique, and every test a capability spec
 # names in its proof table still exists. Both catch drift that has happened here —
 # two files once claimed ADR-0015, and a spec citing tests by name breaks silently
@@ -194,7 +205,7 @@ test-relay-race:
 lint-relay:
 	cd relay && gofmt -l . && go vet ./... && golangci-lint run
 
-## --- format-only targets (no compile; called by the format CI job) ---
+## --- format-only targets (no compile; fmt-relay is the relay CI job's gofmt step) ---
 # fmt-relay fails loudly if any file is unformatted: gofmt -l alone exits 0 even on drift.
 fmt-relay:
 	@test -z "$$(cd relay && gofmt -l .)" || { cd relay && gofmt -l . >&2; exit 1; }
@@ -215,7 +226,7 @@ build-daemon-release:
 test-daemon:
 	cd daemon && cargo test
 
-## --- strict-umask test lane (ci.yml: strict-umask) — issue #528 ---
+## --- strict-umask test lane (ci.yml: the relay and daemon jobs' umask steps) — issue #528 ---
 # Everything else in the gate runs at ONE umask: 0022 on a GitHub runner, and
 # in practice the same on a dev box. That made a whole defect class
 # structurally invisible — a fixture that quietly stops being a valid input, or
@@ -249,9 +260,16 @@ test-daemon:
 # process-global and Go tests run in parallel, so a test that sets it corrupts
 # its neighbours (ruled out on those grounds in #481). Setting it once, around
 # the whole lane, is the safe shape.
-test-strict-umask:
+#
+# Split per toolchain so CI can run each half in the job that already compiled
+# that toolchain's tests; `test-strict-umask` remains the whole lane.
+test-strict-umask: test-strict-umask-relay test-strict-umask-daemon
+
+test-strict-umask-relay:
 	umask 077 && echo "test-strict-umask: umask is $$(umask)" && cd relay && go test -count=1 ./...
-	umask 077 && cd daemon && cargo test
+
+test-strict-umask-daemon:
+	umask 077 && echo "test-strict-umask: umask is $$(umask)" && cd daemon && cargo test
 
 ## --- End-to-end integration tests ---
 # test-integration is NOT part of the make test gate (hermetic suites only).
@@ -330,10 +348,9 @@ vuln-daemon:
 # next one. This is intentional — one crasher at a time keeps each failure
 # triageable — not a bug.
 #
-# The fuzz corpus cache ($GOCACHE/fuzz) is not persisted across nightly runs
-# (no cache step below, unlike the Go-modules cache); each run starts fresh
-# from the in-code f.Add seeds. Known limitation — persisting the corpus
-# across runs is a future follow-up, not required for issue #217's DoD.
+# The nightly job persists the coverage-grown corpus ($GOCACHE/fuzz) across runs
+# within a month with a cache step (security-nightly.yml), so each run resumes from
+# what the previous ones found rather than restarting from the in-code f.Add seeds.
 FUZZTIME ?= 30s
 fuzz-relay:
 	cd relay && go test -run=^$$ -fuzz='^FuzzSignCSR$$'                -fuzztime=$(FUZZTIME) ./internal/ca/
@@ -372,10 +389,19 @@ FUZZ_TOTAL_TIME ?= 60
 FUZZ_RSS_MB     ?= 2048
 FUZZ_MAX_LEN    ?= 65536
 FUZZ_FLAGS      := -max_total_time=$(FUZZ_TOTAL_TIME) -rss_limit_mb=$(FUZZ_RSS_MB) -max_len=$(FUZZ_MAX_LEN)
+#
+# FUZZ_GROWN_CORPUS (absolute path, optional): a directory the nightly job persists
+# across runs. When set, each target reads <dir>/<target> AND the committed seeds,
+# and writes new inputs only to <dir>/<target> — libFuzzer adds to the FIRST corpus
+# directory — so a persisted corpus never overwrites or pollutes the committed seeds.
+FUZZ_GROWN_CORPUS ?=
+FUZZ_DAEMON_TARGETS := fuzz_relay_message_decode fuzz_enroll_response_decode fuzz_renew_response_decode
+fuzz_corpus = $(if $(FUZZ_GROWN_CORPUS),$(FUZZ_GROWN_CORPUS)/$(1) $(CURDIR)/daemon/fuzz/corpus/$(1))
 fuzz-daemon:
-	cd daemon && cargo +nightly fuzz run fuzz_relay_message_decode   -- $(FUZZ_FLAGS)
-	cd daemon && cargo +nightly fuzz run fuzz_enroll_response_decode -- $(FUZZ_FLAGS)
-	cd daemon && cargo +nightly fuzz run fuzz_renew_response_decode  -- $(FUZZ_FLAGS)
+	$(if $(FUZZ_GROWN_CORPUS),mkdir -p $(addprefix $(FUZZ_GROWN_CORPUS)/,$(FUZZ_DAEMON_TARGETS)))
+	cd daemon && cargo +nightly fuzz run fuzz_relay_message_decode   $(call fuzz_corpus,fuzz_relay_message_decode) -- $(FUZZ_FLAGS)
+	cd daemon && cargo +nightly fuzz run fuzz_enroll_response_decode $(call fuzz_corpus,fuzz_enroll_response_decode) -- $(FUZZ_FLAGS)
+	cd daemon && cargo +nightly fuzz run fuzz_renew_response_decode  $(call fuzz_corpus,fuzz_renew_response_decode) -- $(FUZZ_FLAGS)
 
 ## --- local dev fleet (DEV-ONLY; requires Docker + compose v2) ---
 # Thin convenience wrappers over `docker compose` for the laptop dev fleet

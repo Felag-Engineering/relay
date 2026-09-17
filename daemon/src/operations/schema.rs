@@ -16,7 +16,7 @@
 //!       this file's exhaustive proof tests bind every [`ArgSpec`]'s
 //!       ADVERTISED charset to the real validator, byte by byte, not just
 //!       its test-only `predicate` twin.
-//!   (b) `opschema-drift` CI job — regenerates `operations.schema.json` via
+//!   (b) `opschema-drift` CI step — regenerates `operations.schema.json` via
 //!       the `dump-operation-schema` subcommand and fails on any diff.
 //!   (c) `relay/internal/opvocab/opvocab_test.go` — a hermetic Go test that
 //!       cross-checks `opvocab.Operations()` against the committed golden.
@@ -278,7 +278,7 @@ fn json_escape(s: &str) -> String {
 
 /// Renders `schemas()` as canonical, deterministically-ordered, pretty
 /// JSON (2-space indent) — the same string on every run given the same
-/// table, so `git diff --exit-code` (the `opschema-drift` CI job) is a
+/// table, so `git diff --exit-code` (the `opschema-drift` CI step) is a
 /// faithful drift check.
 pub fn to_canonical_json() -> String {
     let mut out = String::new();

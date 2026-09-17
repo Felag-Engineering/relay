@@ -113,7 +113,7 @@ at 1).
 make verify 2>&1 | tee .dev-loop/verify.log     # RELAY_SMOKE_PORT=<port> when running in parallel
 ```
 
-This mirrors CI job for job. If the diff touches `proto/`, `verify-proto` must not have
+This mirrors CI gate for gate. If the diff touches `proto/`, `verify-proto` must not have
 skipped: grep the log for `skip` notices. **A skipped gate is reported as skipped, never as
 passed**, and a proto change with a skipped proto gate is a stop.
 
