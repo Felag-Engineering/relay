@@ -14,7 +14,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELAY_BIN="${REPO_ROOT}/relay/bin/relay"
 DAEMON_BIN="${REPO_ROOT}/daemon/target/debug/relay-daemon"
-RELAY_ADDR="127.0.0.1:17654"
+# RELAY_SMOKE_PORT lets parallel runs (several worktrees running `make verify` at once, as
+# /dev-loop-parallel does) each bind their own port instead of reaching one another's Relay.
+RELAY_ADDR="127.0.0.1:${RELAY_SMOKE_PORT:-17654}"
 RELAY_URL="http://${RELAY_ADDR}"
 STARTUP_TIMEOUT=10
 DAEMON_WINDOW=5

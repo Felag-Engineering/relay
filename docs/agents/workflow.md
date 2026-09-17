@@ -20,6 +20,7 @@ you edit a spec (co-authored, human-driven)      /spec-author
 /decompose <milestone>                           issues, created as loop:proposed
   └─ label flip ────────────────────────────────► GATE 3  you set loop:ready
 /dev-loop-queue ► /dev-loop <n>                  unattended: plan, review, implement, verify,
+  or /dev-loop-parallel (interactive: up to 3 issues at once, one runner per worktree)
                                                  review, proof-row update, PR
   └─ PR ────────────────────────────────────────► GATE 4  you review and comment
 /pr-respond                                      unattended: address comments, re-verify, push

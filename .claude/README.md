@@ -8,6 +8,7 @@ unattended run is concerned.
 commands/dev-loop-queue.md   routine: one loop:ready issue per tick, no merge waiting
 commands/pr-respond.md       routine: address human review comments on an open loop PR
 commands/dev-loop.md         the pipeline the queue invokes, in --non-interactive mode
+commands/dev-loop-parallel.md interactive: up to 3 issues at once, one dev-loop-runner per worktree
 commands/spec-author.md      interactive: co-author a spec, ADR, glossary entry or invariant
 commands/spec-check.md       interactive: docs-only conflict check for a changed spec
 commands/spec-drift.md       interactive: classify a spec's claims as built or unbuilt
@@ -15,6 +16,7 @@ commands/design.md           interactive: design plan from Designed claims, two-
 commands/decompose.md        interactive: merged plan → loop:proposed issues
 commands/milestone-close.md  interactive: delete the plan, flip the spec's Status
 agents/devloop-*.md          the five subagents dev-loop and pr-respond dispatch to
+agents/dev-loop-runner.md    runs dev-loop.md for one issue inside a worktree, for dev-loop-parallel
 agents/design-*.md           the design architect and its adversarial reviewer
 agents/decomposer.md, spec-conflict-reviewer.md, spec-proof-updater.md
 ```
