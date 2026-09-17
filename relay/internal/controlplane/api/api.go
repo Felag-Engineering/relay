@@ -80,6 +80,12 @@ type Freezer interface {
 // interface.
 type Auditor interface {
 	Append(ctx context.Context, r audit.Record) error
+
+	// AppendAll persists every Record in rs atomically: on a nil error all of
+	// them were written, on a non-nil error none were (audit.Repository's
+	// contract). Used by the token-revocation cascade to record a chunk of
+	// Nodes in one commit rather than one per Node (#563).
+	AppendAll(ctx context.Context, rs []audit.Record) error
 }
 
 // AccountManager is the Account-store view the identity routes need
@@ -401,12 +407,30 @@ func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, 
 // written — the same surface disagreeing with itself about whether an
 // unrecorded act may proceed was the inconsistency worth removing.
 func recordLifecycleErr(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) error {
+	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
+	if err != nil {
+		return err
+	}
+	if err := d.Audit.Append(ctx, rec); err != nil {
+		return fmt.Errorf("api: append lifecycle audit record: %w", err)
+	}
+	return nil
+}
+
+// newLifecycleRecord builds one lifecycle audit.Record attributed to p,
+// carrying both the verified and asserted identity lanes and the derived
+// reason — the same construction recordLifecycleErr uses for a single write
+// and recordLifecycleAllErr uses for a cascaded chunk. Kept in one place so
+// the attribution mapping cannot drift between the two paths: a second copy
+// is what a security review would flag, and it is how a lane gets dropped on
+// one path only.
+func newLifecycleRecord(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) (audit.Record, error) {
 	id, err := newAuditID()
 	if err != nil {
-		return fmt.Errorf("api: generate lifecycle audit record id: %w", err)
+		return audit.Record{}, fmt.Errorf("api: generate lifecycle audit record id: %w", err)
 	}
 	asserted := capability.AssertionsFromContext(ctx)
-	rec := audit.Record{
+	return audit.Record{
 		ID:        id,
 		Timestamp: d.Now(),
 		Kind:      kind,
@@ -428,9 +452,29 @@ func recordLifecycleErr(ctx context.Context, d Deps, p capability.Principal, kin
 		},
 		NodeID: nodeID,
 		Reason: reason,
+	}, nil
+}
+
+// recordLifecycleAllErr is the recorder-side half of RevocationRecorder's
+// all-or-nothing contract (revocation/service.go): it builds one lifecycle
+// audit.Record per Node in nodeIDs, attributed identically to
+// recordLifecycleErr, then writes all of them through a single
+// Auditor.AppendAll call.
+//
+// Every record is built with newLifecycleRecord before any write is
+// attempted, so an ID-generation failure returns before any record for this
+// chunk is persisted — keeping the all-or-nothing contract even on that path.
+func recordLifecycleAllErr(ctx context.Context, d Deps, p capability.Principal, kind string, nodeIDs []string, reason string) error {
+	recs := make([]audit.Record, len(nodeIDs))
+	for i, nodeID := range nodeIDs {
+		rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
+		if err != nil {
+			return err
+		}
+		recs[i] = rec
 	}
-	if err := d.Audit.Append(ctx, rec); err != nil {
-		return fmt.Errorf("api: append lifecycle audit record: %w", err)
+	if err := d.Audit.AppendAll(ctx, recs); err != nil {
+		return fmt.Errorf("api: append lifecycle audit records: %w", err)
 	}
 	return nil
 }

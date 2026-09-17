@@ -156,7 +156,7 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 	// This test's registry is empty, so the cascade records nothing through
 	// this recorder; the attribution assertions for a non-empty cascade live at
 	// the API seam (internal/controlplane/api).
-	recordsNothingBecauseTheRegistryIsEmpty := func(string) error { return nil }
+	recordsNothingBecauseTheRegistryIsEmpty := func([]string) error { return nil }
 	if err := deps.revocation.RevokeToken(ctx, tok.ID, recordsNothingBecauseTheRegistryIsEmpty); err != nil {
 		t.Fatalf("RevokeToken: %v", err)
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +14,20 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
+
+// silenceLogs swaps slog's default logger for one that discards everything,
+// restoring the previous default on cleanup. The cascade's RevokeNode and
+// flush both log per Node (slog.Info/slog.Error), so a test that drives
+// ~1,005 Nodes through it would otherwise flood test output with no bearing
+// on what the test asserts. revocation.Service takes no logger of its own —
+// it calls the log/slog package functions directly — so this is the only way
+// to quiet it without a production change outside this plan.
+func silenceLogs(t *testing.T) {
+	t.Helper()
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+}
 
 // fakeLister is a test double for revocation.Registry. It returns a successive
 // slice of Nodes on each call to List(); once all slices are exhausted it
@@ -39,12 +55,15 @@ type fakeTokenRevoker struct{ err error }
 func (f *fakeTokenRevoker) Revoke(_ context.Context, _ string) error { return f.err }
 
 // recorder is a test double for revocation.RevocationRecorder: it records
-// every node_id it was called with, in call order, and returns failOn[nodeID]
-// when set.
+// every node_id it was called with (across every call, in call order), the
+// calls themselves (one entry per call, in call order), and returns
+// failCalls[call index] for the call at that 1-based index when set — failure
+// is per CALL now, since a call covers a chunk rather than one Node.
 type recorder struct {
-	mu     sync.Mutex
-	got    []string
-	failOn map[string]error
+	mu        sync.Mutex
+	calls     [][]string
+	got       []string
+	failCalls map[int]error
 
 	// revokedAtRecordTime, when set, is consulted INSIDE record() to observe
 	// whether the Node was already denylisted at the moment the record was
@@ -56,14 +75,18 @@ type recorder struct {
 	recordedAfterRevoke []string
 }
 
-func (r *recorder) record(nodeID string) error {
+func (r *recorder) record(nodeIDs []string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.got = append(r.got, nodeID)
-	if r.revokedAtRecordTime != nil && r.revokedAtRecordTime(nodeID) {
-		r.recordedAfterRevoke = append(r.recordedAfterRevoke, nodeID)
+	callIndex := len(r.calls) + 1
+	r.calls = append(r.calls, append([]string(nil), nodeIDs...))
+	for _, nodeID := range nodeIDs {
+		r.got = append(r.got, nodeID)
+		if r.revokedAtRecordTime != nil && r.revokedAtRecordTime(nodeID) {
+			r.recordedAfterRevoke = append(r.recordedAfterRevoke, nodeID)
+		}
 	}
-	return r.failOn[nodeID]
+	return r.failCalls[callIndex]
 }
 
 // contains reports whether nodeID is anywhere in r.got.
@@ -272,11 +295,19 @@ func TestService_RevokeToken_RecordsNodeFoundOnRescan(t *testing.T) {
 
 // TestService_RevokeToken_RecordFailureDoesNotStopTheCascade covers the
 // failure posture that deliberately inverts #487's: when the recorder fails
-// mid-cascade, RevokeToken must still denylist EVERY matching Node —
-// including the one whose record failed — record every one of them (the
+// on a chunk, RevokeToken must still denylist EVERY matching Node —
+// including every one in the failed chunk — record every one of them (the
 // failure is noted, not swallowed), and report the shortfall via
 // ErrCascadeNotRecorded rather than aborting or silently succeeding.
+//
+// N is sized to two full chunks plus a remainder (2*CascadeRecordChunk + 5),
+// so there are exactly 3 recorder calls of sizes CascadeRecordChunk,
+// CascadeRecordChunk, and 5. Failing the first and third call — unequal chunk
+// sizes — makes "count calls", "count total", and "count only the first
+// failure" mutations of the shortfall count all go red: only "sum the sizes
+// of the failed calls" survives.
 func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
+	silenceLogs(t)
 	svc, d, _, reg, tokenSvc := newServiceFixture(t)
 	ctx := context.Background()
 
@@ -286,25 +317,19 @@ func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 	}
 	tokenID := tok.ID
 
-	const nodeCount = 20
+	const nodeCount = 2*revocation.CascadeRecordChunk + 5
 	nodeIDs := make([]string, nodeCount)
 	for i := range nodeIDs {
-		nodeIDs[i] = fmt.Sprintf("node-%02d", i+1)
+		nodeIDs[i] = fmt.Sprintf("node-%05d", i+1)
 		if _, err := reg.Upsert(registry.Report{NodeID: nodeIDs[i], EnrollingTokenID: tokenID}); err != nil {
 			t.Fatalf("Upsert(%s): %v", nodeIDs[i], err)
 		}
 	}
 
-	// TWO failures on distinct Nodes, not one. With a single failure the
-	// shortfall count is indistinguishable from "any non-zero number", and a
-	// code review found that corrupting it -- incrementing by two, or setting it
-	// to the cascade length on the first failure -- reddened nothing in the
-	// entire suite. That number is what an on-call operator reads to size the
-	// audit gap, and the threat model's R12 entry rests on it being honest.
 	rec := &recorder{
-		failOn: map[string]error{
-			"node-07": errors.New("audit store unavailable"),
-			"node-13": errors.New("audit store unavailable"),
+		failCalls: map[int]error{
+			1: errors.New("audit store unavailable"),
+			3: errors.New("audit store unavailable"),
 		},
 		revokedAtRecordTime: d.IsRevoked,
 	}
@@ -316,9 +341,10 @@ func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 	if !errors.As(err, &shortfall) {
 		t.Fatalf("RevokeToken error = %v, want it to carry a *CascadeShortfall", err)
 	}
-	if shortfall.Unrecorded != 2 {
-		t.Errorf("shortfall.Unrecorded = %d, want exactly 2 — the count an operator reads "+
-			"to size the audit gap must be the number that actually failed", shortfall.Unrecorded)
+	wantUnrecorded := revocation.CascadeRecordChunk + 5
+	if shortfall.Unrecorded != wantUnrecorded {
+		t.Errorf("shortfall.Unrecorded = %d, want exactly %d — the count an operator reads "+
+			"to size the audit gap must be the number that actually failed", shortfall.Unrecorded, wantUnrecorded)
 	}
 	if shortfall.Total != nodeCount {
 		t.Errorf("shortfall.Total = %d, want %d", shortfall.Total, nodeCount)
@@ -340,6 +366,125 @@ func TestService_RevokeToken_RecordFailureDoesNotStopTheCascade(t *testing.T) {
 			t.Errorf("recorder should have been called for %s", id)
 		}
 	}
+}
+
+// TestService_RevokeToken_RecordsInChunksNotPerNode is #563's core claim: an
+// N-Node cascade calls the recorder in chunks of at most
+// revocation.CascadeRecordChunk Nodes, not once per Node and not once for the
+// whole cascade. It goes red if the loop reverts to one call per Node (too
+// many calls) or to one unbounded call (one call covering all of N).
+func TestService_RevokeToken_RecordsInChunksNotPerNode(t *testing.T) {
+	silenceLogs(t)
+	svc, d, _, reg, tokenSvc := newServiceFixture(t)
+	ctx := context.Background()
+
+	tok, _, err := tokenSvc.Create(ctx, []string{"relay:env=test"}, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("Create token: %v", err)
+	}
+	tokenID := tok.ID
+
+	const nodeCount = 2*revocation.CascadeRecordChunk + 5
+	nodeIDs := make([]string, nodeCount)
+	for i := range nodeIDs {
+		nodeIDs[i] = fmt.Sprintf("node-%05d", i+1)
+		if _, err := reg.Upsert(registry.Report{NodeID: nodeIDs[i], EnrollingTokenID: tokenID}); err != nil {
+			t.Fatalf("Upsert(%s): %v", nodeIDs[i], err)
+		}
+	}
+
+	rec := &recorder{revokedAtRecordTime: d.IsRevoked}
+	if err := svc.RevokeToken(ctx, tokenID, rec.record); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	if len(rec.calls) != 3 {
+		t.Fatalf("recorder was called %d times, want exactly 3 (chunked calls)", len(rec.calls))
+	}
+	seen := make(map[string]int, nodeCount)
+	for _, call := range rec.calls {
+		if len(call) > revocation.CascadeRecordChunk {
+			t.Errorf("recorder call had %d Nodes, want at most %d (cascadeRecordChunk)",
+				len(call), revocation.CascadeRecordChunk)
+		}
+		for _, id := range call {
+			seen[id]++
+		}
+	}
+	if len(seen) != nodeCount {
+		t.Fatalf("recorder calls covered %d distinct Nodes, want %d", len(seen), nodeCount)
+	}
+	for _, id := range nodeIDs {
+		if seen[id] != 1 {
+			t.Errorf("%s was recorded %d times across all calls, want exactly 1", id, seen[id])
+		}
+	}
+	if len(rec.recordedAfterRevoke) != 0 {
+		t.Errorf("these Nodes were recorded AFTER being denylisted: %v", rec.recordedAfterRevoke)
+	}
+}
+
+// TestService_RevokeToken_DedupesDuplicateListEntryWithinChunk covers the
+// `pending` guard directly: List() returning the same NodeID twice inside one
+// pass, before any flush, must still record and revoke that Node exactly
+// once, and CascadeShortfall must count it once — not twice — toward
+// Total/Unrecorded. Every registry.List() implementation returns unique IDs
+// today, so nothing else in this suite reaches the duplicate branch the
+// guard exists for; removing it leaves the rest of the suite green.
+func TestService_RevokeToken_DedupesDuplicateListEntryWithinChunk(t *testing.T) {
+	const tokenID = "tok-dup"
+	duplicated := []registry.Node{
+		{NodeID: "node-a", EnrollingTokenID: tokenID},
+		{NodeID: "node-a", EnrollingTokenID: tokenID},
+		{NodeID: "node-b", EnrollingTokenID: tokenID},
+	}
+
+	t.Run("non-failing recorder records each id exactly once", func(t *testing.T) {
+		d := revocation.NewDenylist()
+		c := revocation.NewConnections()
+		lister := &fakeLister{perCall: [][]registry.Node{duplicated}}
+		svc := revocation.NewService(d, c, lister, &fakeTokenRevoker{})
+
+		rec := &recorder{}
+		if err := svc.RevokeToken(context.Background(), tokenID, rec.record); err != nil {
+			t.Fatalf("RevokeToken: %v", err)
+		}
+
+		counts := make(map[string]int, 2)
+		for _, id := range rec.got {
+			counts[id]++
+		}
+		if counts["node-a"] != 1 {
+			t.Errorf("node-a appeared %d times across recorder calls, want exactly 1", counts["node-a"])
+		}
+		if counts["node-b"] != 1 {
+			t.Errorf("node-b appeared %d times across recorder calls, want exactly 1", counts["node-b"])
+		}
+		if len(rec.got) != 2 {
+			t.Errorf("recorder saw %v (%d ids), want exactly the 2 distinct Nodes", rec.got, len(rec.got))
+		}
+	})
+
+	t.Run("failing recorder reports the distinct count, not the duplicate count", func(t *testing.T) {
+		d := revocation.NewDenylist()
+		c := revocation.NewConnections()
+		lister := &fakeLister{perCall: [][]registry.Node{duplicated}}
+		svc := revocation.NewService(d, c, lister, &fakeTokenRevoker{})
+
+		rec := &recorder{failCalls: map[int]error{1: errors.New("audit store unavailable")}}
+		err := svc.RevokeToken(context.Background(), tokenID, rec.record)
+		var shortfall *revocation.CascadeShortfall
+		if !errors.As(err, &shortfall) {
+			t.Fatalf("RevokeToken error = %v, want a *CascadeShortfall", err)
+		}
+		if shortfall.Total != 2 {
+			t.Errorf("shortfall.Total = %d, want 2 (the distinct Node count, not the 3 duplicated List entries)",
+				shortfall.Total)
+		}
+		if shortfall.Unrecorded != 2 {
+			t.Errorf("shortfall.Unrecorded = %d, want 2", shortfall.Unrecorded)
+		}
+	})
 }
 
 // TestService_RevokeToken_NilRecorderRevokesNothing covers the structural

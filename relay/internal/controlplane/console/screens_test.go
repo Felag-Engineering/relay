@@ -2597,6 +2597,10 @@ func (r *captureRepo) Append(_ context.Context, rec audit.Record) error {
 	r.recs = append(r.recs, rec)
 	return nil
 }
+func (r *captureRepo) AppendAll(_ context.Context, recs []audit.Record) error {
+	r.recs = append(r.recs, recs...)
+	return nil
+}
 func (r *captureRepo) List(context.Context) ([]audit.Record, error) { return r.recs, nil }
 func (r *captureRepo) ByJob(context.Context, string) ([]audit.Record, error) {
 	return nil, nil

@@ -592,6 +592,18 @@ func (t *recordingTrail) Append(_ context.Context, r audit.Record) error {
 	return nil
 }
 
+// AppendAll mirrors sqliteAudit.AppendAll's all-or-nothing contract: on
+// appendErr, nothing in rs is kept, unlike Append above.
+func (t *recordingTrail) AppendAll(_ context.Context, rs []audit.Record) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.appendErr != nil {
+		return t.appendErr
+	}
+	t.records = append(t.records, rs...)
+	return nil
+}
+
 func (t *recordingTrail) List(context.Context) ([]audit.Record, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
