@@ -48,7 +48,7 @@ either way.
 `gh pr list --state open --search "head:loop/issue-<n>-"` returns anything, print
 `already started: <ref>` and stop. The queue relies on this.
 
-**Toolchain preflight.** `go`, `cargo`, `buf`, `protoc` on `PATH` (`make proto-tools` installs
+**Toolchain preflight.** `go`, `cargo`, `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` on `PATH` or in `$(go env GOPATH)/bin` (`make proto-tools` installs
 `buf`). Missing → in interactive mode stop and say which lane cannot be verified; unattended,
 comment and stop. **Never silently run half the gate.**
 

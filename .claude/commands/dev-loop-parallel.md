@@ -19,7 +19,7 @@ Arguments: **$ARGUMENTS**. Explicit issue numbers skip Stage 2's picking but not
 ## Stage 0 — Halt and preflight
 
 - `gh issue list --label loop:halt --state open --limit 1 --json number -q length` non-zero → stop.
-- `gh auth status`; `go`, `cargo`, `buf`, `protoc` on `PATH` (the runners inherit this environment,
+- `gh auth status`; `go`, `cargo`, `buf`, `protoc-gen-go`, `protoc-gen-go-grpc` (the runners inherit this environment,
   and each will refuse to run half a gate). Missing → stop and say which.
 - Warn once about cost: each runner builds the Go and Rust trees and runs `make verify` in its own
   worktree, so N runners use roughly N times the CPU, memory and disk of one.
