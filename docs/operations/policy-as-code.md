@@ -55,8 +55,9 @@ name = "file.read"
 args = [["/etc/shadow"]]
 
 # Raw Exec: deny-by-default; permitted only when the joined argv matches an
-# allow regex and no deny regex. Anchor allows; deny regexes are also tested
-# against each raw and canonical argv element (ADR-0019).
+# allow regex in full (enforced by the daemon) and no deny regex; an argv
+# element containing whitespace is refused (ADR-0019). Deny regexes are also
+# tested against each raw and canonical argv element (ADR-0019).
 [raw_exec]
 allow = ["^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$"]
 deny  = ["--force", "\\brm\\b"]
@@ -65,8 +66,9 @@ deny  = ["--force", "\\brm\\b"]
 Semantics to keep in mind while authoring (details and rationale in the example
 file's comments): deny-by-default; deny-beats-allow; argument-level granularity
 with `allowed_args[i]`/`args[i]` addressing argv position `i`; deny rules have
-vacuous-deny semantics for omitted trailing arguments; Raw Exec should be gated
-by a tight, fully-anchored allow list with denies as backstop only.
+vacuous-deny semantics for omitted trailing arguments; Raw Exec should be
+gated by a tight allow list (the whole-command match is enforced; write
+patterns `^...$`) with denies as backstop only.
 
 Organize the repo by cohort, not by Node — the fingerprint check (below) works
 best when every Node in a cohort carries byte-identical Policy:
@@ -98,6 +100,10 @@ $ relay-daemon policy check policies/web-prod.toml --strict
   explicit `[[deny]]` silences it. Details and the deliberate absence of a
   daemon-side deny floor: [template-packs.md](template-packs.md) and the
   ADR-0021 amendment.
+- **Warns on a Raw Exec allow pattern not written `^...$`**: allow patterns now
+  match the whole command, so an unanchored pattern that used to match as a
+  substring no longer does. Run `--strict` in CI before upgrading the daemon
+  so the pipeline finds these first.
 - **Pass `--templates <dir>`** when the cohort installs Template Operations
   (ADR-0021): it lints the template files too, and resolves Operation names
   against natives + those templates. Without it, a name that is not native is

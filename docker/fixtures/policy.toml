@@ -40,8 +40,10 @@ name = "file.read"
 args = [["/etc/shadow"]]
 
 # Raw Exec regex gate (ADR-0001). Allow only `systemctl status|restart` of the
-# two demo units (nginx|php-fpm), anchored to prevent prefix/suffix injection;
-# deny --force and a bare `rm` anywhere, even if an allow regex also matched.
+# two demo units (nginx|php-fpm); the daemon matches the allow pattern against
+# the WHOLE command (ADR-0019, amended 2026-09-16), so writing it as ^...$
+# reads as what it matches. Deny --force and a bare `rm` anywhere, even if an
+# allow regex also matched.
 # The unit set is narrowed to match the structured `service.restart` allow above
 # so `systemctl restart sshd` is denied via Raw Exec too — the walkthrough's
 # deny example is consistent whether driven structured or raw.

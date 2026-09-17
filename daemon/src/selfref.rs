@@ -141,6 +141,12 @@ fn targets(template_names: &[String]) -> Vec<Target> {
 /// Raw Exec probe shapes: concrete argv vectors that reach `path`, spanning
 /// edit-in-place, overwrite, copy/move over, delete, redirect, permission
 /// change, and plain read. Each is evaluated by the real engine.
+///
+/// The redirect probe is a whitespace-free `:>path` (truncate), not
+/// `echo x > path`: since the ADR-0019 amendment (2026-09-16) any argv
+/// element carrying whitespace is refused before an allow pattern ever runs,
+/// so a script containing a space could never be Allowed and a Policy like
+/// `^/bin/sh -c .*$` would silently stop being flagged by this probe.
 fn raw_exec_probes(path: &str) -> Vec<Vec<String>> {
     let v = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect::<Vec<String>>();
     vec![
@@ -151,7 +157,7 @@ fn raw_exec_probes(path: &str) -> Vec<Vec<String>> {
         v(&["/usr/bin/tee", path]),
         v(&["/bin/chmod", "0666", path]),
         v(&["/bin/ln", "-sf", "/tmp/x", path]),
-        v(&["/bin/sh", "-c", &format!("echo x > {path}")]),
+        v(&["/bin/sh", "-c", &format!(":>{path}")]),
         v(&["/bin/cat", path]),
     ]
 }
@@ -252,6 +258,30 @@ allow = ["^/usr/bin/sed .*$"]
             "expected a finding naming the Policy file; got {findings:#?}"
         );
         assert!(findings.iter().all(|f| f.severity == LintSeverity::Warning));
+    }
+
+    /// The `/bin/sh -c :>path` redirect probe still reaches the daemon's own
+    /// Policy file once allow patterns require a full match (ADR-0019,
+    /// amended 2026-09-16): the probe was changed from `echo x > path` to a
+    /// whitespace-free `:>path` specifically so it can still be Allowed and
+    /// this lint's shell-redirect coverage stays live.
+    #[test]
+    fn flags_shell_redirect_reach_under_full_match() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/sh -c .*$"]
+"#,
+        )
+        .expect("policy parses");
+
+        let findings = lint(&policy, &[]);
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.message.contains("/etc/relay-daemon/policy.toml")),
+            "expected a finding naming the Policy file; got {findings:#?}"
+        );
     }
 
     /// file.read over the state dir is identity-material disclosure, not just a

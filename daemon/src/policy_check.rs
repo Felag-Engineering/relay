@@ -55,10 +55,11 @@ Usage: relay-daemon policy check <file> [--strict] [--templates <dir>]
                                   [--would-allow <spec>]
 
 Parses and lints a Policy file: invalid regex, unknown Operation names, allow
-rules that are fully shadowed by a deny rule and can therefore never fire, and
+rules that are fully shadowed by a deny rule and can therefore never fire,
 deny rules with a \"*\" or empty argument clause that (deny args being
-exact-match) can never fire either. Always runs the self-reference lint (#287):
-a warning when the Policy's
+exact-match) can never fire either, and a Raw Exec allow pattern not anchored
+^...$ (its meaning changed: allow patterns now match the whole command).
+Always runs the self-reference lint (#287): a warning when the Policy's
 own reach includes this daemon's config, templates, state dir, binary, or
 unit — decided by probing the real Policy engine, not a second matcher.
 
@@ -73,7 +74,8 @@ evaluation code the live wire path uses (ADR-0011) — no second evaluator.
 Options:
   --strict               Treat lint warnings (a shadowed allow rule, a deny
                          rule that can never fire, an unresolvable Operation
-                         name, a self-reference finding) as failures.
+                         name, an unanchored Raw Exec allow pattern, a
+                         self-reference finding) as failures.
   --templates <dir>      Lint the template root at <dir> alongside the Policy
                          and resolve Operation names against it.
   --would-allow <spec>   Ask whether the given action would be allowed.
@@ -765,6 +767,24 @@ args = [["*"]]
         assert_eq!(run(&argv(&tmp.path_str(), &["--strict"])), EXIT_INVALID);
     }
 
+    /// A Raw Exec allow pattern not written `^...$` warns (its meaning
+    /// changed with the ADR-0019 amendment: allow patterns now match the
+    /// whole command) — a warning, not an Error, so the file is still valid;
+    /// `--strict` is what fails the pipeline on it.
+    #[test]
+    fn unanchored_raw_exec_allow_warns_and_fails_under_strict() {
+        let tmp = TempFile::new(
+            "unanchored-raw-exec-allow",
+            r#"
+[raw_exec]
+allow = ["/bin/echo hi"]
+"#,
+        );
+
+        assert_eq!(run(&argv(&tmp.path_str(), &[])), EXIT_VALID);
+        assert_eq!(run(&argv(&tmp.path_str(), &["--strict"])), EXIT_INVALID);
+    }
+
     #[test]
     fn exit_code_would_allow_allow_is_zero() {
         let tmp = TempFile::new(
@@ -826,6 +846,38 @@ deny = ["secret"]
             &["--would-allow", "raw-exec", "--", "/bin/echo", "secret"],
         ));
         assert_eq!(denied, EXIT_WOULD_DENY);
+    }
+
+    /// A Raw Exec argv element carrying whitespace is refused by the
+    /// ADR-0019 guard before the (now full-match) allow pattern ever runs —
+    /// `--would-allow` must answer the same as a real dispatch would (ADR-0011).
+    #[test]
+    fn would_allow_raw_exec_whitespace_element_is_would_deny() {
+        let tmp = TempFile::new(
+            "would-allow-raw-exec-whitespace",
+            r#"
+[raw_exec]
+allow = ["^/bin/echo .+$"]
+"#,
+        );
+
+        let denied = run(&argv(
+            &tmp.path_str(),
+            &[
+                "--would-allow",
+                "raw-exec",
+                "--",
+                "/bin/echo",
+                "hello world",
+            ],
+        ));
+        assert_eq!(denied, EXIT_WOULD_DENY);
+
+        let allowed = run(&argv(
+            &tmp.path_str(),
+            &["--would-allow", "raw-exec", "--", "/bin/echo", "hello"],
+        ));
+        assert_eq!(allowed, EXIT_VALID);
     }
 
     #[test]
@@ -1150,6 +1202,14 @@ deny = ["secret"]
             Case {
                 label: "raw-exec deny",
                 action: CaseAction::RawExec(vec!["/bin/echo".to_string(), "secret".to_string()]),
+                expect_allow: false,
+            },
+            Case {
+                label: "raw-exec whitespace element denied",
+                action: CaseAction::RawExec(vec![
+                    "/bin/echo".to_string(),
+                    "hello world".to_string(),
+                ]),
                 expect_allow: false,
             },
             Case {
