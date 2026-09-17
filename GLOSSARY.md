@@ -196,6 +196,23 @@ relay-space Labels; the certificate is the resulting *identity*. Can only enroll
 Operations.
 _Avoid_: API key, secret, join key
 
+**Join string**:
+The one pasteable artifact that enrolls a Node: `glp_join_…`, encoding the Relay's enrollment
+address, the **CA fingerprint** the daemon pins, and an **Enrollment Token** (ADR-0031, decision
+3). It replaces supplying a CA bundle path and a token separately, and carries the `glp_` prefix
+so a leak is greppable. **Decided, not yet built**: no code parses or renders one today, and the
+daemon still verifies the Relay against a CA bundle file. A join string contains a live
+Enrollment Token and is handled as a secret.
+_Avoid_: join token, enrollment string, bootstrap string
+
+**CA fingerprint**:
+A hash of the Relay's CA certificate — the stable value an operator compares when trusting a
+Relay, rendered on the Console's day-one screen and logged at startup. Distinct from the
+**server certificate fingerprint**, which changes every time the server certificate rotates and
+is never something to pin or compare (ADR-0031, decision 5). The third kind of fingerprint, beside
+the Policy and template-set fingerprints; unlike them it describes the Relay, not a Node.
+_Avoid_: cert hash, thumbprint, server fingerprint (a different, rotating value)
+
 **Certificate renewal**:
 A Node rotating its short-lived identity certificate before expiry over its existing mTLS
 identity — no Enrollment Token — via the Relay's cert-authenticated `Renew` RPC. The Relay
@@ -265,7 +282,7 @@ re-approval. The fan-out is bound **by identity, never by count** — any Node n
 approved set re-parks, while a Node that has left it is shrinkage, dropped and recorded
 (ADR-0038). A single gated dispatch is the **one-step** case, which is how it was first
 built and still how it behaves.
-_Avoid_: job hash, checksum, fingerprint (reserved for Policy and template-set fingerprints)
+_Avoid_: job hash, checksum, fingerprint (reserved for the Policy, template-set and CA fingerprints)
 
 **Shape key**:
 The content address of *what* an approval is for, as opposed to *how much of it*: a hash
