@@ -114,6 +114,91 @@ func TestJobQuery_StateDerivation(t *testing.T) {
 	}
 }
 
+// nonDispatchAuditRecord appends a job_id-carrying audit row of the given
+// Kind (KindRefusal or KindJobCancel) attributed to accountID — the shape
+// CancelJob's refuseCancel/RecordCancel write (capability/service.go). Used
+// by TestJobQuery_RequesterJoinIgnoresNonDispatchRows to prove these rows
+// never feed the requester join.
+func nonDispatchAuditRecord(t *testing.T, ctx context.Context, st *Store, id, kind, jobID, accountID, accountName string, ts time.Time) {
+	t.Helper()
+	if err := st.Audit().Append(ctx, audit.Record{
+		ID:        id,
+		Timestamp: ts,
+		Kind:      kind,
+		Principal: accountName + ":operator",
+		Attribution: audit.Attribution{
+			Verified: audit.Verified{AccountID: accountID, AccountName: accountName, Role: "operator"},
+		},
+		JobID: jobID,
+	}); err != nil {
+		t.Fatalf("append %s audit record %s: %v", kind, id, err)
+	}
+}
+
+// TestJobQuery_RequesterJoinIgnoresNonDispatchRows guards the auditWhere
+// filter in jobQuerySelect (`WHERE kind = 'dispatch'`): capability's
+// CancelJob (Service.CancelJob/authorizeMachineCancel) now writes a
+// job_id-carrying KindRefusal row on a machine-Account cancel refusal, and a
+// KindJobCancel row on a successful one. Neither may enter the requester
+// join — if the filter were loosened, a REFUSED caller's account_id could
+// still win the join's MIN(account_id) and be recorded as the Job's
+// requester, letting that same caller's second cancel attempt succeed
+// against the very refusal that was supposed to stop it.
+//
+// job-b-refused-first is lexically SMALLER than job-a-legit-dispatcher
+// ("acct-0" < "acct-z"), so an unfiltered MIN(account_id) would pick it if
+// the kind filter were ever dropped — this test would then fail loudly
+// rather than pass by accident of ordering.
+func TestJobQuery_RequesterJoinIgnoresNonDispatchRows(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+
+	const legitRequester = "acct-z-legit-dispatcher"
+	const refusedCaller = "acct-0-refused-caller"
+
+	createJobFixture(t, ctx, st, "job-scoped", base, []jobs.Task{
+		{ID: "job-scoped-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	})
+	dispatchAuditRecord(t, ctx, st, "audit-scoped-dispatch", "job-scoped", "relay:env=prod", legitRequester, "legit-machine", base)
+	nonDispatchAuditRecord(t, ctx, st, "audit-scoped-refusal", audit.KindRefusal, "job-scoped", refusedCaller, "refused-machine", base)
+	nonDispatchAuditRecord(t, ctx, st, "audit-scoped-cancel", audit.KindJobCancel, "job-scoped", refusedCaller, "refused-machine", base)
+
+	// A second Job with ONLY a refusal row (no dispatch row at all): its
+	// requester must read back empty, never the refused caller's account.
+	createJobFixture(t, ctx, st, "job-refusal-only", base, []jobs.Task{
+		{ID: "job-refusal-only-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	})
+	nonDispatchAuditRecord(t, ctx, st, "audit-refusal-only", audit.KindRefusal, "job-refusal-only", refusedCaller, "refused-machine", base)
+
+	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{}, 0, "")
+	if err != nil {
+		t.Fatalf("QueryJobs: %v", err)
+	}
+	byID := map[string]jobs.JobSummary{}
+	for _, j := range page.Jobs {
+		byID[j.JobID] = j
+	}
+
+	scoped, ok := byID["job-scoped"]
+	if !ok {
+		t.Fatal("job-scoped missing from QueryJobs")
+	}
+	if scoped.RequesterAccountID != legitRequester {
+		t.Errorf("job-scoped.RequesterAccountID = %q, want %q (the refusal/cancel rows must not win the join)",
+			scoped.RequesterAccountID, legitRequester)
+	}
+
+	refusalOnly, ok := byID["job-refusal-only"]
+	if !ok {
+		t.Fatal("job-refusal-only missing from QueryJobs")
+	}
+	if refusalOnly.RequesterAccountID != "" {
+		t.Errorf("job-refusal-only.RequesterAccountID = %q, want empty (only a refusal row exists, no dispatch)",
+			refusalOnly.RequesterAccountID)
+	}
+}
+
 // TestJobQuery_RequesterJoin covers a Job WITH an audit dispatch row and a
 // Job WITHOUT one yet (in-flight): both must still be listed, and only the
 // first carries Requester/RequesterAccountID/Selector.

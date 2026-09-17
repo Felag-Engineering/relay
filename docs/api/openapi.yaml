@@ -255,9 +255,16 @@ paths:
         `cancelled`. Cancelling an already-finished Job is therefore a clean
         `200` no-op.
 
-        **Requires the `operator` role or above, for any Job** — not only one
-        the caller dispatched, and not human-only: an AI-agent may cancel its
-        own dispatch.
+        **Requires the `operator` role or above.** That floor is not
+        human-only — an AI-agent may cancel its own dispatch — but who it may
+        cancel differs by Account kind: a **human** Account may cancel any
+        Job. A **machine** Account may cancel only a Job recorded as
+        requested by that same Account; a Job with no recorded requester, or
+        one requested by a different Account, is refused `403`. Today the
+        recorded requester is joined from the audit trail after dispatch
+        returns, so a machine Account cannot yet cancel its own Job while it
+        is still in flight — refused `403` until #616 records the requester
+        at Job creation.
       responses:
         "200":
           description: The cancel was applied (or was a no-op on a finished Job).

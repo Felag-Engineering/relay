@@ -104,8 +104,13 @@ func (m *memTasks) Cancel(_ context.Context, id, accountID string, now time.Time
 }
 
 // taskFixture builds a Service whose gate parks everything, with task handles
-// wired, and returns it alongside the stores.
-func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatcher) {
+// wired, and returns it alongside the stores — including a spyJobQuery
+// (#614) so a CancelTask test that reaches CancelJob for a machine Principal
+// can set jobsResult to say who a Job's recorded requester is. Its zero
+// value (no Jobs) makes every such cancel refuse — ErrJobNotRequestedByCaller
+// — until a test opts in, which is the fail-closed default this fixture
+// should have.
+func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatcher, *spyJobQuery) {
 	t.Helper()
 	reg := registry.NewInMemory()
 	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
@@ -113,6 +118,7 @@ func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatch
 	}
 	approvals, tasks := newMemApprovals(), newMemTasks()
 	disp := &spyDispatcher{jobID: "job-1"}
+	jobQ := &spyJobQuery{}
 	s := New(reg,
 		WithAuthorizer(&spyAuthorizer{}),
 		WithCapChecker(&spyCapChecker{}),
@@ -120,16 +126,17 @@ func taskFixture(t *testing.T) (*Service, *memApprovals, *memTasks, *spyDispatch
 		WithFreeze(&fakeFreezeStore{}),
 		WithApprovals(gateEverything(t, 1), approvals, &spyApprovalAuthorizer{}),
 		WithMCPTasks(tasks),
+		WithQueries(&spyAuditQuery{}, jobQ),
 		WithClock(func() time.Time { return apNow }),
 	)
 	s.disp = disp
-	return s, approvals, tasks, disp
+	return s, approvals, tasks, disp, jobQ
 }
 
 // TestParkMintsATaskHandle: a parked dispatch comes back carrying a handle, so
 // a Tasks-capable client has something to poll.
 func TestParkMintsATaskHandle(t *testing.T) {
-	s, _, tasks, _ := taskFixture(t)
+	s, _, tasks, _, _ := taskFixture(t)
 
 	parked := park(t, s, machineRequester)
 	if parked.TaskID == "" {
@@ -149,7 +156,7 @@ func TestParkMintsATaskHandle(t *testing.T) {
 // second handle for one wait, or a client would believe it had two things
 // outstanding.
 func TestReDriveReattachesToTheSameHandle(t *testing.T) {
-	s, _, tasks, _ := taskFixture(t)
+	s, _, tasks, _, _ := taskFixture(t)
 
 	first := park(t, s, machineRequester)
 	second := park(t, s, machineRequester)
@@ -181,7 +188,7 @@ func TestParkStillWorksWithoutTaskHandles(t *testing.T) {
 // criterion: parked reports a non-terminal status, and after approval and
 // dispatch the same handle reports completed against the Job that ran.
 func TestResolveTaskFollowsTheApprovalThroughToCompletion(t *testing.T) {
-	s, approvals, _, _ := taskFixture(t)
+	s, approvals, _, _, _ := taskFixture(t)
 	ctx := context.Background()
 
 	parked := park(t, s, machineRequester)
@@ -221,7 +228,7 @@ func TestResolveTaskFollowsTheApprovalThroughToCompletion(t *testing.T) {
 // another Account's handle is refused" — and it must be refused
 // indistinguishably from a handle that never existed.
 func TestResolveTaskRefusesAnotherAccount(t *testing.T) {
-	s, _, _, _ := taskFixture(t)
+	s, _, _, _, _ := taskFixture(t)
 	ctx := context.Background()
 
 	parked := park(t, s, machineRequester)
@@ -247,7 +254,7 @@ func TestResolveTaskRefusesAnotherAccount(t *testing.T) {
 // pending approval, an agent could yank a request back the moment it sensed a
 // denial coming, erasing the evidence a human was about to rule on.
 func TestCancelParkedTaskLeavesTheApprovalPending(t *testing.T) {
-	s, approvals, _, disp := taskFixture(t)
+	s, approvals, _, disp, _ := taskFixture(t)
 	ctx := context.Background()
 
 	parked := park(t, s, machineRequester)
@@ -286,11 +293,20 @@ func TestCancelParkedTaskLeavesTheApprovalPending(t *testing.T) {
 	}
 }
 
+// requesterIsSelf sets jobQ's answer to CancelJob's machine-scoping query
+// (#614) so jobID's recorded requester is machineRequester's own Account —
+// the one case a machine Principal's cancel is allowed.
+func requesterIsSelf(jobQ *spyJobQuery, jobID string) {
+	jobQ.jobsResult = JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: machineRequester.AccountID}}}
+}
+
 // TestCancelDispatchedTaskGoesThroughCancelJob: once a Job exists, cancelling
 // the handle must cancel the real work through the ordinary path rather than
-// through a second implementation.
+// through a second implementation. Uses the real machine Principal
+// (machineRequester) throughout, with jobQ answering that job-1's recorded
+// requester is that same Account — the case #614's scoping allows.
 func TestCancelDispatchedTaskGoesThroughCancelJob(t *testing.T) {
-	s, approvals, _, disp := taskFixture(t)
+	s, approvals, _, disp, jobQ := taskFixture(t)
 	ctx := context.Background()
 
 	parked := park(t, s, machineRequester)
@@ -298,6 +314,7 @@ func TestCancelDispatchedTaskGoesThroughCancelJob(t *testing.T) {
 	if _, err := s.Run(ctx, machineRequester, Selector{}, mutateAct()); err != nil {
 		t.Fatalf("re-drive: %v", err)
 	}
+	requesterIsSelf(jobQ, "job-1")
 
 	if _, err := s.CancelTask(ctx, machineRequester, parked.TaskID); err != nil {
 		t.Fatalf("CancelTask: %v", err)
@@ -311,7 +328,7 @@ func TestCancelDispatchedTaskGoesThroughCancelJob(t *testing.T) {
 // its cancel did not take, rather than being told the task is cancelled while
 // Tasks keep running on the fleet.
 func TestCancelDoesNotMarkTheHandleWhenTheJobCancelFails(t *testing.T) {
-	s, approvals, tasks, disp := taskFixture(t)
+	s, approvals, tasks, disp, jobQ := taskFixture(t)
 	ctx := context.Background()
 
 	parked := park(t, s, machineRequester)
@@ -319,6 +336,7 @@ func TestCancelDoesNotMarkTheHandleWhenTheJobCancelFails(t *testing.T) {
 	if _, err := s.Run(ctx, machineRequester, Selector{}, mutateAct()); err != nil {
 		t.Fatalf("re-drive: %v", err)
 	}
+	requesterIsSelf(jobQ, "job-1")
 
 	boom := errors.New("dispatcher: cancel failed")
 	disp.cancelErr = boom
@@ -332,6 +350,49 @@ func TestCancelDoesNotMarkTheHandleWhenTheJobCancelFails(t *testing.T) {
 	}
 	if h.Cancelled() {
 		t.Error("the handle was marked cancelled even though the Job cancel failed")
+	}
+}
+
+// TestCancelDispatchedTaskRefusesMachineNotItsOwnJob: CancelTask inherits
+// CancelJob's machine-Account scoping (#614) for a Job-backed cancel — a
+// machine Principal whose Job has no recorded requester, or whose Job was
+// requested by a different Account, is refused ErrJobNotRequestedByCaller,
+// the dispatcher's cancel is never reached, and the handle is NOT marked
+// cancelled — a refused cancel must not look like it took.
+func TestCancelDispatchedTaskRefusesMachineNotItsOwnJob(t *testing.T) {
+	cases := []struct {
+		name      string
+		requester string // RequesterAccountID jobQ answers with for job-1
+	}{
+		{"no recorded requester", ""},
+		{"another Account's Job", "acct-other"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, approvals, tasks, disp, jobQ := taskFixture(t)
+			ctx := context.Background()
+
+			parked := park(t, s, machineRequester)
+			approvals.approve(t, parked.RequestID, "acct-ana", "ana", apNow)
+			if _, err := s.Run(ctx, machineRequester, Selector{}, mutateAct()); err != nil {
+				t.Fatalf("re-drive: %v", err)
+			}
+			jobQ.jobsResult = JobPage{Jobs: []JobSummary{{JobID: "job-1", RequesterAccountID: tc.requester}}}
+
+			if _, err := s.CancelTask(ctx, machineRequester, parked.TaskID); !errors.Is(err, ErrJobNotRequestedByCaller) {
+				t.Fatalf("CancelTask: err = %v, want ErrJobNotRequestedByCaller", err)
+			}
+			if disp.cancelledJobID != "" {
+				t.Errorf("dispatcher cancel was reached (cancelledJobID = %q), want it never called", disp.cancelledJobID)
+			}
+			h, err := tasks.Get(ctx, parked.TaskID, machineRequester.AccountID)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if h.Cancelled() {
+				t.Error("the handle was marked cancelled even though CancelJob refused")
+			}
+		})
 	}
 }
 

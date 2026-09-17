@@ -347,6 +347,29 @@ func TestCancel_RefusalRendersTheCapabilityLayersAnswer(t *testing.T) {
 	}
 }
 
+// TestCancel_MachineScopingRefusalRendersA403 covers #614's second refusal
+// sentinel: a machine Account cannot hold a Console session in practice, but
+// the adapter must render EVERY capability-layer refusal as a refusal
+// (invariant 10) rather than let an unrecognized one fall to the 500
+// default, which would misreport a refused cancel as one that "may have"
+// stopped Tasks it never touched.
+func TestCancel_MachineScopingRefusalRendersA403(t *testing.T) {
+	canceller := &fakeCanceller{err: capability.ErrJobNotRequestedByCaller}
+	h := newTestHandlerSkippingCSRF(cancelDeps(&fakeQueries{}, canceller), accounts.RoleOperator)
+
+	rec := postSkippingCSRF(t, h, cancelJobAction(testJobID))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "The Relay refused this cancel") {
+		t.Errorf("body does not carry the refusal heading: %s", body)
+	}
+	if !strings.Contains(body, "The Job continues") {
+		t.Error("a refused cancel does not say the Job continues")
+	}
+}
+
 func TestCancel_UnknownJobIs404(t *testing.T) {
 	canceller := &fakeCanceller{err: jobs.ErrJobNotFound}
 	h := newTestHandlerSkippingCSRF(cancelDeps(&fakeQueries{}, canceller), accounts.RoleOperator)

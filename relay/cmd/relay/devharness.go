@@ -493,12 +493,20 @@ func harnessRunJobAction(req harnessRequest) (jobs.Action, error) {
 // pipeline's CancelJob: undispatched Tasks are marked cancelled without ever
 // being sent, in-flight Tasks are asked to cancel over their Tunnels. Uses
 // the same devharness Principal as its sibling harnessRunJob (v0.0.6 [5/8],
-// owner DECISION 2: CancelJob now records who asked).
+// owner DECISION 2: CancelJob now records who asked), but — unlike
+// harnessRunJob — Kind matters here: CancelJob's machine-Account scoping
+// (#614, owner decision 2026-09-17) would otherwise treat an unset Kind as a
+// machine Account with no recorded requester and refuse every cancel. The
+// harness Principal stands in for an on-call operator driving the fleet by
+// hand, not an AI-agent, so it is Kind: PrincipalKindHuman — this is a
+// build-tag-excluded, already allow-all test harness, not a widening of the
+// capability check itself.
 func harnessCancelJob(ctx context.Context, st *harnessState, req harnessRequest) harnessResponse {
 	if req.JobID == "" {
 		return harnessResponse{Error: "cancel_job: job_id is required"}
 	}
-	if err := st.capSvc.CancelJob(ctx, capability.Principal{Account: "devharness"}, req.JobID); err != nil {
+	p := capability.Principal{Account: "devharness", Kind: capability.PrincipalKindHuman}
+	if err := st.capSvc.CancelJob(ctx, p, req.JobID); err != nil {
 		return harnessResponse{Error: err.Error()}
 	}
 	return harnessResponse{}

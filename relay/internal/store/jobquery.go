@@ -92,6 +92,14 @@ func jobOutcomeSumColumns() []string {
 // column is named here, so paginating a Job list can never become a path to
 // captured output.
 func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
+	// kind = 'dispatch' is load-bearing, not tidying: capability's CancelJob
+	// (Service.CancelJob/authorizeMachineCancel) writes job_id-carrying
+	// KindRefusal and KindJobCancel audit rows too, and authorizeMachineCancel
+	// trusts RequesterAccountID below to decide whether a machine Account may
+	// cancel a Job. Drop this filter and a refused caller's own account_id
+	// could win the MIN(account_id) join and be recorded as the Job's
+	// requester, letting a second cancel attempt from that same caller
+	// succeed. See TestJobQuery_RequesterJoinIgnoresNonDispatchRows.
 	taskWhere, auditWhere := "", "\n\tWHERE kind = 'dispatch'"
 	if filter.JobID != "" {
 		taskWhere = "\n\tWHERE job_id = ?"

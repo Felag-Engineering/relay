@@ -46,10 +46,13 @@ const (
 	ControlFreezeRelease ControlAction = "freeze_release"
 
 	// ControlCancelJob is POST /api/v1/jobs/{id}/cancel, MCP's cancel_job and
-	// tasks/cancel, and the Console's Cancel control (#595). The floor is
-	// operator, for any Job — not only the caller's own — and not
-	// human-only: an AI-agent must be able to cancel its own dispatch (#346,
-	// execution.md §Cancellation, owner decision 2026-09-14).
+	// tasks/cancel, and the Console's Cancel control (#595). The ROLE floor
+	// is operator and not human-only: an AI-agent must be able to cancel its
+	// own dispatch (#346, execution.md §Cancellation, owner decision
+	// 2026-09-14). The SCOPE differs by Kind (#614, owner decision
+	// 2026-09-17): a human Account may cancel any Job, a machine Account
+	// only one whose recorded requester is itself — see
+	// Service.CancelJob/authorizeMachineCancel.
 	ControlCancelJob ControlAction = "cancel_job"
 )
 
@@ -247,11 +250,17 @@ const (
 // know audit's storage shape.
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
-// AuditKindRefusal (authz-deny or cap-reject), Reason is set and JobID/
-// Results are empty — the dispatcher was never reached. For AuditKindPlan
-// (#119), only Principal/Selector/Action are set — JobID, Results, and
-// Reason are all empty, since a Plan never dispatches (no Job/Task exists to
-// reference) even when it reports a would-be-rejected cap/Freeze condition.
+// AuditKindRefusal (authz-deny, cap-reject, or CancelJob's machine-Account
+// scoping, #614), Reason is set and Results is empty — the dispatcher was
+// never reached — but JobID is NOT always empty: refuseControl's role-floor
+// refusal leaves it empty (it precedes any existence check, so the id is
+// unvalidated caller text), while refuseCancel's machine-scoping refusal
+// sets it to the store's own echo of the Job authorizeMachineCancel's lookup
+// actually found — never a caller-supplied id the Relay never validated.
+// For AuditKindPlan (#119), only Principal/Selector/Action are set — JobID,
+// Results, and Reason are all empty, since a Plan never dispatches (no
+// Job/Task exists to reference) even when it reports a would-be-rejected
+// cap/Freeze condition.
 type AuditEntry struct {
 	Kind      AuditKind
 	Principal Principal

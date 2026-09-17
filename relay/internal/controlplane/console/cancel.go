@@ -25,10 +25,13 @@ package console
 //
 // # Who decides
 //
-// The role floor (operator, for any Job — #595, execution.md §Cancellation)
-// and the audit row are the capability layer's, exactly as invariant 10
-// requires: this file renders what capability.Service.CancelJob decided, and
-// decides nothing itself.
+// The role floor is operator (#595, execution.md §Cancellation); the SCOPE
+// beyond that floor differs by Account kind — a human Account may cancel any
+// Job, a machine Account only a Job it requested (#614) — and that
+// distinction, like the floor itself, is decided in the capability layer,
+// not here. It and the audit row are the capability layer's, exactly as
+// invariant 10 requires: this file renders what capability.Service.CancelJob
+// decided, and decides nothing itself.
 
 import (
 	"context"
@@ -129,10 +132,11 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 			renderScreen(w, pg, cancelResultTmpl, cancelResultView{
 				Heading: "No Job with the id " + jobID + " appears in this Relay's records.",
 			})
-		case errors.Is(err, authz.ErrUnauthorized):
-			// The capability layer made the decision; this screen only
-			// renders it. Informative, not an error: nothing was stopped
-			// and nothing kept running that would not have anyway.
+		case errors.Is(err, authz.ErrUnauthorized), errors.Is(err, capability.ErrJobNotRequestedByCaller):
+			// The capability layer made the decision — a role refusal or a
+			// machine Account's scoping refusal (#614) — and this screen
+			// only renders it. Informative, not an error: nothing was
+			// stopped and nothing kept running that would not have anyway.
 			w.WriteHeader(http.StatusForbidden)
 			renderScreen(w, pg, cancelResultTmpl, cancelResultView{
 				Heading: "The Relay refused this cancel: " + err.Error() + ". The Job continues.",

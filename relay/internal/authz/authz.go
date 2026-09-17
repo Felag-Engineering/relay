@@ -38,9 +38,16 @@
 // requires a HUMAN Account: a machine Account at operator halting the fleet
 // is an AI-agent switching off its own overseers, and the fire-alarm
 // argument for cheap engagement ("anyone may pull the handle") is an
-// argument about people. Authority remains the Role — capability.Principal's
-// Kind is not an authorization input anywhere else and does not become one
-// here; it answers only the question authority cannot.
+// argument about people. Authority remains the Role, but capability.
+// Principal's Kind IS an authorization input for three specific decisions
+// Role alone cannot answer — this is one of them. The other two are decided
+// elsewhere, deliberately not here: CancelJob's machine-Account scoping (a
+// human Account may cancel any Job, a machine Account only one whose
+// recorded requester is itself) lives in capability.Service.CancelJob/
+// authorizeMachineCancel, because it needs Job data this package does not
+// hold; ADR-0027's confirmation ladder rung 2 (self-confirmation is
+// human-requesters-only) lives in capability's approval decision path. This
+// package's own use of Kind begins and ends with the Freeze rule above.
 //
 // authz imports capability, jobs, and accounts — no proto, no store, no HTTP.
 // capability never imports authz, so there is no cycle.
@@ -237,8 +244,14 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // durable position than any single dispatch, which is why it cannot sit
 // below the role that may run one.
 //
-// Cancel's floor applies to ANY Job, not only one the caller dispatched, and
-// is not human-only: an AI-agent must be able to stop its own dispatch.
+// Cancel's ROLE floor is not human-only: an AI-agent must be able to stop
+// its own dispatch. Whether it may reach ANY Job or only its own is a
+// separate question this gate does not decide — it needs the Job's recorded
+// requester, which is capability-layer data this package does not hold.
+// capability.Service.CancelJob layers that machine-Account scoping on top of
+// this floor (owner decision 2026-09-17, execution.md §Cancellation, #614):
+// a human Account may still cancel any Job, but a machine Account may cancel
+// only a Job whose recorded requester is itself.
 func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
 	switch act {
 	case capability.ControlMintEnrollmentToken:

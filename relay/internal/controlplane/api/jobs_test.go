@@ -288,6 +288,24 @@ func TestCancelJob_ARefusalIsA403(t *testing.T) {
 	}
 }
 
+// TestCancelJob_MachineScopingRefusalIsA403 is TestCancelJob_ARefusalIsA403's
+// sibling for the OTHER cancel refusal the capability layer can return
+// (#614): a machine Account's Job-scoping refusal, capability.
+// ErrJobNotRequestedByCaller — writeJobError must recognize it exactly like
+// authz.ErrUnauthorized, not fall through to the default 500.
+func TestCancelJob_MachineScopingRefusalIsA403(t *testing.T) {
+	exec := &fakeExecutor{cancelErr: capability.ErrJobNotRequestedByCaller}
+	h := newJobFixture(t, accounts.RoleOperator, exec, fakeJobs{}, &fakeReadAuditor{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/jobs/job-7/cancel", nil)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "requested") {
+		t.Errorf("body = %q, want it to carry ErrJobNotRequestedByCaller's reason", rec.Body.String())
+	}
+}
+
 // A cancel is NOT read-audited: it changes state and is recorded by the
 // capability layer's own RecordCancel, so recording it here too would
 // double-audit the same act.

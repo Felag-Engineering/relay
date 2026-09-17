@@ -125,8 +125,13 @@ func New(repo audit.Repository, opts ...Option) *Sink {
 // (no Results) still gets exactly one job-level Record, with an empty
 // NodeID, so the attempt remains queryable by JobID. A Refusal entry (authz-
 // deny or cap-reject: the dispatcher was never reached) gets exactly one
-// Record with the refusal's Reason, jobs.OutcomeUnspecified, and no JobID/
-// NodeID. A Plan entry (#119, ADR-0011: a no-execution PolicyQuery probe)
+// Record with the refusal's Reason, jobs.OutcomeUnspecified, no NodeID, and
+// JobID copied verbatim from e.JobID — empty for a role-floor refusal that
+// precedes any existence check (refuseControl), and set only when
+// Service.CancelJob's machine-Account scoping (#614) refused after
+// resolving jobID to a real Job (refuseCancel/authorizeMachineCancel); never
+// caller-supplied text the Relay never validated. A Plan entry (#119,
+// ADR-0011: a no-execution PolicyQuery probe)
 // gets exactly one Record, Principal+Selector+Action only — no JobID/NodeID/
 // Outcome, since a Plan never creates a Job or Task. Per-Record Append
 // failures are joined, not short-circuited, so one failing write does not
@@ -155,6 +160,7 @@ func (s *Sink) Record(ctx context.Context, e capability.AuditEntry) error {
 	if e.Kind == capability.AuditKindRefusal {
 		base.Kind = audit.KindRefusal
 		base.Reason = e.Reason
+		base.JobID = e.JobID
 		err := s.append(ctx, base)
 		s.logDecision(audit.KindRefusal, e, 0, "")
 		return err
