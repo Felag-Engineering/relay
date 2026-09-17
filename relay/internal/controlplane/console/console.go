@@ -134,8 +134,8 @@ type Deps struct {
 	// default) means the marker never fires.
 	CertExpiringWithin time.Duration
 
-	// Cancel is the Console's one write seam (#595, cancel.go): the same
-	// capability.Service.CancelJob the Control API and MCP call. The role
+	// Cancel is one of the Console's two write seams (#595, cancel.go): the
+	// same capability.Service.CancelJob the Control API and MCP call. The role
 	// floor is operator; the scope beyond that floor differs by Account kind
 	// (human: any Job, machine: only a Job it requested — #614). Both the
 	// floor and that scope, plus the audit row, are the capability layer's;
@@ -143,6 +143,19 @@ type Deps struct {
 	// not render and the route answers unavailable — the same "not wired"
 	// posture every other seam on this Deps takes.
 	Cancel JobCanceller
+
+	// Decide is the Console's other write seam (#453, decide.go): the same
+	// capability.Service.DecideApproval the Control API's out-of-band
+	// endpoint and MCP call. Quorum, audience, requester exclusion, the
+	// machine-self-decision rule, channel strength and the audit row are all
+	// the capability layer's; this package only renders what it decided.
+	//
+	// Decide is PAIRED with Auth: decideOffered refuses to offer the control
+	// unless both are wired, because a decision that cannot be
+	// step-up-verified must not be offered at all. Wiring one without the
+	// other is a composition-root trap, not a supported configuration — see
+	// decideOffered and TestDecide_UnwiredSeamsOfferNothing.
+	Decide ApprovalDecider
 }
 
 // now reads the clock, defaulting when the composition root left it unset.
@@ -305,14 +318,37 @@ func Routes(d Deps) []Route {
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
 
-		// Cancel (#595): the Console's one write route. NOT gated behind
-		// d.Execution — ADR-0026 decision 5 scopes that flag to the composer
-		// and to dispatch, and Cancel cannot run anything, only ask
-		// something already running to stop. MinRole here is mount-time
+		// Cancel (#595): the first of the Console's two write routes. NOT
+		// gated behind d.Execution — ADR-0026 decision 5 scopes that flag to
+		// the composer and to dispatch, and Cancel cannot run anything, only
+		// ask something already running to stop. MinRole here is mount-time
 		// absence for a viewer (a 404, the same "absent beats forbidden"
 		// every other MinRole gives); the capability layer's RoleGate,
 		// reached inside handleCancelJob, is the authority.
 		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
+
+		// Decide (#453): the second write route, and the one that RELEASES
+		// execution rather than only ever reducing it — decide.go's header
+		// states that asymmetry rather than eliding it. Also NOT gated
+		// behind d.Execution, for the same reason: this route composes
+		// nothing, it answers a Plan the Relay already built, and
+		// ADR-0026 decision 5 scopes console_execution to the composer and
+		// the dispatch routes.
+		//
+		// MinRole is RoleOperator because that is the LOWEST floor
+		// authz.requiredRole can ever return (ActionOperation -> operator,
+		// ActionRawExec -> admin; authz.go), so this mount gate can never
+		// hide the route from a principal AuthorizeApprovalDecision would
+		// admit — subtractive only, never wider than the capability layer.
+		//
+		// The path owns itself exclusively: "GET /console/approvals/{id}"
+		// is a three-segment pattern and never matches this four-segment
+		// one, and because this route constrainsReach(), Register also
+		// mounts methodMismatch on the bare path
+		// "/console/approvals/{approval_id}/decision", which collides with
+		// nothing else in this table (contrast the "/console/nodes/add"
+		// hazard documented above).
+		{"POST", "/console/approvals/{approval_id}/decision", NavEntry{}, accounts.RoleOperator, handleDecideApproval},
 	}
 
 	// This placeholder stays mounted, unlike the four below that were removed

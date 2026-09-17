@@ -348,6 +348,14 @@ func TestApprovals_LapsedSortsLastAndSaysSo(t *testing.T) {
 // TestApprovals_QueueOffersNoApproveControl is spec 14's hard rule. A row-level
 // Approve lets someone approve without seeing what they approved, which is the
 // entire failure the mechanism exists to prevent.
+//
+// The QUEUE half of this assertion is absolute and unconditional (binding
+// decision 5): it is structurally read-only and stays that way regardless of
+// what is wired, deciding-#453 included. The CARD half is narrower since
+// #453 added a decision control to the object — this fixture renders it with
+// renderableDeps(), which wires neither Decide nor Auth, so the card offers
+// no control here because THAT SEAM IS UNWIRED, not because deciding does
+// not exist. See decide_test.go for what the card renders once it is wired.
 func TestApprovals_QueueOffersNoApproveControl(t *testing.T) {
 	d := renderableDeps()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{
@@ -365,8 +373,9 @@ func TestApprovals_QueueOffersNoApproveControl(t *testing.T) {
 		content := contentOf(get(t, h, path).Body.String())
 		for _, control := range []string{"<form", "<button", "<input"} {
 			if strings.Contains(content, control) {
-				t.Errorf("%s rendered %s — v0.6.0 is read-only on both approval screens, and every "+
-					"filter is an anchor", path, control)
+				t.Errorf("%s rendered %s — the queue is structurally read-only and every filter is "+
+					"an anchor; the card offers no control because the decide seam is unwired here",
+					path, control)
 			}
 		}
 	}
@@ -3903,6 +3912,14 @@ func TestApproval_NoPriorIsStatedNotManufactured(t *testing.T) {
 // reserved for Policy decisions, and borrowing it would say a daemon refused
 // something it was never asked. An expired one is not a success either, and a
 // pending one is not "unsupported".
+//
+// The decide seams (Decide, Auth) are wired here on purpose (#453): a
+// terminal record must render no decision control EVEN WHEN deciding is
+// available on this Relay, because buildApprovalView gates Decide on
+// v.Pending and neither of these records is pending. Rendering with the
+// seams unwired would make this assertion pass for the wrong reason — an
+// absent control proves nothing about a terminal state if the control was
+// never offered to begin with.
 func TestApproval_TerminalStatesAreNotPaintedAsSuccess(t *testing.T) {
 	denied := approval.Request{
 		ID: "ap-denied", State: approval.StateDenied, ResolvedAt: testNow.Add(-time.Hour),
@@ -3915,6 +3932,8 @@ func TestApproval_TerminalStatesAreNotPaintedAsSuccess(t *testing.T) {
 	}
 	d := renderableDeps()
 	d.Approvals = &fakeApprovals{resolved: []approval.Request{denied, lapsed}}
+	d.Decide = &fakeDecider{}
+	d.Auth = &fakeAuth{}
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	for _, tc := range []struct{ id, state string }{{"ap-denied", "denied"}, {"ap-lapsed", "expired"}} {
@@ -3928,8 +3947,9 @@ func TestApproval_TerminalStatesAreNotPaintedAsSuccess(t *testing.T) {
 		if strings.Contains(content, `data-outcome="denied_by_policy"`) {
 			t.Errorf("%s reuses the Policy-decision colour for a human's answer", tc.id)
 		}
-		if strings.Contains(content, "Deciding is not available in this Console yet") {
-			t.Errorf("%s offers deciding on a record nobody can decide", tc.id)
+		if strings.Contains(content, "<form") || strings.Contains(content, `name="password"`) ||
+			strings.Contains(content, `name="answer"`) {
+			t.Errorf("%s offers a decision control on a record nobody can decide", tc.id)
 		}
 	}
 }

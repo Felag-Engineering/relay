@@ -15,9 +15,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
@@ -627,6 +629,81 @@ func (f *fakeCanceller) CancelJob(_ context.Context, p capability.Principal, job
 	return f.err
 }
 
+// decideCall records one DecideApproval invocation's arguments (#453).
+type decideCall struct {
+	Principal capability.Principal
+	Decision  capability.ApprovalDecision
+}
+
+// fakeDecider is the Decide write seam. It records every call rather than
+// deciding anything — quorum, audience, requester exclusion, channel
+// strength and the audit row are the capability layer's, and a fake that
+// "helpfully" enforced any of them would be asserting against its own
+// implementation instead of the real domain.
+//
+// order, when non-nil, is a shared recorder both this fake and fakeAuth
+// append to, so a test can assert StepUp happened strictly before
+// DecideApproval (TestDecide_StepUpHappensBeforeTheDecision).
+type fakeDecider struct {
+	calls []decideCall
+	err   error
+	order *[]string
+}
+
+func (f *fakeDecider) DecideApproval(_ context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
+	f.calls = append(f.calls, decideCall{Principal: p, Decision: in})
+	if f.order != nil {
+		*f.order = append(*f.order, "DecideApproval")
+	}
+	if f.err != nil {
+		return approval.Request{}, f.err
+	}
+	return approval.Request{ID: in.RequestID, PlanHash: in.PlanHash}, nil
+}
+
+// fakeAuth implements the Console's four-method Authenticator (login.go)
+// over nothing but recorded calls and configurable errors — no real store,
+// no real session. Login and Logout are here only to satisfy the interface;
+// decide_test.go exercises real sessions through loginFixture (a REAL
+// consoleauth.Service), which is what proves the session-lane properties
+// this fake cannot: fakeAuth exists for the seam-level refusal branches
+// (throttled, bad credential, no session), where a real store would only
+// obscure what handleDecideApproval does with the error it gets back.
+type fakeAuth struct {
+	loginErr    error
+	logoutErr   error
+	stepUpErr   error
+	stepUpCalls []struct {
+		ID       consoleauth.SessionID
+		Password accounts.Password
+		Source   string
+	}
+	window time.Duration
+	order  *[]string
+}
+
+func (f *fakeAuth) Login(context.Context, consoleauth.Attempt) (consoleauth.SessionID, consoleauth.Session, error) {
+	return consoleauth.SessionID{}, consoleauth.Session{}, f.loginErr
+}
+
+func (f *fakeAuth) Logout(context.Context, consoleauth.SessionID, string) error {
+	return f.logoutErr
+}
+
+func (f *fakeAuth) StepUp(_ context.Context, id consoleauth.SessionID, password accounts.Password, source string) error {
+	f.stepUpCalls = append(f.stepUpCalls, struct {
+		ID       consoleauth.SessionID
+		Password accounts.Password
+		Source   string
+	}{ID: id, Password: password, Source: source})
+	if f.order != nil {
+		*f.order = append(*f.order, "StepUp")
+	}
+	return f.stepUpErr
+}
+
+func (f *fakeAuth) StepUpWindow() time.Duration { return f.window }
+
 // fakeFreeze is the Freeze read seam.
 type fakeFreeze struct {
 	frozen bool
@@ -772,6 +849,12 @@ func sweepFixture() Deps {
 	d.Approvals = &fakeApprovals{pending: []approval.Request{
 		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
 	}}
+	// Decide and Auth are both wired (#453) so the route sweeps and the
+	// snapshot producer see the REAL decision card — an unwired seam would
+	// silently make every sweep exercise the honest-absence branch instead
+	// of the form.
+	d.Decide = &fakeDecider{}
+	d.Auth = &fakeAuth{}
 	d.Audit = fakeAudit{records: []audit.Record{
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
 	}}

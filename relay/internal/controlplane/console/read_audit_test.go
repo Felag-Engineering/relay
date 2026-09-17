@@ -198,6 +198,13 @@ var consoleReadAudit = map[string]readAuditRule{
 		why: "a write, not a read (#595): the capability layer records the cancel as " +
 			"job_cancel with its Principal, and a refusal as a refusal",
 	},
+	"POST /console/approvals/{approval_id}/decision": {
+		path: "",
+		why: "a write, not a read (#453): the capability layer records the decision as " +
+			"approval_decided with its Principal, the plan hash and the channel " +
+			"(approval_decide.go), and consoleauth records its own step_up event; a " +
+			"refusal is rendered as a refusal and appends nothing",
+	},
 }
 
 const (

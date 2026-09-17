@@ -1322,6 +1322,34 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
 .joblist { list-style: none; padding: 0; margin: 0 0 var(--space-3); display: flex; flex-wrap: wrap; gap: var(--space-3); font-family: var(--font-mono); font-size: var(--text-sm); }
 .back { font-size: var(--text-sm); margin: 0 0 var(--space-3); }
 
+/* --- The decision form (#453) ----------------------------------------------
+ *
+ * Spec 08 item 5: "Approve and Deny are visually identical in weight; neither
+ * is focused on load." One class, .decideanswer, for BOTH buttons — no colour,
+ * no border-weight difference, nothing that reads as "the recommended one".
+ * A visually dominant Approve is the rubber-stamp failure this screen exists
+ * to prevent, asserted here rather than only in the markup, exactly as the
+ * queue's read-only claim is asserted from the route table and not merely
+ * from a missing button. Neither button carries autofocus (approvals.go). */
+.decideform {
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-section);
+  background: var(--bg-surface); padding: var(--space-5);
+  max-width: 440px; display: flex; flex-direction: column; gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+.decideform label { font-size: var(--text-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.decideform input, .decideform textarea {
+  font: inherit; padding: var(--space-2) var(--space-3); border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg); background: var(--bg-canvas); color: var(--text-primary);
+}
+.decideanswers { display: flex; gap: var(--space-3); }
+.decideanswer {
+  flex: 1; font: inherit; font-weight: var(--weight-medium); padding: var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-elevated); color: var(--text-primary); cursor: pointer;
+}
+.decideanswer:hover { background: var(--bg-canvas); }
+
 .summary { font-size: var(--text-base); margin: var(--space-3) 0 0; }
 .empty { max-width: 44em; }
 .empty h2 { font-size: var(--text-lg); font-weight: var(--weight-semibold); margin: var(--space-1) 0 var(--space-2); }
