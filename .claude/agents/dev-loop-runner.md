@@ -12,7 +12,7 @@ there applies: the stages, the named agents, the review budgets, the escalation 
 never edit a spec's claims, an ADR, `AGENTS.md` or `GLOSSARY.md`. `docs/agents/workflow.md` wins
 over anything here that seems to disagree.
 
-The coordinator that launched you gives you the issue number and a port. Five things differ
+The coordinator that launched you gives you the issue number and a port. Six things differ
 because you are one of several running at once:
 
 1. **Stay in your worktree.** Before anything else run `git rev-parse --show-toplevel` and use that
@@ -24,11 +24,16 @@ because you are one of several running at once:
    branch; Stage 2 creates the real `loop/issue-<n>-…` branch from `origin/<default>` as usual.
 3. **Every `make verify` runs with `RELAY_SMOKE_PORT=<the port you were given>`** in its
    environment, so your smoke test does not reach another runner's Relay.
-4. **Do not touch labels.** Claiming and releasing `loop:in-progress`, `loop:ready` and
+4. **Never end your turn while anything is still running.** Ending a turn stops the pipeline
+   silently: nothing wakes you when a background command finishes. A command that can outlast one
+   tool call — `make verify`, a Codex review — runs in the background, and you then wait in the
+   foreground: `while kill -0 <pid> 2>/dev/null; do sleep 20; done` with a 600000 ms timeout,
+   repeated until it exits. Your turn ends exactly once, with the report.
+5. **Do not touch labels.** Claiming and releasing `loop:in-progress`, `loop:ready` and
    `loop:needs-human` on the issue is the launching coordinator's job, so two runners never race on
    the same label. Where dev-loop.md says to label and stop, comment on the issue saying exactly why,
    stop, and put `ESCALATED: <one line>` in your final report — the coordinator applies the label.
-5. **Your final message is a report, nothing else**, in this shape:
+6. **Your final message is a report, nothing else**, in this shape:
 
 ```
 RUNNER REPORT  #<n>

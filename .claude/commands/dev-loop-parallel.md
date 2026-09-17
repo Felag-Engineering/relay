@@ -38,10 +38,16 @@ Then, because these run **at the same time** and each is cut from the same `main
 
 - **Never pick an issue that another eligible pick blocks.** If A says `Blocked by: #B`, they cannot
   run together, whatever B's state.
-- **Avoid overlap.** For each candidate, read the paths and modules its body names (and its
-  `Security surface:` line). Skip a candidate that names the same file, or the same package
-  directory, as one already picked; note it as deferred for overlap. Two PRs editing one file will
-  conflict on merge, and the second PR's author cannot see the first.
+- **Avoid overlap, by file.** For each candidate, read the files its body names and the files its
+  fix will obviously touch (including shared contracts such as `docs/api/openapi.yaml` and anything
+  under `/proto`). Skip a candidate that shares a file with one already picked; note it as deferred
+  for overlap. Two PRs editing one file conflict on merge, and neither author can see the other.
+  Sharing a Go package or Rust module is fine: nearly every issue touches the adapter packages, and
+  a package-level rule would reduce every batch to one.
+- **Read each candidate's governing spec before picking it.** An issue whose suggested fix a later
+  owner decision in its spec superseded will be built wrong by a runner, which follows the issue.
+  Stop and put the choice to the human, then write the decision into the issue body before
+  claiming it.
 - **At most one `/proto`-touching issue per batch.** Regenerated code conflicts wholesale.
 
 Take the lowest-numbered survivors up to the slot count. Print the picks and the skipped-for-overlap
@@ -60,6 +66,12 @@ In **one message**, one `Agent` call per pick:
 
 Then wait. Each runner notifies when it finishes; do not poll, and do not start another pick while
 any runs. Print one line per runner as its report arrives.
+
+**A notification without a `RUNNER REPORT` is not a finish.** A runner that ended its turn early —
+typically while a command it started was still running — has stalled. Check its worktree
+(`.dev-loop/` files, running processes); wait for any command it left running to exit; then resume
+it with `SendMessage`, telling it the result and the stage to continue from. Release nothing until a
+report arrives.
 
 ## Stage 5 — Release, for every pick, including failures
 
