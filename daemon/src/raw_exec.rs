@@ -211,6 +211,62 @@ allow = ["^/bin/echo .+$"]
     }
 
     // -----------------------------------------------------------------------
+    // 2a. A secret-bearing whitespace argument never appears in the Deny
+    // reason. `denied_by_policy_result` puts the reason verbatim into
+    // `TaskResult.stderr`, and `run_raw_exec` logs the same `reason` string
+    // above (`tracing::warn!`) -- this module's own doc comment on
+    // `run_raw_exec` says the full argv is never logged for exactly this
+    // reason (a Raw Exec argument may embed a credential, e.g. a `curl -H
+    // "Authorization: ..."` header). The ADR-0019 whitespace-guard reason
+    // must uphold that: it names the offending index, never the argument's
+    // value.
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn secret_bearing_whitespace_argument_never_appears_in_deny_reason() {
+        let policy = from_toml_str(
+            r#"
+[raw_exec]
+allow = ["^/bin/curl .+$"]
+"#,
+        )
+        .expect("policy must parse");
+
+        // argv[2] carries whitespace, so the ADR-0019 guard denies this
+        // before any allow pattern is consulted -- no allow pattern needs to
+        // "leak" the secret; the guard's own Deny reason must not either.
+        let secret = "Authorization: Bearer topsecrettoken";
+        let raw = make_raw_exec(argv(&["/bin/curl", "-H", secret]));
+        let result = run_raw_exec(
+            "t-secret".to_string(),
+            &raw,
+            Duration::from_secs(5),
+            big_cap(),
+            &policy,
+            None, // cancel: uncancellable in tests
+        )
+        .await;
+
+        assert_eq!(
+            result.outcome,
+            Outcome::DeniedByPolicy as i32,
+            "must be denied by the whitespace guard"
+        );
+
+        // The Task result's stderr IS the Deny reason (denied_by_policy_result).
+        let reason = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            reason.contains("argv[2]"),
+            "the reason must name the offending index; got {reason:?}"
+        );
+        assert!(
+            !reason.contains("topsecrettoken") && !reason.contains(secret),
+            "the Deny reason must never quote a caller-controlled argument, which may hold a \
+             secret (ADR-0019; AGENTS.md security posture: never log secrets); got {reason:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // 3. Deny beats an overlapping allow (deny-beats-allow)
     // -----------------------------------------------------------------------
 

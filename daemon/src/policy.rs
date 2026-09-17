@@ -643,12 +643,14 @@ pub fn lint_with_vocabulary(
         &file.raw_exec.allow,
         "allow",
         compile_allow_regex,
+        true,
         &mut findings,
     );
     lint_raw_exec_regexes(
         &file.raw_exec.deny,
         "deny",
         compile_deny_regex,
+        false,
         &mut findings,
     );
     lint_raw_exec_allow_anchoring(&file.raw_exec.allow, &mut findings);
@@ -735,18 +737,27 @@ pub fn non_canonical_path_denial(path: &str) -> Decision {
 ///
 /// Compiled with the same function `from_toml_str` uses for that section
 /// (`compile_allow_regex` for "allow", `compile_deny_regex` for "deny"), so
-/// the lint verdict can never diverge from load-time behavior — an allow
-/// pattern the wrapping step cannot validate (see `compile_allow_regex`'s doc
-/// comment) is caught here too, with the same hint.
+/// the lint verdict can never diverge from load-time behavior. Only the
+/// ALLOW section's wrapping (`compile_allow_regex`) can turn a
+/// verbose-mode/trailing-`#`-comment pattern from compiling into
+/// non-compiling — `compile_deny_regex` never wraps, so a deny pattern that
+/// fails to compile is invalid on its own, and the wrapping hint would
+/// misattribute the cause. `is_allow` gates the hint accordingly, matching
+/// `with_allow_regex_hint`'s loader-side scoping.
 fn lint_raw_exec_regexes(
     patterns: &[String],
     section: &str,
     compile: fn(&str) -> Result<Regex, regex::Error>,
+    is_allow: bool,
     findings: &mut Vec<LintFinding>,
 ) {
     for (i, pattern) in patterns.iter().enumerate() {
         if let Err(e) = compile(pattern) {
-            let hint = verbose_trailing_comment_hint(pattern);
+            let hint = if is_allow {
+                verbose_trailing_comment_hint(pattern)
+            } else {
+                String::new()
+            };
             findings.push(LintFinding {
                 severity: LintSeverity::Error,
                 location: format!("[raw_exec].{section}[{i}]"),
@@ -1249,12 +1260,12 @@ impl Policy {
     ///   the definition `split_whitespace` below already uses), and `argv[0]`
     ///   must additionally be non-empty. An offending element is Deny **before
     ///   the allow pass runs**, with a reason naming its index — see the
-    ///   "whitespace guard" below. Once the guard passes, joining is lossless
-    ///   *between the two argvs it could otherwise conflate*: no element
-    ///   contains the separator the join introduces, so no other argv joins to
-    ///   the identical string (an empty non-`argv[0]` element is allowed and
-    ///   contributes nothing to the joined string either way, so it cannot
-    ///   create such a collision).
+    ///   "whitespace guard" below. Once the guard passes, `argv.join(" ")` is
+    ///   injective: with no element containing whitespace, the single space
+    ///   the join inserts between elements can never be confused with a
+    ///   space *inside* an element, so no two distinct argvs join to the same
+    ///   string (an empty non-`argv[0]` element is allowed and simply
+    ///   contributes an empty span between its neighbouring separators).
     /// - Deny patterns are tested against three forms; **any** match denies:
     ///   1. the joined command;
     ///   2. each raw `argv[i]` — catches deny patterns that are substrings of
@@ -1336,12 +1347,16 @@ impl Policy {
         // so no allow pattern can approve an argv whose element boundaries are
         // ambiguous. Returns the FIRST offending element, by index.
         //
-        // Each element quoted into a reason is caller-controlled and goes into
-        // `deciding_rule` and the audit trail, so it is bounded by
-        // `reason_fragment` like every other quoted fragment on this path. The
-        // `argv[0]` reason is the CHEAPEST one to provoke — it needs no allow
-        // and no deny pattern, so even an empty Policy emits it — which is
-        // exactly why it must not be able to carry a caller-sized payload.
+        // `argv[0]` is quoted into its reason (pre-existing, out of scope for
+        // this issue) and so is bounded by `reason_fragment` like every other
+        // caller-controlled fragment on this path — it is the CHEAPEST reason
+        // to provoke, needing no allow and no deny pattern, so even an empty
+        // Policy emits it. A later element's reason names only its index and
+        // never its value: a Raw Exec argument can carry a secret (e.g. an
+        // `Authorization: Bearer <token>` header value), and this reason lands
+        // in `deciding_rule`, the Task result and the daemon log, none of
+        // which may hold one (ADR-0019; AGENTS.md security posture — never
+        // log secrets).
         for (i, elem) in argv.iter().enumerate() {
             if i == 0 {
                 if elem.is_empty() || elem.chars().any(char::is_whitespace) {
@@ -1358,11 +1373,9 @@ impl Policy {
             } else if elem.chars().any(char::is_whitespace) {
                 return Decision::Deny {
                     reason: format!(
-                        "raw exec argv[{i}] {:?} contains whitespace: no Raw Exec argument may \
-                         carry whitespace, so the command Policy matched is exactly the argv \
-                         that runs; pass such an argument through a Template Operation \
-                         (ADR-0019)",
-                        reason_fragment(elem)
+                        "raw exec argv[{i}] contains whitespace: no Raw Exec argument may carry \
+                         whitespace, so the command Policy matched is exactly the argv that \
+                         runs; pass such an argument through a Template Operation (ADR-0019)"
                     ),
                     rule: None,
                 };
@@ -1952,6 +1965,46 @@ deny = ["restart nginx"]
         assert!(
             errors[0].message.contains("verbose-mode"),
             "the lint message must carry the same hint as the loader; got {:?}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn lint_deny_invalid_regex_gets_no_verbose_wrapping_hint() {
+        // `compile_deny_regex` never wraps a pattern (deny semantics are
+        // unchanged by the ADR-0019 amendment), so a deny pattern that fails
+        // to compile is invalid ON ITS OWN — an unclosed group here, not the
+        // wrap-swallows-the-comment edge case `compile_allow_regex` has. The
+        // pattern still "looks verbose" (`(?x)`) and its last line still ends
+        // in a `#` comment, so a hint scoped only by that heuristic would
+        // misattribute the failure to wrapping. Loader and lint must agree
+        // that no such hint is attached on the deny side.
+        let toml = "[raw_exec]\ndeny = ['(?x)a(b # comment']\n";
+
+        match from_toml_str(toml) {
+            Err(PolicyError::InvalidRegex { pattern, hint, .. }) => {
+                assert_eq!(pattern, "(?x)a(b # comment");
+                assert!(
+                    hint.is_empty(),
+                    "a deny pattern's InvalidRegex must carry no wrapping hint \
+                     (deny is never wrapped); got {hint:?}"
+                );
+            }
+            other => panic!("expected InvalidRegex; got {other:?}"),
+        }
+
+        let report = lint(toml);
+        let errors: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.severity == LintSeverity::Error)
+            .collect();
+        assert_eq!(errors.len(), 1, "got {:?}", report.findings);
+        assert!(errors[0].location.contains("[raw_exec].deny[0]"));
+        assert!(
+            !errors[0].message.contains("verbose-mode"),
+            "the lint message for a deny pattern must not carry the allow-only wrapping \
+             hint; got {:?}",
             errors[0].message
         );
     }
@@ -2815,7 +2868,7 @@ mod raw_exec_redteam {
                 policy_toml: "[raw_exec]\nallow = [\"^/usr/bin/systemctl (status|restart) [A-Za-z0-9@._-]+$\"]\n",
                 argv: &["/bin/sh", "-c", "/usr/bin/systemctl restart nginx"],
                 expect: Expect::DenyByGuard,
-                note: "argv[2] \"/usr/bin/systemctl restart nginx\" carries whitespace, so the ADR-0019 whitespace guard now refuses this before any allow pattern runs; the anchored-^ coverage this row used to pin moved to unanchored_allow_full_match_denies_foreign_argv0 and interp_unanchored_allow_full_match_denies_shell_argv0 below, whose argv has no whitespace and so reaches the (now full-match) allow pass",
+                note: "argv[2] \"/usr/bin/systemctl restart nginx\" carries whitespace, so the ADR-0019 whitespace guard now refuses this before any allow pattern runs; the anchored-^ coverage this row used to pin moved to anchored_allow_blocks_same_foreign_argv0 below, whose argv has no whitespace and so reaches the (now full-match) allow pass",
             },
             Case {
                 name: "unanchored_allow_full_match_denies_foreign_argv0",
@@ -3512,10 +3565,16 @@ mod raw_exec_redteam {
             }
         }
 
-        // Caller-controlled text is bounded, on BOTH reasons that quote it: a
-        // `.*`-style deny against a long joined command, and the ADR-0019
-        // argv[0] guard — which is the cheaper one to provoke, since it needs
-        // no allow and no deny pattern (an empty Policy still emits it).
+        // Caller-controlled text is bounded on the two reasons that quote
+        // it: a `.*`-style deny against a long joined command, and the
+        // ADR-0019 argv[0] guard — which is the cheaper one to provoke,
+        // since it needs no allow and no deny pattern (an empty Policy still
+        // emits it). The later-element guard reason (added by the
+        // 2026-09-16 amendment) does NOT quote the caller's text at all — a
+        // Raw Exec argument can carry a secret (e.g. an `Authorization:
+        // Bearer <token>` header value), and this reason lands verbatim in
+        // `deciding_rule`, the Task result and the daemon log — so it is
+        // checked separately below with a stronger property than a bound.
         //
         // The fixtures are deliberately NOT uniform-width: with an ASCII byte
         // ahead of 4-byte codepoints, byte index REASON_FRAGMENT_BUDGET falls
@@ -3593,6 +3652,32 @@ mod raw_exec_redteam {
                     "{which} ({label}): the reason must stay small; got {} chars ({} bytes)",
                     short.chars().count(),
                     short.len()
+                );
+            }
+        }
+
+        // The later-element guard reason: stronger than a size bound, the
+        // caller's text must not appear in the reason AT ALL, at any length —
+        // it may be a secret (a `curl -H "Authorization: Bearer <token>"`
+        // argument), not merely a long one.
+        for (label, text) in &long_texts {
+            let longer = text.repeat(4);
+            for candidate in [text.as_str(), longer.as_str()] {
+                let secret_argv = argv(&["prog", "ok", &format!("{candidate} x")]);
+                let reason = reason_of(
+                    empty_policy.evaluate_raw_exec(&secret_argv),
+                    "later-element guard reason",
+                    label,
+                );
+                assert!(
+                    reason.contains("argv[2]"),
+                    "later-element guard reason ({label}): must name the offending index; \
+                     got {reason:?}"
+                );
+                assert!(
+                    !reason.contains(candidate),
+                    "later-element guard reason ({label}): must never quote the caller's \
+                     argument text, which may hold a secret; got {reason:?}"
                 );
             }
         }
