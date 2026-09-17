@@ -555,6 +555,7 @@ func (f *fakeQueries) QueryJobs(_ context.Context, _ capability.Principal, filte
 	for _, j := range f.jobs {
 		switch {
 		case filter.JobID != "" && j.JobID != filter.JobID:
+		case filter.State != nil && j.State != *filter.State:
 		case filter.RiskClass != nil && j.RiskClass != *filter.RiskClass:
 		case filter.RequesterAccountID != "" && j.RequesterAccountID != filter.RequesterAccountID:
 		case filter.Operation != "" && j.OperationName != filter.Operation:
@@ -604,6 +605,26 @@ func containsString(xs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// cancelCall records one CancelJob invocation's arguments (#595).
+type cancelCall struct {
+	Principal capability.Principal
+	JobID     string
+}
+
+// fakeCanceller is the Cancel write seam. It records every call rather than
+// deciding anything — the role floor and the audit row are the capability
+// layer's, and a fake that "helpfully" refused a role would be asserting
+// against its own implementation instead of the real RoleGate.
+type fakeCanceller struct {
+	calls []cancelCall
+	err   error
+}
+
+func (f *fakeCanceller) CancelJob(_ context.Context, p capability.Principal, jobID string) error {
+	f.calls = append(f.calls, cancelCall{Principal: p, JobID: jobID})
+	return f.err
 }
 
 // fakeFreeze is the Freeze read seam.

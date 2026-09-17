@@ -37,6 +37,10 @@ const (
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+
+	// authzImportPath is cancel.go's own import (#595) — the Console's FIRST
+	// and ONLY file that names package authz. See the allowlist below.
+	authzImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 )
 
 // localImportAlias resolves the local identifier file uses for importPath: the
@@ -65,19 +69,52 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	regAlias, regImported := localImportAlias(file, registryImportPath)
 	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
 	evAlias, evImported := localImportAlias(file, eventsImportPath)
+	authzAlias, authzImported := localImportAlias(file, authzImportPath)
 
-	// A dot-import of either banned package erases the qualifier every check
+	// A dot-import of any banned package erases the qualifier every check
 	// below matches on: `import . ".../events"` turns the recovery into
 	// `d.Events.(*Bus)`, which names nothing this guard can see. There is no
 	// legitimate reason for one here, so it is a violation on its own.
 	for _, banned := range []struct{ alias, pkg string }{
-		{regAlias, "registry"}, {evAlias, "events"}, {capAlias, "capability"},
+		{regAlias, "registry"}, {evAlias, "events"}, {capAlias, "capability"}, {authzAlias, "authz"},
 	} {
 		if banned.alias == "." {
 			violations = append(violations, fmt.Sprintf(
 				"%s dot-imports %s — that erases the package qualifier this guard matches on, so "+
 					"every check below silently stops working", fileName, banned.pkg))
 		}
+	}
+
+	// The authz allowlist (#595): cancel.go is the Console's ONLY importer
+	// of package authz, and it is documented there to use exactly one
+	// symbol — the authz.ErrUnauthorized sentinel, to RENDER a refusal the
+	// capability layer already made. Any other selector on the package —
+	// authz.NewRoleGate, authz.RoleGate, a future exported gate helper — is
+	// a violation. This is an ALLOWLIST rather than a denylist naming
+	// NewRoleGate/RoleGate specifically, because a denylist silently admits
+	// the next exported gate helper the authz package grows; an allowlist
+	// fails closed on anything new instead.
+	if authzImported {
+		ast.Inspect(file, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			pkg, ok := sel.X.(*ast.Ident)
+			if !ok || pkg.Name != authzAlias || sel.Sel.Name == "ErrUnauthorized" {
+				return true
+			}
+			// The literal package name, not the local alias: the message
+			// must name what the guard actually checked against
+			// (authz.<Name>) even when the file imported the package under
+			// a different local identifier, so an aliased import cannot
+			// make the violation message read as clean.
+			violations = append(violations, fmt.Sprintf(
+				"%s names authz.%s — the Console renders a refusal the capability layer made "+
+					"(authz.ErrUnauthorized only) and never holds, constructs or calls a gate "+
+					"(invariant 10, ADR-0026 decision 4)", fileName, sel.Sel.Name))
+			return true
+		})
 	}
 
 	// bannedSelector reports whether expr NAMES one of the two write
@@ -151,6 +188,28 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// banned type or adding an import. A claim that strong has to be enforced,
 	// not asserted — this is the same hole for ApprovalReader that #427 closed
 	// for events.Bus.
+	//
+	// The dispatch/control verbs (#595) close the SAME hole, not a new one
+	// the Cancel seam introduced: Deps.Approvals and Deps.Queries were
+	// already wired to that same *capability.Service before this issue, so
+	// an anonymous-interface assertion could already have recovered Run,
+	// Plan, EngageFreeze, ReleaseFreeze or ResolveTask from either seam with
+	// no import and no banned type named. Deps.Cancel (cancel.go) is a THIRD
+	// field wired to the same object, and closing the pre-existing hole
+	// belongs in the same change that adds another way to reach it.
+	// ResolveTask (mcptask.go) writes a task handle's status — a real write,
+	// not exposed by ApprovalReader or QueryReader, so "Resolve" belongs on
+	// this list for the identical reason "Decide" and "Revoke" already are.
+	//
+	// Record is deliberately NOT here, and the distinction is worth being
+	// precise about: *capability.Service has exactly one Record* method,
+	// RecordEventSubscription, and it is not a hole this list would close —
+	// it is QueryReader's OWN declared method (seams.go), the one every
+	// screen on this seam is already meant to call. Banning "Record" would
+	// not stop an escalation; it would ban re-declaring the read this
+	// package is supposed to make. A prefix belongs on this list only when
+	// the seam's underlying *capability.Service has a write under that name
+	// which the seam's OWN interface does not already expose.
 	writeSurfaceMethod := func(name string) bool {
 		for _, prefix := range []string{
 			"Publish", "Set",
@@ -158,6 +217,12 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// Request, opening a window, closing one, spending one, and the
 			// store-level writes underneath all three.
 			"Decide", "Revoke", "Request", "Claim", "Create", "Bind",
+			// The capability layer's dispatch and control-action verbs
+			// (#595): Run and Plan dispatch; Engage/Release and Cancel are
+			// ControlActions; Resolve is ResolveTask, a task-handle write.
+			// All six are reachable from Deps.Approvals, Deps.Queries, or
+			// Deps.Cancel today (see the comment above).
+			"Run", "Plan", "Engage", "Release", "Cancel", "Resolve",
 		} {
 			if strings.HasPrefix(name, prefix) {
 				return true
@@ -301,6 +366,7 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
 	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
+	const authzImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"`
 
 	cases := []struct {
 		name       string
@@ -424,6 +490,113 @@ type approvals interface {
 	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
 }
 func f(a approvals) { _, _ = a.PendingApprovals(context.Background()) }
+`,
+			wantSubstr: "",
+		},
+		{
+			// The evasion Deps.Cancel makes newly possible (#595): it is
+			// wired to the same *capability.Service Deps.Approvals and
+			// Deps.Queries already were, so an anonymous interface matching
+			// Run's signature recovers dispatch from the Cancel seam too.
+			name: "anonymous interface recovering Run from the cancel seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+)
+func f(c any) {
+	_, _ = c.(interface {
+		Run(ctx context.Context, p capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error)
+	})
+}
+`,
+			wantSubstr: "Run",
+		},
+		{
+			name: "anonymous interface recovering CancelTask from the cancel seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+)
+func f(c any) {
+	_, _ = c.(interface {
+		CancelTask(ctx context.Context, p capability.Principal, taskID string) (capability.TaskView, error)
+	})
+}
+`,
+			wantSubstr: "CancelTask",
+		},
+		{
+			name: "anonymous interface recovering ResolveTask from the cancel seam",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+)
+func f(c any) {
+	_, _ = c.(interface {
+		ResolveTask(ctx context.Context, p capability.Principal, taskID string) (capability.TaskView, error)
+	})
+}
+`,
+			wantSubstr: "ResolveTask",
+		},
+		{
+			// The false-positive guard for the new seam itself: JobCanceller
+			// is a NAMED interface (cancel.go), not an anonymous one recovered
+			// through a type assertion, so declaring it must produce nothing.
+			name: "declaring the JobCanceller seam produces nothing",
+			src: `package console
+import "context"
+type canceller interface {
+	CancelJob(ctx context.Context, p any, jobID string) error
+}
+func f(c canceller) { _ = c.CancelJob(context.Background(), nil, "job-1") }
+`,
+			wantSubstr: "",
+		},
+		{
+			name: "constructing a role gate",
+			src: `package console
+import ` + authzImport + `
+var _ = authz.NewRoleGate()
+`,
+			wantSubstr: "authz.NewRoleGate",
+		},
+		{
+			name: "naming the role gate type",
+			src: `package console
+import ` + authzImport + `
+var _ *authz.RoleGate
+`,
+			wantSubstr: "authz.RoleGate",
+		},
+		{
+			// An aliased import must not let the message read clean: it is
+			// built from the literal package name, never the local alias
+			// (cycle-2 review, finding 4) — the same evasion "aliased
+			// capability import dodging the literal package name" above
+			// tests for capability.Service.
+			name: "an aliased authz import still names the gate",
+			src: `package console
+import az ` + authzImport + `
+var _ = az.NewRoleGate()
+`,
+			wantSubstr: "authz.NewRoleGate",
+		},
+		{
+			// The false-positive guard for the one symbol cancel.go is
+			// allowed to use: recognizing the refusal sentinel produces
+			// nothing.
+			name: "matching the refusal sentinel produces nothing",
+			src: `package console
+import (
+	"errors"
+	` + authzImport + `
+)
+func f(err error) bool { return errors.Is(err, authz.ErrUnauthorized) }
 `,
 			wantSubstr: "",
 		},

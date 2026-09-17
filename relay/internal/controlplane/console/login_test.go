@@ -31,8 +31,15 @@ type loginFixture struct {
 	handler  http.Handler
 	sessions *consoleauth.Store
 	accounts accounts.Repository
-	mike     accounts.Account
-	clk      *testClock
+
+	// passwords is kept alongside accounts so a test can mint a SECOND
+	// console-signable Account at a role other than mike's admin (#595's
+	// viewer-finds-the-route-absent test) through createAccountWithPassword,
+	// without reopening a store of its own.
+	passwords accounts.PasswordRepository
+
+	mike accounts.Account
+	clk  *testClock
 
 	// svc is the same real sign-in service the handler above authenticates
 	// against, exposed so a test can build a SECOND boundary over it — see
@@ -53,6 +60,14 @@ func (c *testClock) now() time.Time          { return c.t }
 func (c *testClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func newLoginFixture(t *testing.T) *loginFixture {
+	return newLoginFixtureWith(t, nil)
+}
+
+// newLoginFixtureWith is newLoginFixture with the chance to adjust the Deps
+// Register mounts before it does — for a test that needs a seam
+// newLoginFixture does not wire by default (#595's fakeCanceller and a
+// running Job). mutate may be nil, in which case this is newLoginFixture.
+func newLoginFixtureWith(t *testing.T, mutate func(*Deps)) *loginFixture {
 	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
@@ -97,17 +112,42 @@ func newLoginFixture(t *testing.T) *loginFixture {
 	// nothing to do with signing in.
 	d := renderableDeps()
 	d.Auth = svc
+	if mutate != nil {
+		mutate(&d)
+	}
 	Register(mux, d)
 
 	return &loginFixture{
-		handler:  authn.Middleware(Secure(mux)),
-		svc:      svc,
-		sessions: sessions,
-		accounts: st.Accounts(),
-		mike:     mike,
-		clk:      clk,
-		deps:     d,
+		handler:   authn.Middleware(Secure(mux)),
+		svc:       svc,
+		sessions:  sessions,
+		accounts:  st.Accounts(),
+		passwords: st.Passwords(),
+		mike:      mike,
+		clk:       clk,
+		deps:      d,
 	}
+}
+
+// createAccountWithPassword mints a second console-signable Account at role,
+// for a test that needs a session other than mike's admin one (#595's
+// viewer-finds-the-route-absent test).
+func (f *loginFixture) createAccountWithPassword(t *testing.T, name string, role accounts.Role, password string) accounts.Account {
+	t.Helper()
+	acct, err := f.accounts.Create(context.Background(), accounts.Account{
+		Name: name, Kind: accounts.KindHuman, Role: role, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create account %q: %v", name, err)
+	}
+	hash, err := accounts.HashPassword(accounts.NewPassword(password))
+	if err != nil {
+		t.Fatalf("hash password for %q: %v", name, err)
+	}
+	if err := f.passwords.SetPassword(context.Background(), acct.ID, hash); err != nil {
+		t.Fatalf("set password for %q: %v", name, err)
+	}
+	return acct
 }
 
 // do issues a request, carrying cookies forward the way a browser would.

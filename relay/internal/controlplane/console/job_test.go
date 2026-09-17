@@ -627,18 +627,19 @@ func TestJob_JobIdIsNotPresentedAsAPlanHash(t *testing.T) {
 	}
 }
 
-// TestJob_OffersNoControlAtAll is v0.6.0's rule, restated per-screen: no route
-// on this page reaches the capability layer's write or dispatch path. Cancel
-// is v0.7.0, and a Cancel that shipped early would be the first Console
-// control that changes the fleet.
-func TestJob_OffersNoControlAtAll(t *testing.T) {
+// TestJob_OffersNoControlWhenNothingIsInFlight is v0.7.0's Cancel restated per
+// its own condition: a complete Job (nothing unresolved) offers no control at
+// all, exactly as v0.6.0 offered none of anything. Cancel is the exception
+// (cancel_test.go covers it while a Task is in flight), not a standing
+// control on every Job.
+func TestJob_OffersNoControlWhenNothingIsInFlight(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
 	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
-	content := contentOf(jobBody(t, jobDeps(q), jobPath("")))
+	content := contentOf(jobBody(t, cancelDeps(q, &fakeCanceller{}), jobPath("")))
 
 	for _, banned := range []string{"<form", "<button", `method="post"`, "hx-post", "<script"} {
 		if strings.Contains(content, banned) {
-			t.Errorf("the Job screen renders %q — no control on this page may reach the capability layer in v0.6.0", banned)
+			t.Errorf("the Job screen renders %q for a complete Job — Cancel is offered only while a Task is unresolved", banned)
 		}
 	}
 }
@@ -903,5 +904,178 @@ func TestJob_MutateDenyWithNoStderrIsNotAssertedAsAgreement(t *testing.T) {
 	}
 	if n := strings.Count(body, `class="trow"`); n != 4 {
 		t.Errorf("listed %d of 4 Nodes whose denials were never explained", n)
+	}
+}
+
+// --- The cancel result (#595) ------------------------------------------------
+
+// sentThenCancelled is a cancelled Task that WAS dispatched before it was
+// stopped — DispatchedAt is set, which is exactly what taskRow.Sent reads.
+func sentThenCancelled(node string) capability.TaskRow {
+	row := mutateTask(node, jobs.OutcomeCancelled, "")
+	row.DispatchedAt = testNow
+	return row
+}
+
+// TestJob_NoCancelReadWhenNothingIsCancelledOrInFlight pins the conditional
+// read (finding 2): a complete Job with nothing cancelled makes no job_cancel
+// query at all, and the 10,000-Node guard (TestJob_TenThousandNodesRendersNoList)
+// stays at exactly one trail read.
+func TestJob_NoCancelReadWhenNothingIsCancelledOrInFlight(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	jobBody(t, jobDeps(q), jobPath(""))
+
+	for _, f := range q.auditFilters {
+		if containsString(f.Kinds, audit.KindJobCancel) {
+			t.Errorf("a job_cancel read ran on a Job with nothing cancelled and nothing in flight: %+v", f)
+		}
+	}
+	if q.auditCalls != 1 {
+		t.Errorf("audit reads = %d, want 1 (the dispatch record only)", q.auditCalls)
+	}
+}
+
+// TestJob_CancelResultSaysWhichIsWhich is the issue's honesty acceptance: the
+// screen says which cancelled Tasks never left the Relay, which were stopped
+// after being sent, which are still in flight (best-effort, qualified), and
+// that already-resolved Tasks kept their real outcome.
+func TestJob_CancelResultSaysWhichIsWhich(t *testing.T) {
+	tasks := []capability.TaskRow{
+		mutateTask("node-never-sent", jobs.OutcomeCancelled, ""),
+		sentThenCancelled("node-sent"),
+		mutateTask("node-ok", jobs.OutcomeSuccess, "ok"),
+	}
+	sum := oneJob(tasks, jobs.RiskClassMutate)
+	sum.Total = len(tasks) + 1
+	sum.Unresolved = 1
+	sum.State = jobs.JobStateRunning
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{sum},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindJobCancel, JobID: testJobID, Principal: "gleipnir:operator"}},
+	}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	for _, want := range []string{
+		"Cancel requested by",
+		"never sent",
+		"sent and then stopped",
+		"still in flight",
+		"best-effort",
+		"where its Node is connected",
+		"keep the outcome they really had",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the cancel result does not say %q", want)
+		}
+	}
+	if !strings.Contains(body, "success") {
+		t.Error("the success group did not survive alongside the cancel result")
+	}
+}
+
+// TestJob_CancelResultWithNothingCancelledYet: a cancel was requested but
+// nothing has been marked cancelled yet (every Task is still in flight). The
+// page must say "No Task reads cancelled" and never "0 Tasks read cancelled".
+func TestJob_CancelResultWithNothingCancelledYet(t *testing.T) {
+	sum := oneJob(nil, jobs.RiskClassMutate)
+	sum.Total = 2
+	sum.Unresolved = 2
+	sum.State = jobs.JobStateRunning
+	q := &fakeQueries{
+		jobs: []capability.JobSummary{sum},
+		rows: []capability.AuditRow{{Kind: audit.KindJobCancel, JobID: testJobID, Principal: "gleipnir:operator"}},
+	}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if !strings.Contains(body, "No Task reads cancelled") {
+		t.Error(`the result does not say "No Task reads cancelled"`)
+	}
+	if strings.Contains(body, "0 Tasks read cancelled") {
+		t.Error(`the result renders "0 Tasks read cancelled" — the zero case must never render as a bare count`)
+	}
+}
+
+// TestJob_NoCancelClaimWithoutAnAuditedRequest: Tasks read cancelled (a Job
+// halted some other way, e.g. a future incident-ladder action) but no
+// job_cancel audit row exists. The page must not attribute that to a cancel
+// request it cannot prove happened.
+func TestJob_NoCancelClaimWithoutAnAuditedRequest(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeCancelled, "")}
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if strings.Contains(body, "Cancel requested") {
+		t.Error("the page claims a cancel was requested with no audited record of one")
+	}
+	if strings.Contains(body, "asked to stop") {
+		t.Error(`the page renders "asked to stop" with no audited cancel request behind it`)
+	}
+}
+
+// TestJob_CancelledClustersNeverMergeSentAndUnsent: three or more of each
+// kind must give two clusters, never one "identical" row spanning both.
+func TestJob_CancelledClustersNeverMergeSentAndUnsent(t *testing.T) {
+	var tasks []capability.TaskRow
+	for i := 0; i < 3; i++ {
+		tasks = append(tasks, mutateTask(fmt.Sprintf("node-never-%d", i), jobs.OutcomeCancelled, ""))
+	}
+	for i := 0; i < 3; i++ {
+		tasks = append(tasks, sentThenCancelled(fmt.Sprintf("node-sent-%d", i)))
+	}
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if !strings.Contains(body, "never sent") || !strings.Contains(body, "sent and then stopped") {
+		t.Fatalf("both cancelled clusters are not present: %s", cancelledGroupOf(t, body))
+	}
+	if n := strings.Count(cancelledGroupOf(t, body), `class="clabel"`); n != 2 {
+		t.Errorf("the cancelled group rendered %d cluster labels, want exactly 2 (never-sent and sent-then-stopped never merge)", n)
+	}
+}
+
+// cancelledGroupOf extracts the cancelled outcome group's own block, mirroring
+// successGroupOf above.
+func cancelledGroupOf(t *testing.T, body string) string {
+	t.Helper()
+	for _, block := range strings.Split(body, `<details class="ogroup"`)[1:] {
+		if j := strings.Index(block, "</details>"); j >= 0 {
+			block = block[:j]
+		}
+		if strings.Contains(block, `<span class="chip outcome" data-outcome="cancelled"`) {
+			return block
+		}
+	}
+	t.Fatal("the page has no cancelled group at all")
+	return ""
+}
+
+// TestJob_CancelTrailFailureStillRendersTheJob: the job_cancel record cannot
+// be read, but the page still renders 200 with the groups intact and a note
+// naming what is missing.
+func TestJob_CancelTrailFailureStillRendersTheJob(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeCancelled, "")}
+	sum := oneJob(tasks, jobs.RiskClassMutate)
+	sum.Total = 2
+	sum.Unresolved = 1
+	sum.State = jobs.JobStateRunning
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{sum},
+		tasks: tasks,
+		auditErrOn: func(f capability.AuditFilter) bool {
+			return containsString(f.Kinds, audit.KindJobCancel)
+		},
+	}
+	rec := get(t, newTestHandler(jobDeps(q), accounts.RoleAdmin), jobPath(""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 even when the cancel record cannot be read", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "cancel request") {
+		t.Error("the trail-error note does not mention the cancel request")
+	}
+	if n := strings.Count(body, `class="trow"`); n == 0 {
+		t.Error("the groups did not render alongside the cancel trail failure")
 	}
 }

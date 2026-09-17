@@ -133,6 +133,14 @@ type Deps struct {
 	// 11), same "told, never settable" posture as Execution above. Zero (the
 	// default) means the marker never fires.
 	CertExpiringWithin time.Duration
+
+	// Cancel is the Console's one write seam (#595, cancel.go): the same
+	// capability.Service.CancelJob the Control API and MCP call. The role
+	// floor (operator, for any Job) and the audit row are the capability
+	// layer's; this package only renders what it decided. Nil means the
+	// control does not render and the route answers unavailable — the same
+	// "not wired" posture every other seam on this Deps takes.
+	Cancel JobCanceller
 }
 
 // now reads the clock, defaulting when the composition root left it unset.
@@ -294,6 +302,15 @@ func Routes(d Deps) []Route {
 		{"GET", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginForm},
 		{"POST", LoginPath, NavEntry{}, accounts.RoleViewer, handleLoginSubmit},
 		{"POST", LogoutPath, NavEntry{}, accounts.RoleViewer, handleLogout},
+
+		// Cancel (#595): the Console's one write route. NOT gated behind
+		// d.Execution — ADR-0026 decision 5 scopes that flag to the composer
+		// and to dispatch, and Cancel cannot run anything, only ask
+		// something already running to stop. MinRole here is mount-time
+		// absence for a viewer (a 404, the same "absent beats forbidden"
+		// every other MinRole gives); the capability layer's RoleGate,
+		// reached inside handleCancelJob, is the authority.
+		{"POST", "/console/jobs/{job_id}/cancel", NavEntry{}, accounts.RoleOperator, handleCancelJob},
 	}
 
 	// This placeholder stays mounted, unlike the four below that were removed

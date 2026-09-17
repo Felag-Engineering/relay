@@ -1242,6 +1242,17 @@ section.panel { margin-top: var(--space-4); }
 .jobhead { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); }
 .jhrow { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
 .jhrow:last-child { margin-bottom: 0; }
+/* .jobcancel is slate, never red (#595): a cancel is an ordinary, cheap-to-ask
+ * control, not an alarm — the same reasoning that keeps a Policy deny slate
+ * rather than red on this same screen. */
+.jobcancel { display: inline-flex; align-items: baseline; gap: var(--space-2); }
+.jobcancel button {
+  font: inherit; padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle); border-radius: var(--radius-lg);
+  background: var(--bg-surface); color: var(--text-primary); cursor: pointer;
+}
+.jobcancel button:hover { background: var(--bg-elevated); }
+.jcnote { font-size: var(--text-xs); color: var(--text-muted); }
 .jobop { font-family: var(--font-mono); font-size: var(--text-base); }
 .ogroup { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); margin-bottom: var(--space-3); }
 .ogroup > summary { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3) var(--space-5); cursor: pointer; font-size: var(--text-sm); list-style: none; }
