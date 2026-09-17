@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
@@ -119,6 +120,11 @@ func handleGetJob(d Deps) http.HandlerFunc {
 // Tasks are asked to cancel over their Tunnels, and already-resolved Tasks keep
 // their truthful outcome.
 //
+// The floor is `operator`, for any Job — decided by the capability layer's
+// AuthorizeControl(ControlCancelJob), not here (#595, invariant 10). A
+// refused caller gets writeJobError's authz.ErrUnauthorized branch below,
+// before any existence check runs.
+//
 // Best-effort for in-flight Tasks by design: a Task that completes before the
 // cancel reaches it reports its real outcome, never a fabricated `cancelled`.
 // Cancelling an already-finished Job is therefore a clean 200 no-op — every
@@ -151,16 +157,22 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 	}
 }
 
-// writeJobError renders a Job-addressed error: an unknown Job id is a 404,
-// anything else a 500. The 404 text names the id the caller asked for, which is
-// theirs already and discloses nothing.
+// writeJobError renders a Job-addressed error: an unknown Job id is a 404, a
+// role or human-kind refusal (#397, #595) unwraps to authz.ErrUnauthorized and
+// renders 403 with the gate's own reason — the same recognize-don't-re-decide
+// pattern writeFreezeError and writeExecutionError use — and anything else is
+// a 500. The 404 text names the id the caller asked for, which is theirs
+// already and discloses nothing.
 func writeJobError(w http.ResponseWriter, jobID string, err error) {
-	if errors.Is(err, jobs.ErrJobNotFound) {
+	switch {
+	case errors.Is(err, jobs.ErrJobNotFound):
 		writeProblem(w, http.StatusNotFound, "job not found",
 			fmt.Sprintf("no Job with id %q", jobID))
-		return
+	case errors.Is(err, authz.ErrUnauthorized):
+		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
+	default:
+		writeProblem(w, http.StatusInternalServerError, "job request failed", err.Error())
 	}
-	writeProblem(w, http.StatusInternalServerError, "job request failed", err.Error())
 }
 
 // auditRead records one read-access event, or returns an error that fails the

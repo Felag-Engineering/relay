@@ -13,12 +13,12 @@ import (
 //
 // It exists because "who may ask" was previously answered only for things
 // that reach a Node. Minting an Enrollment Token, revoking one, revoking a
-// Node, and engaging or releasing the Freeze never touch the dispatch
-// pipeline, so authz.RoleGate was never consulted for any of them and every
-// one of them was reachable by a viewer. Naming them here — in the capability
-// layer, beside the Action-shaped question — is what lets a single Authorizer
-// answer both, so MCP, the Control API, and the Console inherit one table
-// rather than each surface carrying its own (invariant 10).
+// Node, engaging or releasing the Freeze, and cancelling a Job never touch
+// the dispatch pipeline, so authz.RoleGate was never consulted for any of
+// them and every one of them was reachable by a viewer. Naming them here —
+// in the capability layer, beside the Action-shaped question — is what lets
+// a single Authorizer answer both, so MCP, the Control API, and the Console
+// inherit one table rather than each surface carrying its own (invariant 10).
 //
 // The values are stable, low-cardinality identifiers: they appear in refusal
 // reasons that land in the audit trail.
@@ -44,6 +44,13 @@ const (
 
 	// ControlFreezeRelease is POST /api/v1/freeze/release (ADR-0013).
 	ControlFreezeRelease ControlAction = "freeze_release"
+
+	// ControlCancelJob is POST /api/v1/jobs/{id}/cancel, MCP's cancel_job and
+	// tasks/cancel, and the Console's Cancel control (#595). The floor is
+	// operator, for any Job — not only the caller's own — and not
+	// human-only: an AI-agent must be able to cancel its own dispatch (#346,
+	// execution.md §Cancellation, owner decision 2026-09-14).
+	ControlCancelJob ControlAction = "cancel_job"
 )
 
 // ControlAuthorizer decides whether p may perform a ControlAction — the

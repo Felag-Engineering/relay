@@ -874,7 +874,7 @@ func TestService_CancelJob_PublishesJobCancelled(t *testing.T) {
 
 	e := &jobEngine{jobsRepo: jobsRepo, tasksRepo: tasksRepo, conduit: newFakeConduit(nil), now: func() time.Time { return at }}
 	sink := &spyJobEventSink{}
-	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink}
+	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink, authz: &spyAuthorizer{}}
 
 	principal := Principal{Account: "bob", Role: "operator"}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {

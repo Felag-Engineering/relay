@@ -675,6 +675,21 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 // tasksRepo/Conduit stay inside the engine, mirroring how Run delegates to
 // s.disp.run.
 //
+// The floor is `operator`, for any Job — not only one the caller dispatched
+// — and not human-only (#595, execution.md §Cancellation, owner decision
+// 2026-09-14, #346). AuthorizeControl runs FIRST, before disp.cancel, so a
+// refused caller neither touches a Task nor learns whether the Job exists
+// (see TestCancelJobRefusalDoesNotRevealWhetherTheJobExists). It reads the
+// context with withoutAssertions, for the same reason Run and Plan do: an
+// authorization decision must never be swayed by caller-asserted
+// attribution (assertions.go).
+//
+// A refused cancel is recorded through refuseControl with the Principal and
+// the reason, and deliberately without the Job ID: the refusal precedes any
+// existence check, so the id is caller-authored text, and the trail's
+// job_id column is otherwise always a Relay-minted id that surfaces build
+// links from.
+//
 // p is recorded via AuditSink.RecordCancel (v0.0.6 [5/8], owner DECISION 2):
 // cancellation is durably recorded on each affected Task via
 // OutcomeCancelled regardless of who asked (ADR-0013), but the audit trail
@@ -683,7 +698,16 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 // EngageFreeze/ReleaseFreeze: the cancel itself is attempted first, and the
 // audit write is skipped if it errors — there is nothing true to record
 // (e.g. jobs.ErrJobNotFound: no Task was ever touched).
+//
+// CancelTask (mcptask.go) calls this and inherits the gate for a Task that
+// already has a Job. A still-parked task handle — one CreateTaskHandle
+// created but no dispatch has claimed yet — is cancelled without ever
+// reaching CancelJob, so that path stays owner-scoped and ungated; only a
+// Job-backed cancel is gated here.
 func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) error {
+	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
+		return s.refuseControl(ctx, p, err)
+	}
 	if err := s.disp.cancel(ctx, jobID); err != nil {
 		return err
 	}

@@ -42,7 +42,9 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 		Description: "Cancel a Job's Tasks (ADR-0013): undispatched Tasks are marked cancelled without " +
 			"ever being sent, in-flight Tasks are asked to cancel over their Tunnels, and already-" +
 			"resolved Tasks keep their truthful outcome. Best-effort for in-flight Tasks — a Task that " +
-			"completes before the cancel reaches it reports its real outcome, never a fabricated cancel.",
+			"completes before the cancel reaches it reports its real outcome, never a fabricated cancel. " +
+			"Requires an Account of operator or above; any Job, not only the caller's own — a viewer is " +
+			"refused and the Job continues.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in cancelJobInput) (*sdkmcp.CallToolResult, cancelJobOutput, error) {
 		logPrincipal(ctx, "cancel_job")
 		p, err := requirePrincipal(ctx)

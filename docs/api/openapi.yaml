@@ -251,6 +251,10 @@ paths:
         the cancel reaches it reports its real outcome, never a fabricated
         `cancelled`. Cancelling an already-finished Job is therefore a clean
         `200` no-op.
+
+        **Requires the `operator` role or above, for any Job** — not only one
+        the caller dispatched, and not human-only: an AI-agent may cancel its
+        own dispatch.
       responses:
         "200":
           description: The cancel was applied (or was a no-op on a finished Job).
@@ -258,6 +262,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/CancelledJob' }
         "401": { $ref: '#/components/responses/Unauthorized' }
+        "403": { $ref: '#/components/responses/Forbidden' }
         "404": { $ref: '#/components/responses/JobNotFound' }
         "500": { $ref: '#/components/responses/InternalError' }
 

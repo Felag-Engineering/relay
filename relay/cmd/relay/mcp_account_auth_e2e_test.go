@@ -252,6 +252,17 @@ func TestMCPAccountAuth_RevocationAndDisablement_E2E(t *testing.T) {
 			t.Errorf("%s as viewer SUCCEEDED — a viewer may never dispatch", tc.tool)
 		}
 	}
+
+	// A viewer may not cancel a Job either (#595) — the real RoleGate over
+	// the real Service, reached through cancel_job. An unknown id already
+	// errors on its own, so asserting the text is what makes this test
+	// discriminate a role refusal from a not-found.
+	res := relaytest.CallTool(t, session, "cancel_job", map[string]any{"job_id": "job-does-not-exist"})
+	if !res.IsError {
+		t.Error("cancel_job as viewer SUCCEEDED — a viewer may never cancel a Job")
+	} else if text := relaytest.ToolErrorText(t, res); !strings.Contains(text, "operator") {
+		t.Errorf("cancel_job as viewer error = %q, want it to name the required role %q", text, "operator")
+	}
 }
 
 // principals renders audit records as "kind=principal" pairs, so a failure
