@@ -357,6 +357,13 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 
 ## Accepted residual risk
 
+- **Overlapping rules union their approvers.** When a dispatch or a grant matches several gate
+  rules, anyone in any matching rule's audience may approve, and a matching rule with no audience
+  makes it anyone at all. A `relay:` rule reserved for one approver can therefore be decided by
+  another rule's approver when a Selector also matches that rule. Count, channel, requester exclusion
+  and window still take the strictest. Accepted by the owner on `2026-09-16` (ADR-0027 amendment;
+  threat model R18) as a stage-appropriate simplification; the improvement is Future work below.
+
 - **Under the shipped defaults, a prompt-injected AI-agent session can approve its own mutation.**
   An in-band confirmation is an assertion by the client, and the session asking is the session
   answering. A fresh install's gate is therefore only as strong as the client. The trail records
@@ -372,6 +379,12 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
 none is a commitment to an order.
 
+- **Approver audiences that cannot be widened by overlap.** Replace the union of matching rules'
+  audiences (Accepted residual risk) with one of two models, decided at pickup: **intersection**,
+  refusing a dispatch or grant whose intersection is empty and naming the conflicting rules; or a
+  **per-rule quorum**, where every matching rule's audience must be satisfied and one approver in
+  several audiences can satisfy them together. Surfaced by #602's security review; ADR-0027
+  amendment of `2026-09-16`.
 - **Richer multi-person and out-of-band requirements** — rules demanding more than one approver
   (two-person release), and out-of-band requirements that are practical enough to become the
   default for agent-grade mutations.

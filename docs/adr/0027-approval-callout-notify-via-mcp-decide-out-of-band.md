@@ -398,3 +398,40 @@ Relay's store without saying how a fresh Relay gets any. Owner decision, 2026-09
 Until store-backed rules are built, today's behaviour stands and `docs/specs/approval.md` must
 describe it as current: an optional root-owned file, and **no gate at all** when none is
 configured.
+
+## Amendment (2026-09-16): grants pin no namespace; overlapping rules keep the audience union, as an accepted risk
+
+Two owner decisions of the same date.
+
+### Grants no longer pin a namespace
+
+Decision 3's "every namespace a Selector could use **when the Scope does not pin one**" loses its
+condition: a Scope has no namespace term (`docs/specs/approval.md`; #482). A grant is always priced
+over every namespace. A stored grant that carried a pin releases nothing.
+
+### Overlapping rules keep the union of their audiences — accepted, and tracked for improvement
+
+When more than one rule matches a dispatch, or a grant's worst case, the combined Requirement takes
+the strictest count, channel, requester exclusion and window, and the **union** of the audiences,
+with a rule that names no audience making the result unrestricted. This is unchanged. The security
+review of #482's change (#602) found what the union costs, and it is recorded here rather than left
+in a closed review:
+
+- With `{relay:… → [alice]}` and `{node:… → [bob]}`, a dispatch matching both may be approved by
+  `bob` alone — so adding a `node:` term to a security-lane Selector reaches an approver the
+  `relay:` rule did not name.
+- A matching rule with no audience makes the combined audience unrestricted, so a broad rule
+  silently lifts a narrower rule's restriction on every dispatch they both match.
+- Removing grant pinning makes every grant priced across all rules, so a grant's audience is always
+  the union.
+
+**Decided, 2026-09-16: keep the union for now.** Count, channel, requester exclusion and window still
+tighten; only *who* may approve widens. Two better models were considered and deferred, not
+rejected: **intersecting** audiences and refusing a dispatch whose intersection is empty (simple;
+refuses what disjoint overlapping rules both match), and a **per-rule quorum** in which every
+matching rule's audience must be satisfied (most faithful to the rules as written; the queue and the
+Console must track several groups). The choice between them is future work in
+`docs/specs/approval.md`, and the residual is **R18** in `docs/security/threat-model.md`.
+
+**Mitigation until then** is authoring: give a security-lane rule the widest match it needs, and do
+not let a broader rule with a different or empty audience overlap it.

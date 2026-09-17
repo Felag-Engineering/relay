@@ -54,7 +54,7 @@ When there is no comparable prior approval, say so plainly. Do not manufacture a
 ## Batches are Grants
 
 A "batch" is what ADR-0027's #378 amendment built: a **Grant** — an ordinary approval Request whose
-subject is a **Scope** (Operation allow-list, namespace pin, fan-out ceiling, window, `max_uses`)
+subject is a **Scope** (Operation allow-list, fan-out ceiling, window, `max_uses`; no namespace pin since 2026-09-16, ADR-0027)
 rather than one Plan. It renders as **one card** — "Grant · `service.restart` on `tag:web` · ≤ 200
 Nodes · next 2h · 20 uses" — carrying the Scope, its *derived worst-case Requirement*, and, once
 approved, the Jobs it has released so far (audit `grant_id`). Never one card per released Job.
