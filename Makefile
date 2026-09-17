@@ -152,6 +152,15 @@ proto-tools:
 # names in its proof table still exists. Both catch drift that has happened here —
 # two files once claimed ADR-0015, and a spec citing tests by name breaks silently
 # when one is renamed. Cheap, hermetic, no network.
+.PHONY: console-snapshots
+# Render every Console screen against the test fixtures and write the HTML to
+# relay/console-snapshots/ (gitignored). The design canvas is seeded from these so
+# the UI is edited from the real pages; re-run after any Console change.
+console-snapshots:
+	@rm -rf relay/console-snapshots && cd relay && RELAY_CONSOLE_SNAPSHOT_DIR=$(CURDIR)/relay/console-snapshots \
+	  go test ./internal/controlplane/console -run TestConsole_WriteScreenSnapshots -count=1 -v 2>&1 | grep -E 'wrote|FAIL|ok ' || true
+	@ls relay/console-snapshots
+
 .PHONY: docs-check
 docs-check:
 	@./scripts/check-docs.sh

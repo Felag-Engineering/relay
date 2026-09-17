@@ -27,6 +27,7 @@
 *.crt
 *.csr
 /relay/*.db
+/relay/console-snapshots/
 /relay/*.sqlite
 *.local.yaml
 
