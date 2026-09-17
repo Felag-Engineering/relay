@@ -133,7 +133,8 @@ canonical path:
   `failure`, `unsupported` and a malformed call. The denial is a structured `/proto` contract
   carrying, in its first pass, only:
   - a reason: `no_allow` (nothing permitted it) or `denied` (a deny rule vetoed it);
-  - human-readable text. Caller-supplied text quoted into it is truncated to a fixed budget.
+  - human-readable text. Caller-supplied text quoted into it is truncated to a fixed budget, on
+    the Raw Exec and Operation paths alike (#258 tracks the Operation path).
 - **Malformed.** An unknown argument or slot name, or a value not well-formed for its type, gets
   its own outcome for Native and Template Operations alike — so a typo never reads as a denial
   and never sends an AI-agent into a retry loop.
@@ -160,8 +161,9 @@ canonical path:
   collapses into the Policy fingerprint. Its rejection of a daemon-side deny floor stands.
 - **ADR-0018 — needs amending.** The deferred path matcher is resolved as the glob dialect above.
   Case and Unicode folding on a folding mount remains a recorded residual risk.
-- **ADR-0019 — needs amending.** Whitespace-bearing argv elements are now denied outright, and
-  allow patterns are full-match.
+- **ADR-0019 — amended `2026-09-16`.** Whitespace-bearing argv elements are denied outright, and
+  allow patterns are full-match. Its choice to quote caller text into a Raw Exec denial, bounded,
+  stands; removing that quoting (Future work) would need a further amendment for the Raw Exec path.
 - **ADR-0022** — the shipped read posture stands, now expressed as a package-owned fragment.
 - **ADR-0025** — reads are audited and output is not retained; this is the present answer to
   secrets in read output.
@@ -196,6 +198,15 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   a writable Policy directory a live escalation rather than one that waits for a restart.
 - **Secrets in read output.** The confidentiality deny-list cannot know every file that holds a
   credential; read auditing records that such a file was read, not what it said.
+- **Secrets in denial text reach the daemon log.** A denial's human-readable text quotes
+  caller-supplied text — a deny pattern's matched text and a refused `argv[0]` on the Raw Exec
+  path, the arguments on the Operation path — and so copies a secret passed as an argument into
+  the Task result and the daemon log, beyond the audit trail `execution.md` already accepts it
+  reaching. Accepted by the owner on `2026-09-17`, so that execution works end to end before it is
+  refined. Compensating control: `execution.md`'s contract that arguments are never secrets, and
+  the fixed budget on quoted text, which bounds how much of one is copied (Raw Exec today; the
+  Operation path is #258). Threat model R20; the
+  fix is under Future work.
 
 ## Future work
 
@@ -204,6 +215,11 @@ none is a commitment to an order.
 
 - **Richer denial detail** — the deciding fragment and rule, the argument that decided it, the
   pattern that matched.
+- **No caller text in denials or the daemon log** — a denial names the form, the index and the
+  rule that decided it and never quotes what the caller sent; the same holds for the daemon's
+  log of a refused or failed Task. Pulls against *richer denial detail* above, and needs
+  ADR-0019 amended for the Raw Exec path, where it chose quoting for diagnosability. Scoped, with the deny paths and log
+  lines that quote today, in #619.
 - **Shared Template definitions with separate allow rules** — one definition serving a fleet,
   with per-Node allowed values held apart from it.
 - **A daemon-verified guarantee against self-modification** — the daemon itself establishes that
@@ -224,6 +240,8 @@ Resolved elsewhere: how the Relay trusts a Template's risk class, and what remai
 
 ## History
 
+- `2026-09-17` — with the owner: caller text in denial text is an accepted residual risk for now;
+  removing it is future work (#619).
 - `2026-09-17` — Raw Exec allow patterns now require a whole-command match, and any argv
   element containing whitespace is denied before allow patterns run (#589).
 - `2026-09-13` — worked through with the owner. Policy and Templates collapse into one concept in
