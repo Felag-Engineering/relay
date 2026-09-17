@@ -250,17 +250,18 @@ const (
 // know audit's storage shape.
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
-// AuditKindRefusal (authz-deny, cap-reject, or CancelJob's machine-Account
-// scoping, #614), Reason is set and Results is empty — the dispatcher was
-// never reached — but JobID is NOT always empty: refuseControl's role-floor
-// refusal leaves it empty (it precedes any existence check, so the id is
-// unvalidated caller text), while refuseCancel's machine-scoping refusal
-// sets it to the store's own echo of the Job authorizeMachineCancel's lookup
-// actually found — never a caller-supplied id the Relay never validated.
+// AuditKindRefusal (authz-deny, cap-reject, a zero-match dispatch
+// (no_nodes_matched, #571), or CancelJob's machine-Account scoping, #614),
+// Reason is set and Results is empty — the dispatcher was never reached —
+// but JobID is NOT always empty: refuseControl's role-floor refusal leaves
+// it empty (it precedes any existence check, so the id is unvalidated caller
+// text), while refuseCancel's machine-scoping refusal sets it to the store's
+// own echo of the Job authorizeMachineCancel's lookup actually found — never
+// a caller-supplied id the Relay never validated.
 // For AuditKindPlan (#119), only Principal/Selector/Action are set — JobID,
 // Results, and Reason are all empty, since a Plan never dispatches (no
 // Job/Task exists to reference) even when it reports a would-be-rejected
-// cap/Freeze condition.
+// cap/Freeze/no-Nodes-matched condition.
 type AuditEntry struct {
 	Kind      AuditKind
 	Principal Principal
@@ -388,6 +389,11 @@ const (
 	// denied. Kept a distinct value precisely so an operator can tell "the
 	// gate is working" apart from "the fleet is rejecting work".
 	RefusalPendingApproval
+
+	// RefusalNoNodesMatched counts a dispatch refused because its Selector
+	// resolved to zero Nodes (#571). This is a real refusal, not a park:
+	// nothing was dispatched and no Job was created.
+	RefusalNoNodesMatched
 )
 
 // MetricsSink records best-effort observability counters for the capability

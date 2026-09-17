@@ -129,7 +129,9 @@ paths:
         With `plan: true` this resolves, authorizes, and checks exactly as a
         real run would but **executes nothing**, returning per-Node Policy
         verdicts instead (ADR-0011). A plan creates no Job, so its response
-        carries no `job_id`.
+        carries no `job_id`. A Selector that matches no Nodes is refused with
+        `422`; with `plan: true` it is reported instead as
+        `would_be_rejected.reason: no_nodes_matched`.
 
         Argument NAMES are validated against the Operation's published
         constraints before dispatch, so a misspelled argument is a `400` rather
@@ -158,7 +160,7 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/Forbidden' }
         "409": { $ref: '#/components/responses/Frozen' }
-        "422": { $ref: '#/components/responses/CapExceeded' }
+        "422": { $ref: '#/components/responses/GuardrailRejected' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   /api/v1/raw-exec:
@@ -180,6 +182,10 @@ paths:
 
         Prefer `POST /api/v1/operations` whenever a structured Operation
         expresses the task.
+
+        A Selector that matches no Nodes is refused with `422`; with
+        `plan: true` it is reported instead as
+        `would_be_rejected.reason: no_nodes_matched`.
       requestBody:
         required: true
         content:
@@ -206,7 +212,7 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/Problem' }
         "409": { $ref: '#/components/responses/Frozen' }
-        "422": { $ref: '#/components/responses/CapExceeded' }
+        "422": { $ref: '#/components/responses/GuardrailRejected' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   # ---------------------------------------------------------------------------
@@ -1008,13 +1014,26 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
-    CapExceeded:
+    GuardrailRejected:
       description: |
-        The Selector matched more Nodes than the applicable blast-radius cap
-        allows (ADR-0004/0012). The request was well-formed and authorized; a
-        guardrail refused it before anything ran. Narrow the Selector or split
-        the work into batches. The cap is Relay configuration and cannot be
-        raised through this API (invariant 11).
+        A `422` guardrail refusal on an otherwise well-formed, authorized
+        request. There is no machine-readable problem `type`, so a client
+        branches on `title` alone, which is stable; `detail` is
+        human-readable and is not a contract.
+
+        - `title: "no nodes matched"` — the Selector resolved to zero Nodes.
+          It was refused before anything ran, so no Job exists and there is
+          no `job_id` to read. It is audited as a refusal (principal,
+          Selector, Action). `detail` carries `no_nodes_matched` and the
+          Selector in canonical form, so a typo is visible. With
+          `plan: true` it is not refused: a `200` `PlanResponse` reports
+          `would_be_rejected.reason: no_nodes_matched` (ADR-0011).
+        - `title: "blast radius cap exceeded"` — the Selector matched more
+          Nodes than the applicable blast-radius cap allows (ADR-0004/0012).
+          The request was well-formed and authorized; a guardrail refused it
+          before anything ran. Narrow the Selector or split the work into
+          batches. The cap is Relay configuration and cannot be raised
+          through this API (invariant 11).
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1346,9 +1365,10 @@ components:
         job_id:
           type: string
           description: |
-            **Present only when a Job was created.** Absent on a plan (which
-            executes nothing) and on a zero-match dispatch, so an absent
-            `job_id` always means nothing was dispatched.
+            **Present on every completed dispatch.** A plan (`PlanResponse`)
+            carries none. A Selector matching no Nodes never produces this
+            response: it is refused with `422` `no nodes matched` and
+            creates no Job.
         results:
           type: array
           items: { $ref: '#/components/schemas/PerNodeResult' }
@@ -1374,7 +1394,13 @@ components:
       properties:
         reason:
           type: string
-          enum: [exceeds_cap, frozen]
+          enum: [exceeds_cap, frozen, no_nodes_matched]
+          description: |
+            Only `exceeds_cap` carries `matched`/`cap`/`class`. `frozen` and
+            `no_nodes_matched` carry neither — the Freeze is Relay-wide, and
+            the zero count is already the top-level `matched`.
+            `no_nodes_matched` is what a real run would refuse with `422`
+            `no nodes matched`.
         matched: { type: integer }
         cap: { type: integer }
         class: { $ref: '#/components/schemas/RiskClass' }

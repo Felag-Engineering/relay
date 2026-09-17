@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -353,5 +354,88 @@ func TestMCP_Plan_PlanVsRealRunParity(t *testing.T) {
 	}
 	if runByNode[ts.nodeB].Outcome != "unreachable" {
 		t.Errorf("node %s: real outcome = %q, want unreachable", ts.nodeB, runByNode[ts.nodeB].Outcome)
+	}
+}
+
+// TestMCP_Plan_ZeroMatchReportsWhatARealRunRefuses is the no-Nodes-matched
+// parity test for the preflight decision (#571, ADR-0011): plan=true reports
+// would_be_rejected{no_nodes_matched} as data, while the same call with
+// plan=false is a tool error carrying no_nodes_matched — for both
+// run_operation and raw_exec.
+func TestMCP_Plan_ZeroMatchReportsWhatARealRunRefuses(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	tools := []map[string]any{
+		{"operation": "system.facts", "selector": "node:role=nonexistent"},
+		{"argv": []string{"/bin/true"}, "selector": "node:role=nonexistent"},
+	}
+	toolNames := []string{"run_operation", "raw_exec"}
+
+	for i, name := range toolNames {
+		args := tools[i]
+
+		planArgs := map[string]any{}
+		for k, v := range args {
+			planArgs[k] = v
+		}
+		planArgs["plan"] = true
+
+		planRes := callTool(t, session, name, planArgs)
+		if planRes.IsError {
+			t.Fatalf("%s(plan=true) against a zero-match Selector: IsError = true, content = %+v", name, planRes.Content)
+		}
+		var planOut mcp.RunOrPlanOutput
+		decodeResult(t, planRes, &planOut)
+		if planOut.JobID != "" {
+			t.Errorf("%s(plan=true).job_id = %q, want empty", name, planOut.JobID)
+		}
+		if planOut.Plan == nil || planOut.Plan.Matched != 0 {
+			t.Errorf("%s(plan=true).plan.matched = %+v, want 0", name, planOut.Plan)
+		}
+		if planOut.Plan == nil || len(planOut.Plan.Verdicts) != 0 {
+			t.Errorf("%s(plan=true).plan.verdicts = %+v, want empty", name, planOut.Plan)
+		}
+		if planOut.Plan == nil || planOut.Plan.WouldBeRejected == nil || planOut.Plan.WouldBeRejected.Reason != "no_nodes_matched" {
+			t.Fatalf("%s(plan=true).plan.would_be_rejected = %+v, want {reason: no_nodes_matched}", name, planOut.Plan)
+		}
+
+		realRes := callTool(t, session, name, args)
+		if !realRes.IsError {
+			t.Fatalf("%s(plan=false) against a zero-match Selector: IsError = false, want true", name)
+		}
+		if text := toolErrorText(t, realRes); !strings.Contains(text, "no_nodes_matched") {
+			t.Errorf("%s(plan=false) error = %q, want it to contain %q", name, text, "no_nodes_matched")
+		}
+	}
+
+	if len(ts.conduit.queriedNodes()) != 0 {
+		t.Errorf("Query was called %v times, want 0 (no Node to ask on a zero-match Selector)", ts.conduit.queriedNodes())
+	}
+	if _, err := ts.store.Jobs().GetJob(context.Background(), "job-id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("GetJob(job-id-1) error = %v, want jobs.ErrJobNotFound", err)
+	}
+
+	records, err := ts.store.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("Audit().List: %v", err)
+	}
+	var plans, refusals int
+	for _, rec := range records {
+		if rec.Selector != "node:role=nonexistent" {
+			continue
+		}
+		switch rec.Kind {
+		case audit.KindPlan:
+			plans++
+		case audit.KindRefusal:
+			refusals++
+		}
+	}
+	if plans != 2 {
+		t.Errorf("audit.KindPlan records for the zero-match Selector = %d, want 2", plans)
+	}
+	if refusals != 2 {
+		t.Errorf("audit.KindRefusal records for the zero-match Selector = %d, want 2", refusals)
 	}
 }

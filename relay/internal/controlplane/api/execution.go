@@ -137,9 +137,9 @@ type perNodeVerdict struct {
 }
 
 // wouldBeRejected reports why a Plan's real counterpart would be refused
-// before dispatch — over the blast cap, or the Relay frozen. A Plan reports
-// these INSIDE the response rather than erroring (ADR-0011): the whole point
-// is to learn the answer without triggering it.
+// before dispatch — over the blast cap, the Relay frozen, or no Node
+// matched. A Plan reports these INSIDE the response rather than erroring
+// (ADR-0011): the whole point is to learn the answer without triggering it.
 type wouldBeRejected struct {
 	Reason  string `json:"reason"`
 	Matched int    `json:"matched,omitempty"`
@@ -192,7 +192,8 @@ const statusPendingApproval = "pending_approval"
 //
 // JobID carries omitempty deliberately (#207/#253): it is present only when a
 // Job was actually created, so an ABSENT job_id always means nothing was
-// dispatched (a zero-match Selector), never a failed-but-created Job. Results
+// dispatched, never a failed-but-created Job. A zero-match dispatch is a 422
+// no_nodes_matched refusal, so every 200 dispatch carries a job_id. Results
 // is always rendered as an array, never null.
 type executionResponse struct {
 	JobID   string          `json:"job_id,omitempty"`
@@ -343,8 +344,9 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 		writeExecError(w, err)
 		return
 	}
-	// Zero matched Nodes: no Job was created, so there is nothing to re-read
-	// and no job_id to report (#207/#253) — an explicit empty result set.
+	// *capability.Service can never reach this branch: a zero-match Selector
+	// is refused as no_nodes_matched before Run returns. It exists only so an
+	// out-of-contract Executor can't index an empty slice below.
 	if len(nodeResults) == 0 {
 		writeJSON(w, http.StatusOK, executionResponse{Results: []perNodeResult{}})
 		return
@@ -422,6 +424,10 @@ func resolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
 //   - Blast cap       → 422 Unprocessable Content: well-formed and authorized,
 //     rejected by a guardrail on the resolved fan-out (ADR-0004/0012). The
 //     error text already states matched/cap/class.
+//   - No nodes matched → 422 Unprocessable Content: well-formed and
+//     authorized, refused on the resolved fan-out (zero Nodes) before any
+//     Job exists. Title "no nodes matched" is what distinguishes it from the
+//     cap's 422; detail carries no_nodes_matched and the canonical Selector.
 //   - Unauthorized    → 403 Forbidden: the role ladder refused (authz.RoleGate)
 //     — an operator reaching for Raw Exec lands here.
 //   - anything else   → 500.
@@ -439,6 +445,14 @@ func writeExecError(w http.ResponseWriter, err error) {
 		writeProblem(w, http.StatusUnprocessableEntity, "blast radius cap exceeded", capErr.Error())
 		return
 	}
+	var nnmErr *capability.NoNodesMatchedError
+	if errors.As(err, &nnmErr) {
+		// err itself, not just the unwrapped NoNodesMatchedError: a joined
+		// audit-write failure must stay visible to the caller (errors.As
+		// still finds the type on the joined err).
+		writeProblem(w, http.StatusUnprocessableEntity, "no nodes matched", err.Error())
+		return
+	}
 	if errors.Is(err, authz.ErrUnauthorized) {
 		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
 		return
@@ -447,9 +461,15 @@ func writeExecError(w http.ResponseWriter, err error) {
 }
 
 // renderPlan renders a capability.PlanResult, verdicts sorted by NodeID for a
-// stable response. would_be_rejected reports the cap rejection in preference to
-// the Freeze when both apply: an over-cap Plan never ran its verdict fan-out at
-// all (Verdicts is empty), so it is the more informative reason.
+// stable response. would_be_rejected reports pr.NoNodesMatched first (reason
+// "no_nodes_matched") — a zero match is reported first because Verdicts is
+// empty and nothing would dispatch even after a Freeze lifted, the same "the
+// reason nothing was asked" rule that already puts exceeds_cap ahead of
+// frozen; zero-match and over-cap cannot occur together under BlastCap, whose
+// caps are clamped positive. Absent that it reports the cap rejection in
+// preference to the Freeze when both apply: an over-cap Plan never ran its
+// verdict fan-out at all (Verdicts is empty), so it is the more informative
+// reason.
 func renderPlan(pr capability.PlanResult) planResponse {
 	verdicts := make([]perNodeVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
@@ -465,6 +485,8 @@ func renderPlan(pr capability.PlanResult) planResponse {
 
 	out := planResponse{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
 	switch {
+	case pr.NoNodesMatched:
+		out.WouldBeRejected = &wouldBeRejected{Reason: "no_nodes_matched"}
 	case pr.CapExceeded != nil:
 		out.WouldBeRejected = &wouldBeRejected{
 			Reason:  "exceeds_cap",

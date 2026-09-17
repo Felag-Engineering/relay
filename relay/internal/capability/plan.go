@@ -19,6 +19,9 @@
 //     not learn per-Node deciding rules.
 //   - A Plan creates no Job, no Stage, no Task, no dedup entry, and is
 //     audited as a distinct AuditKindPlan (seams.go), never AuditKindDispatch.
+//   - A Selector matching no Nodes is REPORTED (PlanResult.NoNodesMatched),
+//     never refused, while Run refuses the same condition as
+//     no_nodes_matched (ADR-0011).
 package capability
 
 import (
@@ -78,12 +81,17 @@ type planResult struct {
 // is skipped rather than probing an unbounded fleet. Frozen is advisory: it
 // reports that real dispatch would currently be refused (ADR-0013), but the
 // Plan still ran its queries — Frozen and a populated Verdicts are not
-// mutually exclusive.
+// mutually exclusive. NoNodesMatched is true when the Selector resolved to
+// zero Nodes. A real Run would refuse that as no_nodes_matched, and a Policy
+// preflight reports it as data instead (ADR-0011). Verdicts is then empty
+// because there was no Node to ask. Like Frozen it is advisory, and it is
+// never an error.
 type PlanResult struct {
-	Matched     int
-	Frozen      bool
-	CapExceeded *CapExceededError
-	Verdicts    []NodeVerdict
+	Matched        int
+	Frozen         bool
+	CapExceeded    *CapExceededError
+	NoNodesMatched bool
+	Verdicts       []NodeVerdict
 }
 
 // query implements dispatcher: for each of d's matched Nodes, ask the
@@ -135,13 +143,16 @@ func (e *jobEngine) query(ctx context.Context, d dispatch) (planResult, error) {
 //  2. authorize p against act/sel — GATES (returns an error, audited as a
 //     refusal): a caller not permitted to ASK must not learn per-Node
 //     deciding rules (invariant 3).
-//  3. read Frozen — advisory only; a read error is swallowed (never fails
+//  3. note whether the Selector matched no Nodes — advisory only, reported
+//     as NoNodesMatched; Run refuses the same condition as no_nodes_matched,
+//     after authorization, so a Policy preflight and a real run agree.
+//  4. read Frozen — advisory only; a read error is swallowed (never fails
 //     the Plan) since Frozen here is informational, not a guardrail.
-//  4. check the blast cap — reported as CapExceeded data, not an error; the
+//  5. check the blast cap — reported as CapExceeded data, not an error; the
 //     query fan-out is skipped in that case (real dispatch would touch
 //     nothing over-cap, so there is nothing useful to probe).
-//  5. query every matched Node through the sealed dispatcher seam.
-//  6. audit as AuditKindPlan — Principal/Selector/Action only, no
+//  6. query every matched Node through the sealed dispatcher seam.
+//  7. audit as AuditKindPlan — Principal/Selector/Action only, no
 //     JobID/Results (no Job/Task rows were ever created).
 func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.Action) (PlanResult, error) {
 	nodes := sel.Resolve(s.reg, s.stateEval())
@@ -150,16 +161,18 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 		return PlanResult{}, s.recordRefusal(ctx, p, sel, act, RefusalUnauthorized, err)
 	}
 
+	noMatch := len(nodes) == 0
+
 	frozen, _ := s.freeze.Frozen(ctx)
 
 	if capErr := s.cap.Check(act.RiskClass, len(nodes)); capErr != nil {
 		var ce *CapExceededError
 		errors.As(capErr, &ce)
 		if err := s.audit.Record(ctx, AuditEntry{Kind: AuditKindPlan, Principal: p, Selector: sel, Action: act, Asserted: AssertionsFromContext(ctx)}); err != nil {
-			return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce},
+			return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch},
 				fmt.Errorf("capability: record audit entry: %w", err)
 		}
-		return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce}, nil
+		return PlanResult{Matched: len(nodes), Frozen: frozen, CapExceeded: ce, NoNodesMatched: noMatch}, nil
 	}
 
 	pr, err := s.disp.query(ctx, newDispatch(p, sel, nodes, act))
@@ -174,7 +187,7 @@ func (s *Service) Plan(ctx context.Context, p Principal, sel Selector, act jobs.
 	}
 
 	if joined := errors.Join(err, auditErr); joined != nil {
-		return PlanResult{Matched: len(nodes), Frozen: frozen, Verdicts: pr.verdicts}, joined
+		return PlanResult{Matched: len(nodes), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: pr.verdicts}, joined
 	}
-	return PlanResult{Matched: len(nodes), Frozen: frozen, Verdicts: pr.verdicts}, nil
+	return PlanResult{Matched: len(nodes), Frozen: frozen, NoNodesMatched: noMatch, Verdicts: pr.verdicts}, nil
 }

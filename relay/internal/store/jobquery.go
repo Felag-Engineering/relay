@@ -56,8 +56,9 @@ func jobOutcomeSumColumns() []string {
 // returns the statement and the arguments bound INSIDE it, which precede
 // every WHERE/cursor/limit argument in the text.
 //
-// Both joins are LEFT, deliberately: a zero-Task Job (fan-out matched
-// nothing) has no row in the tasks aggregate, and an IN-FLIGHT Job has no
+// Both joins are LEFT, deliberately: a zero-Task Job (a historical row from
+// before #571, when a zero-match dispatch still created one) has no row in
+// the tasks aggregate, and an IN-FLIGHT Job has no
 // audit row yet at all — capability/service.go's dispatcher writes the audit
 // record only after disp.run returns (capability/service.go's AuditSink.Record
 // call happens after dispatch, not before). An INNER JOIN would make either
@@ -136,8 +137,9 @@ LEFT JOIN (
 
 // jobOutcomeColumnRefs renders "COALESCE(t.o0, 0), COALESCE(t.o1, 0), ..."
 // for the outer SELECT — the inner aggregate's SUM is NULL only when a Job
-// has no matching tasks row at all (the zero-Task case), which COALESCE
-// turns into a truthful zero rather than a NULL Outcome count.
+// has no matching tasks row at all (the zero-Task case, a historical row
+// from before #571), which COALESCE turns into a truthful zero rather than a
+// NULL Outcome count.
 func jobOutcomeColumnRefs() []string {
 	refs := make([]string, len(jobOutcomeOrder))
 	for i := range jobOutcomeOrder {

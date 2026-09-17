@@ -317,6 +317,67 @@ func TestPlanMode_OverCapReportsWouldBeRejectedNotAnError(t *testing.T) {
 	}
 }
 
+// A zero-match Policy preflight reports would_be_rejected{no_nodes_matched}
+// INSIDE a 200 response rather than erroring — the same guardrail-reports-
+// not-refuses posture as the over-cap case (ADR-0011), for both execution
+// routes.
+func TestPlanMode_ZeroMatchReportsWouldBeRejectedNotAnError(t *testing.T) {
+	exec := &fakeExecutor{planResult: capability.PlanResult{Matched: 0, NoNodesMatched: true}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+	for _, rt := range []struct {
+		path string
+		body any
+	}{
+		{"/api/v1/operations", runOperationRequest{Operation: "system.facts", Plan: true}},
+		{"/api/v1/raw-exec", rawExecRequest{Argv: []string{"/bin/true"}, Plan: true}},
+	} {
+		rec := do(t, h, http.MethodPost, rt.path, rt.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 (a zero-match Policy preflight is a successful query); body %s", rt.path, rec.Code, rec.Body.String())
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: decode: %v", rt.path, err)
+		}
+		if _, present := raw["job_id"]; present {
+			t.Errorf("%s: plan response carries a job_id; a Plan creates no Job", rt.path)
+		}
+		if _, present := raw["verdicts"]; !present {
+			t.Errorf("%s: plan response has no verdicts key, want an explicit empty array", rt.path)
+		}
+		var plan planResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &plan); err != nil {
+			t.Fatalf("%s: decode plan: %v", rt.path, err)
+		}
+		if len(plan.Verdicts) != 0 {
+			t.Errorf("%s: plan.verdicts = %+v, want empty (no Node to ask)", rt.path, plan.Verdicts)
+		}
+		if plan.WouldBeRejected == nil || plan.WouldBeRejected.Reason != "no_nodes_matched" {
+			t.Fatalf("%s: would_be_rejected = %+v, want {reason: no_nodes_matched}", rt.path, plan.WouldBeRejected)
+		}
+	}
+}
+
+// TestRenderPlan_NoNodesMatchedTakesPrecedence is #571's would_be_rejected
+// precedence line, the Control API twin of the MCP test of the same name:
+// NoNodesMatched wins over Frozen, and Matched/Cap/Class stay zero since
+// no_nodes_matched carries neither.
+func TestRenderPlan_NoNodesMatchedTakesPrecedence(t *testing.T) {
+	both := renderPlan(capability.PlanResult{NoNodesMatched: true, Frozen: true})
+	if both.WouldBeRejected == nil || both.WouldBeRejected.Reason != "no_nodes_matched" {
+		t.Fatalf("renderPlan(NoNodesMatched+Frozen).WouldBeRejected = %+v, want {reason: no_nodes_matched}", both.WouldBeRejected)
+	}
+	if both.WouldBeRejected.Matched != 0 || both.WouldBeRejected.Cap != 0 || both.WouldBeRejected.Class != "" {
+		t.Errorf("renderPlan(NoNodesMatched+Frozen).WouldBeRejected = %+v, want Matched/Cap/Class all zero", both.WouldBeRejected)
+	}
+
+	frozenOnly := renderPlan(capability.PlanResult{Frozen: true})
+	if frozenOnly.WouldBeRejected == nil || frozenOnly.WouldBeRejected.Reason != "frozen" {
+		t.Fatalf("renderPlan(Frozen only).WouldBeRejected = %+v, want {reason: frozen}", frozenOnly.WouldBeRejected)
+	}
+}
+
 // -----------------------------------------------------------------------
 // Refusal rendering: each capability-layer refusal gets a truthful status.
 // -----------------------------------------------------------------------
@@ -340,6 +401,12 @@ func TestExecutionRefusals_RenderTruthfulStatuses(t *testing.T) {
 			want:    http.StatusUnprocessableEntity,
 			wantSub: "cap",
 		},
+		{
+			name:    "no nodes matched is a guardrail rejection of a well-formed request",
+			runErr:  &capability.NoNodesMatchedError{Selector: "node:role=db"},
+			want:    http.StatusUnprocessableEntity,
+			wantSub: "no_nodes_matched",
+		},
 	}
 
 	for _, tt := range tests {
@@ -359,6 +426,31 @@ func TestExecutionRefusals_RenderTruthfulStatuses(t *testing.T) {
 				t.Errorf("Content-Type = %q, want application/problem+json", ct)
 			}
 		})
+	}
+}
+
+// TestRunOperation_NoNodesMatchedIs422WithTitleAndSelector decodes the
+// problem body: title distinguishes the no-Nodes-matched 422 from the cap's
+// 422 (TestExecutionRefusals_RenderTruthfulStatuses's "cap" case), and detail
+// carries the canonical Selector so a typo is visible.
+func TestRunOperation_NoNodesMatchedIs422WithTitleAndSelector(t *testing.T) {
+	exec := &fakeExecutor{runErr: &capability.NoNodesMatchedError{Selector: "node:role=db"}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations",
+		runOperationRequest{Operation: "system.facts", Selector: "node:role=db"})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422; body %s", rec.Code, rec.Body.String())
+	}
+	var p problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Title != "no nodes matched" {
+		t.Errorf("title = %q, want %q", p.Title, "no nodes matched")
+	}
+	if !strings.Contains(p.Detail, "node:role=db") {
+		t.Errorf("detail = %q, want it to contain the Selector %q", p.Detail, "node:role=db")
 	}
 }
 
@@ -568,8 +660,8 @@ func TestExecutionResponse_ExitCodeAndJobIDShape(t *testing.T) {
 		}
 	})
 
-	t.Run("zero-match dispatch omits job_id and renders an empty array", func(t *testing.T) {
-		exec := &fakeExecutor{runResults: nil} // no Node matched -> no Job created
+	t.Run("an Executor returning no results renders no job_id and an empty array", func(t *testing.T) {
+		exec := &fakeExecutor{runResults: nil} // out-of-contract: *capability.Service refuses zero-match as no_nodes_matched
 		h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
 
 		rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})

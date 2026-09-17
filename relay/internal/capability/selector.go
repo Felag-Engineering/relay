@@ -381,3 +381,24 @@ func (sel Selector) Resolve(reg registry.Repository, ev StateEval) []registry.No
 	}
 	return matched
 }
+
+// NoNodesMatchedError is returned by Service.Run when the Selector resolves to
+// zero Nodes. It is exported and typed so a surface recognises it via
+// errors.As without string-matching (mirrors FrozenError, seams.go, and
+// CapExceededError, caps.go). Selector is the Selector's canonical form
+// (Selector.String()) — the rendering ParseSelector round-trips and the audit
+// trail records — so a typo in a key or value is visible. It is not
+// byte-for-byte the caller's input: whitespace around terms is normalised
+// (term order is preserved).
+type NoNodesMatchedError struct {
+	Selector string
+}
+
+func (e *NoNodesMatchedError) Error() string {
+	if e.Selector != "" {
+		return fmt.Sprintf("capability: dispatch refused: no_nodes_matched: the Selector %q matched no Nodes; "+
+			"nothing was dispatched and no Job was created. Check the Selector against the Nodes' labels", e.Selector)
+	}
+	return "capability: dispatch refused: no_nodes_matched: the empty Selector matches every Node, and the " +
+		"registry has none; nothing was dispatched and no Job was created"
+}

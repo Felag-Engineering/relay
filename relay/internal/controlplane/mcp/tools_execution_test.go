@@ -39,13 +39,16 @@ func TestResolveTimeoutSeconds_RejectsOutOfRange(t *testing.T) {
 	}
 }
 
-// TestRunOrPlanOutput_ZeroMatchOmitsJobID is #207/#253's job_id contract
+// TestRunOrPlanOutput_NoJobOmitsJobID is #207/#253's job_id contract
 // (deliberately superseding #119's byte-identical-to-#118 freeze, which
-// pinned {"job_id":"","results":[]} here): a zero-match plan=false run
-// created no Job, so it renders NO job_id key at all — an empty-string id
-// read as a missing/failed id. results stays an explicit empty array, never
-// null and never a bare {}.
-func TestRunOrPlanOutput_ZeroMatchOmitsJobID(t *testing.T) {
+// pinned {"job_id":"","results":[]} here): the test pins how an output with
+// no Job serialises (the shape parks build). A zero-match dispatch no longer
+// reaches it, because the capability layer refuses it as no_nodes_matched
+// before any Job exists (see TestMCP_ZeroMatch_RefusesBothExecutionTools). An
+// output with no Job renders NO job_id key at all — an empty-string id read
+// as a missing/failed id. results stays an explicit empty array, never null
+// and never a bare {}.
+func TestRunOrPlanOutput_NoJobOmitsJobID(t *testing.T) {
 	out := RunOrPlanOutput{Results: []PerNodeResult{}}
 	b, err := json.Marshal(out)
 	if err != nil {
@@ -53,7 +56,7 @@ func TestRunOrPlanOutput_ZeroMatchOmitsJobID(t *testing.T) {
 	}
 	want := `{"results":[]}`
 	if string(b) != want {
-		t.Errorf("json.Marshal(zero-match RunOrPlanOutput) = %s, want %s (no Job was created, so no job_id key)", b, want)
+		t.Errorf("json.Marshal(no-Job RunOrPlanOutput) = %s, want %s (no Job, so no job_id key)", b, want)
 	}
 }
 
@@ -185,6 +188,26 @@ func TestRenderPlan_CarriesOutdatedIntoPerNodeVerdict(t *testing.T) {
 	}
 	if byNode["node-current"].Outdated {
 		t.Error(`renderPlan: node-current PerNodeVerdict.Outdated = true, want false`)
+	}
+}
+
+// TestRenderPlan_NoNodesMatchedTakesPrecedence is #571's would_be_rejected
+// precedence line: NoNodesMatched wins over Frozen (the same "the reason
+// nothing was asked" rule renderPlan already applies to exceeds_cap over
+// frozen), and Matched/Cap/Class stay zero since no_nodes_matched carries
+// neither.
+func TestRenderPlan_NoNodesMatchedTakesPrecedence(t *testing.T) {
+	both := renderPlan(capability.PlanResult{NoNodesMatched: true, Frozen: true})
+	if both.WouldBeRejected == nil || both.WouldBeRejected.Reason != "no_nodes_matched" {
+		t.Fatalf("renderPlan(NoNodesMatched+Frozen).WouldBeRejected = %+v, want {reason: no_nodes_matched}", both.WouldBeRejected)
+	}
+	if both.WouldBeRejected.Matched != 0 || both.WouldBeRejected.Cap != 0 || both.WouldBeRejected.Class != "" {
+		t.Errorf("renderPlan(NoNodesMatched+Frozen).WouldBeRejected = %+v, want Matched/Cap/Class all zero", both.WouldBeRejected)
+	}
+
+	frozenOnly := renderPlan(capability.PlanResult{Frozen: true})
+	if frozenOnly.WouldBeRejected == nil || frozenOnly.WouldBeRejected.Reason != "frozen" {
+		t.Fatalf("renderPlan(Frozen only).WouldBeRejected = %+v, want {reason: frozen}", frozenOnly.WouldBeRejected)
 	}
 }
 
@@ -332,7 +355,7 @@ func TestDispatchAndRender_ParkIsAResultNotAnError(t *testing.T) {
 	}
 
 	if out.PendingApproval == nil {
-		t.Fatal("no pending_approval in the result; the caller cannot tell a park from a zero-match dispatch")
+		t.Fatal("no pending_approval in the result; the caller cannot tell a park from an empty result")
 	}
 	pa := out.PendingApproval
 

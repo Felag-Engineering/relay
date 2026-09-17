@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -216,6 +217,167 @@ func TestRunCapCheckDeniedShortCircuits(t *testing.T) {
 	}
 	if audit.entry.Reason == "" {
 		t.Error("AuditEntry.Reason is empty, want the CapChecker error's message")
+	}
+}
+
+// TestRunZeroMatchRefusedBeforeAnyJob is #571's core acceptance line: a
+// Selector resolving to zero Nodes is refused, once, in the capability layer
+// — authorized but never dispatched, never capacity-checked — and audited as
+// a refusal rather than a job-level dispatch row.
+func TestRunZeroMatchRefusedBeforeAnyJob(t *testing.T) {
+	reg := seedOneNode(t)
+	authz := &spyAuthorizer{}
+	capChecker := &spyCapChecker{}
+	disp := &spyDispatcher{}
+	audit := &spyAuditSink{}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
+
+	principal := Principal{Account: "alice"}
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	results, err := svc.Run(context.Background(), principal, sel, act)
+	if results != nil {
+		t.Errorf("Run() results = %+v, want nil", results)
+	}
+	var nnmErr *NoNodesMatchedError
+	if !errors.As(err, &nnmErr) {
+		t.Fatalf("Run() error = %v, want errors.As to find a *NoNodesMatchedError", err)
+	}
+	if nnmErr.Selector != "node:role=db" {
+		t.Errorf("NoNodesMatchedError.Selector = %q, want %q", nnmErr.Selector, "node:role=db")
+	}
+	if !strings.Contains(err.Error(), "no_nodes_matched") {
+		t.Errorf("Run() error = %q, want it to contain %q", err.Error(), "no_nodes_matched")
+	}
+	if !strings.Contains(err.Error(), "node:role=db") {
+		t.Errorf("Run() error = %q, want it to contain the Selector %q", err.Error(), "node:role=db")
+	}
+	if !authz.called {
+		t.Error("Authorizer was not called — the zero-match refusal must come AFTER authorization")
+	}
+	if capChecker.called {
+		t.Error("CapChecker must not be called on a zero-match Selector")
+	}
+	if disp.called {
+		t.Error("dispatcher must not be called on a zero-match Selector")
+	}
+
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit.entries = %+v, want exactly one entry", audit.entries)
+	}
+	entry := audit.entries[0]
+	if entry.Kind != AuditKindRefusal {
+		t.Errorf("AuditEntry.Kind = %v, want AuditKindRefusal", entry.Kind)
+	}
+	if entry.Principal != principal {
+		t.Errorf("AuditEntry.Principal = %+v, want %+v", entry.Principal, principal)
+	}
+	if !reflect.DeepEqual(entry.Selector, sel) {
+		t.Errorf("AuditEntry.Selector = %+v, want %+v", entry.Selector, sel)
+	}
+	if entry.Action.OperationName != act.OperationName {
+		t.Errorf("AuditEntry.Action.OperationName = %q, want %q", entry.Action.OperationName, act.OperationName)
+	}
+	if entry.JobID != "" {
+		t.Errorf("AuditEntry.JobID = %q, want empty (no Job was ever created)", entry.JobID)
+	}
+	if entry.Results != nil {
+		t.Errorf("AuditEntry.Results = %+v, want nil", entry.Results)
+	}
+	if !strings.Contains(entry.Reason, "no_nodes_matched") {
+		t.Errorf("AuditEntry.Reason = %q, want it to contain %q", entry.Reason, "no_nodes_matched")
+	}
+}
+
+// TestRunZeroMatchCreatesNoJob proves the zero-match refusal happens before
+// any Job exists: CreateJob is never reached, so a later GetJob for the id
+// the (untouched) ID generator would have produced returns ErrJobNotFound,
+// and the Conduit is never touched.
+func TestRunZeroMatchCreatesNoJob(t *testing.T) {
+	reg := seedOneNode(t)
+	var log []string
+	conduit := newFakeConduit(&log)
+
+	jobsRepo, tasksRepo := testEngineStore(t)
+	audit := &spyAuditSink{}
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithExecution(jobsRepo, tasksRepo, conduit, WithExecNewID(sequentialIDs("id-"))),
+	)
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
+	var nnmErr *NoNodesMatchedError
+	if !errors.As(err, &nnmErr) {
+		t.Fatalf("Run() error = %v, want errors.As to find a *NoNodesMatchedError", err)
+	}
+
+	if _, err := jobsRepo.GetJob(context.Background(), "id-1"); !errors.Is(err, jobs.ErrJobNotFound) {
+		t.Errorf("jobsRepo.GetJob(id-1) error = %v, want ErrJobNotFound (CreateJob must never be called)", err)
+	}
+	if len(log) != 0 {
+		t.Errorf("Conduit was touched (log = %v), want no Dispatch/Query calls on a zero-match Run", log)
+	}
+}
+
+// TestRunZeroMatchUnauthorizedIsRefusedAsUnauthorized pins the ordering
+// decision: an unauthorized caller gets "unauthorized" whatever the fleet
+// holds, and never learns that its Selector matched no Node.
+func TestRunZeroMatchUnauthorizedIsRefusedAsUnauthorized(t *testing.T) {
+	reg := seedOneNode(t)
+	authz := &spyAuthorizer{err: errors.New("denied")}
+	capChecker := &spyCapChecker{}
+	disp := &spyDispatcher{}
+	audit := &spyAuditSink{}
+	svc := &Service{reg: reg, authz: authz, cap: capChecker, disp: disp, audit: audit, freeze: noopFreezeStore{}, metrics: noopMetricsSink{}}
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "db"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+
+	_, err := svc.Run(context.Background(), Principal{Account: "alice"}, sel, act)
+	var nnmErr *NoNodesMatchedError
+	if errors.As(err, &nnmErr) {
+		t.Fatalf("Run() error = %v, want errors.As NOT to find a *NoNodesMatchedError (authz must gate first)", err)
+	}
+	if len(audit.entries) != 1 {
+		t.Fatalf("audit.entries = %+v, want exactly one entry", audit.entries)
+	}
+	if audit.entries[0].Reason != "denied" {
+		t.Errorf("AuditEntry.Reason = %q, want %q", audit.entries[0].Reason, "denied")
+	}
+	if disp.called {
+		t.Error("dispatcher must not be called when Authorize fails")
+	}
+}
+
+// TestNoNodesMatchedErrorIsLegibleForAnEmptySelector checks both of
+// NoNodesMatchedError.Error()'s branches: a non-empty Selector renders it
+// verbatim, and an empty Selector (which matches every Node) gets its own
+// legible sentence rather than a bare "".
+func TestNoNodesMatchedErrorIsLegibleForAnEmptySelector(t *testing.T) {
+	nonEmpty := &NoNodesMatchedError{Selector: "node:role=db"}
+	if !strings.Contains(nonEmpty.Error(), "no_nodes_matched") {
+		t.Errorf("Error() = %q, want it to contain %q", nonEmpty.Error(), "no_nodes_matched")
+	}
+	if !strings.Contains(nonEmpty.Error(), "node:role=db") {
+		t.Errorf("Error() = %q, want it to contain the Selector", nonEmpty.Error())
+	}
+
+	empty := &NoNodesMatchedError{}
+	if !strings.Contains(empty.Error(), "no_nodes_matched") {
+		t.Errorf("Error() = %q, want it to contain %q", empty.Error(), "no_nodes_matched")
+	}
+	if !strings.Contains(empty.Error(), "empty Selector") {
+		t.Errorf("Error() = %q, want it to explain the empty Selector rather than render a bare \"\"", empty.Error())
+	}
+	if strings.Contains(empty.Error(), `""`) {
+		t.Errorf("Error() = %q, want no bare \"\" rendered for the empty Selector", empty.Error())
 	}
 }
 
