@@ -44,17 +44,40 @@ COPY --from=build \
     /src/daemon/target/x86_64-unknown-linux-musl/release/relay-daemon \
     /usr/local/bin/relay-daemon
 
-# Bake the Policy fixture in. COPY lands it owned by root:root (UID/GID 0), which
-# satisfies the daemon's fail-closed owner check. The explicit chmod 0644 is
-# load-bearing: COPY preserves the host file's mode bits, and a dev laptop's
-# umask commonly leaves files group-writable — which the loader rejects (it
-# refuses any group/world-writable Policy). Forcing 0644 here makes the image
-# correct regardless of the builder's umask. Baking the Policy in — rather than
-# bind-mounting from the host, where the file would be owned by an unprivileged
-# user and rejected — is the ADR-0002 "Policy arrives with the image, never over
-# the wire" option.
-COPY docker/fixtures/policy.toml /etc/relay-daemon/policy.toml
-RUN chmod 0644 /etc/relay-daemon/policy.toml
+# Bake the Policy fixtures in. COPY --chmod lands each file owned by root:root
+# (UID/GID 0) with the mode forced in the same layer — load-bearing, not
+# style: a dev laptop's umask commonly leaves a checked-out file
+# group-writable, which the daemon's fail-closed loader rejects (it refuses
+# any group/world-writable Policy). `--chmod=` gives that guarantee in one
+# layer, exactly as docker/relay.Dockerfile already does. Baking the Policy in
+# — rather than bind-mounting from the host, where the file would be owned by
+# an unprivileged user and rejected — is the ADR-0002 "Policy arrives with the
+# image, never over the wire" option.
+#
+# There are TWO Policy fixtures, both baked into this one image; compose
+# picks which one each daemon reads via RELAY_POLICY_PATH (docker-compose.yml)
+# — the `role=web` Nodes read policy.web.toml (which carries the demo
+# service's raw-exec allow), the `role=db` Node reads policy.db.toml (which
+# omits it, so deny-by-default refuses the repair there). The daemon has no
+# Policy include mechanism, so divergence means two files rather than one.
+COPY --chmod=0644 docker/fixtures/policy.web.toml /etc/relay-daemon/policy.web.toml
+COPY --chmod=0644 docker/fixtures/policy.db.toml  /etc/relay-daemon/policy.db.toml
+
+# The demo Template pack (#389) — loaded and Policy-enforced on every Node
+# (one image, one vocabulary; only Policy diverges), but not yet dispatchable
+# (#626). The template loader is fail-closed and WHOLE-SET exactly like the
+# Policy loader (TemplateSet::load, ADR-0002's trust root applies to templates
+# verbatim), which is why the mode is forced here exactly as for the Policy
+# above — a bad mode on this one file would empty the Node's entire template
+# vocabulary rather than merely dropping this pack.
+COPY --chmod=0644 docker/fixtures/templates.d/relay-demo/catalog.toml /etc/relay-daemon/templates.d/relay-demo/catalog.toml
+
+# The demo service (#389): a root-owned script that manages a real
+# `busybox httpd` on the `role=web` Nodes (docker/daemon-entrypoint.sh starts
+# it), reachable today only through the Raw Exec allow in policy.web.toml.
+COPY --chmod=0755 docker/fixtures/dev-fleet-service /usr/local/bin/dev-fleet-service
+COPY --chmod=0644 docker/fixtures/www/index.html /srv/dev-fleet-service/www/index.html
+RUN mkdir -p /var/lib/dev-fleet-service && chmod 0755 /var/lib/dev-fleet-service
 
 # busybox ships no /etc/os-release; bake one in so the documented
 # list_operations file.read example (path=/etc/os-release) succeeds on the

@@ -1,0 +1,218 @@
+#!/bin/sh
+# dev-fleet-service — the dev fleet's real, observable demo service (#389).
+#
+# DEV-ONLY. Installed to /usr/local/bin/dev-fleet-service (root-owned, mode
+# 0755). The repo filename deliberately equals the installed basename: the
+# fixture Policy's `[raw_exec]` allow regex hardcodes this exact path, so
+# renaming this file means renaming the allow pattern, the template pack
+# bodies, and the `str::contains` guard in daemon/tests/dev_fleet_fixtures.rs
+# together (see "Ordering risk" in the implementation plan).
+#
+# Manages a real `busybox httpd` serving a real docroot on 127.0.0.1:8080.
+# Every success-or-down exit code below comes from an observed HTTP fetch of
+# that service, never from an assumption (option 1 — a fixture that fakes
+# success — is explicitly rejected; see docs/dev-fleet.md and issue #389).
+# (The one exception is the usage exit 2, which is reached before any probe.)
+#
+# Pid-reuse edge (no code change, just a note for whoever revisits this):
+# `restart` kills whatever pid is recorded in $PIDFILE. If that httpd was
+# already killed out of band (#622) and its pid got reused by an unrelated
+# process before `restart` ran, this would SIGTERM that unrelated process
+# instead. Vanishingly unlikely in a demo container, and harmless to the
+# exit-code contract either way — wait_down/wait_up still decide success or
+# failure from the probe, never from whether the kill "worked".
+set -u
+
+# Literal PATH, no environment reads: the daemon's executor calls env_clear()
+# and sets a fixed PATH before exec (see SAFE_CHILD_PATH in
+# daemon/src/executor.rs), so this script sets the identical PATH itself —
+# the entrypoint call site and the Task call site then behave identically.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+BIND=127.0.0.1
+PORT=8080
+DOCROOT=/srv/dev-fleet-service/www
+STATE_DIR=/var/lib/dev-fleet-service
+PIDFILE="$STATE_DIR/httpd.pid"
+STATEFILE="$STATE_DIR/state"
+LOG="$STATE_DIR/httpd.log"
+URL="http://127.0.0.1:8080/index.html"
+
+# --- Timing: the arithmetic, and why it must not be raised casually --------
+#
+#   wait_down <= DOWN_TRIES x (PROBE_TIMEOUT + 1s sleep) = 3 x 2s =  6s
+#   wait_up   <= UP_TRIES   x (PROBE_TIMEOUT + 1s sleep) = 6 x 2s = 12s
+#   kill + spawn + mkdir + date + two small writes                 ~  1s
+#   -----------------------------------------------------------------
+#   restart worst case                                             ~ 19s
+#
+# The budget this must fit inside is *at most 30s and usually less*: the
+# daemon's DEFAULT_TIMEOUT is 30s, but dispatch_scheduled_with_runner runs ONE
+# clock from received_at and hands the executor only the REMAINING budget —
+# dedup, the scheduler permit wait (mutates are serialised), and queueing all
+# come out of the same 30s before this script ever starts.
+#
+# A probe cost is not free: against a HUNG listener (as opposed to a refused
+# connection, which returns instantly) each probe costs up to PROBE_TIMEOUT.
+# That is why -T 1 and small try counts, not -T 2 with generous counts.
+#
+# And an over-budget restart does not merely report `timeout` — it leaves the
+# demo service DOWN. On expiry the executor sets kill_needed and calls
+# kill_group_graceful(pgid), which SIGTERMs and then SIGKILLs the WHOLE
+# PROCESS GROUP; process_group(0) put the httpd this script just spawned into
+# that group. A restart that overruns therefore kills the very service it was
+# repairing — the demo failing on stage in exactly the way option 3 was
+# chosen to avoid. DO NOT raise UP_TRIES "to be safe" without redoing this
+# arithmetic against received_at.
+#
+# Typical cost is far below the worst case: after a kill the first probe is
+# refused instantly, and httpd binds its socket within milliseconds of exec,
+# so a real restart completes in well under a second. The try counts exist
+# only for pathological cases.
+#
+# setsid was considered and rejected: moving the spawned httpd out of this
+# script's process group would make it immune to the group kill, but it adds
+# a third applet dependency, and it would also make a legitimate cancel leave
+# httpd running — less honest than "cancel kills what the Task started". The
+# sizing above is the mitigation instead.
+PROBE_TIMEOUT=1
+DOWN_TRIES=3
+UP_TRIES=6
+
+# probe(): wget's exit status is the ONLY liveness oracle in this script.
+# Rationale: the daemon is PID 1 in these containers and does not reap
+# foreign children, so a killed httpd can linger as a zombie; pidof/kill -0
+# would report a corpse as alive, while a zombie cannot answer HTTP. Nothing
+# in this script ever infers liveness from a pid.
+probe() {
+    wget -q -O /dev/null -T "$PROBE_TIMEOUT" "$URL"
+}
+
+wait_up() {
+    i=0
+    while [ "$i" -lt "$UP_TRIES" ]; do
+        if probe; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    return 1
+}
+
+wait_down() {
+    i=0
+    while [ "$i" -lt "$DOWN_TRIES" ]; do
+        if ! probe; then
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    return 1
+}
+
+# spawn(): -f (foreground) + & is what makes $! the real httpd pid instead of
+# a self-daemonising parent that has already exited.
+#
+# The stdio redirection below is load-bearing, not style — do not tidy it
+# away. The executor carries a KNOWN LIMITATION (the comment above the
+# out_task.await / err_task.await drains in execute()): a backgrounded
+# process that inherits the Task's stdout/stderr pipe fds blocks those drains
+# until it exits, i.e. the Task hangs to timeout. Redirecting to $LOG rather
+# than /dev/null satisfies that constraint *and* keeps a diagnostic that
+# file.read can retrieve.
+spawn() {
+    mkdir -p "$STATE_DIR"
+    httpd -f -p "$BIND:$PORT" -h "$DOCROOT" </dev/null >>"$LOG" 2>&1 &
+    echo $! >"$PIDFILE"
+}
+
+# record(): the independent read. Called only after an observed successful
+# probe. pid and started_epoch both change across a restart, which is what
+# makes a `file.read` of $STATEFILE prove a mutate really happened.
+#
+# Deliberately no `state=` key here: this file is never rewritten after a
+# probe-verified start, so a stale `state=running` would go on claiming
+# liveness after an out-of-band kill (#622) — exactly the kind of assertion
+# this fixture exists to reject. pid/port/started_epoch are all this file
+# ever needs to say, and none of them can lie about the present: they are
+# only ever a record of the last observed successful probe, never read back
+# by this script as a liveness signal.
+record() {
+    mkdir -p "$STATE_DIR"
+    pid=$(cat "$PIDFILE" 2>/dev/null || echo unknown)
+    {
+        echo "pid=$pid"
+        echo "port=$PORT"
+        echo "started_epoch=$(date +%s)"
+    } >"$STATEFILE"
+}
+
+cmd_status() {
+    if probe; then
+        pid=$(cat "$PIDFILE" 2>/dev/null || echo unknown)
+        echo "state=running pid=$pid port=$PORT"
+        exit 0
+    else
+        echo "state=down port=$PORT"
+        exit 3
+    fi
+}
+
+cmd_start() {
+    if probe; then
+        echo "state=running pid=$(cat "$PIDFILE" 2>/dev/null || echo unknown) port=$PORT"
+        exit 0
+    fi
+    spawn
+    if wait_up; then
+        record
+        exit 0
+    fi
+    echo "dev-fleet-service: start failed; see $LOG" >&2
+    exit 1
+}
+
+# There is deliberately no `stop` subcommand at all — not merely no Policy
+# allow for one. The agent must be able to repair the fleet and never to
+# break it; the fault this fixture exists to demonstrate is injected out of
+# band (#622). Both this script and the Policy allow regex say the same
+# thing by omission.
+cmd_restart() {
+    if [ -f "$PIDFILE" ]; then
+        kill "$(cat "$PIDFILE")" 2>/dev/null
+    fi
+    if ! wait_down; then
+        echo "dev-fleet-service: could not stop the running instance" >&2
+        exit 1
+    fi
+    spawn
+    if wait_up; then
+        record
+        exit 0
+    fi
+    echo "dev-fleet-service: restart failed; see $LOG" >&2
+    exit 1
+}
+
+usage() {
+    echo "usage: dev-fleet-service {start|restart|status}" >&2
+    exit 2
+}
+
+case "${1:-}" in
+    status)
+        cmd_status
+        ;;
+    start)
+        cmd_start
+        ;;
+    restart)
+        cmd_restart
+        ;;
+    *)
+        usage
+        ;;
+esac

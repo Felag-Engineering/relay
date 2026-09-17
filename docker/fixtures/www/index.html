@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>dev-fleet-service (DEV-ONLY)</title></head>
+<body>
+<h1>Relay dev-fleet demo service</h1>
+<p>
+  This is a DEV-ONLY fixture (issue #389, docs/dev-fleet.md). It is served by
+  a real <code>busybox httpd</code> on <code>127.0.0.1:8080</code>, managed by
+  <code>/usr/local/bin/dev-fleet-service</code>. Fetching this file is exactly
+  what <code>dev-fleet-service status</code> observes: there is no other
+  liveness check, so a successful fetch of this page is the only thing that
+  can make a `start`, `restart`, or `status` call report success.
+</p>
+</body>
+</html>
