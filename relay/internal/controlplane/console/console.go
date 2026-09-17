@@ -136,10 +136,12 @@ type Deps struct {
 
 	// Cancel is the Console's one write seam (#595, cancel.go): the same
 	// capability.Service.CancelJob the Control API and MCP call. The role
-	// floor (operator, for any Job) and the audit row are the capability
-	// layer's; this package only renders what it decided. Nil means the
-	// control does not render and the route answers unavailable — the same
-	// "not wired" posture every other seam on this Deps takes.
+	// floor is operator; the scope beyond that floor differs by Account kind
+	// (human: any Job, machine: only a Job it requested — #614). Both the
+	// floor and that scope, plus the audit row, are the capability layer's;
+	// this package only renders what it decided. Nil means the control does
+	// not render and the route answers unavailable — the same "not wired"
+	// posture every other seam on this Deps takes.
 	Cancel JobCanceller
 }
 

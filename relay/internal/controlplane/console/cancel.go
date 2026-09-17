@@ -25,10 +25,13 @@ package console
 //
 // # Who decides
 //
-// The role floor (operator, for any Job — #595, execution.md §Cancellation)
-// and the audit row are the capability layer's, exactly as invariant 10
-// requires: this file renders what capability.Service.CancelJob decided, and
-// decides nothing itself.
+// The role floor is operator (#595, execution.md §Cancellation); the SCOPE
+// beyond that floor differs by Account kind — a human Account may cancel any
+// Job, a machine Account only a Job it requested (#614) — and that
+// distinction, like the floor itself, is decided in the capability layer,
+// not here. It and the audit row are the capability layer's, exactly as
+// invariant 10 requires: this file renders what capability.Service.CancelJob
+// decided, and decides nothing itself.
 
 import (
 	"context"
