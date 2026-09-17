@@ -668,6 +668,25 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 	return s.recordRefusal(ctx, p, Selector{}, jobs.Action{}, RefusalUnauthorized, refusalErr)
 }
 
+// ErrJobNotRequestedByCaller is CancelJob's refusal for a machine Account
+// asking to cancel a Job that is not its own (owner decision 2026-09-17,
+// execution.md §Cancellation, #614). Exported and typed so a surface can
+// recognize the refusal via errors.Is without string-matching (mirrors
+// FrozenError/CapExceededError).
+//
+// One message covers two different facts on purpose — "this Job was
+// requested by a different Account" and "this Job's requester is not
+// recorded at all" — and the caller must not be able to tell which. A Job's
+// requester is joined from the audit trail's dispatch row, written only
+// after the Job engine's own audit write (jobs.JobSummary's doc comment), so
+// a running Job usually has none; distinguishing "not recorded" from
+// "somebody else's" would let a machine Account learn that a Job it cannot
+// cancel exists and is still in flight, one bit at a time. Never inferred:
+// an unresolvable requester is refused exactly like a resolved one that
+// does not match.
+var ErrJobNotRequestedByCaller = errors.New(
+	"capability: cancel refused: this Job was not requested by the caller, or its requester is not recorded")
+
 // CancelJob stops jobID's Tasks (#101, ADR-0013): undispatched Tasks are
 // marked cancelled without ever being sent, in-flight Tasks are asked to
 // cancel over their Tunnels, and already-resolved Tasks keep their truthful
@@ -675,20 +694,25 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 // tasksRepo/Conduit stay inside the engine, mirroring how Run delegates to
 // s.disp.run.
 //
-// The floor is `operator`, for any Job — not only one the caller dispatched
-// — and not human-only (#595, execution.md §Cancellation, owner decision
-// 2026-09-14, #346). AuthorizeControl runs FIRST, before disp.cancel, so a
-// refused caller neither touches a Task nor learns whether the Job exists
-// (see TestCancelJobRefusalDoesNotRevealWhetherTheJobExists). It reads the
-// context with withoutAssertions, for the same reason Run and Plan do: an
-// authorization decision must never be swayed by caller-asserted
+// The floor is `operator` for every Account, human or machine — that half
+// is unchanged. What differs by Kind is the SCOPE (owner decision
+// 2026-09-17, execution.md §Cancellation, #614, narrowing #595's original
+// "any Job" reading): a human Account may still cancel any Job, but a
+// machine Account may cancel only a Job whose recorded requester is that
+// same Account — see authorizeMachineCancel. AuthorizeControl runs FIRST,
+// before disp.cancel, so a refused caller neither touches a Task nor learns
+// whether the Job exists (see TestCancelJobRefusalDoesNotRevealWhetherTheJobExists).
+// It reads the context with withoutAssertions, for the same reason Run and
+// Plan do: an authorization decision must never be swayed by caller-asserted
 // attribution (assertions.go).
 //
-// A refused cancel is recorded through refuseControl with the Principal and
-// the reason, and deliberately without the Job ID: the refusal precedes any
-// existence check, so the id is caller-authored text, and the trail's
-// job_id column is otherwise always a Relay-minted id that surfaces build
-// links from.
+// A refusal from the role floor is recorded through refuseControl with the
+// Principal and the reason, and deliberately without the Job ID: the
+// refusal precedes any existence check, so the id is caller-authored text,
+// and the trail's job_id column is otherwise always a Relay-minted id that
+// surfaces build links from. A refusal from the machine-scoping check is
+// recorded through refuseCancel instead, WITH the Job ID: by then s.jobQ has
+// already resolved jobID to a real Job, so recording it is safe.
 //
 // p is recorded via AuditSink.RecordCancel (v0.0.6 [5/8], owner DECISION 2):
 // cancellation is durably recorded on each affected Task via
@@ -708,6 +732,11 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 	if err := s.authz.AuthorizeControl(withoutAssertions(ctx), p, ControlCancelJob); err != nil {
 		return s.refuseControl(ctx, p, err)
 	}
+	if !p.Human() {
+		if err := s.authorizeMachineCancel(ctx, jobID, p.AccountID); err != nil {
+			return s.refuseCancel(ctx, p, jobID, err)
+		}
+	}
 	if err := s.disp.cancel(ctx, jobID); err != nil {
 		return err
 	}
@@ -720,4 +749,50 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 		s.jobEvents.RecordJob(JobEvent{Transition: JobCancelled, JobID: jobID, Principal: p})
 	}
 	return s.audit.RecordCancel(ctx, p, jobID)
+}
+
+// authorizeMachineCancel decides CancelJob's machine-Account scope (owner
+// decision 2026-09-17, execution.md §Cancellation, #614): may accountID
+// cancel jobID? It queries s.jobQ directly rather than through
+// Service.QueryJobs — this is an authorization decision, not a
+// caller-invoked read, so it must not append its own entry to the read-lane
+// trail (recordQueryRead); CancelJob's own refuseCancel/RecordCancel is what
+// gets recorded for it.
+//
+// Fail CLOSED, and identically, in every case a caller must not be able to
+// tell apart: s.jobQ unwired, the query itself failing, jobID matching no
+// Job, or a Job whose requester has not been joined from the audit trail yet
+// (#616 is unbuilt — until it lands, a still-running Job usually has none,
+// per jobs.JobSummary's doc comment) all return ErrJobNotRequestedByCaller,
+// the same value a resolved-but-mismatched requester returns. Never infer
+// ownership from anything short of an exact match.
+func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID string) error {
+	if s.jobQ == nil {
+		return ErrJobNotRequestedByCaller
+	}
+	page, err := s.jobQ.QueryJobs(ctx, JobFilter{JobID: jobID}, PageRequest{Limit: 1})
+	if err != nil || len(page.Jobs) != 1 {
+		return ErrJobNotRequestedByCaller
+	}
+	requester := page.Jobs[0].RequesterAccountID
+	if requester == "" || requester != accountID {
+		return ErrJobNotRequestedByCaller
+	}
+	return nil
+}
+
+// refuseCancel audits a CancelJob refusal from authorizeMachineCancel. It is
+// refuseControl's sibling for the one refusal CancelJob can attribute to a
+// real Job: by the time this is called, s.jobQ has already resolved jobID to
+// a Job that exists, so — unlike refuseControl's role-floor refusal, whose
+// id is unvalidated caller-authored text — recording it on the audit entry
+// is safe and matches every other Job-addressed audit row.
+func (s *Service) refuseCancel(ctx context.Context, p Principal, jobID string, refusalErr error) error {
+	s.metrics.IncRefusal(RefusalUnauthorized)
+	entry := AuditEntry{Kind: AuditKindRefusal, Principal: p, JobID: jobID, Reason: refusalErr.Error(), Asserted: AssertionsFromContext(ctx)}
+	var auditErr error
+	if err := s.audit.Record(ctx, entry); err != nil {
+		auditErr = fmt.Errorf("capability: record audit entry: %w", err)
+	}
+	return errors.Join(refusalErr, auditErr)
 }

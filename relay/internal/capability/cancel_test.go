@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestCancelJobStopsPendingSendsCancelToDispatchedLeavesResolved(t *testing.T
 	audit := &spyAuditSink{}
 	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
 
-	principal := Principal{Account: "alice", Role: "operator"}
+	principal := Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
@@ -135,7 +136,7 @@ func TestCancelJobUnknownJobReturnsErrJobNotFound(t *testing.T) {
 	audit := &spyAuditSink{}
 	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}}
 
-	err := svc.CancelJob(context.Background(), Principal{Account: "alice", Role: "operator"}, "job-does-not-exist")
+	err := svc.CancelJob(context.Background(), Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}, "job-does-not-exist")
 	if !errors.Is(err, jobs.ErrJobNotFound) {
 		t.Errorf("CancelJob(unknown) error = %v, want jobs.ErrJobNotFound", err)
 	}
@@ -234,7 +235,7 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, authz: authz}
 
 	ctx := WithAssertions(context.Background(), Assertions{OnBehalfOf: "ops-team"})
-	if err := svc.CancelJob(ctx, Principal{Account: "alice", Role: "operator"}, jobID); err != nil {
+	if err := svc.CancelJob(ctx, Principal{Account: "alice", Role: "operator", Kind: PrincipalKindHuman}, jobID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
 	if !authz.called {
@@ -242,5 +243,123 @@ func TestCancelJobAuthorizesWithoutAssertions(t *testing.T) {
 	}
 	if !authz.sawAssertions.IsZero() {
 		t.Errorf("AuthorizeControl saw caller-asserted attribution %+v — it must never be able to", authz.sawAssertions)
+	}
+}
+
+// machineCancelFixture builds a *Service wired for CancelJob's
+// machine-Account scoping tests below (owner decision 2026-09-17,
+// execution.md §Cancellation, #614): a real Job in the engine store, an
+// allow-all role-floor Authorizer (spyAuthorizer), and a spyJobQuery that
+// answers jobID's requester however the caller sets jobsResult. It mirrors
+// the other CancelJob fixtures in this file rather than New(), so the test
+// stays a white-box exercise of authorizeMachineCancel/refuseCancel without
+// the rest of New's wiring guards.
+func machineCancelFixture(t *testing.T, jobID string, jobQ *spyJobQuery) (*Service, *spyAuditSink) {
+	t.Helper()
+	jobsRepo, tasksRepo := testEngineStore(t)
+	at := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	if err := jobsRepo.CreateJob(context.Background(), jobs.Job{ID: jobID, CreatedAt: at}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   newFakeConduit(nil),
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return at },
+	}
+	audit := &spyAuditSink{}
+	svc := &Service{disp: e, audit: audit, metrics: noopMetricsSink{}, authz: &spyAuthorizer{}, jobQ: jobQ}
+	return svc, audit
+}
+
+// TestCancelJobAllowsMachineCancellingItsOwnResolvedRequesterJob: a machine
+// Account at operator+ may cancel a Job whose recorded requester (jobQ's
+// join from the audit trail) is that very Account.
+func TestCancelJobAllowsMachineCancellingItsOwnResolvedRequesterJob(t *testing.T) {
+	const jobID = "job-owned"
+	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
+	jobQ := &spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: machine.AccountID}}}}
+	svc, audit := machineCancelFixture(t, jobID, jobQ)
+
+	if err := svc.CancelJob(context.Background(), machine, jobID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	if len(audit.cancelCalls) != 1 {
+		t.Fatalf("RecordCancel calls = %d, want 1", len(audit.cancelCalls))
+	}
+	if !jobQ.jobsCalled {
+		t.Error("the machine-scoping check never queried the Job's requester")
+	}
+	if jobQ.gotJobFilter.JobID != jobID {
+		t.Errorf("queried JobID = %q, want %q", jobQ.gotJobFilter.JobID, jobID)
+	}
+}
+
+// TestCancelJobRefusesMachineCancellingAnotherAccountsJob: a machine Account
+// asking to cancel a Job whose recorded requester is a DIFFERENT Account is
+// refused with ErrJobNotRequestedByCaller, and the reason never names the
+// other Account.
+func TestCancelJobRefusesMachineCancellingAnotherAccountsJob(t *testing.T) {
+	const jobID = "job-not-mine"
+	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
+	jobQ := &spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: "acct-other"}}}}
+	svc, audit := machineCancelFixture(t, jobID, jobQ)
+
+	err := svc.CancelJob(context.Background(), machine, jobID)
+	if !errors.Is(err, ErrJobNotRequestedByCaller) {
+		t.Fatalf("CancelJob error = %v, want ErrJobNotRequestedByCaller", err)
+	}
+	if strings.Contains(err.Error(), "acct-other") {
+		t.Errorf("refusal reason names another Account: %q", err.Error())
+	}
+	if len(audit.cancelCalls) != 0 {
+		t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+	}
+	if len(audit.entries) != 1 || audit.entries[0].Kind != AuditKindRefusal {
+		t.Fatalf("audit entries = %+v, want exactly one AuditKindRefusal", audit.entries)
+	}
+	if audit.entries[0].JobID != jobID {
+		t.Errorf("refusal JobID = %q, want %q — this refusal follows a real Job lookup", audit.entries[0].JobID, jobID)
+	}
+}
+
+// TestCancelJobRefusesMachineCancellingAJobWithNoRecordedRequester: a Job
+// whose requester has not yet been joined from the audit trail (a still
+// in-flight Job, before #616) is refused exactly like one requested by
+// somebody else — never inferred as the caller's own.
+func TestCancelJobRefusesMachineCancellingAJobWithNoRecordedRequester(t *testing.T) {
+	const jobID = "job-in-flight"
+	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
+	jobQ := &spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: ""}}}}
+	svc, audit := machineCancelFixture(t, jobID, jobQ)
+
+	err := svc.CancelJob(context.Background(), machine, jobID)
+	if !errors.Is(err, ErrJobNotRequestedByCaller) {
+		t.Fatalf("CancelJob error = %v, want ErrJobNotRequestedByCaller", err)
+	}
+	if len(audit.cancelCalls) != 0 {
+		t.Errorf("RecordCancel calls = %d, want 0 — a refused cancel touches no Task", len(audit.cancelCalls))
+	}
+}
+
+// TestCancelJobAllowsHumanOperatorCancellingAMachinesJob: the machine-Account
+// scoping is Kind-specific — a human Account at operator+ may still cancel
+// ANY Job, including one a machine Account requested, and the scoping check
+// is never even consulted for one.
+func TestCancelJobAllowsHumanOperatorCancellingAMachinesJob(t *testing.T) {
+	const jobID = "job-machine-owned"
+	human := Principal{AccountID: "acct-ops", Account: "ana", Role: "operator", Kind: PrincipalKindHuman}
+	jobQ := &spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: jobID, RequesterAccountID: "acct-m"}}}}
+	svc, audit := machineCancelFixture(t, jobID, jobQ)
+
+	if err := svc.CancelJob(context.Background(), human, jobID); err != nil {
+		t.Fatalf("CancelJob: %v", err)
+	}
+	if len(audit.cancelCalls) != 1 {
+		t.Fatalf("RecordCancel calls = %d, want 1", len(audit.cancelCalls))
+	}
+	if jobQ.jobsCalled {
+		t.Error("a human Account's cancel must never query the Job's requester — the scoping check is machine-only")
 	}
 }

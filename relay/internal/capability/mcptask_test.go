@@ -286,6 +286,17 @@ func TestCancelParkedTaskLeavesTheApprovalPending(t *testing.T) {
 	}
 }
 
+// humanOwnerOf returns p with its Kind switched to human, same AccountID —
+// so a CancelTask call still owns the handle (mcpTasks.Get/Cancel key on
+// AccountID) while sidestepping CancelJob's machine-Account scoping (#614):
+// these two tests are about the cancel WIRING (it reaches the real
+// dispatcher, and a dispatcher failure is not swallowed), not about that
+// scoping — cancel_test.go covers the scoping itself.
+func humanOwnerOf(p Principal) Principal {
+	p.Kind = PrincipalKindHuman
+	return p
+}
+
 // TestCancelDispatchedTaskGoesThroughCancelJob: once a Job exists, cancelling
 // the handle must cancel the real work through the ordinary path rather than
 // through a second implementation.
@@ -299,7 +310,7 @@ func TestCancelDispatchedTaskGoesThroughCancelJob(t *testing.T) {
 		t.Fatalf("re-drive: %v", err)
 	}
 
-	if _, err := s.CancelTask(ctx, machineRequester, parked.TaskID); err != nil {
+	if _, err := s.CancelTask(ctx, humanOwnerOf(machineRequester), parked.TaskID); err != nil {
 		t.Fatalf("CancelTask: %v", err)
 	}
 	if disp.cancelledJobID != "job-1" {
@@ -323,7 +334,7 @@ func TestCancelDoesNotMarkTheHandleWhenTheJobCancelFails(t *testing.T) {
 	boom := errors.New("dispatcher: cancel failed")
 	disp.cancelErr = boom
 
-	if _, err := s.CancelTask(ctx, machineRequester, parked.TaskID); !errors.Is(err, boom) {
+	if _, err := s.CancelTask(ctx, humanOwnerOf(machineRequester), parked.TaskID); !errors.Is(err, boom) {
 		t.Fatalf("CancelTask: err = %v, want the dispatcher's failure", err)
 	}
 	h, err := tasks.Get(ctx, parked.TaskID, machineRequester.AccountID)

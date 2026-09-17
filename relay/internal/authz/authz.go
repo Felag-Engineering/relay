@@ -237,8 +237,14 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 // durable position than any single dispatch, which is why it cannot sit
 // below the role that may run one.
 //
-// Cancel's floor applies to ANY Job, not only one the caller dispatched, and
-// is not human-only: an AI-agent must be able to stop its own dispatch.
+// Cancel's ROLE floor is not human-only: an AI-agent must be able to stop
+// its own dispatch. Whether it may reach ANY Job or only its own is a
+// separate question this gate does not decide — it needs the Job's recorded
+// requester, which is capability-layer data this package does not hold.
+// capability.Service.CancelJob layers that machine-Account scoping on top of
+// this floor (owner decision 2026-09-17, execution.md §Cancellation, #614):
+// a human Account may still cancel any Job, but a machine Account may cancel
+// only a Job whose recorded requester is itself.
 func requiredControlRole(act capability.ControlAction) (role accounts.Role, label string, humanOnly, known bool) {
 	switch act {
 	case capability.ControlMintEnrollmentToken:

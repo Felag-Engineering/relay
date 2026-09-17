@@ -43,8 +43,9 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 			"ever being sent, in-flight Tasks are asked to cancel over their Tunnels, and already-" +
 			"resolved Tasks keep their truthful outcome. Best-effort for in-flight Tasks — a Task that " +
 			"completes before the cancel reaches it reports its real outcome, never a fabricated cancel. " +
-			"Requires an Account of operator or above; any Job, not only the caller's own — a viewer is " +
-			"refused and the Job continues.",
+			"Requires an Account of operator or above; a viewer is refused and the Job continues. A " +
+			"human Account may cancel any Job; a machine Account may cancel only a Job it requested " +
+			"itself — a Job with no recorded requester, or another Account's Job, is refused.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in cancelJobInput) (*sdkmcp.CallToolResult, cancelJobOutput, error) {
 		logPrincipal(ctx, "cancel_job")
 		p, err := requirePrincipal(ctx)

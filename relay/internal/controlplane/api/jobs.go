@@ -120,10 +120,13 @@ func handleGetJob(d Deps) http.HandlerFunc {
 // Tasks are asked to cancel over their Tunnels, and already-resolved Tasks keep
 // their truthful outcome.
 //
-// The floor is `operator`, for any Job — decided by the capability layer's
+// The ROLE floor is `operator`, decided by the capability layer's
 // AuthorizeControl(ControlCancelJob), not here (#595, invariant 10). A
 // refused caller gets writeJobError's authz.ErrUnauthorized branch below,
-// before any existence check runs.
+// before any existence check runs. The SCOPE is also decided in the
+// capability layer (#614, owner decision 2026-09-17): a human Account may
+// cancel any Job; a machine Account may cancel only a Job it requested
+// itself, refused via capability.ErrJobNotRequestedByCaller otherwise.
 //
 // Best-effort for in-flight Tasks by design: a Task that completes before the
 // cancel reaches it reports its real outcome, never a fabricated `cancelled`.
@@ -159,16 +162,17 @@ func handleCancelJob(d Deps) http.HandlerFunc {
 
 // writeJobError renders a Job-addressed error: an unknown Job id is a 404, a
 // role or human-kind refusal (#397, #595) unwraps to authz.ErrUnauthorized and
-// renders 403 with the gate's own reason — the same recognize-don't-re-decide
-// pattern writeFreezeError and writeExecutionError use — and anything else is
-// a 500. The 404 text names the id the caller asked for, which is theirs
-// already and discloses nothing.
+// a machine-Account scoping refusal (#614) is capability.ErrJobNotRequestedByCaller
+// — both render 403 with the gate's own reason, the same recognize-don't-
+// re-decide pattern writeFreezeError and writeExecutionError use — and
+// anything else is a 500. The 404 text names the id the caller asked for,
+// which is theirs already and discloses nothing.
 func writeJobError(w http.ResponseWriter, jobID string, err error) {
 	switch {
 	case errors.Is(err, jobs.ErrJobNotFound):
 		writeProblem(w, http.StatusNotFound, "job not found",
 			fmt.Sprintf("no Job with id %q", jobID))
-	case errors.Is(err, authz.ErrUnauthorized):
+	case errors.Is(err, authz.ErrUnauthorized), errors.Is(err, capability.ErrJobNotRequestedByCaller):
 		writeProblem(w, http.StatusForbidden, "forbidden", err.Error())
 	default:
 		writeProblem(w, http.StatusInternalServerError, "job request failed", err.Error())

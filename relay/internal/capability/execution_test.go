@@ -876,7 +876,7 @@ func TestService_CancelJob_PublishesJobCancelled(t *testing.T) {
 	sink := &spyJobEventSink{}
 	svc := &Service{disp: e, audit: &spyAuditSink{}, metrics: noopMetricsSink{}, jobEvents: sink, authz: &spyAuthorizer{}}
 
-	principal := Principal{Account: "bob", Role: "operator"}
+	principal := Principal{Account: "bob", Role: "operator", Kind: PrincipalKindHuman}
 	if err := svc.CancelJob(ctx, principal, jobID); err != nil {
 		t.Fatalf("CancelJob: %v", err)
 	}
