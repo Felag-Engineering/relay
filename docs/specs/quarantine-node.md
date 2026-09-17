@@ -137,13 +137,12 @@ preflight because it is quarantined, never sent.
 
 ## Governing ADRs and invariants
 
-- **Invariant 7 — needs amending.** It names `relay:` as the only valid quarantine target. Engaging
-  a quarantine may now also target `tag:`, which no Node can write; lifting stays `relay:`-only,
-  and `node:` and `state:` remain forbidden. The amendment is accepted by the owner and must reach
-  the invariant text, its ADRs and `docs/security/threat-model.md`.
-- **ADR-0006 — needs amending.** Its operating rule that quarantine targets `relay:` only, and its
+- **Invariant 7 — amended 2026-09-16.** Engaging a quarantine may target `relay:` or `tag:`, which
+  no Node can write; lifting stays `relay:`-only, and `node:` and `state:` remain forbidden. The
+  accepted residual is R17 in `docs/security/threat-model.md`.
+- **ADR-0006 — amended 2026-09-16.** Its operating rule that quarantine targets `relay:` only, and its
   pairing of quarantine with remediation and secret distribution as one lane.
-- **ADR-0020 — needs amending.** Its design of post-enrollment `relay:` label management at
+- **ADR-0020 — amended 2026-09-16.** Its design of post-enrollment `relay:` label management at
   `admin` + step-up for both setting and lifting is superseded: a quarantine is engaged by
   `operator`+ and lifted by a human `admin` with step-up, and no Account writes a `relay:` label
   directly.
@@ -229,5 +228,5 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
   Relay at resolution; cheap to engage (`operator`+, machine Accounts allowed, `relay:` or `tag:`
   targets, counted against the `mutate` cap) and deliberate to lift (human `admin`, step-up,
   `relay:` targets only); the Node is not told and stays connected; no expiry; a re-enrolled
-  identity does not inherit it. Amends invariant 7.
+  identity does not inherit it. Invariant 7 amended to match (#582).
 - `2026-09-13` — stub created to name the capability.
