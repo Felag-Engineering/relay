@@ -1736,8 +1736,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   cannot decide anything yet, so nothing here is gating on it.</p>
   {{if not .Grant.LegacyNamespacePin}}
   <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>:
-  count, channel, requester exclusion and window are priced at the strictest any covered dispatch
-  would have faced, and the approver audience is the <b>union</b> of those dispatches' audiences.</p>
+  count, channel, requester exclusion and decision deadline (TTL) are priced at the strictest any
+  covered dispatch would have faced, and the approver audience is the <b>union</b> of those
+  dispatches' audiences (a rule with no audience makes the merged audience unrestricted).</p>
   {{end}}
 </section>
 {{else}}

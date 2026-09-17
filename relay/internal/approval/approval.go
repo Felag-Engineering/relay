@@ -232,7 +232,8 @@ func mergeStricter(a, b Requirement) Requirement {
 	// union is used instead, and the narrowing that matters (Count,
 	// RequesterAllowed, Channel) is applied above. This is an owner-accepted
 	// residual risk (ADR-0027 amendment 2026-09-16): overlapping rules can
-	// widen who may decide, never who may skip Count/Channel/RequesterAllowed/TTL.
+	// widen who may decide; Count, Channel, RequesterAllowed and TTL still
+	// merge strictest-wins.
 	out.Audience = unionAudience(out.Audience, b.Audience)
 	return out
 }

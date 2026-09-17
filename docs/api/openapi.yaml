@@ -108,9 +108,10 @@ tags:
       exclusion, and channel strength are the same code for a window as for a
       single dispatch. What that approval **costs** is derived from the gate at
       the scope's widest admissible dispatch: count, channel, requester
-      exclusion, and window are priced at the strictest any covered dispatch
-      would have faced, and the approver audience is the **union** of those
-      dispatches' audiences (a rule with no audience is unrestricted).
+      exclusion, and decision deadline (TTL) are priced at the strictest any
+      covered dispatch would have faced, and the approver audience is the
+      **union** of those dispatches' audiences (a rule with no audience makes
+      the merged audience unrestricted).
 
 paths:
   # ---------------------------------------------------------------------------
