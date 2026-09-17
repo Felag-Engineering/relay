@@ -34,11 +34,12 @@ import (
 // called with and returns a configurable error.
 //
 // cascade, when non-empty, stands in for the Nodes revocation.Service's
-// re-scan would have found: RevokeToken calls record(n) for each n in
-// cascade, in order, COLLECTING every returned error into recordErrs —
-// collecting rather than discarding the return value is what makes mutation
-// 4 (a recorder closure that swallows the audit error) redden. cascadeErr, if
-// set, is returned from RevokeToken after every record call, standing in for
+// re-scan would have found: RevokeToken calls record(cascade) ONCE, with the
+// whole cascade as one chunk — mirroring the real Service's one-call-per-chunk
+// contract — COLLECTING the returned error into recordErrs. Collecting rather
+// than discarding the return value is what makes mutation 4 (a recorder
+// closure that swallows the audit error) redden. cascadeErr, if set, is
+// returned from RevokeToken after the record call, standing in for
 // revocation.Service's own ErrCascadeNotRecorded return.
 type fakeTokenRevoker struct {
 	mu         sync.Mutex
@@ -56,8 +57,8 @@ func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record revo
 	cascade := f.cascade
 	f.mu.Unlock()
 
-	for _, nodeID := range cascade {
-		err := record(nodeID)
+	if len(cascade) > 0 {
+		err := record(cascade)
 		f.mu.Lock()
 		f.recordErrs = append(f.recordErrs, err)
 		f.mu.Unlock()
@@ -140,17 +141,45 @@ func (f *fakeFreezer) ReleaseFreeze(ctx context.Context, p capability.Principal,
 }
 
 // fakeAuditor is an Auditor fake that records every appended Record.
+//
+// appendCalls tracks only what arrived through the SINGULAR Append, kept
+// distinct from records (which also holds what AppendAll wrote) so a test can
+// assert a KindNodeRevoke row never arrives through Append — the tell for a
+// recorder closure that reverted to looping over single-record Append calls.
 type fakeAuditor struct {
-	mu      sync.Mutex
-	records []audit.Record
-	err     error
+	mu          sync.Mutex
+	records     []audit.Record
+	appendCalls []audit.Record
+	allCalls    [][]audit.Record
+	err         error
 }
 
+// Append keeps r even when f.err is set — it reports the failure but does not
+// pretend the record was never offered. audit.Repository.Append declares no
+// such contract itself; keeping r is this fake's own long-standing behaviour,
+// and the tests that exercise it assert on the returned error, not on
+// whether records was mutated.
 func (f *fakeAuditor) Append(_ context.Context, r audit.Record) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.records = append(f.records, r)
+	f.appendCalls = append(f.appendCalls, r)
 	return f.err
+}
+
+// AppendAll drops everything in rs on error instead of keeping it, unlike
+// Append above — that asymmetry is the all-or-nothing contract itself
+// (audit.Repository.AppendAll), not a fake-specific shortcut: a real error
+// from AppendAll means the transaction rolled back and nothing was written.
+func (f *fakeAuditor) AppendAll(_ context.Context, rs []audit.Record) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.allCalls = append(f.allCalls, append([]audit.Record(nil), rs...))
+	if f.err != nil {
+		return f.err
+	}
+	f.records = append(f.records, rs...)
+	return nil
 }
 
 func (f *fakeAuditor) all() []audit.Record {
@@ -551,6 +580,8 @@ func TestHandleRevokeToken_UnrecordedCascadeStillRecordsTheTokenRevoke(t *testin
 // TestHandleRevokeToken_CascadeRecorderReportsAuditFailure asserts the
 // recorder closure this handler builds propagates a real audit failure back
 // to the caller (revocation.Service) rather than swallowing it — mutation 4.
+// AppendAll's all-or-nothing contract means a single failing call loses the
+// whole chunk, so this also asserts no KindNodeRevoke row exists afterward.
 func TestHandleRevokeToken_CascadeRecorderReportsAuditFailure(t *testing.T) {
 	auditErr := errors.New("audit store unavailable")
 	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b"}}
@@ -560,12 +591,56 @@ func TestHandleRevokeToken_CascadeRecorderReportsAuditFailure(t *testing.T) {
 
 	do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
 
-	if len(tr.recordErrs) != 2 {
-		t.Fatalf("recordErrs = %v, want 2 entries (one per cascaded Node)", tr.recordErrs)
+	if len(tr.recordErrs) != 1 {
+		t.Fatalf("recordErrs = %v, want 1 entry (one call, covering the whole cascade chunk)", tr.recordErrs)
 	}
-	for i, err := range tr.recordErrs {
-		if err == nil {
-			t.Errorf("recordErrs[%d] = nil, want the recorder to report the audit failure", i)
+	if tr.recordErrs[0] == nil {
+		t.Error("recordErrs[0] = nil, want the recorder to report the audit failure")
+	}
+	for _, r := range auditor.all() {
+		if r.Kind == audit.KindNodeRevoke {
+			t.Errorf("found a KindNodeRevoke record %+v despite AppendAll erroring — "+
+				"the all-or-nothing contract means none of the chunk should have been kept", r)
+		}
+	}
+}
+
+// TestHandleRevokeToken_CascadeRecorderWritesAllInOneCall asserts the
+// recorder closure this handler builds writes a cascade's records through
+// ONE Auditor.AppendAll call rather than looping over Append — the fix #563
+// exists for. It goes red if the closure reverts to N Append calls.
+func TestHandleRevokeToken_CascadeRecorderWritesAllInOneCall(t *testing.T) {
+	tr := &fakeTokenRevoker{cascade: []string{"node-a", "node-b", "node-c"}}
+	auditor := &fakeAuditor{}
+	d := Deps{TokenRevoker: tr, Audit: auditor, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodDelete, "/api/v1/enrollment-tokens/tok-123", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusNoContent, rec.Body.String())
+	}
+
+	if len(auditor.allCalls) != 1 {
+		t.Fatalf("AppendAll was called %d times, want exactly 1", len(auditor.allCalls))
+	}
+	call := auditor.allCalls[0]
+	if len(call) != 3 {
+		t.Fatalf("the one AppendAll call carried %d records, want 3", len(call))
+	}
+	seenIDs := map[string]bool{}
+	for _, r := range call {
+		if r.Kind != audit.KindNodeRevoke {
+			t.Errorf("AppendAll record Kind = %q, want %q", r.Kind, audit.KindNodeRevoke)
+		}
+		if r.ID == "" || seenIDs[r.ID] {
+			t.Errorf("AppendAll record ID = %q, want non-empty and unique across the call", r.ID)
+		}
+		seenIDs[r.ID] = true
+	}
+
+	for _, r := range auditor.appendCalls {
+		if r.Kind == audit.KindNodeRevoke {
+			t.Error("a KindNodeRevoke record arrived through a single Append call, want only AppendAll")
 		}
 	}
 }

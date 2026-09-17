@@ -103,8 +103,8 @@ func handleMintToken(d Deps) http.HandlerFunc {
 	}
 }
 
-// cascadeAuditBudget bounds the wall-clock time the per-Node cascade records may
-// take in total, once detached from the request context.
+// cascadeAuditBudget bounds the wall-clock time the cascade's chunked record
+// writes may take in total, once detached from the request context.
 //
 // Generous rather than tight: it exists to stop an unbounded stall on the
 // Relay's single store connection, not to police a slow disk. A cascade that
@@ -166,18 +166,29 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		//
 		// BUT NOT WITHOUT A DEADLINE. Detaching from the request would otherwise
 		// leave these writes unbounded, and they are not cheap: the store runs
-		// on a single connection (SetMaxOpenConns(1)) and each record is its own
-		// fsynced INSERT, so a token covering a large fleet head-of-line blocks
-		// every other store-backed request — registry reads, Job persistence,
-		// the fail-closed read-audit path — during the incident that motivated
-		// the revoke. The cap bounds that stall without bounding N, which must
-		// stay unbounded: capping the cascade would leave Nodes either unrevoked
-		// (an authentication hole) or unrecorded (the bug this closes).
+		// on a single connection (SetMaxOpenConns(1)). The records are now
+		// written in chunked transactions (revocation.cascadeRecordChunk), one
+		// commit per chunk rather than one per Node, so a token covering a
+		// large fleet no longer head-of-line blocks every other store-backed
+		// request — registry reads, Job persistence, the fail-closed
+		// read-audit path — for the whole cascade, only for the chunk in
+		// flight. The deadline still bounds the total: a chunk that is in
+		// flight or not yet started when the budget expires fails whole and is
+		// counted whole by the cascade, while earlier committed chunks stay.
+		// N must still stay unbounded: capping the cascade would leave Nodes
+		// either unrevoked (an authentication hole) or unrecorded (the bug
+		// this closes).
+		//
+		// This reduces the stall; it does not eliminate it. revocation.Service.
+		// RevokeNode still performs one SetRevoked autocommit UPDATE per Node
+		// on this same single connection, with context.Background and no
+		// deadline — that half of the original head-of-line block is
+		// unchanged by this issue.
 		auditCtx, cancelAudit := context.WithTimeout(
 			context.WithoutCancel(r.Context()), cascadeAuditBudget)
 		defer cancelAudit()
-		record := func(nodeID string) error {
-			return recordLifecycleErr(auditCtx, d, p, audit.KindNodeRevoke, nodeID, reason)
+		record := func(nodeIDs []string) error {
+			return recordLifecycleAllErr(auditCtx, d, p, audit.KindNodeRevoke, nodeIDs, reason)
 		}
 
 		err = d.TokenRevoker.RevokeToken(r.Context(), id, record)

@@ -234,6 +234,8 @@ None open.
 
 ## History
 
+- `2026-09-16` — Store change landed for the token-revocation cascade's per-Node audit inserts
+  (#563). Spec unmigrated (`aspirational`); claims not updated; the lines this makes stale are listed in #563's PR.
 - `2026-09-14` — Worked through with the owner. The join string is first-pass behaviour; token scope of
   `relay:` Labels is retired in favour of `relay:enrollment-token`, `relay:node-id` and optional token
   `tag:` Labels; re-enrollment creates a new record with no tags carried; rendered bundles, `relay init`,

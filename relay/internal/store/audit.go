@@ -16,36 +16,97 @@ type sqliteAudit struct {
 
 var _ audit.Repository = (*sqliteAudit)(nil)
 
-// Append persists a new Record.
-func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
+// insertAuditSQL is the one INSERT text shared by Append and AppendAll, so
+// their column list cannot drift apart.
+const insertAuditSQL = `
+	INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
+	                   account_id, account_name, account_role, token_id, auth_method, verified_source,
+	                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
+	                   approval_id, grant_id, approval_answer, decision_channel, plan_hash)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// auditInsertArgs builds the ordered argument list for insertAuditSQL from r.
+//
+// Stdout/Stderr are stored raw, exactly as delivered — no redaction or
+// scrubbing (secrets in command output are retained by design; Policy is the
+// place to prevent secret-emitting commands, ADR-0002). This mirrors how
+// tasks.go persists Task output.
+func auditInsertArgs(r audit.Record) ([]any, error) {
 	argsJSON, err := encodeStringMap(r.Args)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	argvJSON, err := encodeStringSlice(r.RawExecArgv)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Stdout/Stderr are stored raw, exactly as delivered — no redaction or
-	// scrubbing (secrets in command output are retained by design; Policy is
-	// the place to prevent secret-emitting commands, ADR-0002). This mirrors
-	// how tasks.go persists Task output.
 	v, as := r.Attribution.Verified, r.Attribution.Asserted
-	_, err = a.db.ExecContext(ctx, `
-		INSERT INTO audit (audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
-		                   account_id, account_name, account_role, token_id, auth_method, verified_source,
-		                   asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
-		                   approval_id, grant_id, approval_answer, decision_channel, plan_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	return []any{
 		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method), nullIfEmpty(v.Source),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
 		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID), nullIfEmpty(r.ApprovalAnswer), nullIfEmpty(r.DecisionChannel), nullIfEmpty(r.PlanHash),
-	)
+	}, nil
+}
+
+// Append persists a new Record.
+func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
+	args, err := auditInsertArgs(r)
 	if err != nil {
+		return err
+	}
+	if _, err := a.db.ExecContext(ctx, insertAuditSQL, args...); err != nil {
 		return fmt.Errorf("insert audit record: %w", err)
+	}
+	return nil
+}
+
+// AppendAll persists every Record in rs in one transaction: on a nil error
+// all of them were written, on a non-nil error none were (see
+// audit.Repository.AppendAll).
+//
+// Every record's args are built up front, before BeginTx, so an encode error
+// returns before anything touches the store. A context that is done before or
+// during the call makes database/sql roll the transaction back and return a
+// non-nil error, writing nothing — which is what lets the cascade count the
+// whole chunk as unrecorded. A Commit error that races a commit which
+// actually landed can only OVER-report the shortfall, never under-report it.
+func (a *sqliteAudit) AppendAll(ctx context.Context, rs []audit.Record) error {
+	if len(rs) == 0 {
+		return nil
+	}
+
+	argsPerRecord := make([][]any, len(rs))
+	for i, r := range rs {
+		args, err := auditInsertArgs(r)
+		if err != nil {
+			return err
+		}
+		argsPerRecord[i] = args
+	}
+
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin audit append: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, insertAuditSQL)
+	if err != nil {
+		return fmt.Errorf("prepare audit insert: %w", err)
+	}
+	defer stmt.Close() //nolint:errcheck
+
+	for i, args := range argsPerRecord {
+		if _, err := stmt.ExecContext(ctx, args...); err != nil {
+			return fmt.Errorf("insert audit record %d of %d: %w", i+1, len(rs), err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit audit records: %w", err)
 	}
 	return nil
 }

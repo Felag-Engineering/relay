@@ -31,8 +31,22 @@ type TokenRevoker interface {
 	Revoke(ctx context.Context, id string) error
 }
 
-// RevocationRecorder records the trail's entry for one Node the cascade is
-// about to revoke, and reports whether that record was written.
+// RevocationRecorder records the trail's entries for a chunk of Nodes the
+// cascade is about to revoke, and reports whether that chunk was written.
+//
+// The contract is ALL-OR-NOTHING per call: a nil error means every ID in
+// nodeIDs was recorded, a non-nil error means none of them were. The cascade
+// below counts len(nodeIDs) as unrecorded on error, and that count is the
+// number threat-model R12 rests on being honest — a recorder that recorded
+// some of a chunk and still returned an error, or vice versa, would corrupt
+// it. nodeIDs is a READ-ONLY BORROW: the recorder must not modify it — in
+// place, by index, or by appending within its spare capacity — and must not
+// retain it, or any alias of its backing array, after the call returns. The
+// cascade still needs every one of those IDs to revoke the chunk once record
+// returns, so it hands the recorder a defensive copy rather than trusting
+// this contract alone: a recorder that mutated the slice it was given could
+// otherwise make the cascade revoke the wrong set of Nodes, which is exactly
+// the authentication hole R12 exists to prevent.
 //
 // WHY A CALLBACK AND NOT A SINK FIELD: package revocation imports neither
 // internal/audit nor internal/capability (imports_test.go enforces this), so
@@ -49,7 +63,17 @@ type TokenRevoker interface {
 // the Control API detach the write from the client connection (see
 // context.WithoutCancel in tokens.go) so an irreversible cascade is not
 // aborted by a client that hangs up mid-revoke.
-type RevocationRecorder func(nodeID string) error
+type RevocationRecorder func(nodeIDs []string) error
+
+// cascadeRecordChunk bounds how many Nodes one RevocationRecorder call covers.
+//
+// It bounds how long one recorder call holds the store's only connection
+// (SetMaxOpenConns(1)), so other requests can run between chunks. It bounds
+// how long a Node waits between being found and being revoked. And a chunk
+// that commits before the Control API's audit budget runs out stays
+// committed. It does NOT bound N: the pass loop below still walks every
+// matching Node in the registry, in chunks, however many there are.
+const cascadeRecordChunk = 500
 
 // ErrRecorderRequired is returned by RevokeToken when called with a nil
 // recorder, before the token store or the registry is touched.
@@ -148,9 +172,9 @@ func (s *Service) RevokeNode(nodeID string) {
 // safe to log (see enroll/token.go).
 //
 // record is REQUIRED (#557): every cascaded Node's revocation must be
-// recorded through it, one call per Node, from inside the pass loop below —
-// see RevocationRecorder's doc for why a callback rather than a sink field,
-// and why it takes no context.
+// recorded through it, one call per chunk of at most cascadeRecordChunk
+// Nodes, from inside the pass loop below — see RevocationRecorder's doc for
+// why a callback rather than a sink field, and why it takes no context.
 func (s *Service) RevokeToken(ctx context.Context, tokenID string, record RevocationRecorder) error {
 	// A nil recorder is refused before the token store is touched, so a nil
 	// recorder revokes NOTHING — see ErrRecorderRequired.
@@ -187,6 +211,99 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 	var total, unrecorded int
 	for pass := 0; pass <= maxRescanPasses; pass++ {
 		var newThisPass int
+		chunk := make([]string, 0, cascadeRecordChunk)
+		pending := make(map[string]struct{}, cascadeRecordChunk)
+
+		// flush records and revokes the accumulated chunk, then resets both
+		// chunk and pending to FRESH values (never re-sliced to zero length),
+		// so that this pass's next chunk gets its own backing array rather
+		// than one that might still be aliased by an earlier flush's local
+		// variables.
+		flush := func() {
+			if len(chunk) == 0 {
+				return
+			}
+
+			// Re-check IsRevoked immediately before recording, dropping any id
+			// that was revoked by something else (e.g. a concurrent single-Node
+			// revoke) while it sat in this unflushed chunk. Without this, that
+			// Node would get a second node_revoke record here, against the
+			// causative-record rule the IsRevoked skip below already enforces
+			// across passes. This can only trigger under a concurrent revoke
+			// racing this pass's List loop — nothing in this package runs
+			// between an id being appended to chunk and the flush that follows
+			// it — so no deterministic test drives this branch; it exists for
+			// that concurrent case, not for anything the sequential tests can
+			// observe. Filtered in place: chunk's backing array is not shared
+			// with any earlier flush's chunk (each got a fresh make).
+			live := 0
+			for _, id := range chunk {
+				if !s.denylist.IsRevoked(id) {
+					chunk[live] = id
+					live++
+				}
+			}
+			chunk = chunk[:live]
+			if len(chunk) == 0 {
+				chunk = make([]string, 0, cascadeRecordChunk)
+				pending = make(map[string]struct{}, cascadeRecordChunk)
+				return
+			}
+
+			// Record the chunk BEFORE revoking any Node in it, but — unlike
+			// handleRevokeNode's #487 ordering — revoke EVERY Node in the chunk
+			// EITHER WAY, deliberately inverting that posture. #487's fail-closed
+			// order was licensed by two facts that do not hold here: nothing had
+			// happened yet, and RevokeNode has no error return to strand. Here the
+			// token is already revoked (Step 1 above) and any earlier Node in this
+			// same cascade already is too; refusing to revoke a Node because its
+			// chunk's record failed would leave a Node whose enrolling token is
+			// already dead still holding a live Tunnel and a cert-authenticated
+			// Renew path — a permanent security hole traded for an audit gap,
+			// against this file's own stated direction (see the over-denying
+			// comment in RevokeNode). Aborting the loop entirely would be worse
+			// still: it would un-revoke nothing already done and under-revoke
+			// everything still to come. So: record the chunk, note the failure,
+			// revoke every Node in the chunk anyway, and report the shortfall to
+			// the caller afterward via ErrCascadeNotRecorded rather than papering
+			// over it.
+			//
+			// This still leaves a wider crash window than the old one-Node-at-a-
+			// time cascade did: a process crash between this chunk's commit and
+			// the end of the RevokeNode loop below can leave up to
+			// cascadeRecordChunk records for Nodes not yet revoked (the
+			// per-Node cascade before #563: at most 1). That is the same
+			// failure direction #557 chose — a record with no matching revoke
+			// is an audit-trail overstatement, never an unattributed revoke —
+			// just wider now that recording and revoking happen per chunk
+			// instead of per Node. Accepted; do not reorder.
+			//
+			// record is handed a defensive copy, never chunk itself: chunk is
+			// what the revoke loop below (and the error log above it) reads
+			// once record returns, and RevocationRecorder's contract only asks
+			// the recorder not to mutate or retain what it was given — it does
+			// not enforce that. A recorder that broke the contract and mutated
+			// or reordered chunk in place could otherwise make the cascade
+			// revoke the wrong Nodes; copying first means a misbehaving
+			// recorder can corrupt only its own copy, and every Node in this
+			// chunk still gets revoked.
+			recordIDs := append([]string(nil), chunk...)
+			if err := record(recordIDs); err != nil {
+				for _, id := range chunk {
+					slog.Error("cascaded node revocation not recorded",
+						"node_id", id, "token_id", tokenID, "error", err)
+				}
+				unrecorded += len(chunk)
+			}
+			for _, id := range chunk {
+				s.RevokeNode(id)
+			}
+			newThisPass += len(chunk)
+
+			chunk = make([]string, 0, cascadeRecordChunk)
+			pending = make(map[string]struct{}, cascadeRecordChunk)
+		}
+
 		for _, n := range s.reg.List() {
 			if n.EnrollingTokenID != tokenID {
 				continue
@@ -199,30 +316,22 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 				// that answers "who did it".
 				continue
 			}
-
-			// Record BEFORE revoking, but — unlike handleRevokeNode's #487
-			// ordering — revoke EITHER WAY, deliberately inverting that posture.
-			// #487's fail-closed order was licensed by two facts that do not hold
-			// here: nothing had happened yet, and RevokeNode has no error return
-			// to strand. Here the token is already revoked (Step 1 above) and any
-			// earlier Node in this same cascade already is too; refusing to revoke
-			// Node n because ITS record failed would leave a Node whose enrolling
-			// token is already dead still holding a live Tunnel and a
-			// cert-authenticated Renew path — a permanent security hole traded for
-			// an audit gap, against this file's own stated direction (see the
-			// over-denying comment in RevokeNode). Aborting the loop entirely would
-			// be worse still: it would un-revoke nothing already done and
-			// under-revoke everything still to come. So: record, note the failure,
-			// revoke anyway, and report the shortfall to the caller afterward via
-			// ErrCascadeNotRecorded rather than papering over it.
-			if err := record(n.NodeID); err != nil {
-				slog.Error("cascaded node revocation not recorded",
-					"node_id", n.NodeID, "token_id", tokenID, "error", err)
-				unrecorded++
+			if _, ok := pending[n.NodeID]; ok {
+				// Already queued in THIS pass's unflushed chunk. The old per-Node
+				// revoke relied on a duplicate List() entry hitting the IsRevoked
+				// skip above; inside an unflushed chunk it would not yet, and
+				// would get a second record against the causative-record rule.
+				// This guard restores that dedup explicitly.
+				continue
 			}
-			s.RevokeNode(n.NodeID)
-			newThisPass++
+			chunk = append(chunk, n.NodeID)
+			pending[n.NodeID] = struct{}{}
+			if len(chunk) >= cascadeRecordChunk {
+				flush()
+			}
 		}
+		flush()
+
 		total += newThisPass
 		// After the initial scan (pass > 0), stop early if this pass found no new
 		// nodes: the registry has settled and no further late Upserts are expected.

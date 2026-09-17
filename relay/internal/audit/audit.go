@@ -403,6 +403,13 @@ type Repository interface {
 	// Append persists a new Record.
 	Append(ctx context.Context, r Record) error
 
+	// AppendAll persists every Record in rs atomically: on a nil error all of
+	// them were written, on a non-nil error none were. An empty rs is a
+	// no-op. Callers that write an unbounded number of records bound the
+	// slice themselves: the store serialises every request through one
+	// connection, and the whole call holds it.
+	AppendAll(ctx context.Context, rs []Record) error
+
 	// List returns all Records, ordered by Timestamp.
 	List(ctx context.Context) ([]Record, error)
 
