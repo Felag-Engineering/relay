@@ -19,7 +19,10 @@ import (
 // single approval trustworthy therefore applies unchanged: the quorum, the
 // audience, the requester exclusion, the machine-cannot-self-decide rule, the
 // channel strength, and the role floor. A grant is not a second, cheaper way to
-// get approved — it is the same approval, with a wider subject.
+// get approved on count, channel, requester exclusion or window — it is the
+// same approval, with a wider subject; its approver audience is the union of
+// what the dispatches it could cover would have faced, which can be wider
+// (owner-accepted residual risk, ADR-0027 amendment 2026-09-16).
 
 // GrantRequest is what a surface asks for when it wants a batch/window
 // approval. The Relay derives everything else: the requirement, the summary,
@@ -57,9 +60,11 @@ func (s *Service) RequestGrant(ctx context.Context, p Principal, in GrantRequest
 	}
 
 	// The requirement is DERIVED from the gate at the Scope's worst case, never
-	// supplied by the caller: a grant must be at least as strictly approved as
-	// the strictest dispatch it could release, or it would be a way of buying
-	// approval more cheaply than the work it replaces.
+	// supplied by the caller: a grant's count, channel, requester exclusion and
+	// window must be at least as strict as the strictest dispatch it could
+	// release, or it would be a way of buying approval more cheaply than the
+	// work it replaces. Its approver audience is the union of those dispatches'
+	// audiences instead, which can be wider (ADR-0027 amendment 2026-09-16).
 	req, rules, gated := approval.RequirementForScope(in.Scope, s.gate.Evaluate)
 	if !gated {
 		return approval.Grant{}, approval.Request{}, ErrGrantCoversNothingGated

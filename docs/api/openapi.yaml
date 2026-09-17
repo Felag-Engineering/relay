@@ -107,8 +107,10 @@ tags:
       `POST /api/v1/approvals/{id}/decision`, so quorum, audience, requester
       exclusion, and channel strength are the same code for a window as for a
       single dispatch. What that approval **costs** is derived from the gate at
-      the scope's widest admissible dispatch, so a grant can never be a cheaper
-      path to approval than the work it replaces.
+      the scope's widest admissible dispatch: count, channel, requester
+      exclusion, and window are priced at the strictest any covered dispatch
+      would have faced, and the approver audience is the **union** of those
+      dispatches' audiences (a rule with no audience is unrestricted).
 
 paths:
   # ---------------------------------------------------------------------------

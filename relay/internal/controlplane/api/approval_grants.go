@@ -32,8 +32,10 @@ import (
 //     the same code path — a deployment requiring two approvers for one mutate
 //     does not get single-approver grants covering a hundred of them.
 //   - **It does not decide what a grant costs.** The Requirement is derived
-//     below this layer, at the Scope's worst case, so a grant can never be a
-//     cheaper way to get approved than the work it replaces.
+//     below this layer, at the Scope's worst case: count, channel, requester
+//     exclusion and window are priced at the strictest a covered dispatch would
+//     have faced, and the approver audience is the union of those dispatches'
+//     audiences (owner-accepted residual risk, ADR-0027 amendment 2026-09-16).
 //
 // Like every route in this package: decode, call, render. Everything that
 // decides anything is in capability and approval (invariant 10).

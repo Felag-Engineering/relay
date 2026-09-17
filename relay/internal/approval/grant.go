@@ -407,9 +407,11 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 // ADR-0020, ADR-0034). RequirementForScope ALWAYS walks every one. A Scope has
 // no namespace term (#482), so a Grant can cover a dispatch whose Selector
 // uses any of them, and in any combination. Probing each namespace on its own
-// and merging strictest-wins is exactly that worst case, because a gate Match
-// names at most one namespace and a multi-namespace dispatch matches the union
-// of what its single-namespace probes match.
+// is exactly that worst case, because a gate Match names at most one namespace
+// and a multi-namespace dispatch matches the union of what its single-namespace
+// probes match. The probes are merged with mergeStricter, which is strictest
+// for count, channel, requester exclusion and window, and a union for audience
+// (owner-accepted residual risk, ADR-0027 amendment 2026-09-16).
 //
 // Before #482 a pinned Scope was priced over its one namespace while Covers
 // admitted any dispatch CONTAINING it, so a Grant could release work needing a
@@ -425,20 +427,27 @@ func (g Grant) ShapeKey() string { return hashGrantShape(g.Scope, g.LegacyNamesp
 // TestKnownNamespacesMatchGateRuleNamespaces).
 var knownNamespaces = []string{"node", "relay", "tag", "state"}
 
-// RequirementForScope derives what a Grant over s must satisfy: the STRICTEST
-// Requirement any dispatch the Grant could cover would itself have faced.
+// RequirementForScope derives what a Grant over s must satisfy: the
+// Requirement priced at the strictest count, channel, requester exclusion and
+// window (TTL) any dispatch the Grant could cover would itself have faced,
+// with an approver audience that is the UNION of those dispatches' audiences
+// (a rule with no audience makes it unrestricted).
 //
-// This is the property that stops a grant being a way around the gate. If
-// "mutate on 10+ Nodes needs two people" and a grant would cover exactly that,
-// the grant needs two people. Deriving it — rather than letting the requester
-// or a separate config say what a grant costs — means a grant can never be
-// approved more cheaply than the dispatches it replaces.
+// This is the property that stops a grant being a way around the gate for
+// count, channel, requester exclusion and window. If "mutate on 10+ Nodes
+// needs two people" and a grant would cover exactly that, the grant needs two
+// people. Deriving it — rather than letting the requester or a separate config
+// say what a grant costs — means a grant is never priced more cheaply on those
+// four dimensions than the dispatches it replaces. The audience is not priced
+// the same way: it is the union across matched rules, so a Grant's approver
+// set can be wider than a covered dispatch's own (owner-accepted residual
+// risk, ADR-0027 amendment 2026-09-16).
 //
 // It evaluates the gate at the Scope's WORST CASE: the fan-out ceiling (the
 // widest dispatch the grant admits), every Operation in the allow-list, Raw
 // Exec if opted in, and every namespace a Selector could use (a Scope never
-// narrows by namespace). Merging those to the strictest is the same
-// mergeStricter the Gate itself uses for overlapping rules.
+// narrows by namespace). Merging those is the same mergeStricter the Gate
+// itself uses for overlapping rules.
 //
 // gated is false when nothing the Grant could cover would have parked at all.
 // A caller should refuse that rather than create the Grant: a grant covering

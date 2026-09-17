@@ -1735,8 +1735,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   enforcement arrives with the decision controls in the administration milestone; this Console
   cannot decide anything yet, so nothing here is gating on it.</p>
   {{if not .Grant.LegacyNamespacePin}}
-  <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>, so
-  a Grant is never cheaper to approve than the work it replaces.</p>
+  <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>:
+  count, channel, requester exclusion and window are priced at the strictest any covered dispatch
+  would have faced, and the approver audience is the <b>union</b> of those dispatches' audiences.</p>
   {{end}}
 </section>
 {{else}}
