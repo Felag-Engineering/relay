@@ -250,11 +250,17 @@ const (
 // know audit's storage shape.
 //
 // For AuditKindDispatch, JobID and Results are set and Reason is empty. For
-// AuditKindRefusal (authz-deny or cap-reject), Reason is set and JobID/
-// Results are empty — the dispatcher was never reached. For AuditKindPlan
-// (#119), only Principal/Selector/Action are set — JobID, Results, and
-// Reason are all empty, since a Plan never dispatches (no Job/Task exists to
-// reference) even when it reports a would-be-rejected cap/Freeze condition.
+// AuditKindRefusal (authz-deny, cap-reject, or CancelJob's machine-Account
+// scoping, #614), Reason is set and Results is empty — the dispatcher was
+// never reached — but JobID is NOT always empty: refuseControl's role-floor
+// refusal leaves it empty (it precedes any existence check, so the id is
+// unvalidated caller text), while refuseCancel's machine-scoping refusal
+// sets it to the store's own echo of the Job authorizeMachineCancel's lookup
+// actually found — never a caller-supplied id the Relay never validated.
+// For AuditKindPlan (#119), only Principal/Selector/Action are set — JobID,
+// Results, and Reason are all empty, since a Plan never dispatches (no
+// Job/Task exists to reference) even when it reports a would-be-rejected
+// cap/Freeze condition.
 type AuditEntry struct {
 	Kind      AuditKind
 	Principal Principal

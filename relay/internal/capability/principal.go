@@ -38,16 +38,26 @@ type Principal struct {
 	// accounts.Kind's values, carried as a plain string so this package keeps
 	// its narrow import allowlist (jobs + registry + approval).
 	//
-	// It is NOT an authorization input: authority is the Role, and a machine
-	// Account with the admin role has admin's powers. It exists for the one
-	// question authority cannot answer — ADR-0027's confirmation ladder, whose
-	// rung 2 (self-confirmation) is human-requesters-only, because an agent
-	// confirming its own proposal is the same actor answering twice.
+	// Authority is still the Role — a machine Account with the admin role has
+	// admin's powers — but Kind IS an authorization input for the specific
+	// decisions Role alone cannot answer:
+	//
+	//   - EngageFreeze requires a HUMAN Account (#397, ADR-0013 amendment): a
+	//     machine Account at operator halting the fleet is an AI-agent
+	//     switching off its own overseers.
+	//   - CancelJob's machine-Account scoping (#614, owner decision
+	//     2026-09-17, execution.md §Cancellation): a human Account may cancel
+	//     any Job, but a machine Account may cancel only a Job whose recorded
+	//     requester is itself.
+	//   - ADR-0027's confirmation ladder, whose rung 2 (self-confirmation) is
+	//     human-requesters-only, because an agent confirming its own proposal
+	//     is the same actor answering twice.
 	//
 	// The empty value means "unknown", and every check written against this
-	// field must treat unknown as MACHINE. That is why there is no
-	// PrincipalKind type with a friendly zero value: the restrictive answer has
-	// to be the one you get by forgetting to set it.
+	// field must treat unknown as MACHINE — the restrictive answer for all
+	// three decisions above. That is why there is no PrincipalKind type with
+	// a friendly zero value: the restrictive answer has to be the one you get
+	// by forgetting to set it.
 	Kind string
 
 	// AuthMethod is HOW this identity was established: a static API Token or

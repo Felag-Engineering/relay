@@ -376,29 +376,65 @@ func TestCancelJobRefusesMachineWithEmptyAccountIDAgainstEmptyRequester(t *testi
 }
 
 // TestCancelJobFailsClosedWhenTheRequesterCannotBeResolved is a table test
-// over authorizeMachineCancel's three "the lookup never confirmed a real
-// Job" cases: a query error, no job query wired at all, and jobID matching
-// no Job. Every case refuses with the SAME caller-visible
-// ErrJobNotRequestedByCaller, is audited as a refusal, and — because none of
-// them resolved jobID to a real Job — the refusal's audit JobID is empty,
-// exactly like a role-floor refusal (see refuseCancel/authorizeMachineCancel).
+// over authorizeMachineCancel's "the lookup never confirmed a real Job"
+// cases: a query error, no job query wired at all, jobID matching no Job, an
+// empty jobID (which JobFilter's own zero value would otherwise match EVERY
+// Job against — #614 cycle-3 review finding), the store returning some
+// OTHER Job than the one asked about, and an over-long jobID. Every case
+// refuses with the SAME caller-visible ErrJobNotRequestedByCaller, is
+// audited as a refusal, and — because none of them resolved jobID to that
+// EXACT real Job — the refusal's audit JobID is empty, exactly like a
+// role-floor refusal (see refuseCancel/authorizeMachineCancel).
 func TestCancelJobFailsClosedWhenTheRequesterCannotBeResolved(t *testing.T) {
 	const jobID = "job-unresolvable"
 	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
 
 	cases := []struct {
 		name string
-		jobQ JobQuery // nil means no job query wired at all
+		// cancelJobID is the id argument passed to CancelJob itself —
+		// usually jobID, but the empty/over-long cases need their own.
+		cancelJobID string
+		jobQ        JobQuery // nil means no job query wired at all
+		// wantQueried, when jobQ is a *spyJobQuery, additionally asserts
+		// whether the query ran at all — used by the two cases that must
+		// refuse BEFORE ever reaching s.jobQ.
+		wantQueried bool
 	}{
-		{"query error", &spyJobQuery{jobsErr: errors.New("store: unavailable")}},
-		{"no job query wired", nil},
-		{"unknown Job ID", &spyJobQuery{jobsResult: JobPage{}}},
+		{"query error", jobID, &spyJobQuery{jobsErr: errors.New("store: unavailable")}, true},
+		{"no job query wired", jobID, nil, false},
+		{"unknown Job ID", jobID, &spyJobQuery{jobsResult: JobPage{}}, true},
+		// An empty jobID must never reach the query as JobFilter{JobID: ""}:
+		// that is JobQuery's OWN "match every Job" zero value (JobFilter's
+		// doc comment), so a naive query would return the newest Job —
+		// here deliberately one the caller DOES own — and a bug that
+		// queried anyway would wrongly authorize this.
+		{
+			"empty Job ID would match every Job if queried",
+			"",
+			&spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: "job-newest", RequesterAccountID: machine.AccountID}}}},
+			false,
+		},
+		// A store that returns some OTHER Job than the one asked about —
+		// even one the caller owns — must never be trusted as "found": only
+		// a returned row whose own JobID echoes the argument counts.
+		{
+			"the store returns a different Job's id than the one asked for",
+			jobID,
+			&spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: "job-not-what-was-asked", RequesterAccountID: machine.AccountID}}}},
+			true,
+		},
+		{
+			"an over-long Job ID",
+			strings.Repeat("a", maxJobIDBytes+1),
+			&spyJobQuery{jobsResult: JobPage{Jobs: []JobSummary{{JobID: strings.Repeat("a", maxJobIDBytes+1), RequesterAccountID: machine.AccountID}}}},
+			false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, audit := machineCancelFixture(t, jobID, tc.jobQ)
 
-			err := svc.CancelJob(context.Background(), machine, jobID)
+			err := svc.CancelJob(context.Background(), machine, tc.cancelJobID)
 			if !errors.Is(err, ErrJobNotRequestedByCaller) {
 				t.Fatalf("CancelJob error = %v, want ErrJobNotRequestedByCaller", err)
 			}
@@ -409,7 +445,10 @@ func TestCancelJobFailsClosedWhenTheRequesterCannotBeResolved(t *testing.T) {
 				t.Fatalf("audit entries = %+v, want exactly one AuditKindRefusal", audit.entries)
 			}
 			if audit.entries[0].JobID != "" {
-				t.Errorf("refusal JobID = %q, want empty — the lookup never resolved a real Job", audit.entries[0].JobID)
+				t.Errorf("refusal JobID = %q, want empty — the lookup never resolved that exact Job", audit.entries[0].JobID)
+			}
+			if sq, ok := tc.jobQ.(*spyJobQuery); ok && sq.jobsCalled != tc.wantQueried {
+				t.Errorf("jobQ.QueryJobs called = %v, want %v", sq.jobsCalled, tc.wantQueried)
 			}
 		})
 	}

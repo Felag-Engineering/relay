@@ -38,9 +38,16 @@
 // requires a HUMAN Account: a machine Account at operator halting the fleet
 // is an AI-agent switching off its own overseers, and the fire-alarm
 // argument for cheap engagement ("anyone may pull the handle") is an
-// argument about people. Authority remains the Role — capability.Principal's
-// Kind is not an authorization input anywhere else and does not become one
-// here; it answers only the question authority cannot.
+// argument about people. Authority remains the Role, but capability.
+// Principal's Kind IS an authorization input for three specific decisions
+// Role alone cannot answer — this is one of them. The other two are decided
+// elsewhere, deliberately not here: CancelJob's machine-Account scoping (a
+// human Account may cancel any Job, a machine Account only one whose
+// recorded requester is itself) lives in capability.Service.CancelJob/
+// authorizeMachineCancel, because it needs Job data this package does not
+// hold; ADR-0027's confirmation ladder rung 2 (self-confirmation is
+// human-requesters-only) lives in capability's approval decision path. This
+// package's own use of Kind begins and ends with the Freeze rule above.
 //
 // authz imports capability, jobs, and accounts — no proto, no store, no HTTP.
 // capability never imports authz, so there is no cycle.

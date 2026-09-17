@@ -707,6 +707,14 @@ var ErrJobNotRequestedByCaller = errors.New(
 // Plan do: an authorization decision must never be swayed by caller-asserted
 // attribution (assertions.go).
 //
+// A deliberate asymmetry falls out of the SCOPE difference above: a human
+// Account cancelling an unknown Job ID reaches disp.cancel directly and gets
+// jobs.ErrJobNotFound, while a machine Account asking about that same id
+// gets the uniform ErrJobNotRequestedByCaller instead — because only a
+// machine Account's cancel is scoped at all, and GET /api/v1/jobs/{id}
+// already answers "does this Job exist" for any authenticated caller, so
+// neither answer discloses anything new.
+//
 // A refusal from the role floor is recorded through refuseControl with the
 // Principal and the reason, and deliberately without the Job ID: the
 // refusal precedes any existence check, so the id is caller-authored text,
@@ -767,17 +775,37 @@ func (s *Service) CancelJob(ctx context.Context, p Principal, jobID string) erro
 // It returns (auditJobID, err): err is nil on success, and on refusal is
 // always ErrJobNotRequestedByCaller — the caller-visible answer must not
 // distinguish "no requester recorded" from "requested by somebody else" (see
-// ErrJobNotRequestedByCaller's doc comment). auditJobID is jobID when the
-// lookup actually found a Job (whether or not its requester matched), and
-// empty otherwise — s.jobQ unwired, the query itself failing, or jobID
-// matching no Job. Only CancelJob's refuseCancel reads auditJobID, and only
-// to decide what — if anything — lands in the trail's job_id column: never
-// caller-supplied text the Relay never validated.
+// ErrJobNotRequestedByCaller's doc comment). auditJobID is the STORE's own
+// echo of the Job it resolved (page.Jobs[0].JobID, never the caller-supplied
+// jobID argument) when the lookup actually found that exact Job — whether or
+// not its requester matched — and empty otherwise: jobID empty or failing
+// validateJobID (refused before any query, see below), s.jobQ unwired, the
+// query itself failing, no row returned, or a returned row whose OWN JobID
+// does not echo what was asked for. Only CancelJob's refuseCancel reads
+// auditJobID, and only to decide what — if anything — lands in the trail's
+// job_id column: never caller-supplied text the Relay never validated, and
+// never a different Job's id the store happened to return.
+//
+// jobID is rejected BEFORE it ever reaches s.jobQ if it is empty or fails
+// validateJobID. Both matter for different reasons: JobFilter's zero value
+// (empty JobID) matches EVERY Job, not none (JobQuery's own contract) — so
+// an empty jobID would query "the newest Job" rather than "no Job", and
+// authorize a cancel of some job the caller never named, as long as ITS
+// requester happened to be the caller. validateJobID's length bound exists
+// independently so the slog line below can never be handed an unbounded
+// caller string.
 //
 // Fail CLOSED, and identically from the CALLER's perspective, in every case
 // above: only auditJobID (an internal, unexported detail) tells them apart.
-// Never infer ownership from anything short of an exact match.
+// Never infer ownership from anything short of an exact match, and never
+// trust a query result for a Job other than the one that was asked about —
+// requiring page.Jobs[0].JobID == jobID before any ownership comparison is
+// what closes that off even if a JobQuery implementation (or a test spy)
+// ever returned the wrong row for an exact-JobID filter.
 func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID string) (auditJobID string, err error) {
+	if jobID == "" || validateJobID(jobID) != nil {
+		return "", ErrJobNotRequestedByCaller
+	}
 	if s.jobQ == nil {
 		return "", ErrJobNotRequestedByCaller
 	}
@@ -791,12 +819,13 @@ func (s *Service) authorizeMachineCancel(ctx context.Context, jobID, accountID s
 			"job_id", jobID, "account_id", accountID, "error", queryErr)
 		return "", ErrJobNotRequestedByCaller
 	}
-	if len(page.Jobs) != 1 {
+	if len(page.Jobs) != 1 || page.Jobs[0].JobID != jobID {
 		return "", ErrJobNotRequestedByCaller
 	}
-	// The lookup resolved jobID to a real Job — record it on a refusal from
-	// here on, regardless of whether the requester below turns out to match.
-	auditJobID = jobID
+	// The lookup resolved jobID to that exact Job — record ITS id (the
+	// store's own echo, not the caller's argument) on a refusal from here on,
+	// regardless of whether the requester below turns out to match.
+	auditJobID = page.Jobs[0].JobID
 	requester := page.Jobs[0].RequesterAccountID
 	if requester == "" || requester != accountID {
 		return auditJobID, ErrJobNotRequestedByCaller
