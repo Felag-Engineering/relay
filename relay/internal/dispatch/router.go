@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -224,7 +225,17 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 			// Dispatched — it surfaces via InFlight() for reconciliation.
 			return jobs.Result{}, ErrNodeDisconnected
 		}
-		return result(tr), nil
+		res, v := result(tr)
+		if v.Violated() {
+			slog.Warn("dispatch: node reported an outcome the wire contract forbids; recorded as a protocol violation",
+				"node_id", nodeID, "task_id", t.ID, "reported_outcome", v.ReportedOutcome, "rule", v.Rule)
+		}
+		// The nil error is load-bearing: returning one here would leave the
+		// Task Dispatched, so InFlight() hands it to the Reconciler, which
+		// resends on the next reconnect and gets the same forged answer — an
+		// attacker-controlled loop. Resolving failure is terminal and
+		// truthful (invariant 4).
+		return res, nil
 	case <-ctx.Done():
 		r.removeWaiter(t.ID)
 		return jobs.Result{}, ctx.Err()

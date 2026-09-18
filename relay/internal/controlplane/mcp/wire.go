@@ -255,11 +255,14 @@ type ListOperationsOutput struct {
 // ExitCode is a pointer so a Task with no real process exit status renders
 // with NO exit_code key at all (#207/#253): the daemon's -1 "no exit status"
 // sentinel (spawn failure, timeout/cancel kill, signal-kill,
-// denied_by_policy) and the Relay's synthesized zero value (unreachable,
-// version_refused) both read as plausible real exit codes, which is exactly
-// the ambiguity ADR-0001/0003's legibility posture forbids. Present iff a
-// process actually ran and exited with a status (exitCodePtr,
-// tools_execution.go); Outcome is always the authoritative did-it-run state.
+// denied_by_policy), the Relay's synthesized zero value (unreachable,
+// version_refused), and — since #632 — the Relay's own -1 on a Task whose
+// daemon report the wire boundary refused as a protocol violation (it may
+// well have executed; what happened is unknown) all read as plausible real
+// exit codes, which is exactly the ambiguity ADR-0001/0003's legibility
+// posture forbids. Present iff a process actually ran and exited with a
+// status (exitCodePtr, tools_execution.go); Outcome is always the
+// authoritative did-it-run state.
 //
 // RefusalExplanation carries a second author on a denied_by_policy row: stderr
 // stays the Node's own verbatim reason, and RefusalExplanation is the Relay's
@@ -269,7 +272,7 @@ type ListOperationsOutput struct {
 type PerNodeResult struct {
 	NodeID             string `json:"node_id"`
 	Outcome            string `json:"outcome"`
-	ExitCode           *int32 `json:"exit_code,omitempty" jsonschema:"Present only when a process actually ran and exited with a status. Absent when nothing executed (denied_by_policy, unreachable, version_refused) or the process was killed without an exit status (timeout, cancelled, spawn failure) — outcome is the authoritative state, see stderr for the reason."`
+	ExitCode           *int32 `json:"exit_code,omitempty" jsonschema:"Present only when a process actually ran and exited with a status. Absent when nothing executed (denied_by_policy, unreachable, version_refused) or the process was killed without an exit status (timeout, cancelled, spawn failure) — outcome is the authoritative state, see stderr for the reason. Also absent on a failure row whose daemon report the Relay refused as a protocol violation: the Task may well have executed, but what happened is unknown, so stderr is Relay-authored rather than the daemon's own bytes."`
 	Stdout             string `json:"stdout"`
 	Stderr             string `json:"stderr"`
 	StdoutTruncated    bool   `json:"stdout_truncated"`

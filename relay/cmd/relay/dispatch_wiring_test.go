@@ -85,6 +85,63 @@ func TestRouterSink_ForwardsToRouter(t *testing.T) {
 	}
 }
 
+// TestRouterSink_ForgedRelayOnlyOutcomeRefused is #632's regression test on
+// the FULL production wiring: the taskSink.deliver entry point tunnel.go:249
+// calls, all the way through routerSink -> dispatch.Router -> the wire
+// boundary. A real relay-daemon cannot forge this outcome (it never emits
+// one — measured against daemon/src/dispatch.rs and dedup.rs), so this
+// property can never be an integration test: it is only reachable by
+// injecting a forged TaskResult exactly as sink.deliver would receive one
+// off a compromised Node's Tunnel.
+func TestRouterSink_ForgedRelayOnlyOutcomeRefused(t *testing.T) {
+	router, _, sink := newDispatchStack(testTaskRepository(t))
+
+	sentCh := make(chan *relayv1.RelayMessage, 4)
+	send := func(msg *relayv1.RelayMessage) error {
+		sentCh <- msg
+		return nil
+	}
+
+	unregister := sink.register("node-1", send)
+	defer unregister()
+
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := router.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+		errCh <- err
+	}()
+
+	select {
+	case <-sentCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for router to send the dispatched task")
+	}
+
+	// A compromised but enrolled Node claims its Task was never sent, while
+	// also claiming it ran ("i actually ran") — the exact #632 lie.
+	sink.deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+		Stdout:  []byte("i actually ran"),
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("router.Dispatch: %v", err)
+	}
+	res := <-resultCh
+	if res.Outcome != jobs.OutcomeFailure {
+		t.Errorf("Dispatch result Outcome = %v, want jobs.OutcomeFailure", res.Outcome)
+	}
+	if res.ExitCode != -1 {
+		t.Errorf("Dispatch result ExitCode = %d, want -1", res.ExitCode)
+	}
+	if len(res.Stdout) != 0 {
+		t.Errorf("Dispatch result Stdout = %q, want empty — the Node's claimed output must be discarded", res.Stdout)
+	}
+}
+
 // TestNewDispatchStack_ReconcilerUsesRouter asserts that newDispatchStack
 // wires the Reconciler's Conduit to the same Router it returns (not some
 // other Router), by relying on Router.WaitForNode/Connected staying

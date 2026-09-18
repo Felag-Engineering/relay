@@ -14,6 +14,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -64,6 +65,103 @@ const (
 const VersionRefusedMessage = "capability: dispatch refused: this Node's relay-daemon reports a version below " +
 	"the Relay's configured minimum (ADR-0014); the Task was never sent. Upgrade the daemon on this Node " +
 	"through your config-management / IaC pipeline — the Relay never pushes binaries."
+
+// ViolationRule names the specific way a relay-daemon's TaskResult broke the
+// wire contract (#632): what dispatch.result() refuses at the wire boundary,
+// before a Result is ever persisted or a Task resolved with what the daemon
+// actually sent.
+type ViolationRule int
+
+const (
+	// ViolationNone is the zero value: the wire TaskResult was one a
+	// relay-daemon is permitted to send, so a zero-value ProtocolViolation
+	// means "no violation".
+	ViolationNone ViolationRule = iota
+	// ViolationRelayOnlyOutcome: the daemon reported an Outcome /proto
+	// reserves for the Relay to synthesize ("a daemon never emits this").
+	ViolationRelayOnlyOutcome
+	// ViolationUnresolvedOutcome: the daemon reported a finished Task with no
+	// Outcome at all (the enum's zero value means "not yet resolved").
+	ViolationUnresolvedOutcome
+)
+
+// String renders r for a log attribute (dispatch's slog.Warn at the wire
+// boundary), so the value stays legible rather than a bare int.
+//
+// ViolationNone has its own case rather than falling into default: default
+// is reserved for a rule value this method genuinely does not recognize, so
+// it never claims "no violation" about one that might not be none at all
+// (code review, cycle 2).
+func (r ViolationRule) String() string {
+	switch r {
+	case ViolationNone:
+		return "none"
+	case ViolationRelayOnlyOutcome:
+		return "relay_only_outcome"
+	case ViolationUnresolvedOutcome:
+		return "unresolved_outcome"
+	default:
+		return fmt.Sprintf("unknown_violation_rule(%d)", int(r))
+	}
+}
+
+// ProtocolViolation records that a relay-daemon reported something the wire
+// contract does not permit. The zero value means no violation.
+type ProtocolViolation struct {
+	Rule ViolationRule
+	// ReportedOutcome is the wire enum's own name (e.g.
+	// "OUTCOME_VERSION_REFUSED"), not a relayv1.Outcome: this package carries
+	// no proto dependency (see the package doc comment), so dispatch fills
+	// this in from relayv1.Outcome_name at the wire boundary.
+	ReportedOutcome string
+}
+
+// Violated reports whether v records an actual protocol violation.
+func (v ProtocolViolation) Violated() bool { return v.Rule != ViolationNone }
+
+// Explanation renders v as Relay-authored, caller-facing text explaining why
+// a Task resolved failure with no daemon-produced output: the wire boundary
+// discarded what the Node reported, so this is the one place a Result's
+// Stderr carries Relay prose instead of Node bytes. Direct precedent for
+// Relay-synthesized text living in this package: VersionRefusedMessage above.
+//
+// Drafting rules, mirroring capability/refusal.go's five-rule idiom:
+//  1. Never say "never sent", "was not sent" or "nothing executed" — that is
+//     the exact lie #632 is about. The Task WAS dispatched and may have run.
+//  2. Names no file path and no Account.
+//  3. Relay-authored, never daemon output — this is prose, never an echo of
+//     anything the Node actually sent.
+//  4. Cites the contract (/proto), never an internal invariant number:
+//     internal numbering does not belong in caller-facing bytes.
+func (v ProtocolViolation) Explanation() string {
+	if !v.Violated() {
+		return ""
+	}
+	name := v.ReportedOutcome
+	if name == "" {
+		name = "an unnamed value"
+	}
+	base := "dispatch: this Node's relay-daemon reported something the wire contract " +
+		"(/proto) does not permit, so the Relay discarded its report. The Task WAS " +
+		"dispatched to this Node and may have executed: what actually happened there " +
+		"is unknown, and this row must not be read as proof that the Task did not " +
+		"run. Treat the Node as misbehaving and investigate it."
+	switch v.Rule {
+	case ViolationRelayOnlyOutcome:
+		return base + fmt.Sprintf(" The reported outcome (%s) is one /proto reserves for "+
+			"the Relay to synthesize; no daemon may send it.", name)
+	case ViolationUnresolvedOutcome:
+		return base + " The report carried no outcome at all, which a finished Task's " +
+			"result may never do."
+	}
+	// A ViolationRule Violated() reports true but with no case above: a future
+	// rule added to the const block without a matching case here. Returning ""
+	// would be indistinguishable from "no violation" — the exact failure mode
+	// #632 exists to prevent — so this stays non-empty even though it names no
+	// specific rule (code review, cycle 2; TestEveryWireOutcomeIsClassified's
+	// non-empty-Stderr assertion is what would catch this going forward).
+	return base
+}
 
 // RiskClass mirrors relayv1.RiskClass. The zero value, RiskClassUnspecified,
 // keeps the enum's zero value defined, matching how Outcome mirrors Unspecified.
@@ -151,7 +249,10 @@ type Task struct {
 }
 
 // Result is the outcome of a resolved Task, as reported by the relay-daemon
-// (or synthesized by the Relay, e.g. OutcomeUnreachable).
+// (or synthesized by the Relay, e.g. OutcomeUnreachable). A Result may also
+// be wholly Relay-authored where the wire boundary refused the daemon's
+// report as a protocol violation (ProtocolViolation.Explanation, #632): in
+// that case Stderr carries Relay text and no daemon bytes survive.
 type Result struct {
 	Outcome  Outcome
 	ExitCode int32

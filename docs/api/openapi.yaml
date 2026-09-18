@@ -1346,7 +1346,11 @@ components:
             `version_refused`) or was killed without one (`timeout`,
             `cancelled`, spawn failure) has no `exit_code` key at all — reading
             an absent code as `0` would turn "did not run" into "succeeded".
-            `outcome` is the authoritative state.
+            `outcome` is the authoritative state. A Task whose daemon report
+            the Relay refused as a protocol violation also has no `exit_code`
+            key and is neither of those: it may well have executed, and what
+            actually happened is unknown — `stderr` on that row is
+            Relay-authored, not the daemon's own bytes.
         stdout: { type: string }
         stderr: { type: string }
         stdout_truncated:
@@ -1370,13 +1374,20 @@ components:
             and this field carries the Relay's framing — two different authors. On a
             `version_refused` row the Relay authored both and this repeats `stderr`.
             Byte-identical to the MCP surface's field (ADR-0009/0010).
-            This field is keyed on `outcome`, which on this (apply) path is the
-            Node's own self-reported value — so its lead clause ("nothing
-            executed", "the Task was never sent") is only as trustworthy as
+            This field is keyed on `outcome`. For `denied_by_policy`, `outcome`
+            on this (apply) path is the Node's own self-reported value — so
+            its lead clause ("nothing executed") is only as trustworthy as
             `outcome`/`stderr` already are on this same row, not a new
             guarantee; the boundary text it is built from (no code path to
             write Policy, no caller identity on the wire) holds unconditionally
-            regardless of what any Node reports.
+            regardless of what any Node reports. From #632 onward, `unreachable`
+            and `version_refused` are Relay-authored on every path: a daemon
+            reporting either is refused at the wire boundary and recorded as
+            `failure` instead, so a `version_refused` row's "the Task was
+            never sent" is always this control plane's own claim, never a
+            Node's. A `version_refused` row a pre-#632 Relay already persisted
+            against this same store predates that boundary and is not covered
+            by this guarantee.
 
     ExecutionResponse:
       type: object

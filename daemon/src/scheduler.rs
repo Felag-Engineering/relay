@@ -582,7 +582,22 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // start_paused is LOAD-BEARING, not tidiness. On a real clock this test's
+    // premise — "an already-expired deadline is Ready on the FIRST poll" — is
+    // decided by where the deadline lands relative to a tokio timer tick, and
+    // tokio's resolution is 1ms, so a 1ms margin sits exactly on that boundary.
+    // When the sleep arm is not Ready first, the free permit arm (always Ready)
+    // wins and the assertion below fires. That is a property of the test's
+    // setup, never of `acquire`. It went green ~370 consecutive local runs,
+    // including under full CPU load, and red on a loaded CI runner (#637);
+    // dropping the margin to 0ms reproduces it locally every time.
+    //
+    // Virtual time makes "already expired" exact instead of phase-dependent:
+    // Instant::now() is frozen, so now() - 1ms is unambiguously a past tick and
+    // the sleep is elapsed on the first poll. The sibling test at
+    // queued_timeout_returns_timeout does NOT need this — it occupies the gate,
+    // so the permit arm is never Ready and the timeout wins whenever it fires.
+    #[tokio::test(start_paused = true)]
     async fn free_gate_timeout_beats_permit_biased() {
         let sched = Scheduler::new();
         for _ in 0..64 {

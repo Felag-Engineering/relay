@@ -110,12 +110,14 @@ type rawExecRequest struct {
 // perNodeResult is one Node's Task outcome.
 //
 // ExitCode is a pointer so it is OMITTED whenever no real process exit status
-// exists (#207/#253): the daemon uses -1 exclusively as its "no exit status"
-// sentinel (denied-before-spawn, spawn failure, signal-kill, timeout/cancel
-// kill) and Relay-synthesized outcomes (unreachable, version_refused) carry
-// only a zero value. Rendering either as a plausible `0` would let a caller
-// read "did not run" as "ran and succeeded"; Outcome is the authoritative
-// did-it-run state.
+// exists (#207/#253): the daemon's -1 "no exit status" sentinel
+// (denied-before-spawn, spawn failure, signal-kill, timeout/cancel kill), the
+// Relay's synthesized zero value (unreachable, version_refused), and — since
+// #632 — the Relay's own -1 on a Task whose daemon report the wire boundary
+// refused as a protocol violation (it may well have executed; what happened
+// is unknown). Rendering any of these as a plausible `0` would let a caller
+// read "did not run" or "unknown" as "ran and succeeded"; Outcome is the
+// authoritative did-it-run state.
 //
 // RefusalExplanation carries a second author on a denied_by_policy row: stderr
 // stays the Node's own verbatim reason, and RefusalExplanation is the Relay's

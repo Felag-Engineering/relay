@@ -91,12 +91,19 @@ const PolicyDenyVerdictExplanation = "The Node reports that it would refuse this
 // table is anchored to relayv1.Outcome_name's length, so a new /proto Outcome
 // with no added case here fails that test.
 //
-// On the apply path, o is the Node's own self-reported outcome, so the lead
-// clause this returns ("nothing executed", "the Task was never sent") is only
-// as trustworthy as outcome/stderr already are on that same row — not a new
-// trust boundary — whereas the shared boundary text's architecture clauses
-// (no code path to write Policy, no caller identity on the wire) hold
-// unconditionally regardless of what any Node reports.
+// On the apply path, o is the Node's own self-reported outcome for the
+// values a daemon may legitimately send (denied_by_policy, unsupported,
+// timeout, cancelled, failure, success), so the lead clause this returns
+// ("nothing executed", "the Task was never sent") is only as trustworthy as
+// outcome/stderr already are on that same row — not a new trust boundary —
+// whereas the shared boundary text's architecture clauses (no code path to
+// write Policy, no caller identity on the wire) hold unconditionally
+// regardless of what any Node reports. From #632 onward, unreachable and
+// version_refused are NOT self-reported on any path: the wire boundary
+// (dispatch.result()) refuses a daemon that reports either, so by the time
+// o reaches this function it is always Relay-authored. A version_refused row
+// a pre-#632 Relay already persisted predates that boundary and is not
+// covered by this guarantee.
 func RefusalExplanation(o jobs.Outcome) string {
 	switch o {
 	case jobs.OutcomeDeniedByPolicy:

@@ -144,10 +144,14 @@ type taskRow struct {
 	NodeID   string
 	NodeHref string
 
-	// ExitCode is rendered only when ShowExit. The daemon uses -1 EXCLUSIVELY as
-	// its "no exit status" sentinel — denied before spawn, spawn failure,
-	// signal kill, timeout kill — and Relay-synthesized outcomes (unreachable,
-	// version_refused) carry a zero that means nothing at all.
+	// ExitCode is rendered only when ShowExit. Three producers put a sentinel
+	// here, never a real process result. The daemon uses -1 for "no exit
+	// status": denied before spawn, spawn failure, signal kill, timeout kill.
+	// A Relay-synthesized outcome (unreachable, version_refused) carries a
+	// zero that means nothing at all. And since #632, the Relay itself writes
+	// -1 on a failure row whose daemon report the wire boundary refused as a
+	// protocol violation — the Task may well have executed; what happened
+	// there is unknown.
 	//
 	// The Control API omits the field for the same reason (execution.go makes
 	// it a pointer). Rendering "exit -1" beside a deny invites an operator to
