@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -120,6 +121,72 @@ func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data a
 	}
 	p.Content = template.HTML(buf.String())
 	Render(w, p)
+}
+
+// notFoundTmpl is the styled 404, mounted on every unmatched /console/ path
+// and reused by every refusal that used to fall through to net/http's plain
+// "404 page not found" (see console.go's gated and methodMismatch).
+//
+// It echoes NOTHING caller-supplied — no request path, no query, no header —
+// so a refused, in-role route and a path that was never mounted at all render
+// the SAME bytes. That byte-identity is the property ADR-0026 decision 5
+// depends on: a viewer must not be able to tell "this route exists but I lack
+// the role" from "this route does not exist" by diffing two 404 pages.
+var notFoundTmpl = newScreen("notfound", `
+<div class="placeholder">
+  <p>Nothing in the Console lives at this address.</p>
+  <p><a href="/console/">Back to the fleet</a>.</p>
+</div>
+`)
+
+// renderNotFound renders the styled Console 404: not net/http's plain-text
+// one, and not the request path echoed back.
+//
+// It is reached only from behind Authenticator.Middleware — every /console/*
+// request that is not on Unauthenticated's short list has already resolved a
+// Principal before the mux is consulted, so the `!ok` branch below is
+// unreachable in production. It falls back to net/http's 404 rather than a
+// 500 so a test or a future caller that reaches this function without a
+// Principal in context fails safe instead of panicking on page().
+//
+// Content-Type is set BEFORE WriteHeader, unconditionally: Render (via
+// renderScreen) sets it too, but by then the status line is already written
+// and a header set after WriteHeader is silently dropped on a real
+// connection. Setting it here first is what makes the response text/html
+// rather than whatever the ResponseWriter's zero value would otherwise send.
+//
+// banner() is deliberately not called: it reads Freeze state, which the gated
+// and unmounted paths that share this handler must render identically
+// regardless of.
+func renderNotFound(d Deps, w http.ResponseWriter, r *http.Request) {
+	pr, ok := principal(w, r)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	token, _ := sessionCSRFToken(r)
+	role := accounts.Role(pr.Role)
+	pg := Page{
+		Title:   "Not found",
+		Account: pr.Account,
+		Role:    role,
+		// currentPath "" rather than r.URL.Path: a refused in-role nav route
+		// (say /console/agents refused by methodMismatch) must not highlight
+		// that nav item while an unmounted path renders the identical page.
+		Nav:       Nav(d, role, ""),
+		CSRFToken: token,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	renderScreen(w, pg, notFoundTmpl, nil)
+}
+
+// notFoundHandler adapts renderNotFound to an http.HandlerFunc for
+// Register's catch-all and for gated/methodMismatch's shared refusal.
+func notFoundHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		renderNotFound(d, w, r)
+	}
 }
 
 // unavailable renders a screen whose backing seam the composition root did not

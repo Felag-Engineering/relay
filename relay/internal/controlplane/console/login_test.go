@@ -266,6 +266,23 @@ func TestConsole_UnauthenticatedRequestIsSentToSignIn(t *testing.T) {
 	}
 }
 
+// TestConsole_UnauthenticatedUnknownPathRedirectsToSignIn (#640, item 5): a
+// path this package never mounts at all is no different from any other
+// private route to an unauthenticated caller — it never reaches the mux (and
+// so never reaches the new styled 404) because Authenticator.Middleware
+// redirects first. No route enumeration before sign-in.
+func TestConsole_UnauthenticatedUnknownPathRedirectsToSignIn(t *testing.T) {
+	f := newLoginFixture(t)
+
+	rec := f.do(t, httptest.NewRequest(http.MethodGet, "/console/does-not-exist", nil))
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+	if loc := rec.Header().Get("Location"); !strings.HasPrefix(loc, LoginPath) {
+		t.Fatalf("Location = %q, want the sign-in page", loc)
+	}
+}
+
 // TestConsole_UnauthorizedRedirectDropsATraversalDestination drives a crafted
 // dot-segment destination through the REAL middleware, not just
 // safeReturnPath in isolation: a fix applied in handleLoginForm rather than
@@ -490,6 +507,33 @@ func TestConsole_ThrottleSaysSoAndSaysWhen(t *testing.T) {
 	f.clk.advance(2 * time.Minute)
 	if rec, _ := f.signIn(t, "mike", consolePassword); rec.Code != http.StatusSeeOther {
 		t.Fatalf("after waiting out the delay, sign-in = %d, want %d", rec.Code, http.StatusSeeOther)
+	}
+}
+
+// TestConsole_ThrottledSignInKeepsTheUsernameNotThePassword (#640, item 4):
+// a throttled re-render must not make the operator retype what they already
+// typed, and must never echo the password regardless.
+func TestConsole_ThrottledSignInKeepsTheUsernameNotThePassword(t *testing.T) {
+	f := newLoginFixture(t)
+
+	firstRec, _ := f.signIn(t, "mike", "wrong")
+	if firstRec.Code != http.StatusUnauthorized {
+		t.Fatalf("first failure status = %d", firstRec.Code)
+	}
+	if strings.Contains(firstRec.Body.String(), `value="mike"`) {
+		t.Error("a bad-credentials re-render echoed the username — this scope is throttle-only")
+	}
+
+	rec, _ := f.signIn(t, "mike", consolePassword)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTooManyRequests)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `value="mike"`) {
+		t.Error("a throttled re-render did not keep the submitted username")
+	}
+	if strings.Contains(body, consolePassword) {
+		t.Error("a throttled re-render echoed the password")
 	}
 }
 

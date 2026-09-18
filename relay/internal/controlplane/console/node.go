@@ -418,7 +418,20 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 				}
 			}
 
-			rows, elided := windowed(recs, nodeTaskRows)
+			// Recent Tasks is Tasks dispatched to this Node, not reads ABOUT
+			// it: filter to KindDispatch BEFORE windowing, so forty page
+			// views of this very screen (each a describe_node read) cannot
+			// push every real Task out of the window (#640). Denies stay —
+			// they are KindDispatch rows with outcome denied_by_policy — and
+			// refusals stay excluded, as they always were: a refusal is
+			// Relay-side and never reached the Node (nodeTaskFrom's doc).
+			tasks := make([]audit.Record, 0, len(recs))
+			for _, rec := range recs {
+				if rec.Kind == audit.KindDispatch {
+					tasks = append(tasks, rec)
+				}
+			}
+			rows, elided := windowed(tasks, nodeTaskRows)
 			v.TasksElided = elided
 			// The same rule denied over and over is ONE fact, not twenty. A
 			// Node that has refused the same read every hour for a day would
@@ -475,42 +488,18 @@ func factRows(n registry.Node) []nodeFact {
 // nodeTaskFrom projects one audit record into a recent-Task row, or reports
 // that it is not one.
 //
-// Only dispatch and read records describe something that happened ON this Node.
-// A refusal is Relay-side — nothing reached the machine — and belongs on
-// Activity, where it is attributed to the principal who was refused rather than
-// to the Node that never heard about it.
-//
-// # The admitting switch names the outcome, rather than a corrective one
-//
-// The outcome chip used to be built from rec.Outcome for both admitted kinds.
-// That is right for a dispatch and wrong for a read: auditsink.RecordRead
-// writes who read, which tool, what they aimed it at and when, and deliberately
-// no per-Node verdict — nothing was dispatched and no daemon decided anything.
-// The zero Outcome then rendered "unspecified", the Console saying "we don't
-// know" about the one family of record whose disposition is completely known
-// (#520; the Agents screen had the same bug, #517).
-//
-// agentCallFrom fixes its copy with a CORRECTIVE switch after the assignment,
-// because it admits eight kinds and only some of them need correcting. This
-// function admits exactly two, so a second switch would be a special case
-// bolted beside the switch that already decides what a record is. Deciding the
-// outcome inside the admitting switch is both smaller and stricter: a kind
-// added to it later cannot be admitted without someone naming what its chip
-// says, which is precisely the omission that produced this bug.
-//
-// Dispatch is the only admitted kind with a real per-Node verdict — a
-// zero-result dispatch record carries no NodeID at all, so ByNode never returns
-// one here — and the word for the other is justified at readOutcomeAudited
-// (vocab.go), taken from there rather than re-minted so that two screens naming
-// these records cannot name them two ways.
+// Only dispatch records describe something that happened ON this Node —
+// Recent Tasks is Tasks dispatched to this Node, denies included (spec 02).
+// Control-plane reads ABOUT the Node (describe_node, get_job) are still
+// written to the trail and still appear on Activity, Agents and Read egress;
+// this panel just does not list them (#640). A refusal is Relay-side —
+// nothing reached the machine — and belongs on Activity, where it is
+// attributed to the principal who was refused rather than to the Node that
+// never heard about it. buildNodeView's caller filters to KindDispatch before
+// this function ever sees a row; the switch below is a second, defensive
+// gate on the same rule.
 func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
-	var outcome string
-	switch rec.Kind {
-	case audit.KindDispatch:
-		outcome = OutcomeLabel(rec.Outcome)
-	case audit.KindRead:
-		outcome = readOutcomeAudited
-	default:
+	if rec.Kind != audit.KindDispatch {
 		return nodeTask{}, false
 	}
 	f := factsOfRecord(rec)
@@ -518,11 +507,16 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Operation: operationText(f),
 		Args:      argsText(f),
-		Outcome:   outcome,
+		Outcome:   OutcomeLabel(rec.Outcome),
 		JobID:     rec.JobID,
 		Principal: principalText(f),
 		Verified:  rec.Attribution.Verified.AccountID != "",
-		ReadClass: rec.Kind == audit.KindRead,
+		// The Node's own dispatches carry no declared risk class, so this
+		// infers one the same way Activity does (activity.go), rather than
+		// keying off rec.Kind == audit.KindRead — that kind was filtered out
+		// above, but a read-class DISPATCH (file.read, log.tail ...) still
+		// deserves the "output not retained" note (ADR-0025).
+		ReadClass: riskOf(f) == jobs.RiskClassRead,
 	}
 	if rec.JobID != "" {
 		t.JobHref = "/console/jobs/" + rec.JobID
@@ -580,7 +574,7 @@ var nodeTmpl = newScreen("node", `
   <div class="pcol">
     <section class="panel">
       <h3>Identity &amp; enrollment</h3>
-      <dl>
+      <dl class="kv">
         <dt>node id</dt><dd><code>{{.ID}}</code></dd>
         <dt>certificate</dt><dd><code title="{{.CertFingerprint}}">{{short .CertFingerprint}}</code></dd>
         <dt>enrolled via</dt><dd>{{if .EnrollingToken}}<code>{{.EnrollingToken}}</code>{{else}}<span class="dim">not recorded</span>{{end}}</dd>
@@ -598,7 +592,7 @@ var nodeTmpl = newScreen("node", `
       answerable; the certificate is not, and this Node cannot reconnect.</p>
       {{end}}
       {{if .CertProvenanceKnown}}
-      <dl>
+      <dl class="kv">
         <dt>enrolled</dt><dd>{{if .EnrolledAt}}{{.EnrolledAt}}{{else}}<span class="dim">before this was recorded</span>{{end}}</dd>
         <dt>expires</dt><dd>{{.CertNotAfter}} <span class="dim">{{.CertExpiresIn}}</span></dd>
         <dt>renewals</dt><dd>{{.RenewalCount}}{{if .LastRenewedAt}} <span class="dim">last {{.LastRenewedAt}}</span>{{else}} <span class="dim">never renewed</span>{{end}}</dd>

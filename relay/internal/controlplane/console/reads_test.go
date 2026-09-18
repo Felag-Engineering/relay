@@ -18,14 +18,20 @@ import (
 	"go/parser"
 	"go/token"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditquery"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
 // readsDeps wires a Console to nothing but the read lane, which is all Read
@@ -868,6 +874,91 @@ func TestReads_EnumerationsAreCountedApartFromNodeReads(t *testing.T) {
 	}
 }
 
+// enumHeadlinePattern extracts the headline enumeration figure —
+// `<b>N</b><span>control-plane enumeration(s)</span>` — from a rendered
+// Read-egress page.
+var enumHeadlinePattern = regexp.MustCompile(`<b>(\d+)</b><span>control-plane enumerations?</span>`)
+
+// principalEnumPattern extracts the By-principal table's Enumerations cell —
+// the second `<td class="num">` after the row's trust chip — for the
+// Account named by its rendered display text.
+func principalEnumPattern(account string) *regexp.Regexp {
+	return regexp.MustCompile(`(?s)>` + regexp.QuoteMeta(account) + `</span></td>\s*` +
+		`<td class="num">\d+</td>\s*<td class="num">(\d+)</td>`)
+}
+
+// TestReads_EnumerationHeadlineAndPrincipalTableAreOneSnapshot (#640, item 6).
+//
+// The fixtures elsewhere in this file are fakeQueries, which answer instantly
+// and cannot reproduce the bug: the read lane records each query's OWN
+// KindRead record before that query runs (capability/readlane.go), so the
+// headline and the by-principal Enumerations column disagreed by exactly the
+// number of the page's own reads that landed between the two aggregates that
+// used to compute them. Only a REAL store, sink and query engine reproduce
+// that ordering, so this test is store-backed rather than fakeQueries-backed
+// — and it must FAIL on the code before this change (a difference of 2).
+func TestReads_EnumerationHeadlineAndPrincipalTableAreOneSnapshot(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	sink := auditsink.New(st.Audit(), auditsink.WithClock(func() time.Time { return testNow }))
+	q := auditquery.New(st.AuditQueries(), st.JobQueries())
+	svc := capability.New(registry.NewInMemory(),
+		capability.WithAuditSink(sink),
+		capability.WithQueries(q, q),
+	)
+
+	// The same verified principal the handler authenticates as (newTestHandler
+	// -> roleVerifier{RoleAdmin}), so these seeded records land in the same
+	// by-principal row the page's own reads do.
+	admin := capability.Principal{
+		AccountID: testAccountID(accounts.RoleAdmin),
+		Account:   testAccountName(accounts.RoleAdmin),
+		Role:      string(accounts.RoleAdmin),
+		Kind:      string(accounts.KindHuman),
+	}
+	ctx := context.Background()
+	for _, tool := range []string{"list_nodes", "list_operations", "list_nodes"} {
+		if err := sink.RecordRead(ctx, admin, tool, "", "", ""); err != nil {
+			t.Fatalf("RecordRead(%q): %v", tool, err)
+		}
+	}
+
+	d := renderableDeps()
+	d.Queries = svc
+	d.Now = func() time.Time { return testNow }
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/reads")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/reads = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+
+	headlineMatch := enumHeadlinePattern.FindStringSubmatch(body)
+	if headlineMatch == nil {
+		t.Fatalf("the enumeration headline did not render at all:\n%s", body)
+	}
+	principalMatch := principalEnumPattern(testAccountName(accounts.RoleAdmin)).FindStringSubmatch(body)
+	if principalMatch == nil {
+		t.Fatalf("the by-principal Enumerations cell did not render for %q:\n%s",
+			testAccountName(accounts.RoleAdmin), body)
+	}
+	if headlineMatch[1] != principalMatch[1] {
+		t.Errorf("headline enumeration figure = %s, by-principal Enumerations cell = %s — they must "+
+			"come from the same aggregate and agree", headlineMatch[1], principalMatch[1])
+	}
+	// Greater than the 3 seeded records: the page's own reads (this render's
+	// QueryJobs/AuditCounts/QueryAudit calls) are counted too, and counted
+	// identically in both figures.
+	if headlineMatch[1] == "3" {
+		t.Error("the headline is exactly the 3 seeded records — the page's own reads are not being " +
+			"counted, so this test is not exercising the gap it exists to close")
+	}
+}
+
 // riskBlindQueries satisfies QueryReader and IGNORES JobFilter.RiskClass —
 // a seam that conforms by signature and not by contract.
 //
@@ -965,8 +1056,9 @@ func TestReads_AFailedAggregateIsAbsentNotZero(t *testing.T) {
 	// has been read", which is a positive claim of zero exposure manufactured
 	// by two failed queries.
 	quiet := &fakeQueries{
-		rows:       []capability.AuditRow{enumRow("list_nodes", "acct-1")},
-		reachErrOn: func(capability.AuditFilter) bool { return true },
+		rows:        []capability.AuditRow{enumRow("list_nodes", "acct-1")},
+		reachErrOn:  func(capability.AuditFilter) bool { return true },
+		countsErrOn: func(capability.AuditFilter) bool { return true },
 	}
 	body = readsBody(t, quiet, "")
 	if strings.Contains(body, "Nothing has been read in this window.") {
@@ -1083,7 +1175,7 @@ func TestReads_OverlongOperationNameIsDroppedNotSentToTheLane(t *testing.T) {
 
 // TestReads_EachDegradedSectionNamesItsOwnQuery.
 //
-// Nine queries, four of which may fail without taking the page down. Each has
+// Eight queries, four of which may fail without taking the page down. Each has
 // to say WHICH figure is missing: a section that renders its rows and stays
 // silent about the query that did not answer is indistinguishable from one
 // that measured a genuine nothing.
@@ -1116,9 +1208,9 @@ func TestReads_EachDegradedSectionNamesItsOwnQuery(t *testing.T) {
 			q.auditErrOn = func(f capability.AuditFilter) bool { return isEnum(f) }
 		}, "The enumeration rows could not be read."},
 		{"the enumeration count (Q7)", func(q *fakeQueries) {
-			q.reachErrOn = func(f capability.AuditFilter) bool { return isEnum(f) }
+			q.countsErrOn = func(f capability.AuditFilter) bool { return isEnum(f) }
 		}, "The exact enumeration count could not be computed"},
-		{"the per-principal counts (Q4/Q9)", func(q *fakeQueries) {
+		{"the per-principal counts (Q4/Q7)", func(q *fakeQueries) {
 			q.countsErrOn = func(capability.AuditFilter) bool { return true }
 		}, "The per-principal figures could not be read."},
 	} {

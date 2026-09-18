@@ -272,6 +272,12 @@ type loginView struct {
 	CSRFToken string
 	Next      string
 
+	// Username is echoed back ONLY on a throttled re-render, as typed, and
+	// never the password. A throttle refuses before any credential is
+	// checked, so nothing about the submitted name is revealed by returning
+	// it; a bad-credentials or infrastructure refusal leaves it empty.
+	Username string
+
 	// Message is shown to the operator. It is one of exactly two strings for a
 	// refused attempt (see loginHandler), never a description of what went
 	// wrong with the credential.
@@ -306,9 +312,10 @@ var loginTmpl = template.Must(template.New("login").Parse(`<!doctype html>
     {{if .Next}}<input type="hidden" name="next" value="{{.Next}}">{{end}}
     <label for="username">Username</label>
     <input id="username" name="username" type="text" autocomplete="username"
-           autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+           autocapitalize="none" autocorrect="off" spellcheck="false" required
+           value="{{.Username}}" {{if not .Username}}autofocus{{end}}>
     <label for="password">Password</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <input id="password" name="password" type="password" autocomplete="current-password" required {{if .Username}}autofocus{{end}}>
     <button type="submit">Sign in</button>
   </form>
 </main>
@@ -413,6 +420,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 			renderLogin(w, http.StatusTooManyRequests, loginView{
 				CSRFToken: token,
 				Next:      next,
+				Username:  r.PostFormValue("username"),
 				Throttled: true,
 				Message:   throttleMessage(wait),
 			})

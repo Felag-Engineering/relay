@@ -3,7 +3,9 @@ package consoleauth_test
 import (
 	"context"
 	"errors"
+	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -327,6 +329,44 @@ func TestLogin_ThrottleIsReportedAsAThrottleAndNotAsAFailure(t *testing.T) {
 	}
 }
 
+// TestLogin_ThrottledAuditStatesTheWaitRoundedUp (#640, item 4): a sub-second
+// wait used to be rounded to NEAREST (time.Duration.Round), so a 400ms wait
+// audited as "accepted in 0s" — a lie about a real, non-zero wait, and one
+// that disagreed with both the page's own copy and the Retry-After header
+// (which both use the ceiling). The audit reason must round up instead, so
+// every surface names the same number.
+func TestLogin_ThrottledAuditStatesTheWaitRoundedUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t)
+	ctx := context.Background()
+
+	// The first failure earns the base delay (1s, DefaultAccountBaseDelay).
+	if _, _, err := f.svc.Login(ctx, attempt("mike", "wrong")); !errors.Is(err, consoleauth.ErrBadCredentials) {
+		t.Fatalf("first failure = %v", err)
+	}
+	f.clk.advance(600 * time.Millisecond)
+
+	_, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
+	wait, throttled := consoleauth.Throttled(err)
+	if !throttled {
+		t.Fatalf("an attempt 600ms into a 1s delay = %v, want a ThrottledError", err)
+	}
+	if wait != 400*time.Millisecond {
+		t.Fatalf("wait = %s, want 400ms", wait)
+	}
+
+	reason := f.audit.last().Reason
+	if !strings.Contains(reason, "accepted in 1s") {
+		t.Errorf("reason = %q, want it to name the wait rounded UP to 1s", reason)
+	}
+	if strings.Contains(reason, "in 0s") {
+		t.Errorf("reason = %q, rounds a real 400ms wait down to nothing", reason)
+	}
+	if want := int(math.Ceil(wait.Seconds())); !strings.Contains(reason, strconv.Itoa(want)+"s") {
+		t.Errorf("reason = %q, does not name %ds — the same ceiling Retry-After uses", reason, want)
+	}
+}
+
 func TestResolve_ReadsTheAccountFreshOnEveryCall(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -442,8 +482,10 @@ func TestStepUp_AThrottledStepUpIsAudited(t *testing.T) {
 	}
 	afterFailure := len(f.audit.all())
 
-	// The immediate retry lands inside the progressive delay the failure
-	// above just earned.
+	// 600ms into the 1s delay the failure above just earned, so the wait is
+	// a sub-second 400ms — the exact case that used to round to "0s"
+	// (time.Duration.Round) instead of up to "1s" (#640, item 4).
+	f.clk.advance(600 * time.Millisecond)
 	err = f.svc.StepUp(ctx, id, accounts.NewPassword(testPassword), "198.51.100.7")
 	wait, throttled := consoleauth.Throttled(err)
 	if !throttled {
@@ -464,8 +506,14 @@ func TestStepUp_AThrottledStepUpIsAudited(t *testing.T) {
 	if !strings.Contains(last.Reason, "step-up") {
 		t.Errorf("reason = %q, does not name the step-up", last.Reason)
 	}
-	if !strings.Contains(last.Reason, wait.Round(time.Second).String()) {
-		t.Errorf("reason = %q, does not name the wait %s", last.Reason, wait.Round(time.Second))
+	// The CEILING, agreeing with Retry-After — not time.Duration.Round, which
+	// would round this 400ms wait down to "0s".
+	ceiling := time.Duration(math.Ceil(wait.Seconds())) * time.Second
+	if !strings.Contains(last.Reason, ceiling.String()) {
+		t.Errorf("reason = %q, does not name the wait %s", last.Reason, ceiling)
+	}
+	if strings.Contains(last.Reason, "in 0s") {
+		t.Errorf("reason = %q, rounds a real wait down to nothing", last.Reason)
 	}
 }
 
