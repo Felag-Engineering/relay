@@ -442,11 +442,17 @@ func routesFor(d Deps, role accounts.Role) []Route {
 // Otherwise the returned handler reads the Principal that Middleware injected
 // and calls notFound — the SAME not-found handler Register mounts on every
 // unmatched /console/ path — unless r.ReachableBy(that Principal's role). A
-// MISSING Principal on a gated route is unreachable in production (every
-// gated route sits behind Authenticator.Middleware, Register's contract) and
-// also refused here rather than the 500 [principal] returns elsewhere,
-// because the refusal must stay byte-identical to a route that was never
-// mounted, not merely present with a different number.
+// MISSING Principal on a gated route is unreachable in production for gated
+// ITSELF (every route gated wraps has constrainsReach() true, so its MinRole
+// exceeds RoleViewer and it sits behind Authenticator.Middleware, Register's
+// contract). But notFound is the SAME handler Register also mounts directly
+// on the public, method-less catch-all ("/console/"), which a public,
+// unauthenticated request CAN reach — an OPTIONS on a public path, or a path
+// variant (a trailing slash) the route table never claimed — so notFound must
+// handle a missing Principal safely on its own; see [renderNotFound]. gated
+// refuses here, rather than deferring to the 500 [principal] returns
+// elsewhere, because the refusal must stay byte-identical to a route that was
+// never mounted, not merely present with a different number.
 //
 // A typo'd MinRole fails closed too: RoleViewer.AtLeast(<not a role>) is
 // false, so an invalid MinRole is treated as gate-worthy, and
@@ -557,12 +563,17 @@ func methodMismatch(r Route, notFound http.HandlerFunc) http.HandlerFunc {
 // route, and putting it there would make it a nav item and a read-audit
 // classification entry it is neither of.
 //
-// By the time any request reaches this mux, authentication has already
-// happened: Authenticator.Middleware redirects an unauthenticated /console/*
-// request to sign-in before the mux is consulted (login.go's Unauthenticated
-// admits only LoginPath and AssetsPrefix), so the catch-all enumerates
-// nothing before sign-in — an unauthenticated probe of an unknown path gets
-// the sign-in redirect, never this 404.
+// By the time an ORDINARY request reaches this mux, authentication has
+// already happened: Authenticator.Middleware redirects an unauthenticated
+// /console/* request to sign-in before the mux is consulted, so an
+// unauthenticated probe of an unknown path gets the sign-in redirect, never
+// this 404. The exception is login.go's Unauthenticated surface itself
+// (LoginPath and AssetsPrefix, exactly): a request that targets one of those
+// but not with the method or exact path the route table claims — an
+// unauthenticated OPTIONS on LoginPath, say — is still "public" by
+// Middleware's own predicate, so it reaches the catch-all with no Principal
+// in context at all. [renderNotFound] handles that case directly rather than
+// assuming it cannot happen; see its doc comment.
 func Register(mux *http.ServeMux, d Deps) {
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }

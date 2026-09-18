@@ -149,6 +149,33 @@ func TestConsole_NoTableCellIsTakenOutOfTableLayout(t *testing.T) {
 	}
 }
 
+// mediaBlock returns the declarations inside the FIRST "@media (query) {"
+// block in css, matched by counting braces rather than up to the first "}":
+// a naive shortest-match would stop at a nested rule's own closing brace
+// (the 720px block's ".nav { ... }" rule spans several lines) and silently
+// pass a pin that names a rule declared OUTSIDE the block entirely. "" if
+// query's block is not found.
+func mediaBlock(css, query string) string {
+	open := strings.Index(css, "@media ("+query+") {")
+	if open == -1 {
+		return ""
+	}
+	start := open + len("@media ("+query+") {")
+	depth := 1
+	for i := start; i < len(css); i++ {
+		switch css[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return css[start:i]
+			}
+		}
+	}
+	return ""
+}
+
 // TestConsole_ShellStacksAtPhoneWidth pins #640's item 2: at phone width the
 // shell must stack rather than hold the sidebar beside the content, which is
 // what made the document itself scroll sideways at ~400px (document
@@ -157,23 +184,27 @@ func TestConsole_NoTableCellIsTakenOutOfTableLayout(t *testing.T) {
 // A string pin, in the same style TestNode_RecentTasksScrollsInsideItsPanel
 // uses for the stylesheet: it does not render a page at 400px (Go has no
 // layout engine), it asserts the RULE that makes that rendering true exists.
+// It asserts the pinned rules are INSIDE the 720px block itself, not merely
+// present somewhere in the file: a desktop rule that happens to share the
+// same text (or one left behind in a different media block) would otherwise
+// pass this guard without stacking anything at phone width.
 func TestConsole_ShellStacksAtPhoneWidth(t *testing.T) {
 	css, err := assetsFS.ReadFile("assets/console.css")
 	if err != nil {
 		t.Fatalf("read console.css: %v", err)
 	}
-	body := string(css)
 
-	if !strings.Contains(body, "@media (max-width: 720px)") {
+	block := mediaBlock(string(css), "max-width: 720px")
+	if block == "" {
 		t.Fatal("no @media (max-width: 720px) block — the shell has no phone-width layout at all")
 	}
 	for _, want := range []string{
 		".app { flex-direction: column; }",
 		".gbody { flex-direction: column; }",
 	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("console.css does not contain %q — the shell (or the Fleet page's grouped "+
-				"body) does not stack at phone width", want)
+		if !strings.Contains(block, want) {
+			t.Errorf("the @media (max-width: 720px) block does not contain %q — the shell (or the "+
+				"Fleet page's grouped body) does not stack at phone width", want)
 		}
 	}
 }

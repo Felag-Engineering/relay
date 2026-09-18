@@ -283,6 +283,34 @@ func TestConsole_UnauthenticatedUnknownPathRedirectsToSignIn(t *testing.T) {
 	}
 }
 
+// TestConsole_UnauthenticatedPublicPathVariantGetsAPlainNotFoundOnce (#640
+// cycle-2 review, BLOCKING 1): LoginPath is on Unauthenticated's exact-match
+// list, so Authenticator.Middleware treats an OPTIONS on it as PUBLIC and
+// calls next.ServeHTTP with no Principal in context at all — the route table
+// only registers GET and POST /console/login, so this request reaches
+// Register's method-less catch-all directly, not through gated or
+// methodMismatch. renderNotFound must handle that missing Principal itself,
+// with net/http's own plain 404 (never the styled page, which needs a Page
+// built from a Principal): the earlier code called [principal] first, which
+// already wrote a 500 for the missing Principal, and then wrote a second,
+// styled 404 on top of it. Pin a single write: net/http's plain 404, with no
+// "authenticated principal" text anywhere in the response.
+func TestConsole_UnauthenticatedPublicPathVariantGetsAPlainNotFoundOnce(t *testing.T) {
+	f := newLoginFixture(t)
+
+	rec := f.do(t, httptest.NewRequest(http.MethodOptions, LoginPath, nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "authenticated principal") {
+		t.Errorf("body contains the defensive 500 message alongside the 404: %q", body)
+	}
+	if body != "404 page not found\n" {
+		t.Errorf("body = %q, want exactly net/http's plain 404 (a single write, not two)", body)
+	}
+}
+
 // TestConsole_UnauthorizedRedirectDropsATraversalDestination drives a crafted
 // dot-segment destination through the REAL middleware, not just
 // safeReturnPath in isolation: a fix applied in handleLoginForm rather than

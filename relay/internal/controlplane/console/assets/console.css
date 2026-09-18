@@ -1090,15 +1090,18 @@ dd { margin: 0; color: var(--text-primary); }
 dd code, .frow code { font-family: var(--font-mono); font-size: var(--text-sm); }
 dl.kv {
   grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5);
-  /* Scoped to dl.kv rather than every dl (#640): the approval card's
-     code.planhash dd is a horizontal scroll container, and align-items:
-     baseline there would pin its scrollbar edge to the dt's text baseline
-     instead of stretching it, which looks broken rather than aligned. Every
-     dl.kv row (Node detail's identity/cert lists, the approval card's
-     "requested by") gets its dt lined up with the first line of its dd, even
-     when the dd holds a chip whose own line-height differs from plain text. */
-  align-items: baseline;
 }
+/* Per-row, not per-dl (#640 cycle 2 review, BLOCKING 2): the approval card's
+   "requested by" and "plan hash" rows share ONE dl.kv (approvals.go), and
+   code.planhash's dd is a horizontal scroll container — align-items: baseline
+   on the whole dl would pin ITS scrollbar edge to the dt's text baseline
+   instead of stretching it to the row, which looks broken there. dl.kv's
+   default cross-axis alignment (grid's own "stretch") is already correct for
+   every plain-text row, including plan hash; only "requested by" needs its dt
+   lined up with the trust chip's first line rather than stretched to match
+   it, because the chip's own line-height differs from plain text. .baseline
+   marks that one row's dt/dd, not the dl. */
+.kv dt.baseline, .kv dd.baseline { align-self: baseline; }
 
 .polblock { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-canvas); }
 .polrow { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }

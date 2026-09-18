@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -957,6 +958,61 @@ func TestReads_EnumerationHeadlineAndPrincipalTableAreOneSnapshot(t *testing.T) 
 		t.Error("the headline is exactly the 3 seeded records — the page's own reads are not being " +
 			"counted, so this test is not exercising the gap it exists to close")
 	}
+}
+
+// TestReads_UnattributedEnumerationsAreNotDroppedFromThePrincipalTable (#640
+// cycle-2 review, NON-BLOCKING 1b). Q7's headline now sums EVERY bucket
+// AuditCounts returns, including one with no AccountID at all — a caller
+// whose identity did not verify. principalRows keys its map on AccountID
+// too, including "", so that bucket becomes a row of its own ("unattributed")
+// rather than being folded into, or dropped from, an attributed Account's
+// row. This pins that the headline and the by-principal SUM stay equal by
+// construction even when a bucket carries no Account — the case BLOCKING 2's
+// review comment asked to be verified rather than assumed.
+func TestReads_UnattributedEnumerationsAreNotDroppedFromThePrincipalTable(t *testing.T) {
+	q := &fakeQueries{
+		jobs: []capability.JobSummary{readJob("file.read", "acct-1", jobs.RiskClassRead)},
+		rows: []capability.AuditRow{
+			readDispatchRow("file.read", "/etc/shadow", "n1", "acct-1", jobs.OutcomeSuccess),
+			enumRow("list_nodes", "acct-1"),
+			enumRow("list_operations", ""), // no verified identity: AccountID == ""
+		},
+	}
+	body := readsBody(t, q, "")
+
+	headlineMatch := enumHeadlinePattern.FindStringSubmatch(body)
+	if headlineMatch == nil {
+		t.Fatalf("the enumeration headline did not render at all:\n%s", body)
+	}
+	if headlineMatch[1] != "2" {
+		t.Fatalf("headline = %s, want 2 (one attributed enumeration, one unattributed)", headlineMatch[1])
+	}
+
+	attributed := principalEnumPattern("acct-1-bot").FindStringSubmatch(body)
+	if attributed == nil {
+		t.Fatalf("no By-principal Enumerations cell for acct-1-bot:\n%s", body)
+	}
+	unattributed := principalEnumPattern("unattributed").FindStringSubmatch(body)
+	if unattributed == nil {
+		t.Fatalf("the unattributed enumeration is missing its own By-principal row:\n%s", body)
+	}
+
+	got := mustAtoi(t, attributed[1]) + mustAtoi(t, unattributed[1])
+	want := mustAtoi(t, headlineMatch[1])
+	if got != want {
+		t.Errorf("By-principal Enumerations sum = %d (attributed %s + unattributed %s), "+
+			"headline = %d — an unattributed bucket must be counted in both, not dropped from either",
+			got, attributed[1], unattributed[1], want)
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatalf("Atoi(%q): %v", s, err)
+	}
+	return n
 }
 
 // riskBlindQueries satisfies QueryReader and IGNORES JobFilter.RiskClass —

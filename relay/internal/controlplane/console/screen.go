@@ -23,6 +23,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -142,12 +143,16 @@ var notFoundTmpl = newScreen("notfound", `
 // renderNotFound renders the styled Console 404: not net/http's plain-text
 // one, and not the request path echoed back.
 //
-// It is reached only from behind Authenticator.Middleware — every /console/*
-// request that is not on Unauthenticated's short list has already resolved a
-// Principal before the mux is consulted, so the `!ok` branch below is
-// unreachable in production. It falls back to net/http's 404 rather than a
-// 500 so a test or a future caller that reaches this function without a
-// Principal in context fails safe instead of panicking on page().
+// This handler is also the catch-all Register mounts on the bare "/console/"
+// pattern, and that pattern is reachable WITHOUT a Principal: login.go's
+// Unauthenticated list admits LoginPath and AssetsPrefix before
+// Authenticator.Middleware ever authenticates, so a public-path request whose
+// method or trailing slash the route table does not claim (an unauthenticated
+// OPTIONS /console/login, say) reaches this function with no Principal in
+// context. That is an ordinary, reachable case here — not a defensive
+// impossibility — so the `!ok` branch renders net/http's plain 404 directly
+// and returns, without calling [principal], whose own 500 write would double
+// up with the one below it.
 //
 // Content-Type is set BEFORE WriteHeader, unconditionally: Render (via
 // renderScreen) sets it too, but by then the status line is already written
@@ -159,7 +164,7 @@ var notFoundTmpl = newScreen("notfound", `
 // and unmounted paths that share this handler must render identically
 // regardless of.
 func renderNotFound(d Deps, w http.ResponseWriter, r *http.Request) {
-	pr, ok := principal(w, r)
+	pr, ok := controlplane.PrincipalFromContext(r.Context())
 	if !ok {
 		http.NotFound(w, r)
 		return
