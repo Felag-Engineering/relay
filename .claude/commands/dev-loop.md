@@ -80,8 +80,10 @@ unattended; print them interactively) and stop. The fix is a better issue, not a
 
 Skip Stages 3 and 4 only if **all** hold: well-specified; the issue names ≤ 2 files; the change
 is one function, component or config value; **`scripts/security-surface.sh -` over those paths
-prints nothing**; the issue names no spec claims. On skip, write a minimal `plan.md` (title,
-acceptance criteria, files, `Note: scope-gate skip`) and go to Stage 5.
+exits 1** (exit 2 means the check could not run — a missing glob list — and is a skipped gate,
+not a skip-eligible one: escalate as in Stage 3); the issue names no spec claims. On skip, write
+a minimal `plan.md` (title, acceptance criteria, files, `Note: scope-gate skip`) and go to
+Stage 5.
 
 ## Stage 3 — Plan
 
@@ -142,7 +144,10 @@ append under `## Cycle <c> — Code review`.
 
 `scripts/security-surface.sh origin/<default>` prints the matching paths, or nothing.
 
-Nothing → print `Stage 6.5: no security-surface paths` and continue.
+**Exit 1** (nothing printed) → print `Stage 6.5: no security-surface paths` and continue.
+**Exit 2 means the check could not run** — it says why on stderr (a missing glob list, a base
+ref that does not resolve, one that cannot be diffed). That is a skipped gate, not a clean
+surface: escalate as in Stage 3.
 
 Otherwise, in parallel: **the `devloop-security-reviewer` agent** and
 `scripts/codex-review.sh security`. PASS from both → carry the summaries into the PR body.

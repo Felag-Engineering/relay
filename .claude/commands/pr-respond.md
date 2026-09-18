@@ -56,7 +56,8 @@ the issue. It edits; it never commits.
 
 `make verify` (full gate; **max 2 fix attempts** via the developer, then escalate). Then
 **use the `devloop-code-reviewer` agent** on the new diff, and `scripts/codex-review.sh diff`;
-if `scripts/security-surface.sh` matches, also the `devloop-security-reviewer` and
+if `scripts/security-surface.sh` matches (**exit 2 = the check could not run — treat it
+as a failed gate and escalate, never as clean**), also the `devloop-security-reviewer` and
 `scripts/codex-review.sh security`. Blocking findings go back to Stage 2 once; a second
 failure escalates.
 
