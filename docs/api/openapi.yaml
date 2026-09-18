@@ -1357,6 +1357,26 @@ components:
           type: integer
           format: int64
           description: 0 when the Task was never dispatched, never a fabricated value.
+        refusal_explanation:
+          type: string
+          description: |
+            Relay-authored explanation of which boundary refused this Task and what
+            this control plane can and cannot change about it. Present when a named
+            boundary refused the Task and nothing executed (`denied_by_policy`,
+            `version_refused`); absent otherwise — absence means "no boundary
+            refusal", not "succeeded". `outcome` remains authoritative.
+            It explains the boundary, never the specific rule: on a
+            `denied_by_policy` row `stderr` carries the Node's own verbatim reason
+            and this field carries the Relay's framing — two different authors. On a
+            `version_refused` row the Relay authored both and this repeats `stderr`.
+            Byte-identical to the MCP surface's field (ADR-0009/0010).
+            This field is keyed on `outcome`, which on this (apply) path is the
+            Node's own self-reported value — so its lead clause ("nothing
+            executed", "the Task was never sent") is only as trustworthy as
+            `outcome`/`stderr` already are on this same row, not a new
+            guarantee; the boundary text it is built from (no code path to
+            write Policy, no caller identity on the wire) holds unconditionally
+            regardless of what any Node reports.
 
     ExecutionResponse:
       type: object
@@ -1384,6 +1404,17 @@ components:
           type: string
           description: The Policy rule text behind a deny, verbatim from the daemon's engine.
         reason: { type: string }
+        refusal_explanation:
+          type: string
+          description: |
+            Relay-authored explanation of the boundary that would refuse this
+            verdict. Present only on `verdict=deny`; nothing would be dispatched.
+            `deciding_rule` remains the daemon's rule text, verbatim — keeping it
+            true is the point of this separate field. Byte-identical to the MCP
+            surface's field (ADR-0009/0010).
+            This field is keyed on `verdict`, itself the Node's own live answer
+            to a plan-mode Policy query — the same trust boundary `deciding_rule`
+            already carries, not a new one.
         outdated:
           type: boolean
           description: The Node's relay-daemon is below the Relay's minimum version (ADR-0014).

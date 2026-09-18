@@ -116,24 +116,36 @@ type rawExecRequest struct {
 // only a zero value. Rendering either as a plausible `0` would let a caller
 // read "did not run" as "ran and succeeded"; Outcome is the authoritative
 // did-it-run state.
+//
+// RefusalExplanation carries a second author on a denied_by_policy row: stderr
+// stays the Node's own verbatim reason, and RefusalExplanation is the Relay's
+// framing of the boundary that reason belongs to. On a version_refused row the
+// Relay authored both, so RefusalExplanation repeats stderr. Never infer the
+// two agree, and never infer they differ.
 type perNodeResult struct {
-	NodeID          string `json:"node_id"`
-	Outcome         string `json:"outcome"`
-	ExitCode        *int32 `json:"exit_code,omitempty"`
-	Stdout          string `json:"stdout,omitempty"`
-	Stderr          string `json:"stderr,omitempty"`
-	StdoutTruncated bool   `json:"stdout_truncated,omitempty"`
-	StderrTruncated bool   `json:"stderr_truncated,omitempty"`
-	DurationMS      int64  `json:"duration_ms"`
+	NodeID             string `json:"node_id"`
+	Outcome            string `json:"outcome"`
+	ExitCode           *int32 `json:"exit_code,omitempty"`
+	Stdout             string `json:"stdout,omitempty"`
+	Stderr             string `json:"stderr,omitempty"`
+	StdoutTruncated    bool   `json:"stdout_truncated,omitempty"`
+	StderrTruncated    bool   `json:"stderr_truncated,omitempty"`
+	DurationMS         int64  `json:"duration_ms"`
+	RefusalExplanation string `json:"refusal_explanation,omitempty"`
 }
 
 // perNodeVerdict is one Node's plan-mode Policy verdict (ADR-0011).
+//
+// RefusalExplanation is the Relay's framing of the boundary a deny verdict
+// belongs to; DecidingRule remains the daemon's rule text, verbatim — two
+// different authors on the same verdict, exactly as on perNodeResult.
 type perNodeVerdict struct {
-	NodeID       string `json:"node_id"`
-	Verdict      string `json:"verdict"`
-	DecidingRule string `json:"deciding_rule,omitempty"`
-	Reason       string `json:"reason,omitempty"`
-	Outdated     bool   `json:"outdated,omitempty"`
+	NodeID             string `json:"node_id"`
+	Verdict            string `json:"verdict"`
+	DecidingRule       string `json:"deciding_rule,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	RefusalExplanation string `json:"refusal_explanation,omitempty"`
+	Outdated           bool   `json:"outdated,omitempty"`
 }
 
 // wouldBeRejected reports why a Plan's real counterpart would be refused
@@ -474,11 +486,12 @@ func renderPlan(pr capability.PlanResult) planResponse {
 	verdicts := make([]perNodeVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
 		verdicts = append(verdicts, perNodeVerdict{
-			NodeID:       v.NodeID,
-			Verdict:      verdictString(v.Status),
-			DecidingRule: v.DecidingRule,
-			Reason:       v.Reason,
-			Outdated:     v.Outdated,
+			NodeID:             v.NodeID,
+			Verdict:            verdictString(v.Status),
+			DecidingRule:       v.DecidingRule,
+			Reason:             v.Reason,
+			RefusalExplanation: capability.VerdictExplanation(v.Status),
+			Outdated:           v.Outdated,
 		})
 	}
 	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
@@ -533,14 +546,15 @@ func perNodeResultFromTask(t jobs.Task) perNodeResult {
 	}
 
 	return perNodeResult{
-		NodeID:          t.NodeID,
-		Outcome:         outcomeString(t.Outcome),
-		ExitCode:        exitCodePtr(t),
-		Stdout:          stdout,
-		Stderr:          stderr,
-		StdoutTruncated: stdoutTruncated,
-		StderrTruncated: stderrTruncated,
-		DurationMS:      durationMS,
+		NodeID:             t.NodeID,
+		Outcome:            outcomeString(t.Outcome),
+		ExitCode:           exitCodePtr(t),
+		Stdout:             stdout,
+		Stderr:             stderr,
+		StdoutTruncated:    stdoutTruncated,
+		StderrTruncated:    stderrTruncated,
+		DurationMS:         durationMS,
+		RefusalExplanation: capability.RefusalExplanation(t.Outcome),
 	}
 }
 

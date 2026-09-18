@@ -2,7 +2,10 @@ package dispatch
 
 import (
 	"reflect"
+	"regexp"
 	"testing"
+
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
@@ -221,4 +224,90 @@ func TestOutcome_UnrecognizedDefaultsToUnspecified(t *testing.T) {
 	if got := outcome(relayv1.Outcome(999)); got != jobs.OutcomeUnspecified {
 		t.Errorf("outcome(999) = %v, want jobs.OutcomeUnspecified", got)
 	}
+}
+
+// callerIdentityFieldName mirrors relay/cmd/relay/policy_immutability_test.go's
+// guard of the same name. Deliberately duplicated here, not shared, because
+// THIS package — internal/dispatch — is where the wire conversion this guard
+// protects actually happens (taskRequest/policyQueryProto below), and it IS
+// on docs/agents/security-surface.txt (relay/cmd/relay/** is not, except
+// main.go): a security review of a caller-identity addition must find this
+// guard even if it never opens the cmd/relay copy.
+var callerIdentityFieldName = regexp.MustCompile(`(?i)principal|actor|account|role|token|caller|subject|identity|user|auth`)
+
+// walkReachableMessageFields mirrors relay/cmd/relay/policy_immutability_test.go's
+// function of the same name — see its doc comment for why the BFS, rather
+// than a hand-built Go-side field list, is what makes this guard structural.
+func walkReachableMessageFields(start protoreflect.MessageDescriptor, visit func(fieldName string)) {
+	visited := map[protoreflect.FullName]bool{}
+	queue := []protoreflect.MessageDescriptor{start}
+	for len(queue) > 0 {
+		md := queue[0]
+		queue = queue[1:]
+		if visited[md.FullName()] {
+			continue
+		}
+		visited[md.FullName()] = true
+
+		fields := md.Fields()
+		for i := 0; i < fields.Len(); i++ {
+			f := fields.Get(i)
+			if md.IsMapEntry() && (f.Name() == "key" || f.Name() == "value") {
+				if f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind {
+					queue = append(queue, f.Message())
+				}
+				continue
+			}
+			visit(string(f.Name()))
+			if f.Kind() == protoreflect.MessageKind || f.Kind() == protoreflect.GroupKind {
+				queue = append(queue, f.Message())
+			}
+		}
+	}
+}
+
+// assertExactTopLevelFieldSet fails t if md's own (non-transitive) field-name
+// set is not exactly want.
+func assertExactTopLevelFieldSet(t *testing.T, md protoreflect.MessageDescriptor, want map[string]bool) {
+	t.Helper()
+	fields := md.Fields()
+	got := make(map[string]bool, fields.Len())
+	for i := 0; i < fields.Len(); i++ {
+		got[string(fields.Get(i).Name())] = true
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s field set changed:\n  got:  %v\n  want: %v\n"+
+			"any addition must be reviewed for caller identity before this allow-set is updated",
+			md.FullName(), got, want)
+	}
+}
+
+// TestWireCarriesNoCallerIdentity mirrors
+// relay/cmd/relay/policy_immutability_test.go's test of the same name — see
+// its doc comment for the full rationale (the bypass beat, F2; the rename
+// blind spot an earlier review found in the regex-only version; ADR-0002).
+// Kept in both places deliberately: this package is on the security surface,
+// the cmd/relay copy sits beside its sibling wire-immutability idiom.
+func TestWireCarriesNoCallerIdentity(t *testing.T) {
+	start := (&relayv1.RelayMessage{}).ProtoReflect().Descriptor()
+	walkReachableMessageFields(start, func(fieldName string) {
+		if callerIdentityFieldName.MatchString(fieldName) {
+			t.Errorf("RelayMessage reaches a field named %q, which looks like caller identity — "+
+				"the wire contract must never let the Relay tell the Node who is asking (ADR-0002, #454)", fieldName)
+		}
+	})
+
+	// Exact-field-set belt-and-suspenders on the four messages a Task/
+	// PolicyQuery actually carries, INCLUDING the two oneof payload messages:
+	// a rename (e.g. "requested_by", "on_behalf_of") evades the regex above,
+	// so an addition or a rename inside Operation/RawExec must be named here
+	// to pass, not just caught by the regex.
+	assertExactTopLevelFieldSet(t, (&relayv1.TaskRequest{}).ProtoReflect().Descriptor(),
+		map[string]bool{"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true})
+	assertExactTopLevelFieldSet(t, (&relayv1.PolicyQuery{}).ProtoReflect().Descriptor(),
+		map[string]bool{"query_id": true, "operation": true, "raw_exec": true})
+	assertExactTopLevelFieldSet(t, (&relayv1.Operation{}).ProtoReflect().Descriptor(),
+		map[string]bool{"name": true, "args": true})
+	assertExactTopLevelFieldSet(t, (&relayv1.RawExec{}).ProtoReflect().Descriptor(),
+		map[string]bool{"argv": true})
 }

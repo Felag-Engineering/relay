@@ -600,6 +600,58 @@ func seedJob(t *testing.T, deps *appDeps) string {
 	return jobID
 }
 
+// seedRefusalJob writes a Job with one OutcomeDeniedByPolicy Task (a
+// realistic daemon reason as Stderr) and one OutcomeVersionRefused Task (the
+// Relay's own jobs.VersionRefusedMessage as Stderr), for #454's
+// refusal_explanation parity test. A SEPARATE helper from seedJob, not an
+// edit to it: TestControlAPI_JobRoutes asserts against seedJob's exact two
+// Tasks. Returns the Job id.
+func seedRefusalJob(t *testing.T, deps *appDeps) string {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	jobID := "job-e2e-refusal-1"
+	if err := deps.jobs.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: now}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	stageID := "stage-e2e-refusal-1"
+	if err := deps.jobs.AddStage(ctx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
+		t.Fatalf("AddStage: %v", err)
+	}
+
+	act := jobs.Action{
+		Kind:          jobs.ActionOperation,
+		OperationName: "service.restart",
+		RiskClass:     jobs.RiskClassMutate,
+	}
+	denied := jobs.Task{ID: "task-e2e-denied", JobID: jobID, StageID: stageID, NodeID: "node-denied", Action: act, CreatedAt: now}
+	if err := deps.tasks.CreateTask(ctx, denied); err != nil {
+		t.Fatalf("CreateTask(denied): %v", err)
+	}
+	if err := deps.tasks.MarkDispatched(ctx, denied.ID, now); err != nil {
+		t.Fatalf("MarkDispatched(denied): %v", err)
+	}
+	if err := deps.tasks.Resolve(ctx, denied.ID, jobs.Result{
+		Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1,
+		Stderr: []byte("denied by explicit rule for operation 'file.read'"),
+	}); err != nil {
+		t.Fatalf("Resolve(denied): %v", err)
+	}
+
+	outdated := jobs.Task{ID: "task-e2e-outdated", JobID: jobID, StageID: stageID, NodeID: "node-outdated", Action: act, CreatedAt: now}
+	if err := deps.tasks.CreateTask(ctx, outdated); err != nil {
+		t.Fatalf("CreateTask(outdated): %v", err)
+	}
+	// MarkVersionRefused (Pending -> Resolved directly, never Dispatched)
+	// mirrors the real ADR-0014 gate: the Task was never sent, and it
+	// stamps Stderr = jobs.VersionRefusedMessage itself.
+	if err := deps.tasks.MarkVersionRefused(ctx, outdated.ID, now); err != nil {
+		t.Fatalf("MarkVersionRefused(outdated): %v", err)
+	}
+	return jobID
+}
+
 // TestControlAPI_JobRoutes drives #357's acceptance through the real
 // composition root: a dispatched Job is re-readable by id with truthful
 // per-Node outcomes, an unknown id is a legible 404, and cancel reaches the
@@ -742,6 +794,72 @@ func TestControlAPI_JobResultsMatchMCP(t *testing.T) {
 		if a.Stdout != m.Stdout || a.Stderr != m.Stderr {
 			t.Errorf("result[%d] (%s): captured output differs between surfaces", i, a.NodeID)
 		}
+	}
+}
+
+// TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces is #454's
+// cross-surface parity proof, hermetic (no daemon needed): a denied_by_policy
+// row and a version_refused row must carry a non-empty refusal_explanation,
+// byte-identical between the API and MCP, and the deny row's value must be
+// exactly capability.PolicyDenyExplanation. Modelled on
+// TestControlAPI_JobResultsMatchMCP, which already decodes the API body into
+// mcp.PerNodeResult — the shared JSON tag does the parity work.
+func TestControlAPI_RefusalRendersIdenticallyOnBothSurfaces(t *testing.T) {
+	f := startRelay(t, WithControlPlane())
+	jobID := seedRefusalJob(t, f.Deps)
+
+	resp := controlAPIRequest(t, f.ClientFor(""), http.MethodGet,
+		f.ControlBase+"/api/v1/jobs/"+jobID, f.Credential, nil)
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("API status = %d, want 200", resp.StatusCode)
+	}
+	var apiBody struct {
+		Results []mcp.PerNodeResult `json:"results"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&apiBody); err != nil {
+		t.Fatalf("decode API body: %v", err)
+	}
+
+	session := relaytest.Connect(t, f.ControlBase, f.Client())
+	res := relaytest.CallTool(t, session, "get_job", map[string]any{"job_id": jobID})
+	if res.IsError {
+		t.Fatalf("get_job returned IsError; content = %+v", res.Content)
+	}
+	var mcpOut mcp.ExecutionOutput
+	if err := json.Unmarshal([]byte(mcpToolText(t, res)), &mcpOut); err != nil {
+		t.Fatalf("decode MCP output: %v", err)
+	}
+
+	if len(apiBody.Results) != len(mcpOut.Results) {
+		t.Fatalf("API returned %d per-Node results, MCP returned %d", len(apiBody.Results), len(mcpOut.Results))
+	}
+	apiByNode := map[string]mcp.PerNodeResult{}
+	for _, r := range apiBody.Results {
+		apiByNode[r.NodeID] = r
+	}
+	mcpByNode := map[string]mcp.PerNodeResult{}
+	for _, r := range mcpOut.Results {
+		mcpByNode[r.NodeID] = r
+	}
+
+	for nodeID, a := range apiByNode {
+		m, ok := mcpByNode[nodeID]
+		if !ok {
+			t.Fatalf("no MCP result for node %s", nodeID)
+		}
+		if a.RefusalExplanation == "" {
+			t.Errorf("node %s: API refusal_explanation is empty, want non-empty (outcome=%s)", nodeID, a.Outcome)
+		}
+		if a.RefusalExplanation != m.RefusalExplanation {
+			t.Errorf("node %s: refusal_explanation differs between surfaces — API %q, MCP %q", nodeID, a.RefusalExplanation, m.RefusalExplanation)
+		}
+	}
+	if got := apiByNode["node-denied"].RefusalExplanation; got != capability.PolicyDenyExplanation {
+		t.Errorf("node-denied refusal_explanation = %q, want capability.PolicyDenyExplanation", got)
+	}
+	if got := apiByNode["node-outdated"].RefusalExplanation; got != jobs.VersionRefusedMessage {
+		t.Errorf("node-outdated refusal_explanation = %q, want jobs.VersionRefusedMessage", got)
 	}
 }
 

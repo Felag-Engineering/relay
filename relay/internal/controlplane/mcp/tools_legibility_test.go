@@ -5,6 +5,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // TestMCP_EveryToolHasADescription is the mechanical CI floor (#120
@@ -165,5 +169,146 @@ func TestMCP_ExecutionToolsSteerTypedPath(t *testing.T) {
 	}
 	if !strings.Contains(rawExecDesc, planModeSentence) {
 		t.Errorf("raw_exec Description does not contain the exact plan-mode clause: %q", rawExecDesc)
+	}
+}
+
+// TestMCP_PolicyDenyNamesItsBoundary is #454's apply-path wire seam: a
+// denied_by_policy Task, driven through the real run_operation pipeline,
+// carries stderr as the daemon's own reason verbatim AND a new
+// refusal_explanation naming the boundary — two different authors on the
+// same row. This package cannot reach perNodeResultFromTask directly (it is
+// external, mcp_test), so the assertion goes through the tool surface, which
+// is the stronger test anyway.
+func TestMCP_PolicyDenyNamesItsBoundary(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	const daemonReason = "no allow rule matched args [\"sshd\"] for operation 'service.restart' (allow rules exist for other arguments)"
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte(daemonReason)}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	var out mcp.ExecutionOutput
+	decodeResult(t, res, &out)
+
+	byNode := map[string]mcp.PerNodeResult{}
+	for _, r := range out.Results {
+		byNode[r.NodeID] = r
+	}
+	r, ok := byNode[ts.nodeB]
+	if !ok {
+		t.Fatalf("no result for node %s: %+v", ts.nodeB, out.Results)
+	}
+	if r.Outcome != "denied_by_policy" {
+		t.Errorf("outcome = %q, want denied_by_policy", r.Outcome)
+	}
+	if r.ExitCode != nil {
+		t.Errorf("exit_code = %v, want absent (nothing executed)", *r.ExitCode)
+	}
+	if r.Stderr != daemonReason {
+		t.Errorf("stderr = %q, want the daemon's reason verbatim and unmodified: %q", r.Stderr, daemonReason)
+	}
+	if r.RefusalExplanation != capability.PolicyDenyExplanation {
+		t.Errorf("refusal_explanation = %q, want capability.PolicyDenyExplanation", r.RefusalExplanation)
+	}
+}
+
+// TestMCP_PlanDenyNamesItsBoundary is TestMCP_PolicyDenyNamesItsBoundary's
+// plan-mode counterpart: a deny verdict carries deciding_rule (the daemon's
+// rule text, unchanged) AND refusal_explanation (the Relay's plan-mode
+// framing).
+func TestMCP_PlanDenyNamesItsBoundary(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.verdicts[ts.nodeA] = jobs.Verdict{Allowed: true}
+	ts.conduit.verdicts[ts.nodeB] = jobs.Verdict{Allowed: false, DecidingRule: "deny-facts"}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts", "plan": true})
+	var out mcp.RunOrPlanOutput
+	decodeResult(t, res, &out)
+
+	if out.Plan == nil {
+		t.Fatal("plan field is nil, want a populated PlanOutput")
+	}
+	byNode := verdictsByNode(*out.Plan)
+	v, ok := byNode[ts.nodeB]
+	if !ok {
+		t.Fatalf("no verdict for node %s: %+v", ts.nodeB, out.Plan.Verdicts)
+	}
+	if v.Verdict != "deny" {
+		t.Errorf("verdict = %q, want deny", v.Verdict)
+	}
+	if v.DecidingRule != "deny-facts" {
+		t.Errorf("deciding_rule = %q, want unchanged (\"deny-facts\")", v.DecidingRule)
+	}
+	if v.RefusalExplanation != capability.PolicyDenyVerdictExplanation {
+		t.Errorf("refusal_explanation = %q, want capability.PolicyDenyVerdictExplanation", v.RefusalExplanation)
+	}
+
+	// The allow verdict must carry no explanation at all.
+	if allow := byNode[ts.nodeA]; allow.RefusalExplanation != "" {
+		t.Errorf("node %s (allow) refusal_explanation = %q, want empty", ts.nodeA, allow.RefusalExplanation)
+	}
+}
+
+// TestMCP_VersionRefusedCarriesFullExplanation extends
+// TestMCP_RunOperation_OutdatedNodeVersionRefused (mcp_exec_test.go) to
+// assert the FULL text, not just the outcome string: on a version_refused
+// row the Relay authored both stderr and refusal_explanation, so they must
+// be byte-identical to jobs.VersionRefusedMessage.
+func TestMCP_VersionRefusedCarriesFullExplanation(t *testing.T) {
+	ts := newTestServerWithConfig(t, 0, 0, "1.2.0")
+	ts.conduit.connect(ts.nodeA, ts.nodeB) // nodeA (1.1.0, outdated) stays connected: the gate is connectivity-independent
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	var out mcp.ExecutionOutput
+	decodeResult(t, res, &out)
+
+	byNode := map[string]mcp.PerNodeResult{}
+	for _, r := range out.Results {
+		byNode[r.NodeID] = r
+	}
+	r, ok := byNode[ts.nodeA]
+	if !ok {
+		t.Fatalf("no result for node %s: %+v", ts.nodeA, out.Results)
+	}
+	if r.Outcome != "version_refused" {
+		t.Errorf("outcome = %q, want version_refused", r.Outcome)
+	}
+	if r.Stderr != jobs.VersionRefusedMessage {
+		t.Errorf("stderr = %q, want jobs.VersionRefusedMessage", r.Stderr)
+	}
+	if r.RefusalExplanation != jobs.VersionRefusedMessage {
+		t.Errorf("refusal_explanation = %q, want jobs.VersionRefusedMessage (the Relay authored both fields here)", r.RefusalExplanation)
+	}
+}
+
+// TestMCP_ExplanationAbsentWhenNotRefused pins the other half of the field's
+// meaning: a success and a failure row must both carry an EMPTY
+// refusal_explanation, so a caller can never learn "field present => a
+// refusal" and then be wrong on those two outcomes.
+func TestMCP_ExplanationAbsentWhenNotRefused(t *testing.T) {
+	ts := newTestServer(t)
+	ts.conduit.connect(ts.nodeA, ts.nodeB)
+	ts.conduit.results[ts.nodeA] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	ts.conduit.results[ts.nodeB] = jobs.Result{Outcome: jobs.OutcomeFailure, Stderr: []byte("spawn systemctl: No such file or directory")}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "run_operation", map[string]any{"operation": "system.facts"})
+	var out mcp.ExecutionOutput
+	decodeResult(t, res, &out)
+
+	byNode := map[string]mcp.PerNodeResult{}
+	for _, r := range out.Results {
+		byNode[r.NodeID] = r
+	}
+	if got := byNode[ts.nodeA].RefusalExplanation; got != "" {
+		t.Errorf("node %s (success) refusal_explanation = %q, want empty", ts.nodeA, got)
+	}
+	if got := byNode[ts.nodeB].RefusalExplanation; got != "" {
+		t.Errorf("node %s (failure) refusal_explanation = %q, want empty", ts.nodeB, got)
 	}
 }

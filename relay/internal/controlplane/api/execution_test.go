@@ -762,3 +762,161 @@ func TestExecutionRoutes_UnwiredDependenciesAreALegible500(t *testing.T) {
 		}
 	}
 }
+
+// -----------------------------------------------------------------------
+// #454: refusal_explanation — the API mirrors of mcp/tools_legibility_test.go's
+// TestMCP_PolicyDenyNamesItsBoundary / TestMCP_PlanDenyNamesItsBoundary /
+// TestMCP_VersionRefusedCarriesFullExplanation / TestMCP_ExplanationAbsentWhenNotRefused.
+// Names kept parallel to the MCP ones so the parity intent is legible.
+// -----------------------------------------------------------------------
+
+// TestAPI_PolicyDenyNamesItsBoundary is #454's apply-path route seam: a
+// denied_by_policy Task renders stderr as the daemon's own reason verbatim
+// AND a new refusal_explanation naming the boundary.
+func TestAPI_PolicyDenyNamesItsBoundary(t *testing.T) {
+	const daemonReason = "no allow rule matched args [\"sshd\"] for operation 'service.restart' (allow rules exist for other arguments)"
+	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
+		job: jobs.Job{ID: "job-1"},
+		tasks: []jobs.Task{
+			{NodeID: "n1", Outcome: jobs.OutcomeDeniedByPolicy, ExitCode: -1, Stderr: []byte(daemonReason)},
+		},
+	})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var body executionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Results) != 1 {
+		t.Fatalf("results = %+v, want 1", body.Results)
+	}
+	r := body.Results[0]
+	if r.Outcome != "denied_by_policy" {
+		t.Errorf("outcome = %q, want denied_by_policy", r.Outcome)
+	}
+	if r.ExitCode != nil {
+		t.Errorf("exit_code = %v, want absent (nothing executed)", *r.ExitCode)
+	}
+	if r.Stderr != daemonReason {
+		t.Errorf("stderr = %q, want the daemon's reason verbatim and unmodified: %q", r.Stderr, daemonReason)
+	}
+	if r.RefusalExplanation != capability.PolicyDenyExplanation {
+		t.Errorf("refusal_explanation = %q, want capability.PolicyDenyExplanation", r.RefusalExplanation)
+	}
+}
+
+// TestAPI_PlanDenyNamesItsBoundary is TestAPI_PolicyDenyNamesItsBoundary's
+// plan-mode counterpart: a deny verdict carries deciding_rule (the daemon's
+// rule text, unchanged) AND refusal_explanation (the Relay's plan-mode
+// framing); the allow verdict carries no explanation at all.
+func TestAPI_PlanDenyNamesItsBoundary(t *testing.T) {
+	exec := &fakeExecutor{planResult: capability.PlanResult{
+		Matched: 2,
+		Verdicts: []capability.NodeVerdict{
+			{NodeID: "n2", Status: capability.VerdictDeny, DecidingRule: "denied by rule"},
+			{NodeID: "n1", Status: capability.VerdictAllow},
+		},
+	}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts", Plan: true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var plan planResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &plan); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(plan.Verdicts) != 2 {
+		t.Fatalf("verdicts = %+v, want 2", plan.Verdicts)
+	}
+	byNode := map[string]perNodeVerdict{}
+	for _, v := range plan.Verdicts {
+		byNode[v.NodeID] = v
+	}
+	deny := byNode["n2"]
+	if deny.Verdict != "deny" {
+		t.Errorf("n2 verdict = %q, want deny", deny.Verdict)
+	}
+	if deny.DecidingRule != "denied by rule" {
+		t.Errorf("n2 deciding_rule = %q, want unchanged (\"denied by rule\")", deny.DecidingRule)
+	}
+	if deny.RefusalExplanation != capability.PolicyDenyVerdictExplanation {
+		t.Errorf("n2 refusal_explanation = %q, want capability.PolicyDenyVerdictExplanation", deny.RefusalExplanation)
+	}
+	if allow := byNode["n1"]; allow.RefusalExplanation != "" {
+		t.Errorf("n1 (allow) refusal_explanation = %q, want empty", allow.RefusalExplanation)
+	}
+}
+
+// TestAPI_VersionRefusedCarriesFullExplanation: on a version_refused row the
+// Relay authored both stderr and refusal_explanation, so they must be
+// byte-identical to jobs.VersionRefusedMessage.
+func TestAPI_VersionRefusedCarriesFullExplanation(t *testing.T) {
+	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
+		job: jobs.Job{ID: "job-1"},
+		tasks: []jobs.Task{
+			{NodeID: "n1", Outcome: jobs.OutcomeVersionRefused, Stderr: []byte(jobs.VersionRefusedMessage)},
+		},
+	})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var body executionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Results) != 1 {
+		t.Fatalf("results = %+v, want 1", body.Results)
+	}
+	r := body.Results[0]
+	if r.Outcome != "version_refused" {
+		t.Errorf("outcome = %q, want version_refused", r.Outcome)
+	}
+	if r.Stderr != jobs.VersionRefusedMessage {
+		t.Errorf("stderr = %q, want jobs.VersionRefusedMessage", r.Stderr)
+	}
+	if r.RefusalExplanation != jobs.VersionRefusedMessage {
+		t.Errorf("refusal_explanation = %q, want jobs.VersionRefusedMessage (the Relay authored both fields here)", r.RefusalExplanation)
+	}
+}
+
+// TestAPI_ExplanationAbsentWhenNotRefused pins the other half of the field's
+// meaning: a success and a failure row must both carry an EMPTY
+// refusal_explanation.
+func TestAPI_ExplanationAbsentWhenNotRefused(t *testing.T) {
+	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
+	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
+		job: jobs.Job{ID: "job-1"},
+		tasks: []jobs.Task{
+			{NodeID: "n-success", Outcome: jobs.OutcomeSuccess},
+			{NodeID: "n-failure", Outcome: jobs.OutcomeFailure, Stderr: []byte("spawn systemctl: No such file or directory")},
+		},
+	})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/operations", runOperationRequest{Operation: "system.facts"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body %s", rec.Code, rec.Body.String())
+	}
+	var body executionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byNode := map[string]perNodeResult{}
+	for _, r := range body.Results {
+		byNode[r.NodeID] = r
+	}
+	if got := byNode["n-success"].RefusalExplanation; got != "" {
+		t.Errorf("n-success refusal_explanation = %q, want empty", got)
+	}
+	if got := byNode["n-failure"].RefusalExplanation; got != "" {
+		t.Errorf("n-failure refusal_explanation = %q, want empty", got)
+	}
+}

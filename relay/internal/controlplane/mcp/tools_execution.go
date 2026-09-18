@@ -159,11 +159,12 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 	verdicts := make([]PerNodeVerdict, 0, len(pr.Verdicts))
 	for _, v := range pr.Verdicts {
 		verdicts = append(verdicts, PerNodeVerdict{
-			NodeID:       v.NodeID,
-			Verdict:      verdictString(v.Status),
-			DecidingRule: v.DecidingRule,
-			Reason:       v.Reason,
-			Outdated:     v.Outdated,
+			NodeID:             v.NodeID,
+			Verdict:            verdictString(v.Status),
+			DecidingRule:       v.DecidingRule,
+			Reason:             v.Reason,
+			RefusalExplanation: capability.VerdictExplanation(v.Status),
+			Outdated:           v.Outdated,
 		})
 	}
 	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
@@ -269,14 +270,15 @@ func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 	}
 
 	return PerNodeResult{
-		NodeID:          task.NodeID,
-		Outcome:         outcomeString(task.Outcome),
-		ExitCode:        exitCodePtr(task),
-		Stdout:          stdout,
-		Stderr:          stderr,
-		StdoutTruncated: stdoutTruncated,
-		StderrTruncated: stderrTruncated,
-		DurationMS:      durationMS,
+		NodeID:             task.NodeID,
+		Outcome:            outcomeString(task.Outcome),
+		ExitCode:           exitCodePtr(task),
+		Stdout:             stdout,
+		Stderr:             stderr,
+		StdoutTruncated:    stdoutTruncated,
+		StderrTruncated:    stderrTruncated,
+		DurationMS:         durationMS,
+		RefusalExplanation: capability.RefusalExplanation(task.Outcome),
 	}
 }
 

@@ -260,15 +260,22 @@ type ListOperationsOutput struct {
 // the ambiguity ADR-0001/0003's legibility posture forbids. Present iff a
 // process actually ran and exited with a status (exitCodePtr,
 // tools_execution.go); Outcome is always the authoritative did-it-run state.
+//
+// RefusalExplanation carries a second author on a denied_by_policy row: stderr
+// stays the Node's own verbatim reason, and RefusalExplanation is the Relay's
+// framing of the boundary that reason belongs to. On a version_refused row the
+// Relay authored both, so RefusalExplanation repeats stderr. Never infer the
+// two agree, and never infer they differ.
 type PerNodeResult struct {
-	NodeID          string `json:"node_id"`
-	Outcome         string `json:"outcome"`
-	ExitCode        *int32 `json:"exit_code,omitempty" jsonschema:"Present only when a process actually ran and exited with a status. Absent when nothing executed (denied_by_policy, unreachable, version_refused) or the process was killed without an exit status (timeout, cancelled, spawn failure) — outcome is the authoritative state, see stderr for the reason."`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	StdoutTruncated bool   `json:"stdout_truncated"`
-	StderrTruncated bool   `json:"stderr_truncated"`
-	DurationMS      int64  `json:"duration_ms"`
+	NodeID             string `json:"node_id"`
+	Outcome            string `json:"outcome"`
+	ExitCode           *int32 `json:"exit_code,omitempty" jsonschema:"Present only when a process actually ran and exited with a status. Absent when nothing executed (denied_by_policy, unreachable, version_refused) or the process was killed without an exit status (timeout, cancelled, spawn failure) — outcome is the authoritative state, see stderr for the reason."`
+	Stdout             string `json:"stdout"`
+	Stderr             string `json:"stderr"`
+	StdoutTruncated    bool   `json:"stdout_truncated"`
+	StderrTruncated    bool   `json:"stderr_truncated"`
+	DurationMS         int64  `json:"duration_ms"`
+	RefusalExplanation string `json:"refusal_explanation,omitempty" jsonschema:"Present when a named boundary refused this Task and nothing executed (denied_by_policy, version_refused). Relay-authored — on a denied_by_policy row stderr still carries the Node's own verbatim reason; on a version_refused row the Relay authored both and this repeats stderr. Absent means no boundary refusal, not that the Task succeeded — outcome is authoritative."`
 }
 
 // ExecutionOutput is get_job's result shape: the Job id (echoed back, always
@@ -284,11 +291,16 @@ type ExecutionOutput struct {
 // "allow"/"deny"/"unknown", with DecidingRule set only on deny and Reason
 // (e.g. "offline") set only on unknown — mirrors PerNodeResult's per-Node
 // shape but for a verdict, never an executed outcome.
+//
+// RefusalExplanation is the Relay's framing of the boundary a deny verdict
+// belongs to; DecidingRule remains the daemon's rule text, verbatim — two
+// different authors on the same verdict, exactly as on PerNodeResult.
 type PerNodeVerdict struct {
-	NodeID       string `json:"node_id"`
-	Verdict      string `json:"verdict"`
-	DecidingRule string `json:"deciding_rule,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	NodeID             string `json:"node_id"`
+	Verdict            string `json:"verdict"`
+	DecidingRule       string `json:"deciding_rule,omitempty"`
+	Reason             string `json:"reason,omitempty"`
+	RefusalExplanation string `json:"refusal_explanation,omitempty" jsonschema:"Present only on verdict=deny: the Relay's framing of the boundary that would refuse it. Nothing would be dispatched. deciding_rule remains the daemon's rule text, verbatim."`
 	// Outdated is the ADR-0014 apply-time-refusal hint: true when this
 	// Node's relay-daemon is below the Relay's configured minimum version,
 	// so a real dispatch (plan=false) would refuse it with
