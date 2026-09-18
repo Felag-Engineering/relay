@@ -46,7 +46,10 @@ type NodeResult struct {
 	// (#122 full-output-always). Empty for outcomes with no real execution
 	// (e.g. unreachable) except version-refused, whose Stderr carries the
 	// Relay-synthesized jobs.VersionRefusedMessage (matching the Task row);
-	// always empty for noopDispatcher, which performs no execution.
+	// always empty for noopDispatcher, which performs no execution. A
+	// failure row may also carry Relay-authored Stderr where the wire
+	// boundary refused the daemon's report as a protocol violation
+	// (jobs.ProtocolViolation.Explanation, #632) — again no daemon bytes.
 	Stdout    []byte
 	Stderr    []byte
 	Truncated bool

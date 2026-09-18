@@ -3,6 +3,7 @@ package dispatch
 import (
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -177,7 +178,7 @@ func TestResult_ConvertsFields(t *testing.T) {
 		Stderr:    []byte(""),
 		Truncated: true,
 	}
-	got := result(tr)
+	got, v := result(tr)
 	want := jobs.Result{Outcome: jobs.OutcomeSuccess, ExitCode: 0, Stdout: []byte("hi"), Stderr: []byte(""), Truncated: true}
 	if got.Outcome != want.Outcome || got.ExitCode != want.ExitCode {
 		t.Errorf("result() = %+v, want %+v", got, want)
@@ -188,6 +189,9 @@ func TestResult_ConvertsFields(t *testing.T) {
 	if got.Truncated != want.Truncated {
 		t.Errorf("result() Truncated = %v, want %v", got.Truncated, want.Truncated)
 	}
+	if v.Violated() {
+		t.Errorf("result() reported a protocol violation for a legitimate daemon result: %+v", v)
+	}
 }
 
 // TestResult_TruncatedDefaultsFalse asserts the wire's single truncated bool
@@ -195,31 +199,100 @@ func TestResult_ConvertsFields(t *testing.T) {
 // case must not be silently dropped either direction.
 func TestResult_TruncatedDefaultsFalse(t *testing.T) {
 	tr := &relayv1.TaskResult{TaskId: "task-2", Outcome: relayv1.Outcome_OUTCOME_SUCCESS}
-	if got := result(tr); got.Truncated {
+	if got, _ := result(tr); got.Truncated {
 		t.Errorf("result().Truncated = true, want false for an untruncated TaskResult")
 	}
 }
 
-func TestOutcome_FullEnumMap(t *testing.T) {
+// TestResult_RefusesOutcomesNoDaemonMaySend is #632's core regression test:
+// every wire Outcome a relay-daemon is not permitted to report must resolve
+// failure with a Relay-authored explanation, ExitCode -1, and no daemon
+// bytes surviving — never the outcome the Node claimed.
+func TestResult_RefusesOutcomesNoDaemonMaySend(t *testing.T) {
 	cases := []struct {
+		name string
 		wire relayv1.Outcome
-		want jobs.Outcome
+		rule jobs.ViolationRule
 	}{
-		{relayv1.Outcome_OUTCOME_UNSPECIFIED, jobs.OutcomeUnspecified},
-		{relayv1.Outcome_OUTCOME_SUCCESS, jobs.OutcomeSuccess},
-		{relayv1.Outcome_OUTCOME_FAILURE, jobs.OutcomeFailure},
-		{relayv1.Outcome_OUTCOME_TIMEOUT, jobs.OutcomeTimeout},
-		{relayv1.Outcome_OUTCOME_DENIED_BY_POLICY, jobs.OutcomeDeniedByPolicy},
-		{relayv1.Outcome_OUTCOME_CANCELLED, jobs.OutcomeCancelled},
-		{relayv1.Outcome_OUTCOME_UNREACHABLE, jobs.OutcomeUnreachable},
+		{"unreachable", relayv1.Outcome_OUTCOME_UNREACHABLE, jobs.ViolationRelayOnlyOutcome},
+		{"version_refused", relayv1.Outcome_OUTCOME_VERSION_REFUSED, jobs.ViolationRelayOnlyOutcome},
+		{"unspecified", relayv1.Outcome_OUTCOME_UNSPECIFIED, jobs.ViolationUnresolvedOutcome},
 	}
 	for _, c := range cases {
-		if got := outcome(c.wire); got != c.want {
-			t.Errorf("outcome(%v) = %v, want %v", c.wire, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			tr := &relayv1.TaskResult{
+				TaskId:  "task-forged",
+				Outcome: c.wire,
+				Stdout:  []byte("i actually ran"),
+				Stderr:  []byte("and here is my real stderr"),
+			}
+			got, v := result(tr)
+
+			if !v.Violated() {
+				t.Fatalf("result(%v) reported no violation, want one", c.wire)
+			}
+			if v.Rule != c.rule {
+				t.Errorf("violation Rule = %v, want %v", v.Rule, c.rule)
+			}
+			wantName := relayv1.Outcome_name[int32(c.wire)]
+			if v.ReportedOutcome != wantName {
+				t.Errorf("violation ReportedOutcome = %q, want %q", v.ReportedOutcome, wantName)
+			}
+
+			if got.Outcome != jobs.OutcomeFailure {
+				t.Errorf("Result.Outcome = %v, want jobs.OutcomeFailure", got.Outcome)
+			}
+			if got.ExitCode != -1 {
+				t.Errorf("Result.ExitCode = %d, want -1 (the no-exit-status sentinel)", got.ExitCode)
+			}
+			if string(got.Stderr) != v.Explanation() {
+				t.Errorf("Result.Stderr = %q, want v.Explanation() = %q", got.Stderr, v.Explanation())
+			}
+			if len(got.Stdout) != 0 {
+				t.Errorf("Result.Stdout = %q, want empty — the Node's bytes must be discarded", got.Stdout)
+			}
+			if strings.Contains(string(got.Stderr), "i actually ran") {
+				t.Errorf("Result.Stderr leaked the Node's forged stdout: %q", got.Stderr)
+			}
+			if strings.Contains(string(got.Stderr), "and here is my real stderr") {
+				t.Errorf("Result.Stderr leaked the Node's own stderr: %q", got.Stderr)
+			}
+		})
+	}
+}
+
+// TestOutcome_FullEnumMap iterates relayv1.Outcome_value rather than a
+// hand-picked subset, so a new /proto Outcome value can never silently go
+// untested here (rev 1 of this test omitted OUTCOME_VERSION_REFUSED and
+// OUTCOME_UNSUPPORTED without failing).
+func TestOutcome_FullEnumMap(t *testing.T) {
+	explicit := map[relayv1.Outcome]jobs.Outcome{
+		relayv1.Outcome_OUTCOME_UNSPECIFIED:      jobs.OutcomeUnspecified,
+		relayv1.Outcome_OUTCOME_SUCCESS:          jobs.OutcomeSuccess,
+		relayv1.Outcome_OUTCOME_FAILURE:          jobs.OutcomeFailure,
+		relayv1.Outcome_OUTCOME_TIMEOUT:          jobs.OutcomeTimeout,
+		relayv1.Outcome_OUTCOME_DENIED_BY_POLICY: jobs.OutcomeDeniedByPolicy,
+		relayv1.Outcome_OUTCOME_CANCELLED:        jobs.OutcomeCancelled,
+		relayv1.Outcome_OUTCOME_UNREACHABLE:      jobs.OutcomeUnreachable,
+		relayv1.Outcome_OUTCOME_VERSION_REFUSED:  jobs.OutcomeVersionRefused,
+		relayv1.Outcome_OUTCOME_UNSUPPORTED:      jobs.OutcomeUnsupported,
+	}
+	for name, number := range relayv1.Outcome_value {
+		wire := relayv1.Outcome(number)
+		want, ok := explicit[wire]
+		if !ok {
+			t.Fatalf("relayv1.Outcome_value has %s (%d) with no expected mapping in this test's explicit table — add it", name, number)
+		}
+		if got := outcome(wire); got != want {
+			t.Errorf("outcome(%s) = %v, want %v", name, got, want)
 		}
 	}
 }
 
+// TestOutcome_UnrecognizedDefaultsToUnspecified documents §2's deliberate
+// forward-compat line: outcome() keeps this mapping for values >= 9 only,
+// because the wire value 0 (OUTCOME_UNSPECIFIED) is refused by result()
+// before outcome() is ever reached.
 func TestOutcome_UnrecognizedDefaultsToUnspecified(t *testing.T) {
 	if got := outcome(relayv1.Outcome(999)); got != jobs.OutcomeUnspecified {
 		t.Errorf("outcome(999) = %v, want jobs.OutcomeUnspecified", got)

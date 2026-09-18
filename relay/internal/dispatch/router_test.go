@@ -3,6 +3,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -679,6 +680,53 @@ func TestRouter_UnregisterClosesVerdictWaiter(t *testing.T) {
 	r.mu.Unlock()
 	if stillWaiting {
 		t.Error("verdict waiter for queryID leaked after unregister")
+	}
+}
+
+// TestRouter_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation is #632's
+// regression test on the production Dispatch path: a compromised but
+// enrolled Node reports OUTCOME_VERSION_REFUSED for a Task it actually
+// received (and claims to have run), and Dispatch must resolve it as a
+// terminal protocol violation — never as the outcome the Node claimed, and
+// never as an error (an error would leave the Task Dispatched and hand the
+// Reconciler an attacker-controlled resend loop, invariant 4).
+func TestRouter_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing.T) {
+	r := NewRouter(nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+		errCh <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+		Stdout:  []byte("i actually ran"),
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch returned an error for a forged outcome, want nil (terminal resolve, not a retry loop): %v", err)
+	}
+	res := <-resultCh
+	if res.Outcome != jobs.OutcomeFailure {
+		t.Errorf("Dispatch result Outcome = %v, want jobs.OutcomeFailure", res.Outcome)
+	}
+	if res.ExitCode != -1 {
+		t.Errorf("Dispatch result ExitCode = %d, want -1", res.ExitCode)
+	}
+	if len(res.Stdout) != 0 {
+		t.Errorf("Dispatch result Stdout = %q, want empty — the Node's claimed output must be discarded", res.Stdout)
+	}
+	if !strings.Contains(string(res.Stderr), "WAS dispatched") {
+		t.Errorf("Dispatch result Stderr = %q, want the Relay-authored protocol-violation explanation", res.Stderr)
 	}
 }
 

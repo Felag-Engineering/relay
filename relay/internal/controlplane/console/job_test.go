@@ -422,11 +422,13 @@ func TestJob_IdenticalOutputClusters(t *testing.T) {
 
 // TestJob_SentinelExitCodesAreNotRenderedAsProcessResults.
 //
-// The daemon uses -1 exclusively as "no exit status": denied before spawn,
-// killed, never sent. Relay-synthesized outcomes carry a zero that means
-// nothing. Rendering either as an exit code invites an operator to read "did
-// not run" as a real result — and "exit 0" beside `unreachable` says it
-// succeeded.
+// The daemon's -1 "no exit status" sentinel — denied before spawn, killed,
+// never sent — Relay-synthesized outcomes carrying a zero that means
+// nothing, and (#632) the Relay's own -1 on a failure row whose daemon
+// report the wire boundary refused as a protocol violation are all
+// sentinels. Rendering any of them as an exit code invites an operator to
+// read "did not run" or "unknown" as a real result — and "exit 0" beside
+// `unreachable` says it succeeded.
 func TestJob_SentinelExitCodesAreNotRenderedAsProcessResults(t *testing.T) {
 	cases := []struct {
 		outcome jobs.Outcome

@@ -66,7 +66,8 @@ func registerJobTools(srv *sdkmcp.Server, exec Executor, results JobResultReader
 			"get_job re-reads the same Job later, e.g. after cancel_job, or to check on a still-in-flight " +
 			"Job from a second call). Per-Node exit_code is present only when a process actually ran and " +
 			"exited with a status; a Task that never executed or was killed without one has no exit_code " +
-			"key — outcome is the authoritative state.",
+			"key — outcome is the authoritative state. A Task whose daemon report the Relay refused as a " +
+			"protocol violation also has no exit_code key and is neither of those: it may well have executed.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in getJobInput) (*sdkmcp.CallToolResult, ExecutionOutput, error) {
 		// get_job returns a Job's captured per-Node stdout, so it is the
 		// sharpest case for read auditing: a caller can read back command

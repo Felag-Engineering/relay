@@ -237,12 +237,14 @@ func truncateOutput(b []byte) (string, bool) {
 // process exit status exists — the #207/#253 did-not-run disambiguation (see
 // PerNodeResult's doc comment). A real status exists only when the Task
 // actually resolved as success/failure AND the daemon reported a non-negative
-// code: the daemon uses -1 exclusively as its "no exit status" sentinel
-// (spawn failure, wait failure, signal-kill, timeout/cancel kill,
-// denied-before-spawn — a real Unix exit status is always 0-255), and
-// Relay-synthesized outcomes (unreachable, version_refused) never carry one
-// at all, only a zero value. This is pure presentation — the stored
-// jobs.Task and the wire contract (/proto) are untouched.
+// code: the daemon's -1 "no exit status" sentinel (spawn failure, wait
+// failure, signal-kill, timeout/cancel kill, denied-before-spawn — a real
+// Unix exit status is always 0-255), the Relay's synthesized zero value
+// (unreachable, version_refused), and — since #632 — the Relay's own -1 on a
+// failure row whose daemon report the wire boundary refused as a protocol
+// violation (it may well have executed; what happened is unknown) all render
+// as no exit_code at all. This is pure presentation — the stored jobs.Task
+// and the wire contract (/proto) are untouched.
 func exitCodePtr(task jobs.Task) *int32 {
 	switch task.Outcome {
 	case jobs.OutcomeSuccess, jobs.OutcomeFailure:
@@ -518,10 +520,12 @@ const planModeClause = "Plan mode — the no-execution preview of whether each N
 const resultShapeClause = "Result shape: per-Node exit_code is present only when a process actually ran and " +
 	"exited with a status — a Task that never executed (denied_by_policy, unreachable, version_refused) or " +
 	"was killed without one (timeout, cancelled, spawn failure) has no exit_code key at all, and outcome is " +
-	"the authoritative state. job_id is present only when a Job was created; it is absent on plan=true " +
-	"responses (a Plan executes nothing) and on a dispatch parked for approval, so an absent job_id always " +
-	"means nothing was dispatched. A Selector that matches no Nodes is refused as no_nodes_matched and " +
-	"creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched."
+	"the authoritative state. A Task whose daemon report the Relay refused as a protocol violation (outcome " +
+	"failure with no exit_code) may well have executed — what happened there is unknown, and stderr is " +
+	"Relay-authored rather than the daemon's own bytes. job_id is present only when a Job was created; it is " +
+	"absent on plan=true responses (a Plan executes nothing) and on a dispatch parked for approval, so an " +
+	"absent job_id always means nothing was dispatched. A Selector that matches no Nodes is refused as " +
+	"no_nodes_matched and creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched."
 
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build

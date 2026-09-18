@@ -328,6 +328,58 @@ func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
 	}
 }
 
+// TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation is #632's
+// regression test on the restart/reconnect path — the resend that gives a
+// compromised Node a second chance to answer, which a fix scoped only to
+// capability.jobEngine.dispatchOne would miss entirely.
+func TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing.T) {
+	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := newFakeTaskRepository(task)
+	router := NewRouter(nil)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.ReconcileNode(context.Background(), "node-1") }()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	router.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+		Stdout:  []byte("i actually ran"),
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReconcileNode: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReconcileNode did not return")
+	}
+
+	got, err := tasks.Get(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved {
+		t.Fatalf("task-1 State = %v, want Resolved", got.State)
+	}
+	if got.Outcome != jobs.OutcomeFailure {
+		t.Errorf("task-1 Outcome = %v, want jobs.OutcomeFailure (never the forged OutcomeVersionRefused)", got.Outcome)
+	}
+	if got.ExitCode != -1 {
+		t.Errorf("task-1 ExitCode = %d, want -1", got.ExitCode)
+	}
+	if len(got.Stdout) != 0 {
+		t.Errorf("task-1 Stdout = %q, want empty — the Node's claimed output must be discarded", got.Stdout)
+	}
+}
+
 // TestReconciler_NoInFlightTasksIsANoOp asserts ReconcileNode on a Node with
 // no in-flight Tasks returns cleanly without touching the Conduit.
 func TestReconciler_NoInFlightTasksIsANoOp(t *testing.T) {
