@@ -59,6 +59,12 @@ jobs:
 
       - run: make docs-check
 
+      # The dev-loop's security-surface gate, proved against a fixture repo (#634). Shell + git
+      # only, and self-contained, so the shallow checkout above is irrelevant to it.
+      - name: Security-surface gate self-test
+        if: ${{ !cancelled() }}
+        run: make test-security-surface
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:

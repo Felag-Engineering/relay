@@ -12,6 +12,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
+        test-security-surface \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         fuzz-relay fuzz-daemon \
         verify opschema-check openapi-check gen-apiclient apiclient-check
@@ -20,9 +21,9 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
-# absence check, the strict-umask test lane, and both cross-binary suites. Work
-# can pass the inner loop and fail CI on a class of problem the author never
-# looked at.
+# absence check, the security-surface gate self-test, the strict-umask test
+# lane, and both cross-binary suites. Work can pass the inner loop and fail CI
+# on a class of problem the author never looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
 # gate for gate, so "it passes locally" means the same thing it means in CI.
@@ -37,7 +38,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # hard-failed: a check you did not run must not look like a check that passed.
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
-        apiclient-check verify-proto docs-check \
+        apiclient-check verify-proto docs-check test-security-surface \
         test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
@@ -175,6 +176,12 @@ console-snapshots:
 .PHONY: docs-check
 docs-check:
 	@./scripts/check-docs.sh
+
+# Proves scripts/security-surface.sh sees what its header claims — untracked files, both halves
+# of a rename, and an unresolvable base ref, the three ways it used to report "clean" (#634).
+# Runs against a throwaway fixture repo; touches nothing in this working tree.
+test-security-surface:
+	bash scripts/security-surface-test.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
