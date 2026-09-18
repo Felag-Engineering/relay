@@ -15,12 +15,14 @@
 # The syntax and semantics (deny-by-default, deny-beats-allow, positional
 # argument matching, "*" wildcard) are documented in daemon/policy.example.toml.
 #
-# This file and policy.db.toml (the `role=db` Node) are intentionally
-# near-identical. The ONLY differences are the two `svc.*` [[operation]]
-# blocks below and the `dev-fleet-service` raw-exec allow — so a future edit
-# to the shared parts (service.restart, system.facts, file.read, the
-# systemctl raw-exec allow, the --force/rm denies) goes into BOTH files unless
-# the divergence itself is the point.
+# There are now THREE fixtures. This file and policy.db.toml (the `role=db`
+# Node) are intentionally near-identical, and differ only in the two `svc.*`
+# [[operation]] blocks below and the `dev-fleet-service` raw-exec allow — so a
+# future edit to the shared parts (service.restart, system.facts, file.read,
+# the systemctl raw-exec allow, the --force/rm denies) goes into BOTH web and
+# db; it goes into policy.bastion.toml only if it also *narrows* that file —
+# the bastion is deliberately NOT near-identical to either sibling: it exists
+# to deny, and widening it deletes the demo's refusal beat.
 
 # Allow `service.restart` only for nginx and php-fpm. Restarting any other
 # service (notably sshd) is denied — this is the deterministic Policy-denied

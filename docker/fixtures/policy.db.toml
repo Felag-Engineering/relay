@@ -15,18 +15,24 @@
 # The syntax and semantics (deny-by-default, deny-beats-allow, positional
 # argument matching, "*" wildcard) are documented in daemon/policy.example.toml.
 #
-# This file and policy.web.toml (the `role=web` Nodes) are intentionally
-# near-identical. The ONLY differences are the two `svc.*` [[operation]]
-# blocks and the `dev-fleet-service` raw-exec allow, both ABSENT here — so a
-# future edit to the shared parts (service.restart, system.facts, file.read,
-# the systemctl raw-exec allow, the --force/rm denies) goes into BOTH files
-# unless the divergence itself is the point.
+# There are now THREE fixtures. This file and policy.web.toml (the `role=web`
+# Nodes) are intentionally near-identical, and differ only in the two `svc.*`
+# [[operation]] blocks and the `dev-fleet-service` raw-exec allow, both
+# ABSENT here — so a future edit to the shared parts (service.restart,
+# system.facts, file.read, the systemctl raw-exec allow, the --force/rm
+# denies) goes into BOTH web and db; it goes into policy.bastion.toml only if
+# it also *narrows* that file — the bastion is deliberately NOT
+# near-identical to either sibling: it exists to deny, and widening it
+# deletes the demo's refusal beat.
 #
 # This Node runs NO demo service: it carries neither the svc.* Policy
 # vocabulary nor the dev-fleet-service raw-exec allow, so deny-by-default
 # refuses the repair command here. That is what makes a fleet-wide Raw Exec
-# against the demo script return a MIXED result set (success on the two
-# `role=web` Nodes, denied_by_policy here) rather than a uniform one.
+# against the demo script return a MIXED result set (success on the `role=web`
+# Nodes, denied_by_policy here) rather than a uniform one — under the default
+# fleet that split is 2 success / 1 denied here; under the demo profile it is
+# 6 success / 3 denied (this Node plus daemon-7 and the bastion, which has no
+# raw-exec allow at all).
 
 # Allow `service.restart` only for nginx and php-fpm. Restarting any other
 # service (notably sshd) is denied — this is the deterministic Policy-denied
