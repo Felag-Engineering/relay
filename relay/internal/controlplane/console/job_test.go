@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -602,7 +603,16 @@ func TestJob_PlanBlockDoesNotReflowWhileTheJobRuns(t *testing.T) {
 // different meaning, presented as the one an operator is trained to compare.
 func TestJob_JobIdIsNotPresentedAsAPlanHash(t *testing.T) {
 	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
-	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	// A found dispatch record with no ApprovalID (#455's DispatchFound): a
+	// COMPLETE Job — as opposed to one still in flight — has always had its
+	// dispatch record written, and this test's claim is about that ungated
+	// case specifically, not about a running Job whose record has not landed
+	// yet (see TestJob_InFlightJobWithNoAuditRowYetStillRenders for that one).
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID}},
+	}
 	body := jobBody(t, jobDeps(q), jobPath(""))
 
 	if strings.Contains(body, "planhash") {
@@ -715,6 +725,35 @@ func TestJob_InFlightJobWithNoAuditRowYetStillRenders(t *testing.T) {
 	}
 	if strings.Contains(body, "could not be read") {
 		t.Error("a missing dispatch record was reported as a failure; it is the normal in-flight state")
+	}
+	// Cycle-2 review item 1: with no dispatch record at all, the page must not
+	// claim "not gated by an approval" — it does not know that yet either.
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error(`an in-flight Job with no dispatch record yet was told it "was not gated by an approval" — that is not known until the record is written`)
+	}
+	if !strings.Contains(body, "The dispatch record is not written yet") {
+		t.Error("an in-flight Job with no dispatch record yet does not say whether it was gated is unknown")
+	}
+}
+
+// TestJob_CompleteJobWithNoDispatchRecordSaysNoneFound (cycle-2 code review
+// item 1). A COMPLETE Job — nothing unresolved — with no dispatch record has
+// no "still writing it" window to explain: the record simply was never found,
+// and the page must not borrow the in-flight Job's "not written yet" wording
+// for a case where that story cannot be true.
+func TestJob_CompleteJobWithNoDispatchRecordSaysNoneFound(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if !strings.Contains(body, "No dispatch record was found for this Job") {
+		t.Error("a complete Job with no dispatch record does not say none was found")
+	}
+	if strings.Contains(body, "not written yet") {
+		t.Error(`a complete Job with no dispatch record was told the record "is not written yet" — it never will be, this is not an in-flight Job`)
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("a complete Job with no dispatch record was called ungated, which it cannot know")
 	}
 }
 
@@ -1115,5 +1154,548 @@ func TestJob_CancelTrailFailureStillRendersTheJob(t *testing.T) {
 	}
 	if n := strings.Count(body, `class="trow"`); n == 0 {
 		t.Error("the groups did not render alongside the cancel trail failure")
+	}
+}
+
+// --- Attribution (#455): who asked / for whom / who approved / what ran ---
+
+// titleAttrPattern strips every title="..." attribute's value, so a search
+// for the lane key's explanatory sentence cannot be satisfied by the
+// trust-chip template's OWN title attribute — which carries similar wording
+// but is invisible to a touch device or a printout (cycle-2 review item 5).
+var titleAttrPattern = regexp.MustCompile(`title="[^"]*"`)
+
+func stripTitleAttrs(body string) string {
+	return titleAttrPattern.ReplaceAllString(body, "")
+}
+
+// gatedTasks is the mixed result set the full-path test needs: two
+// successes, a failure, and a denial with a rule attached, so the "what each
+// Node returned" half of the story has both a success and a refusal in it.
+func gatedTasks() []capability.TaskRow {
+	deny := mutateTask("node-d", jobs.OutcomeDeniedByPolicy, "")
+	deny.Stderr = []byte("deny service.restart nginx  # rule prod-mutate")
+	return []capability.TaskRow{
+		mutateTask("node-a", jobs.OutcomeSuccess, "restarted"),
+		mutateTask("node-b", jobs.OutcomeSuccess, "restarted"),
+		mutateTask("node-c", jobs.OutcomeFailure, "unit failed"),
+		deny,
+	}
+}
+
+// TestJob_FullPathGatedJobAnswersAttributionOnOneScreen is the issue's own
+// acceptance criterion: a completed gated Job — agent request, park, human
+// approval, fan-out dispatch, mixed per-Node outcomes — read from the Job
+// screen alone, with no cross-referencing to the approval card.
+func TestJob_FullPathGatedJobAnswersAttributionOnOneScreen(t *testing.T) {
+	tasks := gatedTasks()
+	sum := oneJob(tasks, jobs.RiskClassMutate) // Requester "gleipnir", RequesterAccountID "acct-1"
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{sum},
+		tasks: tasks,
+		rows: []capability.AuditRow{{
+			Kind:       audit.KindDispatch,
+			JobID:      testJobID,
+			Asserted:   capability.Assertions{OnBehalfOf: "alice@example.com"},
+			ApprovalID: "ap-1",
+		}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID:            "ap-1",
+		State:         approval.StateApproved,
+		RequestedBy:   "gleipnir",
+		RequestedByID: "acct-1",
+		MatchedRules:  []string{"prod-mutate"},
+		Summary:       "restart nginx on 4 Nodes",
+		PlanHash:      "sha256:4b18c02f9911",
+		Require:       approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{
+			Account: "mike", AccountID: "acct-2", Approve: true,
+			Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow,
+		}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+	content := stripTitleAttrs(body)
+
+	if !strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">gleipnir<`) {
+		t.Error("the requester does not render as a verified chip")
+	}
+	if !strings.Contains(body, `data-trust="asserted" title="The caller claimed this. Nothing checked it.">alice@example.com<`) {
+		t.Error("the on-behalf-of claim does not render as its own asserted chip")
+	}
+	if !strings.Contains(body, "gated by rule") || !strings.Contains(body, "prod-mutate") {
+		t.Error("the page does not say which rule gated this dispatch")
+	}
+	if !strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">mike<`) {
+		t.Error("the approver does not render as a verified chip")
+	}
+	if !strings.Contains(body, stampOrAbsent(testNow)) {
+		t.Error("the approver's decision time is not stamped")
+	}
+	if !strings.Contains(body, "out-of-band") {
+		t.Error("the decision channel is not shown")
+	}
+	if !strings.Contains(body, "restart nginx on 4 Nodes") {
+		t.Error("the Relay-authored summary the approver saw is not shown")
+	}
+	// Cycle-2 code review item 4: "stored when the Job was parked" is wrong for
+	// a Grant-released Job, so the qualifier names the moment true of both —
+	// when the approval itself was requested.
+	if !strings.Contains(body, "stored when the approval was requested") {
+		t.Error("the summary's qualifier does not say the summary was stored when the approval was requested")
+	}
+	if strings.Contains(body, "stored when the Job was parked") {
+		t.Error(`the summary's qualifier still says "stored when the Job was parked", which does not hold for a Grant-released Job`)
+	}
+	if !strings.Contains(body, "<b>1</b> of 1 approval") {
+		t.Error("the quorum is not shown as signed-of-required")
+	}
+	if !strings.Contains(body, "sha256:4b18c02f9911") {
+		t.Error("the plan hash the approval committed to is not shown")
+	}
+	if strings.Contains(body, "approval parked by") {
+		t.Error("the approval's own requester line rendered even though it matches the Job's own requester")
+	}
+	if !strings.Contains(body, `data-outcome="denied_by_policy"`) {
+		t.Error("the denied Node does not appear in the record")
+	}
+	if !strings.Contains(body, `data-outcome="failure"`) {
+		t.Error("the failure does not appear in the record")
+	}
+	if !strings.Contains(body, `data-outcome="success"`) {
+		t.Error("the successes do not appear in the record")
+	}
+	// The lane key's explanatory sentences must be visible TEXT, not only
+	// readable from a chip's title attribute.
+	if !strings.Contains(content, "the Relay authenticated this identity") {
+		t.Error("the lane key does not explain the verified lane outside a title attribute")
+	}
+	if !strings.Contains(content, "the caller claimed this; nothing checked it") {
+		t.Error("the lane key does not explain the asserted lane outside a title attribute")
+	}
+}
+
+// TestJob_UnattributedApproverRendersInTheAssertedLane is the BLOCKING
+// finding 1 regression test: an approving Decision that carries a name but no
+// AccountID must never render as though the Relay authenticated it.
+func TestJob_UnattributedApproverRendersInTheAssertedLane(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", Approve: true, Channel: approval.ChannelOutOfBand, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, `data-trust="asserted" title="The caller claimed this. Nothing checked it.">mike<`) {
+		t.Error("an approving Decision with no AccountID does not render in the asserted lane")
+	}
+	if strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">mike<`) {
+		t.Error("an approving Decision with no AccountID rendered as VERIFIED — the exact lane error this issue exists to prevent")
+	}
+}
+
+// TestJob_PartialQuorumHistoryIsReadable: a released Job's approval has
+// always MET its quorum, so "partial quorum" is read off the history — two
+// signatures, each with its own time, showing the moment the record stood at
+// 1 of 2.
+func TestJob_PartialQuorumHistoryIsReadable(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	early := testNow.Add(-2 * time.Hour)
+	late := testNow.Add(-10 * time.Minute)
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 2},
+		Decisions: []approval.Decision{
+			{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: early},
+			{Account: "sam", AccountID: "acct-3", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: late},
+		},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "<b>2</b> of 2 approvals") {
+		t.Error("the quorum does not read 2 of 2")
+	}
+	for _, want := range []string{
+		`data-trust="verified" title="The Relay authenticated this identity.">mike<`,
+		`data-trust="verified" title="The Relay authenticated this identity.">sam<`,
+		stampOrAbsent(early), stampOrAbsent(late),
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the decision history does not render %q", want)
+		}
+	}
+	if strings.Index(body, stampOrAbsent(early)) > strings.Index(body, stampOrAbsent(late)) {
+		t.Error("the deciders do not render in stored order")
+	}
+}
+
+// TestJob_ShortQuorumRecordIsStatedNotHidden is the defensive render: a
+// record that holds fewer approvals than the rule required states the count
+// and never claims the approval was complete.
+func TestJob_ShortQuorumRecordIsStatedNotHidden(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 2},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "<b>1</b> of 2 approvals") {
+		t.Error("a short quorum does not state its true count")
+	}
+	if !strings.Contains(body, "fewer approvals than the rule required") {
+		t.Error("a short quorum record is hidden rather than stated")
+	}
+}
+
+// TestJob_ZeroQuorumRecordSaysSoRatherThanZeroOfZero. A record with no stored
+// Requirement is not "0 of 0 met" — it is a record this page cannot read a
+// quorum from at all, and it must say that rather than a number.
+func TestJob_ZeroQuorumRecordSaysSoRatherThanZeroOfZero(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1"}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "no quorum recorded") {
+		t.Error(`a record with no stored Requirement does not say "no quorum recorded"`)
+	}
+	if strings.Contains(body, "<b>0</b> of 0") {
+		t.Error(`a record with no stored Requirement rendered "0 of 0" rather than saying no quorum was recorded`)
+	}
+}
+
+// TestJob_InBandDecisionShowsTheAssertedHumanInTheAssertedLane. An in-band
+// decision naming an asserted human (ADR-0029) must show that human in the
+// asserted lane, never beside the verified decider as though the two were
+// the same fact.
+func TestJob_InBandDecisionShowsTheAssertedHumanInTheAssertedLane(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{
+			Account: "relay-bot", AccountID: "acct-9", Approve: true,
+			Channel: approval.ChannelInBand, DeciderHuman: false, OnBehalfOf: "carol", At: testNow,
+		}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, `data-trust="asserted" title="The caller claimed this. Nothing checked it.">carol<`) {
+		t.Error("the asserted human is not rendered in the asserted lane")
+	}
+	if strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">carol<`) {
+		t.Error("the asserted human rendered as VERIFIED")
+	}
+	if !strings.Contains(body, "machine") {
+		t.Error("a non-human decider is not marked machine")
+	}
+	if !strings.Contains(body, "in-band") {
+		t.Error("the in-band channel is not shown")
+	}
+}
+
+// TestJob_ApprovalParkedByAnotherAccountIsShown is cycle-1 finding 3:
+// checkApproval releases on the plan hash alone, so the Job's requester may
+// differ from the Account that parked the approval. When it does, the page
+// shows the approval's own requester rather than staying silent about it.
+func TestJob_ApprovalParkedByAnotherAccountIsShown(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, // RequesterAccountID "acct-1"
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", RequestedBy: "bob", RequestedByID: "acct-9",
+		Require:   approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "approval parked by") {
+		t.Error("the approval's own requester is not shown when it differs from the Job's")
+	}
+	if !strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">bob<`) {
+		t.Error("the approval's requester does not render as a verified chip")
+	}
+}
+
+// TestJob_DeniedNodesAppearInTheGatedRecord is acceptance box 4: a gated
+// dispatch's refusals appear in the record alongside its approver, not only
+// its successes.
+func TestJob_DeniedNodesAppearInTheGatedRecord(t *testing.T) {
+	deny := func(node string) capability.TaskRow {
+		row := mutateTask(node, jobs.OutcomeDeniedByPolicy, "")
+		row.Stderr = []byte("deny service.restart nginx  # rule prod-mutate")
+		return row
+	}
+	tasks := []capability.TaskRow{
+		deny("node-a"), deny("node-b"), deny("node-c"),
+		mutateTask("node-d", jobs.OutcomeSuccess, "ok"),
+	}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, `data-outcome="denied_by_policy"`) {
+		t.Error("the denied group does not render alongside the approver")
+	}
+	if !strings.Contains(body, "prod-mutate") {
+		t.Error("the deciding rule is not shown verbatim")
+	}
+	if !strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">mike<`) {
+		t.Error("the approver does not render alongside the denied Nodes")
+	}
+}
+
+// TestJob_GrantReleasedJobShowsNoPlanHashAndSaysWhy. A Grant's PlanHash
+// hashes its Scope, never the Job's own Plan, so the Job's plan-hash slot
+// must stay empty and say why — never render the Grant's hash in its place.
+func TestJob_GrantReleasedJobShowsNoPlanHashAndSaysWhy(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-g", GrantID: "g-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-g", PlanHash: "sha256:scopehash", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if strings.Contains(body, "scopehash") {
+		t.Error("a Grant-released Job rendered the Grant's Scope hash as though it were this Job's plan hash")
+	}
+	if strings.Contains(body, `class="planhash"`) {
+		t.Error("a Grant-released Job rendered a plan-hash slot at all")
+	}
+	if !strings.Contains(body, "a window this plan fell inside") {
+		t.Error("a Grant-released Job does not explain that its approvers approved a window, not this plan")
+	}
+	if !strings.Contains(body, `data-trust="verified" title="The Relay authenticated this identity.">mike<`) {
+		t.Error("the Grant's approver does not render")
+	}
+}
+
+// TestJob_UnreadableApprovalIsStatedAndNotCalledUngated. An approval record
+// that cannot be read is a store failure, not "this dispatch was not gated".
+func TestJob_UnreadableApprovalIsStatedAndNotCalledUngated(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-missing"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{} // ap-missing is not in the store
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "could not be read") {
+		t.Error("an unreadable approval record does not say so")
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("an unreadable approval record was called an ungated dispatch")
+	}
+}
+
+// TestJob_MissingApprovalReaderIsStatedDistinctly (finding 9). A Console with
+// no approval seam wired is a deployment fact, distinct from a store that
+// failed to answer.
+func TestJob_MissingApprovalReaderIsStatedDistinctly(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	body := jobBody(t, jobDeps(q), jobPath("")) // jobDeps wires no approval seam
+
+	if !strings.Contains(body, "approval reader is not available on this Console") {
+		t.Error("a Console with no approval seam wired does not say so distinctly")
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("a Console with no approval seam wired called the dispatch ungated")
+	}
+}
+
+// TestJob_UnreadableDispatchRecordDoesNotClaimUngated (finding 2). When the
+// dispatch record itself cannot be read, ApprovalID is unknown — the page
+// must not then assert this dispatch "was not gated", which it cannot know.
+func TestJob_UnreadableDispatchRecordDoesNotClaimUngated(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		auditErrOn: func(f capability.AuditFilter) bool {
+			return containsString(f.Kinds, audit.KindDispatch)
+		},
+	}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if !strings.Contains(body, "whether this dispatch was gated by an approval is not known") {
+		t.Error("an unreadable dispatch record does not say whether the Job was gated is unknown")
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("an unreadable dispatch record was called an ungated dispatch")
+	}
+}
+
+// TestJob_UngatedJobRendersNoApprovalSection. The common case: no approval
+// section, the existing ungated plan note, and the lane key still present —
+// every found Job has a requester chip for it to explain.
+func TestJob_UngatedJobRendersNoApprovalSection(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID}},
+	}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if strings.Contains(body, `class="jobapproval"`) {
+		t.Error("an ungated Job renders an approval section")
+	}
+	if !strings.Contains(body, "no plan hash was retained") {
+		t.Error("an ungated Job does not render its own plan note")
+	}
+	if !strings.Contains(body, `class="lanekey"`) {
+		t.Error("an ungated Job renders no lane key, though every found Job has a requester chip to explain")
+	}
+}
+
+// TestJob_ApprovalWithNoPlanHashSaysSoRatherThanClaimingUngated (cycle-2
+// review item 2). The approval read succeeds and the Job was genuinely gated,
+// but the record itself carries no stored plan hash — a fact distinct from
+// "this dispatch was not gated by an approval" at all.
+func TestJob_ApprovalWithNoPlanHashSaysSoRatherThanClaimingUngated(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1"}}} // no PlanHash stored
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "The approval record holds no plan hash") {
+		t.Error("an approval record with no stored plan hash does not say so")
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("a gated Job whose approval carries no plan hash was called ungated")
+	}
+}
+
+// TestJob_MissingGateRuleIsNotWrappedInCode (cycle-2 code review item 2). The
+// "no gate rule recorded" fallback is prose about the record, not a rule
+// name, so it must not render inside the <code> element the page reserves for
+// an actual rule.
+func TestJob_MissingGateRuleIsNotWrappedInCode(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1}, // no MatchedRules stored
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "gated by rule no gate rule recorded") {
+		t.Error("the missing-rule fallback does not render beside the label")
+	}
+	if strings.Contains(body, "<code>no gate rule recorded</code>") {
+		t.Error("the missing-rule fallback rendered inside <code>, as though it were a rule name")
+	}
+}
+
+// TestJob_DeciderWithNoRecordedTimeSaysSoProperly (cycle-2 code review item
+// 3). A Decision with no stored At time must not render as the ungrammatical
+// "approved not recorded" — the missing time is named as what it is.
+func TestJob_DeciderWithNoRecordedTimeSaysSoProperly(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true}}, // At left zero
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "approved, time not recorded") {
+		t.Error(`a decider with no recorded time does not say "approved, time not recorded"`)
+	}
+	if strings.Contains(body, "approved not recorded") {
+		t.Error(`a decider with no recorded time rendered the ungrammatical "approved not recorded"`)
+	}
+}
+
+// TestJob_ApprovalWithNoDecidersSaysSo (cycle-2 code review item 5). A
+// released Job's approval record can carry no approving Decision at all — a
+// defensive, unexpected case the page states rather than rendering an empty
+// gap where the decider list would be.
+func TestJob_ApprovalWithNoDecidersSaysSo(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", Require: approval.Requirement{Count: 1}}}} // no Decisions
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "no approving decision recorded") {
+		t.Error("an approval record with no approving Decisions does not say so")
+	}
+	if !strings.Contains(body, `class="jobapproval"`) {
+		t.Error("the approval section is not rendered at all for a record with no Decisions")
 	}
 }
