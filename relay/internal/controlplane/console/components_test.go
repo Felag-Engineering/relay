@@ -397,10 +397,13 @@ func TestDenyBlock_RendersThePreflightBoundary(t *testing.T) {
 // is the Console's own copy: markup, the clip note, two link labels, and this
 // fixture's short field values. 693 bytes today; the budget is 800.
 //
-// WHAT IT HOLDS: no new prose can be added to THIS BLOCK without a deliberate
-// budget bump, in any spelling. The 107 bytes of headroom are less than the
-// 138-byte paraphrase this change removed, so re-adding it — or any sentence
-// like it — trips this.
+// WHAT IT HOLDS: a CEILING on the block's own copy, not a ban on it. The copy
+// cannot grow past the 107 bytes of headroom without a deliberate budget bump,
+// which is enough to catch the 138-byte paraphrase this change removed — or any
+// sentence of that length, in any spelling or line-wrapping. A SHORT new
+// sentence still fits: a 46-byte one ("Policy lives on the Node; Relay only
+// reads it.") was injected into the block during review and this guard passed.
+// Do not cite it as proof that the block carries no Console prose.
 // WHAT IT DOES NOT HOLD: prose anywhere else in the package. Three boundary
 // paraphrases live outside this block (node.go's Effective Policy panel, and a
 // fourth commissioned in docs/design/console/07) and are tracked in #651. This

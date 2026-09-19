@@ -410,6 +410,9 @@ func (d Deny) BoundaryExplanation() (string, error) {
 	default:
 		return "", errors.New("deny block built with no DenyBoundary")
 	}
+	// Unreachable today — both mappings return non-empty compile-time constants.
+	// It catches a future refusal.go edit that empties either one, which would
+	// otherwise reopen this issue silently.
 	if text == "" {
 		return "", errors.New("the capability layer returned no boundary explanation")
 	}
