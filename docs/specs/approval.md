@@ -1,7 +1,7 @@
 # Approval
 
-**Status:** aspirational — worked through with the owner on `2026-09-14`, awaiting their review
-of this draft. Describes intended behaviour, not the code (see the establishing phase in
+**Status:** aspirational — worked through with the owner on `2026-09-14` and `2026-09-18`, awaiting
+their review of this draft. Describes intended behaviour, not the code (see the establishing phase in
 `README.md`).
 
 ## Purpose
@@ -23,12 +23,15 @@ approval grants, the shape key and the anti-fatigue diff all exist for that reas
 
 | Surface | How it is reached |
 |---|---|
-| **MCP** | `approve_request` — an ordinary tool call carrying the request ID, the plan hash being answered, the verdict, an asserted approver identity, and an optional reason. This is the in-band path the shipped defaults rely on (ADR-0029). |
+| **MCP** | Two envelopes that carry a decision, over **one** in-band decision path (ADR-0029 decision 6). **`approve_request`** — an ordinary tool call carrying the request ID, the plan hash being answered, the verdict, an asserted approver identity, and an optional reason; the primary in-band path, and the one every MCP client can make. **MRTR elicitation** — the gated `tools/call` answers with an input-required result carrying a Relay-authored approval question; the client puts it to a human and retries the call carrying the answer, which includes an asserted approver identity as `approve_request` does. The retried call delivers the decision to the same decision path, through the same single guarded seam as `approve_request` (ADR-0029 decision 5), and its dispatch then re-enters the full pipeline — Freeze, resolution, authorization, cap, and the gate's plan-hash match — as any re-drive does. Which response a gated call receives when a client supports both MRTR and the MCP task handle is `execution.md`'s to state. |
 | **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision` — the out-of-band decision endpoint; grant management under `/api/v1/approval-grants`. |
-| **Admin Console** | The approval queue — triage, the request detail, the anti-fatigue diff against the last approval of the same shape, and deciding from the Console (#435). |
+| **Admin Console** | The approval queue — triage, the request detail, the anti-fatigue diff against the last approval of the same shape, deciding from the Console (#435), and bulk decisions. The approval UI is where a human records a Decision and nothing else — see *Two decision paths*; the Console's execution surface is `execution.md` (ADR-0026). |
 
-Deliberately **not** a surface: MCP elicitation. Delivery envelopes come and go with protocol
-revisions; a tool call is the one surface every MCP client has had since 2024-11-05 (ADR-0029).
+Server-initiated elicitation (`elicitation/create` pushed over a stream) is **not** a surface: the
+2026-07-28 protocol removed it, and emitting it would cost the MCP surface its stateless property
+(ADR-0029). MRTR is the conformant form, and a tool call remains the one surface every MCP client
+has had since 2024-11-05, which is why `approve_request` remains the primary in-band path
+(ADR-0029).
 
 **This is the one capability where the surfaces genuinely differ**, and the difference is the
 point rather than an inconsistency. A decision's *channel* is set by the surface that receives
@@ -107,6 +110,49 @@ and an asserted approver identity does not upgrade one. A stronger channel satis
 rule; the reverse is refused. A rule that states no channel defaults to out-of-band; the shipped
 file states in-band explicitly.
 
+### Two decision paths
+
+A decision reaches Relay by one of two paths, and they exist side by side because they reach
+different people:
+
+- **In-band, through the requesting client.** Relay authors the question; the client puts it in
+  front of a human and returns the answer over its own session — `approve_request`, or MRTR
+  elicitation where the client supports it. This is the path that reaches an on-call human
+  wherever they are, because Relay is expected to sit behind a firewall that on-call people
+  cannot easily cross, while the client — Gleipnir routing to its on-call audience, or an
+  operator's own harness — already can. **How the client reaches the human is the client's
+  concern**, and it is expected to keep the rule ADR-0027 states for Gleipnir's handler: *"a
+  deterministic path to the assigned human audience — never surfaced to the LLM, never
+  auto-answered."* ADR-0027 does not bind Gleipnir or any other client; Relay cannot enforce it.
+- **Out-of-band, on Relay itself.** The Console or the Control API decision endpoint, under a
+  per-person Account; a Console decision re-authenticates at the moment of deciding (step-up).
+  This is the path for anyone who can reach Relay directly, and the only one whose approver Relay
+  verifies.
+
+Both paths record into the same decision model; attribution differs by lane — the approver is
+**verified** out-of-band and **asserted** in-band (*Attribution*). Either is a full approval path:
+a rule set to `in-band` is satisfied by either. They are not of equal **strength**: *Channel
+strength* above still holds, so a rule set to `out-of-band` is satisfied by the second path only.
+
+**Relay integrates no chat or paging system.** Its only outbound notice is the best-effort
+webhook (*Notification*), which carries no answer back; a decision never arrives by any route but
+these two.
+
+**The Console's approval UI records Decisions and does nothing else.** It shows the
+pending queue, a request's Relay-authored Plan and exact Nodes, and the anti-fatigue diff, and it
+approves or denies. It never edits a request before deciding it — the approver decides exactly
+what was asked or nothing — and nothing is dispatched from it: a release proceeds as any other
+release does (*Deciding*).
+
+**Bulk decisions.** The Console may approve or deny several pending requests in one act, Raw Exec
+included. A bulk decision is a set of individual Decisions made together, never a new kind and
+never an Approval grant: each request is answered against its own plan hash, checked against every
+rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the
+others with it. **One step-up re-authentication covers the whole act**, entered immediately before
+it is submitted. Approval grant requests are excluded from bulk approval: approving a grant
+requires expanding its Scope, and each grant request is decided on its own. See *Accepted
+residual risk*.
+
 ### What an approval commits to
 
 An approval binds to a **plan hash** — a content address over the Plan's ordered steps, their
@@ -175,7 +221,8 @@ is deliberately small and conspicuous.
 A Scope is: **exactly one Account**, a risk class, an Operation allow-list, a fan-out ceiling, and
 a time window. The first-pass limits:
 
-- **Never covers Raw Exec.** Raw Exec is always decided request by request.
+- **Never covers Raw Exec.** Raw Exec is never covered by standing authorization: every Raw Exec
+  needs its own decision, alone or within a bulk act.
 - **Window capped at 4 hours.** Everything expires.
 - **Issued only by second-person, out-of-band approval** — never self-confirmed and never in-band,
   whatever the shipped defaults allow for ordinary requests.
@@ -254,9 +301,10 @@ so the trail's count of asks stays truthful while polling stays visible.
   expiry, the attribution triple, and approval grants remain its decisions. Amendments: a shipped
   default gate file; grants lose namespace pinning, cap their window at 4 hours, exclude Raw Exec,
   and are issued only second-person out-of-band; pending-request expiry defaults to 1 hour.
-- **ADR-0029** — in-band approval as a tool call rather than elicitation, and the asserted
-  approver. Now the default path for MCP mutations under the shipped file, which is the case its
-  own text flagged as worth revisiting; the owner accepted it knowingly.
+- **ADR-0029** — in-band approval as a tool call, the asserted approver, the single guarded
+  decision seam, and MRTR elicitation as the second envelope over the same decision path
+  (decision 6). Now the default path for MCP mutations under the shipped file, which is the case
+  its own text flagged as worth revisiting; the owner accepted it knowingly.
 - **ADR-0038** — the plan hash covers a route; the derived requirement is priced over every step.
 - **Invariant 3** (deny-beats-allow) — a denial is terminal and a stricter rule wins a merge.
 - **Invariant 5** — a grant releases an approval requirement, never the blast cap.
@@ -326,6 +374,11 @@ Claims above with **no row**, and so nothing checking them:
   *values* are well covered; which side chooses them is not.
 - That deciding from the Console records the same decision, channel and attribution as the
   Control API (#435).
+- That an MRTR elicitation answer records the same in-band decision, channel and asserted
+  attribution as `approve_request`, through the same guarded seam. Not built.
+- That a bulk decision is answered, refused and audited request by request against each request's
+  own plan hash, under one step-up, and never includes an approval grant request. Not built.
+- That the Console's approval UI cannot edit a request or dispatch.
 
 ### Performance
 
@@ -369,6 +422,20 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   answering. A fresh install's gate is therefore only as strong as the client. The trail records
   the approver as asserted, never verified, and an operator who needs evidence raises the rule to
   second-person or out-of-band. Stated to the owner and accepted on `2026-09-14`.
+- **An in-band approval is only as honest as the client's path to the human.** Behind a firewall,
+  in-band is expected to be the everyday path, so for `in-band` rules the guarantee that a human
+  decided rests on the client — Gleipnir's HIL router, or an operator's harness — keeping ADR-0027's
+  rule. Relay records such an approver as asserted and cannot detect an auto-answer. An operator
+  who needs evidence sets the rule to `out-of-band`. Accepted by the owner on `2026-09-18`
+  (threat model R21).
+- **Bulk approve can rubber-stamp.** Approving many requests in one act, Raw Exec included, is the
+  approval-fatigue pattern this capability's Purpose names, and one step-up covers the whole act:
+  a hijacked human Console session plus that Account's password can release every pending request
+  it is eligible to decide, Raw Exec included, at once. Bounded by each request still binding to
+  its own plan hash and passing every decision check individually, by the audience and role floor,
+  by approval grant requests being excluded, and by the audit recording each Decision separately.
+  Accepted by the owner on `2026-09-18` (threat model R22), with bounding by shape key, excluding
+  Raw Exec, or a step-up per request left as Future work.
 - **An approval grant hands the AI-agent choice within its Scope.** Inside a grant, the AI-agent
   picks which covered Operations to run on which Nodes, so a steered session can use a legitimate
   grant for actions nobody intended. Bounded by the Scope, the 4-hour window, the blast cap, Node
@@ -388,15 +455,37 @@ none is a commitment to an order.
 - **Richer multi-person and out-of-band requirements** — rules demanding more than one approver
   (two-person release), and out-of-band requirements that are practical enough to become the
   default for agent-grade mutations.
+- **Retiring `approve_request`.** The owner's intent is that it may be retired once MRTR
+  elicitation is usable from the clients Relay is driven by, which first requires those clients to
+  negotiate the 2026-07-28 protocol. Not decided here: it needs an ADR-0029 amendment first
+  (decisions 1 and 5, and Consequences).
+- **Bounding bulk approve** — by shape key, by excluding Raw Exec, or by a step-up per request —
+  if unbounded bulk proves to invite rubber-stamping.
 - **Namespace-pinned approval grants**, if ever re-added — only with pricing that cannot release
   work needing a stronger approval than the grant was issued under (the #482 defect class).
 
 ## Open questions
 
-None open. Deciding from the Console (#435) is in scope, not open.
+- **Does a release dispatch while the requester waits?** An out-of-band decision today releases a
+  request that runs only when the requester re-drives it. #643 proposes holding the gated call
+  open for a bounded wait and dispatching on release, which would change *Deciding does not itself
+  dispatch*. Undecided. MRTR makes the re-drive automatic for in-band decisions; this question is about
+  out-of-band ones. What would force it: an owner decision on #643, which cannot be built until
+  it is made.
+
+Deciding from the Console (#435) is in scope, not open.
 
 ## History
 
+- `2026-09-18` — worked through with the owner. Two decision paths recorded: in-band through the
+  requesting client (`approve_request`, and MRTR elicitation over the same guarded seam) and
+  out-of-band on Relay (Console with step-up, Control API), reachable by different people because
+  Relay is expected to sit behind a firewall. Retiring `approve_request` is intent only, pending an
+  ADR-0029 amendment. Relay integrates no chat system. The Console's approval UI records Decisions
+  only — no editing, no dispatch — and gains unbounded bulk decisions under one step-up, each
+  answered and audited individually, excluding approval grant requests. Two residual risks
+  accepted: in-band honesty rests on the client (R21), and bulk approve can rubber-stamp (R22).
+  Held-call dispatch (#643) left open. MRTR implementation tracked separately.
 - `2026-09-17` — a blank (empty or whitespace-only) audience entry is now refused, naming
   the rule and `require.audience`, when gate rules load, when an Approval grant is
   requested, when a dispatch parks, and when an approval Request is stored — nothing trims

@@ -302,11 +302,14 @@ a value.
 _Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
 
 **Approval**:
-A verified human decision that a specific parked Job may proceed, recorded against its
-Plan hash. The Job waits in **`pending-approval`** until the Gate rule's requirement is
-satisfied or its TTL expires. Relay authors what the approver sees, so the requesting
-AI-agent can neither truncate nor spin it; the decision arrives on an authenticated
-channel, never through the MCP session (ADR-0027). An Approval **narrows** — it permits
+A human decision that a specific parked Job may proceed, recorded against its Plan hash.
+The Job waits in **`pending-approval`** until the Gate rule's requirement is satisfied or
+its TTL expires. Relay authors what the approver sees, so the requesting AI-agent can
+neither truncate nor spin it. The decision arrives by one of two paths: **out-of-band**, on
+an authenticated Relay surface (Console or Control API) where the approver is verified; or
+**in-band**, through the requesting client's MCP session (`approve_request`, or an MRTR
+answer), where the approver is asserted and only as honest as the client (ADR-0027,
+ADR-0029). An Approval **narrows** — it permits
 one already-Policy-legal Plan to run. It is never authorization and can never widen what a
 Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
@@ -320,6 +323,13 @@ including a denial and including the first of two, so partial quorum is never an
 the trail.
 _Avoid_: vote, approval (for the individual answer — the Approval is the whole requirement
 being met), response
+
+**Bulk decision**:
+Several Decisions made together in one act in the Admin Console, under one step-up. Not a
+new kind of Decision and not an Approval grant: each request is answered against its own
+Plan hash, checked and audited on its own, and a refused one does not carry the others with
+it. Approval grant requests cannot be bulk-approved (`docs/specs/approval.md`).
+_Avoid_: batch, batch approval (a batch is an Approval grant — ADR-0027), blanket approval
 
 **Channel** (of a Decision):
 How strongly a Decision's delivery path is trusted. **`in-band`** means the answer came
@@ -386,9 +396,11 @@ Relay mints **one handle per parked dispatch**, not per Job — a parked dispatc
 Job at all, and the Job arrives later if an approval releases it, or never. A handle is
 owner-only and expires; one that is not yours reads exactly like one that never existed.
 
-Two things a handle deliberately is not. It is not a decision channel: no MCP method
-accepts an approval, and `tasks/cancel` ends the *client's* interest while leaving a still-
-parked Approval pending and decidable. And it is not required: a client that knows nothing
+Two things a handle deliberately is not. It is not a decision channel: no `tasks/*`
+method accepts an approval, and `tasks/cancel` ends the *client's* interest while leaving a still-
+parked Approval pending and decidable — an in-band Decision arrives only through
+`approve_request` or an MRTR answer, never a `tasks/*` method (ADR-0028, ADR-0029). And it is
+not required: a client that knows nothing
 about Tasks drives the same gated dispatch to completion on the universal path, so nothing
 may come to depend on a handle existing.
 
@@ -396,6 +408,15 @@ Relay serves the extension itself, as a shim, because its SDK does not implement
 (ADR-0028). The shim is temporary by design and has a written removal condition.
 _Avoid_: task (unqualified), MCP task, job handle, task id (when a Relay **Task** is also in
 play)
+
+**MRTR** (Multi Round-Trip Requests):
+MCP's stateless pattern (SEP-2322, protocol 2026-07-28) for a server that needs input
+mid-call: the server answers `tools/call` with an input-required result and ends the
+request; the client obtains the input and retries the call carrying it. Relay's use is
+**MRTR elicitation** — a Relay-authored approval question on a gated call, answered in-band
+with an asserted approver, through the same decision path as `approve_request` (ADR-0029
+decision 6). Replaces server-initiated `elicitation/create`, which 2026-07-28 removed.
+_Avoid_: elicitation (unqualified — say which form), held elicitation
 
 **Relay-side authorization**:
 The central rules deciding which Account may send which Operations to which Nodes.
