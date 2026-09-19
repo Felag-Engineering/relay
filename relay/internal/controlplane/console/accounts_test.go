@@ -167,9 +167,16 @@ func TestAccounts_NoRoleComparisonLivesInThisScreen(t *testing.T) {
 	// legitimately renders a role name in a table cell and names the three
 	// roles in the "what a role means" block. What it must never do is decide
 	// anything from one.
+	// "caller.Role" is the load-bearing entry, and it is a ban on READING the
+	// caller's role at all rather than on any particular comparison shape.
+	// The operator-shaped entries below do not catch a switch on the role, nor
+	// a comparison against a string literal (`string(caller.Role) != "admin"`)
+	// — both compile, and both are the third, unreviewed answer. This file
+	// never legitimately reads caller.Role: it passes `caller` whole to the
+	// capability layer, which is the whole point.
 	for _, banned := range []string{
 		".AtLeast(", "ReachableBy(", "== accounts.Role", "!= accounts.Role",
-		"RoleGate", "requiredRole",
+		"RoleGate", "requiredRole", "caller.Role",
 	} {
 		if strings.Contains(string(src), banned) {
 			t.Errorf("accounts.go contains %q — this screen must interpret no role. The route's "+

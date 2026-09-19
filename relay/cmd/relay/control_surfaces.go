@@ -272,8 +272,9 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		Queries: d.capability,
 		// The Accounts screen's read seam (#654). d.capability already
 		// carries Accounts and APITokens (#653), so no adapter is built for
-		// it, and console.AccountReader declares neither of the account
-		// lane's write verbs. The admin floor on both reads is the capability
+		// it, and console.AccountReader declares none of the account lane's
+		// five write verbs (CreateAccount, SetAccountRole, SetAccountEnabled,
+		// MintAPIToken, RevokeAPIToken). The admin floor on both reads is the capability
 		// layer's (authz.go), as is the decision that a successful read
 		// records nothing — #659 tracks the latter, in front of a human.
 		Accounts: d.capability,

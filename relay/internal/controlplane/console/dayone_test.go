@@ -71,8 +71,15 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 			"day-one shape is pinned in TestAccounts_DayOneShowsTheFoundingAdmin.",
 	}
 
+	// An exemption that stops being reached is an unexecuted paragraph that
+	// outlives its reason — the failure this package answers elsewhere with a
+	// vacuity assert (no_dispatch_test.go). If /console/accounts ever leaves
+	// walkableScreens, the reason above must be re-argued, not inherited.
+	exemptHit := map[string]bool{}
+
 	for _, path := range paths {
 		if why, ok := dayOneExempt[path]; ok {
+			exemptHit[path] = true
 			t.Logf("skipping %s: %s", path, why)
 			continue
 		}
@@ -90,6 +97,14 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 		if m := zeroed.FindString(body); m != "" {
 			t.Errorf("%s rendered the zeroed statistic %q on a fresh Relay — say nothing has "+
 				"happened, do not measure it", path, m)
+		}
+	}
+
+	for path := range dayOneExempt {
+		if !exemptHit[path] {
+			t.Errorf("dayOneExempt names %s, which this sweep never reached — the exemption is "+
+				"now an unexecuted paragraph. Delete it, or fix the sweep that stopped covering "+
+				"the route it excuses", path)
 		}
 	}
 }

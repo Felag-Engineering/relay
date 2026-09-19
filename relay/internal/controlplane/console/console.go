@@ -285,13 +285,15 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
 		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
-		// are v0.7.0 screens, not built yet (#464). Accounts (spec 15) was the
-		// fourth until #654 mounted its read half, below. They do
+		// are v0.7.0 screens, not built yet (#464). They do
 		// not get a placeholder row: a v0.6.0 nav must not advertise a route
 		// that answers "not built yet", and Register no longer needs a
 		// mounted-but-refusing row to keep a session from reaching one — the
 		// route is simply absent until its screen ships, and that issue adds
 		// its own row with its own MinRole.
+		//
+		// Accounts (spec 15) was the fourth of those until #654 mounted its
+		// read half, below.
 		//
 		// Add Nodes was /console/nodes/add — a LITERAL segment under
 		// GET /console/nodes/{node_id} (above). With that row gone, the path
