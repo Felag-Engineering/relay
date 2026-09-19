@@ -87,7 +87,7 @@ func (s *Service) Account(ctx context.Context, p Principal, id string) (accounts
 
 // CreateAccount creates a new Account (#653). Authorized at
 // ControlAccountCreate; the create is audited (AccountAdminCreate) with the
-// Account's assigned id, name, and initial role.
+// Account's assigned id, name, kind, and initial role.
 func (s *Service) CreateAccount(ctx context.Context, p Principal, a accounts.Account) (accounts.Account, error) {
 	if s.accountsStore == nil {
 		return accounts.Account{}, ErrAccountsUnavailable
@@ -106,6 +106,7 @@ func (s *Service) CreateAccount(ctx context.Context, p Principal, a accounts.Acc
 		AccountID:   created.ID,
 		AccountName: created.Name,
 		Role:        string(created.Role),
+		AccountKind: string(created.Kind),
 		Asserted:    AssertionsFromContext(ctx),
 	}); auditErr != nil {
 		return created, fmt.Errorf("capability: record audit entry: %w", auditErr)

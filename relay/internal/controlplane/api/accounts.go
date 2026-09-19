@@ -157,13 +157,27 @@ func requireAccountAdmin(w http.ResponseWriter, r *http.Request, d Deps) (capabi
 // writeAccountError maps a domain or capability-layer error onto an HTTP
 // problem response. Unrecognized errors become a bare 500 with no detail: an
 // unexpected failure must not spill store internals onto the wire.
-func writeAccountError(w http.ResponseWriter, err error, title string) {
+//
+// selfTargetVerb names the act being refused ("re-role", "disable") for the
+// ErrSelfTargeted title, so the two callers that can actually produce it
+// (handleSetAccountRole, handleSetAccountEnabled) render the same specific
+// title `refuseSelfTarget` used to (pre-#653: "cannot re-role your own
+// account" / "cannot disable your own account") rather than a generic one.
+// Every other caller passes "" — they cannot reach this branch, since
+// SetAccountRole/SetAccountEnabled are the only two capability methods that
+// return ErrSelfTargeted — and "" would only ever render if that stopped
+// being true, which is itself worth noticing.
+func writeAccountError(w http.ResponseWriter, err error, title, selfTargetVerb string) {
 	switch {
 	case errors.Is(err, authz.ErrUnauthorized):
 		writeProblem(w, http.StatusForbidden, "forbidden",
 			"identity management requires the admin role")
 	case errors.Is(err, capability.ErrSelfTargeted):
-		writeProblem(w, http.StatusConflict, "cannot do this to your own account",
+		verb := selfTargetVerb
+		if verb == "" {
+			verb = "target"
+		}
+		writeProblem(w, http.StatusConflict, "cannot "+verb+" your own account",
 			"another admin must do this; a control plane whose last admin can switch itself off has no way back in")
 	case errors.Is(err, accounts.ErrLastAdmin):
 		writeProblem(w, http.StatusConflict, "the last enabled admin cannot be demoted or disabled",
@@ -216,7 +230,7 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 			Enabled: true,
 		})
 		if err != nil {
-			writeAccountError(w, err, "create account failed")
+			writeAccountError(w, err, "create account failed", "")
 			return
 		}
 
@@ -234,7 +248,7 @@ func handleListAccounts(d Deps) http.HandlerFunc {
 
 		list, err := d.AccountAdmin.Accounts(r.Context(), p)
 		if err != nil {
-			writeAccountError(w, err, "list accounts failed")
+			writeAccountError(w, err, "list accounts failed", "")
 			return
 		}
 
@@ -260,7 +274,7 @@ func handleGetAccount(d Deps) http.HandlerFunc {
 
 		acct, err := d.AccountAdmin.Account(r.Context(), p, id)
 		if err != nil {
-			writeAccountError(w, err, "get account failed")
+			writeAccountError(w, err, "get account failed", "")
 			return
 		}
 		writeJSON(w, http.StatusOK, renderAccount(acct))
@@ -291,7 +305,7 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 		}
 
 		if err := d.AccountAdmin.SetAccountRole(r.Context(), p, id, accounts.Role(req.Role)); err != nil {
-			writeAccountError(w, err, "set account role failed")
+			writeAccountError(w, err, "set account role failed", "re-role")
 			return
 		}
 
@@ -318,7 +332,7 @@ func handleSetAccountEnabled(d Deps, enabled bool) http.HandlerFunc {
 		}
 
 		if err := d.AccountAdmin.SetAccountEnabled(r.Context(), p, id, enabled); err != nil {
-			writeAccountError(w, err, verb+" account failed")
+			writeAccountError(w, err, verb+" account failed", verb)
 			return
 		}
 
@@ -393,7 +407,7 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		if err != nil {
 			switch {
 			case errors.Is(err, authz.ErrUnauthorized):
-				writeAccountError(w, err, "mint api token failed")
+				writeAccountError(w, err, "mint api token failed", "")
 			case errors.Is(err, accounts.ErrNotFound):
 				writeProblem(w, http.StatusNotFound, "account not found", "")
 			case errors.Is(err, accounts.ErrInvalidTTL):
@@ -411,7 +425,8 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// The single Reveal() in the codebase: the mint response is the one
+		// One of the two permitted Reveal() call sites (accounts.Plaintext's
+		// own doc comment enumerates both): the mint response is the one
 		// moment the plaintext is allowed to exist outside the minting call.
 		writeJSON(w, http.StatusCreated, mintAPITokenResponse{
 			APIToken: renderAPIToken(tok),
@@ -439,7 +454,7 @@ func handleListAPITokens(d Deps) http.HandlerFunc {
 		list, err := d.AccountAdmin.APITokens(r.Context(), p, accountID)
 		if err != nil {
 			if errors.Is(err, authz.ErrUnauthorized) {
-				writeAccountError(w, err, "list api tokens failed")
+				writeAccountError(w, err, "list api tokens failed", "")
 				return
 			}
 			writeProblem(w, http.StatusInternalServerError, "list api tokens failed", "")
@@ -474,7 +489,7 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 		if err := d.AccountAdmin.RevokeAPIToken(r.Context(), p, id); err != nil {
 			switch {
 			case errors.Is(err, authz.ErrUnauthorized):
-				writeAccountError(w, err, "revoke api token failed")
+				writeAccountError(w, err, "revoke api token failed", "")
 			case errors.Is(err, accounts.ErrTokenNotFound):
 				writeProblem(w, http.StatusNotFound, "api token not found", "")
 			default:

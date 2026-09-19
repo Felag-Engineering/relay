@@ -951,18 +951,16 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// for the ControlSurface seam (#162) this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
-			registry:     reg,
-			policy:       policyCache,
-			vocab:        vocabCache,
-			ops:          opvocabLister{},
-			capability:   capSvc,
-			jobs:         st.Jobs(),
-			tasks:        st.Tasks(),
-			tokens:       tokenSvc,
-			accountsRepo: st.Accounts(),
-			apiTokens:    apiTokenSvc,
-			revocation:   revocationSvc,
-			audit:        st.Audit(),
+			registry:   reg,
+			policy:     policyCache,
+			vocab:      vocabCache,
+			ops:        opvocabLister{},
+			capability: capSvc,
+			jobs:       st.Jobs(),
+			tasks:      st.Tasks(),
+			tokens:     tokenSvc,
+			revocation: revocationSvc,
+			audit:      st.Audit(),
 			// The read-access sink (#288, ADR-0025). This assignment was
 			// MISSING until #357: surfaceDeps.auditSink stayed nil, so
 			// readAuditor's defensive `sink == nil` skip silently disabled every

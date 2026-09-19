@@ -229,8 +229,7 @@ func (r *sqliteAccounts) SetRole(ctx context.Context, id string, role accounts.R
 	if !role.Valid() {
 		return accounts.ErrInvalidRole
 	}
-	return r.updateGuarded(ctx, setRoleGuardSQL, id,
-		sql.Named("role", string(role)), sql.Named("id", id))
+	return r.updateGuarded(ctx, setRoleGuardSQL, id, sql.Named("role", string(role)))
 }
 
 // SetEnabled enables or disables an Account, effective immediately. Enabling
@@ -241,7 +240,7 @@ func (r *sqliteAccounts) SetEnabled(ctx context.Context, id string, enabled bool
 	if enabled {
 		return r.update(ctx, `UPDATE accounts SET enabled = ? WHERE id = ?`, boolToInt(true), id)
 	}
-	return r.updateGuarded(ctx, setDisabledGuardSQL, id, sql.Named("id", id))
+	return r.updateGuarded(ctx, setDisabledGuardSQL, id)
 }
 
 func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id string) error {
@@ -259,18 +258,27 @@ func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id
 	return nil
 }
 
-// updateGuarded runs a single guarded UPDATE (query, built from named
-// parameters carried in args) and, when it affects zero rows, disambiguates
-// WHY: accounts.ErrNotFound if id does not exist, accounts.ErrLastAdmin if it
-// does.
+// updateGuarded runs a single guarded UPDATE (query, built from extraArgs
+// plus a `:id` binding this function builds ITSELF from id) and, when it
+// affects zero rows, disambiguates WHY: accounts.ErrNotFound if id does not
+// exist, accounts.ErrLastAdmin if it does.
 //
-// That disambiguation is EXACT, not a heuristic, for two reasons specific to
-// this schema: accounts.Repository has no Delete, so a row can never vanish
-// between the UPDATE and the Get below — an id that existed a moment ago
-// still exists now, or it never did. And SQLite counts a no-op UPDATE (new
-// value equals the old one) as one changed row, not zero, so a redundant
-// write can never be mistaken for a refused one.
-func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id string, args ...any) error {
+// The `:id` binding is built here, once, rather than passed in by each
+// caller alongside the OTHER copy of id used for the Get disambiguation
+// below — a caller passing its own sql.Named("id", id) is a second place the
+// same value could be spelled differently by a future edit and silently
+// diverge from the id the disambiguation actually checks. Building it here
+// from the same id parameter both uses makes that divergence impossible
+// rather than merely unlikely.
+//
+// The disambiguation itself is EXACT, not a heuristic, for two reasons
+// specific to this schema: accounts.Repository has no Delete, so a row can
+// never vanish between the UPDATE and the Get below — an id that existed a
+// moment ago still exists now, or it never did. And SQLite counts a no-op
+// UPDATE (new value equals the old one) as one changed row, not zero, so a
+// redundant write can never be mistaken for a refused one.
+func (r *sqliteAccounts) updateGuarded(ctx context.Context, query string, id string, extraArgs ...any) error {
+	args := append(append([]any{}, extraArgs...), sql.Named("id", id))
 	res, err := r.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update account: %w", err)

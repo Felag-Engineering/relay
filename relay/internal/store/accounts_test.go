@@ -416,6 +416,45 @@ func TestSQLiteAccounts_LastAdminGuardIsASingleStatement(t *testing.T) {
 	}
 	checked++
 
+	// SetRole and SetEnabled must reach the store ONLY through update/
+	// updateGuarded — never a raw r.db.ExecContext/QueryContext/
+	// QueryRowContext placed directly in either body, which would be a
+	// pre-check or a bypass of the guarded statement hiding in plain sight
+	// beside the calls checked above.
+	dbContextCalls := func(fd *ast.FuncDecl) int {
+		n := 0
+		ast.Inspect(fd.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "ExecContext", "QueryContext", "QueryRowContext":
+			default:
+				return true
+			}
+			recv, ok := sel.X.(*ast.SelectorExpr)
+			if ok && recv.Sel.Name == "db" {
+				n++
+			}
+			return true
+		})
+		return n
+	}
+	if n := dbContextCalls(setRole); n != 0 {
+		t.Errorf("SetRole issues %d raw r.db.*Context call(s) directly in its body, want 0 — "+
+			"the store must be reached only through update/updateGuarded", n)
+	}
+	if n := dbContextCalls(setEnabled); n != 0 {
+		t.Errorf("SetEnabled issues %d raw r.db.*Context call(s) directly in its body, want 0 — "+
+			"the store must be reached only through update/updateGuarded", n)
+	}
+	checked++
+
 	// updateGuarded itself must issue exactly one ExecContext — the single
 	// statement the guard clause lives inside. A later Get (disambiguation
 	// only, on the zero-rows path) is fine; a read BEFORE the write is not,

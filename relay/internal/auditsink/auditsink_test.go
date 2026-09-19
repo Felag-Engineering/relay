@@ -586,8 +586,8 @@ func TestSink_RecordAccountAdminMapsEveryKind(t *testing.T) {
 		wantReason string
 	}{
 		{capability.AccountAdminCreate,
-			capability.AccountAdminEvent{Kind: capability.AccountAdminCreate, AccountID: "acct-1", AccountName: "gleipnir", Role: "operator"},
-			audit.KindAccountCreate, "account_id=acct-1 name=gleipnir role=operator"},
+			capability.AccountAdminEvent{Kind: capability.AccountAdminCreate, AccountID: "acct-1", AccountName: "gleipnir", AccountKind: "machine", Role: "operator"},
+			audit.KindAccountCreate, "account_id=acct-1 name=gleipnir kind=machine role=operator"},
 		{capability.AccountAdminRole,
 			capability.AccountAdminEvent{Kind: capability.AccountAdminRole, AccountID: "acct-1", Role: "admin"},
 			audit.KindAccountRole, "account_id=acct-1 role=admin"},

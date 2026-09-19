@@ -260,6 +260,17 @@ type AccountAdminEvent struct {
 	// AccountAdminRole (the new role); empty otherwise.
 	Role string
 
+	// AccountKind is set for AccountAdminCreate only: the created Account's
+	// accounts.Kind (human/machine), carried as a plain string so this
+	// package's import allowlist stays unaffected either way. Without it the
+	// trail cannot answer "was this Account created as a machine identity",
+	// which matters on a compromise — the account_id/account_name/role
+	// columns already on this event describe the TARGET, never the acting
+	// Principal, and Kind is the fourth fact recordLifecycle used to write
+	// about that target before #653 moved this surface into the capability
+	// layer.
+	AccountKind string
+
 	// TokenID is set for AccountAdminTokenMint/Revoke; empty otherwise.
 	// Never the token's secret — see this type's doc comment above.
 	TokenID string

@@ -147,6 +147,46 @@ func newAccountAdminFixture(t *testing.T, authz Authorizer, accountStore Account
 }
 
 // -----------------------------------------------------------------------
+// New's fail-open guard for WithAccountAdmin (security review finding 1):
+// every sibling guard (TestWithExecutionRefusesDefaultSeams,
+// TestWithExecutionRefusesWithoutFreeze, TestWithQueriesRefusesNoopAuditSink)
+// has a panic test; this is WithAccountAdmin's.
+// -----------------------------------------------------------------------
+
+// TestNewRefusesAccountAdminWithoutARealAuthorizer: a Service built with
+// WithAccountAdmin but no WithAuthorizer must panic at construction — an
+// allowAllAuthorizer paired with a real account store would answer
+// account_role/account_enable/api_token_mint for every role, the identity
+// surface's own fail-open.
+func TestNewRefusesAccountAdminWithoutARealAuthorizer(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New(reg, WithAccountAdmin(...)) without a real Authorizer should panic")
+		}
+	}()
+	New(registry.NewInMemory(),
+		WithAuditSink(&spyAuditSink{}),
+		WithAccountAdmin(&fakeAccountStore{}, &fakeAPITokenStore{}),
+	)
+}
+
+// TestNewRefusesAccountAdminWithoutARealAuditSink: a Service built with
+// WithAccountAdmin but no WithAuditSink must panic at construction — every
+// Account/API-Token administration act would go unrecorded, exactly the
+// "unauditable act succeeded" state ADR-0025 forbids for the read lane.
+func TestNewRefusesAccountAdminWithoutARealAuditSink(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New(reg, WithAccountAdmin(...)) without a real AuditSink should panic")
+		}
+	}()
+	New(registry.NewInMemory(),
+		WithAuthorizer(&permissiveControlAuthorizer{}),
+		WithAccountAdmin(&fakeAccountStore{}, &fakeAPITokenStore{}),
+	)
+}
+
+// -----------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------
 

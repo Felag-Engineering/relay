@@ -26,12 +26,30 @@ var mintLikeSelectors = map[string]bool{"Mint": true, "MintAPIToken": true}
 // or the result of NewPlaintext directly.
 //
 // This is file-scoped rather than function-scoped — deliberately the coarser
-// of the two options. A false positive (an unrelated variable elsewhere in
-// the same file happening to match one of these shapes) only ever makes this
-// guard MORE inclusive, never less: it would add a file to the found set,
-// and TestPlaintext_RevealCallSitesAreEnumerated compares that set for
-// EQUALITY with the permitted list, so an over-broad match fails loud rather
-// than silently passing.
+// of the two options for FALSE POSITIVES: a false positive (an unrelated
+// variable elsewhere in the same file happening to match one of these
+// shapes) only ever makes this guard MORE inclusive, never less — it would
+// add a file to the found set, and TestPlaintext_RevealCallSitesAreEnumerated
+// compares that set for EQUALITY with the permitted list, so an over-broad
+// match fails loud rather than silently passing.
+//
+// FALSE NEGATIVES this guard CANNOT see, stated plainly rather than left
+// implicit — this repo has shipped guards that claimed more than they
+// enforced, and this one is narrower than its name suggests:
+//   - a Plaintext arriving as a FUNCTION PARAMETER (`func f(p Plaintext)`)
+//     rather than bound by a local assignment;
+//   - a Plaintext held in a STRUCT FIELD and reached via `x.field.Reveal()`;
+//   - a CHAINED call, `mint(...).Reveal()` or `NewPlaintext(...).Reveal()`,
+//     with no intermediate variable at all;
+//   - a 2-VALUE mint shape (`tok, err := ...`) where Plaintext is folded into
+//     a wrapper struct rather than returned as the literal second value of a
+//     3-value assignment.
+//
+// A new call site introduced through any of these shapes would NOT be
+// caught by this test. It is a guard against the two known, currently-real
+// call sites drifting or a third being added in the SAME shape as those two
+// — not a general static-analysis proof that Reveal() is called nowhere
+// else.
 func fileCallsPlaintextReveal(fset *token.FileSet, path string) (bool, error) {
 	file, err := parser.ParseFile(fset, path, nil, 0)
 	if err != nil {
@@ -88,7 +106,10 @@ func fileCallsPlaintextReveal(fset *token.FileSet, path string) (bool, error) {
 // claimed "there should be exactly one" and there were already two. Skips
 // every _test.go file — Reveal is called throughout this repo's tests purely
 // to get a string to put in an HTTP request, which is not the "the plaintext
-// escapes production code" property this guards.
+// escapes production code" property this guards. See
+// fileCallsPlaintextReveal's doc comment for the call SHAPES this cannot
+// see — it enumerates the two known real call sites, it does not prove
+// there is no third in a different shape.
 func TestPlaintext_RevealCallSitesAreEnumerated(t *testing.T) {
 	permitted := map[string]bool{
 		"internal/controlplane/api/accounts.go": true,

@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
@@ -52,19 +51,17 @@ import (
 // single surface (e.g. apiSurface never touches ops), which is expected: the
 // struct is a shared dependency bag, not a per-surface signature.
 type surfaceDeps struct {
-	registry     registry.Repository
-	policy       *policyview.Cache
-	vocab        *nodevocab.Cache
-	ops          mcp.OperationLister
-	capability   *capability.Service // one instance: mcp.Executor AND api.Freezer
-	jobs         jobs.JobRepository
-	tasks        jobs.TaskRepository
-	tokens       *enroll.Service
-	accountsRepo accounts.Repository
-	apiTokens    *accounts.TokenService
-	revocation   *revocation.Service
-	audit        audit.Repository
-	auditSink    *auditsink.Sink
+	registry   registry.Repository
+	policy     *policyview.Cache
+	vocab      *nodevocab.Cache
+	ops        mcp.OperationLister
+	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
+	jobs       jobs.JobRepository
+	tasks      jobs.TaskRepository
+	tokens     *enroll.Service
+	revocation *revocation.Service
+	audit      audit.Repository
+	auditSink  *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
 	// API needs it directly for the administrative routes that never reach the

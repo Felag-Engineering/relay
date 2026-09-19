@@ -258,8 +258,30 @@ func handlerFuncName(t *testing.T, r Route) string {
 	if i := strings.Index(name, "."); i >= 0 {
 		name = name[i+1:] // drop the package name
 	}
+	beforeClosureSuffix := name
 	if i := strings.Index(name, "."); i >= 0 {
 		name = name[:i] // drop a ".funcN" closure suffix
+	}
+	// A resolution of "Routes" means the Go compiler inlined a
+	// closure-returning function (like enableAccount) into Routes() at its
+	// call site, which makes runtime.FuncForPC attribute the returned
+	// closure to Routes itself rather than to the function that built it.
+	// Routes' own body references literally every handler in the table as a
+	// value, so reachesGate("Routes", …) walks into all of them — making the
+	// FORWARD guard (TestSurfaceGatedRoutesReachARoleCheck) trivially true
+	// for that route regardless of whether ITS OWN handler reaches a gate
+	// (a silent false pass), while the INVERSE guard
+	// (TestCapabilityFlooredRoutesDoNotReachASurfaceGate) fails LOUDLY but
+	// for the same wrong reason — a spurious failure, not a proof the
+	// handler re-derives anything. Neither is acceptable, so this fails
+	// the test outright with a message naming the fix: //go:noinline on the
+	// function that returns this route's handler closure (see
+	// enableAccount's own //go:noinline and its doc comment for why).
+	if name == "Routes" || strings.HasPrefix(beforeClosureSuffix, "Routes.") {
+		t.Fatalf("route %q: handler resolved to %q (from %q) — a closure-returning function "+
+			"was inlined into Routes(), making this route's role-floor guard either trivially "+
+			"true or spuriously false; add //go:noinline to the function that builds this "+
+			"route's Handler", r.Pattern(), name, beforeClosureSuffix)
 	}
 	return name
 }

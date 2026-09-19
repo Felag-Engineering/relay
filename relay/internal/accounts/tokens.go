@@ -43,8 +43,10 @@ var (
 // String, GoString, LogValue, and MarshalJSON all redact, so every accidental
 // path — `fmt.Sprintf("%s"/"%v"/"%#v")`, `slog.Any`, `json.Marshal`, a struct
 // embedding it — emits the redaction rather than the secret. Reading the real
-// value requires calling [Plaintext.Reveal], which is greppable in review: it
-// should appear exactly once in the codebase, at the mint response.
+// value requires calling [Plaintext.Reveal], which is greppable in review and
+// whose permitted call sites are enumerated — not assumed singular — on
+// Reveal's own doc comment below, and checked by
+// TestPlaintext_RevealCallSitesAreEnumerated.
 type Plaintext struct {
 	secret string
 }

@@ -224,10 +224,13 @@ func Routes() []Route {
 		{"POST", "/api/v1/freeze/engage", handleFreezeEngage},
 		{"POST", "/api/v1/freeze/release", handleFreezeRelease},
 
-		// Identity management (#297). Every route here is admin-only; the gate
-		// lives in each handler (requireAdmin) rather than in a wrapper, so a
-		// route added later cannot silently miss it by being registered in the
-		// wrong group.
+		// Identity management (#297; #653: the floor moved into
+		// capability.Service behind AuthorizeControl). Every route here is
+		// admin-only in full. Deps carries no store for these routes at all —
+		// only AccountAdmin, the capability seam — so this surface renders the
+		// refusal and re-derives nothing (role_floor_test.go's
+		// TestCapabilityFlooredRoutesDoNotReachASurfaceGate pins that as a
+		// mechanical fact, not a comment).
 		{"POST", "/api/v1/accounts", handleCreateAccount},
 		{"GET", "/api/v1/accounts", handleListAccounts},
 		{"GET", "/api/v1/accounts/{id}", handleGetAccount},
@@ -284,11 +287,17 @@ func Routes() []Route {
 // source-level function name via runtime.FuncForPC, and the Go compiler's
 // inliner folds this function's returned closure into Routes() at the call
 // site — which makes FuncForPC report the closure as belonging to Routes
-// itself. Routes' own body names literally every handler in the table, so a
-// resolution of "Routes" would make both role_floor_test.go guards (the
-// handler reaches a gate / does not reach a gate) trivially true, silently
-// disabling both of them for whichever route this returns. Keeping this
-// un-inlined is what keeps handlerFuncName resolving "enableAccount" instead.
+// itself. Routes' own body references literally every handler in the table
+// as a value, so a resolution of "Routes" makes the FORWARD guard
+// (TestSurfaceGatedRoutesReachARoleCheck) trivially true for that route
+// regardless of what its own handler actually does — a SILENT false pass —
+// while the INVERSE guard (TestCapabilityFlooredRoutesDoNotReachASurfaceGate)
+// fails, but spuriously: loud, yet for the wrong reason, not because the
+// handler re-derives anything. handlerFuncName additionally fails the test
+// outright if it ever sees this resolution, so a future closure-built route
+// that forgets this directive cannot go silently vacuous either way. Keeping
+// this un-inlined is what keeps handlerFuncName resolving "enableAccount"
+// instead.
 //
 //go:noinline
 func enableAccount(enabled bool) func(Deps) http.HandlerFunc {

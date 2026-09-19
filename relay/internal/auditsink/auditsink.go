@@ -330,7 +330,7 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 // moved this surface into the capability layer, so existing trail queries
 // and dashboards built against those strings keep working:
 //
-//	account_create   account_id=… name=… role=…
+//	account_create   account_id=… name=… kind=… role=…
 //	account_role     account_id=… role=…
 //	account_enable   account_id=…
 //	account_disable  account_id=…
@@ -339,7 +339,7 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 func accountAdminReason(e capability.AccountAdminEvent) string {
 	switch e.Kind {
 	case capability.AccountAdminCreate:
-		return fmt.Sprintf("account_id=%s name=%s role=%s", e.AccountID, e.AccountName, e.Role)
+		return fmt.Sprintf("account_id=%s name=%s kind=%s role=%s", e.AccountID, e.AccountName, e.AccountKind, e.Role)
 	case capability.AccountAdminRole:
 		return fmt.Sprintf("account_id=%s role=%s", e.AccountID, e.Role)
 	case capability.AccountAdminEnable, capability.AccountAdminDisable:

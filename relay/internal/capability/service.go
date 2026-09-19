@@ -407,7 +407,15 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	// every role would pass account_role/account_disable/api_token_mint —
 	// and an unaudited one means "who created this Account" is unanswerable
 	// after a compromise, exactly what ADR-0025 forbids for the read lane.
-	if s.accountsStore != nil {
+	//
+	// Checked on EITHER field, not just accountsStore: WithAccountAdmin sets
+	// both together and panics on a nil argument, so today the two can never
+	// disagree — but a guard that keys on only one of two fields a future
+	// option (or a hand-built Service literal in a test) could set
+	// independently is exactly the kind of guard that silently stops
+	// covering what it claims to (TestNewRefusesAccountAdminWithoutA...
+	// falsifies this by construction, see accountadmin_test.go).
+	if s.accountsStore != nil || s.apiTokens != nil {
 		if _, ok := s.authz.(allowAllAuthorizer); ok {
 			panic("capability: New: WithAccountAdmin requires a real Authorizer (WithAuthorizer); allowAllAuthorizer would fail open on every Account/API-Token administration act")
 		}
