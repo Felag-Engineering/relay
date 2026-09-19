@@ -736,6 +736,27 @@ func TestJob_InFlightJobWithNoAuditRowYetStillRenders(t *testing.T) {
 	}
 }
 
+// TestJob_CompleteJobWithNoDispatchRecordSaysNoneFound (cycle-2 code review
+// item 1). A COMPLETE Job — nothing unresolved — with no dispatch record has
+// no "still writing it" window to explain: the record simply was never found,
+// and the page must not borrow the in-flight Job's "not written yet" wording
+// for a case where that story cannot be true.
+func TestJob_CompleteJobWithNoDispatchRecordSaysNoneFound(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
+	body := jobBody(t, jobDeps(q), jobPath(""))
+
+	if !strings.Contains(body, "No dispatch record was found for this Job") {
+		t.Error("a complete Job with no dispatch record does not say none was found")
+	}
+	if strings.Contains(body, "not written yet") {
+		t.Error(`a complete Job with no dispatch record was told the record "is not written yet" — it never will be, this is not an in-flight Job`)
+	}
+	if strings.Contains(body, "not gated by an approval") {
+		t.Error("a complete Job with no dispatch record was called ungated, which it cannot know")
+	}
+}
+
 // TestJob_UnknownJobIs404 — an id that was never dispatched has no Job, and
 // the page says so rather than rendering an empty one.
 func TestJob_UnknownJobIs404(t *testing.T) {
@@ -1218,6 +1239,15 @@ func TestJob_FullPathGatedJobAnswersAttributionOnOneScreen(t *testing.T) {
 	if !strings.Contains(body, "restart nginx on 4 Nodes") {
 		t.Error("the Relay-authored summary the approver saw is not shown")
 	}
+	// Cycle-2 code review item 4: "stored when the Job was parked" is wrong for
+	// a Grant-released Job, so the qualifier names the moment true of both —
+	// when the approval itself was requested.
+	if !strings.Contains(body, "stored when the approval was requested") {
+		t.Error("the summary's qualifier does not say the summary was stored when the approval was requested")
+	}
+	if strings.Contains(body, "stored when the Job was parked") {
+		t.Error(`the summary's qualifier still says "stored when the Job was parked", which does not hold for a Grant-released Job`)
+	}
 	if !strings.Contains(body, "<b>1</b> of 1 approval") {
 		t.Error("the quorum is not shown as signed-of-required")
 	}
@@ -1593,5 +1623,79 @@ func TestJob_ApprovalWithNoPlanHashSaysSoRatherThanClaimingUngated(t *testing.T)
 	}
 	if strings.Contains(body, "not gated by an approval") {
 		t.Error("a gated Job whose approval carries no plan hash was called ungated")
+	}
+}
+
+// TestJob_MissingGateRuleIsNotWrappedInCode (cycle-2 code review item 2). The
+// "no gate rule recorded" fallback is prose about the record, not a rule
+// name, so it must not render inside the <code> element the page reserves for
+// an actual rule.
+func TestJob_MissingGateRuleIsNotWrappedInCode(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1}, // no MatchedRules stored
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow}},
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "gated by rule no gate rule recorded") {
+		t.Error("the missing-rule fallback does not render beside the label")
+	}
+	if strings.Contains(body, "<code>no gate rule recorded</code>") {
+		t.Error("the missing-rule fallback rendered inside <code>, as though it were a rule name")
+	}
+}
+
+// TestJob_DeciderWithNoRecordedTimeSaysSoProperly (cycle-2 code review item
+// 3). A Decision with no stored At time must not render as the ungrammatical
+// "approved not recorded" — the missing time is named as what it is.
+func TestJob_DeciderWithNoRecordedTimeSaysSoProperly(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{
+		ID: "ap-1", Require: approval.Requirement{Count: 1},
+		Decisions: []approval.Decision{{Account: "mike", AccountID: "acct-2", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true}}, // At left zero
+	}}}
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "approved, time not recorded") {
+		t.Error(`a decider with no recorded time does not say "approved, time not recorded"`)
+	}
+	if strings.Contains(body, "approved not recorded") {
+		t.Error(`a decider with no recorded time rendered the ungrammatical "approved not recorded"`)
+	}
+}
+
+// TestJob_ApprovalWithNoDecidersSaysSo (cycle-2 code review item 5). A
+// released Job's approval record can carry no approving Decision at all — a
+// defensive, unexpected case the page states rather than rendering an empty
+// gap where the decider list would be.
+func TestJob_ApprovalWithNoDecidersSaysSo(t *testing.T) {
+	tasks := []capability.TaskRow{mutateTask("node-a", jobs.OutcomeSuccess, "ok")}
+	q := &fakeQueries{
+		jobs:  []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)},
+		tasks: tasks,
+		rows:  []capability.AuditRow{{Kind: audit.KindDispatch, JobID: testJobID, ApprovalID: "ap-1"}},
+	}
+	d := jobDeps(q)
+	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", Require: approval.Requirement{Count: 1}}}} // no Decisions
+	body := jobBody(t, d, jobPath(""))
+
+	if !strings.Contains(body, "no approving decision recorded") {
+		t.Error("an approval record with no approving Decisions does not say so")
+	}
+	if !strings.Contains(body, `class="jobapproval"`) {
+		t.Error("the approval section is not rendered at all for a record with no Decisions")
 	}
 }

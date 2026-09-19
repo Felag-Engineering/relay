@@ -1099,18 +1099,19 @@ var jobTmpl = newScreen("job", `
 
 {{with .Approval}}
 <section class="jobapproval" aria-label="Approval">
-  <p>gated by rule <code>{{if .Rules}}{{join ", " .Rules}}{{else}}no gate rule recorded{{end}}</code></p>
+  <p>gated by rule {{if .Rules}}<code>{{join ", " .Rules}}</code>{{else}}no gate rule recorded{{end}}</p>
   <p>{{if gt .Required 0}}<b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{else}}no quorum recorded{{end}}{{if .Short}} <span class="gap">the record holds fewer approvals than the rule required — this page does not know why the Job was released</span>{{end}}</p>
   {{if .ParkedByDiffers}}<p>approval parked by {{template "trust-chip" (trust .ParkedBy .ParkedByVerified)}} <span class="dim">{{if .ViaGrant}}— the Account that requested the Grant{{else}}— not the Account that requested this Job; the approval was released on its plan hash{{end}}</span></p>{{end}}
   {{range .Deciders}}
   <div class="decider">
     {{template "trust-chip" (trust .Account .Verified)}}{{if not .Human}}<span class="dim">machine</span>{{end}}
-    <span>approved {{.At}}</span> <code>{{.Channel}}</code>
+    <span>{{if eq .At "not recorded"}}approved, time not recorded{{else}}approved {{.At}}{{end}}</span> <code>{{.Channel}}</code>
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for — asserted by the deciding client, nothing checked it</span>{{end}}
     {{with .Reason}}<span class="dim">{{.}}</span>{{end}}
   </div>
   {{end}}
-  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">— Relay-authored, stored when the Job was parked, not re-rendered</span><br>{{.}}</p>{{end}}
+  {{if not .Deciders}}<p class="dim">no approving decision recorded</p>{{end}}
+  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">— Relay-authored, stored when the approval was requested, not re-rendered</span><br>{{.}}</p>{{end}}
   {{if .ViaGrant}}<p class="note">These approvers approved a Grant — a window this plan fell inside — not this plan. The summary above describes the window.</p>{{end}}
 </section>
 {{end}}
@@ -1136,7 +1137,7 @@ fixed when the Tasks were created and does not move while the Job runs.
 {{else if .GrantID}}This dispatch was released by a Grant. The Grant's approval committed to a window, not to this plan, so no plan hash was retained for it — and the Job's own id is not one.
 {{else if or .ApprovalError .ApprovalReaderMissing}}The approval record could not be read here, so the plan hash it committed to is not shown.
 {{else if .ApprovalID}}The approval record holds no plan hash, so none is shown here.
-{{else if not .DispatchFound}}The dispatch record is not written yet, so whether it was gated is not known.
+{{else if not .DispatchFound}}{{if .InFlight}}The dispatch record is not written yet, so whether it was gated is not known.{{else}}No dispatch record was found for this Job, so whether it was gated is not known.{{end}}
 {{else}}This dispatch was not gated by an approval, so no plan hash was retained
 for it — and the Job's own id is not one.
 {{end}}
