@@ -37,12 +37,21 @@ into one row per Job it could release has defeated the mechanism before anyone o
 
 ## Deciding from the queue
 
-**Do not.** Decisions happen on the approval object (spec 08), which carries the Plan, the diff
-callout and step-up. A row-level Approve button would let someone approve without seeing what they
-approved, which is the whole thing the design is built to prevent.
+**One request is decided on its approval object** (spec 08), which carries the Plan, the diff
+callout and step-up. There is no one-click Approve on a row: a row-level button would let someone
+approve without seeing what they approved.
 
-The queue may offer **bulk deny** — refusing without reading is safe in a way that approving
-without reading is not. Even then it requires step-up and a reason.
+**Several requests may be decided in one bulk act** (`docs/specs/approval.md`, owner decision of
+2026-09-18): select pending rows, then approve or deny them together. Before submitting, a
+confirmation lists every selected request with its **Relay-authored** summary and fan-out, and
+**one step-up re-authentication covers the whole act**. Raw Exec may be included. Approval grant
+requests cannot be bulk-approved — each needs its Scope expanded on its own card. Each request is
+still answered against its own plan hash and audited as its own Decision; a request the decision
+checks refuse is reported by name and does not stop the others. Bulk deny still requires a
+reason.
+
+Deciding many requests at once is the approval-fatigue pattern this screen otherwise works
+against; it is an accepted residual risk (`approval.md`, threat model R22), not an oversight.
 
 ## Filtering
 
@@ -52,7 +61,8 @@ should not have to find their own item in someone else's list.
 
 ## Must not appear
 
-- An Approve control on a row.
+- A one-click Approve control on a row — a bulk approve always passes through the confirmation
+  listing what it approves.
 - A default sort by arrival time.
 - Grants split into per-Job rows.
 
@@ -73,6 +83,10 @@ should not have to find their own item in someone else's list.
       tiebreak is **not** implemented and cannot be — the approval record carries no fan-out and
       a park creates no Job to count Tasks on (#462, blocked on #469). The tiebreak is creation
       time and then id, which is arbitrary but stable.
+- [ ] Bulk approve and bulk deny from the queue: a selection, a confirmation listing each
+      request's Relay-authored summary, one step-up for the act, per-request results, no Approval
+      grant request approvable in bulk. **Not built** (owner decision of 2026-09-18); until it is,
+      the criterion below describes the queue.
 - [x] No decision is possible without opening the approval object, except bulk deny with step-up.
       Still true after #453 added deciding, now enforced two ways rather than one: **the queue
       itself carries no control of any kind** — the Console's approval seam (`ApprovalReader`) has

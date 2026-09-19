@@ -117,7 +117,9 @@ and Activity (spec 04) shows either.
       (`StepUpFresh`/`ErrStepUpRequired` stay uncalled) — approving three requests costs three
       passwords. Stricter than the window, which invariant 10 permits (an adapter may offer less,
       never more), and it is what kills the one-click rubber stamp this whole screen exists to
-      prevent.
+      prevent. **The one exception is a bulk act from the queue** (spec 14): there, one step-up
+      covers every Decision in the act (`docs/specs/approval.md`, owner decision of 2026-09-18,
+      threat model R22). A decision made on this card still costs its own password.
 - [ ] A Grant cannot be approved without its Scope having been expanded.
       **(Deferred beyond #453.)** v0.6.0 shipped the closed `<details>` disclosure; #453 added the
       decision control for a Plan but deliberately **refuses to decide a Grant at all** rather than
