@@ -60,23 +60,26 @@ what makes a compromised Relay survivable. This screen ends at the clipboard on 
 
 Four steps, and step 3 is the one that closes the loop:
 
-1. Commit to the file the package installs as a conffile, so the edit survives daemon upgrades.
-2. Roll out through config management. The daemon reloads locally; nothing is pushed from here.
+1. Commit to the Policy file, or to a fragment in the Policy directory, in the IaC repo.
+2. Roll out through config management, which restarts the daemon; nothing is pushed from here.
 3. **Watch the Policy-fingerprint facet on the fleet view.** When the old fingerprint reaches zero
    Nodes, the rollout landed everywhere — by string comparison, not by trust.
 4. Re-run the Plan. The denies become allows, or they say what is still wrong.
 
-## Handoff to the author screen
+## Handoff to the Policy Catalog
 
-"Open in Policy Author" carries this Node's effective Policy and the pending edit into spec 06, so
-a one-line fix can grow into a considered rewrite without retyping.
+List the catalog fragments whose declared Operations (PC-3) include the denied Operation's name,
+and link to the Policy Catalog (spec 06) with them shown — a published fragment beats a
+hand-written rule. Matching is by Operation name only: the screen never says a fragment *would*
+permit this Task (invariant 12), and points to `policy check --would-allow` for that verdict. The
+catalog never takes this screen's rule with it: it emits no allow rules (PC-11).
 
 ## Must not appear
 
 - Any apply, push or distribute control.
 - Red/green diff colouring.
-- A suggested rule wider than what the denied action needs. If the operator wants broader, that is
-  the author screen's job.
+- A suggested rule wider than what the denied action needs. Broader permission comes from a
+  catalog fragment or the operator's own IaC repo.
 
 ## Acceptance
 
@@ -84,4 +87,5 @@ a one-line fix can grow into a considered rewrite without retyping.
 - [ ] The suggested rule is minimal: it permits the denied action and nothing more.
 - [ ] The rendered rule and line number match the Node's live effective Policy.
 - [ ] The screen states the no-write boundary in the UI, not only in documentation.
-- [ ] "Open in Policy Author" preserves the edit.
+- [ ] Catalog fragments declaring the denied Operation are listed by name match only, with no
+      allow/deny verdict, and link to the Policy Catalog.

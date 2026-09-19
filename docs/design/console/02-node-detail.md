@@ -56,7 +56,8 @@ Console one. The panel renders the five Facts that exist.
 **Effective Policy** — rendered from `policyview`, queried live from the Node's own engine, with
 the query timestamp shown. Read-only *structurally*, not by permission: there is no code path from
 this screen to a Node's Policy, and the panel says so. Offer "ask a what-if" (a `PolicyQuery`)
-and a link into the Policy Author (spec 06) seeded from this file.
+and a link to the Policy Catalog (spec 06). The catalog is not seeded from this Node: it
+arranges first-party fragments, never a Node's own file.
 
 **What shipped (#421):** the panel carries the instant the RELAY received the report, stamped
 inside `policyview.Cache.Set` from the Relay's own clock and un-injectable by a caller. That is a
@@ -64,7 +65,8 @@ receipt time, not a query time — a snapshot is captured when a Node connects �
 which, because "queried 12s ago" would be a claim nothing supports. **Not implemented: "ask a
 what-if".** A `PolicyQuery` is a live request through the capability layer's dispatch path, which
 v0.6.0's "zero mutating routes" excludes; it belongs with the composer (spec 05) in v0.7.0. The
-Policy Author LINK ships, role-gated to `operator`.
+Policy Catalog link is role-gated to `operator` today; it follows PC-8 (`viewer`) when spec 06
+lands.
 
 **Recent Tasks** — time, Operation with arguments, outcome chip, Job link. Include denies; they
 are the most informative rows here. Read-class rows say "output not retained" (ADR-0025).

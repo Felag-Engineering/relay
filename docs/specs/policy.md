@@ -55,6 +55,13 @@ what Policy allows. A Task can be allowed by Policy and refused by the Relay; ne
 
 ### Composition
 
+> **Not yet reconciled (`2026-09-19`).** The v0.7.0 first cut of the Policy directory is
+> `daemon-installation.md`'s, not this section's: a Policy file plus a directory of fragments,
+> applied by restart, a bad-mode fragment refusing start like the Policy file, and no
+> package-owned fragments (#648, `policy-catalog.md`). Explicit reload, Templates inside
+> fragments, package-owned fragments and a reported `invalid` state remain this spec's intent,
+> to be reconciled when it is migrated.
+
 - The daemon reads every fragment in the Policy directory and evaluates them as **one Policy
   with one fingerprint**. Which fragment a rule came from affects only error messages.
 - A Template name defined in more than one fragment is a Policy error. There is no override and
@@ -99,6 +106,8 @@ canonical path:
 
 ### Load, reload and validity
 
+> **Not yet reconciled (`2026-09-19`)** — see *Composition*.
+
 - Policy is loaded at daemon start and on every explicit reload. There is no filesystem watching.
 - On reload the daemon reads and validates the whole directory, then swaps the evaluated Policy
   atomically. Tasks already running finish under the Policy that admitted them; every later
@@ -119,6 +128,9 @@ canonical path:
   Node. The deny-list is not treated as a secret.
 
 ### The shipped default
+
+> **Not yet reconciled** — see *Composition*. Until then the shipped default stays one
+> operator-owned Policy file (ADR-0022, ADR-0033 §4) and is not a catalog fragment.
 
 - The package ships a read fragment: every first-party `read`-class Template (the shipped read
   catalog), `system.facts`, and `file.read` of any path outside a curated confidentiality
@@ -183,8 +195,9 @@ _Not yet written._ This spec's claims are the backlog of its testing issue.
   `operations-and-templates.md`.
 - **Relay-side authorization, approval, the blast-radius cap and Freeze**: `accounts-and-access.md`,
   `approval.md`, `execution.md`, `freeze.md`. Policy never consults them.
-- **Getting fragments onto a Node and triggering reload**: `daemon-installation.md`, through the
+- **Getting fragments onto a Node and applying them**: `daemon-installation.md`, through the
   customer's config management.
+- **Pre-made fragments and the screen that arranges them**: `policy-catalog.md`.
 - **Central Policy authorship.** Out of realm (AGENTS.md). A Template an AI-agent drafts ends as
   a proposal a human ships through config management.
 
@@ -240,6 +253,8 @@ Resolved elsewhere: how the Relay trusts a Template's risk class, and what remai
 
 ## History
 
+- `2026-09-19` — with the owner, for `policy-catalog.md`: Composition, Load and The shipped
+  default marked not yet reconciled with `daemon-installation.md`'s first cut (#648).
 - `2026-09-17` — with the owner: caller text in denial text is an accepted residual risk for now;
   removing it is future work (#619).
 - `2026-09-17` — Raw Exec allow patterns now require a whole-command match, and any argv

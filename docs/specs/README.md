@@ -164,6 +164,7 @@ interrogation.
 | `audit-and-read-lane.md` | The audited read lane, audit records, the retention posture |
 | `enrollment.md` | Enrollment Tokens, join strings, bundles, identity issuance and revocation |
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
+| `policy-catalog.md` | First-party opt-in catalog fragments, their release digests, and the Console screen that arranges them into cohorts and exports them; never applied over the wire |
 | `policy.md` *(stub)* | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |
 | `operations-and-templates.md` *(stub)* | The Operation vocabulary and its golden schema, risk classes, the frozen Native set, the local Template catalog |
 | `node-connection.md` *(stub)* | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
