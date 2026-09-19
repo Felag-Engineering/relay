@@ -2489,9 +2489,12 @@ func TestLayout_NavigationIsALandmark(t *testing.T) {
 	}
 
 	// Derived from what Nav actually returns for this role, not a hard-coded
-	// three-group list: since #464 removed the four v0.7.0 placeholders, the
-	// Administer heading has no route left to draw and nav.go's drop-empty-
-	// section rule means it will not appear even for an admin.
+	// three-group list. #464 removed the four v0.7.0 placeholders, which left
+	// the Administer heading with no route to draw at all — nav.go's
+	// drop-empty-section rule then removed the heading itself. #654 mounted
+	// Accounts at admin, so for THIS role the group draws again; for a viewer
+	// it still does not. Deriving the sections is what lets one assertion
+	// cover both without being rewritten each time.
 	sections := Nav(d, accounts.RoleAdmin, "/console/")
 	if len(sections) == 0 {
 		t.Fatal("Nav returned zero sections — the sweep is not running")

@@ -63,6 +63,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -152,6 +153,47 @@ type ApprovalReader interface {
 	LastApprovedOfSameShape(ctx context.Context, r approval.Request) (approval.Request, error)
 	ActiveGrants(ctx context.Context) ([]approval.Grant, error)
 	GrantForApproval(ctx context.Context, requestID string) (approval.Grant, error)
+}
+
+// AccountReader is the Account registry and its API Tokens, read-only (#654,
+// spec 15). *capability.Service satisfies both methods, which landed on it in
+// #653 (PR #657), so no adapter is built for this seam.
+//
+// EVERY WRITE VERB ON THE ACCOUNT LANE IS ABSENT: CreateAccount,
+// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken. As with
+// ApprovalReader's RevokeGrant above, one of those is worth naming on its own
+// — MintAPIToken is the one a future editor is most likely to add, because
+// "the Accounts screen needs a mint button" sounds like a rendering problem.
+// It is not: minting is a reveal-once credential issue, it belongs to the
+// write half (#655) with its own seam and its own step-up, and it stays off
+// this interface however convenient it looks.
+//
+// Both reads authorize in the capability layer — ControlAccountRead and
+// ControlAPITokenRead, both floored at admin (authz.go) — so this Console
+// narrows to exactly what that layer permits and widens nothing
+// (invariant 10). The Console's own MinRole on the route is the SAME admin
+// floor, which makes it mount-time absence rather than a second opinion.
+//
+// WHAT THESE TWO READS DO NOT DO IS LEAVE A RECORD. Both are authorized and
+// answered and write no audit row on success (capability/accountadmin.go's
+// header); only a REFUSED read is recorded, through refuseControl. So "who
+// holds an identity on this control plane" can be read off this Relay without
+// the trail knowing — a gap tracked by #659 against the capability layer,
+// where the fix belongs. It is not an ADR-0025 defect (decision 1 scopes to
+// non-dispatching read TOOLS, and these are ControlActions), and it is not
+// fixable here: a RecordRead call inside this package is exactly what
+// read_audit_test.go refuses. console.go's Deps.Accounts paragraph and the
+// consoleReadAudit entry for GET /console/accounts say the same thing, so
+// whichever of the three a reader lands on tells the whole story.
+//
+// Account(ctx, p, id) — the single-Account read — is deliberately NOT here.
+// The read half selects an Account out of the list it already holds, so
+// nothing calls it, and this file's culture is to delete an unused method
+// rather than offer it (see AuditReader's List and ByJob). #655 adds it back
+// if its writes need it.
+type AccountReader interface {
+	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
+	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
 }
 
 // QueryReader is the capability layer's read lane (#441): filtered,

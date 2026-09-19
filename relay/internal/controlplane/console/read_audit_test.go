@@ -159,6 +159,29 @@ var consoleReadAudit = map[string]readAuditRule{
 		path: "/console/agents",
 		tool: "query_audit",
 	},
+	"GET /console/accounts": {
+		path: "/console/accounts",
+		// WHAT THIS ROW COVERS, AND WHAT IT DOES NOT. The tool named is the
+		// LAST-TOOL-CALL read: the one unconditional QueryAudit the screen
+		// makes over agentCallKinds (accounts.go), which is audited by the
+		// lane exactly like every other row in this table.
+		//
+		// It does NOT cover the Account and API-Token reads on the same page.
+		// ControlAccountRead and ControlAPITokenRead are authorized and
+		// answered and write NOTHING on success (capability/accountadmin.go);
+		// only a refusal is recorded. So a reader who sees this entry and
+		// concludes "the Account disclosure was recorded" has it wrong — who
+		// holds an identity on this control plane can be read off this Relay
+		// leaving no trace, and the row that IS written describes a different
+		// read.
+		//
+		// That is not an ADR-0025 defect (decision 1 scopes to
+		// non-dispatching read TOOLS; these two are ControlActions), and it is
+		// not fixable in this package — a RecordRead here is exactly what this
+		// file's own failure message forbids. It is tracked in #659 against
+		// internal/capability, where the fix belongs, in front of a human.
+		tool: "query_audit",
+	},
 
 	// ── Not yet on the lane ──────────────────────────────────────────────
 	"GET /console/compare": {

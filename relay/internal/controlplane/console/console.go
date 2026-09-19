@@ -128,6 +128,29 @@ type Deps struct {
 	// through Fleet/Policy/Audit above.
 	Queries QueryReader
 
+	// Accounts is the Account registry and its API Tokens, read-only
+	// (#654, seams.go). It is satisfied by the same *capability.Service as
+	// Queries above, and it is deliberately NOT inside the Fleet/Policy/Audit
+	// block: that comment is about the last unaudited REGISTRY doors and says
+	// a new screen must not reach for them, and this seam must not read as
+	// having inherited that permission by sitting next to it.
+	//
+	// It is, though, a FOURTH door whose successful reads record nothing.
+	// ControlAccountRead and ControlAPITokenRead are authorized and answered
+	// and write no audit row unless they are refused (accountadmin.go), so
+	// reading who holds an identity on this control plane leaves no trace.
+	// That is not an ADR-0025 violation — decision 1 scopes to non-dispatching
+	// read TOOLS, and these two are ControlActions — and it is not this
+	// package's to fix: a RecordRead here is what read_audit_test.go forbids.
+	// #659 tracks it against internal/capability, where the fix belongs.
+	//
+	// Nil renders the screen unavailable rather than as an empty Account
+	// list. "You have no Accounts" is a claim about identity, and a Console
+	// that makes it because nobody wired the seam has lied about who can
+	// reach this Relay — the same rule the read seams above follow, on the
+	// one subject where being wrong is worst.
+	Accounts AccountReader
+
 	// CertExpiringWithin is the state:cert-expiring warning window
 	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
 	// 11), same "told, never settable" posture as Execution above. Zero (the
@@ -261,8 +284,9 @@ func Routes(d Deps) []Route {
 		{"GET", "/console/compare", NavEntry{}, accounts.RoleViewer, handleCompare},
 		{"GET", "/console/reads", NavEntry{NavObserve, "Read egress", 40}, accounts.RoleViewer, handleReads},
 
-		// Policy Author (spec 06), Add Nodes (spec 09), Accounts (spec 15) and
-		// Incident (spec 16) are v0.7.0 screens, not built yet (#464). They do
+		// Policy Author (spec 06), Add Nodes (spec 09) and Incident (spec 16)
+		// are v0.7.0 screens, not built yet (#464). Accounts (spec 15) was the
+		// fourth until #654 mounted its read half, below. They do
 		// not get a placeholder row: a v0.6.0 nav must not advertise a route
 		// that answers "not built yet", and Register no longer needs a
 		// mounted-but-refusing row to keep a session from reaching one — the
@@ -288,6 +312,38 @@ func Routes(d Deps) []Route {
 		// for the same reason.
 		{"GET", "/console/approvals", NavEntry{NavAct, "Approvals", 30}, accounts.RoleViewer, handleApprovals},
 		{"GET", "/console/approvals/{approval_id}", NavEntry{}, accounts.RoleViewer, handleApproval},
+
+		// Accounts, read half (#654, spec 15). The first route in the
+		// Administer group, which has drawn nothing since #464 removed the
+		// four placeholders.
+		//
+		// MinRole is admin because ControlAccountRead is floored at admin on
+		// every surface (authz.go): this gate narrows to exactly the
+		// capability layer's own floor and widens nothing, and a viewer gets
+		// the byte-identical 404 [gated] gives every other constrained route
+		// rather than a 403 that would confirm the screen exists.
+		//
+		// THE PATH BELONGS TO THIS ROUTE ALONE, and that is a constraint on
+		// what comes next rather than an observation. Because this route
+		// constrainsReach(), Register mounts [methodMismatch] on the BARE
+		// "/console/accounts" as well, which collides with nothing in this
+		// table today. It does mean the write half (#655) cannot add a
+		// constrained "POST /console/accounts": Register would register the
+		// bare path a second time and net/http panics at registration.
+		// Distinct paths — /console/accounts/create and so on — are what
+		// that issue must use.
+		//
+		// The selected Account is "?account=<name>", not a
+		// /console/accounts/{account_id} detail page, and the reason is a
+		// FORWARD hazard rather than a present one: verified empirically,
+		// GET /console/accounts and GET /console/accounts/{account_id}
+		// register together perfectly well, but a constrained
+		// {account_id} route would make every constrained LITERAL under
+		// /console/accounts/ a registration-time panic — the
+		// "/console/nodes/add" shape documented above — and the write half
+		// wants exactly such literals. Agents already selects this way
+		// (agents.go), so it is also the idiom this Console has.
+		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, handleAccounts},
 
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing

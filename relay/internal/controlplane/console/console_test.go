@@ -137,13 +137,18 @@ func request(t *testing.T, h http.Handler, method, path string) *httptest.Respon
 // all, is that ABSENT BEATS FORBIDDEN. So the assertion is about what is not
 // drawn, not about what refuses.
 //
-// Three of the four items in the `absent` list (Policy, Add Nodes, Accounts)
-// now hold for EVERY role, not only a viewer, because #464 unmounted them —
-// this test still holds, but it is no longer the only thing keeping the
-// property true. When #438/#448/#475 re-add those screens with a real
-// MinRole, [Route.ReachableBy] and Register's mount-time gate are what will
-// keep a viewer's Console structurally smaller again; this test would fail
-// first if that stopped being so.
+// Two of the four items in the `absent` list (Policy, Add Nodes) still hold
+// for EVERY role, not only a viewer, because #464 unmounted them — for those
+// this test still holds, but it is not the only thing keeping the property
+// true.
+//
+// Accounts is now the first item here that is absent FOR THE REASON THIS TEST
+// IS ABOUT. #654 mounted GET /console/accounts at admin, so the screen exists
+// and an admin's nav draws it; a viewer's does not, because
+// [Route.ReachableBy] excludes the route from [routesFor] and Nav is a
+// projection of that. When #438/#448/#475 re-add the rest with a real MinRole
+// they will join it, and this test would fail first if the mount-time gate
+// stopped being what keeps a viewer's Console structurally smaller.
 func TestConsole_ViewerNavigationIsStructurallySmaller(t *testing.T) {
 	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleViewer)
 	// Scoped to the navigation, not the whole page. The assertion is about what
@@ -290,6 +295,69 @@ func TestConsole_UnauthenticatedIsRefused(t *testing.T) {
 
 	if rec.Code == http.StatusOK {
 		t.Error("an unauthenticated request rendered a Console page")
+	}
+}
+
+// TestConsole_RegisterMountsEveryRouteWithoutPatternConflict turns a startup
+// PANIC into a named test failure.
+//
+// Register mounts a SECOND, method-less pattern on r.Path for every route
+// [Route.constrainsReach] is true for, which creates two hazards that net/http
+// only reports by panicking at registration time — in production, that is a
+// process that does not start:
+//
+//   - two constrained routes sharing one Path (the bare pattern is registered
+//     twice, and ServeMux refuses a duplicate);
+//   - a constrained LITERAL segment beneath a constrained "{id}" pattern of
+//     the same shape, the "/console/nodes/add" hazard console.go documents.
+//
+// A route-table edit is therefore not a test-time nit, and nothing else in
+// this package calls Register with both Execution settings. This does.
+func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
+	for _, execution := range []bool{true, false} {
+		d := withExecution(sweepFixture(), execution)
+
+		// The shared-path hazard, checked FIRST and by hand, because it is
+		// the one this test can name better than net/http can: a failure here
+		// prints both colliding routes. Register panics on it too, and a
+		// panic ends the test before anything else runs.
+		owner := map[string]Route{}
+		constrained := 0
+		for _, r := range Routes(d) {
+			if !r.constrainsReach() {
+				continue
+			}
+			constrained++
+			if prior, taken := owner[r.Path]; taken {
+				t.Errorf("execution=%v: %q and %q both constrain reach and share the path %q — "+
+					"Register mounts methodMismatch on that BARE path once per route, so it would "+
+					"register the pattern twice and net/http panics at registration",
+					execution, prior.Pattern(), r.Pattern(), r.Path)
+			}
+			owner[r.Path] = r
+		}
+		if constrained == 0 {
+			t.Fatalf("execution=%v: no route constrains reach — this check is inspecting nothing", execution)
+		}
+
+		// And the whole table through the real Register, which is the only
+		// thing that catches the OTHER hazard: a constrained literal segment
+		// beneath a constrained "{id}" pattern of the same shape — the
+		// "/console/nodes/add" case console.go documents, which no
+		// path-equality check can see.
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("Register(execution=%v) panicked: %v\n"+
+						"net/http refuses conflicting patterns at registration, so this is a Relay "+
+						"that does not START — not a test-time nit. Register mounts methodMismatch "+
+						"on the BARE r.Path for every route constrainsReach() is true for; a "+
+						"constrained literal may not sit under a constrained {id} of the same "+
+						"shape (console.go).", execution, r)
+				}
+			}()
+			Register(http.NewServeMux(), d)
+		}()
 	}
 }
 
@@ -507,15 +575,21 @@ func TestConsole_NavDrawsNoLinkTheSessionCannotReach(t *testing.T) {
 }
 
 // TestConsole_V060MountsNoUnbuiltScreen is a regression pin for the exact
-// defect #464 fixed, not a derived property: these four specific v0.7.0
-// screens (console/06, 09, 15, 16) must not be reachable in v0.6.0, however
-// the route table changes around them. A hand-written list is correct here.
+// defect #464 fixed, not a derived property: these specific v0.7.0 screens
+// (console/06, 09, 16) must not be reachable in v0.6.0, however the route
+// table changes around them. A hand-written list is correct here.
+//
+// Spec 15 (Accounts) was the fourth entry until #654 mounted its read half at
+// GET /console/accounts. It leaves this list because the screen now EXISTS —
+// which is a different fact from the one this pin defends. What keeps a
+// viewer from reaching it is the route's own admin MinRole, swept by
+// TestConsole_ARouteAboveTheSessionRoleIsAbsent and pinned by name in
+// TestAccounts_AViewerFindsTheScreenAbsentNotForbidden.
 func TestConsole_V060MountsNoUnbuiltScreen(t *testing.T) {
 	h := newTestHandler(withExecution(renderableDeps(), false), accounts.RoleAdmin)
 	for _, path := range []string{
 		"/console/policy",
 		"/console/nodes/add",
-		"/console/accounts",
 		"/console/incident",
 	} {
 		if got := get(t, h, path).Code; got != http.StatusNotFound {

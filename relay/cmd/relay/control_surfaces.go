@@ -270,6 +270,13 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// (#423) reads Jobs and Tasks through it and through nothing else,
 		// which is why the Console is handed no Job repository of its own.
 		Queries: d.capability,
+		// The Accounts screen's read seam (#654). d.capability already
+		// carries Accounts and APITokens (#653), so no adapter is built for
+		// it, and console.AccountReader declares neither of the account
+		// lane's write verbs. The admin floor on both reads is the capability
+		// layer's (authz.go), as is the decision that a successful read
+		// records nothing — #659 tracks the latter, in front of a human.
+		Accounts: d.capability,
 		// state:cert-expiring's warning window (#414, ADR-0034) — the same
 		// value every other surface resolves `state:` against.
 		CertExpiringWithin: d.certExpiringWithin,
