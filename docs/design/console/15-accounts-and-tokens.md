@@ -53,8 +53,10 @@ on this screen may reintroduce one, and there is no such thing as a token not bo
 ## Stopping one actor
 
 There is no suspension rung: ADR-0035 was drafted and **deferred, not adopted** (#443). The
-instruments are **revoking the Account's API Tokens** here — immediate, audited, `admin` +
-step-up — or Freeze (spec 16). Disabling an Account (`Enabled`) is the durable off-switch: it
+instruments are **revoking the Account's API Tokens** here — immediate, audited, `admin`, and
+deliberately **without** step-up — or Freeze (spec 16). Owner decision, `2026-09-19`: step-up
+guards acts that could increase what a principal may do; revocation only reduces, and an
+incident instrument that costs a password is one people route around. Disabling an Account (`Enabled`) is the durable off-switch: it
 authenticates nowhere; re-enabling is a privilege-granting act and takes step-up.
 
 ## Must not appear
@@ -70,7 +72,10 @@ authenticates nowhere; re-enabling is a privilege-granting act and takes step-up
 
 - **Self** — an Account cannot change its own role or delete itself. Say why; do not hide it.
 - **Last admin** — refuse to remove the final `admin`, explicitly.
-- **`viewer`** — sees the list, changes nothing.
+- **`viewer`** — does not see this screen at all. Owner decision, `2026-09-19`: a `viewer` sees
+  the fleet, not administrative settings. The route is not mounted below `admin`, so it answers
+  the same 404 as a path that was never mounted — a 403 would itself disclose that the screen
+  exists.
 
 ## Acceptance
 
