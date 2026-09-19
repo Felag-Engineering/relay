@@ -330,6 +330,12 @@ func TestAdministrativeRoutes_RefuseWithoutAGate(t *testing.T) {
 			Deps{TokenRevoker: &fakeTokenRevoker{}, Audit: &fakeAuditor{}}},
 		{http.MethodPost, "/api/v1/nodes/node-abc/revoke", nil,
 			Deps{Nodes: &fakeNodeRevoker{}, Audit: &fakeAuditor{}}},
+		// The identity routes (#653): a nil AccountAdmin must refuse with 500,
+		// on the same unwired-gate posture as every other administrative
+		// route here, rather than falling open now that the floor lives in
+		// the capability layer instead of a per-handler requireAdmin call.
+		{http.MethodGet, "/api/v1/accounts", nil,
+			Deps{Audit: &fakeAuditor{}}},
 	}
 
 	for _, tc := range cases {

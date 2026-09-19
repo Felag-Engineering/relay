@@ -325,6 +325,80 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 	return s.append(ctx, rec)
 }
 
+// accountAdminReason renders e's Reason string, carrying the SAME field
+// names recordLifecycle wrote directly into api/accounts.go before #653
+// moved this surface into the capability layer, so existing trail queries
+// and dashboards built against those strings keep working:
+//
+//	account_create   account_id=… name=… kind=… role=…
+//	account_role     account_id=… role=…
+//	account_enable   account_id=…
+//	account_disable  account_id=…
+//	api_token_mint   account_id=… api_token_id=…
+//	api_token_revoke api_token_id=…
+func accountAdminReason(e capability.AccountAdminEvent) string {
+	switch e.Kind {
+	case capability.AccountAdminCreate:
+		return fmt.Sprintf("account_id=%s name=%s kind=%s role=%s", e.AccountID, e.AccountName, e.AccountKind, e.Role)
+	case capability.AccountAdminRole:
+		return fmt.Sprintf("account_id=%s role=%s", e.AccountID, e.Role)
+	case capability.AccountAdminEnable, capability.AccountAdminDisable:
+		return "account_id=" + e.AccountID
+	case capability.AccountAdminTokenMint:
+		return fmt.Sprintf("account_id=%s api_token_id=%s", e.AccountID, e.TokenID)
+	case capability.AccountAdminTokenRevoke:
+		return "api_token_id=" + e.TokenID
+	default:
+		return ""
+	}
+}
+
+// accountAdminAuditKind maps a capability.AccountAdminKind to the audit.Kind
+// string it is stored under, mirroring audit.KindAccount*/KindAPIToken*
+// (audit.go). An unrecognized kind maps to "" rather than panicking — see
+// RecordAccountAdmin's doc comment.
+func accountAdminAuditKind(k capability.AccountAdminKind) string {
+	switch k {
+	case capability.AccountAdminCreate:
+		return audit.KindAccountCreate
+	case capability.AccountAdminRole:
+		return audit.KindAccountRole
+	case capability.AccountAdminEnable:
+		return audit.KindAccountEnable
+	case capability.AccountAdminDisable:
+		return audit.KindAccountDisable
+	case capability.AccountAdminTokenMint:
+		return audit.KindAPITokenMint
+	case capability.AccountAdminTokenRevoke:
+		return audit.KindAPITokenRevoke
+	default:
+		return ""
+	}
+}
+
+// RecordAccountAdmin implements capability.AuditSink (#653): one Record per
+// Account/API-Token administration act, Principal-attributed exactly like
+// RecordCancel, with Reason carrying the same field-per-kind strings
+// recordLifecycle wrote directly before this surface moved into the
+// capability layer (accountAdminReason above).
+//
+// An unrecognized Kind (only possible if a future value is added here
+// without a matching case in accountAdminAuditKind/accountAdminReason) is
+// still recorded, under Kind "" rather than dropped — a silently-missing
+// administration record is worse than a wrongly-labelled one, and
+// TestSink_RecordAccountAdminMapsEveryKind pins every kind this package
+// knows about to a non-empty audit Kind.
+func (s *Sink) RecordAccountAdmin(ctx context.Context, p capability.Principal, e capability.AccountAdminEvent) error {
+	rec := audit.Record{
+		Timestamp:   s.now(),
+		Kind:        accountAdminAuditKind(e.Kind),
+		Principal:   p.Attribution(),
+		Attribution: attribution(p, e.Asserted),
+		Reason:      accountAdminReason(e),
+	}
+	return s.append(ctx, rec)
+}
+
 // baseRecord builds the audit.Record fields common to every Kind: attributed
 // Principal, the Selector as written, and the Action's shape. Kind, JobID,
 // NodeID, Outcome, and Reason are filled in by the caller per Kind.

@@ -151,6 +151,14 @@ func TestBootstrapToken_RefusesADisabledFoundingAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
+	// A second enabled admin, so disabling the founding admin below does not
+	// trip the last-enabled-admin guard (#653) this test is not about — it is
+	// about bootstrap-token refusing to mint for a disabled founding admin.
+	if _, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create other admin: %v", err)
+	}
 	if err := st.Accounts().SetEnabled(ctx, admin.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}

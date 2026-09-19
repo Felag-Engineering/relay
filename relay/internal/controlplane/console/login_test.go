@@ -647,6 +647,13 @@ func TestConsole_DisablingAnAccountEndsItsConsoleSession(t *testing.T) {
 	if page := f.do(t, httptest.NewRequest(http.MethodGet, "/console/", nil), session); page.Code != http.StatusOK {
 		t.Fatalf("signed-in page = %d", page.Code)
 	}
+	// A second enabled admin, so disabling mike below does not trip the
+	// last-enabled-admin guard (#653) this test is not about.
+	if _, err := f.accounts.Create(context.Background(), accounts.Account{
+		Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create other admin: %v", err)
+	}
 	if err := f.accounts.SetEnabled(context.Background(), f.mike.ID, false); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
 	}

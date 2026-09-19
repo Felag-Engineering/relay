@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
 
@@ -122,61 +122,66 @@ func rfc3339(t time.Time) string {
 }
 
 // -----------------------------------------------------------------------
-// Authorization
+// Nil-seam guard
 // -----------------------------------------------------------------------
 
-// requireAdmin resolves the acting Principal and refuses anyone below admin.
+// requireAccountAdmin resolves the acting Principal and refuses with a bare
+// 500 if d.AccountAdmin is unwired — the same unwired-gate posture
+// TestAdministrativeRoutes_RefuseWithoutAGate pins for the enrollment/
+// revocation routes: an unwired administration surface must be loud and
+// closed, never quietly ungated.
 //
-// Identity management is admin-only in full (#297): an operator who could mint
-// themselves an admin Account, or re-role their own, would make every other
-// role advisory. The comparison goes through accounts.Role.AtLeast rather than
-// a string equality check, so it inherits that function's fail-closed
-// behaviour in both directions — an unknown or corrupted role satisfies
-// nothing.
-//
-// This is a surface-level gate, not a second authorization engine: it decides
-// who may call the control plane's *administrative* endpoints, and it never
-// touches execution, which stays with the capability layer's Authorizer
-// (invariant 10) and, on the Node, with Policy.
-func requireAdmin(w http.ResponseWriter, r *http.Request) (capability.Principal, bool) {
+// This does NOT decide role. Since #653 the floor — admin, in full — and the
+// self-targeting and last-enabled-admin refusals all live inside the
+// capability layer (capability.Service.Accounts/CreateAccount/
+// SetAccountRole/...), reached through d.AccountAdmin below; this surface
+// renders whatever it answers and re-derives nothing
+// (role_floor_test.go's TestCapabilityFlooredRoutesDoNotReachASurfaceGate
+// pins that as a mechanical fact).
+func requireAccountAdmin(w http.ResponseWriter, r *http.Request, d Deps) (capability.Principal, bool) {
 	p, ok := principal(w, r)
 	if !ok {
 		return capability.Principal{}, false
 	}
-	if !accounts.Role(p.Role).AtLeast(accounts.RoleAdmin) {
-		writeProblem(w, http.StatusForbidden, "forbidden",
-			"identity management requires the admin role")
+	if d.AccountAdmin == nil {
+		writeProblem(w, http.StatusInternalServerError, "identity administration is not wired", "")
 		return capability.Principal{}, false
 	}
 	return p, true
-}
-
-// refuseSelfTarget blocks an Account from disabling or re-roling itself.
-//
-// A guard against lockout, not a security boundary: the last admin demoting or
-// switching off their own Account leaves a control plane nobody can administer
-// and no in-band way back. Any *other* admin can still do either — this only
-// removes the one-keystroke path to locking yourself out. It is deliberately
-// not applied to token revocation: revoking your own token is a normal,
-// sometimes urgent act.
-func refuseSelfTarget(w http.ResponseWriter, p capability.Principal, targetID, action string) bool {
-	if p.AccountID == "" || p.AccountID != targetID {
-		return false
-	}
-	writeProblem(w, http.StatusConflict, "cannot "+action+" your own account",
-		"another admin must do this; a control plane whose last admin can switch itself off has no way back in")
-	return true
 }
 
 // -----------------------------------------------------------------------
 // Error mapping
 // -----------------------------------------------------------------------
 
-// writeAccountError maps a domain error from the Account store onto an HTTP
+// writeAccountError maps a domain or capability-layer error onto an HTTP
 // problem response. Unrecognized errors become a bare 500 with no detail: an
 // unexpected failure must not spill store internals onto the wire.
-func writeAccountError(w http.ResponseWriter, err error, title string) {
+//
+// selfTargetVerb names the act being refused ("re-role", "disable") for the
+// ErrSelfTargeted title, so the two callers that can actually produce it
+// (handleSetAccountRole, handleSetAccountEnabled) render the same specific
+// title `refuseSelfTarget` used to (pre-#653: "cannot re-role your own
+// account" / "cannot disable your own account") rather than a generic one.
+// Every other caller passes "" — they cannot reach this branch, since
+// SetAccountRole/SetAccountEnabled are the only two capability methods that
+// return ErrSelfTargeted — and "" would only ever render if that stopped
+// being true, which is itself worth noticing.
+func writeAccountError(w http.ResponseWriter, err error, title, selfTargetVerb string) {
 	switch {
+	case errors.Is(err, authz.ErrUnauthorized):
+		writeProblem(w, http.StatusForbidden, "forbidden",
+			"identity management requires the admin role")
+	case errors.Is(err, capability.ErrSelfTargeted):
+		verb := selfTargetVerb
+		if verb == "" {
+			verb = "target"
+		}
+		writeProblem(w, http.StatusConflict, "cannot "+verb+" your own account",
+			"another admin must do this; a control plane whose last admin can switch itself off has no way back in")
+	case errors.Is(err, accounts.ErrLastAdmin):
+		writeProblem(w, http.StatusConflict, "the last enabled admin cannot be demoted or disabled",
+			"another admin must exist before this account can be changed; a control plane with zero enabled admins has no way back in")
 	case errors.Is(err, accounts.ErrNotFound):
 		writeProblem(w, http.StatusNotFound, "account not found", "")
 	case errors.Is(err, accounts.ErrNameTaken):
@@ -200,13 +205,14 @@ func writeAccountError(w http.ResponseWriter, err error, title string) {
 
 // handleCreateAccount implements POST /api/v1/accounts.
 //
-// Validation is not repeated here: accounts.Repository.Create is the single
-// write path every surface funnels through and is where name/kind/role rules
-// live. This handler's job is to pass the request through and map the domain
-// error onto a status code.
+// Validation is not repeated here: accounts.Repository.Create (reached
+// through the capability layer) is the single write path every surface
+// funnels through and is where name/kind/role rules live. This handler's job
+// is to pass the request through and map the resulting error onto a status
+// code.
 func handleCreateAccount(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAdmin(w, r)
+		p, ok := requireAccountAdmin(w, r, d)
 		if !ok {
 			return
 		}
@@ -217,20 +223,16 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 			return
 		}
 
-		created, err := d.Accounts.Create(r.Context(), accounts.Account{
+		created, err := d.AccountAdmin.CreateAccount(r.Context(), p, accounts.Account{
 			Name:    req.Name,
 			Kind:    accounts.Kind(req.Kind),
 			Role:    accounts.Role(req.Role),
 			Enabled: true,
 		})
 		if err != nil {
-			writeAccountError(w, err, "create account failed")
+			writeAccountError(w, err, "create account failed", "")
 			return
 		}
-
-		recordLifecycle(r.Context(), d, p, audit.KindAccountCreate, "",
-			fmt.Sprintf("account_id=%s name=%s kind=%s role=%s",
-				created.ID, created.Name, created.Kind, created.Role))
 
 		writeJSON(w, http.StatusCreated, renderAccount(created))
 	}
@@ -239,13 +241,14 @@ func handleCreateAccount(d Deps) http.HandlerFunc {
 // handleListAccounts implements GET /api/v1/accounts.
 func handleListAccounts(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := requireAdmin(w, r); !ok {
+		p, ok := requireAccountAdmin(w, r, d)
+		if !ok {
 			return
 		}
 
-		list, err := d.Accounts.List(r.Context())
+		list, err := d.AccountAdmin.Accounts(r.Context(), p)
 		if err != nil {
-			writeAccountError(w, err, "list accounts failed")
+			writeAccountError(w, err, "list accounts failed", "")
 			return
 		}
 
@@ -260,7 +263,8 @@ func handleListAccounts(d Deps) http.HandlerFunc {
 // handleGetAccount implements GET /api/v1/accounts/{id}.
 func handleGetAccount(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := requireAdmin(w, r); !ok {
+		p, ok := requireAccountAdmin(w, r, d)
+		if !ok {
 			return
 		}
 		id, ok := pathID(w, r, "id", "account id")
@@ -268,9 +272,9 @@ func handleGetAccount(d Deps) http.HandlerFunc {
 			return
 		}
 
-		acct, err := d.Accounts.Get(r.Context(), id)
+		acct, err := d.AccountAdmin.Account(r.Context(), p, id)
 		if err != nil {
-			writeAccountError(w, err, "get account failed")
+			writeAccountError(w, err, "get account failed", "")
 			return
 		}
 		writeJSON(w, http.StatusOK, renderAccount(acct))
@@ -285,15 +289,12 @@ func handleGetAccount(d Deps) http.HandlerFunc {
 // beside an innocuous field.
 func handleSetAccountRole(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAdmin(w, r)
+		p, ok := requireAccountAdmin(w, r, d)
 		if !ok {
 			return
 		}
 		id, ok := pathID(w, r, "id", "account id")
 		if !ok {
-			return
-		}
-		if refuseSelfTarget(w, p, id, "re-role") {
 			return
 		}
 
@@ -303,28 +304,25 @@ func handleSetAccountRole(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.Accounts.SetRole(r.Context(), id, accounts.Role(req.Role)); err != nil {
-			writeAccountError(w, err, "set account role failed")
+		if err := d.AccountAdmin.SetAccountRole(r.Context(), p, id, accounts.Role(req.Role)); err != nil {
+			writeAccountError(w, err, "set account role failed", "re-role")
 			return
 		}
 
-		recordLifecycle(r.Context(), d, p, audit.KindAccountRole, "",
-			fmt.Sprintf("account_id=%s role=%s", id, req.Role))
-
-		writeUpdatedAccount(w, r, d, id)
+		writeUpdatedAccount(w, r, d, p, id)
 	}
 }
 
 // handleSetAccountEnabled implements POST /api/v1/accounts/{id}/enable and
 // .../disable — one handler, parameterized, so the two can never drift in how
-// they authorize, audit, or render.
+// they authorize or render.
 func handleSetAccountEnabled(d Deps, enabled bool) http.HandlerFunc {
-	kind, verb := audit.KindAccountEnable, "enable"
+	verb := "enable"
 	if !enabled {
-		kind, verb = audit.KindAccountDisable, "disable"
+		verb = "disable"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAdmin(w, r)
+		p, ok := requireAccountAdmin(w, r, d)
 		if !ok {
 			return
 		}
@@ -332,29 +330,25 @@ func handleSetAccountEnabled(d Deps, enabled bool) http.HandlerFunc {
 		if !ok {
 			return
 		}
-		if !enabled && refuseSelfTarget(w, p, id, "disable") {
+
+		if err := d.AccountAdmin.SetAccountEnabled(r.Context(), p, id, enabled); err != nil {
+			writeAccountError(w, err, verb+" account failed", verb)
 			return
 		}
 
-		if err := d.Accounts.SetEnabled(r.Context(), id, enabled); err != nil {
-			writeAccountError(w, err, verb+" account failed")
-			return
-		}
-
-		recordLifecycle(r.Context(), d, p, kind, "", "account_id="+id)
-
-		writeUpdatedAccount(w, r, d, id)
+		writeUpdatedAccount(w, r, d, p, id)
 	}
 }
 
 // writeUpdatedAccount re-reads and renders an Account after a mutation, so the
 // caller sees the stored state rather than an echo of what they asked for.
 //
-// The mutation has already succeeded and is already audited by the time this
-// runs; a read-back failure therefore reports 200 with no body rather than an
-// error status that would wrongly suggest the change did not happen.
-func writeUpdatedAccount(w http.ResponseWriter, r *http.Request, d Deps, id string) {
-	acct, err := d.Accounts.Get(r.Context(), id)
+// The mutation has already succeeded and is already audited (by the
+// capability layer) by the time this runs; a read-back failure therefore
+// reports 200 with no body rather than an error status that would wrongly
+// suggest the change did not happen.
+func writeUpdatedAccount(w http.ResponseWriter, r *http.Request, d Deps, p capability.Principal, id string) {
+	acct, err := d.AccountAdmin.Account(r.Context(), p, id)
 	if err != nil {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -368,9 +362,17 @@ func writeUpdatedAccount(w http.ResponseWriter, r *http.Request, d Deps, id stri
 
 // handleMintAPIToken implements POST /api/v1/accounts/{id}/tokens: mint a
 // credential for an Account and return its plaintext exactly once (201).
+//
+// Request validation (decodeJSON, the ttl_seconds bounds, the name length)
+// runs BEFORE the capability call, and so before AuthorizeControl inside it
+// — see TestIdentityAPI_AuthorizationIsCheckedAfterRequestValidation. Every
+// check here validates only the CALLER'S OWN INPUT and touches no store, so
+// a caller refused at the floor learns nothing about any Account: they get
+// exactly the same 400 a caller who would have been PERMITTED gets for the
+// same malformed body.
 func handleMintAPIToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAdmin(w, r)
+		p, ok := requireAccountAdmin(w, r, d)
 		if !ok {
 			return
 		}
@@ -400,10 +402,12 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		tok, plaintext, err := d.APITokens.Mint(r.Context(), accountID, req.Name,
+		tok, plaintext, err := d.AccountAdmin.MintAPIToken(r.Context(), p, accountID, req.Name,
 			time.Duration(*req.TTLSeconds)*time.Second)
 		if err != nil {
 			switch {
+			case errors.Is(err, authz.ErrUnauthorized):
+				writeAccountError(w, err, "mint api token failed", "")
 			case errors.Is(err, accounts.ErrNotFound):
 				writeProblem(w, http.StatusNotFound, "account not found", "")
 			case errors.Is(err, accounts.ErrInvalidTTL):
@@ -421,10 +425,8 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		recordLifecycle(r.Context(), d, p, audit.KindAPITokenMint, "",
-			fmt.Sprintf("account_id=%s api_token_id=%s", accountID, tok.ID))
-
-		// The single Reveal() in the codebase: the mint response is the one
+		// One of the two permitted Reveal() call sites (accounts.Plaintext's
+		// own doc comment enumerates both): the mint response is the one
 		// moment the plaintext is allowed to exist outside the minting call.
 		writeJSON(w, http.StatusCreated, mintAPITokenResponse{
 			APIToken: renderAPIToken(tok),
@@ -440,7 +442,8 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 // presenting a bad credential.
 func handleListAPITokens(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := requireAdmin(w, r); !ok {
+		p, ok := requireAccountAdmin(w, r, d)
+		if !ok {
 			return
 		}
 		accountID, ok := pathID(w, r, "id", "account id")
@@ -448,8 +451,12 @@ func handleListAPITokens(d Deps) http.HandlerFunc {
 			return
 		}
 
-		list, err := d.APITokens.List(r.Context(), accountID)
+		list, err := d.AccountAdmin.APITokens(r.Context(), p, accountID)
 		if err != nil {
+			if errors.Is(err, authz.ErrUnauthorized) {
+				writeAccountError(w, err, "list api tokens failed", "")
+				return
+			}
 			writeProblem(w, http.StatusInternalServerError, "list api tokens failed", "")
 			return
 		}
@@ -470,7 +477,7 @@ func handleListAPITokens(d Deps) http.HandlerFunc {
 // hear about while they still believe they revoked something.
 func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := requireAdmin(w, r)
+		p, ok := requireAccountAdmin(w, r, d)
 		if !ok {
 			return
 		}
@@ -479,16 +486,18 @@ func handleRevokeAPIToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		if err := d.APITokens.Revoke(r.Context(), id); err != nil {
-			if errors.Is(err, accounts.ErrTokenNotFound) {
+		if err := d.AccountAdmin.RevokeAPIToken(r.Context(), p, id); err != nil {
+			switch {
+			case errors.Is(err, authz.ErrUnauthorized):
+				writeAccountError(w, err, "revoke api token failed", "")
+			case errors.Is(err, accounts.ErrTokenNotFound):
 				writeProblem(w, http.StatusNotFound, "api token not found", "")
-				return
+			default:
+				writeProblem(w, http.StatusInternalServerError, "revoke api token failed", "")
 			}
-			writeProblem(w, http.StatusInternalServerError, "revoke api token failed", "")
 			return
 		}
 
-		recordLifecycle(r.Context(), d, p, audit.KindAPITokenRevoke, "", "api_token_id="+id)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

@@ -60,6 +60,13 @@ var (
 	// using a reserved name (today: FoundingAdminName). The founding admin is
 	// created by seeding, never by the API.
 	ErrReservedName = errors.New("accounts: reserved account name")
+
+	// ErrLastAdmin is returned by SetRole and SetEnabled when the change
+	// would leave zero enabled admin rows (#653): demoting the last enabled
+	// admin, or disabling it. A disabled admin does not count toward "last
+	// admin" — see SetRole/SetEnabled below for why an implementation MUST
+	// refuse this in one statement rather than a check-then-write.
+	ErrLastAdmin = errors.New("accounts: the last enabled admin cannot be demoted or disabled")
 )
 
 // Kind distinguishes a human operator from a machine driver. It is not an
@@ -239,15 +246,44 @@ type Repository interface {
 	List(ctx context.Context) ([]Account, error)
 
 	// SetRole changes an Account's role. Returns ErrNotFound if it does not
-	// exist, ErrInvalidRole for a role outside the closed set.
+	// exist, ErrInvalidRole for a role outside the closed set, and
+	// ErrLastAdmin if the change would demote the last enabled admin (#653).
 	//
 	// Takes effect immediately: authorization reads the stored role at each
 	// request rather than caching it at authentication time, so a demotion
 	// does not wait for a restart or a token expiry.
+	//
+	// An implementation MUST refuse, IN ONE STATEMENT, any change that would
+	// leave zero enabled admin rows. The rule is a COUNT over the whole
+	// table, not a property of the one row being changed, so a
+	// check-then-write above the store races another writer between the
+	// check and the write — the same reason ErrNameTaken is enforced by a
+	// UNIQUE index rather than a pre-check (see internal/store/accounts.go's
+	// insert, which cites exactly this precedent for its own collision
+	// guard).
+	//
+	// Two scope limits, so a caller does not read more into this than it
+	// promises:
+	//
+	//   - It guarantees ONE ENABLED ADMIN ROW, not one admin that can
+	//     AUTHENTICATE. Revoking that admin's last API Token locks the
+	//     control plane out just as effectively as demoting or disabling the
+	//     Account would have — this rule does not see tokens at all.
+	//     Recovery in that case is `relay bootstrap-token` on the host,
+	//     exactly as docs/specs/accounts-and-access.md accepts. Do not read
+	//     this rule as "lockout is now impossible".
+	//   - There is no Delete on this interface, so spec 15's "removed" is
+	//     SetEnabled(false), not a deletion.
 	SetRole(ctx context.Context, id string, role Role) error
 
 	// SetEnabled enables or disables an Account. A disabled Account
 	// authenticates nowhere, immediately.
+	//
+	// Enabling is never blocked. Disabling is refused with ErrLastAdmin
+	// under exactly the same single-statement rule as SetRole above: it
+	// would leave zero enabled admin rows. A disabled admin does not count
+	// toward "the last admin" in either direction — demoting or disabling
+	// one that is already disabled is never refused by this rule.
 	SetEnabled(ctx context.Context, id string, enabled bool) error
 
 	// TouchLastSeen records a successful authentication. Best-effort: a

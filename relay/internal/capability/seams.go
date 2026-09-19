@@ -2,7 +2,9 @@ package capability
 
 import (
 	"context"
+	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
@@ -54,7 +56,66 @@ const (
 	// only one whose recorded requester is itself — see
 	// Service.CancelJob/authorizeMachineCancel.
 	ControlCancelJob ControlAction = "cancel_job"
+
+	// Account and API-Token administration (#653): GET/POST
+	// /api/v1/accounts[...] and .../tokens. All eight sit at admin
+	// (authz.requiredControlRole) — identity management is admin-only in
+	// full, the same posture the Control API's now-deleted requireAdmin
+	// enforced per handler. See accountadmin.go for why this surface lives
+	// in the capability layer rather than an adapter (invariant 10).
+
+	// ControlAccountRead is GET /api/v1/accounts and GET
+	// /api/v1/accounts/{id}: listing or reading an Account.
+	ControlAccountRead ControlAction = "account_read"
+
+	// ControlAccountCreate is POST /api/v1/accounts.
+	ControlAccountCreate ControlAction = "account_create"
+
+	// ControlAccountRole is POST /api/v1/accounts/{id}/role: the single most
+	// security-relevant edit on this surface.
+	ControlAccountRole ControlAction = "account_role"
+
+	// ControlAccountEnable is POST /api/v1/accounts/{id}/enable.
+	ControlAccountEnable ControlAction = "account_enable"
+
+	// ControlAccountDisable is POST /api/v1/accounts/{id}/disable.
+	ControlAccountDisable ControlAction = "account_disable"
+
+	// ControlAPITokenRead is GET /api/v1/accounts/{id}/tokens: listing an
+	// Account's API Tokens (the redacted view).
+	ControlAPITokenRead ControlAction = "api_token_read"
+
+	// ControlAPITokenMint is POST /api/v1/accounts/{id}/tokens: issuing a new
+	// credential.
+	ControlAPITokenMint ControlAction = "api_token_mint"
+
+	// ControlAPITokenRevoke is DELETE /api/v1/api-tokens/{token_id}.
+	ControlAPITokenRevoke ControlAction = "api_token_revoke"
 )
+
+// AccountStore is the Account half of the collaborator accountadmin.go needs
+// (#653): the same five methods api.AccountManager narrowed
+// accounts.Repository to, before this issue moved the surface behind the
+// capability layer. Deliberately not accounts.Repository itself:
+// EnsureFoundingAdmin is seeding, a startup act, and GetByName/TouchLastSeen
+// belong to the authentication boundary, not to administering Accounts.
+type AccountStore interface {
+	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
+	Get(ctx context.Context, id string) (accounts.Account, error)
+	List(ctx context.Context) ([]accounts.Account, error)
+	SetRole(ctx context.Context, id string, role accounts.Role) error
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+}
+
+// APITokenStore is the API-Token half (#653), narrowed exactly as
+// api.APITokenService was: Verify is deliberately absent — this surface
+// ISSUES credentials, the authenticator CHECKS them, and neither needs the
+// other's power.
+type APITokenStore interface {
+	Mint(ctx context.Context, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	Revoke(ctx context.Context, id string) error
+	List(ctx context.Context, accountID string) ([]accounts.APIToken, error)
+}
 
 // ControlAuthorizer decides whether p may perform a ControlAction — the
 // administrative half of the authorization question, split out as its own
@@ -151,6 +212,72 @@ type AuditSink interface {
 	// guard (service.go) then covers the read lane for free, with no new
 	// guard to remember.
 	RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error
+
+	// RecordAccountAdmin records one Account or API-Token administration act
+	// (#653) — creating an Account, changing its role, enabling/disabling
+	// it, or minting/revoking an API Token. It joins this interface rather
+	// than getting its own seam for the same reason RecordRead does: a
+	// separately-wired administration auditor is how a deployment ends up
+	// with audited dispatch and unaudited identity changes, and New's
+	// real-dispatcher/WithQueries fail-open guards then cover it for free.
+	//
+	// Reads (Accounts/Account/APITokens) never call this — see
+	// accountadmin.go's file header for why that is load-bearing, not an
+	// oversight.
+	RecordAccountAdmin(ctx context.Context, p Principal, e AccountAdminEvent) error
+}
+
+// AccountAdminKind distinguishes which Account/API-Token administration act
+// an AccountAdminEvent describes, mirroring audit.KindAccount*/KindAPIToken*
+// (capability may not import internal/audit — TestCapabilityImportsOnlyRegistryAndJobs
+// — so this mirrors rather than shares that vocabulary; auditsink, the one
+// package that imports both, pins the two equal).
+type AccountAdminKind int
+
+const (
+	AccountAdminCreate AccountAdminKind = iota
+	AccountAdminRole
+	AccountAdminEnable
+	AccountAdminDisable
+	AccountAdminTokenMint
+	AccountAdminTokenRevoke
+)
+
+// AccountAdminEvent is what accountadmin.go passes to
+// AuditSink.RecordAccountAdmin. THE STRUCT HAS NO FIELD A Plaintext COULD
+// OCCUPY — that is #653's acceptance criterion for the mint audit row,
+// expressed as a type: MintAPIToken records TokenID here, never the minted
+// credential.
+type AccountAdminEvent struct {
+	Kind AccountAdminKind
+
+	// AccountID and AccountName name the Account the act was performed on
+	// (every Kind) or, for a create, the Account just created.
+	AccountID   string
+	AccountName string
+
+	// Role is set for AccountAdminCreate (the Account's initial role) and
+	// AccountAdminRole (the new role); empty otherwise.
+	Role string
+
+	// AccountKind is set for AccountAdminCreate only: the created Account's
+	// accounts.Kind (human/machine), carried as a plain string so this
+	// package's import allowlist stays unaffected either way. Without it the
+	// trail cannot answer "was this Account created as a machine identity",
+	// which matters on a compromise — the account_id/account_name/role
+	// columns already on this event describe the TARGET, never the acting
+	// Principal, and Kind is the fourth fact recordLifecycle used to write
+	// about that target before #653 moved this surface into the capability
+	// layer.
+	AccountKind string
+
+	// TokenID is set for AccountAdminTokenMint/Revoke; empty otherwise.
+	// Never the token's secret — see this type's doc comment above.
+	TokenID string
+
+	// Asserted is the caller-claimed attribution lane (#300), read off the
+	// request context. Recorded, never consulted.
+	Asserted Assertions
 }
 
 // AuditKind distinguishes what kind of Run outcome an AuditEntry describes.
@@ -327,6 +454,10 @@ func (noopAuditSink) RecordCancel(context.Context, Principal, string) error {
 }
 
 func (noopAuditSink) RecordRead(context.Context, Principal, string, string, string, string) error {
+	return nil
+}
+
+func (noopAuditSink) RecordAccountAdmin(context.Context, Principal, AccountAdminEvent) error {
 	return nil
 }
 

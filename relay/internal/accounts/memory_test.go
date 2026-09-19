@@ -97,6 +97,21 @@ func (m *memoryStore) List(_ context.Context) ([]Account, error) {
 	return out, nil
 }
 
+// anotherEnabledAdminExistsLocked reports whether an enabled admin other than
+// excludeID exists. Callers must hold m.mu — this is the memoryStore
+// counterpart of sqliteAccounts' single-statement EXISTS guard, made safe by
+// the SAME lock covering both the read and the write, which is exactly what
+// a SQL statement's atomicity gives the store implementation and a
+// check-then-write above it would not.
+func (m *memoryStore) anotherEnabledAdminExistsLocked(excludeID string) bool {
+	for id, a := range m.accounts {
+		if id != excludeID && a.Role == RoleAdmin && a.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *memoryStore) SetRole(_ context.Context, id string, role Role) error {
 	if !role.Valid() {
 		return ErrInvalidRole
@@ -106,6 +121,12 @@ func (m *memoryStore) SetRole(_ context.Context, id string, role Role) error {
 	a, ok := m.accounts[id]
 	if !ok {
 		return ErrNotFound
+	}
+	// The last-admin guard (#653): demoting an enabled admin away from
+	// "admin" is refused unless another enabled admin exists. Promoting TO
+	// admin, and any change to a disabled or non-admin row, is unaffected.
+	if a.Role == RoleAdmin && a.Enabled && role != RoleAdmin && !m.anotherEnabledAdminExistsLocked(id) {
+		return ErrLastAdmin
 	}
 	a.Role = role
 	m.accounts[id] = a
@@ -118,6 +139,11 @@ func (m *memoryStore) SetEnabled(_ context.Context, id string, enabled bool) err
 	a, ok := m.accounts[id]
 	if !ok {
 		return ErrNotFound
+	}
+	// The last-admin guard (#653): disabling an enabled admin is refused
+	// unless another enabled admin exists. Enabling is never blocked.
+	if !enabled && a.Role == RoleAdmin && a.Enabled && !m.anotherEnabledAdminExistsLocked(id) {
+		return ErrLastAdmin
 	}
 	a.Enabled = enabled
 	m.accounts[id] = a
@@ -216,3 +242,15 @@ var (
 	_ Repository      = (*memoryStore)(nil)
 	_ TokenRepository = (*memoryStore)(nil)
 )
+
+// NewMemoryRepositoryForConformanceTest returns a fresh in-memory Repository.
+// Exported (test-only — this file never builds into production) so the
+// shared conformance suite (accountstest.RunRepositoryConformance) can run
+// against it from an external test package without this package's own
+// _test.go files importing accountstest back, which would be an import
+// cycle: memoryStore itself must stay unexported, since it exists only to
+// give this package's own tests real coverage of TokenService, not as a
+// second production Repository.
+func NewMemoryRepositoryForConformanceTest() Repository {
+	return newMemoryStore()
+}

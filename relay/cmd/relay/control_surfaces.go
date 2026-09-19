@@ -24,7 +24,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
@@ -52,19 +51,17 @@ import (
 // single surface (e.g. apiSurface never touches ops), which is expected: the
 // struct is a shared dependency bag, not a per-surface signature.
 type surfaceDeps struct {
-	registry     registry.Repository
-	policy       *policyview.Cache
-	vocab        *nodevocab.Cache
-	ops          mcp.OperationLister
-	capability   *capability.Service // one instance: mcp.Executor AND api.Freezer
-	jobs         jobs.JobRepository
-	tasks        jobs.TaskRepository
-	tokens       *enroll.Service
-	accountsRepo accounts.Repository
-	apiTokens    *accounts.TokenService
-	revocation   *revocation.Service
-	audit        audit.Repository
-	auditSink    *auditsink.Sink
+	registry   registry.Repository
+	policy     *policyview.Cache
+	vocab      *nodevocab.Cache
+	ops        mcp.OperationLister
+	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
+	jobs       jobs.JobRepository
+	tasks      jobs.TaskRepository
+	tokens     *enroll.Service
+	revocation *revocation.Service
+	audit      audit.Repository
+	auditSink  *auditsink.Sink
 	// roleGate is the ONE authz.RoleGate the process holds — the same object
 	// the capability layer authorizes dispatches and Freeze with. The Control
 	// API needs it directly for the administrative routes that never reach the
@@ -158,9 +155,13 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// The role floor for mint/revoke (#397). Same *authz.RoleGate the
 		// capability layer holds — one ladder, consulted from both places,
 		// never re-derived here.
-		Authz:     d.roleGate,
-		Accounts:  d.accountsRepo,
-		APITokens: d.apiTokens,
+		Authz: d.roleGate,
+		// Account and API-Token administration (#653) — the SAME
+		// *capability.Service instance every other surface here holds: the
+		// same floor, the same self-target/last-admin refusals, and the same
+		// audit row as every other administrative act, rather than this
+		// surface re-deriving any of them (invariant 10).
+		AccountAdmin: d.capability,
 		// The Node read route (#440). The same registry every other surface
 		// reads, narrowed to a single Get on the way in.
 		NodeReader: d.registry,

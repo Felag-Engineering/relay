@@ -101,6 +101,16 @@ type Service struct {
 	// WithCertExpiringWindow, which the composition root always calls with a
 	// real value (invariant 11: file-only, no API reads or sets it).
 	certExpiringWithin time.Duration
+
+	// accountsStore and apiTokens back Account and API-Token administration
+	// (#653, accountadmin.go). Both nil means the surface is unconfigured:
+	// every method in accountadmin.go returns ErrAccountsUnavailable rather
+	// than a claim about state it never looked at. Wired together by
+	// WithAccountAdmin, since one without the other is half a surface (an
+	// Account with no way to issue it a credential, or a token store with no
+	// way to look up whose credential it is).
+	accountsStore AccountStore
+	apiTokens     APITokenStore
 }
 
 // Option configures a Service built by New.
@@ -239,6 +249,30 @@ func WithQueries(audit AuditQuery, job JobQuery) Option {
 	}
 }
 
+// WithAccountAdmin wires Account and API-Token administration (#653,
+// accountadmin.go). store and tokens are required together — an Account
+// store with no Token store can create identities with no way to issue them
+// a credential, and a Token store with no Account store cannot resolve
+// whose credential it is minting or revoking; passing an incomplete set is a
+// composition-root bug, so it panics rather than degrading (mirrors
+// WithApprovals' "all required together" reasoning).
+//
+// Optional overall: a Service built without this option answers every
+// accountadmin.go method with ErrAccountsUnavailable, exactly the posture
+// WithQueries' absence gives the read lane.
+func WithAccountAdmin(store AccountStore, tokens APITokenStore) Option {
+	if store == nil {
+		panic("capability: WithAccountAdmin: account store must not be nil")
+	}
+	if tokens == nil {
+		panic("capability: WithAccountAdmin: API token store must not be nil")
+	}
+	return func(s *Service) {
+		s.accountsStore = store
+		s.apiTokens = tokens
+	}
+}
+
 // WithClock overrides the Service's clock. Test seam only: approval expiry and
 // park timestamps are time-dependent, and a test that sleeps is a test that
 // flakes.
@@ -363,6 +397,30 @@ func New(reg registry.Repository, opts ...Option) *Service {
 	if s.auditQ != nil {
 		if _, ok := s.audit.(noopAuditSink); ok {
 			panic("capability: New: WithQueries requires a real AuditSink (WithAuditSink); noopAuditSink would answer every trail query while recording none of them")
+		}
+	}
+	// WithAccountAdmin requires a real AuditSink AND a real Authorizer (#653),
+	// independent of s.realDispatcher and checked here for the same reason
+	// WithQueries' guard above is: the result must not depend on the order
+	// two Options were passed to New. An un-floored Account-administration
+	// surface is a fail-open no less serious than an un-floored dispatch —
+	// every role would pass account_role/account_disable/api_token_mint —
+	// and an unaudited one means "who created this Account" is unanswerable
+	// after a compromise, exactly what ADR-0025 forbids for the read lane.
+	//
+	// Checked on EITHER field, not just accountsStore: WithAccountAdmin sets
+	// both together and panics on a nil argument, so today the two can never
+	// disagree — but a guard that keys on only one of two fields a future
+	// option (or a hand-built Service literal in a test) could set
+	// independently is exactly the kind of guard that silently stops
+	// covering what it claims to (TestNewRefusesAccountAdminWithoutA...
+	// falsifies this by construction, see accountadmin_test.go).
+	if s.accountsStore != nil || s.apiTokens != nil {
+		if _, ok := s.authz.(allowAllAuthorizer); ok {
+			panic("capability: New: WithAccountAdmin requires a real Authorizer (WithAuthorizer); allowAllAuthorizer would fail open on every Account/API-Token administration act")
+		}
+		if _, ok := s.audit.(noopAuditSink); ok {
+			panic("capability: New: WithAccountAdmin requires a real AuditSink (WithAuditSink); noopAuditSink would record no Account/API-Token administration act")
 		}
 	}
 	return s

@@ -568,6 +568,104 @@ func TestRecordCancelAttributesPrincipal(t *testing.T) {
 	}
 }
 
+// TestSink_RecordAccountAdminMapsEveryKind is #653's mapping proof: every
+// capability.AccountAdminKind this package knows about maps to its own
+// audit.Kind* string (audit.KindAccountCreate/Role/Enable/Disable,
+// audit.KindAPITokenMint/Revoke), attributed to the acting Principal, with
+// Reason carrying the field-per-kind strings recordLifecycle wrote directly
+// before #653 moved this surface into the capability layer.
+func TestSink_RecordAccountAdminMapsEveryKind(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+	principal := capability.Principal{Account: "admin-1", Role: "admin"}
+
+	cases := []struct {
+		kind       capability.AccountAdminKind
+		event      capability.AccountAdminEvent
+		wantKind   string
+		wantReason string
+	}{
+		{capability.AccountAdminCreate,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminCreate, AccountID: "acct-1", AccountName: "gleipnir", AccountKind: "machine", Role: "operator"},
+			audit.KindAccountCreate, "account_id=acct-1 name=gleipnir kind=machine role=operator"},
+		{capability.AccountAdminRole,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminRole, AccountID: "acct-1", Role: "admin"},
+			audit.KindAccountRole, "account_id=acct-1 role=admin"},
+		{capability.AccountAdminEnable,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminEnable, AccountID: "acct-1"},
+			audit.KindAccountEnable, "account_id=acct-1"},
+		{capability.AccountAdminDisable,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminDisable, AccountID: "acct-1"},
+			audit.KindAccountDisable, "account_id=acct-1"},
+		{capability.AccountAdminTokenMint,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminTokenMint, AccountID: "acct-1", TokenID: "tok-1"},
+			audit.KindAPITokenMint, "account_id=acct-1 api_token_id=tok-1"},
+		{capability.AccountAdminTokenRevoke,
+			capability.AccountAdminEvent{Kind: capability.AccountAdminTokenRevoke, TokenID: "tok-1"},
+			audit.KindAPITokenRevoke, "api_token_id=tok-1"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.wantKind, func(t *testing.T) {
+			if err := sink.RecordAccountAdmin(context.Background(), principal, tc.event); err != nil {
+				t.Fatalf("RecordAccountAdmin: %v", err)
+			}
+		})
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != len(cases) {
+		t.Fatalf("List returned %d records, want %d", len(records), len(cases))
+	}
+	for i, tc := range cases {
+		rec := records[i]
+		if rec.Kind != tc.wantKind {
+			t.Errorf("record %d: Kind = %q, want %q", i, rec.Kind, tc.wantKind)
+		}
+		if rec.Principal != principal.Attribution() {
+			t.Errorf("record %d: Principal = %q, want %q", i, rec.Principal, principal.Attribution())
+		}
+		if rec.Reason != tc.wantReason {
+			t.Errorf("record %d: Reason = %q, want %q", i, rec.Reason, tc.wantReason)
+		}
+	}
+}
+
+// TestSink_RecordAccountAdminMintCarriesNoSecret is #653's acceptance
+// criterion expressed against the real sink: the mint audit row has no field
+// a Plaintext could occupy. AccountAdminEvent structurally has no such field
+// (seams.go); this proves the RENDERED Record carries only the token's id.
+func TestSink_RecordAccountAdminMintCarriesNoSecret(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	const secret = "glp_deadbeef.super-secret-value"
+	event := capability.AccountAdminEvent{
+		Kind: capability.AccountAdminTokenMint, AccountID: "acct-1", TokenID: "tok-1",
+	}
+	if err := sink.RecordAccountAdmin(context.Background(), capability.Principal{Account: "admin"}, event); err != nil {
+		t.Fatalf("RecordAccountAdmin: %v", err)
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("List returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if strings.Contains(rec.Reason, secret) {
+		t.Errorf("Reason %q contains the plaintext credential", rec.Reason)
+	}
+	if string(rec.Stdout) != "" || string(rec.Stderr) != "" {
+		t.Errorf("mint record carries Stdout/Stderr, which a Plaintext could occupy: %+v", rec)
+	}
+}
+
 // TestRecordRestartDurability is acceptance #2: audit rows survive a Relay
 // restart (a Close followed by a fresh Open of the same path).
 func TestRecordRestartDurability(t *testing.T) {

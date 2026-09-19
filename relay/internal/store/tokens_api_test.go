@@ -181,6 +181,17 @@ func TestAPIToken_InheritsAccountRoleAndDisablement(t *testing.T) {
 		t.Errorf("role after promotion = %q, want admin — a token must not cache its role", got.Role)
 	}
 
+	// A second enabled admin, so disabling acct below (now an admin, since
+	// this test's subject is token inheritance, not the last-admin guard)
+	// does not trip ErrLastAdmin (#653) — without this, the assertions below
+	// would silently start exercising that refusal instead of the disabled-
+	// Account path this test is actually named for.
+	if _, err := acctRepo.Create(ctx, accounts.Account{
+		Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create other admin: %v", err)
+	}
+
 	if err := acctRepo.SetEnabled(ctx, acct.ID, false); err != nil {
 		t.Fatalf("disable: %v", err)
 	}

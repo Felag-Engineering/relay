@@ -47,6 +47,14 @@ func TestAuthorizeControl_Floors(t *testing.T) {
 		{capability.ControlFreezeEngage, accounts.RoleOperator},
 		{capability.ControlFreezeRelease, accounts.RoleAdmin},
 		{capability.ControlCancelJob, accounts.RoleOperator},
+		{capability.ControlAccountRead, accounts.RoleAdmin},
+		{capability.ControlAccountCreate, accounts.RoleAdmin},
+		{capability.ControlAccountRole, accounts.RoleAdmin},
+		{capability.ControlAccountEnable, accounts.RoleAdmin},
+		{capability.ControlAccountDisable, accounts.RoleAdmin},
+		{capability.ControlAPITokenRead, accounts.RoleAdmin},
+		{capability.ControlAPITokenMint, accounts.RoleAdmin},
+		{capability.ControlAPITokenRevoke, accounts.RoleAdmin},
 	}
 
 	for _, tc := range cases {
@@ -134,7 +142,12 @@ func TestAuthorizeControl_FreezeEngageIsHumanOnly(t *testing.T) {
 // admin releasing the Freeze is deliberately still allowed — release is the
 // deliberate rung, and gating it on humanity as well would leave an incident
 // with no automated way back — and a machine admin cancelling a Job is the
-// AI-agent stopping its own dispatch that #346 requires to work.
+// AI-agent stopping its own dispatch that #346 requires to work. The eight
+// Account/API-Token administration acts (#653) join this list on the same
+// status-quo-preservation reasoning: a machine admin creating an Account or
+// minting an API Token is a live, tested surface today (see
+// TestAuthorizeControl_Floors and authz.go's requiredControlRole doc
+// comment), and narrowing it is an owner decision, not settled here.
 func TestAuthorizeControl_MachineAdminKeepsTheOthers(t *testing.T) {
 	gate := NewRoleGate()
 	ctx := context.Background()
@@ -145,6 +158,14 @@ func TestAuthorizeControl_MachineAdminKeepsTheOthers(t *testing.T) {
 		capability.ControlRevokeNode,
 		capability.ControlFreezeRelease,
 		capability.ControlCancelJob,
+		capability.ControlAccountRead,
+		capability.ControlAccountCreate,
+		capability.ControlAccountRole,
+		capability.ControlAccountEnable,
+		capability.ControlAccountDisable,
+		capability.ControlAPITokenRead,
+		capability.ControlAPITokenMint,
+		capability.ControlAPITokenRevoke,
 	} {
 		if err := gate.AuthorizeControl(ctx, machine(accounts.RoleAdmin), act); err != nil {
 			t.Errorf("AuthorizeControl(%s, machine admin) = %v, want nil", act, err)
@@ -195,10 +216,64 @@ func TestAuthorizeControl_CorruptRoleSatisfiesNothing(t *testing.T) {
 		capability.ControlFreezeEngage,
 		capability.ControlFreezeRelease,
 		capability.ControlCancelJob,
+		capability.ControlAccountRead,
+		capability.ControlAccountCreate,
+		capability.ControlAccountRole,
+		capability.ControlAccountEnable,
+		capability.ControlAccountDisable,
+		capability.ControlAPITokenRead,
+		capability.ControlAPITokenMint,
+		capability.ControlAPITokenRevoke,
 	} {
 		if err := gate.AuthorizeControl(context.Background(), p, act); err == nil {
 			t.Errorf("AuthorizeControl(%s, role %q) = nil, want a refusal", act, p.Role)
 		}
+	}
+}
+
+// TestRoleGate_AccountAdministrationRequiresAdmin is #653's headline
+// acceptance for the ladder: all eight Account/API-Token administration acts
+// refuse viewer and operator and permit admin, for both human and machine
+// Accounts (status-quo preservation — see requiredControlRole's doc comment
+// on humanOnly).
+func TestRoleGate_AccountAdministrationRequiresAdmin(t *testing.T) {
+	gate := NewRoleGate()
+	ctx := context.Background()
+
+	acts := []capability.ControlAction{
+		capability.ControlAccountRead,
+		capability.ControlAccountCreate,
+		capability.ControlAccountRole,
+		capability.ControlAccountEnable,
+		capability.ControlAccountDisable,
+		capability.ControlAPITokenRead,
+		capability.ControlAPITokenMint,
+		capability.ControlAPITokenRevoke,
+	}
+	roles := []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
+
+	checked := 0
+	for _, act := range acts {
+		for _, role := range roles {
+			for _, p := range []capability.Principal{human(role), machine(role)} {
+				checked++
+				err := gate.AuthorizeControl(ctx, p, act)
+				wantAllowed := role.AtLeast(accounts.RoleAdmin)
+				if wantAllowed && err != nil {
+					t.Errorf("AuthorizeControl(%s, %s %s) = %v, want nil", act, p.Kind, role, err)
+				}
+				if !wantAllowed {
+					if err == nil {
+						t.Errorf("AuthorizeControl(%s, %s %s) = nil, want a refusal", act, p.Kind, role)
+					} else if !errors.Is(err, ErrUnauthorized) {
+						t.Errorf("refusal %v does not unwrap to ErrUnauthorized", err)
+					}
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("checked 0 cases — the guard must actually inspect something")
 	}
 }
 
