@@ -37,16 +37,20 @@ type floorKind int
 
 const (
 	// floorSurface: the handler itself must reach a role check in this
-	// package — requireAdmin (identity routes) or authorizeControl (#397's
-	// administrative routes). Verified by walking the call graph.
+	// package — authorizeControl (#397's administrative routes: both
+	// enrollment-token routes, Node revoke). Verified by walking the call
+	// graph.
 	floorSurface floorKind = iota
 
 	// floorCapability: the floor is enforced inside the capability layer, and
 	// this surface only renders the refusal. Execution (authz.RoleGate via
 	// capability.Service.Run), Freeze (AuthorizeControl via EngageFreeze/
-	// ReleaseFreeze), and approvals (AuthorizeApprovalDecision) are all here.
-	// A handler in this class must NOT re-derive the rule — that would be the
-	// second control path invariant 10 forbids.
+	// ReleaseFreeze), approvals (AuthorizeApprovalDecision), and identity
+	// management (#653: AuthorizeControl via Accounts/CreateAccount/
+	// SetAccountRole/...) are all here. A handler in this class must NOT
+	// re-derive the rule — that would be the second control path invariant
+	// 10 forbids, and TestCapabilityFlooredRoutesDoNotReachASurfaceGate below
+	// pins it as a mechanical fact rather than a comment.
 	floorCapability
 
 	// floorNone: no role floor. Any authenticated Account may call it. Only
@@ -86,16 +90,18 @@ var routeFloors = map[string]floorKind{
 	"POST /api/v1/freeze/engage":  floorCapability,
 	"POST /api/v1/freeze/release": floorCapability,
 
-	// Identity management (#297): admin in full, gated per handler.
-	"POST /api/v1/accounts":                floorSurface,
-	"GET /api/v1/accounts":                 floorSurface,
-	"GET /api/v1/accounts/{id}":            floorSurface,
-	"POST /api/v1/accounts/{id}/role":      floorSurface,
-	"POST /api/v1/accounts/{id}/enable":    floorSurface,
-	"POST /api/v1/accounts/{id}/disable":   floorSurface,
-	"POST /api/v1/accounts/{id}/tokens":    floorSurface,
-	"GET /api/v1/accounts/{id}/tokens":     floorSurface,
-	"DELETE /api/v1/api-tokens/{token_id}": floorSurface,
+	// Identity management (#297; #653: the floor moved into capability.Service
+	// behind AuthorizeControl; this surface renders the refusal and re-derives
+	// nothing).
+	"POST /api/v1/accounts":                floorCapability,
+	"GET /api/v1/accounts":                 floorCapability,
+	"GET /api/v1/accounts/{id}":            floorCapability,
+	"POST /api/v1/accounts/{id}/role":      floorCapability,
+	"POST /api/v1/accounts/{id}/enable":    floorCapability,
+	"POST /api/v1/accounts/{id}/disable":   floorCapability,
+	"POST /api/v1/accounts/{id}/tokens":    floorCapability,
+	"GET /api/v1/accounts/{id}/tokens":     floorCapability,
+	"DELETE /api/v1/api-tokens/{token_id}": floorCapability,
 
 	// Execution (#356): operator for a typed Operation, admin for Raw Exec —
 	// authz.RoleGate, reached through capability.Service.Run/Plan.
@@ -124,10 +130,14 @@ var routeFloors = map[string]floorKind{
 }
 
 // surfaceGateFuncs are the identifiers that count as "this handler reaches a
-// role check in this package". Both take the ResponseWriter and refuse the
-// request themselves, so reaching one is reaching a decision.
+// role check in this package". It takes the ResponseWriter and refuses the
+// request itself, so reaching it is reaching a decision.
+//
+// requireAdmin is GONE (#653): the identity routes' role floor moved into
+// capability.Service, so the only surface-level role check left in this
+// package is authorizeControl, for the three routes (both enrollment-token
+// routes, Node revoke) that still call it directly.
 var surfaceGateFuncs = map[string]bool{
-	"requireAdmin":     true,
 	"authorizeControl": true,
 }
 
@@ -141,7 +151,7 @@ func TestEveryRouteIsRoleClassified(t *testing.T) {
 		served[pattern] = true
 		if _, ok := routeFloors[pattern]; !ok {
 			t.Errorf("route %q has no entry in routeFloors — decide its role floor (#397): "+
-				"floorSurface if the handler must call requireAdmin/authorizeControl, "+
+				"floorSurface if the handler must call authorizeControl, "+
 				"floorCapability if the capability layer decides it, floorNone if any "+
 				"authenticated Account may call it", pattern)
 		}
@@ -162,8 +172,8 @@ func TestEveryRouteIsRoleClassified(t *testing.T) {
 
 // TestSurfaceGatedRoutesReachARoleCheck is the mechanical half: for every
 // route classified floorSurface, the handler's call graph within this package
-// must reach requireAdmin or authorizeControl. Deleting the gate call from a
-// handler fails here, which is exactly the regression #397 records.
+// must reach authorizeControl. Deleting the gate call from a handler fails
+// here, which is exactly the regression #397 records.
 func TestSurfaceGatedRoutesReachARoleCheck(t *testing.T) {
 	funcs := packageFuncs(t)
 
@@ -189,6 +199,45 @@ func TestSurfaceGatedRoutesReachARoleCheck(t *testing.T) {
 	// above would pass by checking nothing.
 	if checked == 0 {
 		t.Fatal("checked 0 surface-gated routes — the guard must actually inspect something")
+	}
+}
+
+// TestCapabilityFlooredRoutesDoNotReachASurfaceGate is the INVERSE of
+// TestSurfaceGatedRoutesReachARoleCheck (#653 suggestion 11): for every route
+// classified floorCapability, the handler's call graph within this package
+// must NOT reach any surfaceGateFuncs entry.
+//
+// Without this, "this surface re-derives nothing" (this file's own comment
+// on the identity rows above) is a declaration nobody checks. This is what
+// would fail if a future editor re-introduced a local role check beside a
+// capability call that already refuses — a regression as real as the one
+// TestSurfaceGatedRoutesReachARoleCheck catches, just in the other direction.
+func TestCapabilityFlooredRoutesDoNotReachASurfaceGate(t *testing.T) {
+	funcs := packageFuncs(t)
+
+	checked := 0
+	for _, r := range Routes() {
+		if routeFloors[r.Pattern()] != floorCapability {
+			continue
+		}
+		checked++
+		entry := handlerFuncName(t, r)
+		if _, ok := funcs[entry]; !ok {
+			t.Errorf("route %q: handler %q not found among this package's top-level functions", r.Pattern(), entry)
+			continue
+		}
+		if reachesGate(entry, funcs) {
+			t.Errorf("route %q is classified floorCapability but its handler %q reaches a surface-level role check "+
+				"(%s) — the capability layer already decides this route's floor; a local check beside it is the "+
+				"second control path invariant 10 forbids",
+				r.Pattern(), entry, strings.Join(sortedKeys(surfaceGateFuncs), " or "))
+		}
+	}
+
+	// Non-vacuity: if a refactor classified every route floorSurface/floorNone,
+	// the loop above would pass by checking nothing.
+	if checked == 0 {
+		t.Fatal("checked 0 capability-floored routes — the guard must actually inspect something")
 	}
 }
 
@@ -325,7 +374,7 @@ func handler() {
 			name: "gate reached one hop away",
 			src: `package api
 func handler() { helper() }
-func helper() { requireAdmin() }`,
+func helper() { authorizeControl() }`,
 			entry: "handler", want: true,
 		},
 		{

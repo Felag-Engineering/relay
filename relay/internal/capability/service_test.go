@@ -95,11 +95,19 @@ type spyAuditSink struct {
 	// kept for the tests that predate it; the approval decision tests need the
 	// whole sequence, because a park and its decision are two entries from one
 	// exchange and asserting on only the last would hide either.
-	entries     []AuditEntry
-	err         error
-	freezeCalls []FreezeEvent
-	cancelCalls []cancelCall
-	readCalls   []readCall
+	entries           []AuditEntry
+	err               error
+	freezeCalls       []FreezeEvent
+	cancelCalls       []cancelCall
+	readCalls         []readCall
+	accountAdminCalls []accountAdminCall
+}
+
+// accountAdminCall records one RecordAccountAdmin invocation's arguments
+// (#653).
+type accountAdminCall struct {
+	Principal Principal
+	Event     AccountAdminEvent
 }
 
 // cancelCall records one RecordCancel invocation's arguments.
@@ -136,6 +144,11 @@ func (s *spyAuditSink) RecordCancel(_ context.Context, p Principal, jobID string
 
 func (s *spyAuditSink) RecordRead(_ context.Context, p Principal, tool, selector, nodeID, jobID string) error {
 	s.readCalls = append(s.readCalls, readCall{Principal: p, Tool: tool, Selector: selector, NodeID: nodeID, JobID: jobID})
+	return s.err
+}
+
+func (s *spyAuditSink) RecordAccountAdmin(_ context.Context, p Principal, e AccountAdminEvent) error {
+	s.accountAdminCalls = append(s.accountAdminCalls, accountAdminCall{Principal: p, Event: e})
 	return s.err
 }
 

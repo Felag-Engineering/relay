@@ -14,7 +14,11 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -31,7 +35,6 @@ type identityFixture struct {
 	handler http.Handler
 	store   *store.Store
 	tokens  *accounts.TokenService
-	auditor *fakeAuditor
 	founder accounts.Account
 	// bootstrap is the founding admin's credential — the equivalent of
 	// `relay bootstrap-token` output, and the only way in before any other
@@ -39,6 +42,21 @@ type identityFixture struct {
 	bootstrap string
 }
 
+// newIdentityFixture wires the identity routes through a REAL
+// *capability.Service (#653), exactly as cmd/relay does: a real RoleGate, a
+// real auditsink.Sink over the store's own audit.Repository, and
+// WithAccountAdmin(st.Accounts(), tokenSvc). package api's import and
+// no-dispatch guards both skip _test.go files, so constructing a real
+// *capability.Service here is permitted — no real dispatcher is wired, so
+// New's fail-open guard is satisfied by the Authorizer + AuditSink above,
+// exactly as WithQueries' guard is satisfied elsewhere without a dispatcher.
+//
+// CONSEQUENCE: the last-admin SQL guard (internal/store/accounts.go) is
+// therefore LIVE in every identity API test. The one place this could bite
+// is TestIdentityAPI_SelfDisableAndSelfRoleAreRefused, where the founding
+// admin disables the "ops" admin and expects 200 — at that point the
+// founding admin and "ops" are both enabled admins, so disabling "ops"
+// leaves one and the call still succeeds.
 func newIdentityFixture(t *testing.T) *identityFixture {
 	t.Helper()
 
@@ -55,7 +73,6 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 	}
 
 	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
-	auditor := &fakeAuditor{}
 
 	// The founding admin's bootstrap credential, minted exactly as
 	// `relay bootstrap-token` does — so these tests drive the real credential
@@ -67,19 +84,29 @@ func newIdentityFixture(t *testing.T) *identityFixture {
 
 	authn := controlplane.NewAuthenticator(tokenSvc)
 
+	// The auditsink.Sink deliberately keeps its OWN default clock
+	// (time.Now, nanosecond-precision via RFC3339Nano — internal/store's
+	// timeLayout) rather than auditsink.WithClock(fixedNow): two records
+	// written under one frozen timestamp tie on the trail's `ORDER BY ts`,
+	// and the store gives no secondary sort key to break that tie, so the
+	// end-to-end test below (which asserts an exact kind ORDER) would be at
+	// the mercy of an unspecified tie-break rather than real insertion order.
+	capSvc := capability.New(registry.NewInMemory(),
+		capability.WithAuthorizer(authz.NewRoleGate()),
+		capability.WithAuditSink(auditsink.New(st.Audit())),
+		capability.WithAccountAdmin(st.Accounts(), tokenSvc))
+
 	mux := http.NewServeMux()
 	Register(mux, Deps{
-		Accounts:  st.Accounts(),
-		APITokens: tokenSvc,
-		Audit:     auditor,
-		Now:       fixedNow,
+		AccountAdmin: capSvc,
+		Audit:        &fakeAuditor{}, // unused by the identity routes; kept so Register never sees a nil Auditor.
+		Now:          fixedNow,
 	})
 
 	return &identityFixture{
 		handler:   authn.Middleware(mux),
 		store:     st,
 		tokens:    tokenSvc,
-		auditor:   auditor,
 		founder:   founder,
 		bootstrap: bootstrap.Reveal(),
 	}
@@ -132,9 +159,22 @@ func decodeInto(t *testing.T, rec *httptest.ResponseRecorder, dst any) {
 	}
 }
 
-func (f *identityFixture) auditKinds() []string {
+// auditRecords returns every Record the real store's audit trail holds,
+// ordered by timestamp — re-pointed at f.store.Audit().List (#653) now that
+// the identity routes' capability.Service audits through auditsink.Sink onto
+// the real store rather than the fakeAuditor.
+func (f *identityFixture) auditRecords(t *testing.T) []audit.Record {
+	t.Helper()
+	records, err := f.store.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("f.store.Audit().List: %v", err)
+	}
+	return records
+}
+
+func (f *identityFixture) auditKinds(t *testing.T) []string {
 	var kinds []string
-	for _, r := range f.auditor.all() {
+	for _, r := range f.auditRecords(t) {
 		kinds = append(kinds, r.Kind)
 	}
 	return kinds
@@ -188,12 +228,14 @@ func TestIdentityAPI_AdminCreatesAccountAndMintsTokenEndToEnd(t *testing.T) {
 		t.Errorf("credential authenticated as %+v, want the created operator Account", acct)
 	}
 
-	// 4. Both acts are audited and attributed to the founding admin.
-	kinds := f.auditKinds()
+	// 4. Both acts are audited and attributed to the founding admin. Reads
+	//    write no audit row (accountadmin.go), so this is exactly the two
+	//    writes above — no more, no less.
+	kinds := f.auditKinds(t)
 	if len(kinds) != 2 || kinds[0] != audit.KindAccountCreate || kinds[1] != audit.KindAPITokenMint {
 		t.Fatalf("audit kinds = %v, want [%s %s]", kinds, audit.KindAccountCreate, audit.KindAPITokenMint)
 	}
-	for _, r := range f.auditor.all() {
+	for _, r := range f.auditRecords(t) {
 		if !strings.HasPrefix(r.Principal, accounts.FoundingAdminName+":") {
 			t.Errorf("audit record %q attributed to %q, want the founding admin Account", r.Kind, r.Principal)
 		}
@@ -244,7 +286,7 @@ func TestIdentityAPI_PlaintextAppearsOnlyInTheMintResponse(t *testing.T) {
 	}
 
 	// The audit record for the mint carries the token's id, never its secret.
-	for _, r := range f.auditor.all() {
+	for _, r := range f.auditRecords(t) {
 		if strings.Contains(r.Reason, secret) {
 			t.Errorf("audit reason %q contains the plaintext credential", r.Reason)
 		}
@@ -294,8 +336,22 @@ func TestIdentityAPI_NonAdminIsRefusedEveryIdentityEndpoint(t *testing.T) {
 	if after.Role != accounts.RoleViewer || !after.Enabled {
 		t.Errorf("target = %+v after refused calls, want an untouched enabled viewer", after)
 	}
-	if got := len(f.auditor.all()); got != 0 {
-		t.Errorf("%d audit records written for refused calls, want 0", got)
+
+	// AMENDED AC (coordinator ruling, #653): moving the floor into the
+	// capability layer is precisely what makes refusals audited — refuseControl
+	// writes an AuditKindRefusal row on every denial (service.go). "want 0"
+	// encoded the pre-#653 behaviour; the assertion now proves BOTH that
+	// refusals are audited AND that nothing mutated: one refusal row per
+	// refused call (2 roles x 9 routes = 18), every one a KindRefusal.
+	records := f.auditRecords(t)
+	wantRefusals := 2 * len(routes)
+	if len(records) != wantRefusals {
+		t.Fatalf("%d audit records written for %d refused calls, want %d — refusals are audited", len(records), wantRefusals, wantRefusals)
+	}
+	for _, r := range records {
+		if r.Kind != audit.KindRefusal {
+			t.Errorf("audit record kind = %q, want %q for every refused call", r.Kind, audit.KindRefusal)
+		}
 	}
 }
 
@@ -511,6 +567,58 @@ func TestIdentityAPI_MintRequiresExplicitTTL(t *testing.T) {
 	}
 }
 
+// TestIdentityAPI_AuthorizationIsCheckedAfterRequestValidation pins #653's
+// accepted reorder (suggestion 9): AuthorizeControl now runs INSIDE the
+// capability call, after decodeJSON and the mint route's TTL/name
+// validation, so a below-floor caller sending a malformed body gets 400
+// where the deleted requireAdmin used to answer 403. This is accepted
+// rather than papered over with a surface-side pre-check, because a
+// pre-check would keep a role check in this package's call graph and make
+// role_floor_test.go's floorCapability classification false.
+//
+// The disclosure analysis: every pre-authorization check here (decodeJSON,
+// the ttl_seconds bounds, the name length) validates only the CALLER'S OWN
+// INPUT and touches no store, so a refused caller learns nothing about any
+// Account — a viewer with a valid body gets exactly the same 403 an operator
+// with the same body would, and a viewer with an invalid body gets exactly
+// the same 400 an admin sending that body would.
+func TestIdentityAPI_AuthorizationIsCheckedAfterRequestValidation(t *testing.T) {
+	f := newIdentityFixture(t)
+	target, _ := f.mintFor(t, "target", accounts.RoleViewer)
+	_, viewerCred := f.mintFor(t, "caller-viewer", accounts.RoleViewer)
+	path := "/api/v1/accounts/" + target.ID + "/tokens"
+
+	// An invalid body (missing ttl_seconds) fails validation before
+	// AuthorizeControl is ever reached — 400, not 403.
+	rec := f.call(t, viewerCred, http.MethodPost, path, map[string]any{"name": "no-ttl"})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("viewer with an invalid body: status %d, want 400", rec.Code)
+	}
+
+	// A VALID body reaches the capability call, which refuses at the floor —
+	// 403, and the target's tokens are untouched.
+	ttl := int64(3600)
+	rec = f.call(t, viewerCred, http.MethodPost, path, mintAPITokenRequest{Name: "sneaky", TTLSeconds: &ttl})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer with a valid body: status %d, want 403; body %s", rec.Code, rec.Body.String())
+	}
+
+	// mintFor above already minted target ONE token (its own credential); a
+	// refused mint must not add a second.
+	list, err := f.tokens.List(context.Background(), target.ID)
+	if err != nil {
+		t.Fatalf("list tokens: %v", err)
+	}
+	if len(list) != 1 {
+		t.Errorf("target has %d tokens after a refused mint, want 1 (only mintFor's own)", len(list))
+	}
+
+	records := f.auditRecords(t)
+	if len(records) != 1 || records[0].Kind != audit.KindRefusal {
+		t.Fatalf("audit records = %+v, want exactly one KindRefusal", records)
+	}
+}
+
 // Minting for a disabled Account is refused rather than producing a credential
 // that looks like access but authenticates nowhere.
 func TestIdentityAPI_MintForDisabledAccountIsRefused(t *testing.T) {
@@ -544,7 +652,7 @@ func TestIdentityAPI_RevokeIsIdempotent(t *testing.T) {
 			t.Fatalf("revoke #%d: status %d", i+1, rec.Code)
 		}
 	}
-	if got := len(f.auditor.all()); got != 2 {
+	if got := len(f.auditRecords(t)); got != 2 {
 		t.Errorf("%d audit records for two revokes, want 2 — each act is recorded", got)
 	}
 }

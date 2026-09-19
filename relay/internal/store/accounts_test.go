@@ -403,7 +403,7 @@ func TestSQLiteAccounts_LastAdminGuardIsASingleStatement(t *testing.T) {
 	}
 	gotSetEnabled := findCalls(setEnabled)
 	wantSetEnabled := map[guardedCall]bool{
-		{"update", ""}:                          true,
+		{"update", ""}:                           true,
 		{"updateGuarded", "setDisabledGuardSQL"}: true,
 	}
 	if len(gotSetEnabled) != len(wantSetEnabled) {

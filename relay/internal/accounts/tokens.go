@@ -52,8 +52,21 @@ type Plaintext struct {
 // NewPlaintext wraps a freshly minted secret.
 func NewPlaintext(secret string) Plaintext { return Plaintext{secret: secret} }
 
-// Reveal returns the secret. Every call site is a place the plaintext escapes;
-// there should be exactly one, and it should be the mint response.
+// Reveal returns the secret. Every call site is a place the plaintext
+// escapes, so the permitted ones are enumerated rather than assumed to be
+// singular (#653: there are already two — the mint response on each surface
+// that mints a credential):
+//
+//   - relay/internal/controlplane/api/accounts.go — the Control API's mint
+//     response (#297).
+//   - relay/cmd/relay/bootstrap_token.go — `relay bootstrap-token`'s stdout
+//     (#295).
+//
+// TestPlaintext_RevealCallSitesAreEnumerated (tokens_test.go) makes this list
+// a checked fact rather than a comment a third call site could silently
+// outdate: a new caller of Reveal() must be added there deliberately. #654/
+// #655 will add the Console's own mint response to both this list and that
+// test; neither is added by this issue.
 func (p Plaintext) Reveal() string { return p.secret }
 
 // redacted is what every incidental rendering of a Plaintext produces.

@@ -212,6 +212,61 @@ type AuditSink interface {
 	// guard (service.go) then covers the read lane for free, with no new
 	// guard to remember.
 	RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error
+
+	// RecordAccountAdmin records one Account or API-Token administration act
+	// (#653) — creating an Account, changing its role, enabling/disabling
+	// it, or minting/revoking an API Token. It joins this interface rather
+	// than getting its own seam for the same reason RecordRead does: a
+	// separately-wired administration auditor is how a deployment ends up
+	// with audited dispatch and unaudited identity changes, and New's
+	// real-dispatcher/WithQueries fail-open guards then cover it for free.
+	//
+	// Reads (Accounts/Account/APITokens) never call this — see
+	// accountadmin.go's file header for why that is load-bearing, not an
+	// oversight.
+	RecordAccountAdmin(ctx context.Context, p Principal, e AccountAdminEvent) error
+}
+
+// AccountAdminKind distinguishes which Account/API-Token administration act
+// an AccountAdminEvent describes, mirroring audit.KindAccount*/KindAPIToken*
+// (capability may not import internal/audit — TestCapabilityImportsOnlyRegistryAndJobs
+// — so this mirrors rather than shares that vocabulary; auditsink, the one
+// package that imports both, pins the two equal).
+type AccountAdminKind int
+
+const (
+	AccountAdminCreate AccountAdminKind = iota
+	AccountAdminRole
+	AccountAdminEnable
+	AccountAdminDisable
+	AccountAdminTokenMint
+	AccountAdminTokenRevoke
+)
+
+// AccountAdminEvent is what accountadmin.go passes to
+// AuditSink.RecordAccountAdmin. THE STRUCT HAS NO FIELD A Plaintext COULD
+// OCCUPY — that is #653's acceptance criterion for the mint audit row,
+// expressed as a type: MintAPIToken records TokenID here, never the minted
+// credential.
+type AccountAdminEvent struct {
+	Kind AccountAdminKind
+
+	// AccountID and AccountName name the Account the act was performed on
+	// (every Kind) or, for a create, the Account just created.
+	AccountID   string
+	AccountName string
+
+	// Role is set for AccountAdminCreate (the Account's initial role) and
+	// AccountAdminRole (the new role); empty otherwise.
+	Role string
+
+	// TokenID is set for AccountAdminTokenMint/Revoke; empty otherwise.
+	// Never the token's secret — see this type's doc comment above.
+	TokenID string
+
+	// Asserted is the caller-claimed attribution lane (#300), read off the
+	// request context. Recorded, never consulted.
+	Asserted Assertions
 }
 
 // AuditKind distinguishes what kind of Run outcome an AuditEntry describes.
@@ -388,6 +443,10 @@ func (noopAuditSink) RecordCancel(context.Context, Principal, string) error {
 }
 
 func (noopAuditSink) RecordRead(context.Context, Principal, string, string, string, string) error {
+	return nil
+}
+
+func (noopAuditSink) RecordAccountAdmin(context.Context, Principal, AccountAdminEvent) error {
 	return nil
 }
 

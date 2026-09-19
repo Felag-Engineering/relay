@@ -702,6 +702,21 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// — and it is admitted precisely so `state:` has exactly one
 		// definition, shared by Selector.Matches and every rendering surface.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate": true,
+		// internal/accounts joined with #653, on the same terms approval,
+		// mcptask, and nodestate were admitted: a domain package with no
+		// proto, no database/sql, no HTTP, guarded by its own import test
+		// (accounts.TestAccountsImportsStayNarrow). Admitted so the Account/
+		// role vocabulary (accounts.Account, Role, APIToken, Plaintext) has
+		// exactly ONE definition — accountadmin.go's AccountStore/
+		// APITokenStore would otherwise need to mirror it, the way this
+		// package already mirrors approval.Answer and audit.Kind* for
+		// packages it may not import — and a mirrored copy is a copy that can
+		// disagree with the vocabulary it describes. `go list` confirms
+		// accounts' direct imports are exactly its own import test's
+		// allowlist, with zero internal/* and no cycle — its transitive
+		// imports (crypto/*, encoding/*, golang.org/x/crypto/argon2, ...) are
+		// not this package's direct imports and so do not need entries here.
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts": true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,

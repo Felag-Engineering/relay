@@ -707,9 +707,30 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 	// ADR-0001's admin-only Raw Exec.
 	roleGate := authz.NewRoleGate()
 
+	// The one TokenService in the process: the authenticator VERIFIES through
+	// it and the Control API MINTS through it (via capability.WithAccountAdmin
+	// below), but each is handed a narrow interface exposing only its half
+	// (controlplane.TokenVerifier / capability.APITokenStore), so neither
+	// surface holds the other's power. Constructed here, above base, because
+	// base itself needs it (#653) and both branches below share base.
+	apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+
 	base := []capability.Option{
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
 		capability.WithAuditSink(auditSink),
+		// The real RoleGate (#653): both branches below now carry a real
+		// Authorizer, not just the ControlEnabled one, which is what makes
+		// capability.WithAccountAdmin below satisfiable — New's fail-open
+		// guard requires a real Authorizer wherever WithAccountAdmin is used.
+		// Tightening the disabled branch this way changes no caller's
+		// outcome there: nothing is mounted on that path (see the
+		// ControlEnabled==false branch's comment below).
+		capability.WithAuthorizer(roleGate),
+		// Account and API-Token administration (#653): the same Accounts
+		// store and TokenService the authenticator and bootstrap-token use,
+		// so identity administration inherits one floor (invariant 10)
+		// instead of the Control API deciding role itself per handler.
+		capability.WithAccountAdmin(st.Accounts(), apiTokenSvc),
 		capability.WithFreeze(st.Freeze()),
 		capability.WithMetrics(appMetrics),
 		capability.WithApprovals(approvalGate, st.Approvals(), roleGate),
@@ -804,6 +825,11 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		enabledOpts := append([]capability.Option{}, base...)
 		enabledOpts = append(enabledOpts,
 			capability.WithExecution(st.Jobs(), st.Tasks(), router),
+			// Passing WithAuthorizer(roleGate) again here is idempotent —
+			// base (#653) already carries it, and Option application is
+			// last-write-wins over the same object — kept explicit so this
+			// branch reads correctly on its own rather than depending on a
+			// reader having base's contents in mind.
 			capability.WithAuthorizer(roleGate))
 		capSvc = capability.New(reg, enabledOpts...)
 
@@ -824,11 +850,8 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			"enabled", foundingAdmin.Enabled,
 		)
 
-		// The one TokenService in the process: the authenticator VERIFIES
-		// through it and the Control API MINTS through it, but each is handed
-		// a narrow interface exposing only its half (controlplane.TokenVerifier
-		// / api.APITokenService), so neither surface holds the other's power.
-		apiTokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+		// apiTokenSvc is constructed above, alongside base (#653: base itself
+		// needs it for WithAccountAdmin), and reused here.
 
 		// OAuth 2.1 protected-resource support (#299, ADR-0024). Discovery
 		// happens ONCE, here at startup, so a misconfigured issuer fails the
@@ -1013,8 +1036,13 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		}
 	} else {
 		// No consumer surface is mounted (MCP/API require ControlEnabled),
-		// so capSvc keeps the v0.0.5 default no-op dispatcher/allow-all authz
-		// — identical to every build before this issue.
+		// so capSvc keeps the v0.0.5 default no-op dispatcher — but, since
+		// #653, base carries a REAL RoleGate (capability.WithAuthorizer) and
+		// real Account/API-Token administration (capability.WithAccountAdmin),
+		// not the "allow-all authz" this comment described before that issue.
+		// Nothing is mounted on this path, so no caller's outcome changes;
+		// what changes is that New's fail-open guard for WithAccountAdmin
+		// (a real Authorizer + a real AuditSink) is satisfiable here too.
 		capSvc = capability.New(reg, base...)
 	}
 

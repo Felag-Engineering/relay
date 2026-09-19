@@ -88,27 +88,29 @@ type Auditor interface {
 	AppendAll(ctx context.Context, rs []audit.Record) error
 }
 
-// AccountManager is the Account-store view the identity routes need
-// (accounts.Repository satisfies it). Deliberately not accounts.Repository
-// itself: EnsureFoundingAdmin is seeding, a startup act, and no request
-// handler has any business reaching it.
-type AccountManager interface {
-	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
-	Get(ctx context.Context, id string) (accounts.Account, error)
-	List(ctx context.Context) ([]accounts.Account, error)
-	SetRole(ctx context.Context, id string, role accounts.Role) error
-	SetEnabled(ctx context.Context, id string, enabled bool) error
-}
-
-// APITokenService mints, revokes, and lists an Account's API Tokens.
-// *accounts.TokenService satisfies it.
+// AccountAdmin is Account and API-Token administration (#653): the identity
+// routes' single collaborator, mirroring capability.Service's own
+// accountadmin.go methods exactly (each takes the acting Principal, since
+// the role floor AND the self-targeting/last-admin refusals now live in the
+// capability layer, not here) — so *capability.Service satisfies this
+// interface with no adapter, the same shape as Freezer/Executor/
+// ApprovalService above.
 //
-// Verify is deliberately absent: this surface *issues* credentials, the
-// authenticator *checks* them, and neither needs the other's power.
-type APITokenService interface {
-	Mint(ctx context.Context, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
-	Revoke(ctx context.Context, id string) error
-	List(ctx context.Context, accountID string) ([]accounts.APIToken, error)
+// Before #653 this surface declared its own AccountManager/APITokenService
+// interfaces bound straight to accounts.Repository/TokenService and gated
+// role itself (requireAdmin, now deleted): a second control path invariant
+// 10 forbids. This interface is what closes it — every method here is
+// authorized, and self-targeting/last-admin refused, inside the capability
+// layer before this surface ever sees a result.
+type AccountAdmin interface {
+	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
+	Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error)
+	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)
+	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
+	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
+	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
+	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
 }
 
 // Deps are the collaborators Register wires into the /api/v1 route table.
@@ -139,10 +141,10 @@ type Deps struct {
 	// ungated: an unwired gate is a composition-root bug, and #397 exists
 	// because the ungated path failed open silently.
 	Authz capability.ControlAuthorizer
-	// Accounts and APITokens back the identity-management routes (#297).
-	// Both are admin-only at every entry point (see requireAdmin).
-	Accounts  AccountManager
-	APITokens APITokenService
+	// AccountAdmin backs the identity-management routes (#297, migrated onto
+	// the capability layer by #653). Nil refuses every identity route with a
+	// 500, on the same unwired-gate posture Authz above documents.
+	AccountAdmin AccountAdmin
 	// NodeReader is the single-Node registry view behind GET
 	// /api/v1/nodes/{node_id} (#440). A read-only narrowing of
 	// registry.Repository: this surface has no business holding Upsert,
@@ -276,6 +278,19 @@ func Routes() []Route {
 // enableAccount adapts handleSetAccountEnabled's two-argument shape to the
 // Route.Handler signature, so the enable/disable pair stays in the table
 // alongside every other route rather than being a special case in Register.
+//
+// The go:noinline directive below is load-bearing, not a performance note:
+// role_floor_test.go's handlerFuncName resolves a Route's handler back to a
+// source-level function name via runtime.FuncForPC, and the Go compiler's
+// inliner folds this function's returned closure into Routes() at the call
+// site — which makes FuncForPC report the closure as belonging to Routes
+// itself. Routes' own body names literally every handler in the table, so a
+// resolution of "Routes" would make both role_floor_test.go guards (the
+// handler reaches a gate / does not reach a gate) trivially true, silently
+// disabling both of them for whichever route this returns. Keeping this
+// un-inlined is what keeps handlerFuncName resolving "enableAccount" instead.
+//
+//go:noinline
 func enableAccount(enabled bool) func(Deps) http.HandlerFunc {
 	return func(d Deps) http.HandlerFunc { return handleSetAccountEnabled(d, enabled) }
 }

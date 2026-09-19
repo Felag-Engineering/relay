@@ -806,9 +806,12 @@ paths:
         change takes effect immediately for every existing token — no
         re-issuance, no synchronization step.
 
-        An admin cannot change their **own** role: a guard against locking the
-        last admin out of their own control plane, not a security boundary (any
-        other admin still can).
+        Two refusals converge on 409 here (see `AccountConflict`): an admin
+        cannot change their **own** role — a lockout guard only, any other
+        admin still can — and demoting the **last enabled admin** is refused
+        for every caller, which is a real security boundary rather than a
+        convenience: the control plane must always keep at least one enabled
+        admin Account.
       requestBody:
         required: true
         content:
@@ -824,7 +827,7 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/AdminRequired' }
         "404": { $ref: '#/components/responses/AccountNotFound' }
-        "409": { $ref: '#/components/responses/SelfTarget' }
+        "409": { $ref: '#/components/responses/AccountConflict' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   /api/v1/accounts/{id}/enable:
@@ -857,7 +860,11 @@ paths:
         revoked; re-enabling restores them. Disablement and revocation are
         distinct levers on purpose.
 
-        An admin cannot disable their own Account (see `setAccountRole`).
+        Two refusals converge on 409 here (see `AccountConflict`): an admin
+        cannot disable their own Account (see `setAccountRole`) — a lockout
+        guard only — and disabling the **last enabled admin** is refused for
+        every caller, a real security boundary: the control plane must always
+        keep at least one enabled admin Account.
       responses:
         "200":
           description: The updated Account.
@@ -867,7 +874,7 @@ paths:
         "401": { $ref: '#/components/responses/Unauthorized' }
         "403": { $ref: '#/components/responses/AdminRequired' }
         "404": { $ref: '#/components/responses/AccountNotFound' }
-        "409": { $ref: '#/components/responses/SelfTarget' }
+        "409": { $ref: '#/components/responses/AccountConflict' }
         "500": { $ref: '#/components/responses/InternalError' }
 
   /api/v1/accounts/{id}/tokens:
@@ -1047,10 +1054,19 @@ components:
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
-    SelfTarget:
+    AccountConflict:
       description: |
-        An admin may not change their own role or disable their own Account —
-        a lockout guard, not a security boundary. Any other admin can.
+        One of two refusals, both a 409 because both describe a control plane
+        that would be left with no way back in:
+
+        - **Self-targeting.** An admin may not change their own role or
+          disable their own Account — a lockout guard, not a security
+          boundary against every OTHER admin: any other admin can still do
+          either.
+        - **The last enabled admin.** Demoting or disabling the last enabled
+          admin is refused for **every** caller, including another admin —
+          this one IS a security boundary: it guarantees the control plane
+          always keeps at least one enabled admin Account.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }

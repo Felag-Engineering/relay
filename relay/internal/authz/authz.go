@@ -236,7 +236,26 @@ func (*RoleGate) AuthorizeApprovalDecision(_ context.Context, p capability.Princ
 //	engage the Freeze            operator   ADR-0013 (+ human-only, #397)
 //	release the Freeze           admin      ADR-0013
 //	cancel a Job                 operator   execution.md §Cancellation (owner decision 2026-09-14), #346
+//	read Accounts                admin      accounts-and-access.md: "Administer Accounts and API Tokens — admin"
+//	create an Account            admin      accounts-and-access.md
+//	change an Account's role     admin      accounts-and-access.md
+//	enable an Account            admin      accounts-and-access.md
+//	disable an Account           admin      accounts-and-access.md
+//	read API Tokens              admin      accounts-and-access.md
+//	mint an API Token            admin      accounts-and-access.md
+//	revoke an API Token          admin      accounts-and-access.md
 //
+// The eight Account/API-Token rows (#653) are humanOnly: false — STATUS-QUO
+// PRESERVATION, not a claim that admin is already the strongest role (that
+// conflates authority breadth with PERSISTENCE: a machine admin minting a
+// Token converts a transient session compromise into durable access that
+// outlives revoking the agent's own credential, exactly ADR-0009's concern).
+// These nine routes are shipped, and
+// TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess and
+// TestIdentityAPI_SelfDisableAndSelfRoleAreRefused both drive them as MACHINE
+// ADMINS today — humanOnly: true would be a silent behaviour change on a live
+// surface. Narrowing to human-only is an owner decision, to be recorded on
+// the issue, not settled here.
 // Enrollment sits at admin because a token's scope becomes the enrolling
 // Node's relay: labels — the namespace the security-sensitive lane targets
 // (invariant 7, ADR-0020) — so minting manufactures Nodes the quarantine and
@@ -266,6 +285,22 @@ func requiredControlRole(act capability.ControlAction) (role accounts.Role, labe
 		return accounts.RoleAdmin, "releasing the Freeze", false, true
 	case capability.ControlCancelJob:
 		return accounts.RoleOperator, "cancelling a Job", false, true
+	case capability.ControlAccountRead:
+		return accounts.RoleAdmin, "reading Accounts", false, true
+	case capability.ControlAccountCreate:
+		return accounts.RoleAdmin, "creating an Account", false, true
+	case capability.ControlAccountRole:
+		return accounts.RoleAdmin, "changing an Account's role", false, true
+	case capability.ControlAccountEnable:
+		return accounts.RoleAdmin, "enabling an Account", false, true
+	case capability.ControlAccountDisable:
+		return accounts.RoleAdmin, "disabling an Account", false, true
+	case capability.ControlAPITokenRead:
+		return accounts.RoleAdmin, "reading API Tokens", false, true
+	case capability.ControlAPITokenMint:
+		return accounts.RoleAdmin, "minting an API Token", false, true
+	case capability.ControlAPITokenRevoke:
+		return accounts.RoleAdmin, "revoking an API Token", false, true
 	default:
 		return "", "", false, false
 	}
