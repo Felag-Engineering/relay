@@ -2,11 +2,42 @@ package console
 
 import (
 	"bytes"
+	"html/template"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
+
+// escapedInATextNode returns s exactly as html/template escapes it in an HTML
+// text node — the context the deny block's footer renders in. Computed through
+// the same package that renders the block, never a hand-written &#39;: a
+// hand-escaped copy in a test is the same second spelling this change removed.
+func escapedInATextNode(t *testing.T, s string) string {
+	t.Helper()
+	tmpl := template.Must(template.New("esc").Parse("{{.}}"))
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, s); err != nil {
+		t.Fatalf("escapedInATextNode: %v", err)
+	}
+	return buf.String()
+}
+
+// withoutTheSharedBoundary returns out with the capability layer's boundary
+// text removed — what is left is the Console's OWN copy in this block. It
+// fails if the text was not there, so a test that subtracts nothing cannot
+// silently pass.
+func withoutTheSharedBoundary(t *testing.T, out, shared string) string {
+	t.Helper()
+	escaped := escapedInATextNode(t, shared)
+	replaced := strings.Replace(out, escaped, "", 1)
+	if replaced == out {
+		t.Fatalf("withoutTheSharedBoundary: %q was not found in %q", escaped, out)
+	}
+	return replaced
+}
 
 func render(t *testing.T, name string, data any) string {
 	t.Helper()
@@ -276,14 +307,22 @@ func TestDenyBlock_IsNotAnError(t *testing.T) {
 		Line:          42,
 		PolicyHref:    "/console/nodes/node-7f2a#policy",
 		DraftRuleHref: "/console/policy/fix?deny=abc",
+		Boundary:      DenyBoundaryApply,
 	})
 
 	if !strings.Contains(out, `data-outcome="denied_by_policy"`) {
 		t.Error("the deny block does not carry the denied-by-policy treatment")
 	}
-	for _, wrong := range []string{"error", "Error", "failed", "Failure"} {
-		if strings.Contains(out, wrong) {
-			t.Errorf("the deny block calls a Policy decision %q: %s", wrong, out)
+	// The Console's OWN copy, with the capability layer's text subtracted: this
+	// block must never call a Policy decision a failure, and "fail" catches
+	// "failed"/"failure"/"Failure" where the old four-word list caught only two of
+	// them. Subtracting first is what decouples this from wording the Console does
+	// not own and may not edit — capability.PolicyDenyExplanation legitimately
+	// contains "a refusal, not a failure".
+	mine := strings.ToLower(withoutTheSharedBoundary(t, out, capability.PolicyDenyExplanation))
+	for _, wrong := range []string{"fail", "error"} {
+		if strings.Contains(mine, wrong) {
+			t.Errorf("the deny block's own prose calls a Policy decision %q: %s", wrong, mine)
 		}
 	}
 	// The rule VERBATIM, with its location. A paraphrased rule is a rule an
@@ -300,9 +339,12 @@ func TestDenyBlock_IsNotAnError(t *testing.T) {
 		t.Errorf("the deny block is missing one of its two links: %s", out)
 	}
 	// And the Console must be VISIBLY unable to make the change (ADR-0002,
-	// invariant 2). This sentence is the visible part.
-	if !strings.Contains(out, "Relay cannot change this") {
-		t.Errorf("the deny block does not say the Relay cannot write Policy: %s", out)
+	// invariant 2). The sentence that says so is the capability layer's, byte for
+	// byte — the same bytes MCP and the Control API emit — not a Console
+	// paraphrase of it. A substring match on a phrase is what let the old
+	// paraphrase drift away from the shared text in the first place.
+	if !strings.Contains(out, escapedInATextNode(t, capability.PolicyDenyExplanation)) {
+		t.Errorf("the deny block does not carry the capability layer's boundary explanation: %s", out)
 	}
 }
 
@@ -311,13 +353,81 @@ func TestDenyBlock_EscapesARuleItDidNotWrite(t *testing.T) {
 	// whatever it likes, and this block renders it verbatim by design — so
 	// "verbatim" must mean escaped, not injected.
 	out := render(t, "deny-block", Deny{
-		Rule: `deny <script>alert('pwned')</script>`,
+		Rule:     `deny <script>alert('pwned')</script>`,
+		Boundary: DenyBoundaryApply,
 	})
 	if strings.Contains(out, "<script>") {
 		t.Fatalf("a Policy rule was rendered as live markup: %s", out)
 	}
 	if !strings.Contains(out, "&lt;script&gt;") {
 		t.Errorf("the rule was not escaped: %s", out)
+	}
+}
+
+// TestDenyBlock_WithNoBoundaryRefusesToRender is AC5: a Deny built with no
+// DenyBoundary must not render silently with an empty boundary paragraph. The
+// zero value is not a path (DenyBoundaryUnset), so BoundaryExplanation errors
+// and html/template aborts the whole "deny-block" execution.
+func TestDenyBlock_WithNoBoundaryRefusesToRender(t *testing.T) {
+	err := componentsTmpl.ExecuteTemplate(io.Discard, "deny-block", Deny{Rule: "deny x"})
+	if err == nil {
+		t.Fatal("a Deny with no Boundary rendered without error")
+	}
+	if !strings.Contains(err.Error(), "DenyBoundary") {
+		t.Errorf("the render error does not name DenyBoundary: %v", err)
+	}
+}
+
+// TestDenyBlock_RendersThePreflightBoundary proves the preflight framing is
+// reachable from the block at all — it is the only exercise of that text
+// until #438 builds a plan-path composer with a live construction site.
+func TestDenyBlock_RendersThePreflightBoundary(t *testing.T) {
+	out := render(t, "deny-block", Deny{Rule: "deny x", Boundary: DenyBoundaryPreflight})
+	if !strings.Contains(out, escapedInATextNode(t, capability.PolicyDenyVerdictExplanation)) {
+		t.Errorf("the deny block does not carry the preflight boundary explanation: %s", out)
+	}
+}
+
+// TestDenyBlock_CarriesNoConsoleProseOfItsOwn is #631's standing guard, and it
+// is a BUDGET rather than a phrase match on purpose: the paraphrase this issue
+// removed drifted because two tests matched a phrase, and a phrase match cannot
+// see a NEW paraphrase, a re-wrapped one, or one spelled "on the machine".
+//
+// Subtract the capability layer's text from the rendered block and what remains
+// is the Console's own copy: markup, the clip note, two link labels, and this
+// fixture's short field values. 693 bytes today; the budget is 800.
+//
+// WHAT IT HOLDS: a CEILING on the block's own copy, not a ban on it. The copy
+// cannot grow past the 107 bytes of headroom without a deliberate budget bump,
+// which is enough to catch the 138-byte paraphrase this change removed — or any
+// sentence of that length, in any spelling or line-wrapping. A SHORT new
+// sentence still fits: a 46-byte one ("Policy lives on the Node; Relay only
+// reads it.") was injected into the block during review and this guard passed.
+// Do not cite it as proof that the block carries no Console prose.
+// WHAT IT DOES NOT HOLD: prose anywhere else in the package. Three boundary
+// paraphrases live outside this block (node.go's Effective Policy panel, and a
+// fourth commissioned in docs/design/console/07) and are tracked in #651. This
+// guard says nothing about them and must not be read as though it did.
+func TestDenyBlock_CarriesNoConsoleProseOfItsOwn(t *testing.T) {
+	const budget = 800
+
+	// The maximal block: every optional slot filled, so the clip note and both
+	// link labels are inside the budget too.
+	out := render(t, "deny-block", Deny{
+		NodeID:        "node-7f2a",
+		OperationName: "service.restart",
+		Rule:          `deny service.restart where args.unit != "nginx"`,
+		RuleClipped:   true,
+		File:          "/etc/relay/policy.toml",
+		Line:          42,
+		PolicyHref:    "/console/nodes/node-7f2a#policy",
+		DraftRuleHref: "/console/policy/fix?deny=abc",
+		Boundary:      DenyBoundaryApply,
+	})
+
+	mine := withoutTheSharedBoundary(t, out, capability.PolicyDenyExplanation)
+	if len(mine) > budget {
+		t.Errorf("the deny block's own prose is %d bytes, over the %d-byte budget: %s", len(mine), budget, mine)
 	}
 }
 
@@ -353,8 +463,8 @@ func TestPlan_CountsVerdictsAndRendersEveryDeny(t *testing.T) {
 		Hash:      "sha256:aaa",
 		Verdicts: []PlanVerdict{
 			{NodeID: "node-1", Allowed: true},
-			{NodeID: "node-2", Allowed: false, Deny: &Deny{NodeID: "node-2", Rule: "deny proc.list"}},
-			{NodeID: "node-3", Allowed: false, Deny: &Deny{NodeID: "node-3", Rule: "deny everything"}},
+			{NodeID: "node-2", Allowed: false, Deny: &Deny{NodeID: "node-2", Rule: "deny proc.list", Boundary: DenyBoundaryPreflight}},
+			{NodeID: "node-3", Allowed: false, Deny: &Deny{NodeID: "node-3", Rule: "deny everything", Boundary: DenyBoundaryPreflight}},
 		},
 	}
 	if p.AllowedCount() != 1 || p.DeniedCount() != 2 {
@@ -450,7 +560,7 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 		"label-chip":  Label{Namespace: NamespaceRelay, Key: "quarantine"},
 		"trust-chip":  Trust{Text: "mike", Verified: true},
 		"outcome-bar": NewOutcomeBar([]OutcomeCount{{jobs.OutcomeSuccess, 3}, {jobs.OutcomeDeniedByPolicy, 1}}),
-		"deny-block":  Deny{Rule: "deny x", File: "p.toml", Line: 1},
+		"deny-block":  Deny{Rule: "deny x", File: "p.toml", Line: 1, Boundary: DenyBoundaryApply},
 		"plan":        Plan{Selector: "s", Matched: 1, Cap: 5, Hash: "h"},
 		"step-up":     StepUp{Action: "a", FormAction: "/x", CSRFToken: "t"},
 		"pin-bar": pinState{

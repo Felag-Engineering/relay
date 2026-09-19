@@ -179,7 +179,10 @@ anyone is looking.
 **The deny block** (composer, approval, Job detail, Policy fix). The showpiece. The rule verbatim,
 in mono, with file and line, plus two links: the Node's effective Policy, and drafting the rule
 that would allow it. An operator must get from *denied* to *I know exactly which file to change*
-without leaving the Console — and the Console must be visibly unable to change it for them.
+without leaving the Console — and the Console must be visibly unable to change it for them. The
+footer that says so is the capability layer's shared refusal text — the same bytes MCP and the
+Control API return in `refusal_explanation` — not Console copy, and it is never re-authored per
+screen.
 
 **Verified / asserted chips** (everywhere). See the trust lane above.
 

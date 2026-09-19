@@ -907,6 +907,7 @@ func agentCallFrom(f trailFacts) agentCall {
 			// its doc comment for why that is deliberate and permanent.
 			Rule:       denyRuleOffLane(f),
 			PolicyHref: "/console/nodes/" + f.NodeID,
+			Boundary:   DenyBoundaryApply,
 		}
 	}
 	// Reason is rendered ONLY for the approval family: every other kind's

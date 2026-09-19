@@ -16,11 +16,13 @@ package console
 // compromised Node can put anything it likes in a `node:` label.
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
 	"sort"
 	"strings"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -301,6 +303,29 @@ func OutcomeLabel(o jobs.Outcome) string {
 
 // --- The deny block ---------------------------------------------------------
 
+// DenyBoundary says which of the capability layer's two refusal framings this
+// deny renders: the apply path (a Task was dispatched and the Node refused it)
+// or a Policy preflight (the Node reports it WOULD refuse; nothing was
+// dispatched). It exists so the Console SELECTS a framing and never AUTHORS
+// one — the sentence is the capability layer's, one spelling for every adapter
+// (invariant 10; refusal.go's rule 2).
+//
+// The zero value is deliberately not a path: BoundaryExplanation fails on it
+// rather than returning "", so a block with no boundary text cannot render.
+//
+// What that does NOT buy, stated because the name suggests more than it does:
+// it catches an UNSET boundary only. A Deny given the WRONG one — apply's
+// past-tense "nothing executed" on a preflight verdict — renders silently and
+// correctly-looking. Nothing here can catch that, and no test in this package
+// does.
+type DenyBoundary int
+
+const (
+	DenyBoundaryUnset DenyBoundary = iota
+	DenyBoundaryApply
+	DenyBoundaryPreflight
+)
+
 // Deny is the product's pitch rendered: one refusal, with the rule that made
 // it, verbatim.
 //
@@ -345,6 +370,11 @@ type Deny struct {
 	// DraftRuleHref links to the Policy-fix screen (spec 07) pre-loaded with
 	// this deny — one deny in, one minimal rule out.
 	DraftRuleHref string
+
+	// Boundary selects the capability layer's framing for this deny. It has no
+	// usable zero value — see DenyBoundary. Note that it is a KEYED-literal
+	// field like every other: omitting it compiles, and fails at render.
+	Boundary DenyBoundary
 }
 
 // Location renders "file:line", or just the file when no line is known.
@@ -356,6 +386,37 @@ func (d Deny) Location() string {
 		return d.File
 	}
 	return fmt.Sprintf("%s:%d", d.File, d.Line)
+}
+
+// BoundaryExplanation is the Relay's framing of the boundary that refused this
+// — the SAME BYTES the MCP and Control API adapters emit in
+// refusal_explanation (capability/refusal.go). The Console renders it verbatim
+// and adds nothing: a Console-specific sentence would be the third spelling
+// the shared mapping exists to prevent, and the Console's real advantage over
+// an MCP caller is expressed as affordances — PolicyHref, and DraftRuleHref
+// once spec 07 is built — not as prose.
+//
+// It returns an error rather than "" so an unset Boundary aborts the render:
+// renderScreen buffers and returns a 500 without a body byte, and logs the
+// error (screen.go). The message is deliberately value-free — it reaches a log
+// line, so anything interpolated here is logged.
+func (d Deny) BoundaryExplanation() (string, error) {
+	var text string
+	switch d.Boundary {
+	case DenyBoundaryApply:
+		text = capability.RefusalExplanation(jobs.OutcomeDeniedByPolicy)
+	case DenyBoundaryPreflight:
+		text = capability.VerdictExplanation(capability.VerdictDeny)
+	default:
+		return "", errors.New("deny block built with no DenyBoundary")
+	}
+	// Unreachable today — both mappings return non-empty compile-time constants.
+	// It catches a future refusal.go edit that empties either one, which would
+	// otherwise reopen this issue silently.
+	if text == "" {
+		return "", errors.New("the capability layer returned no boundary explanation")
+	}
+	return text, nil
 }
 
 // --- The Plan renderer ------------------------------------------------------
@@ -619,7 +680,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
     {{with .PolicyHref}}<a href="{{.}}">See this Node&#39;s effective Policy</a>{{end}}
     {{with .DraftRuleHref}}<a href="{{.}}">Draft the rule that would allow this</a>{{end}}
   </div>
-  <p class="denynote">Relay cannot change this. Policy is rooted on the Node and the Relay may only read it — take the drafted rule to your config management.</p>
+  <p class="denynote">{{.BoundaryExplanation}}</p>
 </div>{{end}}
 
 {{define "plan"}}<section class="plan" aria-label="Plan">

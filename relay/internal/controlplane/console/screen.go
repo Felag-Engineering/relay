@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -117,6 +118,11 @@ func newScreen(name, body string) *template.Template {
 func renderScreen(w http.ResponseWriter, p Page, tmpl *template.Template, data any) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
+		// Template exec errors carry the template name and the SOURCE TEXT of the
+		// failing action (e.g. <.BoundaryExplanation>), never rendered values — so
+		// a template-reachable method must keep its error messages value-free, or
+		// whatever it interpolates is logged here. See Deny.BoundaryExplanation.
+		slog.Error("console screen render failed", "screen", tmpl.Name(), "error", err)
 		http.Error(w, "the Console could not render this page", http.StatusInternalServerError)
 		return
 	}

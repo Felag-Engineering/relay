@@ -531,6 +531,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 			// beats inventing a rule that was never quoted.
 			Rule:       denyExplanation(rec),
 			PolicyHref: "/console/nodes/" + rec.NodeID,
+			Boundary:   DenyBoundaryApply,
 		}
 	}
 	return t, true
