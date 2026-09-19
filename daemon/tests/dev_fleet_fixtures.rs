@@ -472,6 +472,67 @@ fn svc_restart_is_in_the_web_vocabulary_and_absent_from_db() {
     assert_eq!(code, 2, "db should DENY svc.restart:\n{out}");
 }
 
+/// The hermetic half of #622's discovery read (the live half — that the row
+/// really disappears after the out-of-band kill — is a human's job against a
+/// real fleet; see docs/dev-fleet.md). `file.read /proc/net/tcp` is how the
+/// fault (a killed `busybox httpd`) is meant to be FOUND: it is read-class,
+/// unparked, and the web fixture's wildcard `file.read` allow covers it like
+/// any other path. This proves the daemon's own Policy engine — the thing
+/// that actually gates dispatch — agrees, both for the raw path an operator
+/// would type and for `/proc/1/net/tcp`, an instance of the resolved form
+/// ADR-0018 layer 2 re-checks (`file.read` resolves the *target* path, which
+/// in general is `/proc/<pid>/net/tcp` for whatever PID is doing the
+/// reading; `1` is not assumed for daemons in general — it is what this dev
+/// fleet's daemon happens to be, because docker/daemon-entrypoint.sh execs it
+/// so it becomes the container's PID 1). Both ALLOW identically here
+/// — this fixture Policy draws no distinction between them — so this is not
+/// evidence that layer 2 is a no-op in general, only that it is not the
+/// thing that would refuse this particular read.
+#[test]
+fn web_policy_allows_reading_the_socket_table() {
+    let fx = copy_fixtures();
+    let templates = fx.templates_dir.to_str().unwrap();
+
+    for path in ["/proc/net/tcp", "/proc/1/net/tcp"] {
+        let (code, out) = policy_check(&[
+            fx.policy_web.to_str().unwrap(),
+            "--templates",
+            templates,
+            "--would-allow",
+            "operation",
+            "file.read",
+            &format!("path={path}"),
+        ]);
+        assert_eq!(code, 0, "web should ALLOW file.read {path}:\n{out}");
+        assert!(out.contains("would-allow: ALLOW"), "{out}");
+    }
+
+    // The bastion fixture's file.read allow is the single exact path
+    // /etc/os-release (see bastion_allows_exactly_the_documented_read_and_nothing_else):
+    // it has an allow rule for file.read, just not one that matches THIS
+    // path, so /proc/net/tcp is refused by "no allow rule matched args" —
+    // not the plain deny-by-default a Node with no file.read allow at all
+    // would report for the same call.
+    let (code, out) = policy_check(&[
+        fx.policy_bastion.to_str().unwrap(),
+        "--templates",
+        templates,
+        "--would-allow",
+        "operation",
+        "file.read",
+        "path=/proc/net/tcp",
+    ]);
+    assert_eq!(
+        code, 2,
+        "bastion should DENY file.read /proc/net/tcp:\n{out}"
+    );
+    assert!(
+        out.contains("no allow rule matched args")
+            && out.contains("allow rules exist for other arguments"),
+        "{out}"
+    );
+}
+
 /// The replacement for the issue's requested `--strict` gate (BLOCKING 3 /
 /// deviation (c) in the implementation plan): `--strict` also emits a summary
 /// line (`error: lint warnings present and --strict was given`) that names no

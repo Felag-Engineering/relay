@@ -65,6 +65,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-security-surface
 
+      # scripts/demo-fleet.sh's reset/fault guard, proved against a stubbed docker
+      # (#622). Shell only — no python3, no Docker — so it runs here alongside the
+      # other guard self-test rather than in a toolchain job.
+      - name: Demo-fleet reset guard self-test
+        if: ${{ !cancelled() }}
+        run: make test-demo-fleet
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:

@@ -14,6 +14,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
+        demo-build demo-reset demo-fault demo-up demo-down demo-creds test-demo-fleet \
         fuzz-relay fuzz-daemon \
         verify opschema-check openapi-check gen-apiclient apiclient-check
 
@@ -21,9 +22,10 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # `make build test lint` is the fast inner loop. It is NOT what CI runs, and
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
-# absence check, the security-surface gate self-test, the strict-umask test
-# lane, and both cross-binary suites. Work can pass the inner loop and fail CI
-# on a class of problem the author never looked at.
+# absence check, the security-surface gate self-test, the demo-fleet reset
+# guard self-test, the strict-umask test lane, and both cross-binary suites.
+# Work can pass the inner loop and fail CI on a class of problem the author
+# never looked at.
 #
 # `make verify` closes that gap: one target, mirroring .github/workflows/ci.yml
 # gate for gate, so "it passes locally" means the same thing it means in CI.
@@ -39,7 +41,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-integration test-crossbinary
+        test-demo-fleet test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
 
@@ -182,6 +184,12 @@ docs-check:
 # Runs against a throwaway fixture repo; touches nothing in this working tree.
 test-security-surface:
 	bash scripts/security-surface-test.sh
+
+# Proves scripts/demo-fleet.sh's guard refuses BEFORE any docker call unless the target
+# is the relay-demo compose project on a local engine (#622). Hermetic: docker is a
+# stub under a throwaway WORKDIR, so this touches no real Docker engine.
+test-demo-fleet:
+	bash scripts/demo-fleet-test.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
@@ -430,6 +438,55 @@ dev-fleet-logs:
 # TLS. Run after dev-fleet-up.
 dev-fleet-creds:
 	bash scripts/dev-fleet-mcp.sh init
+
+## --- demo fleet (DEV-ONLY; `--profile demo`, #622) ---
+# A FIXED, guarded compose project — `relay-demo`, never the checkout-directory-named
+# default `dev-fleet-*` targets above use — driven entirely through scripts/demo-fleet.sh.
+# Every subcommand refuses before any Docker call except two read-only checks (the
+# local-engine context endpoint, and a check that no other checkout already owns the
+# project) unless the target is that one project on a local engine
+# (scripts/demo-fleet-test.sh, test-demo-fleet, proves the refusal). Never invoked by
+# CI. `demo-reset` NEVER builds — run `demo-build` first (and again after any code
+# change); it is the only target that does.
+demo-build:
+	bash scripts/demo-fleet.sh build
+
+# DEMO_FAULT_NODES overrides the default fault targets (daemon-4, daemon-6); e.g.
+# `make demo-fault DEMO_FAULT_NODES="daemon-2 daemon-9"`. Exported, not spliced into
+# the recipe text: Make hands it to the recipe's shell as a real environment
+# variable via execve, so a value carrying a shell metacharacter (';', a backtick,
+# '$(') reaches the script as an opaque string, never as text a shell re-parses
+# (#622 security review S2). The script splits it on whitespace and validates every
+# token against the derived web roster before any exec — see cmd_fault.
+export DEMO_FAULT_NODES ?=
+
+demo-reset:
+	bash scripts/demo-fleet.sh reset
+
+demo-fault:
+	bash scripts/demo-fleet.sh fault
+
+demo-down:
+	bash scripts/demo-fleet.sh down
+
+# Bring the demo fleet back up after `demo-down`, WITHOUT wiping any volume —
+# the opposite of `demo-reset` (no `-v`, no build, and no image precheck the
+# way `demo-reset` has one). With `--pull never` the only loud failure is a
+# missing image — run `demo-build` once first. This is NOT "no credential
+# mint": see `demo-creds` below for what `up` does and does not do to them.
+demo-up:
+	bash scripts/demo-fleet.sh up
+
+# Copy the CURRENT control-plane credentials (and CA) out to the gitignored
+# .dev-fleet/ — this mints nothing itself (scripts/dev-fleet-mcp.sh init is a
+# `docker compose cp` / `run --no-deps` read, nothing more). What mints is the
+# `credential`/`approver`/`console-admin`/`console-password` one-shots: they
+# have `restart: no`, but a stopped one-shot container is STARTED again by
+# `compose up` — including a plain `demo-up` — which re-runs its entrypoint
+# and re-mints into the (persisted) volume. Run `demo-creds` after EITHER
+# `demo-reset` or `demo-up` to pick up whatever was most recently minted.
+demo-creds:
+	bash scripts/demo-fleet.sh creds
 
 clean:
 	cd relay && go clean ./... || true
