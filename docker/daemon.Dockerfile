@@ -54,14 +54,24 @@ COPY --from=build \
 # an unprivileged user and rejected — is the ADR-0002 "Policy arrives with the
 # image, never over the wire" option.
 #
-# There are TWO Policy fixtures, both baked into this one image; compose
-# picks which one each daemon reads via RELAY_POLICY_PATH (docker-compose.yml)
-# — the `role=web` Nodes read policy.web.toml (which carries the demo
-# service's raw-exec allow), the `role=db` Node reads policy.db.toml (which
-# omits it, so deny-by-default refuses the repair there). The daemon has no
-# Policy include mechanism, so divergence means two files rather than one.
-COPY --chmod=0644 docker/fixtures/policy.web.toml /etc/relay-daemon/policy.web.toml
-COPY --chmod=0644 docker/fixtures/policy.db.toml  /etc/relay-daemon/policy.db.toml
+# There are now THREE Policy fixtures, all baked into this one image; compose
+# picks which one each daemon reads via RELAY_POLICY_PATH (docker-compose.yml).
+# The daemon loads only the one file its own RELAY_POLICY_PATH names, so a
+# fixture baked in but unread by the default (non-demo) profile changes
+# nothing about that profile's behaviour:
+#   - policy.web.toml — the `role=web` Nodes: demo service allow (structured
+#     service.restart + the dev-fleet-service raw-exec allow) plus the demo
+#     Template pack's vocabulary.
+#   - policy.db.toml — the `role=db` Nodes: neither the demo service allow nor
+#     the Template vocabulary; deny-by-default refuses the repair here.
+#   - policy.bastion.toml — the `role=bastion` Node, demo-profile only: the
+#     narrowest of the three — exactly one `file.read` path, no
+#     `service.restart`, and no `[raw_exec]` section at all.
+# The daemon has no Policy include mechanism, so divergence means separate
+# files rather than one.
+COPY --chmod=0644 docker/fixtures/policy.web.toml     /etc/relay-daemon/policy.web.toml
+COPY --chmod=0644 docker/fixtures/policy.db.toml      /etc/relay-daemon/policy.db.toml
+COPY --chmod=0644 docker/fixtures/policy.bastion.toml /etc/relay-daemon/policy.bastion.toml
 
 # The demo Template pack (#389) — loaded and Policy-enforced on every Node
 # (one image, one vocabulary; only Policy diverges), but not yet dispatchable

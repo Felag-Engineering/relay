@@ -1,23 +1,34 @@
 # Relay dev fleet — DEV-ONLY (docs/dev-fleet.md).
 #
-# One `relay` container plus three `relay-daemon` containers that auto-enroll
-# over CA-pinned mTLS and are drivable through the control plane (MCP + /api/v1).
-# This is a laptop demo / dogfooding environment; it makes NO production posture
-# claims. Docker is never a CI dependency — this file only affects
-# `docker compose`, not `make build/test/lint`.
+# One `relay` container plus three `relay-daemon` containers by default (nine
+# under `--profile demo`, see below) that auto-enroll over CA-pinned mTLS and
+# are drivable through the control plane (MCP + /api/v1). This is a laptop
+# demo / dogfooding environment; it makes NO production posture claims.
+# Docker is never a CI dependency — this file only affects `docker compose`,
+# not `make build/test/lint`.
+#
+# The `demo` compose profile (#452) adds six more daemons, `daemon-4..9`, for
+# a fleet-scale stage demo — varied `node:` labels, a third Policy fixture,
+# and a fan-out that returns `success` beside `denied_by_policy`. It is
+# strictly additive: every one of the six carries `profiles: ["demo"]`, so a
+# plain `docker compose up` still means exactly what it means today, and
+# nothing above `daemon-3` is touched. See "The demo profile" in
+# docs/dev-fleet.md.
 #
 # Startup order:
 #   relay (healthy) -> credential (mints the control-plane credential with
 #   `relay bootstrap-token`) -> approver (creates the dev-approver Account that
 #   the approval gate names as its audience) + bootstrap (mints a relay:
 #   Enrollment Token + exports the public CA cert) -> daemon-1..3 (enroll, then
-#   go healthy).
+#   go healthy); daemon-4..9 join them the same way under `--profile demo`.
 
-# The three daemon services are byte-identical except for their per-Node
-# environment and their private state volume. This anchor factors out ONLY the
-# non-mapping fields they share. NOTE: the YAML merge key `<<` REPLACES a
-# mapping wholesale (it does not deep-merge), so each daemon's `environment:` and
-# `volumes:` are written inline below — they must never live in this anchor.
+# All nine daemon services are byte-identical except for their per-Node
+# environment, their private state volume, and — for `daemon-4..9`, the
+# `demo` profile's Nodes — their `profiles:` key. This anchor factors out
+# ONLY the non-mapping fields they share. NOTE: the YAML merge key `<<`
+# REPLACES a mapping wholesale (it does not deep-merge), so each daemon's
+# `environment:` and `volumes:` are written inline below — they must never
+# live in this anchor.
 x-daemon-base: &daemon-base
   build:
     context: .
@@ -296,6 +307,123 @@ services:
       - bootstrap-shared:/bootstrap:ro
       - daemon3-state:/var/lib/relay-daemon
 
+  # `demo` profile only (#452). daemon-4 is `role=web, env=prod`: demo
+  # service + policy.web.toml, exactly like daemon-1/daemon-2.
+  daemon-4:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-4"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-4"
+      RELAY_NODE_LABELS: "role=web,env=prod"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon4-state:/var/lib/relay-daemon
+
+  # `demo` profile only (#452). daemon-5 is `role=web, env=prod`: demo
+  # service + policy.web.toml, exactly like daemon-1/daemon-2/daemon-4.
+  daemon-5:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-5"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-5"
+      RELAY_NODE_LABELS: "role=web,env=prod"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon5-state:/var/lib/relay-daemon
+
+  # `demo` profile only (#452). daemon-6 is `role=web, env=staging`: demo
+  # service + policy.web.toml, the same Policy as daemon-1/2/4/5 with a
+  # different `env` label.
+  daemon-6:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-6"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-6"
+      RELAY_NODE_LABELS: "role=web,env=staging"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon6-state:/var/lib/relay-daemon
+
+  # `demo` profile only (#452). daemon-7 is `role=db, env=prod`: no demo
+  # service, policy.db.toml, exactly like daemon-3 with an added `env` label.
+  daemon-7:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-7"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.db.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-7"
+      RELAY_NODE_LABELS: "role=db,env=prod"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon7-state:/var/lib/relay-daemon
+
+  # `demo` profile only (#452). daemon-8 is `role=bastion, env=prod` — THE
+  # NARROW NODE the demo's refusal beat depends on: no demo service, and
+  # policy.bastion.toml, the strictly-narrowest fixture (exactly one
+  # `file.read` path, no `service.restart`, no `[raw_exec]` section at all).
+  daemon-8:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-8"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.bastion.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-8"
+      RELAY_NODE_LABELS: "role=bastion,env=prod"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon8-state:/var/lib/relay-daemon
+
+  # `demo` profile only (#452). daemon-9 is `role=web, env=staging`: demo
+  # service + policy.web.toml, the same shape as daemon-6.
+  daemon-9:
+    <<: *daemon-base
+    profiles: ["demo"]
+    hostname: "dev-node-9"
+    environment:
+      RELAY_ADDR: "https://relay:7654"
+      RELAY_DOMAIN: "relay"
+      RELAY_CA_BUNDLE_PATH: "/bootstrap/ca-cert.pem"
+      RELAY_STATE_DIR: "/var/lib/relay-daemon"
+      RELAY_POLICY_PATH: "/etc/relay-daemon/policy.web.toml"
+      RELAY_TEMPLATE_DIR: "/etc/relay-daemon/templates.d"
+      HOSTNAME: "dev-node-9"
+      RELAY_NODE_LABELS: "role=web,env=staging"
+    volumes:
+      - bootstrap-shared:/bootstrap:ro
+      - daemon9-state:/var/lib/relay-daemon
+
 # All named => persist across `compose down`; wiped only with `compose down -v`.
 volumes:
   relay-data:
@@ -306,3 +434,10 @@ volumes:
   daemon1-state:
   daemon2-state:
   daemon3-state:
+  # `demo` profile only (#452).
+  daemon4-state:
+  daemon5-state:
+  daemon6-state:
+  daemon7-state:
+  daemon8-state:
+  daemon9-state:

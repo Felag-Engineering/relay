@@ -1,0 +1,69 @@
+# Relay dev-fleet — relay-daemon Policy fixture (the `role=bastion` Node)
+#
+# DEV-ONLY. This is a fixture Policy for the local `docker compose` dev fleet
+# (docs/dev-fleet.md), not a production Policy.
+#
+# SECURITY / ADR-0002: Policy is Node-rooted and remotely-immutable. In the dev
+# fleet this file is baked into the daemon image (COPY => owned by root:root,
+# mode 0644), so the daemon's fail-closed loader (which refuses any Policy file
+# that is group/world-writable or owned by a non-root, non-euid user) accepts
+# it. The Policy therefore arrives *with the image* and is enforced locally by
+# the daemon — it never travels over the wire and the Relay can never change it.
+#
+# The syntax and semantics (deny-by-default, deny-beats-allow, positional
+# argument matching, "*" wildcard) are documented in daemon/policy.example.toml.
+#
+# THIS IS THE NARROW ONE. Unlike policy.web.toml and policy.db.toml — which are
+# intentionally near-identical siblings (see the three-way note at the top of
+# each) — this fixture exists only to deny. It is deliberately NOT
+# near-identical to either sibling and shares no maintenance obligation with
+# them: an edit that widens it deletes the demo's refusal beat (the fan-out
+# whose one mixed result — success beside denied_by_policy — is the most
+# persuasive artifact the demo produces). If you are tempted to add an allow
+# here, stop and ask whether the beat still lands without it.
+
+# Allow `system.facts` with no arguments, so the fleet-wide happy-path read
+# stays all-success at every Node, including this one.
+[[operation]]
+name = "system.facts"
+allowed_args = []
+
+# Allow `file.read` for EXACTLY `/etc/os-release` — no wildcard. The
+# documented `file.read /etc/os-release` walkthrough still succeeds here,
+# while any OTHER `file.read` (including the demo service's state file) falls
+# through to deny-by-default. This exact-path allow, not a wildcard, is the
+# single most important divergence from the other two fixtures.
+#
+# This allow is silently coupled to `/etc/os-release` being a REGULAR FILE:
+# ADR-0018 layer 2 re-checks the *resolved* path, and today the Dockerfile
+# `COPY`s a regular file, so the exact-path match holds. If a future base
+# image ever makes it a symlink (e.g. to `/usr/lib/os-release`, as some
+# distros do), daemon-8 alone starts denying a read every other Node in the
+# fleet allows — which reads on stage as a Policy bug, not the packaging
+# change that actually caused it.
+[[operation]]
+name = "file.read"
+allowed_args = [["/etc/os-release"]]
+
+# The VERDICT here is unchanged whether or not this rule exists: `/etc/shadow`
+# sits outside the one `file.read` allow above, so deny-by-default would
+# refuse it anyway. But the deny pass runs FIRST on every call
+# (`daemon/src/policy.rs:1162`, `// --- 1. Deny pass (deny-beats-allow,
+# evaluated first) ---`, before the allow pass at `:1200`), so this rule IS
+# reached and evaluated on every `file.read` — and today it is what decides
+# `/etc/shadow`, changing the attributed deciding rule and the audited reason
+# from deny-by-default to this explicit rule. It bites for real the moment a
+# future edit widens the allow above (to "*", or to a directory):
+# deny-beats-allow keeps `/etc/shadow` refused rather than silently reopened
+# in between.
+[[deny]]
+name = "file.read"
+args = [["/etc/shadow"]]
+
+# No `service.restart` allow, no `svc.*` blocks, and no `[raw_exec]` section
+# at all. `daemon/src/policy.rs`'s `PolicyFile`/`RawExecRaw` default every
+# section to empty (`#[serde(default)]`), so an ABSENT `[raw_exec]` section is
+# deny-by-default for every raw command — the stronger and simpler statement
+# than an empty `allow = []`. This Node runs no demo service, has no repair
+# script to call, and refuses `service.restart` (structured) and every Raw
+# Exec (regex-gated) alike.

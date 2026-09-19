@@ -1,9 +1,10 @@
 # Local dev fleet (`docker compose`)
 
 A one-command, laptop-scale fleet: one **Relay** container plus three
-**relay-daemon** containers that auto-enroll over CA-pinned mTLS and are drivable
-through the control plane (MCP + `/api/v1`). It exists to demo and dogfood the
-real control path end to end.
+**relay-daemon** containers by default (nine under the optional `demo` compose
+profile — see [The demo profile](#the-demo-profile)) that auto-enroll over
+CA-pinned mTLS and are drivable through the control plane (MCP + `/api/v1`).
+It exists to demo and dogfood the real control path end to end.
 
 > **DEV-ONLY — no production posture.** This environment ships committed
 > credentials and a fixture Policy for convenience, runs everything on one host,
@@ -15,6 +16,10 @@ real control path end to end.
 > execution for anyone on your network. For the hardened production posture, see
 > `daemon/packaging/relay-daemon.service` and
 > [docs/operations/daemon-privilege-posture.md](operations/daemon-privilege-posture.md).
+> The `demo` compose profile ([below](#the-demo-profile)) is **more** exposed, not
+> less: it puts three times the Nodes behind the very same committed dev
+> credential and the same loopback-only control plane, so everything in this
+> banner applies to it with more force.
 
 ## Prerequisites
 
@@ -37,12 +42,14 @@ never invokes it.
 | `console-admin` | A one-shot helper that creates the `admin` **human** Account the Admin Console signs in. Then it exits. |
 | `console-password` | A one-shot helper that sets that Account's Console password with `relay console-password`. Separate from `console-admin` because the two acts carry different authorities — see [The Admin Console](#the-admin-console) below. Then it exits. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
+| `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`, that scale the fleet to nine Nodes with varied `node:role`/`node:env` labels and a third Policy fixture (`policy.bastion.toml`, the narrowest of the three). See [The demo profile](#the-demo-profile). |
 
 Security-relevant choices, made explicit:
 
 - **Policy arrives with the image, never over the wire (ADR-0002).** The fixture
-  Policy is now **two** files, `docker/fixtures/policy.web.toml` and
-  `policy.db.toml`, both `COPY`d into the daemon image root-owned `0644`,
+  Policy is now **three** files, `docker/fixtures/policy.web.toml`,
+  `policy.db.toml`, and `policy.bastion.toml` (the narrowest of the three,
+  `demo` profile only), all `COPY`d into the daemon image root-owned `0644`,
   passing the daemon's fail-closed loader (which refuses a group/world-writable
   Policy, or one owned by a non-root user). The Relay can query a Node's Policy
   fingerprint but can never change the Policy. The demo Template pack
@@ -137,7 +144,9 @@ $ docker compose up --build -d
 ```
 
 The Relay starts and creates its CA; `bootstrap` waits for the control API, mints
-the token, and exports the CA cert; then the three daemons enroll and go healthy.
+the token, and exports the CA cert; then the daemons enroll and go healthy —
+three by default, or nine under `--profile demo`
+([The demo profile](#the-demo-profile)).
 
 ```console
 $ docker compose ps
@@ -145,7 +154,7 @@ $ docker compose ps
 
 Wait until `daemon-1`, `daemon-2`, and `daemon-3` are `healthy` (each becomes
 healthy only after it has persisted its identity, i.e. after a successful
-enrollment).
+enrollment) — plus `daemon-4..9` under `--profile demo`.
 
 > **Troubleshooting.** The Relay healthcheck probes its control port with busybox
 > `nc -w1`. If your busybox build ships an `nc` without the `-w` (timeout) flag,
@@ -160,8 +169,8 @@ enrollment).
 $ docker compose logs relay
 ```
 
-You should see three Nodes join, each stamped `relay:env=dev` /
-`relay:fleet=dev`.
+You should see three Nodes join (nine under `--profile demo`), each stamped
+`relay:env=dev` / `relay:fleet=dev`.
 
 **Richer check — list the fleet registry over MCP.** The `list_nodes` tool
 returns each Node's `node_labels`, `relay_labels`, and reported
@@ -173,9 +182,10 @@ below (which needs the exported CA cert; see the next step), then call:
 list_nodes()
 ```
 
-The result is a `nodes` array with three entries, each carrying its `node_id`,
-`node_labels`, `relay_labels` (including `relay:env=dev` / `relay:fleet=dev`),
-and `policy_fingerprint`. `node:` and `relay:` labels come back as separate maps
+The result is a `nodes` array with three entries (nine under `--profile demo`),
+each carrying its `node_id`, `node_labels`, `relay_labels` (including
+`relay:env=dev` / `relay:fleet=dev`), and `policy_fingerprint`. `node:` and
+`relay:` labels come back as separate maps
 — never merged — so you can always tell which namespace a label was set from
 (ADR-0006). Pass an optional `selector` to filter, e.g.
 `list_nodes(selector="relay:env=dev")`.
@@ -283,8 +293,16 @@ Two rules:
 
 The fan-out threshold is deliberate: it leaves **both** paths reachable in one fleet. A
 mutate that resolves to a single Node runs straight through; the same mutate aimed
-fleet-wide parks. So `node:role=db` (one Node) executes, and `relay:env=dev` (three) waits
-for a human.
+fleet-wide parks. In the **default** (three-Node) fleet, `node:role=db` is one Node and
+runs straight through, while `relay:env=dev` (three) waits for a human.
+
+**This changes under `--profile demo` — read this before presenting.** At nine Nodes,
+`node:role=db` is **two** Nodes, and `min_fan_out: 2` is a floor, so that Selector now
+parks too. The straight-through beat survives only through Selectors that stay at
+fan-out 1: `node:role=bastion` (exactly one Node) and `node:role=db, node:env=prod`
+(exactly one Node, because `daemon-3` carries no `env` label at all). See
+[The demo profile](#the-demo-profile) for the full cardinality table and the exact
+commands.
 
 Security-relevant choices, made explicit:
 
@@ -353,7 +371,8 @@ audience.
 
 `busybox httpd` serves a real docroot on `127.0.0.1:8080`
 (`/srv/dev-fleet-service/www/index.html`), started by `docker/daemon-entrypoint.sh` on the
-Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`), and managed by the root-owned
+Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`, and — under `--profile demo` —
+`daemon-4`, `daemon-5`, `daemon-6`, `daemon-9`), and managed by the root-owned
 `/usr/local/bin/dev-fleet-service`. It has three subcommands and no more — there is
 deliberately no `stop` (see [Why `start|restart|status` and not `stop`](#why-startrestartstatus-and-not-stop)
 below):
@@ -386,7 +405,8 @@ Preflight without dispatching:
 raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
 ```
 
-returns per-Node verdicts allow/allow/deny — no parking, no execution.
+returns per-Node verdicts allow/allow/deny in the default fleet — 6 allow / 3 deny
+under `--profile demo` — no parking, no execution.
 
 The repair:
 
@@ -405,7 +425,10 @@ $ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/deci
 
 then **re-issue the same `raw_exec` call unchanged** — approving releases a Plan, it does
 not itself dispatch. Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
-`outcome=denied_by_policy`. The verdict is the daemon's, never the Relay's (ADR-0002 /
+`outcome=denied_by_policy` in the default fleet — or **6 × `success, exit_code: 0`**
+and **3 × `denied_by_policy`** (`daemon-3`, `daemon-7`, `daemon-8`) under
+`--profile demo` (predicted; see [The demo profile](#the-demo-profile) for what is
+tested versus predicted). The verdict is the daemon's, never the Relay's (ADR-0002 /
 ADR-0011).
 
 The independent read — proof that a mutate really happened, taken through a different
@@ -438,8 +461,9 @@ Template callable is tracked in
 [issue #626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626).
 
 After the rebuild, `list_nodes()` shows **two distinct `policy_fingerprint` values** across
-the fleet, because `daemon-3` now loads a different Policy file — the registry's drift
-signal, visible for real.
+the default fleet, because `daemon-3` now loads a different Policy file — the registry's
+drift signal, visible for real. Under `--profile demo` there are **three**, one per Policy
+fixture (see [The demo profile](#the-demo-profile)).
 
 ## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
 
@@ -475,6 +499,13 @@ $ docker compose down
 $ docker compose up -d
 ```
 
+**Under `--profile demo`, use the symmetric profiled form on both commands —
+`docker compose --profile demo down` / `--profile demo up -d`.** Whether a
+profile-less `down` stops profiled containers has varied across Compose
+versions and is not verified here; the profiled form is the one whose
+behaviour does not depend on that answer. Get this wrong mid-demo and `up`
+brings back **three** daemons, not nine.
+
 The CA and the SQLite store persist on `relay-data`, and each daemon's identity
 persists on its private `daemonN-state` volume, so the Nodes come back with the
 **same** `node_id`s and do not re-enroll (enrollment is idempotent — a daemon
@@ -485,6 +516,12 @@ To wipe everything (CA, identities, store) and start clean:
 
 ```console
 $ docker compose down -v
+```
+
+or, under the `demo` profile:
+
+```console
+$ docker compose --profile demo down -v
 ```
 
 ## Where to read the audit trail
@@ -505,6 +542,230 @@ summary, not a substitute for the store.
 A dedicated audit **read** surface (an API/MCP route to query the trail) does not
 exist yet — it is future work. For now the logs and the store are the trail.
 
+## The demo profile
+
+A fleet-scale `demo` compose profile (#452): the same fleet as above, plus six more
+daemons — `daemon-4..9` — for a total of nine Nodes with varied `node:` labels and a
+third, strictly narrower Policy fixture. It exists for a stage demo, where three Nodes
+do not read as a fleet and identical Policies produce no interesting refusal. It is
+purely additive: every service the profile adds carries `profiles: ["demo"]`, so a
+plain `docker compose up` still means exactly what it means above, and nothing in
+`daemon-1..3` is touched (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
+enforces this).
+
+### Start from a clean registry
+
+Do this first, and on its own, before anything else in this section:
+
+```console
+$ docker compose --profile demo down -v
+$ docker compose --profile demo up --build -d
+```
+
+Why `down -v` and not a plain `down`: `relay-data` is a **named** volume, so the
+Relay's registry — and every Node in it — survives a plain `compose down`. A Node
+from an earlier experiment is still in the registry, still matches Selectors, and
+would make `node:role=bastion` resolve to **two** Nodes instead of one — which parks
+the beat that is supposed to run straight through. `down -v` is the only thing that
+clears it. The cost is real and worth stating plainly: `-v` destroys the CA and every
+Node identity, so the next `up` re-enrolls the whole fleet from scratch.
+
+`COMPOSE_PROFILES=demo make dev-fleet-up` is the Makefile-shaped equivalent for `up`
+(the target is a bare `docker compose up --build -d`, so it inherits
+`COMPOSE_PROFILES` from the environment with no Makefile change needed).
+
+Stop the demo fleet with `docker compose --profile demo down` / `--profile demo down -v`.
+**`make dev-fleet-down` is a profile-less `docker compose down`** — whether that stops
+profiled containers has varied across Compose versions and is not verified here. Use
+the symmetric `--profile demo` form on every `down` so the answer never matters; see
+[Survive `down` / `up`](#survive-down--up) above and [Cleanup](#cleanup) below, both
+of which now give the profiled form too.
+
+### The nine-Node roster
+
+| service | hostname | `node:` labels | Policy fixture | demo service |
+| --- | --- | --- | --- | --- |
+| `daemon-1` | `dev-node-1` | `role=web` | `policy.web.toml` | yes (base, untouched) |
+| `daemon-2` | `dev-node-2` | `role=web` | `policy.web.toml` | yes (base, untouched) |
+| `daemon-3` | `dev-node-3` | `role=db` | `policy.db.toml` | no (base, untouched) |
+| `daemon-4` | `dev-node-4` | `role=web, env=prod` | `policy.web.toml` | yes |
+| `daemon-5` | `dev-node-5` | `role=web, env=prod` | `policy.web.toml` | yes |
+| `daemon-6` | `dev-node-6` | `role=web, env=staging` | `policy.web.toml` | yes |
+| `daemon-7` | `dev-node-7` | `role=db, env=prod` | `policy.db.toml` | no |
+| `daemon-8` | `dev-node-8` | `role=bastion, env=prod` | `policy.bastion.toml` | no |
+| `daemon-9` | `dev-node-9` | `role=web, env=staging` | `policy.web.toml` | yes |
+
+Totals: 6 `role=web`, 2 `role=db`, 1 `role=bastion`; 4 `env=prod`, 2 `env=staging`, 3 with
+no `env` label at all (the three base Nodes, deliberately unlabelled because their
+blocks stay untouched). `list_nodes()` shows three distinct `policy_fingerprint`
+values, one per Policy fixture — the SHA-256 of that file's raw bytes
+(`daemon/src/policy.rs`'s `policy_fingerprint`), computable locally with
+`sha256sum docker/fixtures/policy.{web,db,bastion}.toml` and not reproduced here
+because it changes on any edit to the file, including a comment.
+
+### What varies, and what cannot
+
+`node:` labels vary as the table above shows. Of the Facts a Node reports
+(`daemon/src/operations/system_facts.rs`), only `hostname` and `ip_addresses` can
+actually differ in a single-host Docker fleet — `os`, `arch`, and `kernel` all come
+from one shared kernel and one image, so every Node reports the same values for
+those regardless of label. Faking them (e.g. per-Node `/etc/os-release` variants) was
+rejected for the same reason the fake `systemctl` was rejected in the base fleet: a
+dev fleet that lies about what it is is worse than one that is legibly limited.
+
+`node:env=prod` / `node:env=staging` above are **Node-authored** labels (set by
+`RELAY_NODE_LABELS` in the compose environment, and forgeable by a compromised Node),
+while `relay:env=dev` is **Relay-authored** at enrollment. They are different
+namespaces on purpose (invariant 7), and `list_nodes()` always returns them as
+separate maps — never merged — so you can always tell which one you are looking at.
+(`tag:` selectors are not mentioned here: they are refused at parse today, a known
+gap tracked separately.)
+
+### Selector cardinalities
+
+| Selector | Nodes |
+| --- | --- |
+| `relay:env=dev` | 9 |
+| `node:role=web` | 6 |
+| `node:role=db` | 2 |
+| `node:role=bastion` | 1 |
+| `node:env=prod` | 4 |
+| `node:env=staging` | 2 |
+| `node:role=web, node:env=staging` | 2 |
+| `node:role=db, node:env=prod` | 1 |
+
+The three base Nodes carry no `node:env` label at all, on purpose — they predate this
+profile and their blocks are untouched.
+
+### Verification honesty
+
+**The outcomes below are predicted, not observed.** Every `denied_by_policy` verdict is
+underwritten by a hermetic test against the daemon's own evaluator
+(`daemon/tests/dev_fleet_fixtures.rs`); every `success` and every `failure` depends on
+`busybox httpd` and `dev-fleet-service` actually running in nine containers, which no
+test in this repository can prove and which nobody has yet stood up at n=9. **Run the
+beats once before presenting them, and correct this section with what you actually
+saw.** Each beat below is marked *(tested)* for the half a hermetic test covers, and
+*(predicted)* for the half that requires the real fleet.
+
+### The four beats
+
+**a. Fleet read, all success.**
+
+```
+run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/etc/os-release"})
+```
+
+→ 9 × `success` — the allow verdict is tested on all three fixtures
+(`all_three_policy_files_lint_clean_with_the_template_pack`,
+`bastion_allows_exactly_the_documented_read_and_nothing_else`); the nine-Node result is
+*(predicted)*. No approval: `read`-class.
+
+**b. Mixed read set, no approval at all.**
+
+```
+run_operation(selector="relay:env=dev", operation="file.read", args={"path":"/var/lib/dev-fleet-service/state"})
+```
+
+→ 6 × `success` (the web Nodes) *(predicted)*, 2 × `failure` (the db Nodes never had the
+file) *(predicted)*, 1 × `denied_by_policy` (the bastion, exact-path allow only)
+*(tested, `bastion_allows_exactly_the_documented_read_and_nothing_else`)*.
+
+**c. The mutate mixed set — the issue's acceptance criterion.**
+
+**On stage, immediately before this beat, run `list_nodes(selector="node:role=bastion")`
+and `list_nodes(selector="relay:env=dev")`.** This is the only instrument that reads the
+**real registry** rather than the compose file. If the first returns anything but one
+Node, or the second anything but nine, stop and `docker compose --profile demo down -v`
+— a stale Node changes the fan-out and the beat will not land.
+
+Then:
+
+```
+raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
+```
+
+→ parks under `dev-raw-exec-always-needs-a-human` with a `request_id` and a
+`plan_hash` — the gate rule matches every Raw Exec regardless of fan-out, as written
+in the fixture, though nobody has run this specific fan-out to watch it happen.
+Approve as `dev-approver`:
+
+```console
+$ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/decision \
+    '{"approve":true,"plan_hash":"<plan_hash>","reason":"repair the dev-fleet demo service"}'
+```
+
+then re-issue the same call unchanged → **6 × `success, exit_code: 0`** *(predicted)*
+and **3 × `denied_by_policy`** *(tested — `daemon-3` and `daemon-7` by the existing
+`raw_exec_verdicts_match_the_web_db_split`; `daemon-8` by
+`bastion_fixture_denies_every_raw_exec`, both in
+`daemon/tests/dev_fleet_fixtures.rs`)*. Preflight the same argv with `plan=true` first
+for 6 allow / 3 deny and no parking.
+
+**d. The straight-through (unparked) mutate at n=9.** Two Selectors, both fan-out 1:
+
+```
+run_operation(selector="node:role=db, node:env=prod", operation="service.restart", args={"unit":"nginx"})
+```
+
+→ dispatched with no human, terminates `failure` with
+`stderr="spawn systemctl: No such file or directory"` and no `exit_code` (the
+documented busybox limit from [The fixture limit, stated plainly](#the-fixture-limit-stated-plainly),
+not a defect) *(predicted)*; and
+
+```
+run_operation(selector="node:role=bastion", operation="service.restart", args={"unit":"nginx"})
+```
+
+→ dispatched with no human — the gate's fan-out-1 behavior, untested here,
+same as the first command above *(predicted)* — and refused by the Node:
+1 × `denied_by_policy` *(tested, `bastion_allows_exactly_the_documented_read_and_nothing_else`)*.
+
+### The threshold, stated on the page
+
+`min_fan_out: 2` is **unchanged**. At nine Nodes almost every interesting fan-out
+crosses it and parks — that is the correct lesson to draw, not a bug: raising the
+threshold to keep a straight-through beat at n=9 would mean a four-Node mutate running
+with no human, which is strictly weaker and teaches the audience the opposite of the
+point. The straight-through path stays reachable through the two fan-out-1 Selectors
+in beat (d) above. Every Raw Exec parks at any fan-out under a separate rule
+(`dev-raw-exec-always-needs-a-human`), and that rule is not retuned either.
+
+### Resource usage
+
+**PENDING MEASUREMENT (#452, AC 4).** No number below has been measured — there is no
+Docker daemon available in this repository's build environment, only the `docker`
+binary — and none should be invented or assumed. Whoever next has a machine with
+Docker Engine + Compose v2 should run the procedure below and fill this table in the
+same change that adjusts the roster, if adjustment turns out to be needed.
+
+**Procedure:**
+
+1. `docker compose down -v`, then `docker compose --profile demo up --build -d`; wait
+   until `docker compose ps` shows all nine daemons `healthy`; let it settle 60s.
+2. **Idle:** three samples 10s apart of
+   `docker stats --no-stream --format "table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}"`.
+   Record total memory, the `relay` container, and one representative web / db /
+   bastion daemon.
+3. **Fan-out:** sample the same command while running
+   `run_operation(selector="relay:env=dev", operation="system.facts")` in a tight loop,
+   and once more during the approved `raw_exec` restart across all nine. Record the peak.
+4. Record the machine (CPU, RAM, OS, Docker version) and the date beside the table —
+   numbers without the machine are noise.
+5. **If nine does not sit comfortably, drop `daemon-9` first, then `daemon-5`.**
+   `daemon-9` and `daemon-6` are both `role=web, env=staging` — dropping both would
+   take `node:role=web, node:env=staging` to zero while this section still publishes
+   it, so the second drop must be `daemon-5` (`role=web, env=prod`), not `daemon-6`.
+   Dropping `daemon-9` then `daemon-5` keeps every Selector in the cardinality table
+   above at 1 or more. Update, in the same change: this roster table and the compose
+   service + `daemonN-state` volume being dropped, the Selector cardinalities table and
+   every beat that says "9 ×" / "6 ×", and `daemon/tests/dev_fleet_fixtures.rs`'s
+   `ROSTER` and `a_single_node_selector_survives_at_nine_nodes`.
+
+| measured on | date | who | idle memory (total) | idle memory (`relay`) | idle memory (1 daemon) | fan-out peak memory | idle CPU | fan-out peak CPU |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ | _pending_ |
+
 ## Scaling the fleet
 
 Each daemon needs its **own** state volume for a stable per-Node identity across
@@ -513,11 +774,30 @@ copy a `daemon-N` service block (bump the name, `HOSTNAME`, and its
 `daemonN-state` volume, and register the new volume under `volumes:`). That copy
 silently inherits `RELAY_POLICY_PATH` and a `role=` label, both of which must
 be chosen deliberately — `policy.web.toml` + `role=web` to get the demo
-service and the repair allow, `policy.db.toml` + `role=db` to get neither.
+service and the repair allow, `policy.db.toml` + `role=db` to get neither,
+or `policy.bastion.toml` + `role=bastion` to get neither and nothing else
+either — see [The demo profile](#the-demo-profile) for the worked example of
+exactly this copy, done six times.
+
+**A new service must declare `profiles: ["demo"]`** (or whichever profile is
+appropriate) **or it changes the default fleet** — a plain `docker compose up`
+picks up every service that omits a `profiles:` key.
+`demo_profile_is_additive` (`daemon/tests/dev_fleet_fixtures.rs`) fails the
+build if a new service forgets it.
 
 ## Cleanup
 
 ```console
 $ docker compose down -v
+$ rm -rf ./.dev-fleet
+```
+
+**Under `--profile demo`, use the symmetric profiled form so the answer never
+matters** — same caveat as [Survive `down` / `up`](#survive-down--up) above:
+whether a profile-less `down -v` also stops the six `demo`-profile daemons has
+varied across Compose versions and is not verified here.
+
+```console
+$ docker compose --profile demo down -v
 $ rm -rf ./.dev-fleet
 ```
