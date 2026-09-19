@@ -72,6 +72,36 @@ relay-daemon, queryable by the Relay, never changeable over the wire. The last l
 of defense.
 _Avoid_: ACL, ruleset, permissions
 
+**Policy fragment**:
+One file in a Node's Policy directory, beside the Policy file. The daemon composes the Policy
+file and every fragment into one Policy with one Policy fingerprint; which file a rule came from
+affects only error messages (`docs/specs/policy.md`, `docs/specs/daemon-installation.md`).
+Written by config management, never over the wire.
+_Avoid_: policy file (for a single fragment), policy module, snippet, include
+
+**Catalog fragment**:
+A first-party, opt-in Policy fragment published in the **Policy Catalog**: named, versioned
+with the release under its `SHA256SUMS`, never edited downstream, and never widened in place — a
+fragment that permits more ships under a new name. Live on a Node only once config management
+places it in the Policy directory. Declares its **required daemon release**, the earliest
+relay-daemon that can load it — not the Relay's minimum-version gate (ADR-0014). The shipped
+default Policy is not a catalog fragment (ADR-0022).
+_Avoid_: preset, profile, playbook, role, pack (a **template pack** is a different thing)
+
+**Policy Catalog**:
+The set of catalog fragments, and the Console screen that arranges them into cohorts and exports
+the files and config-management variables to install them (`docs/specs/policy-catalog.md`).
+Ends at the clipboard: the Relay never applies Policy (invariant 2) and stores no arrangement.
+Unrelated to the **shipped read catalog**, which is a template pack.
+_Avoid_: Policy Author (the screen's former name), policy editor, policy store
+
+**Cohort** (Policy Catalog):
+A named group of Nodes that should run the same catalog fragments — in practice, one
+config-management group. Exists only on the Policy Catalog screen and in its export; the Relay
+stores none and it is never a Selector or a Label. Unrelated to the "emergency cohorts" of
+ADR-0006, a security-lane idea nothing yet defines.
+_Avoid_: group (unqualified), fleet segment, tier
+
 **Canonical form**:
 The single normalized spelling a value is reduced to — or required to already be in —
 before Policy matches it, so that one thing has one representation an operator's rules can

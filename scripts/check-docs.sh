@@ -59,7 +59,8 @@ for spec in "$SPEC_DIR"/*.md; do
   done
 
   # 3c. Every ID in the file uses the declared prefix
-  foreign=$(grep -oE '\b[A-Z]{2,3}-[0-9]+\b' "$spec" | grep -vE "^$prefix-" | sort -u | tr '\n' ' ')
+  # ADR-NNNN, SHA-256 and RFC-NNNN are citations, not claim IDs.
+  foreign=$(grep -oE '\b[A-Z]{2,3}-[0-9]+\b' "$spec" | grep -vE "^($prefix|ADR|SHA|RFC)-" | sort -u | tr '\n' ' ')
   [ -z "$foreign" ] || err "$name: claim IDs with a foreign prefix: $foreign"
 
   # 3d. Definitions: bold IDs in Behaviour/Refusals, first cell of Designed rows. Each once.

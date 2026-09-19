@@ -70,7 +70,7 @@ landed by hand, ahead of the loop.
 | 15 | [Accounts and API tokens](15-accounts-and-tokens.md) | v0.7.0 | yes |
 | 9 | [Add Nodes](09-add-nodes.md) | v0.7.0 | yes |
 | 16 | [Incident](16-incident-ladder.md) | v0.7.0 | yes |
-| 6 | [Policy Author](06-policy-author.md) | v0.7.0 | **no — generate-and-copy only** |
+| 6 | [Policy Catalog](06-policy-author.md) | v0.7.0 | **no — generate-and-copy only** |
 | 7 | [Policy fix, from a deny](07-policy-fix-from-deny.md) | v0.7.0 | **no — generate-and-copy only** |
 | 5 | [Composer and Plan](05-composer-and-plan.md) | v0.7.0 | yes |
 
@@ -100,7 +100,7 @@ are ADRs yet; several need to be — see [`99-open-decisions.md`](99-open-decisi
 | Agent activity is a **separate, call-grained, per-Account surface** with different retention — there are no sessions (ADR-0028) | 03 |
 | **No hold-before-dispatch timer.** Interruption is cancellation (ADR-0013) | 03 |
 | **Plan editing resets quorum**; approvers do not amend | 05, 08 |
-| Policy authoring is **generate-and-copy**; the Relay never transmits Policy | 06, 07 |
+| Policy authoring is **generate-and-copy**; the Relay never transmits Policy. Since 2026-09-18, 06 arranges first-party catalog fragments (`docs/specs/policy-catalog.md`) and emits no allow rule | 06, 07 |
 | `state:` labels are **Node-local and objective**; drift is an observation, not a label | 01, 02, 00 |
 | **`outdated`** matches the MCP wire field; `version-gated` was a synonym and is retired | all |
 | Stopping one agent: suspension **deferred** (ADR-0035 not adopted, #443); the instruments are token revoke and Freeze. There are no agent sessions to end — MCP is stateless | 03, 15, 16 |

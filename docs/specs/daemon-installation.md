@@ -21,7 +21,7 @@ they already run, from artifacts they can verify before executing.
 
 | Surface | What it does |
 |---|---|
-| **Release artifacts** | A `relay-daemon` binary under the release `SHA256SUMS`, a hardened systemd unit, and an example `EnvironmentFile` for config management to place |
+| **Release artifacts** | A `relay-daemon` binary under the release `SHA256SUMS`, a hardened systemd unit, and an example `EnvironmentFile` for config management to place. The Policy Catalog is published beside them; `policy-catalog.md` owns it |
 | **The customer's config management** | The only installer, configurer and upgrader. Ansible and shell are rendered as bundles; other tools are documented, not rendered |
 | **relay-daemon subcommands** | Offline only: `--version`, `policy check`, `dump-operation-schema` |
 | **Enrollment bundles** | A rendered artifact carrying the join string, minted with its Enrollment Token (`enrollment.md` owns minting) |
@@ -39,6 +39,13 @@ the operator has edited.
 That "place if absent" rule is what keeps a fresh Node from the worst first impression: enrolled,
 healthy, and refusing everything. A missing Policy still means deny-all at runtime — the safety
 net stays; installation simply avoids landing on it.
+
+**The Policy directory** *(designed for v0.7.0, with `policy-catalog.md`; #648)*. Beside the Policy
+file sits a directory of Policy fragments. The install creates it empty and never writes into it
+again; config management populates it, typically with catalog fragments. The daemon composes the
+Policy file and every fragment into one Policy with one Policy fingerprint, deny beating allow
+across all of them. The Policy file keeps every rule above — place if absent, the operator's from
+then on — so an existing Node with no fragments behaves exactly as it does today.
 
 There is no daemon container image. A component whose job is to hold the host's own authority is
 not delivered as a container.
@@ -87,7 +94,8 @@ grace, then exits. Anything still running when the grace expires is killed and r
 negotiable and an interrupted `pkg.install` is exactly the thing that must not run twice. The
 outcome has to be legible enough that an AI-agent treats it as terminal.
 
-A Policy or Template change is the same act: push the files, restart the unit. Dedup markers in
+A Policy or Template change is the same act: push the files — the Policy file, a fragment in
+the Policy directory, or a Template — and restart the unit. Dedup markers in
 the state directory carry at-most-once across the reconnect.
 
 Downgrades are permitted by installation; the Relay refuses to dispatch to a Node below the
@@ -113,8 +121,8 @@ not delivered by `curl | sh` (ADR-0033).
 
 | Refusal | Cause |
 |---|---|
-| Daemon refuses to start | Its identity or dedup store cannot be opened; a Policy or Template file is group- or world-writable; the state directory is unusable under the operator's umask |
-| Deny-all | No Policy file, or one that cannot be read |
+| Daemon refuses to start | Its identity or dedup store cannot be opened; a Policy or Template file, or once it exists a fragment in the Policy directory, is group- or world-writable (a fragment also when it is a symlink or not a regular file); the state directory is unusable under the operator's umask |
+| Deny-all | No Policy file, or one that cannot be read; once the Policy directory exists, also any fragment in it that cannot be read or parsed — one bad fragment invalidates the whole Policy |
 | Sandbox refusal | A Task needing privilege the unit does not grant — reported distinctly from a command that ran and failed |
 | Refused at the transport | A revoked Node that keeps dialling |
 | Below minimum version | The Relay declines to dispatch; installation itself permits any version |
@@ -176,7 +184,8 @@ Claims above with **no row**, and so nothing checking them:
 - What Policy may say and how it is evaluated — `policy.md`; what a Template may define —
   `operations-and-templates.md`.
 - The Relay host's own installation and configuration — `relay-configuration.md`.
-- Authoring Policy for a customer. Policy authoring stops at the clipboard (invariant 2).
+- Authoring Policy for a customer. Policy authoring stops at the clipboard (invariant 2); the
+  first-party catalog fragments this capability installs are defined in `policy-catalog.md`.
 - A hosted package repository, ruled out before v1.0.0 (ADR-0033).
 - Non-systemd init systems, non-Linux hosts and containers-as-hosts: unaddressed, not promised.
 
@@ -198,6 +207,9 @@ the cost of a second supported path; both are named in *Future work*. Accepted b
   overwrites an edited one (ADR-0033). The packaging decision that makes "place if absent"
   unnecessary.
 - **`relay-install.sh`**, shipped inside the release (ADR-0033).
+- **A first-party Ansible role** that installs the daemon and places catalog fragments named in a
+  group's variables. Until one exists, `policy-catalog.md`'s exported install task stands alone.
+  A thin role was closed as superseded once (#361); reviving it is a decision, not a chore.
 - **`LoadCredential=` for the Enrollment Token**, closing the residual risk above.
 - **In-place Policy and Template reload**, so tightening Policy across a fleet costs no restarts.
   Deliberately not first-pass: it is a second path by which the privileged side's authority
@@ -215,6 +227,10 @@ the cost of a second supported path; both are named in *Future work*. Accepted b
   one?** It is contract (`/proto`) either way, so it is decided before it is built.
 
 ## History
+
+- `2026-09-19` — with the owner, for `policy-catalog.md`: a Policy directory of fragments beside
+  the Policy file, composed into one Policy, applied by restart; the Policy file's
+  place-if-absent rule unchanged; a first-party Ansible role named as Future work.
 
 - `2026-09-15` — First worked through with the owner. Bare binary plus unit and env file as the
   day-one artifact, with packages deferred; the install places the default Policy only when
