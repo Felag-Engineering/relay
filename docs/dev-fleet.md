@@ -19,7 +19,11 @@ It exists to demo and dogfood the real control path end to end.
 > The `demo` compose profile ([below](#the-demo-profile)) is **more** exposed, not
 > less: it puts three times the Nodes behind the very same committed dev
 > credential and the same loopback-only control plane, so everything in this
-> banner applies to it with more force.
+> banner applies to it with more force. Its reset (`make demo-reset`,
+> [below](#the-fault-and-resetting-between-takes)) is guarded to refuse
+> anything but its own `relay-demo` compose project on a local Docker engine —
+> that guards against pointing it at the wrong fleet, not a claim that any of
+> this is production-safe.
 
 ## Prerequisites
 
@@ -444,8 +448,9 @@ never had.
 ### Why `start|restart|status` and not `stop`
 
 The agent must be able to repair the fleet and never to break it; the fault is injected out
-of band (#622). The script has no `stop` subcommand and the Policy has no allow for one, so
-both layers say the same thing.
+of band (see [The fault, and resetting between takes](#the-fault-and-resetting-between-takes),
+under [The demo profile](#the-demo-profile)). The script has no `stop` subcommand and the
+Policy has no allow for one, so both layers say the same thing.
 
 ### The template pack — loaded and enforced, not yet dispatchable
 
@@ -499,12 +504,18 @@ $ docker compose down
 $ docker compose up -d
 ```
 
-**Under `--profile demo`, use the symmetric profiled form on both commands —
-`docker compose --profile demo down` / `--profile demo up -d`.** Whether a
-profile-less `down` stops profiled containers has varied across Compose
-versions and is not verified here; the profiled form is the one whose
-behaviour does not depend on that answer. Get this wrong mid-demo and `up`
-brings back **three** daemons, not nine.
+**Under the `demo` profile, use `make demo-down` / `make demo-up` instead**
+— never a bare `docker compose --profile demo down` / `up`, which names its
+project after the checkout directory rather than `relay-demo` (see
+[The demo profile](#the-demo-profile)). `make demo-down` stops the demo fleet
+without touching its volumes; `make demo-up` is the matching plain restart —
+also no `-v`, no build — and brings back all nine daemons every time, because
+the fixed project and profile are baked into the script rather than typed at
+the command line. (It is not "no credential mint": see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
+for what `up` does and does not do to the mint one-shots.) `make demo-reset`
+(below) is a different thing: the wipe-and-recreate between takes, not a
+plain restart.
 
 The CA and the SQLite store persist on `relay-data`, and each daemon's identity
 persists on its private `daemonN-state` volume, so the Nodes come back with the
@@ -518,11 +529,8 @@ To wipe everything (CA, identities, store) and start clean:
 $ docker compose down -v
 ```
 
-or, under the `demo` profile:
-
-```console
-$ docker compose --profile demo down -v
-```
+or, under the `demo` profile, `make demo-reset` (see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)).
 
 ## Where to read the audit trail
 
@@ -558,9 +566,22 @@ enforces this).
 Do this first, and on its own, before anything else in this section:
 
 ```console
-$ docker compose --profile demo down -v
-$ docker compose --profile demo up --build -d
+$ make demo-build   # first time, and again after any code change
+$ make demo-reset
 ```
+
+The demo fleet is its own fixed compose project, `relay-demo` — separate
+images and separate volumes from the default fleet above, driven entirely
+through the guarded `scripts/demo-fleet.sh` (see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
+below). It cannot run alongside the default fleet: both publish the same host
+ports, `127.0.0.1:7654` / `9443`.
+
+`make demo-reset` is `docker compose --profile demo down -v` followed by
+`up -d --no-build` under the `relay-demo` project name, plus the health and
+credential verification described below. It never builds — run `make
+demo-build` once first (and again after any code change); a missing image is
+refused up front, before anything is torn down.
 
 Why `down -v` and not a plain `down`: `relay-data` is a **named** volume, so the
 Relay's registry — and every Node in it — survives a plain `compose down`. A Node
@@ -570,16 +591,24 @@ the beat that is supposed to run straight through. `down -v` is the only thing t
 clears it. The cost is real and worth stating plainly: `-v` destroys the CA and every
 Node identity, so the next `up` re-enrolls the whole fleet from scratch.
 
-`COMPOSE_PROFILES=demo make dev-fleet-up` is the Makefile-shaped equivalent for `up`
-(the target is a bare `docker compose up --build -d`, so it inherits
-`COMPOSE_PROFILES` from the environment with no Makefile change needed).
+`COMPOSE_PROFILES=demo make dev-fleet-up` looks like the Makefile-shaped
+equivalent, but it is not: `dev-fleet-up` runs a bare `docker compose`, which
+names its project after the checkout directory rather than `relay-demo` — a
+project `make demo-reset` refuses on sight (see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)).
+Use `make demo-build` / `make demo-reset` instead.
 
-Stop the demo fleet with `docker compose --profile demo down` / `--profile demo down -v`.
-**`make dev-fleet-down` is a profile-less `docker compose down`** — whether that stops
-profiled containers has varied across Compose versions and is not verified here. Use
-the symmetric `--profile demo` form on every `down` so the answer never matters; see
-[Survive `down` / `up`](#survive-down--up) above and [Cleanup](#cleanup) below, both
-of which now give the profiled form too.
+Stop the demo fleet with `make demo-down` (no `-v` — Node identities and the
+store survive, same as `dev-fleet-down` for the default fleet), and bring it
+back with `make demo-up` (also no `-v`, no build — the matching plain
+restart). `demo-up` is **not** "no credential mint": the mint one-shots have
+`restart: no`, but a stopped one-shot container is started again by `up` just
+like any other service, which re-runs its entrypoint and mints fresh values
+into the (persisted) volume — it just does not copy them out to
+`.dev-fleet/`; run `make demo-creds` after `demo-up` for that (see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
+for what `demo-creds` does and does not do). There is no `down` you need to
+remember to run before `make demo-reset`: it wipes first.
 
 ### The nine-Node roster
 
@@ -676,7 +705,7 @@ file) *(predicted)*, 1 × `denied_by_policy` (the bastion, exact-path allow only
 **On stage, immediately before this beat, run `list_nodes(selector="node:role=bastion")`
 and `list_nodes(selector="relay:env=dev")`.** This is the only instrument that reads the
 **real registry** rather than the compose file. If the first returns anything but one
-Node, or the second anything but nine, stop and `docker compose --profile demo down -v`
+Node, or the second anything but nine, stop and run `make demo-reset`
 — a stale Node changes the fan-out and the beat will not land.
 
 Then:
@@ -730,6 +759,168 @@ with no human, which is strictly weaker and teaches the audience the opposite of
 point. The straight-through path stays reachable through the two fan-out-1 Selectors
 in beat (d) above. Every Raw Exec parks at any fan-out under a separate rule
 (`dev-raw-exec-always-needs-a-human`), and that rule is not retuned either.
+
+### The fault, and resetting between takes
+
+`make demo-fault` kills the real `busybox httpd` (#389) on a subset of `role=web`
+Nodes, out of band — through `docker compose exec`, never through the Relay
+(there is no "break" verb anywhere in the control path; see
+[Why `start|restart|status` and not `stop`](#why-startrestartstatus-and-not-stop)).
+The default targets are `daemon-4` (`dev-node-4`, `env=prod`) and `daemon-6`
+(`dev-node-6`, `env=staging`) — one of each environment, and neither is on the
+["drop first" list](#resource-usage) if the roster is ever trimmed. Override with
+`DEMO_FAULT_NODES`, e.g. `make demo-fault DEMO_FAULT_NODES="daemon-2 daemon-9"`
+— the Makefile passes it through as a real environment variable rather than
+splicing it into the recipe text, and the script splits it on whitespace and
+validates every token against the derived web roster (below) before any
+`exec` into a container, so a value carrying a shell metacharacter is
+refused, not executed.
+Every target must be a `role=web` Node — anything else is refused before any
+`exec` into a container, since faulting a Node that runs no demo service
+would report a condition that was never there. (This refusal runs after the
+project guard, and after one read-only `docker compose config` call that
+derives the web/daemon rosters from the compose file — it is not before the
+script touches Docker at all.) The kill is idempotent: running it again on an
+already-down Node reaches the same DOWN report immediately, so it is safe to
+run more than once with no reset in between.
+
+**What is true after the fault.** `httpd` is really killed (found by `pidof`,
+not the pidfile, so a stale pidfile cannot redirect the kill), and
+`dev-fleet-service status` on that Node genuinely reports `state=down` (exit
+`3`) — `make demo-fault` verifies this itself, by polling that same probe,
+before it prints anything. Nothing is written anywhere to stage the condition.
+
+**Discovery — read path, no approval.** Fan `file.read` of `/proc/net/tcp`
+across the web Nodes:
+
+```
+run_operation(selector="node:role=web", operation="file.read", args={"path":"/proc/net/tcp"})
+```
+
+Read-class, unparked — the wildcard `file.read` allow in `policy.web.toml`
+covers this path like any other (proven hermetically by
+`web_policy_allows_reading_the_socket_table`,
+`daemon/tests/dev_fleet_fixtures.rs`). Look for a row whose **local address is
+`0100007F:1F90` (127.0.0.1:8080) AND whose state is `0A` (`TCP_LISTEN`)** —
+present on a serving Node, absent on a faulted one. Do not key off the port
+`1F90` alone: a recently-closed connection leaves a `TIME_WAIT` row (state
+`06`) at that same local address for up to ~60s, and that row is not evidence
+the service is up. `/var/lib/dev-fleet-service/state` is deliberately never
+rewritten to say "down" (see [The real service](#the-real-service)), so it is
+**not** the discovery signal — it is the *repair* proof, below.
+
+**Repair — mutate path.** There is no `node:` Selector that reaches a single
+web Node in this roster. `node:role=web` alone reaches all six. Of the two
+`role`+`env` combinations that actually exist, each matches exactly two Nodes
+(`daemon-4`/`daemon-5` on `env=prod`, `daemon-6`/`daemon-9` on `env=staging`)
+— `daemon-1` and `daemon-2` carry no `env` label at all (see
+[The nine-Node roster](#the-nine-node-roster)), so they cannot be reached by
+a `role`+`env` combination either, only by the even less selective
+`node:role=web`. So the Raw Exec below reaches the faulted Node and its
+healthy sibling both. That is harmless: `dev-fleet-service restart` is
+idempotent, and restarting an already-serving instance still ends in
+`state=running`.
+
+```
+raw_exec(selector="node:role=web, node:env=prod", argv=["/usr/local/bin/dev-fleet-service","restart"])
+```
+
+matches `daemon-4` (faulted) and `daemon-5` (healthy); swap `env=prod` for
+`env=staging` to reach `daemon-6` (faulted) and `daemon-9` (healthy) instead.
+Every Raw Exec parks under `dev-raw-exec-always-needs-a-human` regardless of
+fan-out; approve it as `dev-approver` exactly as in
+[The Raw Exec beat](#the-raw-exec-beat), then re-issue the same call unchanged.
+`svc.status` and `svc.restart` become the natural read/mutate pair for this
+once #626 makes the Template pack dispatchable.
+
+**Independent verification.** `file.read` of
+`/var/lib/dev-fleet-service/state` on the repaired Node shows a new `pid` and
+`started_epoch` (see [The real service](#the-real-service)), and re-running
+the `/proc/net/tcp` discovery read shows the `0100007F:1F90 ... 0A` row is
+back.
+
+**`make demo-reset`** is the reliable way back to the starting state between
+takes — fault cleared, Jobs/approvals/audit/registry cleared (the store lives
+on `relay-data`, wiped by `down -v`), the CA and every credential fresh, and
+every Node healthy — and, unlike a bare `docker compose --profile demo down -v`
+/ `up`, it never builds (a missing image is refused up front — run
+`make demo-build` once, first) and it verifies rather than assumes:
+
+1. Every image `docker compose config --images` names must already exist,
+   checked before anything is torn down.
+2. `down -v --remove-orphans` then `up -d --no-build --pull never`.
+3. Waits for `relay` and every daemon to report `healthy`, and every one-shot
+   (`credential`, `approver`, `console-admin`, `console-password`, `bootstrap`)
+   to have exited `0`.
+4. Probes `dev-fleet-service status` on every `role=web` Node — the fault, if
+   any, is cleared by the fresh `up`, but this step confirms it with the same
+   live probe the fault check uses, rather than assuming a fresh container
+   means a serving one.
+5. **Mints** fresh credentials: step 2's `down -v` / `up` recreates the
+   `credential`/`approver`/`console-admin`/`console-password` one-shots from
+   nothing, which is what actually mints (`docker/mint-credential.sh` runs
+   again on every container that starts fresh). This step then **copies**
+   them out to `.dev-fleet/` (`scripts/dev-fleet-mcp.sh init` — a
+   `docker compose cp` / `run --no-deps` read, nothing more) and checks, live,
+   that `GET /api/v1/approvals` comes back empty and that `list_nodes()` over
+   MCP reports every Node connected — there is no `GET /api/v1/nodes` list
+   route on the Control API, only `GET /api/v1/nodes/{node_id}`, so `list_nodes`
+   is the only surface that sees the whole registry.
+
+**The CA is regenerated on every reset, so a registered MCP client is left
+holding a stale bearer token and a stale CA it can no longer verify against**
+(`NODE_EXTRA_CA_CERTS` is read only at process start). `.dev-fleet/` is
+already current — step 5 above just refreshed it — so the fix is only to
+restart the client: `claude mcp remove relay` / `claude mcp add ...` as in
+[Connecting Claude Code](#connecting-claude-code). `make demo-reset`'s
+closing summary says this every time. **Do not follow
+`.dev-fleet/start-claude.txt`'s own `make dev-fleet-creds` line** — `.dev-fleet/`
+is shared between the default fleet and the demo fleet, and `dev-fleet-creds`
+targets the directory-named default project, not `relay-demo`. `make demo-creds`
+is the demo fleet's equivalent, and it is only needed after `demo-up`: unlike
+`demo-reset`, `demo-up` does not copy anything out on its own, even though its
+`up` (see [Survive `down` / `up`](#survive-down--up)) causes the same
+one-shots to re-mint into the volume. `demo-creds` itself mints nothing — it
+is a pure copy, safe to run any number of times.
+
+**The refusal.** `scripts/demo-fleet.sh` (every one of `demo-build`,
+`demo-reset`, `demo-fault`, `demo-up`, `demo-down`, `demo-creds`) refuses
+unless the target is exactly the `relay-demo` compose project on a local
+Docker engine, and it does so before any Docker call **except two read-only
+checks**: the current docker context's endpoint (always made, to confirm it
+is a local engine), and — only once that passes — a `docker ps` that confirms
+no *other* checkout already owns the `relay-demo` project (this repo lives in
+many git worktrees, and `relay-demo` is one project name per Docker engine).
+A `COMPOSE_PROJECT_NAME` set to anything else — including set-but-empty — or
+a non-local `DOCKER_HOST` are refused with **no** Docker call at all, because
+they are decided from the environment alone. Once past that guard, `demo-reset`
+and `demo-up` separately refuse — before either touches a volume or a
+container, via one more read-only `docker ps` — if host port `7654` or `9443`
+is already published by some other compose project. `demo-reset` refuses once
+more, via a read-only `docker compose config --format json`, if any volume it
+is about to `down -v` does not resolve to a `relay-demo_`-prefixed name — the
+defense against a future `name:`/`external:` override on a volume in
+`docker-compose.yml` quietly pointing `-p relay-demo` at a volume this
+checkout does not own. `make test-demo-fleet` (`scripts/demo-fleet-test.sh`,
+in `make verify` and CI) proves every refusal against a stubbed `docker`,
+never a real engine.
+
+A checkout directory literally named `relay-demo` would give the *default*
+(non-demo) fleet's bare `docker compose up` that same project name — an
+unlikely collision, but one more reason to prefer `make demo-build` /
+`make demo-reset` over typing `docker compose` by hand under this profile.
+
+**Verification honesty.** The `/proc/net/tcp` discovery signal is *(predicted)*
+from `web_policy_allows_reading_the_socket_table`
+(`daemon/tests/dev_fleet_fixtures.rs`) — the daemon's own Policy engine agrees
+the read is allowed, but no automated test here starts a real `busybox httpd`
+or reads its real socket table. "Reset survives back to back, repeatedly" has
+**not been observed live at all** — `scripts/demo-fleet-test.sh`'s hermetic
+guard proof only proves the refusal logic against a stubbed `docker`; it says
+nothing about whether a real `down -v` / `up` / wait / probe cycle actually
+succeeds once, let alone repeatedly. Run the fault → discover → repair →
+verify sequence, and `make demo-reset` two or three times back to back,
+before presenting, and correct this paragraph with what you actually saw.
 
 ### Resource usage
 
@@ -792,12 +983,16 @@ $ docker compose down -v
 $ rm -rf ./.dev-fleet
 ```
 
-**Under `--profile demo`, use the symmetric profiled form so the answer never
-matters** — same caveat as [Survive `down` / `up`](#survive-down--up) above:
-whether a profile-less `down -v` also stops the six `demo`-profile daemons has
-varied across Compose versions and is not verified here.
+**Under the `demo` profile, use `docker compose -p relay-demo --profile demo
+down -v` directly** — never a bare `docker compose --profile demo down -v`,
+which names its project after the checkout directory, not `relay-demo`, and
+leaves that project's volumes behind uncleaned. `make demo-reset` also wipes
+`relay-demo`, but brings the fleet straight back up afterward — it is the
+between-takes reset (see
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes)),
+not a "stop and leave it down" cleanup.
 
 ```console
-$ docker compose --profile demo down -v
+$ docker compose -p relay-demo --profile demo down -v
 $ rm -rf ./.dev-fleet
 ```
