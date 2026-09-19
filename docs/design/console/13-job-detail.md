@@ -103,6 +103,17 @@ shows its audited metadata only (ADR-0025).
 - [x] A three-Node Job is as legible as a ten-thousand-Node one.
       At or below 50 Tasks every group lists everything, success included.
 
+**Attribution (#455).** The header now renders the approver chip(s) this Layout section already
+called for, in the lane their own Account attribution earns — never hard-coded verified — plus
+each decision's time, channel, the gate rule that parked the Job, the quorum it met, the
+approval's own requester when it differs from the Job's, and the stored Relay-authored summary
+the approver was shown, all on the Job screen itself. A visible lane key explains the
+verified/asserted distinction in text, not only in a chip's hover title. A Grant-released Job
+shows the Grant's approvers with the window caveat ("these approvers approved a Grant... not this
+plan") and renders no plan hash, because the Grant's own hash is over its Scope, not this Job's
+Plan. All of it is rendered from the one `Approval()` read the page already made for the plan
+hash — no new read, no new audit record.
+
 ### Not delivered by this build
 
 **Live updates.** "A running Job updates live: counts fill in, the bar grows" is prose in this

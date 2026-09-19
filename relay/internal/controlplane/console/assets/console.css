@@ -1260,6 +1260,20 @@ section.panel { margin-top: var(--space-4); }
 .jobhead { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); }
 .jhrow { display: flex; align-items: baseline; gap: var(--space-3); flex-wrap: wrap; margin-bottom: var(--space-2); }
 .jhrow:last-child { margin-bottom: 0; }
+/* The approval half of the attribution question (#455), boxed the same as
+ * .jobhead so the two read as one continuous header rather than a card and an
+ * afterthought. */
+.jobapproval { background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-section); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); }
+.jobapproval .decider { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-3); }
+/* The verified/asserted key (#455): explained in visible text, not only in
+ * the chip's title attribute, which a touch device and a printout cannot see. */
+.lanekey { font-size: var(--text-xs); color: var(--text-muted); margin-bottom: var(--space-4); }
+/* The dayone rule ".trust { margin: var(--space-6) 0; }" also matches every
+ * ".chip.trust" on the page (that selector's specificity applies everywhere,
+ * not only on day one's own section) and would otherwise stack a 24px margin
+ * onto every sample and decider chip these sections render. Scoped here
+ * rather than by rescoping the dayone rule, which styles another screen. */
+.jobhead .chip.trust, .jobapproval .chip.trust, .lanekey .chip.trust { margin: 0; }
 /* .jobcancel is slate, never red (#595): a cancel is an ordinary, cheap-to-ask
  * control, not an alarm — the same reasoning that keeps a Policy deny slate
  * rather than red on this same screen. */

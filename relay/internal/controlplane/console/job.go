@@ -70,6 +70,22 @@ package console
 // flight — so a complete Job with nothing cancelled pays exactly what it did
 // before this issue (TestJob_TenThousandNodesRendersNoList's
 // auditCalls == 1 guard).
+//
+// # Attribution (#455)
+//
+// The approval half of the header is rendered from the ONE d.Approvals.Approval
+// read buildJobView already made for the plan hash — no new read, no new audit
+// record. Each approver's lane follows Decision.AccountID exactly as the
+// requester's own chip follows RequesterAccountID above: an approval carrying a
+// name but no AccountID renders dashed, never hard-coded verified. The
+// approver's own on-behalf-of assertion (ADR-0029) stays in that same dashed
+// lane, beside the decider's chip rather than merged into it. A Grant-released
+// Job never shows a plan hash in the Job's slot: the Grant's Request.PlanHash is
+// a hash over the Grant's Scope, not over this Job's Plan, and showing it there
+// would train an operator to compare the wrong two hashes. The approval's own
+// requester is shown, with its own trust chip, only when it differs from the
+// Job's — release happens on the plan hash alone, so the Account that parked
+// the approval need not be the Account that dispatched.
 
 import (
 	"context"
@@ -80,6 +96,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -291,6 +308,28 @@ type jobView struct {
 	ApprovalHref string
 	GrantID      string
 
+	// Approval carries who gated this dispatch, under which rule, at what
+	// quorum, and what the Relay-authored Summary told them — rendered from
+	// the same Approval() read that already resolved the plan hash below, so
+	// the auditor never has to open a second screen. Nil when the dispatch
+	// was never gated, or when the approval record itself could not be
+	// resolved (see ApprovalError and ApprovalReaderMissing).
+	Approval *jobApproval
+
+	// ApprovalError is set when v.ApprovalID names a record that could not be
+	// read. ApprovalReaderMissing is set when this Console has no approval
+	// seam wired at all. The two are stated distinctly: one is a store
+	// failure, the other is a deployment that never wired the read.
+	ApprovalError         bool
+	ApprovalReaderMissing bool
+
+	// DispatchFound mirrors dispatchRecord's own ok return. It is false for a
+	// normal in-flight Job — the Job engine writes the dispatch record only
+	// after the dispatch returns — and the Plan note below must not claim
+	// such a Job "was not gated by an approval", which is a fact it cannot
+	// know yet.
+	DispatchFound bool
+
 	// Plan is the Plan this Job was DISPATCHED against, rendered by the shared
 	// renderer. It carries no verdicts (a dispatched Job has outcomes, not
 	// predictions) and no cap: the Console is never told a blast cap and must
@@ -345,6 +384,120 @@ type cancelRequest struct {
 	Principal string
 	Verified  bool
 	At        time.Time
+}
+
+// jobDecider is one approving Decision, projected onto the same verified/
+// asserted grammar as the requester chip above it.
+type jobDecider struct {
+	// Account and Verified are the decider's own identity — the VERIFIED lane
+	// only when the decision itself carried an Account ID, exactly the rule
+	// the page already applies to the requester (Verified = AccountID != "").
+	// An unattributed decision must never render as though the Relay
+	// authenticated it.
+	Account  string
+	Verified bool
+
+	// Human is Decision.DeciderHuman. False renders a "machine" qualifier
+	// beside the chip rather than nothing, so a machine-issued approval never
+	// reads like a person's.
+	Human bool
+
+	// OnBehalfOf is the decider's own asserted human (ADR-0029) — the caller
+	// said this decision speaks for someone; nothing checked it. It renders in
+	// its own dashed chip, never folded into Account's lane.
+	OnBehalfOf string
+
+	Channel string
+	At      string
+	Reason  string
+}
+
+// jobApproval is the approval that released this Job, rendered on the Job
+// screen itself rather than requiring a second one. Built from the same
+// approval.Request read buildJobView already made for the plan hash.
+type jobApproval struct {
+	// Rules is Request.MatchedRules — which gate rule parked this dispatch.
+	Rules []string
+
+	// Summary is the Relay-authored description the approver was shown,
+	// stored at park time and never re-rendered from today's fleet.
+	Summary string
+
+	// Signed and Required are the quorum. Required is 0 for a record with no
+	// stored Requirement, and the template says so rather than claiming
+	// "0 of 0".
+	Signed   int
+	Required int
+
+	// Short is true when the record holds fewer approvals than Required — a
+	// defensive render, stated and never hidden, for a record this page did
+	// not expect to see incomplete on a released Job.
+	Short bool
+
+	// Deciders holds only the APPROVING Decisions, in stored order. A
+	// released Job's Request carries no terminal deny (one is terminal), so
+	// this is every decision that mattered.
+	Deciders []jobDecider
+
+	// ViaGrant is true when this Job was released by a Grant rather than by
+	// its own Plan being approved directly. The approvers below approved a
+	// window, not this plan.
+	ViaGrant bool
+
+	// ParkedBy/ParkedByVerified are who asked for the approval itself, and
+	// ParkedByDiffers is true only when that Account is not the Job's own
+	// requester — release happens on the plan hash alone (capability.
+	// checkApproval), so the two need not match, and the page shows the
+	// approval's own requester only in that uncommon case.
+	ParkedBy         string
+	ParkedByVerified bool
+	ParkedByDiffers  bool
+}
+
+// newJobApproval projects one approval.Request onto the Job screen's
+// attribution section. jobRequesterID and jobRequesterName are the Job's own
+// requester, verified-lane-first, used only to decide ParkedByDiffers.
+func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequesterName string) *jobApproval {
+	a := &jobApproval{
+		Rules:    req.MatchedRules,
+		Summary:  req.Summary,
+		Signed:   countApprovals(req),
+		Required: req.Require.Count,
+		ViaGrant: viaGrant,
+	}
+	a.Short = a.Required > 0 && a.Signed < a.Required
+
+	for _, dec := range req.Decisions {
+		// One denial is terminal (approval.Decision), so a released Job's
+		// record carries no terminal deny — but a fixture or a future replay
+		// could still hand this function one, and rendering it as though it
+		// released the Job would be the wrong story.
+		if !dec.Approve {
+			continue
+		}
+		a.Deciders = append(a.Deciders, jobDecider{
+			Account:    dec.Account,
+			Verified:   dec.AccountID != "",
+			Human:      dec.DeciderHuman,
+			OnBehalfOf: dec.OnBehalfOf,
+			Channel:    dec.Channel.String(),
+			At:         stampOrAbsent(dec.At),
+			Reason:     dec.Reason,
+		})
+	}
+
+	a.ParkedBy = firstNonEmpty(req.RequestedBy, "unattributed")
+	a.ParkedByVerified = req.RequestedByID != ""
+	// Compare by Account ID whenever either side has one; only when BOTH are
+	// unverified does the comparison fall back to the name, so two different
+	// unattributed requesters are never read as the same Account merely
+	// because neither carries an ID.
+	if req.RequestedByID != "" || jobRequesterID != "" {
+		a.ParkedByDiffers = req.RequestedByID != jobRequesterID
+	} else {
+		a.ParkedByDiffers = req.RequestedBy != jobRequesterName
+	}
+	return a
 }
 
 func handleJob(d Deps) http.HandlerFunc {
@@ -448,9 +601,12 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 	// record, so any of them answers these questions identically. (Reading the
 	// Operation off a LATER record would silently follow a re-drive, which is
 	// why this asks the trail for dispatch rows and nothing else.)
+	var dispatchPrincipal string
 	if row, ok, err := dispatchRecord(ctx, d, caller, sum.JobID); err != nil {
 		v.TrailError = true
 	} else if ok {
+		v.DispatchFound = true
+		dispatchPrincipal = row.Principal
 		v.Args = argsSummary(row.Args, row.RawExecArgv)
 		v.OnBehalfOf = row.Asserted.OnBehalfOf
 		v.ApprovalID = row.ApprovalID
@@ -485,10 +641,24 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		// and has no path to one (invariant 11); on a dispatched Job the cap
 		// has already been applied, on the Relay, before anything ran.
 	}
-	if v.ApprovalID != "" && d.Approvals != nil {
-		if req, err := d.Approvals.Approval(ctx, v.ApprovalID); err == nil && req.PlanHash != "" {
-			v.Plan.Hash = req.PlanHash
-			v.PlanHashKnown = true
+	if v.ApprovalID != "" {
+		if d.Approvals == nil {
+			// A distinct state from a failed read (finding 9): this Console
+			// was never wired with an approval seam at all, which is a
+			// deployment fact, not a store outage.
+			v.ApprovalReaderMissing = true
+		} else if req, err := d.Approvals.Approval(ctx, v.ApprovalID); err != nil {
+			v.ApprovalError = true
+		} else {
+			// A Grant's PlanHash hashes the Grant's Scope, never this Job's
+			// Plan (capability/approval_grant.go). Showing it in the Job's
+			// plan-hash slot would be a different hash presented as the one
+			// an operator is trained to compare.
+			if v.GrantID == "" && req.PlanHash != "" {
+				v.Plan.Hash = req.PlanHash
+				v.PlanHashKnown = true
+			}
+			v.Approval = newJobApproval(req, v.GrantID != "", sum.RequesterAccountID, firstNonEmpty(sum.Requester, dispatchPrincipal))
 		}
 	}
 
@@ -915,7 +1085,7 @@ var jobTmpl = newScreen("job", `
   <div class="jhrow">
     {{template "trust-chip" (trust .Principal .Verified)}}
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">on behalf of — caller-claimed, nothing checked it</span>{{end}}
-    {{with .ApprovalHref}}<a href="{{.}}">released by an approval</a>{{end}}
+    {{if .ApprovalHref}}released by approval <a href="{{.ApprovalHref}}"><code>{{short .ApprovalID}}</code></a>{{end}}
     {{with .GrantID}}<span class="grant" title="A human approved a window this plan fell inside, not this plan.">grant {{short .}}</span>{{end}}
   </div>
   <div class="jhrow">
@@ -927,11 +1097,50 @@ var jobTmpl = newScreen("job", `
   </div>
 </section>
 
+{{with .Approval}}
+<section class="jobapproval" aria-label="Approval">
+  <p>gated by rule <code>{{if .Rules}}{{join ", " .Rules}}{{else}}no gate rule recorded{{end}}</code></p>
+  <p>{{if gt .Required 0}}<b>{{.Signed}}</b> of {{.Required}} {{plural .Required "approval" "approvals"}}{{else}}no quorum recorded{{end}}{{if .Short}} <span class="gap">the record holds fewer approvals than the rule required — this page does not know why the Job was released</span>{{end}}</p>
+  {{if .ParkedByDiffers}}<p>approval parked by {{template "trust-chip" (trust .ParkedBy .ParkedByVerified)}} <span class="dim">{{if .ViaGrant}}— the Account that requested the Grant{{else}}— not the Account that requested this Job; the approval was released on its plan hash{{end}}</span></p>{{end}}
+  {{range .Deciders}}
+  <div class="decider">
+    {{template "trust-chip" (trust .Account .Verified)}}{{if not .Human}}<span class="dim">machine</span>{{end}}
+    <span>approved {{.At}}</span> <code>{{.Channel}}</code>
+    {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for — asserted by the deciding client, nothing checked it</span>{{end}}
+    {{with .Reason}}<span class="dim">{{.}}</span>{{end}}
+  </div>
+  {{end}}
+  {{with .Summary}}<p class="summary"><b>What the Relay showed the approver</b> <span class="dim">— Relay-authored, stored when the Job was parked, not re-rendered</span><br>{{.}}</p>{{end}}
+  {{if .ViaGrant}}<p class="note">These approvers approved a Grant — a window this plan fell inside — not this plan. The summary above describes the window.</p>{{end}}
+</section>
+{{end}}
+{{if .ApprovalReaderMissing}}
+<p class="gap">The approval reader is not available on this Console, so who approved this Job, under
+which rule and when is not shown here. The dispatch record says it was released by approval
+<code>{{short .ApprovalID}}</code>.</p>
+{{end}}
+{{if .ApprovalError}}
+<p class="gap">The approval record <code>{{short .ApprovalID}}</code> could not be read, so who
+approved this Job, under which rule and when is missing here. The dispatch record says it was
+released by that approval.</p>
+{{end}}
+
+<p class="lanekey">{{template "trust-chip" (trust "verified" true)}} the Relay authenticated this identity ·
+{{template "trust-chip" (trust "asserted" false)}} the caller claimed this; nothing checked it</p>
+
 {{template "plan" .Plan}}
 <p class="note">This is the Plan the Job was dispatched against, not a fresh one: the fan-out was
 fixed when the Tasks were created and does not move while the Job runs.
-{{if not .PlanHashKnown}}This dispatch was not gated by an approval, so no plan hash was retained
-for it — and the Job's own id is not one.{{end}}</p>
+{{if not .PlanHashKnown}}
+{{if .TrailError}}The dispatch record could not be read, so whether this dispatch was gated by an approval is not known here.
+{{else if .GrantID}}This dispatch was released by a Grant. The Grant's approval committed to a window, not to this plan, so no plan hash was retained for it — and the Job's own id is not one.
+{{else if or .ApprovalError .ApprovalReaderMissing}}The approval record could not be read here, so the plan hash it committed to is not shown.
+{{else if .ApprovalID}}The approval record holds no plan hash, so none is shown here.
+{{else if not .DispatchFound}}The dispatch record is not written yet, so whether it was gated is not known.
+{{else}}This dispatch was not gated by an approval, so no plan hash was retained
+for it — and the Job's own id is not one.
+{{end}}
+{{end}}</p>
 
 {{if .TrailError}}
 <p class="gap">The dispatch record for this Job could not be read, so what was asked for — the
