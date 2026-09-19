@@ -2,7 +2,9 @@ package capability
 
 import (
 	"context"
+	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
@@ -54,7 +56,66 @@ const (
 	// only one whose recorded requester is itself — see
 	// Service.CancelJob/authorizeMachineCancel.
 	ControlCancelJob ControlAction = "cancel_job"
+
+	// Account and API-Token administration (#653): GET/POST
+	// /api/v1/accounts[...] and .../tokens. All eight sit at admin
+	// (authz.requiredControlRole) — identity management is admin-only in
+	// full, the same posture the Control API's now-deleted requireAdmin
+	// enforced per handler. See accountadmin.go for why this surface lives
+	// in the capability layer rather than an adapter (invariant 10).
+
+	// ControlAccountRead is GET /api/v1/accounts and GET
+	// /api/v1/accounts/{id}: listing or reading an Account.
+	ControlAccountRead ControlAction = "account_read"
+
+	// ControlAccountCreate is POST /api/v1/accounts.
+	ControlAccountCreate ControlAction = "account_create"
+
+	// ControlAccountRole is POST /api/v1/accounts/{id}/role: the single most
+	// security-relevant edit on this surface.
+	ControlAccountRole ControlAction = "account_role"
+
+	// ControlAccountEnable is POST /api/v1/accounts/{id}/enable.
+	ControlAccountEnable ControlAction = "account_enable"
+
+	// ControlAccountDisable is POST /api/v1/accounts/{id}/disable.
+	ControlAccountDisable ControlAction = "account_disable"
+
+	// ControlAPITokenRead is GET /api/v1/accounts/{id}/tokens: listing an
+	// Account's API Tokens (the redacted view).
+	ControlAPITokenRead ControlAction = "api_token_read"
+
+	// ControlAPITokenMint is POST /api/v1/accounts/{id}/tokens: issuing a new
+	// credential.
+	ControlAPITokenMint ControlAction = "api_token_mint"
+
+	// ControlAPITokenRevoke is DELETE /api/v1/api-tokens/{token_id}.
+	ControlAPITokenRevoke ControlAction = "api_token_revoke"
 )
+
+// AccountStore is the Account half of the collaborator accountadmin.go needs
+// (#653): the same five methods api.AccountManager narrowed
+// accounts.Repository to, before this issue moved the surface behind the
+// capability layer. Deliberately not accounts.Repository itself:
+// EnsureFoundingAdmin is seeding, a startup act, and GetByName/TouchLastSeen
+// belong to the authentication boundary, not to administering Accounts.
+type AccountStore interface {
+	Create(ctx context.Context, a accounts.Account) (accounts.Account, error)
+	Get(ctx context.Context, id string) (accounts.Account, error)
+	List(ctx context.Context) ([]accounts.Account, error)
+	SetRole(ctx context.Context, id string, role accounts.Role) error
+	SetEnabled(ctx context.Context, id string, enabled bool) error
+}
+
+// APITokenStore is the API-Token half (#653), narrowed exactly as
+// api.APITokenService was: Verify is deliberately absent — this surface
+// ISSUES credentials, the authenticator CHECKS them, and neither needs the
+// other's power.
+type APITokenStore interface {
+	Mint(ctx context.Context, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	Revoke(ctx context.Context, id string) error
+	List(ctx context.Context, accountID string) ([]accounts.APIToken, error)
+}
 
 // ControlAuthorizer decides whether p may perform a ControlAction — the
 // administrative half of the authorization question, split out as its own

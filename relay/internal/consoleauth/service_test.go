@@ -161,6 +161,14 @@ func TestLogin_EveryFailureIsIndistinguishable(t *testing.T) {
 			return attempt("mike", "")
 		},
 		"a disabled Account": func(t *testing.T, f *fixture) consoleauth.Attempt {
+			// A second enabled admin, so disabling mike below does not trip
+			// the last-enabled-admin guard (#653) this test is not about —
+			// it is about a disabled Account's login failing indistinguishably.
+			if _, err := f.accounts.Create(ctx, accounts.Account{
+				Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+			}); err != nil {
+				t.Fatalf("create other admin: %v", err)
+			}
 			if err := f.accounts.SetEnabled(ctx, f.mike.ID, false); err != nil {
 				t.Fatalf("disable account: %v", err)
 			}
@@ -377,6 +385,14 @@ func TestResolve_ReadsTheAccountFreshOnEveryCall(t *testing.T) {
 		t.Fatalf("Login: %v", err)
 	}
 
+	// A second enabled admin, so demoting mike below does not trip the
+	// last-enabled-admin guard (#653) this test is not about.
+	if _, err := f.accounts.Create(ctx, accounts.Account{
+		Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create other admin: %v", err)
+	}
+
 	// A demotion must take effect on the very next click, not at the next
 	// sign-in. The session's own snapshot still says admin; the resolved
 	// Account is what authorization uses.
@@ -400,6 +416,13 @@ func TestResolve_DisablingAnAccountCutsSessionsAlreadyInFlight(t *testing.T) {
 	id, _, err := f.svc.Login(ctx, attempt("mike", testPassword))
 	if err != nil {
 		t.Fatalf("Login: %v", err)
+	}
+	// A second enabled admin, so disabling mike below does not trip the
+	// last-enabled-admin guard (#653) this test is not about.
+	if _, err := f.accounts.Create(ctx, accounts.Account{
+		Name: "other-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create other admin: %v", err)
 	}
 	if err := f.accounts.SetEnabled(ctx, f.mike.ID, false); err != nil {
 		t.Fatalf("SetEnabled: %v", err)
