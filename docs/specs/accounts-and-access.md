@@ -72,15 +72,23 @@ role's reach can be read in one place.
 The Control API creates, lists, reads, re-roles, enables, and disables Accounts.
 Those acts require an authenticated `admin`; their successful writes record the acting
 principal in the audit trail. An Account may not change its own role or disable itself.
+That refusal is decided in the capability layer, because it is the one rule here that needs the
+*acting* principal, which the Accounts repository never sees.
 The founding-admin name is reserved and cannot be created through any surface.
 
 **The last enabled `admin` cannot be disabled or demoted,** by itself or by another Account.
 The Relay always keeps at least one enabled `admin`; if none can act, recovery is
-`relay bootstrap-token` on the Relay host.
+`relay bootstrap-token` on the Relay host. This refusal is enforced by the Accounts repository
+itself, in a single statement, and the capability layer reports it rather than re-deriving it:
+the rule is a count over every Account, so a check made above the repository races a concurrent
+writer, and two Accounts demoting each other can both read "another admin exists" and both
+succeed. What it guarantees is one enabled `admin` **record**, which is not the same as one
+`admin` that can authenticate — revoking that Account's last Token locks the control plane out
+just as effectively, with the same recovery.
 
 **Account administration is authorized in the capability layer,** once, for every surface
-(invariant 10). Today each surface's route checks the role itself; that is a gap to close, not an
-accepted adapter split.
+(invariant 10). The Control API's identity routes hold no role logic of their own and are handed
+no Account or Token store at all, so a route added later cannot reach that state ungated.
 
 ### API Tokens
 
@@ -189,7 +197,7 @@ require step-up. This is the matrix #433 implements.
 - **ADR-0013** — a Freeze is engaged over the API only by a human Account.
 - **ADR-0035** — account suspension is deferred and imposes no state or route.
 - **Invariant 10** — Account administration, like every other decision, is authorized once in the
-  capability layer; per-route role checks are a gap to close.
+  capability layer. Every surface adapts that one decision and reproduces no part of it.
 - **Invariant 11** — OAuth issuer, audience, scope, and Console step-up freshness are
   root-owned Relay configuration, never API-managed runtime objects.
 
@@ -198,9 +206,9 @@ require step-up. This is the matrix #433 implements.
 The Accounts domain and Token service own Account/Token state and verification. The
 control-plane authenticator resolves a credential to a principal; adapters consume
 that principal. Console session and step-up state is separate from bearer-token
-authentication. Account administration authorization belongs in the capability layer, so the
-Console screen (#433) and the Control API call the same lifecycle capability rather than
-reproducing role or audit logic.
+authentication. Account administration authorization belongs in the capability layer, so the Control API and the
+Console screen (#654, #655) call the same lifecycle capability rather than reproducing role or
+audit logic.
 
 `make verify` is sufficient for a documentation-only change. Changes to authentication,
 OAuth configuration, Console sessions, or Account lifecycle are security-sensitive and
@@ -215,7 +223,10 @@ composition-root configuration changes.
 | Non-admin callers cannot use Account lifecycle endpoints | `TestIdentityAPI_NonAdminIsRefusedEveryIdentityEndpoint` | API |
 | A Token plaintext occurs only in its mint response | `TestIdentityAPI_PlaintextAppearsOnlyInTheMintResponse` | API |
 | Token revocation cuts access and Account disablement cuts tokens off | `TestIdentityAPI_AccountTokenAuthenticatesAndRevocationCutsAccess` | API |
-| Self-disable and self-re-role are refused | `TestIdentityAPI_SelfDisableAndSelfRoleAreRefused` | API |
+| Self-disable and self-re-role are refused | `TestIdentityAPI_SelfDisableAndSelfRoleAreRefused`, and at the shared seam `TestAccountAdmin_SelfRoleChangeIsRefused` and `TestAccountAdmin_SelfDisableIsRefused` | API, capability |
+| Account administration is authorized in the capability layer, and no surface re-derives it | `TestRoleGate_AccountAdministrationRequiresAdmin` and `TestCapabilityFlooredRoutesDoNotReachASurfaceGate` | capability, API |
+| The last enabled `admin` cannot be disabled or demoted | `TestRepositoryConformance` (both Repository implementations), `TestSQLiteAccounts_LastAdminGuardIsASingleStatement`, `TestSQLiteAccounts_ConcurrentDemotionsLeaveOneEnabledAdmin`, and `TestAccountAdmin_LastAdminRefusalSurvivesTheRealStore` | store, capability |
+| Account administration cannot be wired without a real authorizer and a real audit sink | `TestNewRefusesAccountAdminWithoutARealAuthorizer` | capability |
 | A Token inherits Account role and enablement | `TestAPIToken_InheritsAccountRoleAndDisablement` | capability |
 | OAuth resolves only a valid token to an existing Account and uses that Account's role | `TestOAuth_ValidTokenResolvesToItsAccount` and `TestOAuth_AuthorityIsTheAccountsRole` | MCP |
 | OAuth rejections are indistinguishable and never auto-provision an Account | `TestOAuth_EveryRejectionIsIndistinguishable` and `TestOAuth_UnknownSubjectIsNotProvisioned` | MCP |
@@ -229,11 +240,9 @@ Claims above with **no row**, and so nothing checking them:
 - That an Account's authority is applied consistently across the Control API, MCP, and the
   Console. Each surface proves its own gate; no cross-surface authorization-parity test
   asserts that they agree — the same gap `query.md` records for the read floor.
-- That Account administration is authorized in the capability layer. It is not today (per-route
-  checks); this is the testing backlog for closing that gap.
-- That the last enabled `admin` cannot be disabled or demoted. Not built.
 - That the four privilege-granting Console acts require a fresh step-up, and that
-  privilege-reducing acts do not. Not built (#433).
+  privilege-reducing acts do not. Not built; the Console write routes are #655. The step-up
+  machinery itself exists and is exercised, but no route consults the recent-auth window.
 - That the founding-admin name is reserved against every creation path, rather than the
   Control API route alone.
 - That `relay bootstrap-token` is additive and refuses a disabled founding admin. The
@@ -296,10 +305,21 @@ none is a commitment to an order.
 
 | Question | Classification | What forces the call |
 |---|---|---|
-| What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected operator scale, or #433's screen needing a caller-visible contract. |
+| What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected operator scale, or #654's screen needing a caller-visible contract. |
 
 ## History
 
+- `2026-09-19` — #653 (PR #657) closed the invariant-10 gap this spec had recorded as open:
+  Account and API-Token administration is now authorized once in the capability layer, behind
+  eight `admin`-floored control actions, and the Control API's nine identity routes were migrated
+  onto it rather than keeping their own role check. Two refusals this spec asserted and that the
+  code did not implement became real — self-targeting in the capability layer, and the last
+  enabled `admin` in the Accounts repository — and both gained proof rows. Their placement, and
+  the reason they differ, is now recorded in *Account administration*. `#433` was split into
+  #653, #654 (the Console screen, read half) and #655 (its write routes and step-up); references
+  here were retargeted. Console step-up remains unbuilt and is #655's. The owner decided the
+  Accounts screen is `admin`-only, so a `viewer` never sees it, and that revoking a Token is
+  `admin`-floored without step-up.
 - `2026-09-14` — Confirmed with the owner. Role stays the only Relay-side limit in the first pass,
   with narrowing below role (#578) as research; the last enabled `admin` cannot be disabled or
   demoted, recovery through `relay bootstrap-token`; Console step-up is required for creating an
