@@ -67,7 +67,16 @@ var (
 type ThrottledError struct{ RetryAfter time.Duration }
 
 func (e *ThrottledError) Error() string {
-	return fmt.Sprintf("consoleauth: too many recent attempts, retry in %s", e.RetryAfter.Round(time.Second))
+	return fmt.Sprintf("consoleauth: too many recent attempts, retry in %s", ceilSecond(e.RetryAfter))
+}
+
+// ceilSecond rounds a positive wait UP to a whole second, the same rounding
+// login.go applies to Retry-After, so every surface names one number.
+func ceilSecond(d time.Duration) time.Duration {
+	if d <= 0 {
+		return 0
+	}
+	return (d + time.Second - 1).Truncate(time.Second)
 }
 
 // Throttled reports whether err is a ThrottledError, and the wait if so.
@@ -234,7 +243,7 @@ func (s *Service) Login(ctx context.Context, a Attempt) (SessionID, Session, err
 			SubmittedName: a.Name,
 			Method:        MethodPassword,
 			Source:        a.Source,
-			Reason:        fmt.Sprintf("refused before any credential was checked; next attempt accepted in %s", wait.Round(time.Second)),
+			Reason:        fmt.Sprintf("refused before any credential was checked; next attempt accepted in %s", ceilSecond(wait)),
 		}); err != nil {
 			return SessionID{}, Session{}, err
 		}
@@ -417,7 +426,7 @@ func (s *Service) StepUp(ctx context.Context, id SessionID, password accounts.Pa
 			Method:        MethodPassword,
 			Source:        source,
 			Reason: fmt.Sprintf("step-up re-authentication refused before any credential "+
-				"was checked; next attempt accepted in %s", wait.Round(time.Second)),
+				"was checked; next attempt accepted in %s", ceilSecond(wait)),
 		}); err != nil {
 			return err
 		}

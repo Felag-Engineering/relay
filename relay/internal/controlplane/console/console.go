@@ -240,7 +240,10 @@ func Routes(d Deps) []Route {
 		// undid the property console_execution exists to provide: with
 		// execution off, /console/run fell through to this handler and
 		// answered 200, so the composer was shadowed rather than absent.
-		// TestConsole_ExecutionOffMakesTheComposerAbsent caught it.
+		// TestConsole_ExecutionOffMakesTheComposerAbsent caught it. Register
+		// mounts its own "/console/" catch-all (method-less) for every path
+		// this table does not claim; {$} is still required so an unclaimed
+		// path reaches THAT catch-all's styled 404 rather than this handler.
 		{"GET", "/console/{$}", NavEntry{NavObserve, "Fleet", 10}, accounts.RoleViewer, handleFleet},
 		{"GET", "/console/nodes/{node_id}", NavEntry{}, accounts.RoleViewer, handleNode},
 		{"GET", "/console/agents", NavEntry{NavObserve, "Agents", 20}, accounts.RoleViewer, handleAgents},
@@ -421,7 +424,7 @@ func routesFor(d Deps, role accounts.Role) []Route {
 
 // gated wraps r's handler with the mount-time reachability check
 // [Route.MinRole] now names. It is SUBTRACTIVE ONLY: the only two things it
-// can do are call h unmodified or call http.NotFound instead of h. It never
+// can do are call h unmodified or call notFound instead of h. It never
 // calls h with an altered request, an elevated principal, or any other
 // changed semantics — so it has no admit-power, only not-call, and every
 // admitted request still reaches the capability layer's RoleGate unchanged
@@ -437,13 +440,19 @@ func routesFor(d Deps, role accounts.Role) []Route {
 // or refuse the sign-in page itself.
 //
 // Otherwise the returned handler reads the Principal that Middleware injected
-// and calls http.NotFound — the exact function net/http's ServeMux uses on an
-// unmatched path — unless r.ReachableBy(that Principal's role). A MISSING
-// Principal on a gated route is unreachable in production (every gated route
-// sits behind Authenticator.Middleware, Register's contract) and also 404s
-// here rather than the 500 [principal] returns elsewhere, because the refusal
-// must be indistinguishable from a route that was never mounted, not merely
-// present with a different number.
+// and calls notFound — the SAME not-found handler Register mounts on every
+// unmatched /console/ path — unless r.ReachableBy(that Principal's role). A
+// MISSING Principal on a gated route is unreachable in production for gated
+// ITSELF (every route gated wraps has constrainsReach() true, so its MinRole
+// exceeds RoleViewer and it sits behind Authenticator.Middleware, Register's
+// contract). But notFound is the SAME handler Register also mounts directly
+// on the public, method-less catch-all ("/console/"), which a public,
+// unauthenticated request CAN reach — an OPTIONS on a public path, or a path
+// variant (a trailing slash) the route table never claimed — so notFound must
+// handle a missing Principal safely on its own; see [renderNotFound]. gated
+// refuses here, rather than deferring to the 500 [principal] returns
+// elsewhere, because the refusal must stay byte-identical to a route that was
+// never mounted, not merely present with a different number.
 //
 // A typo'd MinRole fails closed too: RoleViewer.AtLeast(<not a role>) is
 // false, so an invalid MinRole is treated as gate-worthy, and
@@ -454,14 +463,14 @@ func routesFor(d Deps, role accounts.Role) []Route {
 // gated alone only protects r's own method-specific pattern
 // ("GET /console/run"). It does not by itself make a gated route
 // method-proof — see [methodMismatch], which Register mounts alongside it.
-func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
+func gated(r Route, h http.HandlerFunc, notFound http.HandlerFunc) http.HandlerFunc {
 	if !r.constrainsReach() {
 		return h
 	}
 	return func(w http.ResponseWriter, req *http.Request) {
 		p, ok := controlplane.PrincipalFromContext(req.Context())
 		if !ok || !r.ReachableBy(accounts.Role(p.Role)) {
-			http.NotFound(w, req)
+			notFound(w, req)
 			return
 		}
 		h(w, req)
@@ -482,8 +491,10 @@ func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
 // (verified empirically; a method-specific pattern coexists with a
 // method-less one on the same path and always wins its own method).
 //
-// Below MinRole it answers exactly like [gated]: http.NotFound, so the method
-// used to probe cannot distinguish a gated route from one never mounted.
+// Below MinRole it answers exactly like [gated]: notFound, the same
+// not-found handler Register mounts on every unmatched /console/ path, so the
+// method used to probe cannot distinguish a gated route from one never
+// mounted.
 //
 // At or above MinRole it must not simply invent a 405: a hand-written Allow
 // header could drift from what ServeMux would really have said, and drift
@@ -500,7 +511,7 @@ func gated(r Route, h http.HandlerFunc) http.HandlerFunc {
 // "Allow: GET, HEAD, POST", and a viewer's OPTIONS would 404 on a path whose
 // GET they legitimately reach. The direction is over-hiding, not disclosure,
 // but the claim only holds because no such split exists yet.
-func methodMismatch(r Route) http.HandlerFunc {
+func methodMismatch(r Route, notFound http.HandlerFunc) http.HandlerFunc {
 	probe := http.NewServeMux()
 	probe.HandleFunc(r.Pattern(), func(http.ResponseWriter, *http.Request) {
 		panic("console: methodMismatch probe was asked to serve r's own method; " +
@@ -510,7 +521,7 @@ func methodMismatch(r Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		p, ok := controlplane.PrincipalFromContext(req.Context())
 		if !ok || !r.ReachableBy(accounts.Role(p.Role)) {
-			http.NotFound(w, req)
+			notFound(w, req)
 			return
 		}
 		probe.ServeHTTP(w, req)
@@ -539,16 +550,42 @@ func methodMismatch(r Route) http.HandlerFunc {
 // cannot GET it. A route no MinRole constrains (RoleViewer and below) gets no
 // second registration; an ordinary method mismatch on it discloses nothing,
 // because every valid role could already reach it.
+//
+// Register also mounts ONE catch-all, "/console/" (deliberately method-less:
+// a "GET /console/" pattern would conflict at registration with the
+// method-less methodMismatch patterns above, and net/http panics on
+// conflicting patterns). It is the least specific pattern under /console/, so
+// every table route and every methodMismatch registration still wins; it only
+// ever answers a path this table never claimed. gated and methodMismatch both
+// call the SAME handler for their own refusals, so a route that exists but is
+// out of role and a path that was never mounted render byte-identical
+// responses — see [renderNotFound]. It is not added to [Routes]: it is not a
+// route, and putting it there would make it a nav item and a read-audit
+// classification entry it is neither of.
+//
+// By the time an ORDINARY request reaches this mux, authentication has
+// already happened: Authenticator.Middleware redirects an unauthenticated
+// /console/* request to sign-in before the mux is consulted, so an
+// unauthenticated probe of an unknown path gets the sign-in redirect, never
+// this 404. The exception is login.go's Unauthenticated surface itself
+// (LoginPath and AssetsPrefix, exactly): a request that targets one of those
+// but not with the method or exact path the route table claims — an
+// unauthenticated OPTIONS on LoginPath, say — is still "public" by
+// Middleware's own predicate, so it reaches the catch-all with no Principal
+// in context at all. [renderNotFound] handles that case directly rather than
+// assuming it cannot happen; see its doc comment.
 func Register(mux *http.ServeMux, d Deps) {
 	if d.Now == nil {
 		d.Now = func() time.Time { return time.Now().UTC() }
 	}
+	nf := notFoundHandler(d)
 	for _, r := range Routes(d) {
-		mux.HandleFunc(r.Pattern(), gated(r, r.Handler(d)))
+		mux.HandleFunc(r.Pattern(), gated(r, r.Handler(d), nf))
 		if r.constrainsReach() {
-			mux.HandleFunc(r.Path, methodMismatch(r))
+			mux.HandleFunc(r.Path, methodMismatch(r, nf))
 		}
 	}
+	mux.HandleFunc("/console/", nf)
 }
 
 // principal reads the Principal that Authenticator.Middleware injected. Every

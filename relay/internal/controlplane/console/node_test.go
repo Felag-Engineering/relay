@@ -13,6 +13,7 @@ package console
 // anything is the property the v0.6.0 acceptance criteria are about.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -679,39 +680,37 @@ func tasksPanelOf(body string) string {
 	return rest
 }
 
-// TestNode_ReadOutcomeIsAuditedNotUnspecified.
+// TestNode_RecentTasksListsTasksNotControlPlaneReads (#640).
 //
-// nodeTaskFrom admits read records — auditsink.RecordRead takes a nodeID and
-// real callers pass one — and built every row's outcome chip from
-// audit.Record.Outcome. A metadata-only read has none to build from: nothing
-// was dispatched and no daemon decided anything, so the zero value rendered
-// "unspecified" in this Node's Recent Tasks table, the Console saying "we don't
-// know" about the one family of record whose disposition it knows completely
-// (#520). Unlike agentCallFrom, which #517 fixed on the Agents screen, this
-// function had no corrective switch at all, so nothing caught it.
-//
-// Three properties, and the first two are asserted INDEPENDENTLY because either
-// alone is satisfiable by the bug. A test that only looked for "audited" would
-// still pass if the zero value came back through some other row; a test that
-// only forbade "unspecified" would pass on a blank chip.
-//
-//  1. The rows are actually there, fetched by ByNode. A read aimed at a
-//     different Node is in the same trail and must NOT appear: without that,
-//     an empty table would satisfy every remaining assertion here.
-//  2. NO row renders "unspecified".
-//  3. Every read renders "audited", the word justified at readOutcomeAudited
-//     (vocab.go) and shared with the Agents screen rather than re-minted — a
-//     second screen naming these records is a second chance to name them
-//     differently, which is what #463 was.
-//
-// The fixture goes through auditsink.RecordRead, not an audit.Record literal.
-// A literal is the wrong record shape — it is how #463, #517 and this bug all
-// survived a suite that looked like it covered reads.
-func TestNode_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
+// Every visit to a Node's detail page is itself a describe_node read, so
+// before this fix, repeatedly opening the page filled Recent Tasks with its
+// own control-plane reads and pushed real Tasks out of the fixed window.
+// Spec 02 defines the panel as Tasks dispatched to the Node, denies included
+// — not reads ABOUT the Node. This proves the panel now filters to
+// KindDispatch, that denies still render, and that the audit trail itself is
+// untouched: those reads are still there for Activity, Agents and Read
+// egress to show, this panel just does not list them.
+func TestNode_RecentTasksListsTasksNotControlPlaneReads(t *testing.T) {
 	repo := &captureRepo{}
-	sinkReadsInto(t, repo, "node-web-1", "describe_node", "log.tail")
-	// Aimed at a different Node in the same trail: the assertions below are
-	// worthless if the screen renders the whole trail rather than this Node's.
+	ctx := context.Background()
+	if err := repo.Append(ctx, audit.Record{
+		Kind: audit.KindDispatch, NodeID: "node-web-1", OperationName: "file.read",
+		Outcome: jobs.OutcomeSuccess, JobID: "job-1", Timestamp: testNow,
+	}); err != nil {
+		t.Fatalf("Append(file.read): %v", err)
+	}
+	if err := repo.Append(ctx, audit.Record{
+		Kind: audit.KindDispatch, NodeID: "node-web-1", OperationName: "service.restart",
+		Outcome: jobs.OutcomeDeniedByPolicy, Timestamp: testNow.Add(time.Second),
+	}); err != nil {
+		t.Fatalf("Append(service.restart): %v", err)
+	}
+	// The real auditsink path, as the old test used: several times over, so
+	// this panel's window (nodeTaskRows) would have been blown out by the
+	// Console's own reads before this fix.
+	sinkReadsInto(t, repo, "node-web-1", repeat("describe_node", nodeTaskRows+5)...)
+	// Aimed at a different Node in the same trail: proves the screen still
+	// reads by ByNode rather than rendering the whole trail.
 	sinkReadsInto(t, repo, "node-web-2", "proc.list")
 
 	d := fleetFixture()
@@ -722,26 +721,57 @@ func TestNode_ReadOutcomeIsAuditedNotUnspecified(t *testing.T) {
 	if panel == "" {
 		t.Fatal("the Node page has no Recent Tasks panel")
 	}
-	for _, tool := range []string{"describe_node", "log.tail"} {
-		if !strings.Contains(panel, "<code>"+tool+"</code>") {
-			t.Fatalf("this Node's read of %q is not in Recent Tasks — the assertions below "+
-				"would pass on an empty table, so the row has to be there first", tool)
+	// Anti-vacuity first: both dispatched Operations must actually be there,
+	// or every assertion below would pass on an empty or read-only table.
+	for _, op := range []string{"file.read", "service.restart"} {
+		if !strings.Contains(panel, "<code>"+op+"</code>") {
+			t.Fatalf("the dispatched Operation %q is not in Recent Tasks", op)
 		}
 	}
-	if strings.Contains(panel, "<code>proc.list</code>") {
-		t.Error("a read aimed at another Node is in this Node's Recent Tasks — the screen is " +
-			"not reading the trail through ByNode")
+	if !strings.Contains(panel, `data-outcome="denied_by_policy"`) {
+		t.Error("the denied Task's outcome chip is not rendered — Recent Tasks must include denies")
+	}
+	if strings.Contains(panel, "describe_node") {
+		t.Error("describe_node — a control-plane read ABOUT this Node — appears in Recent Tasks, " +
+			"which spec 02 defines as Tasks dispatched TO the Node")
+	}
+	if strings.Contains(panel, `data-outcome="audited"`) || strings.Contains(panel, `data-outcome="unspecified"`) {
+		t.Error(`Recent Tasks renders a read-only outcome chip ("audited" or "unspecified") — ` +
+			"only dispatched Tasks, whose outcome is a real per-Node verdict, belong here")
+	}
+	if strings.Contains(panel, "Older Tasks are not shown") {
+		t.Error("the elided-Tasks note renders even though only two real Tasks exist — the " +
+			"control-plane reads are still filling the window, so the filter is not running " +
+			"before windowing")
+	}
+	if !strings.Contains(panel, "read — output not retained") {
+		t.Error(`the read-class Task (file.read) does not carry the "output not retained" note`)
+	}
+	if n := strings.Count(panel, "read — output not retained"); n != 1 {
+		t.Errorf("%d rows carry the read-class note, want 1 (file.read only, not service.restart)", n)
 	}
 
-	if strings.Contains(panel, `data-outcome="unspecified"`) {
-		t.Error(`a read renders the outcome chip "unspecified" — the record has no per-Node ` +
-			`verdict because nothing was dispatched, and rendering the zero value tells an ` +
-			`operator the Console does not know what happened when it does`)
+	// The audit record is unchanged: item 3 filters what this panel QUERIES,
+	// never what is written. Every describe_node record the sink wrote for
+	// node-web-1 is still in the trail (plus the one aimed at node-web-2).
+	var describeNodeCount int
+	for _, rec := range repo.recs {
+		if rec.Kind == audit.KindRead && rec.NodeID == "node-web-1" {
+			describeNodeCount++
+		}
 	}
-	chip := `<span class="chip outcome" data-outcome="audited">audited</span>`
-	if n := strings.Count(panel, chip); n != 2 {
-		t.Errorf("%d of 2 reads render the outcome chip %q; a read's outcome is that the "+
-			"access is on the trail (ADR-0025), which is what the row's own note says",
-			n, readOutcomeAudited)
+	if want := nodeTaskRows + 5; describeNodeCount != want {
+		t.Errorf("the audit trail holds %d KindRead records for node-web-1, want %d — this panel "+
+			"must never change what is written, only what it displays", describeNodeCount, want)
 	}
+}
+
+// repeat returns s repeated n times, for building a fixture that names one
+// tool many times over without a literal slice of duplicates in the test body.
+func repeat(s string, n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = s
+	}
+	return out
 }

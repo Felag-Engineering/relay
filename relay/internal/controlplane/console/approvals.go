@@ -1777,7 +1777,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   Operation; it did not choose one word a human reads about it.</p>
 
   <dl class="kv">
-    <dt>requested by</dt><dd>{{template "trust-chip" (trust .Requester .Verified)}}</dd>
+    <dt class="baseline">requested by</dt><dd class="baseline">{{template "trust-chip" (trust .Requester .Verified)}}</dd>
     <dt>plan hash</dt><dd><code class="planhash" title="This is what a decision commits to — not the prose above it.">{{.PlanHash}}</code></dd>
     {{with .MatchedRules}}<dt>parked by</dt><dd><code>{{join ", " .}}</code></dd>{{end}}
     <dt>created</dt><dd>{{.Created}}</dd>

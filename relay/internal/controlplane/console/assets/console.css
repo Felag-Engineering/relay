@@ -897,6 +897,11 @@ th {
 }
 td { padding: var(--space-3); border-bottom: 1px solid var(--border-subtle); vertical-align: top; font-size: var(--text-sm); }
 tbody tr:last-child td { border-bottom: 0; }
+/* .rows overrides td's default top alignment to baseline (#640): a BY trust
+   chip (inline-flex, line-height 1.8, 1px padding) sits taller than its
+   neighbours' plain text, so top-aligning it drops the chip below the row's
+   text rather than lining up their first lines. */
+.rows td { vertical-align: baseline; }
 td.num, th.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 td.num.attn, .stat.attn b { color: var(--attention-text); }
 tr.attnrow td { background: var(--attention-bg); }
@@ -1083,7 +1088,20 @@ dl { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) 
 dt { color: var(--text-muted); font-size: var(--text-xs); }
 dd { margin: 0; color: var(--text-primary); }
 dd code, .frow code { font-family: var(--font-mono); font-size: var(--text-sm); }
-dl.kv { grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5); }
+dl.kv {
+  grid-template-columns: 140px 1fr; gap: var(--space-2) var(--space-5);
+}
+/* Per-row, not per-dl (#640 cycle 2 review, BLOCKING 2): the approval card's
+   "requested by" and "plan hash" rows share ONE dl.kv (approvals.go), and
+   code.planhash's dd is a horizontal scroll container — align-items: baseline
+   on the whole dl would pin ITS scrollbar edge to the dt's text baseline
+   instead of stretching it to the row, which looks broken there. dl.kv's
+   default cross-axis alignment (grid's own "stretch") is already correct for
+   every plain-text row, including plan hash; only "requested by" needs its dt
+   lined up with the trust chip's first line rather than stretched to match
+   it, because the chip's own line-height differs from plain text. .baseline
+   marks that one row's dt/dd, not the dl. */
+.kv dt.baseline, .kv dd.baseline { align-self: baseline; }
 
 .polblock { border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); overflow: hidden; background: var(--bg-canvas); }
 .polrow { display: flex; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--border-subtle); font-size: var(--text-sm); }
@@ -1653,4 +1671,43 @@ dl.kv dd { min-width: 0; }
   .qrow { flex-direction: column; }
   .qside { width: auto; text-align: left; }
   dl.kv { grid-template-columns: 1fr; }
+}
+
+/* --- Phone width (#640) ----------------------------------------------------
+ *
+ * At ~400px the sidebar used to hold its full 220px+ desktop width beside the
+ * content, which is how Fleet and Activity ended up 493px wide and Node
+ * detail 643px, with the Node table clipped out of view entirely on Fleet.
+ * The shell stacks instead of scrolling sideways: the nav moves above the
+ * content, in normal document flow rather than as a drawer — a JS toggle
+ * would need a script, and the content security policy admits none inline.
+ * Every wide table already scrolls INSIDE its own .tablescroll/.devtable
+ * container (see the "Tables" section above); this block is what stops the
+ * DOCUMENT itself from scrolling, so those containers are reachable at all. */
+@media (max-width: 720px) {
+  .app { flex-direction: column; }
+  .nav {
+    width: auto; border-right: 0; border-bottom: 1px solid var(--border-subtle);
+    padding: var(--space-3) 0;
+  }
+  /* .navgroups stays block (unchanged from the desktop rule above): each
+   * h2.navsec heading has to stay paired with its own ul.navlist directly
+   * below it — layout.go renders them as flat siblings, one heading then one
+   * list per group, not grouped in a wrapper element. Turning .navgroups
+   * itself into a flex-wrap row would let flex-wrap arrange headings and
+   * lists as independent items, wrapping a heading beside the tail of the
+   * PREVIOUS group's list rather than above its own. Only .navlist wraps, so
+   * a group's items flow horizontally within that group's own list, and the
+   * heading-list pairing survives by construction. */
+  .navsec { padding: var(--space-2) var(--space-4) var(--space-1); }
+  .navlist { flex-direction: row; flex-wrap: wrap; }
+  .navfoot { margin-top: var(--space-3); }
+  .banner, .topbar { padding-left: var(--space-4); padding-right: var(--space-4); }
+  main { padding: var(--space-4) var(--space-4) var(--space-8); }
+  .gbody { flex-direction: column; }
+  .facets { width: auto; border-right: 0; border-bottom: 1px solid var(--border-subtle); }
+  .devtable { max-width: 100%; }
+  .pcol { min-width: 0; flex-basis: 100%; }
+  .ev { flex-direction: column; gap: var(--space-2); }
+  .evwhen { width: auto; }
 }

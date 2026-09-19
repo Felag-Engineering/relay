@@ -72,16 +72,18 @@ func newTestHandlerWithEventsLimiter(d Deps, role accounts.Role, limiter *stream
 	d = mirrorFleetIntoLane(d)
 	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
 	mux := http.NewServeMux()
+	nf := notFoundHandler(d)
 	for _, r := range Routes(d) {
 		h := r.Handler(d)
 		if r.Path == "/console/events" {
 			h = newEventsHandler(d, limiter)
 		}
-		mux.HandleFunc(r.Pattern(), gated(r, h))
+		mux.HandleFunc(r.Pattern(), gated(r, h, nf))
 		if r.constrainsReach() {
-			mux.HandleFunc(r.Path, methodMismatch(r))
+			mux.HandleFunc(r.Path, methodMismatch(r, nf))
 		}
 	}
+	mux.HandleFunc("/console/", nf)
 	return authn.Middleware(Secure(mux))
 }
 
@@ -417,6 +419,36 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 	}
 	if methodChecked == 0 {
 		t.Fatal("the method-oracle sweep checked zero routes — it is not running")
+	}
+}
+
+// TestConsole_UnknownPathRendersTheStyledNotFound (#640, item 5): a path
+// under /console/ that this package never mounts at all must get the styled
+// Console 404, not net/http's plain-text "404 page not found" — the same
+// gap TestConsole_ARouteAboveTheSessionRoleIsAbsent's own "miss" control
+// already exercises implicitly, asserted directly here.
+func TestConsole_UnknownPathRendersTheStyledNotFound(t *testing.T) {
+	h := newTestHandler(renderableDeps(), accounts.RoleViewer)
+
+	for _, path := range []string{"/console/does-not-exist", "/console/nodes-typo/x"} {
+		rec := get(t, h, path)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", path, rec.Code)
+		}
+		ct := rec.Header().Get("Content-Type")
+		if !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("GET %s Content-Type = %q, want text/html", path, ct)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `aside class="nav"`) {
+			t.Errorf("GET %s did not render the Console shell (no aside class=\"nav\")", path)
+		}
+		if !strings.Contains(body, "Nothing in the Console lives at this address.") {
+			t.Errorf("GET %s did not render the styled not-found sentence", path)
+		}
+		if strings.Contains(body, "404 page not found") {
+			t.Errorf("GET %s rendered net/http's plain 404 text", path)
+		}
 	}
 }
 

@@ -1422,10 +1422,10 @@ var fleetTmpl = newScreen("fleet", `
           <tr>
             <td><span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span></td>
             <td><a href="{{.Href}}{{$.Pin.Query}}" class="nodeid">{{.ID}}</a>{{with .Hostname}}<div class="sub">{{.}}</div>{{end}}</td>
-            <td class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
+            <td><div class="statecell">{{if .Revoked}}<span class="chip fenced" title="Revoked {{.RevokedAt}}. The record is kept so the Node stays investigable.">revoked</span>{{end}}
               {{if .Quarantined}}<span class="chip fenced" title="Quarantined by an admin. Reversible.">quarantined</span>{{end}}
-              {{range .States}}{{template "label-chip" .}}{{end}}</td>
-            <td class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</td>
+              {{range .States}}{{template "label-chip" .}}{{end}}</div></td>
+            <td><div class="lblcell">{{range .Labels}}{{template "label-chip" .}}{{end}}</div></td>
             <td><code title="{{.PolicyFingerprint}}">{{short .PolicyFingerprint}}</code></td>
             <td class="num">{{.LastSeen}}</td>
           </tr>

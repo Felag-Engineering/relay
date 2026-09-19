@@ -41,7 +41,7 @@ package console
 // # Bounded by construction, not capped after the fact
 //
 // Every figure comes from the capability layer's read lane (#441), in AT MOST
-// NINE queries whose count does not move with fleet size, Job size or trail
+// EIGHT queries whose count does not move with fleet size, Job size or trail
 // size. Nothing here iterates Jobs to fetch their dispatch records: that N+1 is
 // what makes cost scale with volume, and it would write one audit record per
 // Job per page view.
@@ -52,9 +52,12 @@ package console
 //	Q4 AuditCounts the same, by principal and bucket  -> volume and baseline
 //	Q5 QueryAudit  the same, refused                  -> the refusal rows
 //	Q6 QueryAudit  the same                           -> the by-target table
-//	Q7 AuditReach  KindRead rows -> the exact enumeration total
+//	Q7 AuditCounts KindRead rows -> the exact enumeration total AND
+//	               enumerations by principal, from ONE result (#640: a second
+//	               aggregate here used to disagree with this one, because the
+//	               read lane records each query's own KindRead record before
+//	               that query runs)
 //	Q8 QueryAudit  KindRead rows -> the by-tool table
-//	Q9 AuditCounts KindRead rows -> enumerations by principal
 //
 // Q2-Q6 are SKIPPED ENTIRELY when the vocabulary is empty. That is the single
 // most important correctness invariant on the page: capability.AuditFilter's
@@ -589,14 +592,35 @@ func buildReadsView(ctx context.Context, d Deps, caller capability.Principal, f 
 			Since:     f.Since,
 			Until:     f.Until,
 		}
+
+		// Q7 is the ONLY aggregate over the enumeration lane: the headline
+		// figure and every By-principal Enumerations cell both come from this
+		// one AuditCounts result, so they are equal BY CONSTRUCTION whatever
+		// the read lane writes in between (#640). A second aggregate — the
+		// former Q7 AuditReach that used to supply the headline alone — would
+		// disagree with this one whenever a query this very render already
+		// made lands between the two calls, because capability's read lane
+		// records each query's own KindRead record BEFORE that query runs
+		// (readlane.go recordQueryRead): the headline and the by-principal
+		// table would then be counting two different snapshots of the same
+		// trail. Also gives an Account that has ONLY enumerated a row in the
+		// by-principal table — including on a page where the join guard fired
+		// and the Node-read lane was never queried — which is why it merges
+		// into v.Principals rather than replacing it.
 		v.Queries++
-		if reach, err := d.Queries.AuditReach(ctx, caller, enumerated); err != nil {
+		if buckets, err := d.Queries.AuditCounts(ctx, caller, enumerated, bucket); err != nil {
 			v.EnumCountError = true
+			v.PrincipalsError = true
 		} else {
-			v.Enumerations = reach.Calls
+			for _, b := range buckets {
+				v.Enumerations += b.Count
+			}
 			v.EnumKnown = true
+			v.Principals = principalRows(nil, buckets, nil, f.Since, f.Until, bucket).mergeInto(v.Principals)
 		}
 
+		// Q8: the by-tool table. EnumSampled reads v.Enumerations/v.EnumKnown,
+		// which Q7 above has already set.
 		v.Queries++
 		if page, err := d.Queries.QueryAudit(ctx, caller, enumerated,
 			capability.PageRequest{Limit: readEnumRows}); err != nil {
@@ -605,19 +629,6 @@ func buildReadsView(ctx context.Context, d Deps, caller capability.Principal, f 
 			v.EnumTargets = aggregateTargets(page.Rows)
 			v.EnumListed = len(page.Rows)
 			v.EnumSampled = page.Next != "" || (v.EnumKnown && v.Enumerations > len(page.Rows))
-		}
-
-		// Q9 exists so that an Account which has ONLY enumerated still appears
-		// in the by-principal table — including on a page where the join guard
-		// fired and the Node-read lane was never queried. Without it the table
-		// would be empty on a page simultaneously reporting N enumerations,
-		// and spec 17's first acceptance criterion is about the principal, not
-		// about one of its two families.
-		v.Queries++
-		if buckets, err := d.Queries.AuditCounts(ctx, caller, enumerated, bucket); err != nil {
-			v.PrincipalsError = true
-		} else {
-			v.Principals = principalRows(nil, buckets, nil, f.Since, f.Until, bucket).mergeInto(v.Principals)
 		}
 	}
 
@@ -1146,11 +1157,12 @@ exposure either way. See the notes below.</p>
 read of the trail as a read, so this view wrote {{.Queries}} {{plural .Queries "record" "records"}}
 that the next view of it will count. The enumeration figure above is not merely affected by that
 later — it already includes it: the read lane writes its record BEFORE the query runs, so the
-enumeration aggregate has counted every query this page had already made, itself included. On an
-otherwise idle Relay the figure therefore never settles below about seven and climbs by nine per
-refresh. These records are labelled rather than filtered out: hiding them would take a second
-hardcoded name list — the exact smell this screen was rebuilt to remove — and &ldquo;who queried the
-audit trail&rdquo; is legitimately part of read egress.</p>
+enumeration aggregate has counted every query this page had already made, itself included. The
+headline figure and the By-principal Enumerations column are computed from that SAME aggregate, so
+the two always agree with each other, however many of this page's own queries the window catches.
+These records are labelled rather than filtered out: hiding them would take a second hardcoded name
+list — the exact smell this screen was rebuilt to remove — and &ldquo;who queried the audit
+trail&rdquo; is legitimately part of read egress.</p>
 
 {{if .OpsEmpty}}
 <p class="gap"><b>The audit lane was not queried for Node reads.</b>
