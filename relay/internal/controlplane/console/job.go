@@ -946,6 +946,7 @@ func newTaskRow(t capability.TaskRow, jobReadClass bool, operation string) taskR
 			// screen (spec 07), which is not built in v0.6.0, and a link to a
 			// screen that does not exist is worse than no link. See spec 13's
 			// annotation.
+			Boundary: DenyBoundaryApply,
 		}
 		return row
 	}

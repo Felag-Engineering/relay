@@ -281,9 +281,10 @@ func TestJob_DenyGroupIsGroupedByRuleAndLinksToPolicy(t *testing.T) {
 		t.Error("a deny rendered in the failure treatment")
 	}
 	// The Relay cannot fix this, and the page says so rather than offering a
-	// control that would imply it could.
-	if !strings.Contains(body, "Relay cannot change this") {
-		t.Error("the deny block does not say Policy is rooted on the Node")
+	// control that would imply it could — in the capability layer's words, byte
+	// for byte, the same bytes MCP and the Control API emit.
+	if !strings.Contains(body, escapedInATextNode(t, capability.PolicyDenyExplanation)) {
+		t.Error("the deny block does not carry the capability layer's boundary explanation")
 	}
 }
 
