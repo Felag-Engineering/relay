@@ -46,9 +46,9 @@ var mintLikeSelectors = map[string]bool{"Mint": true, "MintAPIToken": true}
 //     3-value assignment.
 //
 // A new call site introduced through any of these shapes would NOT be
-// caught by this test. It is a guard against the two known, currently-real
-// call sites drifting or a third being added in the SAME shape as those two
-// — not a general static-analysis proof that Reveal() is called nowhere
+// caught by this test. It is a guard against the three known, currently-real
+// call sites drifting or a fourth being added in the SAME shape as those
+// three — not a general static-analysis proof that Reveal() is called nowhere
 // else.
 func fileCallsPlaintextReveal(fset *token.FileSet, path string) (bool, error) {
 	file, err := parser.ParseFile(fset, path, nil, 0)
@@ -108,12 +108,13 @@ func fileCallsPlaintextReveal(fset *token.FileSet, path string) (bool, error) {
 // to get a string to put in an HTTP request, which is not the "the plaintext
 // escapes production code" property this guards. See
 // fileCallsPlaintextReveal's doc comment for the call SHAPES this cannot
-// see — it enumerates the two known real call sites, it does not prove
-// there is no third in a different shape.
+// see — it enumerates the three known real call sites, it does not prove
+// there is no fourth in a different shape.
 func TestPlaintext_RevealCallSitesAreEnumerated(t *testing.T) {
 	permitted := map[string]bool{
-		"internal/controlplane/api/accounts.go": true,
-		"cmd/relay/bootstrap_token.go":          true,
+		"internal/controlplane/api/accounts.go":           true,
+		"cmd/relay/bootstrap_token.go":                    true,
+		"internal/controlplane/console/accounts_write.go": true,
 	}
 
 	_, thisFile, _, ok := runtime.Caller(0)

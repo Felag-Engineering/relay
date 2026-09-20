@@ -300,6 +300,17 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// d.consoleAuth is already wired above as Auth, so step-up needs no
 		// new wiring.
 		Decide: d.capability,
+		// AccountAdmin (#655): the Console's third write seam. d.capability
+		// already carries all five verbs (#653) — CreateAccount,
+		// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken
+		// — so no adapter is built for it. The admin floor on every one, the
+		// self-target refusal, the last-enabled-admin refusal and all six
+		// audit rows are the capability layer's. d.consoleAuth is already
+		// wired above as Auth and d.capability as Accounts, so the per-action
+		// step-up and the role route's current-role read need no new wiring
+		// either. Execution stays false, unchanged: none of these five
+		// composes or dispatches anything.
+		AccountAdmin: d.capability,
 	})
 	mux.Handle("/console/", console.Secure(consoleMux))
 }

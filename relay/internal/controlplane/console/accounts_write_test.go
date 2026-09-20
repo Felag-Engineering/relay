@@ -1,0 +1,1988 @@
+package console
+
+// accounts_write_test.go covers the Accounts screen's write half (#655):
+// the five routes, the per-action step-up, the reveal-once mint, and the two
+// source-level guards that keep this file from acquiring a second opinion
+// about authority.
+//
+// The two guards at the top are here rather than in accounts_test.go for the
+// same reason accounts_write.go is its own file: they are about the WRITE
+// half, and accounts.go keeps its own, stricter, exception-free version.
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/printer"
+	"go/token"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
+)
+
+// accountsWriteFile is the one file both guards below inspect. A base name, so
+// renaming the file fails these guards loudly rather than silently disabling
+// them — the shape approvalDecideFile already uses (no_dispatch_test.go).
+const accountsWriteFile = "accounts_write.go"
+
+// ---------------------------------------------------------------------------
+// Guard A — the write half reads no caller role, by two independent mechanisms
+// ---------------------------------------------------------------------------
+
+// parseWriteHalf parses accounts_write.go, WITHOUT comments.
+//
+// Without comments deliberately, and it is load-bearing for Layer 1 below: a
+// doc comment that names a shape in order to EXPLAIN it — roleChangeCouldGrant's
+// comment names the fail-open spelling precisely so nobody writes it — is not
+// the violation. TestAccounts_NoConsoleFileNamesSecretHash takes the same
+// position for the same reason.
+func parseWriteHalf(t *testing.T) (*token.FileSet, *ast.File) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, filepath.Join(".", accountsWriteFile), nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", accountsWriteFile, err)
+	}
+	return fset, file
+}
+
+// writeHalfCode renders accounts_write.go back to source with every comment
+// dropped, so Layer 1's string bans scan CODE and not prose.
+func writeHalfCode(t *testing.T) string {
+	t.Helper()
+	fset, file := parseWriteHalf(t)
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, file); err != nil {
+		t.Fatalf("print %s: %v", accountsWriteFile, err)
+	}
+	return buf.String()
+}
+
+// callerAuthorityProducers are this package's functions that RETURN a
+// caller-authority value: principal() reads the Principal the authentication
+// boundary injected (console.go), page() carries the caller's role on Page
+// (layout.go), and writePrelude (accounts_write.go) returns both.
+//
+// A local bound from any of them holds the CALLER's authority whatever it is
+// named, which is the whole point of Layer 2: the spelling bans in Layer 1
+// only catch the spellings somebody thought of, and a plan reviewer broke the
+// first cut of this guard by renaming the local.
+//
+// If a new prelude helper appears that hands a handler its Principal or its
+// Page, it belongs in this list. Guard B's exactly-once count on AtLeast is
+// what keeps the omission from being silent.
+var callerAuthorityProducers = map[string]bool{
+	"principal":    true,
+	"page":         true,
+	"writePrelude": true,
+}
+
+// callerAuthorityIdents collects every identifier in file known to hold a
+// caller-authority value: a parameter or result typed Page or
+// capability.Principal, and a local bound from a callerAuthorityProducers
+// call.
+func callerAuthorityIdents(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+
+	isAuthorityType := func(e ast.Expr) bool {
+		switch t := e.(type) {
+		case *ast.Ident:
+			return t.Name == "Page"
+		case *ast.SelectorExpr:
+			x, ok := t.X.(*ast.Ident)
+			return ok && x.Name == "capability" && t.Sel.Name == "Principal"
+		}
+		return false
+	}
+	collectFields := func(fl *ast.FieldList) {
+		if fl == nil {
+			return
+		}
+		for _, f := range fl.List {
+			if !isAuthorityType(f.Type) {
+				continue
+			}
+			for _, name := range f.Names {
+				if name.Name != "_" {
+					out[name.Name] = true
+				}
+			}
+		}
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch v := n.(type) {
+		case *ast.FuncDecl:
+			collectFields(v.Type.Params)
+			collectFields(v.Type.Results)
+		case *ast.FuncLit:
+			collectFields(v.Type.Params)
+			collectFields(v.Type.Results)
+		case *ast.AssignStmt:
+			if len(v.Rhs) != 1 {
+				return true
+			}
+			call, ok := v.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := call.Fun.(*ast.Ident)
+			if !ok || !callerAuthorityProducers[fn.Name] {
+				return true
+			}
+			for _, lhs := range v.Lhs {
+				if id, ok := lhs.(*ast.Ident); ok && id.Name != "_" {
+					out[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf is invariant 10
+// as a source fact: accounts_write.go must interpret NO caller role. The
+// route's MinRole subtracts reach at mount time and the capability layer
+// authorizes; a comparison here would be a third, unreviewed answer.
+//
+// TWO INDEPENDENT LAYERS, because one is not enough and this package has the
+// scar to prove it. A plan reviewer defeated the first cut of this guard with
+// `if pg.Role != accounts.RoleAdmin { /* skip the password */ }` — a step-up
+// bypass that passed both halves as they were then written.
+//
+//   - Layer 1 bans the spellings, including the two that let that bypass
+//     through. `.AtLeast(` is banned here TOO, with a COUNTED, LOCATED
+//     exception: this layer requires exactly one occurrence and Guard B
+//     requires that one to be inside roleChangeCouldGrant. A ban with a
+//     counted exception is falsifiable; a ban that was simply deleted is not.
+//   - Layer 2 is an AST rule that does not care what the local is called: any
+//     `.Role` selector on an identifier KNOWN to hold caller authority fails,
+//     whatever its name, which catches `string(who.Role) != "admin"` — a hole
+//     accounts.go's own comment admits its spelling bans do not close.
+func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
+	code := writeHalfCode(t)
+
+	const message = "%s reads or re-derives the CALLER's authority (%s) — the write half must " +
+		"interpret no caller role. The route's MinRole subtracts reach at mount time and the " +
+		"capability layer authorizes; a comparison here is a third, unreviewed answer (invariant 10)."
+
+	// --- Layer 1: the spelling bans, accounts.go's list in full ------------
+	for _, banned := range []string{
+		"ReachableBy(", "== accounts.Role", "!= accounts.Role",
+		"RoleGate", "requiredRole", "caller.Role", "pg.Role",
+	} {
+		if strings.Contains(code, banned) {
+			t.Errorf(message, accountsWriteFile, banned)
+		}
+	}
+
+	// `.AtLeast(` is banned with one counted, located exception. Zero would
+	// mean roleChangeCouldGrant was renamed or deleted and Guard B is now
+	// asserting nothing; more than one means an occurrence slipped in.
+	if got := strings.Count(code, ".AtLeast("); got != 1 {
+		t.Errorf("%s calls AtLeast %d times, want exactly 1 (roleChangeCouldGrant's, on the "+
+			"TARGET Account's own old and new role). Zero means this guard and Guard B are "+
+			"asserting nothing; more than one means a second role comparison appeared.",
+			accountsWriteFile, got)
+	}
+
+	// --- Layer 2: the AST rule ---------------------------------------------
+	_, file := parseWriteHalf(t)
+	authority := callerAuthorityIdents(file)
+
+	// Vacuity pins. An empty set means the collection pass stopped working,
+	// not that the file got safer — every handler here takes a Principal and
+	// a Page. The two names are asserted explicitly because Layer 1's
+	// "caller.Role"/"pg.Role" bans are only load-bearing while those ARE the
+	// spellings in use; if someone renames them, this fails and the rename
+	// has to be a deliberate act that also revisits Layer 1.
+	if len(authority) == 0 {
+		t.Fatal("the caller-authority identifier set is empty — the collection pass is not running, " +
+			"so Layer 2 is inspecting nothing")
+	}
+	for _, want := range []string{"caller", "pg"} {
+		if !authority[want] {
+			t.Errorf("the caller-authority set does not contain %q. Either the collection pass "+
+				"broke, or the locals were renamed — in which case Layer 1's spelling bans "+
+				"(%q, %q) are no longer load-bearing and must be revisited deliberately.",
+				want, "caller.Role", "pg.Role")
+		}
+	}
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Role" {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if !ok || !authority[id.Name] {
+			return true
+		}
+		t.Errorf(message, accountsWriteFile, id.Name+".Role")
+		return true
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Guard B — the one AtLeast call is roleChangeCouldGrant's
+// ---------------------------------------------------------------------------
+
+// atLeastSite is one occurrence of an AtLeast selector and the function it sits
+// in. enclosing is "" for PACKAGE SCOPE — a var initialiser or a package-level
+// func literal, which is precisely how a caller-role comparison hides from a
+// guard that only walks f.Decls looking for *ast.FuncDecl.
+type atLeastSite struct {
+	enclosing string
+	pos       token.Pos
+}
+
+// atLeastCallSites walks the WHOLE file, maintaining the node stack, so a
+// package-scope occurrence is found rather than skipped.
+//
+// The first cut of this guard iterated f.Decls and `continue`d on anything
+// that was not an *ast.FuncDecl, which made
+// `var callerOutranks = func(a, b accounts.Role) bool { return a.AtLeast(b) }`
+// invisible to it — AtLeast on a caller's role, at package scope, passing
+// clean, under a failure message asserting the only comparison in the file was
+// roleChangeCouldGrant's. The third fixture below is that shape.
+func atLeastCallSites(file *ast.File) []atLeastSite {
+	var sites []atLeastSite
+	var stack []ast.Node
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			// Post-visit. Every non-nil push above returns true, so pushes
+			// and pops are balanced.
+			stack = stack[:len(stack)-1]
+			return false
+		}
+		stack = append(stack, n)
+
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "AtLeast" {
+			return true
+		}
+		enclosing := ""
+		for i := len(stack) - 1; i >= 0; i-- {
+			if fd, ok := stack[i].(*ast.FuncDecl); ok {
+				enclosing = fd.Name.Name
+				break
+			}
+		}
+		sites = append(sites, atLeastSite{enclosing: enclosing, pos: sel.Pos()})
+		return true
+	})
+	return sites
+}
+
+// atLeastViolations reports the sites that are not roleChangeCouldGrant's,
+// each with the message its own shape deserves.
+func atLeastViolations(sites []atLeastSite) []string {
+	var out []string
+	for _, s := range sites {
+		switch s.enclosing {
+		case "roleChangeCouldGrant":
+			// The one permitted occurrence.
+		case "":
+			out = append(out, fmt.Sprintf(
+				"%s calls AtLeast at PACKAGE SCOPE (a var initialiser or a package-level func "+
+					"literal). That is outside every function this guard names, which is precisely "+
+					"how a caller-role comparison hides from it.", accountsWriteFile))
+		default:
+			out = append(out, fmt.Sprintf(
+				"%s calls AtLeast in %s — the only role comparison this file may make is "+
+					"roleChangeCouldGrant's, on the TARGET Account's own old and new role. A "+
+					"comparison anywhere else is a second opinion about authority (invariant 10).",
+				accountsWriteFile, s.enclosing))
+		}
+	}
+	return out
+}
+
+func TestAccountsWrite_AtLeastIsCalledOnlyInRoleChangeCouldGrant(t *testing.T) {
+	_, file := parseWriteHalf(t)
+	sites := atLeastCallSites(file)
+
+	// The vacuity assert, in the same shape as the Reveal guard below. Zero
+	// means the function was renamed or deleted and this guard now asserts
+	// nothing; more than one means an occurrence slipped in even if it
+	// happened to sit in the right function.
+	if len(sites) != 1 {
+		t.Fatalf("%s contains %d AtLeast selectors, want exactly 1 — this guard carves ONE "+
+			"exception out of Guard A's ban, and it is only meaningful while there is exactly "+
+			"one occurrence to locate", accountsWriteFile, len(sites))
+	}
+	for _, v := range atLeastViolations(sites) {
+		t.Error(v)
+	}
+}
+
+// TestAccountsWriteGuard_AtLeastFixtures runs Guard B's machinery over sources
+// that are not this package — a guard nobody has ever seen fail is a guard
+// that might not run. The `no_dispatch` fixture idiom: every case asserted in
+// both directions.
+func TestAccountsWriteGuard_AtLeastFixtures(t *testing.T) {
+	cases := []struct {
+		name       string
+		src        string
+		wantSubstr string // "" = expect NO violation
+		wantSites  int
+	}{
+		{
+			name: "the real roleChangeCouldGrant is clean",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func roleChangeCouldGrant(from, to accounts.Role) bool {
+	if !from.Valid() || !to.Valid() {
+		return true
+	}
+	return to != from && to.AtLeast(from)
+}
+`,
+			wantSubstr: "",
+			wantSites:  1,
+		},
+		{
+			name: "a second function calling AtLeast violates",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
+func callerOutranks(pg Page, want accounts.Role) bool { return pg.Role.AtLeast(want) }
+`,
+			wantSubstr: "calls AtLeast in callerOutranks",
+			wantSites:  2,
+		},
+		{
+			// THE FIXTURE THAT FAILS AGAINST THE f.Decls SHAPE. A package-level
+			// func literal is not an *ast.FuncDecl, so a guard that filtered
+			// f.Decls never saw it.
+			name: "a package-level func literal calling AtLeast violates",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func roleChangeCouldGrant(from, to accounts.Role) bool { return to != from && to.AtLeast(from) }
+var callerOutranks = func(a, b accounts.Role) bool { return a.AtLeast(b) }
+`,
+			wantSubstr: "at PACKAGE SCOPE",
+			wantSites:  2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tc.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			sites := atLeastCallSites(file)
+			if len(sites) != tc.wantSites {
+				t.Fatalf("atLeastCallSites found %d sites, want %d — the walk itself is wrong",
+					len(sites), tc.wantSites)
+			}
+			violations := atLeastViolations(sites)
+			if tc.wantSubstr == "" {
+				if len(violations) != 0 {
+					t.Fatalf("atLeastViolations = %v, want none (this is the legitimate shape)", violations)
+				}
+				return
+			}
+			for _, v := range violations {
+				if strings.Contains(v, tc.wantSubstr) {
+					return
+				}
+			}
+			t.Fatalf("atLeastViolations = %v, want one containing %q", violations, tc.wantSubstr)
+		})
+	}
+}
+
+// TestAccountsWriteGuard_CallerAuthorityFixtures is Guard A Layer 2's own
+// both-directions fixture table, including the EXACT bypass a plan reviewer
+// used against the first cut of this guard.
+func TestAccountsWriteGuard_CallerAuthorityFixtures(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		wantIDs []string // identifiers whose .Role must be flagged; empty = none
+	}{
+		{
+			// The reviewer's bypass, verbatim in shape: a step-up skipped on
+			// the CALLER's own role.
+			name: "pg.Role on a Page parameter is flagged",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func f(pg Page) bool {
+	if pg.Role != accounts.RoleAdmin {
+		return false
+	}
+	return true
+}
+`,
+			wantIDs: []string{"pg"},
+		},
+		{
+			// The same bypass with the local renamed — Layer 1's spelling
+			// bans cannot see this one at all.
+			name: "a renamed Page local is still flagged",
+			src: `package console
+func f(w any, r any) {
+	who, thePage, ok := writePrelude(nil, w, r, "Accounts")
+	_, _ = who, ok
+	if string(thePage.Role) != "admin" {
+		return
+	}
+}
+`,
+			wantIDs: []string{"thePage"},
+		},
+		{
+			name: "a capability.Principal parameter's Role is flagged",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+func f(anybody capability.Principal) string { return anybody.Role }
+`,
+			wantIDs: []string{"anybody"},
+		},
+		{
+			// The false-positive control: a TARGET Account's role is what
+			// roleChangeCouldGrant legitimately reads. It must not be
+			// mistaken for the caller's.
+			name: "a target Account's Role is not flagged",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func f(target accounts.Account, to accounts.Role) bool {
+	return roleChangeCouldGrant(target.Role, to)
+}
+`,
+			wantIDs: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "fixture.go", tc.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse fixture: %v", err)
+			}
+			authority := callerAuthorityIdents(file)
+
+			var flagged []string
+			ast.Inspect(file, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Role" {
+					return true
+				}
+				if id, ok := sel.X.(*ast.Ident); ok && authority[id.Name] {
+					flagged = append(flagged, id.Name)
+				}
+				return true
+			})
+
+			if !reflect.DeepEqual(flagged, tc.wantIDs) {
+				t.Fatalf("flagged %v, want %v", flagged, tc.wantIDs)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The plaintext's structural containment
+// ---------------------------------------------------------------------------
+
+// TestAccountsWrite_RevealIsCalledExactlyOnceInTheMintFile counts the Reveal
+// selectors in accounts_write.go.
+//
+// Scoped to that ONE file and deliberately not a package-wide ban, because
+// three legitimate unrelated Reveal() calls exist in this package —
+// login.go's consoleauth.SessionID and security.go's two console.CSRFToken
+// comparisons. A package-wide ban would false-positive on the session cookie
+// and the CSRF check, and a guard suppressed on its first run is a guard
+// nobody trusts.
+//
+// WHAT THIS DOES NOT PROVE: that the revealed string never escapes. A helper
+// taking the revealed value would pass this. The properties carrying that are
+// the no-redirect / no-Location / no-store / absent-from-every-later-render
+// tests below, mintedView.LogValue, and TestPlaintext_RevealCallSitesAreEnumerated
+// upstream in internal/accounts.
+func TestAccountsWrite_RevealIsCalledExactlyOnceInTheMintFile(t *testing.T) {
+	_, file := parseWriteHalf(t)
+	count := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Reveal" {
+			count++
+		}
+		return true
+	})
+	if count != 1 {
+		t.Errorf("%s calls Reveal %d times, want exactly 1 — the mint response is the only "+
+			"place in this package a token plaintext may be unwrapped", accountsWriteFile, count)
+	}
+}
+
+// TestAccountsWrite_NoConsoleFileNamesPlaintextOutsideTheMint is the
+// source-level companion: accounts_write.go legitimately names
+// accounts.Plaintext, and no other file in this package may.
+//
+// Parsed without comments, deliberately — a doc comment naming the type in
+// order to say it is absent (seams.go and accounts.go both do) is not the
+// violation. The shape is TestAccounts_NoConsoleFileNamesSecretHash's.
+func TestAccountsWrite_NoConsoleFileNamesPlaintextOutsideTheMint(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	checked, sawTheMintFile := 0, false
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		if name == accountsWriteFile {
+			sawTheMintFile = true
+			continue
+		}
+		file, parseErr := parser.ParseFile(fset, filepath.Join(".", name), nil, parser.SkipObjectResolution)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", name, parseErr)
+		}
+		checked++
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.Ident:
+				if v.Name == "Plaintext" {
+					t.Errorf("%s names Plaintext. Only %s's mint response may hold a token's "+
+						"plaintext; naming the type anywhere else is the first half of giving it "+
+						"a second rendering.", name, accountsWriteFile)
+				}
+			case *ast.BasicLit:
+				if strings.Contains(v.Value, "Plaintext") {
+					t.Errorf("%s has a string literal naming Plaintext (%.60s…) — a template that "+
+						"names it renders it", name, v.Value)
+				}
+			}
+			return true
+		})
+	}
+	if checked == 0 {
+		t.Fatal("the guard inspected zero files — it is not running")
+	}
+	if !sawTheMintFile {
+		t.Fatalf("%s was not found in this package — the allowlisted file was renamed, which "+
+			"silently widens this guard's exception to nothing at all", accountsWriteFile)
+	}
+}
+
+// TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy is the
+// structural claim in both directions: the screen's view types have nowhere to
+// put a secret, and mintedView has exactly one place — which is what makes
+// "the plaintext lands in one field" a fact about the types.
+//
+// CSRFToken is deliberately NOT banned by name: a CSRF token is a per-session
+// derived value the layout already renders into every form, and banning the
+// word would ban the control rather than the secret. What is banned is
+// Secret/Hash/Plaintext, exactly as TestAccounts_ATokenRowHasNoFieldASecretCouldOccupy
+// bans them on tokenRow.
+func TestAccountsWrite_OnlyTheMintViewHasAFieldASecretCouldOccupy(t *testing.T) {
+	for _, typ := range []reflect.Type{
+		reflect.TypeOf(accountsView{}),
+		reflect.TypeOf(accountRow{}),
+		reflect.TypeOf(tokenRow{}),
+		reflect.TypeOf(accountsWriteControls{}),
+		reflect.TypeOf(accountsWriteResultView{}),
+	} {
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			if f.Type.Kind() == reflect.Slice && f.Type.Elem().Kind() == reflect.Uint8 {
+				t.Errorf("%s.%s is a []byte — no screen type may have somewhere to put a SecretHash",
+					typ.Name(), f.Name)
+			}
+			for _, word := range []string{"Secret", "Hash", "Plaintext"} {
+				if strings.Contains(f.Name, word) {
+					t.Errorf("%s.%s names %q — a token's secret exists once, at mint, and reaches "+
+						"exactly one render", typ.Name(), f.Name, word)
+				}
+			}
+		}
+	}
+
+	// The positive half: mintedView has EXACTLY ONE string field named Token.
+	typ := reflect.TypeOf(mintedView{})
+	tokenFields := 0
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if f.Name == "Token" {
+			if f.Type.Kind() != reflect.String {
+				t.Errorf("mintedView.Token is %s, want a string", f.Type.Kind())
+			}
+			tokenFields++
+		}
+	}
+	if tokenFields != 1 {
+		t.Errorf("mintedView has %d fields named Token, want exactly 1 — 'the one place a secret "+
+			"can land' must be a fact about the type", tokenFields)
+	}
+}
+
+// TestAccountsWrite_MintedViewRedactsItsTokenWhenLogged is the structural half
+// of "the plaintext never reaches a log".
+//
+// mintedView.Token is a PLAIN STRING: by the time it lands there, Reveal() has
+// run and every redaction accounts.Plaintext provides — String, GoString,
+// LogValue, MarshalJSON — is gone. LogValue is what puts one of them back, and
+// it survives a future handler edit in a way a buffer assertion on today's
+// handler does not.
+func TestAccountsWrite_MintedViewRedactsItsTokenWhenLogged(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	v := mintedView{
+		AccountName: "gleipnir-prod",
+		TokenID:     sweepMintedTokenID,
+		TokenName:   "ci-deploy",
+		Token:       sweepMintedPlaintext,
+		BackHref:    "/console/accounts",
+	}
+	logger.Info("minted", slog.Any("view", v))
+
+	out := buf.String()
+	if strings.Contains(out, sweepMintedPlaintext) {
+		t.Errorf("logging a mintedView emitted the plaintext:\n%s", out)
+	}
+	if !strings.Contains(out, sweepMintedTokenID) {
+		t.Errorf("logging a mintedView emitted no token id — the operator's only handle:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+// The five routes' targets, taken from sweepAccounts (fakes_test.go) so a
+// fixture and an assertion cannot drift. None is the signed-in Account, so
+// nothing here is masked by capability.ErrSelfTargeted.
+const (
+	targetViewerID   = "acct-ana"      // a viewer: raising it is a grant
+	targetAdminID    = "acct-mike"     // an admin: lowering it is not
+	targetOperatorID = "acct-gleipnir" // an operator, with tokens
+	targetDisabledID = "acct-retired"  // disabled: enabling it is a grant
+	targetLiveToken  = "tok-live"      // a live token on targetOperatorID
+)
+
+// writeFix is a REAL browser session over a real consoleauth.Service, with the
+// write seams the test controls.
+//
+// A real session is not optional: stepUpProved resolves
+// controlplane.ConsoleSessionFromContext, and the CSRF middleware refuses
+// every bearer-lane POST before routing. The seams are fakes because the
+// refusal branches (throttled, bad credential, no session) are what these
+// tests are about, and a real store would only obscure what the handler does
+// with the error it gets back. This is TestDecide_StepUpHappensBeforeTheDecision's
+// shape.
+type writeFix struct {
+	f       *loginFixture
+	session *http.Cookie
+	csrf    string
+	admin   *fakeAccountAdmin
+	auth    *fakeAuth
+}
+
+func newWriteFix(t *testing.T, mutate func(*Deps)) *writeFix {
+	t.Helper()
+	admin := &fakeAccountAdmin{}
+	auth := &fakeAuth{}
+	f := newLoginFixtureWith(t, func(d *Deps) {
+		d.Accounts = sweepAccounts()
+		d.AccountAdmin = admin
+		d.Auth = auth
+		if mutate != nil {
+			mutate(d)
+		}
+	})
+	id, _, err := f.svc.Login(context.Background(), consoleauth.Attempt{
+		Name: "mike", Password: accounts.NewPassword(consolePassword), Source: "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("mint session: %v", err)
+	}
+	return &writeFix{
+		f:       f,
+		session: &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()},
+		csrf:    f.sessions.CSRFToken(id).Reveal(),
+		admin:   admin,
+		auth:    auth,
+	}
+}
+
+// post submits form to path over the fixture's session, adding the session's
+// own CSRF token. A test that wants the token absent or wrong builds the
+// request itself.
+func (x *writeFix) post(t *testing.T, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	body := url.Values{"csrf_token": {x.csrf}}
+	for k, vs := range form {
+		body[k] = vs
+	}
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return x.f.do(t, req, x.session)
+}
+
+// grantingAct is one of the four acts that cost a password, named so the
+// refusal table below is built from the same list the handlers implement —
+// adding a sixth write route without classifying it fails here.
+type grantingAct struct {
+	name string
+	path func() string
+	form url.Values
+	// called reports how many times THIS act's capability verb was called.
+	called func(*fakeAccountAdmin) int
+}
+
+func grantingActs() []grantingAct {
+	return []grantingAct{
+		{
+			name:   "create an Account",
+			path:   createAccountAction,
+			form:   url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.creates) },
+		},
+		{
+			name:   "raise a role",
+			path:   func() string { return setAccountRoleAction(targetViewerID) },
+			form:   url.Values{"role": {"admin"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
+		},
+		{
+			name:   "re-enable a disabled Account",
+			path:   func() string { return setAccountEnabledAction(targetDisabledID) },
+			form:   url.Values{"enabled": {"true"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.enables) },
+		},
+		{
+			name:   "mint an API Token",
+			path:   func() string { return mintAPITokenAction(targetOperatorID) },
+			form:   url.Values{"name": {"ci-deploy"}, "ttl": {"90d"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.mints) },
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// "Every granting act refuses without a correct password — and on refusal the
+// capability seam is never called."
+// ---------------------------------------------------------------------------
+
+func TestAccountsWrite_EveryGrantingActRefusesWithoutACorrectPassword(t *testing.T) {
+	refusals := []struct {
+		name         string
+		stepUpErr    error
+		omitPassword bool
+		wantStatus   int
+	}{
+		{name: "no password at all", omitPassword: true, wantStatus: http.StatusUnauthorized},
+		{name: "a wrong password", stepUpErr: consoleauth.ErrBadCredentials, wantStatus: http.StatusUnauthorized},
+		{name: "a throttled attempt", stepUpErr: &consoleauth.ThrottledError{RetryAfter: 30 * time.Second}, wantStatus: http.StatusTooManyRequests},
+		{name: "an ended session", stepUpErr: consoleauth.ErrNoSession, wantStatus: http.StatusUnauthorized},
+	}
+
+	acts := grantingActs()
+	if len(acts) != 4 {
+		t.Fatalf("the granting-act table has %d entries, want 4 — a write route was added without "+
+			"being classified as granting or reducing", len(acts))
+	}
+
+	for _, act := range acts {
+		for _, refusal := range refusals {
+			t.Run(act.name+"/"+refusal.name, func(t *testing.T) {
+				x := newWriteFix(t, nil)
+				x.auth.stepUpErr = refusal.stepUpErr
+
+				form := url.Values{}
+				for k, vs := range act.form {
+					form[k] = vs
+				}
+				if !refusal.omitPassword {
+					form.Set("password", "whatever the fake rejects")
+				}
+
+				rec := x.post(t, act.path(), form)
+				if rec.Code != refusal.wantStatus {
+					t.Errorf("status = %d, want %d; body %s", rec.Code, refusal.wantStatus, rec.Body.String())
+				}
+				if got := act.called(x.admin); got != 0 {
+					t.Errorf("the capability seam was called %d times — a refused step-up must "+
+						"never reach it", got)
+				}
+			})
+		}
+	}
+}
+
+func TestAccountsWrite_AThrottledStepUpSaysSoAndSaysWhen(t *testing.T) {
+	// The mechanics over the fake: Retry-After is present and parseable, and
+	// the seam is untouched.
+	x := newWriteFix(t, nil)
+	x.auth.stepUpErr = &consoleauth.ThrottledError{RetryAfter: 42 * time.Second}
+
+	rec := x.post(t, createAccountAction(), url.Values{
+		"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"anything"},
+	})
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Retry-After"); got != "42" {
+		t.Errorf("Retry-After = %q, want %q", got, "42")
+	}
+	if !strings.Contains(rec.Body.String(), "Too many recent attempts") {
+		t.Errorf("the throttle does not say what happened: %s", contentOf(rec.Body.String()))
+	}
+	if len(x.admin.creates) != 0 {
+		t.Errorf("CreateAccount was called %d times on a throttled step-up", len(x.admin.creates))
+	}
+
+	// And once over the REAL consoleauth.Service and its real throttle, so
+	// the number in Retry-After is the real throttle's rather than a fake's.
+	realFix := newLoginFixtureWith(t, func(d *Deps) {
+		d.Accounts = sweepAccounts()
+		d.AccountAdmin = &fakeAccountAdmin{}
+		// d.Auth is left as the fixture's REAL consoleauth.Service.
+	})
+	id, _, err := realFix.svc.Login(context.Background(), consoleauth.Attempt{
+		Name: "mike", Password: accounts.NewPassword(consolePassword), Source: "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("mint session: %v", err)
+	}
+	session := &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()}
+	csrf := realFix.sessions.CSRFToken(id).Reveal()
+
+	post := func(password string) *httptest.ResponseRecorder {
+		body := url.Values{
+			"csrf_token": {csrf}, "name": {"newbie"}, "kind": {"human"},
+			"role": {"viewer"}, "password": {password},
+		}
+		req := httptest.NewRequest(http.MethodPost, createAccountAction(), strings.NewReader(body.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		return realFix.do(t, req, session)
+	}
+
+	if rec := post("wrong once"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("first wrong password status = %d, want 401", rec.Code)
+	}
+	// Service.StepUp shares the sign-in throttle keyed by (source, Account):
+	// one failure throttles the very next attempt.
+	throttled := post(consolePassword)
+	if throttled.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429; body %s", throttled.Code, throttled.Body.String())
+	}
+	if _, convErr := time.ParseDuration(throttled.Header().Get("Retry-After") + "s"); convErr != nil {
+		t.Errorf("Retry-After = %q, which does not parse as a number of seconds", throttled.Header().Get("Retry-After"))
+	}
+	// throttleMessage (login.go) is the one renderer of this sentence on every
+	// Console surface, and it drops the "your password was not checked" clause
+	// when the wait rounds to a single second — so the assertion is on what it
+	// always says, not on the clause it sometimes adds.
+	if !strings.Contains(throttled.Body.String(), "Too many recent attempts") {
+		t.Errorf("the throttle does not say what happened: %s", contentOf(throttled.Body.String()))
+	}
+	if !strings.Contains(throttled.Body.String(), "Nothing was created") {
+		t.Errorf("the throttle page does not say the act did not happen: %s", contentOf(throttled.Body.String()))
+	}
+	admin, _ := realFix.deps.AccountAdmin.(*fakeAccountAdmin)
+	if admin == nil || len(admin.creates) != 0 {
+		t.Error("the capability seam was reached during a throttled step-up")
+	}
+}
+
+func TestAccountsWrite_StepUpHappensBeforeTheCapabilityCall(t *testing.T) {
+	for _, act := range grantingActs() {
+		t.Run(act.name, func(t *testing.T) {
+			var order []string
+			x := newWriteFix(t, nil)
+			x.admin.order = &order
+			x.auth.order = &order
+
+			form := url.Values{"password": {"whatever the fake accepts"}}
+			for k, vs := range act.form {
+				form[k] = vs
+			}
+			rec := x.post(t, act.path(), form)
+			if rec.Code >= 400 {
+				t.Fatalf("status = %d, want a success; body %s", rec.Code, contentOf(rec.Body.String()))
+			}
+			if len(order) != 2 || order[0] != "StepUp" {
+				t.Fatalf("call order = %v, want StepUp first then the capability verb", order)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// "Reducing acts succeed without a password — asserted, not assumed."
+// ---------------------------------------------------------------------------
+
+func TestAccountsWrite_AReducingActNeedsNoPassword(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   func() string
+		form   url.Values
+		called func(*fakeAccountAdmin) int
+	}{
+		{
+			name:   "disable an Account",
+			path:   func() string { return setAccountEnabledAction(targetViewerID) },
+			form:   url.Values{"enabled": {"false"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.enables) },
+		},
+		{
+			// admin -> operator, deliberately NOT the floor case, so the
+			// assertion is not quietly satisfied by a change to viewer alone.
+			name:   "lower a role from admin to operator",
+			path:   func() string { return setAccountRoleAction(targetAdminID) },
+			form:   url.Values{"role": {"operator"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
+		},
+		{
+			name:   "lower a role from operator to viewer",
+			path:   func() string { return setAccountRoleAction(targetOperatorID) },
+			form:   url.Values{"role": {"viewer"}},
+			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
+		},
+		{
+			name:   "revoke a token",
+			path:   func() string { return revokeAPITokenAction(targetLiveToken) },
+			form:   url.Values{},
+			called: func(a *fakeAccountAdmin) int { return len(a.revokes) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newWriteFix(t, nil)
+			// No password field AT ALL, and a step-up that would fail if one
+			// were checked — so a handler that asked would be caught.
+			x.auth.stepUpErr = consoleauth.ErrBadCredentials
+
+			rec := x.post(t, tc.path(), tc.form)
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+			}
+			if got := tc.called(x.admin); got != 1 {
+				t.Errorf("the capability seam was called %d times, want 1", got)
+			}
+			if got := len(x.auth.stepUpCalls); got != 0 {
+				t.Errorf("StepUp was called %d times on an act that can only reduce — an "+
+					"emergency brake that costs a password is one people route around", got)
+			}
+		})
+	}
+}
+
+// TestAccountsWrite_RoleChangeCouldGrantIsExhaustiveAndFailsClosed pins the
+// unit that decides a security control, directly rather than only through
+// HTTP.
+//
+// The five invalid spellings are the ones a plan reviewer used to prove the
+// property: accounts.Role.AtLeast returns false when EITHER side is invalid,
+// so the "natural" spelling (to.AtLeast(from) && to != from) is fail-OPEN in
+// every one of these cells — it would read "not a raise" on a corrupt stored
+// role and skip the password.
+func TestAccountsWrite_RoleChangeCouldGrantIsExhaustiveAndFailsClosed(t *testing.T) {
+	valid := []accounts.Role{accounts.RoleViewer, accounts.RoleOperator, accounts.RoleAdmin}
+	invalid := []accounts.Role{"", "superadmin", "Admin", "VIEWER", "root"}
+
+	// The nine ordered valid pairs, by hand so the expectation is stated and
+	// not re-derived from the implementation.
+	wantValid := map[string]bool{
+		"viewer->viewer": false, "viewer->operator": true, "viewer->admin": true,
+		"operator->viewer": false, "operator->operator": false, "operator->admin": true,
+		"admin->viewer": false, "admin->operator": false, "admin->admin": false,
+	}
+	for _, from := range valid {
+		for _, to := range valid {
+			key := string(from) + "->" + string(to)
+			if got := roleChangeCouldGrant(from, to); got != wantValid[key] {
+				t.Errorf("roleChangeCouldGrant(%q, %q) = %v, want %v", from, to, got, wantValid[key])
+			}
+		}
+	}
+
+	all := append(append([]accounts.Role{}, valid...), invalid...)
+	invalidCells := 0
+	for _, from := range all {
+		for _, to := range all {
+			if from.Valid() && to.Valid() {
+				continue
+			}
+			invalidCells++
+			if !roleChangeCouldGrant(from, to) {
+				t.Errorf("roleChangeCouldGrant(%q, %q) = false — an unknown role on either side "+
+					"must be treated as a RAISE and cost a password, or a corrupt stored role "+
+					"silently skips step-up", from, to)
+			}
+		}
+	}
+	if invalidCells != 55 {
+		t.Fatalf("the invalid-role sweep covered %d cells, want 55 — the table is not what it claims", invalidCells)
+	}
+}
+
+func TestAccountsWrite_ARoleReadFailureStillDemandsAPassword(t *testing.T) {
+	x := newWriteFix(t, func(d *Deps) {
+		a := sweepAccounts()
+		a.accountErr = errors.New("the account store is unreachable")
+		d.Accounts = a
+	})
+	x.auth.stepUpErr = consoleauth.ErrBadCredentials
+
+	// A LOWER, which would normally need no password: with the current role
+	// unknown the handler must fail closed in the FRICTION direction.
+	rec := x.post(t, setAccountRoleAction(targetAdminID), url.Values{
+		"role": {"operator"}, "password": {"wrong"},
+	})
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401 — an unreadable current role must demand a password "+
+			"rather than skip it; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	if len(x.admin.roles) != 0 {
+		t.Error("SetAccountRole was reached despite a failed step-up")
+	}
+
+	// It must NOT refuse the act outright: with a correct password the demote
+	// still goes through, because a demote during an incident must not be
+	// blocked by an unrelated read failure.
+	y := newWriteFix(t, func(d *Deps) {
+		a := sweepAccounts()
+		a.accountErr = errors.New("the account store is unreachable")
+		d.Accounts = a
+	})
+	rec = y.post(t, setAccountRoleAction(targetAdminID), url.Values{
+		"role": {"operator"}, "password": {"whatever the fake accepts"},
+	})
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want 303 — a read failure must cost a password, not the act; body %s",
+			rec.Code, contentOf(rec.Body.String()))
+	}
+	if len(y.admin.roles) != 1 {
+		t.Errorf("SetAccountRole calls = %d, want 1", len(y.admin.roles))
+	}
+}
+
+// TestAccountsWrite_AnUnwiredAccountReaderOffersNothingAndPanicsNowhere is the
+// composition-root trap: a Deps with AccountAdmin and Auth wired and Accounts
+// NIL is constructible, and the role route is the one that would dereference
+// it.
+func TestAccountsWrite_AnUnwiredAccountReaderOffersNothingAndPanicsNowhere(t *testing.T) {
+	d := renderableDeps()
+	d.AccountAdmin = &fakeAccountAdmin{}
+	d.Auth = &fakeAuth{}
+	d.Accounts = nil
+
+	if accountsOffered(d) {
+		t.Error("accountsOffered is true with a nil Accounts seam — the role route reads through it")
+	}
+
+	// Each probe carries a VALID body, so the handler is not turned back by
+	// its own input validation before it reaches the seam. Without this the
+	// role route answers 400 on an empty body, the dereference is never
+	// reached, and this test would pass while proving nothing about the
+	// panic it is named for — which is the guard-that-under-enforces failure
+	// mode this package keeps finding.
+	h := newTestHandlerSkippingCSRF(d, accounts.RoleAdmin)
+	probes := []struct {
+		path string
+		form url.Values
+	}{
+		{createAccountAction(), url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {"p"}}},
+		{setAccountRoleAction(targetViewerID), url.Values{"role": {"viewer"}, "password": {"p"}}},
+		{setAccountEnabledAction(targetViewerID), url.Values{"enabled": {"false"}}},
+		{mintAPITokenAction(targetOperatorID), url.Values{"name": {"t"}, "ttl": {"30d"}, "password": {"p"}}},
+		{revokeAPITokenAction(targetLiveToken), url.Values{}},
+	}
+	for _, p := range probes {
+		rec := postFormSkippingCSRF(t, h, p.path, p.form)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("POST %s = %d, want 500 (unavailable)", p.path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "was not wired into this Relay") {
+			t.Errorf("POST %s does not render the unwired-seam explanation: %s", p.path, rec.Body.String())
+		}
+	}
+
+	// The role route by name, with a body that DOES reach the read: it is the
+	// one that would nil-dereference if the guard lived only in
+	// accountsOffered and not in the handler.
+	rec := postFormSkippingCSRF(t, h, setAccountRoleAction(targetViewerID),
+		url.Values{"role": {"admin"}, "password": {"p"}})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("the role route with a nil Accounts seam answered %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "was not wired into this Relay") {
+		t.Fatalf("the role route did not render the unwired-seam explanation: %s", rec.Body.String())
+	}
+}
+
+// postFormSkippingCSRF is postSkippingCSRF with a body, so a probe reaches
+// past a handler's own field validation.
+func postFormSkippingCSRF(t *testing.T, h http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// ---------------------------------------------------------------------------
+// "The plaintext appears in the mint response and nowhere else."
+// ---------------------------------------------------------------------------
+
+func TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable(t *testing.T) {
+	x := newWriteFix(t, nil)
+	rec := x.post(t, mintAPITokenAction(targetOperatorID), url.Values{
+		"name": {"ci-deploy"}, "ttl": {"90d"}, "password": {"whatever the fake accepts"},
+	})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — mint is the one write route that must NOT "+
+			"post-redirect-get, because the plaintext must never enter a URL; body %s",
+			rec.Code, contentOf(rec.Body.String()))
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("the mint response carries Location: %q — the plaintext must never enter a URL", loc)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q — this response must not sit in a shared cache "+
+			"or come back on a back button", got, "no-store")
+	}
+	if got := strings.Count(rec.Body.String(), sweepMintedPlaintext); got != 1 {
+		t.Errorf("the plaintext appears %d times in the mint response, want exactly 1", got)
+	}
+}
+
+func TestAccountsWrite_TheMintedPlaintextIsAbsentFromEveryLaterRender(t *testing.T) {
+	x := newWriteFix(t, nil)
+	mint := x.post(t, mintAPITokenAction(targetOperatorID), url.Values{
+		"name": {"ci-deploy"}, "ttl": {"never"}, "password": {"whatever the fake accepts"},
+	})
+	if mint.Code != http.StatusOK {
+		t.Fatalf("mint status = %d, want 200; body %s", mint.Code, contentOf(mint.Body.String()))
+	}
+	if !strings.Contains(mint.Body.String(), sweepMintedPlaintext) {
+		t.Fatal("the mint response did not carry the plaintext, so the absence assertion below proves nothing")
+	}
+
+	later := x.f.do(t, httptest.NewRequest(http.MethodGet,
+		"/console/accounts?account=gleipnir-prod", nil), x.session)
+	body := later.Body.String()
+	if later.Code != http.StatusOK {
+		t.Fatalf("the later render = %d, want 200", later.Code)
+	}
+	if strings.Contains(body, sweepMintedPlaintext) {
+		t.Error("the minted plaintext reached a later render of the Accounts screen")
+	}
+	// The #654 guard, still live on a page that now has forms.
+	if strings.Contains(body, sweepTokenSecretHash) {
+		t.Error("a token's SecretHash reached the rendered page")
+	}
+}
+
+// TestAccountsWrite_AFailedMintRendersNoSecretButNamesTheTokenId covers the
+// branch that actually occurs: capability.MintAPIToken returns a LIVE token
+// and a LIVE plaintext together with a non-nil error when the mint succeeded
+// and the audit append failed. fakeAccountAdmin models exactly that — a fake
+// returning a zero Plaintext here would prove nothing.
+func TestAccountsWrite_AFailedMintRendersNoSecretButNamesTheTokenId(t *testing.T) {
+	var logged bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	x := newWriteFix(t, nil)
+	x.admin.mintErr = errors.New("capability: record audit entry: the trail is full")
+
+	rec := x.post(t, mintAPITokenAction(targetOperatorID), url.Values{
+		"name": {"ci-deploy"}, "ttl": {"30d"}, "password": {"whatever the fake accepts"},
+	})
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, sweepMintedPlaintext) {
+		t.Error("a failed mint rendered the plaintext — it must be dropped unrendered")
+	}
+	if !strings.Contains(body, sweepMintedTokenID) {
+		t.Errorf("the failure page does not name the token id, which is the operator's only "+
+			"handle on a token that may be live: %s", contentOf(body))
+	}
+	if !strings.Contains(body, "A token may have been created") {
+		t.Errorf("the failure page does not say a token may exist and to check the list: %s", contentOf(body))
+	}
+	if strings.Contains(body, "Nothing was minted") {
+		t.Error("the failure page claims nothing was minted, which this branch cannot back")
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want %q — this page names a token id", got, "no-store")
+	}
+
+	out := logged.String()
+	if strings.Contains(out, sweepMintedPlaintext) {
+		t.Errorf("the plaintext reached the log:\n%s", out)
+	}
+	if !strings.Contains(out, sweepMintedTokenID) {
+		t.Errorf("the token id was not logged — it is the only handle on a live token whose "+
+			"secret is gone:\n%s", out)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Route shape and reach
+// ---------------------------------------------------------------------------
+
+// accountsWriteRoutes is the five patterns paired with a concrete path, so a
+// sweep can drive them.
+func accountsWriteRoutes() []struct {
+	pattern string
+	path    string
+	method  string
+} {
+	return []struct {
+		pattern string
+		path    string
+		method  string
+	}{
+		{createAccountPattern, createAccountAction(), http.MethodPost},
+		{setAccountRolePattern, setAccountRoleAction(targetViewerID), http.MethodPost},
+		{setAccountEnabledPattern, setAccountEnabledAction(targetViewerID), http.MethodPost},
+		{mintAPITokenPattern, mintAPITokenAction(targetOperatorID), http.MethodPost},
+		{revokeAPITokenPattern, revokeAPITokenAction(targetLiveToken), http.MethodPost},
+	}
+}
+
+func TestAccountsWrite_EveryWriteRouteIsAbsentBelowAdmin(t *testing.T) {
+	admin := &fakeAccountAdmin{}
+	d := sweepFixture()
+	d.AccountAdmin = admin
+	d.Auth = &fakeAuth{}
+
+	for _, role := range []accounts.Role{accounts.RoleViewer, accounts.RoleOperator} {
+		h := newTestHandlerSkippingCSRF(d, role)
+		miss := postSkippingCSRF(t, h, "/console/no-such-route")
+		missOptions := request(t, h, http.MethodOptions, "/console/no-such-route")
+
+		for _, r := range accountsWriteRoutes() {
+			rec := postSkippingCSRF(t, h, r.path)
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("role %s: POST %s = %d, want 404 (absent, not forbidden)", role, r.path, rec.Code)
+				continue
+			}
+			if got, want := rec.Body.String(), miss.Body.String(); got != want {
+				t.Errorf("role %s: POST %s body differs from an unmounted path — the 404 is a "+
+					"status-code coincidence rather than byte-identical absence", role, r.path)
+			}
+
+			opt := request(t, h, http.MethodOptions, r.path)
+			if opt.Code != http.StatusNotFound {
+				t.Errorf("role %s: OPTIONS %s = %d, want 404 — the method oracle must not confirm "+
+					"the route exists", role, r.path, opt.Code)
+				continue
+			}
+			if got, want := opt.Body.String(), missOptions.Body.String(); got != want {
+				t.Errorf("role %s: OPTIONS %s body differs from an unmounted path", role, r.path)
+			}
+		}
+	}
+
+	if n := len(admin.creates) + len(admin.roles) + len(admin.enables) + len(admin.mints) + len(admin.revokes); n != 0 {
+		t.Errorf("the capability seam was called %d times by a session below admin", n)
+	}
+}
+
+func TestAccountsWrite_ABearerLanePostIsRefusedAndNeverWrites(t *testing.T) {
+	admin := &fakeAccountAdmin{}
+	d := sweepFixture()
+	d.AccountAdmin = admin
+	d.Auth = &fakeAuth{}
+	h := newTestHandler(d, accounts.RoleAdmin)
+
+	for _, r := range accountsWriteRoutes() {
+		rec := request(t, h, http.MethodPost, r.path)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("POST %s on the bearer lane = %d, want 403", r.path, rec.Code)
+		}
+	}
+	if n := len(admin.creates) + len(admin.roles) + len(admin.enables) + len(admin.mints) + len(admin.revokes); n != 0 {
+		t.Errorf("the capability seam was called %d times by a bearer-lane POST", n)
+	}
+}
+
+func TestAccountsWrite_ARealSessionPostWithNoCSRFTokenIsRefused(t *testing.T) {
+	x := newWriteFix(t, nil)
+	for _, r := range accountsWriteRoutes() {
+		req := httptest.NewRequest(http.MethodPost, r.path, strings.NewReader("role=viewer&enabled=false"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := x.f.do(t, req, x.session)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("POST %s with no CSRF token = %d, want 403", r.path, rec.Code)
+		}
+	}
+	if n := len(x.admin.creates) + len(x.admin.roles) + len(x.admin.enables) + len(x.admin.mints) + len(x.admin.revokes); n != 0 {
+		t.Errorf("the capability seam was called %d times without a CSRF token", n)
+	}
+}
+
+func TestAccountsWrite_ARealSessionPostWithTheWrongCSRFTokenIsRefused(t *testing.T) {
+	x := newWriteFix(t, nil)
+	for _, r := range accountsWriteRoutes() {
+		body := url.Values{"csrf_token": {"not-this-session-s-token"}, "role": {"viewer"}, "enabled": {"false"}}
+		req := httptest.NewRequest(http.MethodPost, r.path, strings.NewReader(body.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := x.f.do(t, req, x.session)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("POST %s with the wrong CSRF token = %d, want 403", r.path, rec.Code)
+		}
+	}
+	if n := len(x.admin.creates) + len(x.admin.roles) + len(x.admin.enables) + len(x.admin.mints) + len(x.admin.revokes); n != 0 {
+		t.Errorf("the capability seam was called %d times with the wrong CSRF token", n)
+	}
+}
+
+// TestAccountsWrite_MissingConsoleSessionFailsClosed pins stepUpProved's own
+// ConsoleSessionFromContext branch directly.
+//
+// In a production-shaped mux this branch is unreachable: Secure refuses every
+// bearer-lane POST before routing, which the test above proves. This one
+// therefore goes AROUND Secure, via newTestHandlerSkippingCSRF, which never
+// wires console sessions into its Authenticator at all. It must NOT be
+// "fixed" by routing through the CSRF-checked handler, which would make it
+// stop testing this branch — the warning
+// TestDecide_MissingConsoleSessionFailsClosed carries, for the same reason.
+func TestAccountsWrite_MissingConsoleSessionFailsClosed(t *testing.T) {
+	admin := &fakeAccountAdmin{}
+	d := sweepFixture()
+	d.AccountAdmin = admin
+	d.Auth = &fakeAuth{}
+	h := newTestHandlerSkippingCSRF(d, accounts.RoleAdmin)
+
+	// A granting act with a password present: only the missing session can
+	// refuse it, so a 500 here is that branch and nothing else.
+	req := httptest.NewRequest(http.MethodPost, createAccountAction(),
+		strings.NewReader("name=newbie&kind=human&role=viewer&password=anything"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+testCredential)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body %s", rec.Code, rec.Body.String())
+	}
+	if len(admin.creates) != 0 {
+		t.Errorf("CreateAccount was called %d times with no resolvable session", len(admin.creates))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Rendering and copy
+// ---------------------------------------------------------------------------
+
+// accountsWriteBody renders the Accounts screen with the write half wired.
+func accountsWriteBody(t *testing.T, query string) string {
+	t.Helper()
+	d := sweepFixture()
+	d.AccountAdmin = &fakeAccountAdmin{}
+	d.Auth = &fakeAuth{}
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/accounts"+query)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/accounts%s = %d, want 200", query, rec.Code)
+	}
+	return rec.Body.String()
+}
+
+// TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup: the step-up matrix
+// is visible in the HTML, not only in the handler. An enabled row's Disable
+// control has no password field; a disabled row's Enable form has one.
+func TestAccountsWrite_TheStateControlAsymmetryIsInTheMarkup(t *testing.T) {
+	body := accountsWriteBody(t, "")
+
+	disable := formWithAction(t, body, setAccountEnabledAction(targetViewerID))
+	if strings.Contains(disable, `type="password"`) {
+		t.Errorf("the Disable control carries a password field — disabling is the durable "+
+			"off-switch and can only reduce:\n%s", disable)
+	}
+	if !strings.Contains(disable, `value="false"`) {
+		t.Errorf("the Disable control does not submit enabled=false:\n%s", disable)
+	}
+
+	enable := formWithAction(t, body, setAccountEnabledAction(targetDisabledID))
+	if !strings.Contains(enable, `type="password"`) {
+		t.Errorf("the Enable form carries no password field — re-enabling a disabled Account "+
+			"is privilege-granting:\n%s", enable)
+	}
+	if !strings.Contains(enable, `value="true"`) {
+		t.Errorf("the Enable form does not submit enabled=true:\n%s", enable)
+	}
+
+	// And the revoke control, which is also a reducing act.
+	revoke := formWithAction(t, accountsWriteBody(t, "?account=gleipnir-prod"),
+		revokeAPITokenAction(targetLiveToken))
+	if strings.Contains(revoke, `type="password"`) {
+		t.Errorf("the Revoke control carries a password field — revocation is the incident "+
+			"instrument and only ever reduces:\n%s", revoke)
+	}
+}
+
+// formWithAction extracts the <form> element whose action is exactly action.
+func formWithAction(t *testing.T, body, action string) string {
+	t.Helper()
+	marker := `action="` + action + `"`
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("no form posts to %s:\n%s", action, contentOf(body))
+	}
+	start := strings.LastIndex(body[:i], "<form")
+	if start < 0 {
+		t.Fatalf("the action %s is not inside a <form>", action)
+	}
+	end := strings.Index(body[start:], "</form>")
+	if end < 0 {
+		t.Fatalf("the form posting to %s is not closed", action)
+	}
+	return body[start : start+end]
+}
+
+func TestAccountsWrite_TheMintFormOffersNoFreeFormTTL(t *testing.T) {
+	body := accountsWriteBody(t, "?account=gleipnir-prod")
+	form := formWithAction(t, body, mintAPITokenAction(targetOperatorID))
+
+	if !strings.Contains(form, `<select id="mint-ttl" name="ttl">`) {
+		t.Errorf("the lifetime control is not a closed select:\n%s", form)
+	}
+	if strings.Contains(form, `name="ttl" type="number"`) || strings.Contains(form, `name="ttl_seconds"`) {
+		t.Errorf("the lifetime control is free-form — a forgotten field must never silently "+
+			"mint an immortal credential:\n%s", form)
+	}
+	for _, c := range ttlChoices {
+		if !strings.Contains(form, `value="`+c.Value+`"`) {
+			t.Errorf("the lifetime select does not offer %q", c.Value)
+		}
+	}
+	if strings.Contains(form, "selected") {
+		t.Errorf("an option is pre-selected — a lifetime must be chosen, not defaulted:\n%s", form)
+	}
+
+	// And the handler half: an absent or unrecognised ttl is a 400 that mints
+	// nothing.
+	for _, ttl := range []string{"", "forever", "0", "86400"} {
+		x := newWriteFix(t, nil)
+		form := url.Values{"name": {"ci-deploy"}, "password": {"whatever the fake accepts"}}
+		if ttl != "" {
+			form.Set("ttl", ttl)
+		}
+		rec := x.post(t, mintAPITokenAction(targetOperatorID), form)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("ttl=%q: status = %d, want 400", ttl, rec.Code)
+		}
+		if len(x.admin.mints) != 0 {
+			t.Errorf("ttl=%q: the mint seam was called", ttl)
+		}
+	}
+}
+
+func TestAccountsWrite_TheCreateFormSaysAHumanAccountCannotYetSignIn(t *testing.T) {
+	body := contentOf(accountsWriteBody(t, ""))
+	if !strings.Contains(body, "relay console-password") {
+		t.Errorf("the create panel does not name `relay console-password`. No capability seam "+
+			"can set a password, so the screen must not imply a human Account it creates can "+
+			"sign in:\n%s", body)
+	}
+}
+
+// TestAccountsWrite_TheSelfTargetAndLastAdminRefusalsAreExplicit: spec 15's
+// "States" asks that these two be said rather than hidden. The sentences are
+// OUR wording — spec 15 asks for explicitness, not for particular words — and
+// the test compares against the package consts rather than a copy of the
+// prose.
+func TestAccountsWrite_TheSelfTargetAndLastAdminRefusalsAreExplicit(t *testing.T) {
+	cases := []struct {
+		name  string
+		err   error
+		want  string
+		path  string
+		form  url.Values
+		apply func(*fakeAccountAdmin, error)
+	}{
+		{
+			name:  "self-targeted role change",
+			err:   capability.ErrSelfTargeted,
+			want:  selfTargetRefusal,
+			path:  setAccountRoleAction(targetAdminID),
+			form:  url.Values{"role": {"operator"}},
+			apply: func(a *fakeAccountAdmin, err error) { a.roleErr = err },
+		},
+		{
+			name:  "self-targeted disable",
+			err:   capability.ErrSelfTargeted,
+			want:  selfTargetRefusal,
+			path:  setAccountEnabledAction(targetAdminID),
+			form:  url.Values{"enabled": {"false"}},
+			apply: func(a *fakeAccountAdmin, err error) { a.enableErr = err },
+		},
+		{
+			name:  "demoting the last admin",
+			err:   accounts.ErrLastAdmin,
+			want:  lastAdminRefusal,
+			path:  setAccountRoleAction(targetAdminID),
+			form:  url.Values{"role": {"operator"}},
+			apply: func(a *fakeAccountAdmin, err error) { a.roleErr = err },
+		},
+		{
+			name:  "disabling the last admin",
+			err:   accounts.ErrLastAdmin,
+			want:  lastAdminRefusal,
+			path:  setAccountEnabledAction(targetAdminID),
+			form:  url.Values{"enabled": {"false"}},
+			apply: func(a *fakeAccountAdmin, err error) { a.enableErr = err },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newWriteFix(t, nil)
+			tc.apply(x.admin, tc.err)
+
+			rec := x.post(t, tc.path, tc.form)
+			if rec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409; body %s", rec.Code, contentOf(rec.Body.String()))
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("the refusal is not the explicit sentence:\n%s", contentOf(body))
+			}
+			if strings.Contains(body, "could not confirm") {
+				t.Error("the refusal fell through to the generic could-not-confirm sentence")
+			}
+		})
+	}
+}
+
+func TestAccountsWrite_ACapabilityRefusalIsRenderedNotReinterpreted(t *testing.T) {
+	cases := []struct {
+		name  string
+		path  string
+		form  url.Values
+		apply func(*fakeAccountAdmin, error)
+	}{
+		{"create", createAccountAction(), url.Values{"name": {"n"}, "kind": {"human"}, "role": {"viewer"}},
+			func(a *fakeAccountAdmin, err error) { a.createErr = err }},
+		{"role", setAccountRoleAction(targetViewerID), url.Values{"role": {"admin"}},
+			func(a *fakeAccountAdmin, err error) { a.roleErr = err }},
+		{"enabled", setAccountEnabledAction(targetDisabledID), url.Values{"enabled": {"true"}},
+			func(a *fakeAccountAdmin, err error) { a.enableErr = err }},
+		{"mint", mintAPITokenAction(targetOperatorID), url.Values{"name": {"t"}, "ttl": {"30d"}},
+			func(a *fakeAccountAdmin, err error) { a.mintErr = err }},
+		{"revoke", revokeAPITokenAction(targetLiveToken), url.Values{},
+			func(a *fakeAccountAdmin, err error) { a.revokeErr = err }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			x := newWriteFix(t, nil)
+			tc.apply(x.admin, authz.ErrUnauthorized)
+
+			form := url.Values{"password": {"whatever the fake accepts"}}
+			for k, vs := range tc.form {
+				form[k] = vs
+			}
+			rec := x.post(t, tc.path, form)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403; body %s", rec.Code, contentOf(rec.Body.String()))
+			}
+			if !strings.Contains(rec.Body.String(), authz.ErrUnauthorized.Error()) {
+				t.Errorf("the refusal does not carry the capability layer's own text:\n%s",
+					contentOf(rec.Body.String()))
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The real lane: no fakes on the path under test
+// ---------------------------------------------------------------------------
+
+// realWriteFix wires the Console's write half over a REAL store, a real
+// accounts.TokenService, a real capability.Service (with the real RoleGate and
+// a real auditsink over a real trail) and a real consoleauth.Service.
+//
+// It exists because three of this issue's acceptance criteria cannot be proved
+// against a fake: that revoking through the Console cuts the next request
+// carrying the token; that each write records ITS OWN audit kind; and that a
+// granting act writes a step_up event while a reducing one does not.
+type realWriteFix struct {
+	handler  http.Handler
+	trail    *store.Store
+	tokens   *accounts.TokenService
+	actor    accounts.Account
+	target   accounts.Account
+	sessions *consoleauth.Store
+	session  *http.Cookie
+	csrf     string
+}
+
+const realWritePassword = "a real console password"
+
+func newRealWriteFix(t *testing.T) *realWriteFix {
+	t.Helper()
+	ctx := context.Background()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	// Two admins, so the last-enabled-admin guard does not refuse a change to
+	// either — that rule is the store's and is not what these tests are about.
+	actor, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "mike", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create acting account: %v", err)
+	}
+	if _, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "second-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
+	}); err != nil {
+		t.Fatalf("create second admin: %v", err)
+	}
+	target, err := st.Accounts().Create(ctx, accounts.Account{
+		Name: "gleipnir-prod", Kind: accounts.KindMachine, Role: accounts.RoleOperator, Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("create target account: %v", err)
+	}
+
+	hash, err := accounts.HashPassword(accounts.NewPassword(realWritePassword))
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if err := st.Passwords().SetPassword(ctx, actor.ID, hash); err != nil {
+		t.Fatalf("set password: %v", err)
+	}
+
+	sink := auditsink.New(st.Audit())
+	tokenSvc := accounts.NewTokenService(st.APITokens(), st.Accounts(), nil)
+	capSvc := capability.New(registry.NewInMemory(),
+		capability.WithAuthorizer(authz.NewRoleGate()),
+		capability.WithAuditSink(sink),
+		capability.WithAccountAdmin(st.Accounts(), tokenSvc))
+
+	sessions := consoleauth.NewStore()
+	svc := consoleauth.NewService(st.Accounts(), st.Passwords(), sessions,
+		consoleauth.NewThrottle(), sink)
+
+	authn := controlplane.NewAuthenticator(
+		tokenSvc,
+		controlplane.WithConsoleSessions(svc, controlplane.ConsoleSessionOptions{
+			Public:       Unauthenticated,
+			Scope:        SessionScope,
+			Unauthorized: UnauthorizedHandler(),
+		}),
+	)
+	mux := http.NewServeMux()
+	d := renderableDeps()
+	d.Auth = svc
+	d.Accounts = capSvc
+	d.AccountAdmin = capSvc
+	Register(mux, d)
+
+	id, _, err := svc.Login(ctx, consoleauth.Attempt{
+		Name: "mike", Password: accounts.NewPassword(realWritePassword), Source: "127.0.0.1",
+	})
+	if err != nil {
+		t.Fatalf("sign in: %v", err)
+	}
+
+	return &realWriteFix{
+		handler:  authn.Middleware(Secure(mux)),
+		trail:    st,
+		tokens:   tokenSvc,
+		actor:    actor,
+		target:   target,
+		sessions: sessions,
+		session:  &http.Cookie{Name: consoleauth.SessionCookieName, Value: id.Reveal()},
+		csrf:     sessions.CSRFToken(id).Reveal(),
+	}
+}
+
+func (x *realWriteFix) post(t *testing.T, path string, form url.Values) *httptest.ResponseRecorder {
+	t.Helper()
+	body := url.Values{"csrf_token": {x.csrf}}
+	for k, vs := range form {
+		body[k] = vs
+	}
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(x.session)
+	rec := httptest.NewRecorder()
+	x.handler.ServeHTTP(rec, req)
+	return rec
+}
+
+// records returns the whole trail, oldest first.
+func (x *realWriteFix) records(t *testing.T) []audit.Record {
+	t.Helper()
+	recs, err := x.trail.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("read the trail: %v", err)
+	}
+	return recs
+}
+
+// kinds returns every audit kind on the trail, oldest first.
+func (x *realWriteFix) kinds(t *testing.T) []string {
+	t.Helper()
+	recs := x.records(t)
+	out := make([]string, 0, len(recs))
+	for _, r := range recs {
+		out = append(out, r.Kind)
+	}
+	return out
+}
+
+// mintedTokenPattern extracts the plaintext from a mint response body — the
+// <code> element the reveal-once page renders it in.
+func scrapeMintedToken(t *testing.T, body string) string {
+	t.Helper()
+	const open = "<code>" + accounts.TokenPrefix
+	i := strings.Index(body, open)
+	if i < 0 {
+		t.Fatalf("the mint response carries no token:\n%s", contentOf(body))
+	}
+	rest := body[i+len("<code>"):]
+	j := strings.Index(rest, "</code>")
+	if j < 0 {
+		t.Fatal("the token element is not closed")
+	}
+	return rest[:j]
+}
+
+// TestAccountsWrite_RevokingCutsTheNextRequestCarryingTheToken is the
+// acceptance criterion, end to end over the real chain with no fake on the
+// path under test.
+//
+// The scrape-then-verify ordering is what makes this prove the RENDERED
+// credential is the real one, rather than a string the test invented.
+func TestAccountsWrite_RevokingCutsTheNextRequestCarryingTheToken(t *testing.T) {
+	x := newRealWriteFix(t)
+	ctx := context.Background()
+
+	mint := x.post(t, mintAPITokenAction(x.target.ID), url.Values{
+		"name": {"ci-deploy"}, "ttl": {"90d"}, "password": {realWritePassword},
+	})
+	if mint.Code != http.StatusOK {
+		t.Fatalf("mint status = %d, want 200; body %s", mint.Code, contentOf(mint.Body.String()))
+	}
+	credential := scrapeMintedToken(t, mint.Body.String())
+
+	acct, tok, err := x.tokens.Verify(ctx, credential)
+	if err != nil {
+		t.Fatalf("the rendered credential does not verify: %v", err)
+	}
+	if acct.ID != x.target.ID {
+		t.Fatalf("the credential authenticates as %s, want %s", acct.ID, x.target.ID)
+	}
+
+	revoke := x.post(t, revokeAPITokenAction(tok.ID), nil)
+	if revoke.Code != http.StatusSeeOther {
+		t.Fatalf("revoke status = %d, want 303; body %s", revoke.Code, contentOf(revoke.Body.String()))
+	}
+
+	if _, _, err := x.tokens.Verify(ctx, credential); !errors.Is(err, accounts.ErrTokenInvalid) {
+		t.Fatalf("after revocation Verify returned %v, want accounts.ErrTokenInvalid — revocation "+
+			"must cut the NEXT request carrying the token", err)
+	}
+}
+
+// TestAccountsWrite_EveryWriteRecordsItsOwnAuditKindThroughTheRealLane is what
+// stops the five read-audit exemptions' `why` strings from being unfalsifiable
+// prose: each names a capability audit kind, and each kind is asserted to come
+// out of the REAL sink, attributed to the signed-in Account.
+func TestAccountsWrite_EveryWriteRecordsItsOwnAuditKindThroughTheRealLane(t *testing.T) {
+	x := newRealWriteFix(t)
+
+	steps := []struct {
+		name string
+		path string
+		form url.Values
+		kind string
+	}{
+		{"create", createAccountAction(),
+			url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {realWritePassword}},
+			audit.KindAccountCreate},
+		{"raise a role", setAccountRoleAction(x.target.ID),
+			url.Values{"role": {"admin"}, "password": {realWritePassword}},
+			audit.KindAccountRole},
+		{"disable", setAccountEnabledAction(x.target.ID),
+			url.Values{"enabled": {"false"}},
+			audit.KindAccountDisable},
+		{"re-enable", setAccountEnabledAction(x.target.ID),
+			url.Values{"enabled": {"true"}, "password": {realWritePassword}},
+			audit.KindAccountEnable},
+		{"mint", mintAPITokenAction(x.target.ID),
+			url.Values{"name": {"ci-deploy"}, "ttl": {"30d"}, "password": {realWritePassword}},
+			audit.KindAPITokenMint},
+	}
+
+	var mintedTokenID string
+	for _, s := range steps {
+		rec := x.post(t, s.path, s.form)
+		if rec.Code >= 400 {
+			t.Fatalf("%s: status = %d; body %s", s.name, rec.Code, contentOf(rec.Body.String()))
+		}
+		if s.kind == audit.KindAPITokenMint {
+			credential := scrapeMintedToken(t, rec.Body.String())
+			_, tok, err := x.tokens.Verify(context.Background(), credential)
+			if err != nil {
+				t.Fatalf("the minted credential does not verify: %v", err)
+			}
+			mintedTokenID = tok.ID
+		}
+	}
+	if rec := x.post(t, revokeAPITokenAction(mintedTokenID), nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("revoke: status = %d; body %s", rec.Code, contentOf(rec.Body.String()))
+	}
+
+	got := x.kinds(t)
+	for _, want := range []string{
+		audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountDisable,
+		audit.KindAccountEnable, audit.KindAPITokenMint, audit.KindAPITokenRevoke,
+	} {
+		if !containsKind(got, want) {
+			t.Errorf("the trail carries no %s record. The read-audit exemption for this route "+
+				"names that kind, and an exemption whose claim is never checked is prose.\ngot %v",
+				want, got)
+		}
+	}
+
+	// Attributed to the signed-in Account, not to nobody. Every one of the
+	// six, not just the first found: an unattributed administrative row is an
+	// audit trail that cannot answer "who".
+	attributed := 0
+	for _, r := range x.records(t) {
+		if !containsKind([]string{
+			audit.KindAccountCreate, audit.KindAccountRole, audit.KindAccountDisable,
+			audit.KindAccountEnable, audit.KindAPITokenMint, audit.KindAPITokenRevoke,
+		}, r.Kind) {
+			continue
+		}
+		attributed++
+		if r.Attribution.Verified.AccountID != x.actor.ID {
+			t.Errorf("the %s record is attributed to %q, want the signed-in Account %q",
+				r.Kind, r.Attribution.Verified.AccountID, x.actor.ID)
+		}
+	}
+	if attributed != 6 {
+		t.Errorf("found %d administrative records to attribute, want 6", attributed)
+	}
+}
+
+func containsKind(kinds []string, want string) bool {
+	for _, k := range kinds {
+		if k == want {
+			return true
+		}
+	}
+	return false
+}
+
+// TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent — and the NEGATIVE half
+// is the point. It is what keeps the revoke and disable exemptions' wording
+// honest, and why those two rows claim no step_up event.
+func TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent(t *testing.T) {
+	t.Run("a create writes both account_create and step_up", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		rec := x.post(t, createAccountAction(), url.Values{
+			"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}, "password": {realWritePassword},
+		})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		got := x.kinds(t)
+		for _, want := range []string{audit.KindAccountCreate, audit.KindStepUp} {
+			if !containsKind(got, want) {
+				t.Errorf("the trail carries no %s record; got %v", want, got)
+			}
+		}
+	})
+
+	t.Run("a revoke writes api_token_revoke and NO step_up", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		_, _, err := x.tokens.Mint(context.Background(), x.target.ID, "ci-deploy", time.Hour)
+		if err != nil {
+			t.Fatalf("mint a token to revoke: %v", err)
+		}
+		toks, err := x.tokens.List(context.Background(), x.target.ID)
+		if err != nil || len(toks) == 0 {
+			t.Fatalf("list tokens: %v (%d)", err, len(toks))
+		}
+
+		before := x.kinds(t)
+		if containsKind(before, audit.KindStepUp) {
+			t.Fatalf("the trail already carries a step_up before the revoke: %v", before)
+		}
+		rec := x.post(t, revokeAPITokenAction(toks[0].ID), nil)
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+
+		got := x.kinds(t)
+		if !containsKind(got, audit.KindAPITokenRevoke) {
+			t.Errorf("the trail carries no api_token_revoke record; got %v", got)
+		}
+		if containsKind(got, audit.KindStepUp) {
+			t.Errorf("revoking wrote a step_up event. Revocation grants nothing and costs no "+
+				"password (owner decision 2026-09-19); the read-audit exemption says so, and "+
+				"this is the assertion that keeps that honest.\ngot %v", got)
+		}
+	})
+
+	t.Run("a disable writes account_disable and NO step_up", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		rec := x.post(t, setAccountEnabledAction(x.target.ID), url.Values{"enabled": {"false"}})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		got := x.kinds(t)
+		if !containsKind(got, audit.KindAccountDisable) {
+			t.Errorf("the trail carries no account_disable record; got %v", got)
+		}
+		if containsKind(got, audit.KindStepUp) {
+			t.Errorf("disabling wrote a step_up event — the durable off-switch costs no "+
+				"password.\ngot %v", got)
+		}
+	})
+}

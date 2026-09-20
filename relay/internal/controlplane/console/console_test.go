@@ -380,15 +380,33 @@ func TestConsole_RegisterMountsEveryRouteWithoutPatternConflict(t *testing.T) {
 // to hold for all of them: net/http's ServeMux answers a method mismatch on a
 // REGISTERED pattern itself, with a 405 before any handler runs, which is a
 // method oracle if the pattern's mere registration leaks past a role that
-// 404s on GET (#464 cycle 2, F1). The second sub-loop below probes every
+// 404s on GET (#464 cycle 2, F1). The OPTIONS sub-loop below probes every
 // route [Route.constrainsReach] is true for — i.e. every route [gated]
-// actually wraps — with OPTIONS instead of GET, so this test fails again if
-// that oracle ever comes back.
+// actually wraps — so this test fails again if that oracle ever comes back.
+//
+// THE SWEEP COVERS EVERY METHOD, NOT ONLY GET (#655). It used to `continue`
+// on every non-GET route, which left POST /console/jobs/{job_id}/cancel and
+// POST /console/approvals/{approval_id}/decision unswept, and would have left
+// this issue's five Accounts write routes unswept beside them. Two things
+// carry the widening:
+//
+//   - the OPTIONS method-oracle sub-loop is now UNCONDITIONAL on method. It
+//     already asserted the right thing for any route, and moving it out of the
+//     GET branch sweeps every POST route for the registration oracle with no
+//     CSRF handling involved at all;
+//   - a probe with the route's OWN method, which must use
+//     [newTestHandlerSkippingCSRF] and its own POST miss control. This is not
+//     a convenience: [newTestHandler] wraps the mux in [Secure], and Secure
+//     refuses every unsafe method on the session lane with a 403 FROM THE
+//     MIDDLEWARE, BEFORE ROUTING (security.go — sessionCSRFValid returns false
+//     with no ConsoleSession in context). Under newTestHandler every POST
+//     probe would be 403 for every role, and the absent-not-forbidden
+//     assertion would be uniformly vacuous. Do not "unify" the two handlers.
 func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 	d := withExecution(sweepFixture(), true)
 	routes := Routes(d)
 
-	checked, methodChecked := 0, 0
+	checked, methodChecked, postChecked := 0, 0, 0
 	for _, role := range sessionRoles {
 		h := newTestHandler(d, role)
 		// The control for the indistinguishability assertion: a path this
@@ -396,10 +414,12 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 		miss := get(t, h, "/console/no-such-route")
 		missOptions := request(t, h, http.MethodOptions, "/console/no-such-route")
 
+		// The own-method probe's handler and its own control — see the doc
+		// comment for why this cannot be h.
+		unchecked := newTestHandlerSkippingCSRF(d, role)
+		missPost := postSkippingCSRF(t, unchecked, "/console/no-such-route")
+
 		for _, r := range routes {
-			if r.Method != http.MethodGet {
-				continue
-			}
 			if r.Path == "/console/events" || r.Path == LoginPath || strings.Contains(r.Path, "{path...}") {
 				continue
 			}
@@ -410,31 +430,56 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 			if strings.Contains(path, "{") {
 				continue
 			}
-			checked++
 
-			rec := get(t, h, path)
-			if r.ReachableBy(role) {
-				if rec.Code == http.StatusNotFound {
-					t.Errorf("role %s: GET %s = 404, want reachable (MinRole %s)", role, path, r.MinRole)
+			if r.Method == http.MethodGet {
+				checked++
+
+				rec := get(t, h, path)
+				if r.ReachableBy(role) {
+					if rec.Code == http.StatusNotFound {
+						t.Errorf("role %s: GET %s = 404, want reachable (MinRole %s)", role, path, r.MinRole)
+					}
+				} else if rec.Code != http.StatusNotFound {
+					t.Errorf("role %s: GET %s = %d, want 404 — a role below MinRole %s must find the route absent", role, path, rec.Code, r.MinRole)
+				} else {
+					// Absent, not forbidden: a refused route must be byte-identical
+					// to a route that was never mounted, or the 404 is a
+					// status-code coincidence rather than a tested property.
+					res, missRes := rec.Result(), miss.Result()
+					if res.Status != missRes.Status {
+						t.Errorf("role %s: GET %s status line %q, want %q (same as an unmounted path)", role, path, res.Status, missRes.Status)
+					}
+					if got, want := res.Header.Get("Content-Type"), missRes.Header.Get("Content-Type"); got != want {
+						t.Errorf("role %s: GET %s Content-Type %q, want %q", role, path, got, want)
+					}
+					if got, want := res.Header.Get("X-Content-Type-Options"), missRes.Header.Get("X-Content-Type-Options"); got != want {
+						t.Errorf("role %s: GET %s X-Content-Type-Options %q, want %q", role, path, got, want)
+					}
+					if got, want := rec.Body.String(), miss.Body.String(); got != want {
+						t.Errorf("role %s: GET %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+					}
 				}
-			} else if rec.Code != http.StatusNotFound {
-				t.Errorf("role %s: GET %s = %d, want 404 — a role below MinRole %s must find the route absent", role, path, rec.Code, r.MinRole)
-			} else {
-				// Absent, not forbidden: a refused route must be byte-identical
-				// to a route that was never mounted, or the 404 is a
-				// status-code coincidence rather than a tested property.
-				res, missRes := rec.Result(), miss.Result()
-				if res.Status != missRes.Status {
-					t.Errorf("role %s: GET %s status line %q, want %q (same as an unmounted path)", role, path, res.Status, missRes.Status)
-				}
-				if got, want := res.Header.Get("Content-Type"), missRes.Header.Get("Content-Type"); got != want {
-					t.Errorf("role %s: GET %s Content-Type %q, want %q", role, path, got, want)
-				}
-				if got, want := res.Header.Get("X-Content-Type-Options"), missRes.Header.Get("X-Content-Type-Options"); got != want {
-					t.Errorf("role %s: GET %s X-Content-Type-Options %q, want %q", role, path, got, want)
-				}
-				if got, want := rec.Body.String(), miss.Body.String(); got != want {
-					t.Errorf("role %s: GET %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+			}
+
+			if r.Method == http.MethodPost {
+				postChecked++
+
+				rec := postSkippingCSRF(t, unchecked, path)
+				if !r.ReachableBy(role) {
+					if rec.Code != http.StatusNotFound {
+						t.Errorf("role %s: POST %s = %d, want 404 — a role below MinRole %s must find the route absent", role, path, rec.Code, r.MinRole)
+					} else if got, want := rec.Body.String(), missPost.Body.String(); got != want {
+						t.Errorf("role %s: POST %s body %q, want %q (same as an unmounted path)", role, path, got, want)
+					}
+				} else if rec.Code == http.StatusNotFound {
+					// Deliberately weak in this direction: with CSRF skipped
+					// the real handler runs against fixture fakes and its
+					// status depends on the route (401 for a granting act
+					// with no password, 400 for a missing field, 303 for a
+					// reducing one). "Not absent" is the property this sweep
+					// is for; per-route behaviour is pinned in the route's
+					// own tests.
+					t.Errorf("role %s: POST %s = 404, want reachable (MinRole %s)", role, path, r.MinRole)
 				}
 			}
 
@@ -487,6 +532,10 @@ func TestConsole_ARouteAboveTheSessionRoleIsAbsent(t *testing.T) {
 	}
 	if methodChecked == 0 {
 		t.Fatal("the method-oracle sweep checked zero routes — it is not running")
+	}
+	if postChecked == 0 {
+		t.Fatal("the own-method POST sweep checked zero routes — it is not running, which is " +
+			"exactly the state this sweep was in before #655 widened it")
 	}
 }
 
@@ -604,6 +653,15 @@ var fixtureIDs = map[string]string{
 	"{node_id}":     "node-web-1",
 	"{job_id}":      "job-1",
 	"{approval_id}": "ap-1",
+
+	// The Accounts write half's two parameters (#655). Both exist in
+	// sweepAccounts (fakes_test.go), and acct-mike is chosen deliberately: it
+	// is NEITHER the founding admin NOR the Account a test session signs in
+	// as, so a reachability probe does not collide with
+	// capability.ErrSelfTargeted or the last-enabled-admin guard and come back
+	// refused for a reason that has nothing to do with reach.
+	"{account_id}": "acct-mike",
+	"{token_id}":   "tok-live",
 }
 
 // walkableScreens derives the GET screens a sweep should render FROM A ROUTE
@@ -706,4 +764,63 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// TestConsole_EveryRenderedFormCarriesACSRFToken is a PACKAGE-WIDE property,
+// swept over every walkable screen for every session role (#655).
+//
+// A new form silently missing its hidden csrf_token is refused only at submit
+// time and only over a real session — which is to say, by nobody in this test
+// suite until somebody clicks it. Before this sweep existed, no test in the
+// package looked for it at all.
+//
+// It drives walkableScreens(routesFor(d, role), fixtureIDs) rather than one
+// screen, for the reason walkableScreens itself gives: a hand-listed sweep is
+// a list that silently stops covering the package. The layout's own sign-out
+// form is swept too, which is correct — it is a form on every page.
+func TestConsole_EveryRenderedFormCarriesACSRFToken(t *testing.T) {
+	d := withExecution(sweepFixture(), true)
+
+	formsChecked := 0
+	for _, role := range sessionRoles {
+		h := newTestHandler(d, role)
+		for _, path := range walkableScreens(routesFor(d, role), fixtureIDs) {
+			rec := get(t, h, path)
+			if rec.Code != http.StatusOK {
+				continue
+			}
+			for _, form := range postForms(rec.Body.String()) {
+				formsChecked++
+				if !strings.Contains(form, `name="csrf_token"`) {
+					t.Errorf("role %s: a form on %s carries no csrf_token input. It will be "+
+						"refused at submit time over a real session, and nothing but this sweep "+
+						"says so before then:\n%s", role, path, form)
+				}
+			}
+		}
+	}
+	if formsChecked == 0 {
+		t.Fatal("the sweep found zero POST forms — it is not inspecting anything")
+	}
+}
+
+// postForms splits a rendered page into its <form method="post"> elements.
+// Each returned string is one form's own markup, so a token belonging to a
+// NEIGHBOURING form cannot satisfy an assertion about this one.
+func postForms(body string) []string {
+	var out []string
+	rest := body
+	for {
+		i := strings.Index(rest, `<form method="post"`)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i:]
+		j := strings.Index(rest, "</form>")
+		if j < 0 {
+			return append(out, rest)
+		}
+		out = append(out, rest[:j])
+		rest = rest[j+len("</form>"):]
+	}
 }

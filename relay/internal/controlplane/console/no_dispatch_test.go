@@ -32,17 +32,36 @@ import (
 // read/exec partition: every file here legitimately handles
 // capability.Principal, since that is how a page attributes what it renders.
 
+// writeSeamName reports whether name is one of the package's THREE write
+// seams: JobCanceller (cancel.go, #595), ApprovalDecider (decide.go, #453) and
+// AccountAdministrator (accounts_write.go, #655). Each lives in its own file
+// so seams.go's "every seam here is read-only" claim stays unqualified, and
+// each is refused by name — and through an alias — on a type assertion below.
+//
+// A list rather than three literal comparisons, because this guard has already
+// been found to under-enforce once: the check and the alias collector must
+// agree about what a write seam IS, and a single list is what makes them.
+func writeSeamName(name string) bool {
+	switch name {
+	case "ApprovalDecider", "JobCanceller", "AccountAdministrator":
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 
-	// authzImportPath is cancel.go's own import (#595); decide.go (#453) and
-	// accounts.go (#654) are the other two files that name package authz,
-	// each for the same one symbol. The allowlist below is PACKAGE-WIDE
-	// rather than per-file, so a further importer needs no change here — see
-	// the allowlist's own doc.
+	// authzImportPath is cancel.go's own import (#595); decide.go (#453),
+	// accounts.go (#654) and accounts_write.go (#655) are the other three
+	// files that name package authz, each for the same one symbol
+	// (ErrUnauthorized). The allowlist below is PACKAGE-WIDE rather than
+	// per-file, so a further importer needs no change here — see the
+	// allowlist's own doc.
 	authzImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 
 	// approvalDecideFile is the one file allowed to name
@@ -181,9 +200,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// legitimate purpose either, and a guard that has to reason about which
 	// spelling compiles is a guard nobody trusts.
 	//
-	// The SAME lesson applies to ApprovalDecider/JobCanceller, and a security
-	// review (cycle 2) caught that the prior revision did not apply it: the
-	// *ast.Ident arm below only ever matched the two names LITERALLY, so
+	// The SAME lesson applies to the package's THREE write seams —
+	// ApprovalDecider, JobCanceller and AccountAdministrator (#655) — and a
+	// security review (cycle 2) caught that the prior revision did not apply
+	// it: the *ast.Ident arm below only ever matched the names LITERALLY, so
 	// `type probeSeam = ApprovalDecider` followed by
 	// `any(d.Approvals).(probeSeam)` recovered the seam with the guard
 	// silent. spec.Type can be a bare *ast.Ident for a package-LOCAL type
@@ -200,9 +220,9 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			aliasOf[spec.Name.Name] = msg
 			return true
 		}
-		if ident, ok := spec.Type.(*ast.Ident); ok && (ident.Name == "ApprovalDecider" || ident.Name == "JobCanceller") {
+		if ident, ok := spec.Type.(*ast.Ident); ok && writeSeamName(ident.Name) {
 			aliasOf[spec.Name.Name] = fmt.Sprintf(
-				"aliases %s — recovering one of the package's two write seams through a renamed "+
+				"aliases %s — recovering one of the package's three write seams through a renamed "+
 					"alias is the same escalation as recovering it by its own name", ident.Name)
 		}
 		return true
@@ -318,13 +338,13 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// JobCanceller's method set structurally, without naming either
 			// identifier anywhere. That residual is the same one the
 			// anonymous-interface check below already lives with for every
-			// other banned method name. Declaring or accepting
-			// ApprovalDecider/JobCanceller as a parameter stays legal —
-			// only a type assertion or type-switch case naming them, or an
-			// alias of them, is refused.
-			if t.Name == "ApprovalDecider" || t.Name == "JobCanceller" {
+			// other banned method name. Declaring or accepting one of the
+			// three write seams as a parameter stays legal — only a type
+			// assertion or type-switch case naming one, or an alias of one,
+			// is refused.
+			if writeSeamName(t.Name) {
 				violations = append(violations, fmt.Sprintf(
-					"%s: type-asserts to %s — recovering one of the package's two write seams "+
+					"%s: type-asserts to %s — recovering one of the package's three write seams "+
 						"by its own name is the same escalation as recovering the underlying type",
 					fileName, t.Name))
 				return
@@ -805,6 +825,53 @@ type AccountReader interface {
 	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
 }
 func f(a AccountReader) { _, _ = a.Accounts(context.Background(), capability.Principal{}) }
+`,
+			wantSubstr: "",
+		},
+		{
+			// The third write seam (#655), by its own name. Same direction
+			// as the ApprovalDecider/JobCanceller arms: recovering a write
+			// seam from an `any` is the escalation, whichever of the three
+			// it is.
+			name: "type-asserting to the AccountAdministrator seam by name violates anywhere",
+			src: `package console
+func f(a any) { _, _ = a.(AccountAdministrator) }
+`,
+			wantSubstr: "AccountAdministrator",
+		},
+		{
+			// And through a renamed alias, which is the evasion the alias
+			// collector exists for.
+			name: "a type alias of AccountAdministrator still violates",
+			src: `package console
+type probeAcct = AccountAdministrator
+func f(a any) { _, _ = a.(probeAcct) }
+`,
+			wantSubstr: "probeAcct",
+		},
+		{
+			// The false-positive guard: AccountAdministrator is a NAMED
+			// interface declared in accounts_write.go, not one recovered
+			// through a type assertion, so declaring it and calling through
+			// it must produce nothing — the same direction "declaring the
+			// AccountReader seam produces nothing" covers for the read seam.
+			name: "declaring the AccountAdministrator seam produces nothing",
+			file: "accounts_write.go",
+			src: `package console
+import (
+	"context"
+	"time"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+)
+type AccountAdministrator interface {
+	CreateAccount(ctx context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error)
+	SetAccountRole(ctx context.Context, p capability.Principal, id string, role accounts.Role) error
+	SetAccountEnabled(ctx context.Context, p capability.Principal, id string, enabled bool) error
+	MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	RevokeAPIToken(ctx context.Context, p capability.Principal, id string) error
+}
+func f(a AccountAdministrator) { _ = a.RevokeAPIToken(context.Background(), capability.Principal{}, "tok-1") }
 `,
 			wantSubstr: "",
 		},

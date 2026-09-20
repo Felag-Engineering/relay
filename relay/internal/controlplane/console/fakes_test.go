@@ -661,6 +661,125 @@ func (f *fakeDecider) DecideApproval(_ context.Context, p capability.Principal, 
 	return approval.Request{ID: in.RequestID, PlanHash: in.PlanHash}, nil
 }
 
+// The five calls fakeAccountAdmin records, each carrying exactly what the
+// handler passed, so a test asserts what reached the seam rather than that
+// something did.
+type createAccountCall struct {
+	Principal capability.Principal
+	Account   accounts.Account
+}
+
+type setRoleCall struct {
+	Principal capability.Principal
+	ID        string
+	Role      accounts.Role
+}
+
+type setEnabledCall struct {
+	Principal capability.Principal
+	ID        string
+	Enabled   bool
+}
+
+type mintCall struct {
+	Principal capability.Principal
+	AccountID string
+	Name      string
+	TTL       time.Duration
+}
+
+type revokeTokenCall struct {
+	Principal capability.Principal
+	TokenID   string
+}
+
+// sweepMintedTokenID and sweepMintedPlaintext are what fakeAccountAdmin's
+// mint returns. The plaintext is distinctive on purpose, for the reason
+// sweepTokenSecretHash gives: a substring search for it cannot match the rest
+// of the Console by accident.
+const (
+	sweepMintedTokenID   = "tok-minted-1"
+	sweepMintedPlaintext = accounts.TokenPrefix + "minted-plaintext-must-appear-once-4a1d" //nolint:gosec // test fixture, not a real credential
+)
+
+// fakeAccountAdmin is the AccountAdministrator write seam (#655). It records
+// every call rather than deciding anything — the admin floor, the self-target
+// rule, the last-enabled-admin rule and every audit row are the capability
+// layer's, and a fake that "helpfully" enforced one would be asserting
+// against its own implementation instead of the real domain.
+//
+// order, when non-nil, is a shared recorder both this fake and fakeAuth append
+// to, so a test can assert StepUp happened strictly BEFORE the capability
+// call — the shape fakeDecider already takes.
+type fakeAccountAdmin struct {
+	creates []createAccountCall
+	roles   []setRoleCall
+	enables []setEnabledCall
+	mints   []mintCall
+	revokes []revokeTokenCall
+
+	createErr error
+	roleErr   error
+	enableErr error
+
+	// mintErr is returned TOGETHER WITH a live token and a live plaintext,
+	// deliberately, because that is the only shape that actually occurs:
+	// capability.MintAPIToken returns `tok, plaintext, fmt.Errorf(...)` when
+	// the mint succeeded and the audit append failed
+	// (capability/accountadmin.go, the "record audit entry" branch). A fake
+	// returning a zero Plaintext here would prove nothing about the branch
+	// the Console must survive, so do not "simplify" it back to one.
+	mintErr   error
+	revokeErr error
+
+	order *[]string
+}
+
+func (f *fakeAccountAdmin) CreateAccount(_ context.Context, p capability.Principal, a accounts.Account) (accounts.Account, error) {
+	f.creates = append(f.creates, createAccountCall{Principal: p, Account: a})
+	f.record("CreateAccount")
+	if f.createErr != nil {
+		return accounts.Account{}, f.createErr
+	}
+	a.ID = "acct-created"
+	return a, nil
+}
+
+func (f *fakeAccountAdmin) SetAccountRole(_ context.Context, p capability.Principal, id string, role accounts.Role) error {
+	f.roles = append(f.roles, setRoleCall{Principal: p, ID: id, Role: role})
+	f.record("SetAccountRole")
+	return f.roleErr
+}
+
+func (f *fakeAccountAdmin) SetAccountEnabled(_ context.Context, p capability.Principal, id string, enabled bool) error {
+	f.enables = append(f.enables, setEnabledCall{Principal: p, ID: id, Enabled: enabled})
+	f.record("SetAccountEnabled")
+	return f.enableErr
+}
+
+func (f *fakeAccountAdmin) MintAPIToken(_ context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error) {
+	f.mints = append(f.mints, mintCall{Principal: p, AccountID: accountID, Name: name, TTL: ttl})
+	f.record("MintAPIToken")
+	tok := accounts.APIToken{ID: sweepMintedTokenID, AccountID: accountID, Name: name, CreatedAt: testNow}
+	if ttl > 0 {
+		tok.ExpiresAt = testNow.Add(ttl)
+	}
+	// The live plaintext accompanies the error on purpose — see mintErr.
+	return tok, accounts.NewPlaintext(sweepMintedPlaintext), f.mintErr
+}
+
+func (f *fakeAccountAdmin) RevokeAPIToken(_ context.Context, p capability.Principal, id string) error {
+	f.revokes = append(f.revokes, revokeTokenCall{Principal: p, TokenID: id})
+	f.record("RevokeAPIToken")
+	return f.revokeErr
+}
+
+func (f *fakeAccountAdmin) record(verb string) {
+	if f.order != nil {
+		*f.order = append(*f.order, verb)
+	}
+}
+
 // fakeAuth implements the Console's four-method Authenticator (login.go)
 // over nothing but recorded calls and configurable errors — no real store,
 // no real session. Login and Logout are here only to satisfy the interface;
@@ -800,11 +919,16 @@ func (f *fakeEvents) subscription(n int) *events.Subscription {
 // Every refusal branch handleAccounts has is drivable from here: err fails the
 // Account list, tokensErr fails only the token panel, and an unset tokens
 // entry is an Account with no tokens rather than an error.
+//
+// accountErr fails the SINGLE-Account read that handleSetAccountRole makes
+// (#655), so the read-failure branch — which must demand step-up rather than
+// skip it — is drivable too.
 type fakeAccounts struct {
-	accounts  []accounts.Account
-	tokens    map[string][]accounts.APIToken
-	err       error
-	tokensErr error
+	accounts   []accounts.Account
+	tokens     map[string][]accounts.APIToken
+	err        error
+	tokensErr  error
+	accountErr error
 }
 
 func (f *fakeAccounts) Accounts(context.Context, capability.Principal) ([]accounts.Account, error) {
@@ -812,6 +936,18 @@ func (f *fakeAccounts) Accounts(context.Context, capability.Principal) ([]accoun
 		return nil, f.err
 	}
 	return f.accounts, nil
+}
+
+func (f *fakeAccounts) Account(_ context.Context, _ capability.Principal, id string) (accounts.Account, error) {
+	if f.accountErr != nil {
+		return accounts.Account{}, f.accountErr
+	}
+	for _, a := range f.accounts {
+		if a.ID == id {
+			return a, nil
+		}
+	}
+	return accounts.Account{}, accounts.ErrNotFound
 }
 
 func (f *fakeAccounts) APITokens(_ context.Context, _ capability.Principal, accountID string) ([]accounts.APIToken, error) {
@@ -911,6 +1047,12 @@ func sweepFixture() Deps {
 	// of the form.
 	d.Decide = &fakeDecider{}
 	d.Auth = &fakeAuth{}
+	// AccountAdmin is wired for the same reason Decide and Auth are, one line
+	// up (#655): an unwired write seam would silently make every sweep render
+	// the Accounts screen's honest-absence branch instead of the five forms,
+	// so the CSRF-token sweep and the snapshot producer would be asserting
+	// about a page that does not ship.
+	d.AccountAdmin = &fakeAccountAdmin{}
 	d.Audit = fakeAudit{records: []audit.Record{
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
 	}}

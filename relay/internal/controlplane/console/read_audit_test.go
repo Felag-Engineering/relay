@@ -112,12 +112,26 @@ func (r readAuditRule) audited() bool { return r.tool != "" }
 // Route.Pattern(), which is method + path and is what makes two routes on one
 // path distinguishable.
 //
-// EXEMPTIONS ARE NOT PERMANENT. Each one names the issue that closes it. What
-// an exemption must never become is a place to put a screen because auditing
-// it was inconvenient — read the entry above it before adding one, and if the
-// reason you are about to write is "it is only a small read", that is the
-// argument ADR-0025 was written to reject: `read` means "cannot change Node
-// state", not "safe to see".
+// EXEMPTIONS ARE NOT PERMANENT — but they are of two kinds, and only one of
+// them can be closed.
+//
+// A READ exemption is a screen that reads fleet or trail data off the lane. It
+// names the issue that migrates it (GET /console/compare is the last one left)
+// and it disappears when that issue lands.
+//
+// A WRITE exemption is a route that is not a read at all: the capability layer
+// records it under its own kind, and there is no future in which it becomes an
+// audited read — so it names no closing issue, and inventing one would be a
+// comment claiming more than is true. The write entries here have always
+// worked this way: the cancel and decision rows cite #595 and #453, which are
+// the issues that BUILT those routes, and the login/logout rows cite nothing
+// at all.
+//
+// What an exemption of EITHER kind must never become is a place to put a
+// screen because auditing it was inconvenient — read the entry above it before
+// adding one, and if the reason you are about to write is "it is only a small
+// read", that is the argument ADR-0025 was written to reject: `read` means
+// "cannot change Node state", not "safe to see".
 var consoleReadAudit = map[string]readAuditRule{
 	// ── The audited fleet reads (#450) ───────────────────────────────────
 	"GET /console/{$}": {
@@ -227,6 +241,58 @@ var consoleReadAudit = map[string]readAuditRule{
 			"approval_decided with its Principal, the plan hash and the channel " +
 			"(approval_decide.go), and consoleauth records its own step_up event; a " +
 			"refusal is rendered as a refusal and appends nothing",
+	},
+
+	// ── The Accounts write half (#655) ───────────────────────────────────
+	//
+	// Five writes, not reads. Each names ITS OWN capability audit kind and is
+	// exact about step-up rather than copying one sentence five times — on
+	// revoke and on disable the step_up clause would be FALSE, and the
+	// negative assertion is the honest version.
+	//
+	// The standing honesty sentence the GET /console/accounts entry above
+	// models applies to all five: these rows describe the WRITE. That a
+	// successful Account READ on this screen records nothing is a different
+	// fact, tracked in #659 against internal/capability where the fix belongs.
+	//
+	// These `why` strings are not trusted prose: the audit kind each one names
+	// is asserted against the REAL lane by
+	// TestAccountsWrite_EveryWriteRecordsItsOwnAuditKindThroughTheRealLane,
+	// and the step-up clauses by
+	// TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent — which the two
+	// write exemptions above have no equivalent of.
+	"POST /console/accounts/create": {
+		path: "",
+		why: "a write, not a read (#655): the capability layer records the create as " +
+			"account_create with its Principal, and consoleauth records its own step_up " +
+			"event — creating an Account of any role or kind is privilege-granting",
+	},
+	"POST /console/accounts/{account_id}/role": {
+		path: "",
+		why: "a write, not a read (#655): the capability layer records the change as " +
+			"account_role with its Principal and the new role, and consoleauth records a " +
+			"step_up event WHEN THE CHANGE RAISES THE ROLE; a demote costs no password " +
+			"and writes no step_up (owner decision 2026-09-19)",
+	},
+	"POST /console/accounts/{account_id}/enabled": {
+		path: "",
+		why: "a write, not a read (#655): the capability layer records it as account_enable " +
+			"or account_disable with its Principal, and consoleauth records a step_up event " +
+			"ON THE ENABLE ONLY; a disable costs no password and writes no step_up — it is " +
+			"the durable off-switch and can only reduce",
+	},
+	"POST /console/accounts/{account_id}/tokens": {
+		path: "",
+		why: "a write, not a read (#655): the capability layer records the mint as " +
+			"api_token_mint carrying the token ID and never the Plaintext " +
+			"(accountadmin.go), and consoleauth records its own step_up event",
+	},
+	"POST /console/api-tokens/{token_id}/revoke": {
+		path: "",
+		why: "a write, not a read (#655): the capability layer records the revocation as " +
+			"api_token_revoke with its Principal. NO step-up and therefore NO step_up " +
+			"event — revocation only reduces, and an incident instrument that costs a " +
+			"password is one people route around (owner decision 2026-09-19)",
 	},
 }
 

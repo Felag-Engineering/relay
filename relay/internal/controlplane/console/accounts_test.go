@@ -351,9 +351,12 @@ func TestAccounts_NoSecretHashReachesTheRenderedPage(t *testing.T) {
 }
 
 // TestAccounts_NoConsoleFileNamesSecretHash is the source-level half, and it
-// is written to survive #655: that issue legitimately names
-// accounts.Plaintext (it mints, once, and reveals once), and it must never
-// name SecretHash.
+// was written to survive #655. It did: that issue legitimately names
+// accounts.Plaintext — accounts_write.go mints, once, and reveals once — and
+// names SecretHash nowhere. The Plaintext side of that prediction has its own
+// guard now (TestAccountsWrite_NoConsoleFileNamesPlaintextOutsideTheMint),
+// which bans the type everywhere BUT that one file; this one still bans
+// SecretHash everywhere without exception.
 //
 // An AST walk rather than a substring scan, in imports_test.go's shape,
 // because the property is about CODE. Parsed without comments, so a doc

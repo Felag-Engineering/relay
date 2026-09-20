@@ -11,15 +11,42 @@
 Every principal in the system: the humans who log in, and the **machine Accounts the AI-agents
 authenticate as**. It is also the screen ADR-0009 warned about most directly.
 
+It reads and it writes. The read half lists every Account and the credentials that authenticate as
+one; the write half creates an Account, sets a role, enables or disables one, and mints or revokes
+an API Token. Every one of those goes through the same capability-layer method the Control API
+calls — the admin floor, the self-target refusal, the last-enabled-admin refusal and every audit
+row are decided there and re-decided nowhere on this screen. The step-up matrix, as built:
+
+| Act | Step-up |
+|---|---|
+| Create an Account (any role, any kind) | yes |
+| **Raise** a role | yes |
+| Re-enable a disabled Account | yes |
+| Mint an API Token | yes |
+| Disable an Account | no |
+| **Lower** a role | no |
+| Revoke an API Token | no |
+
+Owner decision, `2026-09-19` — see *The warning, restated* for the principle behind the split. A
+human Account created here cannot sign in until a password is set with `relay console-password` on
+the host: no capability seam can set one, and the screen says so rather than implying otherwise.
+
 ## The warning, restated
 
 > Once the Console manages Accounts and roles, a hijacked admin session can *indirectly* reach
 > execution by elevating a machine Account it controls.
 
-So **every privilege-granting action on this screen requires step-up**, and every one is audited:
-creating an Account, changing a role, minting an API Token, re-enabling a disabled Account. This is
-not a UI convention — it is the mitigation ADR-0009 named for a consequence class it could not
-otherwise close.
+So **every action on this screen that could increase what a principal may do requires step-up**, and
+every action is audited: creating an Account (of any role or kind), **raising** a role, minting an
+API Token, re-enabling a disabled Account. Owner decision, `2026-09-19`: the privilege-granting
+principle governs — an act that can only *reduce* what a principal may do (disabling an Account,
+**lowering** a role, revoking a Token) does not take step-up, because an emergency brake that costs
+a password is one people route around. This is not a UI convention — it is the mitigation ADR-0009
+named for a consequence class it could not otherwise close.
+
+Step-up here is a password on the granting form itself, verified in the same request as the act it
+authorises — never a recent-auth window. Every granting act costs its own password, which is
+stricter than the window model and is what invariant 10 permits an adapter to be.
 
 ## Rows
 
@@ -44,8 +71,16 @@ something Policy might still deny — **the ceiling is always what the fleet's o
 
 ## API tokens
 
-Minted per Account, listed with scope, creation, last use and expiry. **The plaintext is shown once
-at mint and never again** — the same reveal-once discipline as spec 09, for the same reason.
+Minted per Account, listed with name, creation, last use and expiry. **There is no scope:** an API
+Token carries no authority of its own — authorization reads the Account's role at verification
+time, which is what makes "a token inherits its Account's role changes" true by construction
+(`accounts.APIToken`). **The plaintext is shown once at mint and never again** — the same
+reveal-once discipline as spec 09, for the same reason.
+
+The mint is the one write on this screen that does **not** post-redirect-get: a plaintext must
+never enter a URL, a `Location` header or a browser history entry, so it renders in the response
+body, once, with `Cache-Control: no-store`. A lifetime is a closed choice with no default — a
+forgotten field must never silently mint an immortal credential.
 
 Revocation is immediate and audited. ADR-0023 retired the shared control-plane credential; nothing
 on this screen may reintroduce one, and there is no such thing as a token not bound to an Account.
