@@ -38,10 +38,11 @@ const (
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 
-	// authzImportPath is cancel.go's own import (#595); decide.go (#453) is
-	// the second and, as of this change, only other file that names package
-	// authz. The allowlist below is PACKAGE-WIDE rather than per-file, so a
-	// second importer needs no change here — see the allowlist's own doc.
+	// authzImportPath is cancel.go's own import (#595); decide.go (#453) and
+	// accounts.go (#654) are the other two files that name package authz,
+	// each for the same one symbol. The allowlist below is PACKAGE-WIDE
+	// rather than per-file, so a further importer needs no change here — see
+	// the allowlist's own doc.
 	authzImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 
 	// approvalDecideFile is the one file allowed to name
@@ -246,6 +247,17 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// not exposed by ApprovalReader or QueryReader, so "Resolve" belongs on
 	// this list for the identical reason "Decide" and "Revoke" already are.
 	//
+	// Mint (#654) closes the SAME hole, not a new one the Accounts seam
+	// introduced. Deps.Approvals, Deps.Queries, Deps.Cancel and Deps.Decide
+	// are all already wired to one *capability.Service
+	// (control_surfaces.go), and MintAPIToken landed on that type in #653 —
+	// so `d.Approvals.(interface{ MintAPIToken(…) })` compiles on main
+	// TODAY, with this guard silent, and recovers the reveal-once credential
+	// mint with no import and no banned type named. Deps.Accounts
+	// (seams.go) is a FIFTH field wired to the same object, and closing the
+	// pre-existing hole belongs in the same change that adds another way to
+	// reach it. MintAPIToken is the last uncovered write verb on that type.
+	//
 	// Record is deliberately NOT here, and the distinction is worth being
 	// precise about: *capability.Service has exactly one Record* method,
 	// RecordEventSubscription, and it is not a hole this list would close —
@@ -268,6 +280,10 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			// All six are reachable from Deps.Approvals, Deps.Queries, or
 			// Deps.Cancel today (see the comment above).
 			"Run", "Plan", "Engage", "Release", "Cancel", "Resolve",
+			// The account lane's reveal-once credential write (#654):
+			// MintAPIToken, reachable from any of the five seams wired to
+			// the same *capability.Service.
+			"Mint",
 		} {
 			if strings.HasPrefix(name, prefix) {
 				return true
@@ -744,6 +760,51 @@ type canceller interface {
 	CancelJob(ctx context.Context, p any, jobID string) error
 }
 func f(c canceller) { _ = c.CancelJob(context.Background(), nil, "job-1") }
+`,
+			wantSubstr: "",
+		},
+		{
+			// The pre-existing hole the Mint prefix closes (#654): this
+			// compiles against today's wiring, because every seam on Deps
+			// that is a *capability.Service carries MintAPIToken since
+			// #653. Recovering a reveal-once credential mint from a read
+			// seam is the escalation; which of the five fields it is
+			// spelled through is incidental.
+			name: "anonymous interface recovering MintAPIToken from a read seam",
+			src: `package console
+import (
+	"context"
+	"time"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+)
+func f(a any) {
+	_, _ = a.(interface {
+		MintAPIToken(ctx context.Context, p capability.Principal, accountID, name string, ttl time.Duration) (accounts.APIToken, accounts.Plaintext, error)
+	})
+}
+`,
+			wantSubstr: "MintAPIToken",
+		},
+		{
+			// The false-positive guard for the new seam: AccountReader is a
+			// NAMED interface (seams.go) declaring two READS, not an
+			// anonymous one recovered through a type assertion, so
+			// declaring it must produce nothing — the same direction
+			// "declaring the approval read seam produces nothing" covers
+			// for ApprovalReader.
+			name: "declaring the AccountReader seam produces nothing",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+)
+type AccountReader interface {
+	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
+	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
+}
+func f(a AccountReader) { _, _ = a.Accounts(context.Background(), capability.Principal{}) }
 `,
 			wantSubstr: "",
 		},

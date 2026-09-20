@@ -58,7 +58,31 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 	// ">0 events" and not "0 events", which also matches "10 events".
 	zeroed := regexp.MustCompile(`<b>0</b>|>0 (events|Nodes|Jobs|reads)`)
 
+	// Screens whose day-one shape is NOT "nothing has happened yet". A map
+	// with a written reason rather than a bare continue, so the exclusion
+	// argues for itself in the diff that adds it.
+	dayOneExempt := map[string]string{
+		"/console/accounts": "EnsureFoundingAdmin (relay/cmd/relay/main.go, in the same " +
+			"ControlEnabled branch that mounts the Console) seeds an enabled human admin at " +
+			"startup, so a Relay with zero Accounts is unreachable and the founding admin's " +
+			"row IS the honest first-boot shape. This criterion is about measuring a fleet " +
+			"that does not exist yet; an Account table is not a fleet, and hiding the one " +
+			"row a fresh Relay really has would be the fiction, not the table. The real " +
+			"day-one shape is pinned in TestAccounts_DayOneShowsTheFoundingAdmin.",
+	}
+
+	// An exemption that stops being reached is an unexecuted paragraph that
+	// outlives its reason — the failure this package answers elsewhere with a
+	// vacuity assert (no_dispatch_test.go). If /console/accounts ever leaves
+	// walkableScreens, the reason above must be re-argued, not inherited.
+	exemptHit := map[string]bool{}
+
 	for _, path := range paths {
+		if why, ok := dayOneExempt[path]; ok {
+			exemptHit[path] = true
+			t.Logf("skipping %s: %s", path, why)
+			continue
+		}
 		rec := get(t, h, path)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s on a fresh Relay = %d, want 200", path, rec.Code)
@@ -73,6 +97,14 @@ func TestDayOne_NoScreenRendersAZeroedStatisticOnAFreshRelay(t *testing.T) {
 		if m := zeroed.FindString(body); m != "" {
 			t.Errorf("%s rendered the zeroed statistic %q on a fresh Relay — say nothing has "+
 				"happened, do not measure it", path, m)
+		}
+	}
+
+	for path := range dayOneExempt {
+		if !exemptHit[path] {
+			t.Errorf("dayOneExempt names %s, which this sweep never reached — the exemption is "+
+				"now an unexecuted paragraph. Delete it, or fix the sweep that stopped covering "+
+				"the route it excuses", path)
 		}
 	}
 }

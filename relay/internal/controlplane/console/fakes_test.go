@@ -795,6 +795,50 @@ func (f *fakeEvents) subscription(n int) *events.Subscription {
 	return f.subs[n]
 }
 
+// fakeAccounts is the Account read seam over in-memory slices.
+//
+// Every refusal branch handleAccounts has is drivable from here: err fails the
+// Account list, tokensErr fails only the token panel, and an unset tokens
+// entry is an Account with no tokens rather than an error.
+type fakeAccounts struct {
+	accounts  []accounts.Account
+	tokens    map[string][]accounts.APIToken
+	err       error
+	tokensErr error
+}
+
+func (f *fakeAccounts) Accounts(context.Context, capability.Principal) ([]accounts.Account, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.accounts, nil
+}
+
+func (f *fakeAccounts) APITokens(_ context.Context, _ capability.Principal, accountID string) ([]accounts.APIToken, error) {
+	if f.tokensErr != nil {
+		return nil, f.tokensErr
+	}
+	return f.tokens[accountID], nil
+}
+
+// foundingAdminFixture is the ONE Account a fresh Relay actually has.
+//
+// Every field is what EnsureFoundingAdmin (internal/store/accounts.go) really
+// seeds: the reserved name, human, admin, enabled. LastSeenAt is deliberately
+// ZERO — the row is created at startup, before anybody has signed in — which
+// is what makes the day-one render exercise stamp's "—" rather than a
+// timestamp somebody chose to make the assertion convenient.
+func foundingAdminFixture() accounts.Account {
+	return accounts.Account{
+		ID:        "acct-founding",
+		Name:      accounts.FoundingAdminName,
+		Kind:      accounts.KindHuman,
+		Role:      accounts.RoleAdmin,
+		Enabled:   true,
+		CreatedAt: testNow,
+	}
+}
+
 // dayOneDeps is a fresh Relay: no Nodes, an empty trail, the fingerprints and
 // the event seam wired. This is what the Console looks like on first boot, and
 // several properties in spec 10 are only visible in it.
@@ -803,6 +847,12 @@ func dayOneDeps() Deps {
 	d.Fleet = fakeFleet{}
 	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
 	d.Events = newFakeEvents()
+	// Restated rather than inherited from renderableDeps, exactly as d.Fleet
+	// is above: this is what a fresh Relay IS. EnsureFoundingAdmin seeded an
+	// enabled human admin at startup who has never authenticated, so "day
+	// one" for the Accounts screen is one row and not an empty table — see
+	// accounts.go's header and the named skip in dayone_test.go.
+	d.Accounts = &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}}
 	return d
 }
 
@@ -822,7 +872,13 @@ func renderableDeps() Deps {
 		// and refuses rather than rendering an empty feed when it is missing,
 		// so every sweep that renders every screen needs one.
 		Queries: &fakeQueries{},
-		Now:     func() time.Time { return testNow },
+		// THE SMALLEST TRUTHFUL ACCOUNT FIXTURE IS ONE, NOT ZERO. A Relay
+		// that mounts the Console has run EnsureFoundingAdmin in the same
+		// startup branch, so it cannot hold fewer Accounts than this — and a
+		// fixture with none would make every incidental sweep render a state
+		// production never reaches.
+		Accounts: &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}},
+		Now:      func() time.Time { return testNow },
 	}
 }
 
@@ -868,7 +924,88 @@ func sweepFixture() Deps {
 			TaskID: "task-1", NodeID: "node-web-1", Outcome: jobs.OutcomeSuccess,
 			RiskClass: jobs.RiskClassMutate, Stdout: []byte("restarted"),
 		}},
-		rows: []capability.AuditRow{{Kind: audit.KindDispatch, JobID: "job-1", OperationName: "service.restart"}},
+		rows: []capability.AuditRow{
+			{Kind: audit.KindDispatch, JobID: "job-1", OperationName: "service.restart"},
+			// An agentCallKinds-matching row attributed to the machine
+			// Account below, so the sweeps render the Accounts screen's
+			// last-tool-call CELL rather than always taking its
+			// honest-absence branch.
+			{
+				Kind:          audit.KindRead,
+				OperationName: "list_nodes",
+				Timestamp:     testNow.Add(-90 * time.Second),
+				Verified: capability.VerifiedIdentity{
+					AccountID:   sweepMachineAccountID,
+					AccountName: "gleipnir-prod",
+					Role:        string(accounts.RoleOperator),
+				},
+			},
+		},
 	}
+	d.Accounts = sweepAccounts()
 	return d
 }
+
+// sweepMachineAccountID is the machine Account the sweep fixture's agent-call
+// row is attributed to. Named so the row and the Account cannot drift.
+const sweepMachineAccountID = "acct-gleipnir"
+
+// sweepAccounts is the RICH Account fixture: every shape the screen renders
+// differently is present exactly once.
+//
+// The founding admin (never authenticated), a second human admin, a human
+// viewer, a machine Account with calls on the trail, and a disabled Account —
+// so the "disabled" word, the machine/human kind split and the two
+// last-authentication branches are all walked by any sweep that renders this
+// screen.
+//
+// One token carries a REAL SecretHash. A "no secret ever renders" test against
+// a fixture with nothing to leak proves nothing at all.
+func sweepAccounts() *fakeAccounts {
+	return &fakeAccounts{
+		accounts: []accounts.Account{
+			foundingAdminFixture(),
+			{
+				ID: "acct-mike", Name: "mike", Kind: accounts.KindHuman,
+				Role: accounts.RoleAdmin, Enabled: true,
+				CreatedAt: testNow.Add(-30 * 24 * time.Hour), LastSeenAt: testNow.Add(-2 * time.Hour),
+			},
+			{
+				ID: "acct-ana", Name: "ana", Kind: accounts.KindHuman,
+				Role: accounts.RoleViewer, Enabled: true,
+				CreatedAt: testNow.Add(-20 * 24 * time.Hour), LastSeenAt: testNow.Add(-45 * time.Minute),
+			},
+			{
+				ID: sweepMachineAccountID, Name: "gleipnir-prod", Kind: accounts.KindMachine,
+				Role: accounts.RoleOperator, Enabled: true,
+				CreatedAt: testNow.Add(-10 * 24 * time.Hour), LastSeenAt: testNow.Add(-90 * time.Second),
+			},
+			{
+				ID: "acct-retired", Name: "retired-ci", Kind: accounts.KindMachine,
+				Role: accounts.RoleOperator, Enabled: false,
+				CreatedAt: testNow.Add(-90 * 24 * time.Hour), LastSeenAt: testNow.Add(-60 * 24 * time.Hour),
+			},
+		},
+		tokens: map[string][]accounts.APIToken{
+			sweepMachineAccountID: {
+				{
+					ID: "tok-live", AccountID: sweepMachineAccountID, Name: "ci-deploy",
+					SecretHash: []byte(sweepTokenSecretHash),
+					CreatedAt:  testNow.Add(-10 * 24 * time.Hour),
+					LastUsedAt: testNow.Add(-90 * time.Second),
+				},
+				{
+					ID: "tok-revoked", AccountID: sweepMachineAccountID, Name: "laptop",
+					CreatedAt: testNow.Add(-40 * 24 * time.Hour),
+					ExpiresAt: testNow.Add(24 * time.Hour),
+					RevokedAt: testNow.Add(-24 * time.Hour),
+				},
+			},
+		},
+	}
+}
+
+// sweepTokenSecretHash is the byte sequence that must never reach a rendered
+// page. Distinctive on purpose: a substring search for it cannot match the
+// rest of the Console by accident.
+const sweepTokenSecretHash = "secret-hash-must-never-render-9f2c"
