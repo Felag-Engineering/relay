@@ -51,9 +51,12 @@ package console
 // a raise through without step-up. Three bounds, because they change how bad
 // that is:
 //
-//   - The outcome is CAPPED AT THE TARGET'S READ-TIME ROLE. The race can only
-//     restore a role the target held moments earlier; it can never produce a
-//     role above what this handler observed.
+//   - The outcome is CAPPED AT THE ROLE THIS HANDLER OBSERVED. It can never
+//     produce a role above what the read returned. It is NOT capped at a role
+//     the target has ever held: read admin, submit operator (so no password is
+//     taken), a second admin demotes the target to viewer, and the write lands
+//     a viewer to operator RAISE with no step-up. The cap is on the ceiling,
+//     not on the direction.
 //   - It can NEVER be used for self-elevation. capability.ErrSelfTargeted
 //     refuses p.AccountID == id unconditionally, before the store is touched —
 //     and self-elevation by a hijacked admin session is precisely ADR-0009's
@@ -331,7 +334,14 @@ func accountsHrefFor(name string) string {
 //
 // undone names what did not happen; subject names the object in the
 // operator's terms ("the Account", "this token") for the not-found branch.
-func writeFailed(w http.ResponseWriter, pg Page, err error, route, id, undone, subject string) {
+//
+// ident is how the CALLING ROUTE addresses its object, which is not always an
+// id: four routes pass the path id, and create passes the submitted NAME,
+// because a name is the only handle it has before the Account exists. The
+// not-found sentence and the log field are worded for both rather than
+// assuming an id, so create can never render "no Account with the id
+// <a name>".
+func writeFailed(w http.ResponseWriter, pg Page, err error, route, ident, undone, subject string) {
 	switch {
 	case errors.Is(err, authz.ErrUnauthorized):
 		// The capability layer decided this; this screen renders what it
@@ -357,7 +367,7 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, id, undone, s
 	case errors.Is(err, accounts.ErrNotFound), errors.Is(err, accounts.ErrTokenNotFound):
 		w.WriteHeader(http.StatusNotFound)
 		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
-			Heading: "No " + subject + " with the id " + id + " appears in this Relay's records. " + undone,
+			Heading: "No " + subject + " matching " + ident + " appears in this Relay's records. " + undone,
 		})
 	case errors.Is(err, accounts.ErrNameTaken):
 		w.WriteHeader(http.StatusConflict)
@@ -395,7 +405,7 @@ func writeFailed(w http.ResponseWriter, pg Page, err error, route, id, undone, s
 		// that does not require distinguishing the wrapped audit error is
 		// "could not confirm", never "nothing happened".
 		slog.Error("console account administration returned an error",
-			"route", route, "account_id", id, "error", err)
+			"route", route, "subject", subject, "target", ident, "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		renderScreen(w, pg, accountsWriteResultTmpl, accountsWriteResultView{
 			Heading: "The Relay could not confirm this change was fully recorded. Reload the " +
@@ -723,6 +733,12 @@ func handleMintAPIToken(d Deps) http.HandlerFunc {
 		// credential belongs to. Best-effort — a failed read costs the
 		// selection on the back link, never the render of the secret, which
 		// is the one thing this response exists to do.
+		//
+		// It is not free, and the cost is named rather than discovered: this
+		// is a SECOND ControlAccountRead authorization on the mint path, and a
+		// refusal of it writes its own refuseControl row in the trail. Both
+		// are acceptable — the alternative is echoing a caller-supplied name
+		// back onto the page that reveals a credential.
 		accountName := ""
 		if target, readErr := d.Accounts.Account(r.Context(), caller, id); readErr == nil {
 			accountName = target.Name

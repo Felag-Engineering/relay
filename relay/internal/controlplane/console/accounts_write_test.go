@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,20 +89,41 @@ func writeHalfCode(t *testing.T) string {
 // only catch the spellings somebody thought of, and a plan reviewer broke the
 // first cut of this guard by renaming the local.
 //
-// If a new prelude helper appears that hands a handler its Principal or its
-// Page, it belongs in this list. Guard B's exactly-once count on AtLeast is
-// what keeps the omission from being silent.
+// WHAT THIS LIST IS, AND WHAT IT THEREFORE CANNOT DO. It is a PROVENANCE
+// ALLOWLIST: Layer 2 flags a .Role read only on an identifier it can see the
+// caller's authority arriving in. A caller obtained any OTHER way is invisible
+// to it, and nothing else in this file compensates — a code reviewer found
+// exactly that hole by calling controlplane.PrincipalFromContext directly,
+// whose Principal.Role is a plain string and so trips none of Layer 1's
+// spellings either. That is why the selector form below is matched as well,
+// and why a new way to reach the caller MUST be added here: no other guard in
+// this file will notice its absence.
 var callerAuthorityProducers = map[string]bool{
 	"principal":    true,
 	"page":         true,
 	"writePrelude": true,
 }
 
-// callerAuthorityIdents collects every identifier in file known to hold a
+// callerAuthoritySelectors are the same thing reached through a package
+// qualifier — controlplane.PrincipalFromContext returns the Principal the
+// authentication boundary put in the request context, which is the caller's
+// authority by definition.
+//
+// Matched on the SELECTOR NAME alone, deliberately: a renamed import, an alias
+// or a local wrapper type would all hide a qualifier-based match, and the
+// method name is the part that cannot change without the call changing too.
+var callerAuthoritySelectors = map[string]bool{
+	"PrincipalFromContext": true,
+}
+
+// callerAuthorityIdents collects every identifier in scope known to hold a
 // caller-authority value: a parameter or result typed Page or
-// capability.Principal, and a local bound from a callerAuthorityProducers
-// call.
-func callerAuthorityIdents(file *ast.File) map[string]bool {
+// capability.Principal, and a local bound from a callerAuthorityProducers or
+// callerAuthoritySelectors call.
+//
+// It takes a NODE rather than the file, because the set is per-declaration:
+// see callerAuthorityReads.
+func callerAuthorityIdents(scope ast.Node) map[string]bool {
 	out := map[string]bool{}
 
 	isAuthorityType := func(e ast.Expr) bool {
@@ -130,7 +152,20 @@ func callerAuthorityIdents(file *ast.File) map[string]bool {
 		}
 	}
 
-	ast.Inspect(file, func(n ast.Node) bool {
+	// producesAuthority reports whether a call hands back the caller's own
+	// authority — a bare call to one of this package's prelude helpers, or a
+	// qualified call to one of the context readers.
+	producesAuthority := func(call *ast.CallExpr) bool {
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			return callerAuthorityProducers[fn.Name]
+		case *ast.SelectorExpr:
+			return callerAuthoritySelectors[fn.Sel.Name]
+		}
+		return false
+	}
+
+	ast.Inspect(scope, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.FuncDecl:
 			collectFields(v.Type.Params)
@@ -143,11 +178,7 @@ func callerAuthorityIdents(file *ast.File) map[string]bool {
 				return true
 			}
 			call, ok := v.Rhs[0].(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			fn, ok := call.Fun.(*ast.Ident)
-			if !ok || !callerAuthorityProducers[fn.Name] {
+			if !ok || !producesAuthority(call) {
 				return true
 			}
 			for _, lhs := range v.Lhs {
@@ -158,6 +189,56 @@ func callerAuthorityIdents(file *ast.File) map[string]bool {
 		}
 		return true
 	})
+	return out
+}
+
+// callerAuthorityReads reports every .Role read on an identifier holding
+// caller authority, named, in source order — collecting the
+// identifier set PER TOP-LEVEL DECLARATION rather than once for the whole
+// file.
+//
+// Per declaration because a file-global set is a false-positive waiting to
+// happen: one handler writing `target, pg, ok := writePrelude(...)` would make
+// `target` a caller-authority name EVERYWHERE, and roleChangeCouldGrant's
+// legitimate `target.Role` — the TARGET Account's role, which this file must
+// read — would fail the guard in an unrelated function. A guard that cries
+// wolf is a guard someone deletes.
+//
+// Go's scoping makes this safe in the other direction too: a name can only
+// hold what its own declaration put there, and a nested closure is inside the
+// declaration that encloses it.
+func callerAuthorityReads(file *ast.File) []string {
+	var out []string
+	for _, decl := range file.Decls {
+		idents := callerAuthorityIdents(decl)
+		if len(idents) == 0 {
+			continue
+		}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Role" {
+				return true
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok || !idents[id.Name] {
+				return true
+			}
+			out = append(out, id.Name)
+			return true
+		})
+	}
+	return out
+}
+
+// callerAuthorityNames is the union of the per-declaration sets, for the
+// vacuity pins alone. Nothing is flagged from it.
+func callerAuthorityNames(file *ast.File) map[string]bool {
+	out := map[string]bool{}
+	for _, decl := range file.Decls {
+		for name := range callerAuthorityIdents(decl) {
+			out[name] = true
+		}
+	}
 	return out
 }
 
@@ -209,7 +290,7 @@ func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
 
 	// --- Layer 2: the AST rule ---------------------------------------------
 	_, file := parseWriteHalf(t)
-	authority := callerAuthorityIdents(file)
+	authority := callerAuthorityNames(file)
 
 	// Vacuity pins. An empty set means the collection pass stopped working,
 	// not that the file got safer — every handler here takes a Principal and
@@ -230,18 +311,9 @@ func TestAccountsWrite_NoCallerRoleComparisonLivesInTheWriteHalf(t *testing.T) {
 		}
 	}
 
-	ast.Inspect(file, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Role" {
-			return true
-		}
-		id, ok := sel.X.(*ast.Ident)
-		if !ok || !authority[id.Name] {
-			return true
-		}
-		t.Errorf(message, accountsWriteFile, id.Name+".Role")
-		return true
-	})
+	for _, ident := range callerAuthorityReads(file) {
+		t.Errorf(message, accountsWriteFile, ident+".Role")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -457,6 +529,40 @@ func f(w any, r any) {
 			wantIDs: []string{"thePage"},
 		},
 		{
+			// The hole a code reviewer found in the first cut of Layer 2: the
+			// caller reached through a SELECTOR call rather than one of this
+			// package's bare prelude helpers. capability.Principal.Role is a
+			// plain string, so comparing it to a literal trips no Layer 1
+			// spelling either — this fixture is the only thing standing
+			// between that bypass and a green package.
+			name: "a Principal from controlplane.PrincipalFromContext is flagged",
+			src: `package console
+func f(ctx any) bool {
+	who, _ := controlplane.PrincipalFromContext(ctx)
+	return who.Role == "admin"
+}
+`,
+			wantIDs: []string{"who"},
+		},
+		{
+			// Per-declaration scoping: a prelude local in ONE function must
+			// not make the same name caller-authority in another, where it is
+			// the TARGET Account whose role this file legitimately reads.
+			// Against a file-global set this fixture flags "target" and fails.
+			name: "a prelude local does not taint the same name in another function",
+			src: `package console
+import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
+func handler(w any, r any) {
+	target, pg, ok := writePrelude(nil, w, r, "Accounts")
+	_, _, _ = target, pg, ok
+}
+func decide(target accounts.Account, to accounts.Role) bool {
+	return roleChangeCouldGrant(target.Role, to)
+}
+`,
+			wantIDs: nil,
+		},
+		{
 			name: "a capability.Principal parameter's Role is flagged",
 			src: `package console
 import "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -486,20 +592,7 @@ func f(target accounts.Account, to accounts.Role) bool {
 			if err != nil {
 				t.Fatalf("parse fixture: %v", err)
 			}
-			authority := callerAuthorityIdents(file)
-
-			var flagged []string
-			ast.Inspect(file, func(n ast.Node) bool {
-				sel, ok := n.(*ast.SelectorExpr)
-				if !ok || sel.Sel.Name != "Role" {
-					return true
-				}
-				if id, ok := sel.X.(*ast.Ident); ok && authority[id.Name] {
-					flagged = append(flagged, id.Name)
-				}
-				return true
-			})
-
+			flagged := callerAuthorityReads(file)
 			if !reflect.DeepEqual(flagged, tc.wantIDs) {
 				t.Fatalf("flagged %v, want %v", flagged, tc.wantIDs)
 			}
@@ -750,43 +843,224 @@ func (x *writeFix) post(t *testing.T, path string, form url.Values) *httptest.Re
 	return x.f.do(t, req, x.session)
 }
 
-// grantingAct is one of the four acts that cost a password, named so the
-// refusal table below is built from the same list the handlers implement —
-// adding a sixth write route without classifying it fails here.
-type grantingAct struct {
-	name string
-	path func() string
-	form url.Values
+// writeAct is one act a write route can perform, in one direction.
+//
+// pattern is the ROUTE it drives, and it is what
+// TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing checks the
+// two tables below against a set DERIVED from Routes — so a write route that nobody classified
+// as granting or reducing cannot exist quietly. The two tables do not
+// partition the routes: the role and the enabled routes appear in both,
+// because the same route raises or lowers depending on what was submitted,
+// and that duality is itself pinned below.
+type writeAct struct {
+	name    string
+	pattern string
+	path    func() string
+	form    url.Values
 	// called reports how many times THIS act's capability verb was called.
 	called func(*fakeAccountAdmin) int
 }
 
+// grantingAct is a writeAct in the granting direction. The alias keeps the
+// name the refusal sweeps read by.
+type grantingAct = writeAct
+
+// grantingActs are the four acts that cost a password.
 func grantingActs() []grantingAct {
 	return []grantingAct{
 		{
-			name:   "create an Account",
-			path:   createAccountAction,
-			form:   url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.creates) },
+			name:    "create an Account",
+			pattern: createAccountPattern,
+			path:    createAccountAction,
+			form:    url.Values{"name": {"newbie"}, "kind": {"human"}, "role": {"viewer"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.creates) },
 		},
 		{
-			name:   "raise a role",
-			path:   func() string { return setAccountRoleAction(targetViewerID) },
-			form:   url.Values{"role": {"admin"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
+			name:    "raise a role",
+			pattern: setAccountRolePattern,
+			path:    func() string { return setAccountRoleAction(targetViewerID) },
+			form:    url.Values{"role": {"admin"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.roles) },
 		},
 		{
-			name:   "re-enable a disabled Account",
-			path:   func() string { return setAccountEnabledAction(targetDisabledID) },
-			form:   url.Values{"enabled": {"true"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.enables) },
+			name:    "re-enable a disabled Account",
+			pattern: setAccountEnabledPattern,
+			path:    func() string { return setAccountEnabledAction(targetDisabledID) },
+			form:    url.Values{"enabled": {"true"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.enables) },
 		},
 		{
-			name:   "mint an API Token",
-			path:   func() string { return mintAPITokenAction(targetOperatorID) },
-			form:   url.Values{"name": {"ci-deploy"}, "ttl": {"90d"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.mints) },
+			name:    "mint an API Token",
+			pattern: mintAPITokenPattern,
+			path:    func() string { return mintAPITokenAction(targetOperatorID) },
+			form:    url.Values{"name": {"ci-deploy"}, "ttl": {"90d"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.mints) },
 		},
+	}
+}
+
+// reducingActs are the acts that can only REDUCE what some principal may do,
+// and therefore cost no password (owner decision, 2026-09-19).
+func reducingActs() []writeAct {
+	return []writeAct{
+		{
+			name:    "disable an Account",
+			pattern: setAccountEnabledPattern,
+			path:    func() string { return setAccountEnabledAction(targetViewerID) },
+			form:    url.Values{"enabled": {"false"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.enables) },
+		},
+		{
+			// admin -> operator, deliberately NOT the floor case, so the
+			// assertion is not quietly satisfied by a change to viewer alone.
+			name:    "lower a role from admin to operator",
+			pattern: setAccountRolePattern,
+			path:    func() string { return setAccountRoleAction(targetAdminID) },
+			form:    url.Values{"role": {"operator"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.roles) },
+		},
+		{
+			name:    "lower a role from operator to viewer",
+			pattern: setAccountRolePattern,
+			path:    func() string { return setAccountRoleAction(targetOperatorID) },
+			form:    url.Values{"role": {"viewer"}},
+			called:  func(a *fakeAccountAdmin) int { return len(a.roles) },
+		},
+		{
+			name:    "revoke a token",
+			pattern: revokeAPITokenPattern,
+			path:    func() string { return revokeAPITokenAction(targetLiveToken) },
+			form:    url.Values{},
+			called:  func(a *fakeAccountAdmin) int { return len(a.revokes) },
+		},
+	}
+}
+
+// consoleWriteRoutePatterns derives the write-route set from the route table
+// itself: every POST route Routes mounts under /console/accounts or
+// /console/api-tokens.
+//
+// DERIVED, not restated, and that is the whole point. The first cut of the
+// classification guard below compared a hardcoded table against its own
+// length, so a code reviewer could add a sixth write route — one calling
+// SetAccountRole(..., RoleAdmin) with no step-up at all, an unconditional
+// grant of admin from any admin session with no password — and watch the
+// whole package go green. Routes is the thing a request actually reaches, so
+// it is the thing the classification has to be checked against.
+//
+// Execution is forced on because Routes returns a SMALLER slice when it is
+// off; a future write route gated behind that flag must still be classified.
+//
+// THE SCOPE LIMIT, said out loud: this derivation is by PATH PREFIX, so a
+// write route belonging to this screen but mounted on some third path would
+// escape it. Both prefixes are forced anyway — the five patterns are the only
+// shapes that register beside GET /console/accounts without panicking
+// (accounts_write.go) — so a third path would be a deliberate act, and the
+// person taking it owns widening this filter with it.
+func consoleWriteRoutePatterns() []string {
+	d := sweepFixture()
+	d.Execution = true
+
+	var out []string
+	for _, r := range Routes(d) {
+		if r.Method != http.MethodPost {
+			continue
+		}
+		if !strings.HasPrefix(r.Path, "/console/accounts") && !strings.HasPrefix(r.Path, "/console/api-tokens") {
+			continue
+		}
+		out = append(out, r.Pattern())
+	}
+	return out
+}
+
+// TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing is the
+// guard that makes "adding a write route without classifying it fails here"
+// a fact rather than a comment.
+//
+// Every mounted write route must appear in grantingActs() or reducingActs().
+// A granting entry is swept by
+// TestAccountsWrite_EveryGrantingActRefusesWithoutACorrectPassword, which
+// proves the route refuses without a correct password and never reaches the
+// capability seam; a reducing entry is swept by
+// TestAccountsWrite_AReducingActNeedsNoPassword, which proves the opposite
+// deliberately. An UNCLASSIFIED route is one that no test has ever asked
+// either question of — which is exactly how a route that grants admin with no
+// password passes a green package.
+//
+// The two tables are not a partition, and the dual set is pinned rather than
+// waved at: the role route and the enabled route each appear in BOTH, because
+// one route raises or lowers depending on what was submitted, and that is the
+// only reason either may be classified twice.
+func TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing(t *testing.T) {
+	mounted := consoleWriteRoutePatterns()
+	if len(mounted) == 0 {
+		t.Fatal("Routes mounts no write routes under /console/accounts or /console/api-tokens — " +
+			"the derivation is not running, so this guard is asserting nothing")
+	}
+
+	granting := map[string][]string{}
+	for _, act := range grantingActs() {
+		granting[act.pattern] = append(granting[act.pattern], act.name)
+	}
+	reducing := map[string][]string{}
+	for _, act := range reducingActs() {
+		reducing[act.pattern] = append(reducing[act.pattern], act.name)
+	}
+
+	for _, pattern := range mounted {
+		_, isGranting := granting[pattern]
+		_, isReducing := reducing[pattern]
+		if !isGranting && !isReducing {
+			t.Errorf("Routes mounts %q and neither grantingActs() nor reducingActs() names it. "+
+				"Every write route on this screen must be classified: a granting act is proved to "+
+				"refuse without a correct password and never reach the capability seam, a reducing "+
+				"act is proved to need none. An unclassified write route is one nobody ever asked "+
+				"either question of.", pattern)
+		}
+	}
+
+	// The other direction: a table entry naming a route that is not mounted is
+	// a sweep driving a path no request can reach, which reads as coverage and
+	// is not.
+	for _, table := range []map[string][]string{granting, reducing} {
+		for pattern, names := range table {
+			if !slices.Contains(mounted, pattern) {
+				t.Errorf("the act table names %q (%v), which Routes does not mount — a sweep over "+
+					"a route no request reaches is not coverage", pattern, names)
+			}
+		}
+	}
+
+	// The dual routes, pinned by name. A THIRD route claiming to be both would
+	// mean some act is classified in two directions at once, which for
+	// anything but a raise-or-lower pair is a contradiction, not a nuance.
+	var dual []string
+	for pattern := range granting {
+		if _, ok := reducing[pattern]; ok {
+			dual = append(dual, pattern)
+		}
+	}
+	slices.Sort(dual)
+	want := []string{setAccountEnabledPattern, setAccountRolePattern}
+	slices.Sort(want)
+	if !slices.Equal(dual, want) {
+		t.Errorf("the routes classified BOTH ways are %v, want %v — only a route whose direction "+
+			"depends on what was submitted (raise or lower, enable or disable) may be both",
+			dual, want)
+	}
+
+	// And the reach sweep's own table, which is hand-maintained for the same
+	// reason and would otherwise go stale silently.
+	var swept []string
+	for _, r := range accountsWriteRoutes() {
+		swept = append(swept, r.pattern)
+	}
+	for _, pattern := range mounted {
+		if !slices.Contains(swept, pattern) {
+			t.Errorf("accountsWriteRoutes() does not name %q, so the below-admin reach sweep and "+
+				"the CSRF sweeps never drive it", pattern)
+		}
 	}
 }
 
@@ -808,10 +1082,15 @@ func TestAccountsWrite_EveryGrantingActRefusesWithoutACorrectPassword(t *testing
 		{name: "an ended session", stepUpErr: consoleauth.ErrNoSession, wantStatus: http.StatusUnauthorized},
 	}
 
+	// A vacuity pin on THIS sweep's width, and nothing more: it re-reads the
+	// table it drives, so it cannot notice a route missing from that table.
+	// TestAccountsWrite_EveryWriteRouteIsClassifiedAsGrantingOrReducing is
+	// what proves the table covers every write route Routes mounts.
 	acts := grantingActs()
 	if len(acts) != 4 {
-		t.Fatalf("the granting-act table has %d entries, want 4 — a write route was added without "+
-			"being classified as granting or reducing", len(acts))
+		t.Fatalf("the granting-act table has %d entries, want 4 — four acts cost a password "+
+			"(create, raise a role, re-enable, mint) and this sweep is only as wide as the table",
+			len(acts))
 	}
 
 	for _, act := range acts {
@@ -945,41 +1224,7 @@ func TestAccountsWrite_StepUpHappensBeforeTheCapabilityCall(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAccountsWrite_AReducingActNeedsNoPassword(t *testing.T) {
-	cases := []struct {
-		name   string
-		path   func() string
-		form   url.Values
-		called func(*fakeAccountAdmin) int
-	}{
-		{
-			name:   "disable an Account",
-			path:   func() string { return setAccountEnabledAction(targetViewerID) },
-			form:   url.Values{"enabled": {"false"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.enables) },
-		},
-		{
-			// admin -> operator, deliberately NOT the floor case, so the
-			// assertion is not quietly satisfied by a change to viewer alone.
-			name:   "lower a role from admin to operator",
-			path:   func() string { return setAccountRoleAction(targetAdminID) },
-			form:   url.Values{"role": {"operator"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
-		},
-		{
-			name:   "lower a role from operator to viewer",
-			path:   func() string { return setAccountRoleAction(targetOperatorID) },
-			form:   url.Values{"role": {"viewer"}},
-			called: func(a *fakeAccountAdmin) int { return len(a.roles) },
-		},
-		{
-			name:   "revoke a token",
-			path:   func() string { return revokeAPITokenAction(targetLiveToken) },
-			form:   url.Values{},
-			called: func(a *fakeAccountAdmin) int { return len(a.revokes) },
-		},
-	}
-
-	for _, tc := range cases {
+	for _, tc := range reducingActs() {
 		t.Run(tc.name, func(t *testing.T) {
 			x := newWriteFix(t, nil)
 			// No password field AT ALL, and a step-up that would fail if one
@@ -1161,7 +1406,27 @@ func postFormSkippingCSRF(t *testing.T, h http.Handler, path string, form url.Va
 // "The plaintext appears in the mint response and nowhere else."
 // ---------------------------------------------------------------------------
 
+// TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable
+// covers the SUCCESS path, where the secret actually exists as a plain string.
+//
+// It captures slog for the duration, because mintedView.LogValue protects the
+// VIEW and not the revealed string: a code reviewer added
+// `slog.Info(..., "token", secret)` to this branch and every structural guard
+// in this file — the exactly-once Reveal count, the LogValue redaction, the
+// no-Plaintext-outside-this-file sweep — stayed green. Acceptance criterion 4
+// says the plaintext is absent from logs, and this is the only assertion that
+// reads a log.
+//
+// The buffer is legitimately EMPTY today: a successful mint logs nothing. The
+// claim is not "something was logged", it is "whatever this request logs, it
+// is not the secret" — which is what makes it survive a handler that starts
+// logging.
 func TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable(t *testing.T) {
+	var logged bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
 	x := newWriteFix(t, nil)
 	rec := x.post(t, mintAPITokenAction(targetOperatorID), url.Values{
 		"name": {"ci-deploy"}, "ttl": {"90d"}, "password": {"whatever the fake accepts"},
@@ -1181,6 +1446,11 @@ func TestAccountsWrite_TheMintedPlaintextAppearsExactlyOnceAndIsNotCacheable(t *
 	}
 	if got := strings.Count(rec.Body.String(), sweepMintedPlaintext); got != 1 {
 		t.Errorf("the plaintext appears %d times in the mint response, want exactly 1", got)
+	}
+	if strings.Contains(logged.String(), sweepMintedPlaintext) {
+		t.Errorf("a successful mint wrote the plaintext to the log. The rendered page is the "+
+			"ONE place it may appear, and a log line is the one copy nobody revokes:\n%s",
+			logged.String())
 	}
 }
 
@@ -1922,6 +2192,11 @@ func containsKind(kinds []string, want string) bool {
 // TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent — and the NEGATIVE half
 // is the point. It is what keeps the revoke and disable exemptions' wording
 // honest, and why those two rows claim no step_up event.
+//
+// Every claim the five read-audit rows make about step_up is asserted here on
+// the real lane, positive AND negative, because two of those rows make a
+// CONDITIONAL claim — step_up on a raise but not a lower, on an enable but not
+// a disable — and a conditional claim half-asserted is a claim about nothing.
 func TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent(t *testing.T) {
 	t.Run("a create writes both account_create and step_up", func(t *testing.T) {
 		x := newRealWriteFix(t)
@@ -1935,6 +2210,69 @@ func TestAccountsWrite_AGrantingActAlsoWritesAStepUpEvent(t *testing.T) {
 		for _, want := range []string{audit.KindAccountCreate, audit.KindStepUp} {
 			if !containsKind(got, want) {
 				t.Errorf("the trail carries no %s record; got %v", want, got)
+			}
+		}
+	})
+
+	t.Run("a raise writes account_role and step_up", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		// The target is an operator; admin is a raise.
+		rec := x.post(t, setAccountRoleAction(x.target.ID), url.Values{
+			"role": {"admin"}, "password": {realWritePassword},
+		})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		got := x.kinds(t)
+		for _, want := range []string{audit.KindAccountRole, audit.KindStepUp} {
+			if !containsKind(got, want) {
+				t.Errorf("the trail carries no %s record. The role route's read-audit row claims "+
+					"a step_up when the change RAISES the role; this is that half.\ngot %v", want, got)
+			}
+		}
+	})
+
+	t.Run("a lower writes account_role and NO step_up", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		// The target is an operator; viewer is a lower, and no password field
+		// is submitted at all.
+		rec := x.post(t, setAccountRoleAction(x.target.ID), url.Values{"role": {"viewer"}})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		got := x.kinds(t)
+		if !containsKind(got, audit.KindAccountRole) {
+			t.Errorf("the trail carries no account_role record; got %v", got)
+		}
+		if containsKind(got, audit.KindStepUp) {
+			t.Errorf("lowering a role wrote a step_up event. A demote costs no password (owner "+
+				"decision 2026-09-19) and the role route's read-audit row says so.\ngot %v", got)
+		}
+	})
+
+	t.Run("an enable writes account_enable and step_up, the disable before it neither", func(t *testing.T) {
+		x := newRealWriteFix(t)
+		if rec := x.post(t, setAccountEnabledAction(x.target.ID), url.Values{"enabled": {"false"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("disable status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		// The disable half of the enabled route's read-audit row, asserted
+		// here so the enable assertion below cannot be satisfied by a step_up
+		// the disable wrote.
+		if containsKind(x.kinds(t), audit.KindStepUp) {
+			t.Fatalf("disabling wrote a step_up event; got %v", x.kinds(t))
+		}
+
+		rec := x.post(t, setAccountEnabledAction(x.target.ID), url.Values{
+			"enabled": {"true"}, "password": {realWritePassword},
+		})
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("enable status = %d, want 303; body %s", rec.Code, contentOf(rec.Body.String()))
+		}
+		got := x.kinds(t)
+		for _, want := range []string{audit.KindAccountEnable, audit.KindStepUp} {
+			if !containsKind(got, want) {
+				t.Errorf("the trail carries no %s record. The enabled route's read-audit row "+
+					"claims a step_up on the ENABLE only; this is that half.\ngot %v", want, got)
 			}
 		}
 	})

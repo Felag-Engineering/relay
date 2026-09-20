@@ -116,8 +116,15 @@ func (r readAuditRule) audited() bool { return r.tool != "" }
 // them can be closed.
 //
 // A READ exemption is a screen that reads fleet or trail data off the lane. It
-// names the issue that migrates it (GET /console/compare is the last one left)
-// and it disappears when that issue lands.
+// names the migration that closes it WHERE ONE IS FILED, and it disappears
+// when that migration lands. Two rows below deliberately name no issue number,
+// and each says why in its own words rather than borrowing a ticket that does
+// not close it: GET /console/compare is the last registry read off the lane
+// and its migration has not been ticketed (the numbers it cites are the
+// migrations that already landed for other screens), and GET /console/approvals
+// is classified by what it CAN read — its trail reads ARE on the audited lane
+// and are recorded whenever there is a Request to read for, so there is
+// nothing to migrate at all.
 //
 // A WRITE exemption is a route that is not a read at all: the capability layer
 // records it under its own kind, and there is no future in which it becomes an
