@@ -1,5 +1,10 @@
 # Self-serve enrollment — implementation breakdown
 
+**Status:** live breakdown, maintained. ADR-0030 through ADR-0033 are **merged**, not drafts;
+the issues below now live in the GitHub milestone
+**v0.6.5 — Install Path: relay init, join string, packages**, which is the authority on what
+is in flight (AGENTS.md, "Work the current milestone").
+
 Working document for the `v0.1.0-beta` "Self-serve evaluation" block
 ([docs/specs/](../specs/) `v0.1.0-beta`). It expands the five issues recorded there
 into a dependency-ordered set, after the design conversation of 2026-08-18 settled eleven

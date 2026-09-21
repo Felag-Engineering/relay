@@ -1,5 +1,13 @@
 # Approval & Attribution — design note
 
+> **Superseded (2026-09-20).** The decisions this note grounded are now binding in
+> [ADR-0027](../adr/0027-approval-callout-notify-via-mcp-decide-out-of-band.md) (approval
+> callout: notify via MCP, decide out of band) and
+> [ADR-0029](../adr/0029-in-band-approval-through-the-tool-surface.md) (in-band approval
+> through the tool surface), and the built behaviour is described by the capability specs in
+> [docs/specs/](../specs/). This file is kept as the pre-ADR context — the reasoning, not the
+> rule. Where it and an ADR disagree, the ADR wins.
+
 **Status:** planning-session output (owner + AI-agent, 2026-08-07), pre-ADR. This note is the
 grounding brief for the approval-callout ADR (#268) and the scope inputs it produced for
 #209, #276, #285, and the Accounts milestone. It records decisions and their reasoning; the

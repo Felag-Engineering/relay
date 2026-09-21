@@ -1,5 +1,12 @@
 # Admin Console — backend coverage & sequencing
 
+> **Frozen snapshot (2026-08-07), superseded.** The Status column below is as of that date and
+> is now wrong in places: the Login row describes a single seeded shared credential, which
+> ADR-0023 retired — Accounts, Console sessions and step-up re-authentication are built. What
+> each Console screen needs and has is now recorded in [docs/design/console/](console/) and
+> the capability specs in [docs/specs/](../specs/); this file is kept only as the sequencing
+> rationale from the planning session.
+
 **Status:** planning-session output (owner + AI-agent, 2026-08-07), pre-ADR. Companion to
 the Console execution-surface decision (#264) and the approval/attribution design note
 (`approval-and-attribution.md`). Maps every Console surface to the backend it needs, so

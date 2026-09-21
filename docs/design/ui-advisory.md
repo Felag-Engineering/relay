@@ -1,5 +1,10 @@
 # Admin Console — UI advisory (design brief)
 
+> **Superseded (2026-09-20).** The Console execution surface this brief argued for is decided in
+> [ADR-0026](../adr/0026-admin-console-execution-surface.md), and the live per-screen
+> specification is [docs/design/console/](console/), cited from source; this file's own status
+> line below already records that move. It is kept as the pre-ADR design intent. In this note **Plan** means what GLOSSARY.md now calls the **Policy preflight** — the no-execution preview of a dispatch. ADR-0038 gave the word "Plan" to an approved route of execution after this was written; read every "Plan" below as "preflight".
+
 **Status:** draft from the 2026-08-07 planning session, for owner ratification. **Amended
 2026-08-24:** the word `outdated` here originally covered Policy-fingerprint drift; it is pinned to
 ADR-0014's meaning (below the dispatch minimum) by ADR-0034, and drift is an observation rather

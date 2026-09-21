@@ -1,5 +1,10 @@
 # Admin Console — wireframe brief (four key screens)
 
+> **Expanded by [docs/design/console/](console/) (2026-09-20).** The per-screen specifications
+> there are the live description of each Console screen and supersede the four prompts below
+> where they differ; this brief is kept as the designer-facing origin of the design language.
+> In this note **Plan** means what GLOSSARY.md now calls the **Policy preflight** — the no-execution preview of a dispatch. ADR-0038 gave the word "Plan" to an approved route of execution after this was written; read every "Plan" below as "preflight".
+
 **Status:** designer-facing brief, 2026-08-07. Derived from `ui-advisory.md` (authoritative
 design plan) and ADR-0009/ADR-0020; written as paste-able prompts for mockup generation —
 prepend the global section to each screen prompt. Iterate mockups against this before any
