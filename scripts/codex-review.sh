@@ -10,7 +10,8 @@
 #
 #   0                   a report on stdout.
 #   2                   this script refused (bad usage, unresolvable base, empty change,
-#                       unreadable design file, `mktemp -d` failure).
+#                       unreadable design file, `mktemp -d` failing or returning a
+#                       non-absolute path).
 #   3                   Codex is ABSENT: the plugin, the CLI or node is missing, OR the
 #                       companion reported an exhausted usage quota, OR it reported an
 #                       authentication failure. The caller records the gate as
@@ -33,7 +34,13 @@
 # resolves toward "failed review", which is the pre-#620 behaviour.
 #
 # Captured bytes are never destroyed. On exit 3, and on a signal, they are replayed to
-# STDERR under a marker; stdout stays empty so no caller can read them as a review.
+# STDERR under a marker; stdout stays empty so no caller can read them as a review. The
+# replay passes through a redactor for the obvious API-key and bearer-token shapes, on
+# EVERY branch rather than only the auth one — a limit message can carry a credential just
+# as an auth failure can. That redaction is BEST-EFFORT PATTERN MATCHING, NOT A GUARANTEE:
+# a secret in a shape it does not know reaches stderr in clear. A replay block is therefore
+# diagnostic output for a human at a terminal, and is never material to quote verbatim into
+# a PR body, an issue comment, or anything else durable and public.
 #
 # Codex is not installed in the environment this was written in, so the companion's real
 # limit and auth output was not observed: every claim about its wording below is a design
@@ -47,8 +54,12 @@
 #   (ii) a short review delivered entirely on stderr, with a non-zero exit and no report
 #        marker anywhere, is recorded as absence. All three have to coincide, and the bytes
 #        still reach stderr.
-# A third is closed outright: an exit-0 run with an empty capture used to be recorded as a
-# completed review, and is now a failure.
+#  (iii) `notice_max_total` is bought at a price: a failed run carrying up to ~200 bytes of
+#        partial report on stdout alongside a short marker-free notice on stderr (256 bytes
+#        together) is classified as absence, and those stdout bytes are relabelled and
+#        moved to the stderr replay.
+# A fourth is closed outright: an exit-0 run whose stdout holds nothing but whitespace used
+# to be recorded as a completed review, and is now a failure.
 #
 # Accepted cost of capturing to files rather than streaming: the report is delivered at
 # process exit rather than as it arrives. All three call sites read the completed output,
@@ -57,9 +68,9 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 mode=${1:-}; arg=${2:-origin/main}
-# Usage is the header through the exit contract (lines 2-21), so a caller that gets the
+# Usage is the header through the exit contract (lines 2-22), so a caller that gets the
 # invocation wrong also sees what each exit code means.
-[ -n "$mode" ] || { sed -n '2,21p' "$0"; exit 2; }
+[ -n "$mode" ] || { sed -n '2,22p' "$0"; exit 2; }
 
 companion=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
 if [ -z "$companion" ] || ! command -v codex >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
@@ -73,10 +84,16 @@ repo_rules="Constraints come from AGENTS.md (the fourteen invariants and the esc
 #
 # `limit_re` and `auth_re` are the unobservable-signal ASSUMPTIONS named in the header: the
 # real wording was never seen, so a wrong guess here costs a missed absence (a non-zero exit,
-# which is the pre-#620 behaviour) and never a false one. Bare numeric codes match only
-# beside an http/status word or a trailing space, so a line number cannot match.
-limit_re='usage limit|rate limit|quota (exceeded|exhausted)|too many requests|resource[_ ]exhausted|(http |status )?429 '
-auth_re='not logged in|(run )?(codex )?login|authentication (failed|error)|unauthorized|invalid api key|expired (token|session)|re-?authenticate|(http |status )?401 '
+# which is the pre-#620 behaviour) and never a false one.
+#
+# Every alternative here needs a context word, because the short things that would otherwise
+# match are exactly what a CRASHED reviewer prints, and a crash misread as absence is the
+# one direction this script promises never to fail in. A bare `429 `/`401 ` matches a stack
+# frame (`session.js:429 `) and a line number (`line 401 during teardown`); a bare `login`
+# matches a path (`/etc/login.defs`). So the numeric codes are accepted only after `http `
+# or `status `, and the login wording only in a sentence that is about logging in.
+limit_re='usage limit|rate limit|quota (exceeded|exhausted)|too many requests|resource[_ ]exhausted|(http |status )429 '
+auth_re='not logged in|codex login|please log ?in|authentication (failed|error)|unauthorized|invalid api key|expired (token|session)|re-?authenticate|(http |status )401 '
 # `report_re` is the one matcher here that is NOT a guess about output we have never seen:
 # every word in it is one this script's own prompts demand of the report ("Output: Verdict …",
 # "tagged BLOCKING or SUGGESTION" — see the `case` arms below). It is a veto: a capture
@@ -110,11 +127,19 @@ capture_bytes() {
 # Captured bytes reach a human even when this script has decided they are not a review.
 # stdout stays exactly empty on every path that calls this, so no caller can read the
 # replay as a report.
+#
+# `redact_re` is applied to every replay, not only to the auth branch: a limit message can
+# quote a credential too, and classification is limit-first. It is a pattern list, so it
+# catches the shapes it knows and nothing else — see the header on why a replay block is
+# for a terminal and not for a PR body.
+# The prefix is kept and only what follows it is replaced, so the replay still says WHICH
+# credential was rejected without saying what it was.
+redact_re='s/(sk-|[Bb]earer +)[A-Za-z0-9._-]{8,}/\1[redacted]/g'
 replay_capture() {
   [ -n "$capture_dir" ] || return 0
   [ "$(capture_bytes)" -gt 0 ] || return 0
   { echo "codex-review: --- captured output --- ($1)"
-    cat -- "$capture_dir/out" "$capture_dir/err" 2>/dev/null
+    cat -- "$capture_dir/out" "$capture_dir/err" 2>/dev/null | sed -E "$redact_re"
     echo "codex-review: --- end captured output ---"; } >&2
 }
 
@@ -136,6 +161,19 @@ run_companion() {
   # allocate nothing and install no trap.
   capture_dir=$(mktemp -d) || { echo "codex-review: mktemp -d failed" >&2; exit 2; }
 
+  # A relative TMPDIR that happens to exist under the repo root makes `mktemp -d` return a
+  # relative path, and this script has already `cd`-ed to the repo root — so the capture,
+  # credentials and all, lands INSIDE the working tree and the cleanup below (absolute
+  # paths only) never removes it. Measured: `TMPDIR=reltmp` with `reltmp/` present leaves
+  # `?? reltmp/` holding the captured text; with it absent, `mktemp -d` fails instead.
+  # Refuse either way rather than capture anywhere but an absolute temp directory.
+  case "$capture_dir" in
+    /*) ;;
+    *) rm -rf "$capture_dir"
+       echo "codex-review: mktemp -d returned a non-absolute path ('$capture_dir'); refusing to capture inside the working tree" >&2
+       exit 2 ;;
+  esac
+
   # Two traps over one handler, deliberately: a single combined `trap … EXIT INT TERM HUP`
   # cannot both leave a normal exit status alone and stop a signalled run resuming into the
   # rest of the script. `exit 1` on a signal is non-zero and non-3 — a killed run is a
@@ -152,20 +190,24 @@ run_companion() {
   out_bytes=$(( $(wc -c <"$capture_dir/out" 2>/dev/null || echo 0) ))
   err_bytes=$(( $(wc -c <"$capture_dir/err" 2>/dev/null || echo 0) ))
 
-  # A success with nothing on stdout is not a report. Exit 1 is non-3, so it is a failure,
-  # not an absence.
-  if [ "$rc" -eq 0 ] && [ "$out_bytes" -eq 0 ]; then
+  # A success with nothing on stdout is not a report. Tested on CONTENT, not on byte count:
+  # the prompt hands the companion the working-tree diff and every untracked file in full,
+  # so an injected "reply with a single space and stop" would otherwise pass a zero-byte
+  # test by one whitespace byte and be recorded as a delivered review — a two-vendor gate
+  # with one reviewer, which is the outcome this whole script exists to make impossible.
+  # Exit 1 is non-3, so it is a failure, not an absence.
+  if [ "$rc" -eq 0 ] && ! grep -q '[^[:space:]]' "$capture_dir/out" 2>/dev/null; then
     echo "codex-review: companion exited 0 but produced no report on stdout; treating this as a failed review, not a report" >&2
-    cat -- "$capture_dir/err" >&2 2>/dev/null
     capture_consumed=1
+    cat -- "$capture_dir/err" >&2 2>/dev/null
     exit 1
   fi
 
   # The success door, first among the delivery paths: a run that exits 0 is a report.
   if [ "$rc" -eq 0 ]; then
+    capture_consumed=1
     cat -- "$capture_dir/out"
     cat -- "$capture_dir/err" >&2 2>/dev/null
-    capture_consumed=1
     exit 0
   fi
 
@@ -203,13 +245,22 @@ run_companion() {
     # and a credential reaches this line (AGENTS.md §9 — never log secrets). Nothing at all
     # is extracted from an auth failure. A message that states no reset time yields the
     # empty string and the parenthetical is dropped, never filled with what followed "reset".
-    # The re-validation and the length cap are backstops: while extraction uses `grep -o`
-    # they can never fire, and they are what keeps this line safe if it ever stops doing so.
-    # (Measured: with `-o` dropped, the cap alone rejects the leak; with the cap dropped too,
-    # a whole notice line reaches stderr.)
+    #
+    # Each of the three steps does separate work; none is decoration:
+    #   - extraction takes the FIRST time-shaped token anywhere in the capture. It is not
+    #     anchored near the word "reset", so a message carrying an unrelated time cites that
+    #     one. Harmless (the shape is all that reaches stderr) but worth knowing.
+    #   - the `-x` re-validation requires the whole survivor to BE a time shape. This is
+    #     what holds if extraction ever stops using `-o`: measured with `-o` dropped,
+    #     `limit; key sk-AB 3 min` passes the cap and only `-x` rejects the line.
+    #   - the 24-char cap bounds the unbounded space run in `[0-9]{1,3} *`. `30`+40
+    #     spaces+`min` is a 45-char token that `-x` accepts, because the pattern allows the
+    #     run; the cap is the only thing that rejects it.
     reset_re='[0-9]{1,3} *(sec|min|hour|day)[a-z]{0,4}|[0-9]{1,2}:[0-9]{2}'
     reset=$(grep -shoiE "$reset_re" "$capture_dir/out" "$capture_dir/err" 2>/dev/null | head -1 | tr -d '\r\n')
-    printf '%s' "$reset" | grep -qxE "$reset_re" 2>/dev/null || reset=""
+    # `-i` here as well as on extraction: without it a plausible `30 Minutes` is extracted
+    # and then silently discarded, losing AC1's reset time for a wording difference.
+    printf '%s' "$reset" | grep -qxiE "$reset_re" 2>/dev/null || reset=""
     [ "${#reset}" -le 24 ] || reset=""
     if [ -n "$reset" ]; then
       printf 'codex-review: Codex unavailable — usage limit reached (message cites "%s"); this gate runs with one reviewer\n' "$reset" >&2
@@ -223,16 +274,21 @@ run_companion() {
   # AC1's "one stderr line naming the cause" is the FIRST line above, and the only line
   # matching `^codex-review: Codex unavailable`; the replay below is delimited evidence, not
   # a second cause.
+  #
+  # `capture_consumed` is set BEFORE the bytes are delivered, on every path: set after, a
+  # signal arriving mid-delivery re-enters cleanup and replays the whole block a second
+  # time. Losing a replay to a signal that already got one is cheaper than doubling it.
   if [ -n "$cause" ]; then
-    replay_capture "classified as Codex absent; these bytes are not a review"
     capture_consumed=1
+    replay_capture "classified as Codex absent; these bytes are not a review"
     exit 3
   fi
 
-  # Not absence: forward every byte unchanged and preserve the failure.
+  # Not absence: forward every byte unchanged — no redaction here, because these bytes are
+  # a delivered review and mangling one is a worse failure than the replay's is.
+  capture_consumed=1
   cat -- "$capture_dir/out"
   cat -- "$capture_dir/err" >&2 2>/dev/null
-  capture_consumed=1
   if [ "$rc" -eq 3 ]; then
     echo "codex-review: companion exited 3 for a reason that is not a usage limit or an authentication failure; reporting 1 so it is not read as Codex being absent" >&2
     exit 1

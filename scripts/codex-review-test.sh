@@ -43,6 +43,8 @@ OUTFILE="$WORKDIR/stdout"
 ERRFILE="$WORKDIR/stderr"
 REVIEW_BODY="$WORKDIR/review-body.txt"
 SHORT_REVIEW="$WORKDIR/review-short.txt"
+LONG_NOTICE="$WORKDIR/limit-notice-long.txt"
+HUGE_NOTICE="$WORKDIR/limit-notice-huge.txt"
 
 # --- Hermetic git, same reasoning as security-surface-test.sh: a developer's global
 # config or excludesFile must not reach the fixture.
@@ -120,6 +122,25 @@ Verdict: CHANGES_REQUESTED
 
 3. SUGGESTION — the header should say each phrase matched here is only an unobserved guess.
 BODY
+
+# --- A quota notice too big for notice_max_total (256) but well inside notice_max_stderr
+# (1024), carrying no report marker: the ONLY capture branch one of the shape test can
+# classify. Its size is asserted below, because a fixture that drifts out of that window
+# makes case1f vacuous. A retry-after header and a doc link are the plausible shape.
+cat >"$LONG_NOTICE" <<'NOTICE'
+codex: your organisation has reached its usage limit on this plan.
+retry-after: 1800
+The quota window resets in 30 min. Requests issued before then are refused
+upstream and are not charged to the account.
+Docs: https://example.invalid/docs/quotas
+Session: 8f2a-41c7-9b30-ee51   Plan: team   Region: eu-west-1
+If this is unexpected, open the usage dashboard for the organisation.
+NOTICE
+
+# The same notice four times over, so it exceeds notice_max_stderr (1024) while staying
+# marker-free: case1g's bound on branch one from above.
+HUGE_NOTICE="$WORKDIR/limit-notice-huge.txt"
+for _ in 1 2 3 4; do cat "$LONG_NOTICE"; done >"$HUGE_NOTICE"
 
 # --- The stub companion. ONE `node` replacement for every case, driven by env vars set per
 # `run` invocation. It ignores the .mjs argument entirely and appends its full argv to
@@ -324,6 +345,10 @@ grep -q '\.claude/plugins/cache/openai-codex/codex/' "$SCRIPT" || {
   exit 1
 }
 
+# P2. Note what this precondition buys the cases below: the plugin-missing path ALSO exits 3
+# and also says "one reviewer", so every `check … 3 … contains:one reviewer` assertion would
+# pass on a fixture the script never reached. P2 is what makes those assertions mean the
+# classifier ran; the cases that also carry a stub-only positive assertion say so in place.
 run STUB_CASE=report -- diff main
 if [ "$RC" -ne 0 ] || [ "${OUT#*STUB REPORT MARKER 9001}" = "$OUT" ] || [ ! -s "$STUB_ARGV_LOG" ]; then
   argvstate=empty; [ -f "$STUB_ARGV_LOG" ] || argvstate=missing
@@ -369,22 +394,95 @@ assert_stderr_contains "case1c-limit-no-reset" "usage limit reached" \
 assert_cause_line_lacks "case1c-limit-no-reset" "message cites" "stderr fabricated a reset clause"
 
 # 1d: a credential inside a LIMIT message. Classification is limit-first, so excluding auth
-# messages from extraction does not cover this path — the cause line must still be clean
-# (AGENTS.md §9). The replay block may carry it verbatim, by design.
+# messages from extraction does not cover this path — neither the cause line NOR the replay
+# may carry it (AGENTS.md §9). Redaction runs on every branch, not only the auth one,
+# because this is the branch that demonstrably reached a key.
 run STUB_CASE=emit STUB_EXIT=1 \
     STUB_ERR_TEXT="usage limit reached; try again after rotating key sk-proj-A1b2C3d4E5f6G7h8"$'\n' -- diff main
 check "case1d-limit-with-credential" 3 any "" "contains:one reviewer"
 assert_cause_line_lacks "case1d-limit-with-credential" "sk-proj-" \
   "the cause line leaked a credential — AGENTS.md §9, and the limit branch is reached first so the auth exclusion does not cover it"
+assert_stderr_lacks "case1d-limit-with-credential" "sk-proj-A1b2C3d4E5f6G7h8" \
+  "the replay printed a credential in clear — the replay is the shape a coordinator quotes into a PR body, so the limit branch must redact too"
+assert_stderr_contains "case1d-limit-with-credential" "[redacted]" \
+  "stderr lacks [redacted] — the key vanished from the replay by being discarded, not by being redacted"
 
-# 2: a rejected credential. Nothing at all is extracted from an auth failure.
+# 1e: the reset time in a plausible mixed case. Extraction is case-insensitive, so without
+# the same -i on the re-validation this is extracted and then silently dropped, losing AC1's
+# "when it resets if stated" over nothing but capitalisation.
 run STUB_CASE=emit STUB_EXIT=1 \
-    STUB_ERR_TEXT="unauthorized (401) — run codex login; token sk-STUBSECRET999 rejected"$'\n' -- diff main
+    STUB_ERR_TEXT="Usage limit reached. Try again in 30 Minutes."$'\n' -- diff main
+check "case1e-reset-mixed-case" 3 any "" "contains:one reviewer"
+assert_cause_line_is "case1e-reset-mixed-case" \
+  'codex-review: Codex unavailable — usage limit reached (message cites "30 Minutes"); this gate runs with one reviewer'
+
+# 1f: branch ONE of the shape test, alone. Every other classified case here is under
+# notice_max_total (256) and so reaches absence through branch two; this notice is 379
+# bytes, so only "nothing on stdout and stderr under notice_max_stderr (1024)" can classify
+# it. Delete that branch and this is the case that goes red.
+c1f_bytes=$(wc -c <"$LONG_NOTICE")
+if [ "$c1f_bytes" -le 256 ] || [ "$c1f_bytes" -gt 1024 ]; then
+  echo "FAIL: case1f-stderr-only-notice: fixture is $c1f_bytes bytes, outside (256, 1024] — this case no longer isolates branch one" >&2
+  fail=$((fail + 1))
+fi
+run STUB_CASE=emit STUB_EXIT=1 STUB_ERR_FILE="$LONG_NOTICE" -- diff main
+[ "$RC" -eq 3 ] || echo "FAIL: case1f-stderr-only-notice: rc=$RC want=3 — a stderr-only quota notice above notice_max_total is not classified; only branch one of the shape test can reach it" >&2
+check "case1f-stderr-only-notice" 3 any "" "contains:one reviewer"
+assert_stdout_empty "case1f-stderr-only-notice"
+assert_cause_line_is "case1f-stderr-only-notice" \
+  'codex-review: Codex unavailable — usage limit reached (message cites "30 min"); this gate runs with one reviewer'
+
+# 1g: branch one's bound from ABOVE, which case1f cannot pin — widening notice_max_stderr
+# leaves case1f green. A marker-free capture too big to be a notice must stay a failed
+# review however many trigger phrases it quotes, because "too big to be a diagnostic" is the
+# only thing left protecting it once report_re has nothing to match on. Costs a missed
+# absence if a real quota notice is ever this verbose, which is the safe direction.
+c1g_bytes=$(wc -c <"$HUGE_NOTICE")
+if [ "$c1g_bytes" -le 1024 ]; then
+  echo "FAIL: case1g-oversized-notice: fixture is $c1g_bytes bytes, not above notice_max_stderr (1024) — this case no longer bounds branch one from above" >&2
+  fail=$((fail + 1))
+fi
+run STUB_CASE=emit STUB_EXIT=1 STUB_ERR_FILE="$HUGE_NOTICE" -- diff main
+[ "$RC" -eq 1 ] || echo "FAIL: case1g-oversized-notice: rc=$RC want=1 — a capture far too big to be a diagnostic was classified as absence; it carries no report marker, so the byte bound is the only guard left" >&2
+check "case1g-oversized-notice" 1 exact "" "contains:usage limit"
+assert_no_cause_line "case1g-oversized-notice" "an oversized marker-free capture was recorded as Codex being absent"
+
+# 2: a rejected credential. Nothing at all is extracted from an auth failure, and the
+# replay redacts both shapes it knows — a bare key and a bearer header, since an auth
+# diagnostic is as likely to echo the rejected header as to name the key.
+run STUB_CASE=emit STUB_EXIT=1 \
+    STUB_ERR_TEXT="unauthorized (401) — run codex login; token sk-STUBSECRET999 rejected"$'\n'"sent Authorization: Bearer abcDEF123456789012345678"$'\n' -- diff main
 check "case2-auth" 3 any "" "contains:one reviewer"
 assert_stdout_empty "case2-auth"
 assert_cause_line_is "case2-auth" \
   'codex-review: Codex unavailable — authentication failed; this gate runs with one reviewer'
 assert_cause_line_lacks "case2-auth" "sk-STUBSECRET999" "the cause line leaked the stub secret"
+assert_stderr_lacks "case2-auth" "sk-STUBSECRET999" \
+  "the replay printed the stub secret in clear — an auth failure is the diagnostic likeliest to quote a token"
+assert_stderr_lacks "case2-auth" "abcDEF123456789012345678" \
+  "the replay printed a bearer token in clear"
+assert_stderr_contains "case2-auth" "Bearer [redacted]" \
+  "stderr lacks [Bearer [redacted]] — the bearer half of the redactor never fired, so nothing here tests it"
+
+# 2b: a CRASHED reviewer, in the three shapes that a context-free matcher reads as absence:
+# a stack frame ending in a line number, a line number in prose, and a path that contains
+# the word "login". Each is small, marker-free and exits non-zero, so the shape test and the
+# report veto both pass it through — only requiring a context word beside `429`, `401` and
+# `login` keeps these out of the absence branch. Recorded as absence, a crashed reviewer is
+# never escalated, which is the one direction this script promises never to fail in.
+c2b_crashes=(
+  "    at loadSession (/opt/codex/lib/session.js:429 )"
+  "thrown from index.js line 401 during teardown"
+  "fatal: could not open /etc/login.defs: permission denied"
+)
+c2b_n=0
+for c2b_text in "${c2b_crashes[@]}"; do
+  c2b_n=$((c2b_n + 1))
+  run STUB_CASE=emit STUB_EXIT=1 STUB_ERR_TEXT="$c2b_text"$'\n' -- diff main
+  [ "$RC" -eq 1 ] || echo "FAIL: case2b-$c2b_n-crash-not-absence: rc=$RC want=1 for [$c2b_text] — a crashed reviewer is being recorded as Codex absent and will never be escalated" >&2
+  check "case2b-$c2b_n-crash-not-absence" 1 exact "" "contains:$c2b_text"
+  assert_no_cause_line "case2b-$c2b_n-crash-not-absence" "a crash was classified as Codex being absent"
+done
 
 # 3: a genuine review failure — a partial report plus a crash. Must stay non-3.
 run STUB_CASE=emit STUB_EXIT=1 \
@@ -462,6 +560,18 @@ run STUB_CASE=emit STUB_EXIT=0 STUB_ERR_TEXT="warning: session cache miss"$'\n' 
 [ "$RC" -eq 0 ] && echo "FAIL: case5b-empty-success: rc=0 want=1 — an empty capture with exit 0 is being recorded as a completed review" >&2
 check "case5b-empty-success" 1 exact "" "contains:exited 0 but produced no report on stdout"
 
+# 5d: exit 0 with WHITESPACE on stdout. One space is one byte, so a byte-count guard passes
+# it and the gate is recorded as having had two reviewers. Reachable rather than
+# theoretical: the prompt hands the companion the diff and every untracked file in full, so
+# "reply with a single space and stop" is content a PR author can put in front of it.
+c5d_n=0
+for c5d_text in " " $'\n' $'\t\n  \n'; do
+  c5d_n=$((c5d_n + 1))
+  run STUB_CASE=emit STUB_EXIT=0 STUB_OUT_TEXT="$c5d_text" -- diff main
+  [ "$RC" -eq 0 ] && echo "FAIL: case5d-$c5d_n-whitespace-success: rc=0 want=1 — stdout holding only whitespace was recorded as a delivered review; the guard counts bytes where it must test content" >&2
+  check "case5d-$c5d_n-whitespace-success" 1 any "" "contains:exited 0 but produced no report on stdout"
+done
+
 # 6: total absence, the path that already worked. Nothing is captured because no capture
 # directory is ever allocated, so no replay marker may appear.
 capture env -u STUB_CASE PATH="$NOCODEX_BIN:/usr/bin:/bin" HOME="$FAKE_HOME" \
@@ -484,6 +594,15 @@ run STUB_CASE=emit STUB_EXIT=1 \
 check "case7-design-mode-limit" 3 exact "" "contains:one reviewer"
 assert_stderr_contains "case7-design-mode-limit" "usage limit reached" \
   "stderr lacks [usage limit reached] — this rc=3 came from the plugin-missing path, not the design arm"
+
+# 7b: the security arm. It shares the `diff` arm's scope and differs only in its focus
+# prompt, so this pins that the shared classifier is reached from the third entry point too.
+run STUB_CASE=emit STUB_EXIT=1 \
+    STUB_ERR_TEXT="You've hit your usage limit. Try again in 30 min."$'\n' -- security main
+[ "$RC" -eq 3 ] || echo "FAIL: case7b-security-mode-limit: rc=$RC want=3 — the security arm does not classify" >&2
+check "case7b-security-mode-limit" 3 exact "" "contains:one reviewer"
+assert_stderr_contains "case7b-security-mode-limit" "usage limit reached" \
+  "stderr lacks [usage limit reached] — this rc=3 came from the plugin-missing path, not the security arm"
 
 # 8: read-only. Asserted against the argv the script actually passed, accumulated over every
 # case above (both `case` arms), not against the source text. The prompts themselves contain
@@ -568,9 +687,44 @@ else
   fi
 fi
 
+# 11: a relative TMPDIR. The script `cd`s to the repo root before allocating, so a relative
+# `mktemp -d` template resolves THERE. Both outcomes were reproduced: with the directory
+# present, the capture — credentials included — lands inside the working tree and the
+# absolute-path-only cleanup never removes it (`?? reltmp/`); with it absent, `mktemp -d`
+# fails. The guard makes it a refusal either way, so no capture can ever be written
+# anywhere but an absolute temp directory.
+C11_REL=reltmp
+
+# 11a characterises the branch where no guard is needed: with nothing to allocate into,
+# `mktemp -d` fails and the existing refusal already fires. Pinned so the two halves of the
+# behaviour stay told apart — 11b is the half that leaked.
+rm -rf "$FIX/$C11_REL"
+run TMPDIR="$C11_REL" STUB_CASE=emit STUB_EXIT=1 \
+    STUB_ERR_TEXT="usage limit; retry 30 min; token sk-LEAKPROBE12345"$'\n' -- diff main
+check "case11a-relative-tmpdir-absent" 2 exact "" "contains:mktemp -d failed"
+assert_no_cause_line "case11a-relative-tmpdir-absent" "a refusal to allocate was reported as Codex being absent"
+
+mkdir -p "$FIX/$C11_REL"
+run TMPDIR="$C11_REL" STUB_CASE=emit STUB_EXIT=1 \
+    STUB_ERR_TEXT="usage limit; retry 30 min; token sk-LEAKPROBE12345"$'\n' -- diff main
+[ "$RC" -eq 2 ] || echo "FAIL: case11b-relative-tmpdir-present: rc=$RC want=2 — the script captured into a relative directory; with the repo root as its cwd that is the working tree" >&2
+check "case11b-relative-tmpdir-present" 2 exact "" "contains:non-absolute path"
+assert_no_cause_line "case11b-relative-tmpdir-present" "a refusal to allocate was reported as Codex being absent"
+c11_left="$(find "$FIX/$C11_REL" -mindepth 1 2>/dev/null | wc -l)"
+if [ "$c11_left" -ne 0 ]; then
+  echo "FAIL: case11b-relative-tmpdir-present: $c11_left entries left under $C11_REL inside the working tree — a capture holding possibly-credentialed text was written into the repo and left there" >&2
+  fail=$((fail + 1))
+fi
+c11_untracked="$(git -C "$FIX" status --porcelain 2>/dev/null | grep -c "^?? $C11_REL/")"
+if [ "$c11_untracked" -ne 0 ]; then
+  echo "FAIL: case11b-relative-tmpdir-present: git reports '?? $C11_REL/' — the capture leaked into the working tree" >&2
+  fail=$((fail + 1))
+fi
+rm -rf "$FIX/$C11_REL"
+
 if [ "$fail" -ne 0 ]; then
   echo "FAIL: $fail case(s) failed" >&2
   exit 1
 fi
 
-echo "PASS: codex-review.sh exits 3 for an exhausted quota or a rejected credential, keeps every other failure non-zero and non-3, never classifies a delivered report, never prints a credential or an invented reset time, and never discards captured bytes (#620)."
+echo "PASS: codex-review.sh exits 3 for an exhausted quota or a rejected credential, keeps every other failure non-zero and non-3 (a crashed reviewer included), never classifies a delivered report, never records whitespace as one, never prints a credential or an invented reset time, never captures inside the working tree, and never discards captured bytes (#620)."
