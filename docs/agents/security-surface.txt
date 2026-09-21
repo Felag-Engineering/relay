@@ -62,3 +62,31 @@ daemon/src/enroll.rs
 daemon/src/renew.rs
 daemon/src/config.rs
 daemon/src/main.rs
+
+# Added 2026-09-20 (owner decision, repo audit): paths the invariants and the threat model
+# name as security-relevant that the list did not cover.
+relay/internal/controlplane/console/**
+relay/internal/controlplane/*.go
+relay/internal/store/**
+relay/internal/accounts/**
+relay/internal/registry/**
+relay/internal/nodestate/**
+relay/internal/jobs/**
+relay/internal/audit/**
+relay/internal/auditsink/**
+relay/internal/auditquery/**
+relay/internal/ratelimit/**
+relay/cmd/relay/bootstrap_token.go
+relay/cmd/relay/console_password.go
+relay/cmd/relay/control_surfaces.go
+relay/cmd/relay/dispatch_wiring.go
+relay/cmd/relay/tunnel.go
+daemon/src/cancel.rs
+daemon/src/scheduler.rs
+daemon/src/shutdown.rs
+daemon/src/version.rs
+daemon/build.rs
+relay/go.mod
+relay/go.sum
+daemon/Cargo.toml
+daemon/Cargo.lock
