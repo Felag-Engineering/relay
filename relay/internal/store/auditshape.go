@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
+	"time"
 )
 
 // auditTSCanonicalGlob matches exactly the fixed-width ts migration 0024
@@ -40,17 +42,45 @@ SET ts = substr(ts, 1, 19) || '.' ||
 WHERE ts NOT GLOB '` + auditTSCanonicalGlob + `'
   AND ts GLOB '` + auditTSShapeGlob + `'`
 
-// auditShapeCheckRows is how many of the newest rows the detector reads.
+// auditShapeCheckRows is how many of the most recently inserted rows the
+// window reads.
 const auditShapeCheckRows = 100
 
-// warnOnLegacyAuditTimestamps logs once, at Warn, if the newest rows of the
-// audit table hold pre-0024 timestamps — the binary-rollback case.
+// legacyTSWarnMsg is the one message both warning paths use, so an operator
+// grepping for it finds the first boot that saw the problem and every boot
+// since.
+const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows"
+
+// auditShapeCheckFailedMsg is logged when the detector itself cannot run. It
+// is never an error the caller sees: see warnOnLegacyAuditTimestamps.
+const auditShapeCheckFailedMsg = "could not check the audit trail's timestamp shape"
+
+// legacyTSObservation is what the window saw: how many rows it read, how many
+// of them were not canonical, and one of them to look at.
+type legacyTSObservation struct {
+	checked  int
+	bad      int
+	sampleID string
+	sampleTS string
+}
+
+// auditShapeAlert is the persisted memory of an earlier observation — the
+// audit_shape_alert row (migration 0025).
+type auditShapeAlert struct {
+	observedAt string
+	sampleID   string
+	sampleTS   string
+}
+
+// warnOnLegacyAuditTimestamps logs, at Warn, if the audit table holds
+// pre-0024 timestamps — the binary-rollback case.
 //
 // WHY IT EXISTS: migrate deliberately tolerates a database newer than the
 // binary (#492), so an operator can roll a Relay back onto a converted table,
 // and that older Relay writes trimmed ts values into it. Those rows sort to
-// the end of their second instead of their right place, and a pagination
-// cursor landing on one mis-seeks.
+// the end of their second instead of their right place, a pagination cursor
+// landing on one mis-seeks, and a paged read over the mixed table silently
+// DROPS rows (TestAuditQuery_MixedFormatRowsAreSkipped pins that).
 //
 // ROLL-FORWARD DOES NOT SELF-HEAL. Version 24 is already recorded in
 // schema_migrations and migrate selects by PRESENCE, so upgrading again
@@ -58,22 +88,105 @@ const auditShapeCheckRows = 100
 // failed query, just an audit trail that is quietly in two formats. This
 // function is what turns it into a log line carrying the repair statement.
 //
-// WHY THE NEWEST N IS THE RIGHT WINDOW, AND WHY IT IS CHEAP: a rolled-back
-// binary's rows are by construction the newest, and the 19-character
-// date/time prefix dominates the text comparison, so a trimmed row written
-// later still sorts to the top of a DESC scan. (Within one second a trimmed
-// value also sorts at or above its padded twin: "Z" is 0x5A, above both "."
-// 0x2E and every digit.) The scan is satisfied by idx_audit_ts (ts,
-// audit_id) — no temp B-tree, no table read.
+// THREE STEPS, AND THE MIDDLE ONE IS WHY THERE IS A TABLE FOR IT (0025):
 //
-// NEVER A STARTUP GATE. It returns nothing, and a query failure is logged at
-// Warn while Open carries on. Refusing to start over a DIAGNOSTIC READ would
-// invert #492's tolerate-a-newer-database posture, and is the same reasoning
-// that rejected a CHECK constraint or an aborting trigger here: a Relay that
-// cannot write an audit record cannot dispatch, so bricking the control plane
-// on rollback would be worse than the ordering defect. Unlike
-// backfillShapeKeys, this repairs nothing and asserts nothing.
+//  1. If no alert is recorded, read the most recently INSERTED rows —
+//     auditShapeCheckRows of them — and check their stored shape. Rows a
+//     rolled-back binary wrote are by construction the ones most recently
+//     inserted, so this window sees them without any assumption about clocks:
+//     it is ORDER BY rowid DESC, not ORDER BY ts DESC, because a backwards
+//     clock step around the rollback would push those rows below a hundred
+//     canonical ones in ts order and out of a ts-ordered window. Measured at
+//     0.2 ms on a 10-million-row table (the LIMIT bounds it, not the table).
+//     If it sees any, warn and RECORD the alert.
+//
+//  2. If an alert IS recorded, the window is no longer trustworthy — it
+//     scrolls, and ordinary traffic buries the offending rows within a
+//     hundred appends, which is how the windowed-only version of this
+//     detector went permanently silent while the damage stayed. So ask the
+//     exact question instead: does ANY row fail the canonical GLOB.
+//
+//  3. If the exact question says no, the operator has run the repair: clear
+//     the alert and say so at Info. A detector that kept warning after the
+//     remedy is one an operator learns to ignore.
+//
+// The exact question is only asked at step 2 because it cannot use an index —
+// nonconforming values are interleaved with canonical ones rather than
+// forming a range — so on a clean table it scans the whole index to conclude
+// "none": measured 0.62 s at 1 million rows and 6.4 s at 10 million, against
+// 0.2 ms for the window. A flagged database pays that once per boot until it
+// is repaired, which is the right place for it; a healthy one never pays it.
+//
+// NEVER A STARTUP GATE. It returns nothing. Every failure — the read, the
+// scan, the alert write, the alert clear — is logged at Warn and Open carries
+// on. Refusing to start over a DIAGNOSTIC would invert #492's
+// tolerate-a-newer-database posture, and is the same reasoning that rejected
+// a CHECK constraint or an aborting trigger here: a Relay that cannot write
+// an audit record cannot dispatch, so bricking the control plane on rollback
+// would be worse than the ordering defect. Unlike backfillShapeKeys, this
+// repairs no audit row and asserts nothing; the only thing it writes is its
+// own alert.
 func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.Logger) {
+	alert, err := readAuditShapeAlert(ctx, db)
+	if err != nil {
+		logger.Warn(auditShapeCheckFailedMsg, "error", err)
+		return
+	}
+
+	if alert == nil {
+		observed, err := windowHoldsLegacyTimestamps(ctx, db)
+		if err != nil {
+			logger.Warn(auditShapeCheckFailedMsg, "error", err)
+			return
+		}
+		if observed.bad == 0 {
+			return
+		}
+		if err := raiseAuditShapeAlert(ctx, db, observed); err != nil {
+			// Worth its own line: the warning below still fires on this
+			// boot, but without the alert row it would not fire on the next
+			// one once these rows leave the window.
+			logger.Warn("could not record the audit timestamp alert, so this warning may not survive the next hundred appends", "error", err)
+		}
+		logger.Warn(legacyTSWarnMsg,
+			"checked_rows", observed.checked,
+			"nonconforming_rows", observed.bad,
+			"sample_audit_id", observed.sampleID,
+			"sample_ts", observed.sampleTS,
+			"repair", auditTSRepairSQL,
+		)
+		return
+	}
+
+	stillLegacy, err := anyLegacyAuditTimestamp(ctx, db)
+	if err != nil {
+		logger.Warn(auditShapeCheckFailedMsg, "error", err)
+		return
+	}
+	if stillLegacy {
+		logger.Warn(legacyTSWarnMsg,
+			"first_observed_at", alert.observedAt,
+			"sample_audit_id", alert.sampleID,
+			"sample_ts", alert.sampleTS,
+			"repair", auditTSRepairSQL,
+		)
+		return
+	}
+
+	if err := clearAuditShapeAlert(ctx, db); err != nil {
+		logger.Warn("could not clear the audit timestamp alert", "error", err)
+		return
+	}
+	logger.Info("audit trail timestamps are canonical again — the pre-0024 rows first seen earlier are gone, so the alert is cleared",
+		"first_observed_at", alert.observedAt,
+	)
+}
+
+// windowHoldsLegacyTimestamps reads the most recently inserted rows and
+// reports how many of them are not in the canonical shape.
+func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObservation, error) {
+	var obs legacyTSObservation
+
 	// THE SHAPE IS DECIDED IN SQL, NOT IN GO, and that is not a style choice.
 	// ts is declared TIMESTAMP, so modernc.org/sqlite parses the column's
 	// text into a time.Time on scan and database/sql re-renders it into a Go
@@ -86,51 +199,81 @@ func warnOnLegacyAuditTimestamps(ctx context.Context, db *sql.DB, logger *slog.L
 	// is how the sample in the log line is the operator's actual bytes. Same
 	// driver behaviour that broke the pagination cursor (#656).
 	//
-	// Newest-first, which is what makes reading only auditShapeCheckRows a
-	// sufficient window. Spelled as a literal rather than built from
-	// auditOrderDesc so this file is itself covered by
-	// TestAuditSQL_EveryOrderByTsCarriesTheTieBreak, the guard that exists
-	// because a new by-key reader in a new file is the clause most likely to
-	// be spelled wrong.
+	// ORDER BY rowid DESC is INSERTION order, which is exactly "what was
+	// written most recently" — the rows a rolled-back binary just wrote — and
+	// unlike ts DESC it assumes nothing about the clock. It reads
+	// auditShapeCheckRows table rows in reverse and decodes two columns of
+	// each, never the retained output blobs.
 	rows, err := db.QueryContext(ctx,
-		`SELECT audit_id, CAST(ts AS TEXT), ts GLOB ? FROM audit ORDER BY ts DESC, audit_id DESC LIMIT ?`,
+		`SELECT audit_id, CAST(ts AS TEXT), ts GLOB ? FROM audit ORDER BY rowid DESC LIMIT ?`,
 		auditTSCanonicalGlob, auditShapeCheckRows)
 	if err != nil {
-		logger.Warn("could not check the audit trail's timestamp shape", "error", err)
-		return
+		return obs, err
 	}
 	defer rows.Close() //nolint:errcheck
 
-	checked, bad := 0, 0
-	sampleID, sampleTS := "", ""
 	for rows.Next() {
 		var id, ts string
 		var canonical int
 		if err := rows.Scan(&id, &ts, &canonical); err != nil {
-			logger.Warn("could not check the audit trail's timestamp shape", "error", err)
-			return
+			return obs, err
 		}
-		checked++
+		obs.checked++
 		if canonical == 0 {
-			bad++
-			if sampleID == "" {
-				sampleID, sampleTS = id, ts
+			obs.bad++
+			if obs.sampleID == "" {
+				obs.sampleID, obs.sampleTS = id, ts
 			}
 		}
 	}
-	if err := rows.Err(); err != nil {
-		logger.Warn("could not check the audit trail's timestamp shape", "error", err)
-		return
-	}
-	if bad == 0 {
-		return
-	}
+	return obs, rows.Err()
+}
 
-	logger.Warn("audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows",
-		"checked_rows", checked,
-		"nonconforming_rows", bad,
-		"sample_audit_id", sampleID,
-		"sample_ts", sampleTS,
-		"repair", auditTSRepairSQL,
-	)
+// anyLegacyAuditTimestamp is the exact question, asked of the whole table:
+// does any row fail the canonical GLOB. See warnOnLegacyAuditTimestamps for
+// what it costs and why only a database already known to have been mixed
+// pays it.
+func anyLegacyAuditTimestamp(ctx context.Context, db *sql.DB) (bool, error) {
+	var exists int
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM audit WHERE ts NOT GLOB ?)`, auditTSCanonicalGlob).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists == 1, nil
+}
+
+// readAuditShapeAlert returns the recorded alert, or nil when none is
+// recorded — the state every healthy database is in.
+func readAuditShapeAlert(ctx context.Context, db *sql.DB) (*auditShapeAlert, error) {
+	var a auditShapeAlert
+	// observed_at is read through CAST for the same reason the ts sample is:
+	// the column is declared TIMESTAMP, and a plain scan would hand back the
+	// driver's re-rendering rather than what was written.
+	err := db.QueryRowContext(ctx,
+		`SELECT CAST(observed_at AS TEXT), sample_audit_id, sample_ts FROM audit_shape_alert WHERE id = 1`).
+		Scan(&a.observedAt, &a.sampleID, &a.sampleTS)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// raiseAuditShapeAlert records that pre-0024 rows were observed, so the
+// warning survives the window that saw them.
+func raiseAuditShapeAlert(ctx context.Context, db *sql.DB, obs legacyTSObservation) error {
+	_, err := db.ExecContext(ctx,
+		`INSERT INTO audit_shape_alert (id, observed_at, sample_audit_id, sample_ts) VALUES (1, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET observed_at = excluded.observed_at, sample_audit_id = excluded.sample_audit_id, sample_ts = excluded.sample_ts`,
+		formatTime(time.Now()), obs.sampleID, obs.sampleTS)
+	return err
+}
+
+// clearAuditShapeAlert forgets the alert, which only anyLegacyAuditTimestamp
+// answering "no" may cause.
+func clearAuditShapeAlert(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `DELETE FROM audit_shape_alert WHERE id = 1`)
+	return err
 }

@@ -405,11 +405,16 @@ type Record struct {
 // update or delete.
 //
 // Every reader below returns Records ordered by Timestamp, ties broken by ID.
-// That pair is a TOTAL order and it matches append order (#656): ID is minted
-// monotonically by NewID, so two Records written at the same Timestamp — which
-// a dispatch fan-out guarantees, since every per-Node Record copies one clock
-// reading — come back in the order they were appended, on every read, rather
-// than in an order that changes with each write.
+// That pair is a TOTAL order (#656): ID is minted monotonically by NewID, so
+// two Records sharing a Timestamp — which a dispatch fan-out guarantees, since
+// every per-Node Record copies one clock reading — come back in the same
+// order on every read, rather than in one that changes with each write.
+//
+// That order is the order the ids were MINTED in, which for the cases this
+// exists for is the order the Records were appended: a fan-out and an
+// AppendAll batch are both built in one pass, minting as they go. The two
+// differ only for concurrent Record calls that land on one Timestamp, where
+// "which was appended first" is not a question with an answer anyway.
 type Repository interface {
 	// Append persists a new Record.
 	Append(ctx context.Context, r Record) error

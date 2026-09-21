@@ -155,13 +155,21 @@ func TestAudit_ChronologicalOrderAcrossFractionalWidths(t *testing.T) {
 // reader added later most plausibly lives in a NEW FILE, which is precisely
 // what a two-file scan would miss.
 //
-// WHAT IT DOES NOT COVER, said plainly so nobody reads more into it: an
-// ORDER BY assembled by concatenating across literals ("ORDER BY ts" + dir);
-// a reader that calls db.QueryContext with NO ORDER BY at all, which is
-// invisible to both this scan and sqliteAudit.query's refactor; and an audit
-// reader added in a different package. sqliteAudit.query does not make a bare
-// clause unspellable either — a caller passing its own ORDER BY gets a
-// RUNTIME SQL syntax error, not a compile error.
+// WHAT IT DOES NOT COVER, said plainly so nobody reads more into it. It sees
+// only the literal "ORDER BY ts", SPELLED EXACTLY, case and spacing included:
+// a lowercase "order by ts", a double space, "ORDER BY audit_id" alone or an
+// "ORDER BY rowid" all pass green, because each is either not this clause or
+// not this spelling of it. Nor does it see an ORDER BY assembled by
+// concatenating across literals ("ORDER BY ts" + dir); a reader that calls
+// db.QueryContext with NO ORDER BY at all, which is invisible to both this
+// scan and sqliteAudit.query's refactor; or an audit reader added in a
+// different package. sqliteAudit.query does not make a bare clause
+// unspellable either — a caller passing its own ORDER BY gets a RUNTIME SQL
+// syntax error, not a compile error.
+//
+// What it does cover is the mistake that actually happened here twice: a
+// hand-written audit ORDER BY, in this package, missing the tie-break or
+// spelling it with the directions mismatched.
 //
 // _test.go files are skipped BECAUSE THEY MUST BE: this file holds both
 // accepted spellings as its own expectations, and audit_ts_migration_test.go
@@ -247,7 +255,7 @@ func TestAuditSQL_EveryOrderByTsCarriesTheTieBreak(t *testing.T) {
 	// Liveness. A directory scan that finds nothing passes vacuously, which is
 	// the same failure class as scanning the wrong files one level up.
 	if occurrences < 2 {
-		t.Errorf("scanned %d non-test .go files in %s and found %d %q occurrences, want at least 2 — this guard covers audit.go and auditquery.go; if the audit readers moved, move the guard with them, do not let it pass vacuously (#656)",
+		t.Errorf("scanned %d non-test .go files in %s and found %d %q occurrences, want at least 2 — the two audit order constants are in this package; if the audit readers moved out of it, move this guard with them rather than letting it pass vacuously (#656)",
 			scanned, dir, occurrences, needle)
 	}
 

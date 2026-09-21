@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -13,8 +14,9 @@ import (
 const legacyTSWarning = "audit trail holds pre-0024 timestamps"
 
 // reopenWithLogger closes st and reopens the same database with a buffered
-// logger, so a test can assert on what Open itself logs.
-func reopenWithLogger(t *testing.T, st *Store, path string) *bytes.Buffer {
+// logger, so a test can assert on what Open itself logs — and hands back the
+// reopened Store, since the detector's durability is a property ACROSS boots.
+func reopenWithLogger(t *testing.T, st *Store, path string) (*Store, *bytes.Buffer) {
 	t.Helper()
 	if err := st.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
@@ -25,7 +27,31 @@ func reopenWithLogger(t *testing.T, st *Store, path string) *bytes.Buffer {
 		t.Fatalf("reopen store: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	return &logBuf
+	return reopened, &logBuf
+}
+
+// auditShapeAlertRows reports how many rows audit_shape_alert holds: 0 on
+// every database that has never been seen mixed, 1 once it has.
+func auditShapeAlertRows(t *testing.T, st *Store) int {
+	t.Helper()
+	var n int
+	if err := st.db.QueryRowContext(context.Background(), `SELECT count(*) FROM audit_shape_alert`).Scan(&n); err != nil {
+		t.Fatalf("count audit_shape_alert: %v", err)
+	}
+	return n
+}
+
+// appendCanonicalRows writes n rows through the real writer, which is what
+// scrolls the detector's window past whatever came before them.
+func appendCanonicalRows(t *testing.T, st *Store, n int, base time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("scroll-%03d", i)
+		if err := st.Audit().Append(ctx, orderRecord(id, base.Add(time.Duration(i)*time.Millisecond))); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
 }
 
 // linesContaining returns the log lines whose text carries msg.
@@ -54,12 +80,12 @@ func TestWarnOnLegacyAuditTimestamps_WarnsOnARolledBackRow(t *testing.T) {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
-	// The rollback shape: a trimmed ts, at a LATER instant than every
-	// converted row — which is what makes reading only the newest rows a
-	// sufficient window.
+	// The rollback shape: a trimmed ts, written AFTER every converted row —
+	// which is what makes reading only the most recently inserted rows a
+	// sufficient window for the first observation.
 	insertLegacyAuditRow(t, st.db, "rolled-back", "2026-09-21T12:01:00Z")
 
-	logBuf := reopenWithLogger(t, st, path)
+	_, logBuf := reopenWithLogger(t, st, path)
 
 	lines := linesContaining(logBuf, legacyTSWarning)
 	if len(lines) != 1 {
@@ -110,10 +136,128 @@ func TestWarnOnLegacyAuditTimestamps_SilentOnACleanTable(t *testing.T) {
 		}
 	}
 
-	logBuf := reopenWithLogger(t, st, path)
+	reopened, logBuf := reopenWithLogger(t, st, path)
 
 	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 0 {
 		t.Errorf("Open warned about legacy audit timestamps on a fully converted table: %q — a detector that cries wolf on every boot is one an operator learns to ignore", lines)
+	}
+	// No alert row means the exact whole-table scan was never reached, which
+	// is the property that keeps this check at 0.2 ms instead of the 6.4 s
+	// that scan costs at ten million rows.
+	if n := auditShapeAlertRows(t, reopened); n != 0 {
+		t.Errorf("audit_shape_alert holds %d rows after a clean boot, want 0 — a clean database must never be flagged, and a flagged one pays a whole-index scan on every boot until it is repaired", n)
+	}
+}
+
+// TestWarnOnLegacyAuditTimestamps_KeepsWarningAfterTheWindowScrolls is the
+// #656 cycle-1 security finding, executable: the windowed-only detector
+// warned once and then went PERMANENTLY silent as ordinary traffic buried the
+// offending rows, while the damage — a silently skipped row in a paged read,
+// see TestAuditQuery_MixedFormatRowsAreSkipped — stayed forever.
+func TestWarnOnLegacyAuditTimestamps_KeepsWarningAfterTheWindowScrolls(t *testing.T) {
+	st, path := openTestStore(t)
+
+	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	insertLegacyAuditRow(t, st.db, "rolled-back", "2026-09-21T12:01:00Z")
+
+	reopened, logBuf := reopenWithLogger(t, st, path)
+	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 1 {
+		t.Fatalf("the first Open after the rollback logged %d warnings, want 1; log:\n%s", len(lines), logBuf.String())
+	}
+
+	// Ordinary traffic: more canonical rows than the window reads, so the
+	// window alone would now see nothing wrong.
+	appendCanonicalRows(t, reopened, auditShapeCheckRows+50, base.Add(2*time.Minute))
+
+	reopenedAgain, logBuf := reopenWithLogger(t, reopened, path)
+	lines := linesContaining(logBuf, legacyTSWarning)
+	if len(lines) != 1 {
+		t.Fatalf("Open logged %d warnings once %d canonical rows had scrolled the window past the mixed rows, want 1 — the mixed rows are still there and roll-forward does not self-heal, so the warning must outlive the window that observed it (#656); log:\n%s", len(lines), auditShapeCheckRows+50, logBuf.String())
+	}
+
+	var entry struct {
+		Level           string `json:"level"`
+		FirstObservedAt string `json:"first_observed_at"`
+		SampleAuditID   string `json:"sample_audit_id"`
+		Repair          string `json:"repair"`
+	}
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("unmarshal warning %q: %v", lines[0], err)
+	}
+	if entry.Level != "WARN" {
+		t.Errorf("log level = %q, want WARN", entry.Level)
+	}
+	if entry.SampleAuditID != "rolled-back" {
+		t.Errorf("sample_audit_id = %q, want rolled-back — the sample is carried from the observation precisely because the row is now far outside the window", entry.SampleAuditID)
+	}
+	if entry.FirstObservedAt == "" {
+		t.Errorf("first_observed_at is empty — a warning on a later boot must say when the problem was first seen")
+	}
+	if entry.Repair != auditTSRepairSQL {
+		t.Errorf("repair = %q, want the 0024 conversion UPDATE — every boot's warning must carry the remedy, not just the first", entry.Repair)
+	}
+	if n := auditShapeAlertRows(t, reopenedAgain); n != 1 {
+		t.Errorf("audit_shape_alert holds %d rows, want 1 — the alert is what makes the warning durable", n)
+	}
+}
+
+// TestWarnOnLegacyAuditTimestamps_ClearsTheAlertAfterTheRepair is the other
+// half of durability: a warning that cannot stop is one an operator learns to
+// ignore. Running the statement the log line carries must end it.
+func TestWarnOnLegacyAuditTimestamps_ClearsTheAlertAfterTheRepair(t *testing.T) {
+	st, path := openTestStore(t)
+
+	insertLegacyAuditRow(t, st.db, "rolled-back", "2026-09-21T12:01:00Z")
+	reopened, logBuf := reopenWithLogger(t, st, path)
+	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 1 {
+		t.Fatalf("the first Open after the rollback logged %d warnings, want 1; log:\n%s", len(lines), logBuf.String())
+	}
+
+	// Exactly what the operator is told to run — the log line's own string.
+	if _, err := reopened.db.ExecContext(context.Background(), auditTSRepairSQL); err != nil {
+		t.Fatalf("run the repair the warning carries: %v", err)
+	}
+
+	repaired, logBuf := reopenWithLogger(t, reopened, path)
+	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 0 {
+		t.Errorf("Open still warned after the repair ran: %q — the alert must clear when the exact check says the table is canonical again", lines)
+	}
+	if lines := linesContaining(logBuf, "audit trail timestamps are canonical again"); len(lines) != 1 {
+		t.Errorf("Open logged %d all-clear lines after the repair, want 1 — an operator who acts on a warning is owed the confirmation; log:\n%s", len(lines), logBuf.String())
+	}
+	if n := auditShapeAlertRows(t, repaired); n != 0 {
+		t.Errorf("audit_shape_alert holds %d rows after the repair, want 0 — a stale alert would make every later boot pay the whole-table scan for nothing", n)
+	}
+	if got := storedTS(t, repaired.db, "rolled-back"); got != "2026-09-21T12:01:00.000000000Z" {
+		t.Errorf("the repaired row holds %q — the statement in the log line must be the one that converts it", got)
+	}
+}
+
+// TestWarnOnLegacyAuditTimestamps_FirstObservationIsWindowed pins the limit
+// of the detector, honestly: the WINDOW is what observes, and it reads only
+// the most recently inserted auditShapeCheckRows rows. A legacy row that was
+// already buried when this binary first booted is not found — the alert makes
+// an observation permanent, it does not make the first observation exact.
+//
+// The exact question is affordable only on a database already known to be
+// mixed: measured 6.4 s at ten million rows, against 0.2 ms for the window.
+//
+// IF THIS GOES RED because the detector now finds the buried row, that is an
+// improvement and this test should be rewritten to assert it — not deleted
+// quietly.
+func TestWarnOnLegacyAuditTimestamps_FirstObservationIsWindowed(t *testing.T) {
+	st, path := openTestStore(t)
+
+	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	insertLegacyAuditRow(t, st.db, "buried", "2026-09-21T12:00:00Z")
+	appendCanonicalRows(t, st, auditShapeCheckRows+10, base.Add(time.Minute))
+
+	reopened, logBuf := reopenWithLogger(t, st, path)
+	if lines := linesContaining(logBuf, legacyTSWarning); len(lines) != 0 {
+		t.Errorf("Open warned about a legacy row buried under %d later inserts: %q — if the window got wider or exact, say so here", auditShapeCheckRows+10, lines)
+	}
+	if n := auditShapeAlertRows(t, reopened); n != 0 {
+		t.Errorf("audit_shape_alert holds %d rows, want 0 — nothing was observed, so nothing may be remembered", n)
 	}
 }
 

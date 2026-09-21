@@ -65,11 +65,10 @@ type idGen func() (string, error)
 // onto every per-Node Record, so a whole fan-out shares a ts and its order IS
 // the id order. See audit.NewID for the properties and their bounds.
 func defaultID() (string, error) {
-	id, err := audit.NewID()
-	if err != nil {
-		return "", fmt.Errorf("auditsink: generate id: %w", err)
-	}
-	return id, nil
+	// Returned unwrapped: audit.NewID already says "audit: generate record
+	// id: ...", and a second wrap here only produced "auditsink: generate id:
+	// audit: generate record id: ..." — one failure announced twice.
+	return audit.NewID()
 }
 
 // Sink is the real capability.AuditSink, backed by an audit.Repository.

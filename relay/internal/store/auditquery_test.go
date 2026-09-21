@@ -441,6 +441,77 @@ func TestAuditQuery_PagesExactlyOnceAcrossFractionalWidths(t *testing.T) {
 	}
 }
 
+// TestAuditQuery_MixedFormatRowsAreSkipped pins KNOWN-BAD behaviour, on
+// purpose: it is residual R1 of #656 made executable.
+//
+// An operator who rolls a Relay binary back onto a converted table gets
+// pre-0024 rows written into it, and migrate cannot undo that on the way
+// forward (24 is already recorded, and selection is by presence). This is
+// what such a table then does to a paged read, and it is why
+// warnOnLegacyAuditTimestamps exists and why its warning is made durable by
+// audit_shape_alert (0025) rather than left to a window that scrolls.
+//
+// The mechanism, exactly. Eight rows at ONE instant: four stored trimmed
+// ("…01Z", what the old binary writes) and four canonical
+// ("…01.000000000Z"). "Z" is 0x5A and "." is 0x2E, so every trimmed row sorts
+// ABOVE every canonical one in the DESC walk. The cursor, though, is built
+// from the row's PARSED Timestamp re-rendered canonically — it has to be,
+// since the driver never hands back the stored bytes — so a cursor taken at a
+// trimmed row carries the canonical rendering, and the keyset predicate
+// (ts < ? OR (ts = ? AND audit_id < ?)) then excludes the remaining trimmed
+// rows entirely: their stored ts is neither less than nor equal to it.
+//
+// Result: seven of eight rows, no error, no gap a reader could notice. The
+// audit trail is the artifact an incident is reconstructed from, which is the
+// whole reason a silently-skipped row is worth a startup warning.
+//
+// IF THIS TEST GOES RED, READ IT BEFORE FIXING IT. Red because the walk now
+// returns all eight means the skip was closed — good news, and this test
+// should be rewritten to assert the new behaviour. Red any other way means
+// the cursor encoding moved and something else moved with it.
+func TestAuditQuery_MixedFormatRowsAreSkipped(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	repo := st.Audit()
+	queries := st.AuditQueries()
+
+	instant := time.Date(2026, 8, 20, 0, 0, 1, 0, time.UTC)
+	for _, id := range []string{"l-1", "l-2", "l-3", "l-4"} {
+		insertLegacyAuditRow(t, st.db, id, "2026-08-20T00:00:01Z")
+	}
+	for _, id := range []string{"c-1", "c-2", "c-3", "c-4"} {
+		if err := repo.Append(ctx, queryRecord(id, instant)); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+
+	var got []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > 8 {
+			t.Fatalf("paged walk did not terminate after %d pages", pages)
+		}
+		page, err := queries.Query(ctx, audit.Query{}, 3, cursor)
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		for _, r := range page.Rows {
+			got = append(got, r.ID)
+		}
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+
+	// l-1 is missing: it is the trimmed row left behind when the page-1
+	// cursor was taken at trimmed l-2 and re-rendered canonically.
+	want := []string{"l-4", "l-3", "l-2", "c-4", "c-3", "c-2", "c-1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("paged walk over a mixed-format table returned %v, want %v — this pins the KNOWN-BAD skip a binary rollback re-introduces (#656 residual R1); read this test's comment before changing it", got, want)
+	}
+}
+
 // TestAuditQuery_CursorRejectsAnUnparseableTimestamp pins the fail-loud half
 // of the normalisation: a cursor whose ts is not a timestamp is refused, never
 // compared as raw text.

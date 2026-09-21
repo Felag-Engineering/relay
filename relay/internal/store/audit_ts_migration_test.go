@@ -10,22 +10,78 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// migration0024 returns the shipped 0024_audit_ts_sortable.sql, so these
-// tests exercise the statements an operator actually runs rather than a copy
-// of them that could drift.
-func migration0024(t *testing.T) migration {
+// migrationByVersion returns the shipped migration with that version, so
+// these tests exercise the statements an operator actually runs rather than a
+// copy of them that could drift.
+func migrationByVersion(t *testing.T, version int) migration {
 	t.Helper()
 	migrations, err := loadMigrations()
 	if err != nil {
 		t.Fatalf("loadMigrations: %v", err)
 	}
 	for _, m := range migrations {
-		if m.version == 24 {
+		if m.version == version {
 			return m
 		}
 	}
-	t.Fatal("migration 24 is not embedded — audit ts conversion (#656)")
+	t.Fatalf("migration %d is not embedded", version)
 	return migration{}
+}
+
+// migration0024 is the audit ts conversion (#656).
+func migration0024(t *testing.T) migration {
+	t.Helper()
+	return migrationByVersion(t, 24)
+}
+
+// auditIndexDefinitions maps each idx_audit_* index a migration creates to
+// its definition from ON onwards, whitespace-collapsed and with IF NOT EXISTS
+// removed — so two files creating the same index are directly comparable.
+func auditIndexDefinitions(t *testing.T, m migration) map[string]string {
+	t.Helper()
+	defs := map[string]string{}
+	for _, stmt := range splitStatements(m.sql) {
+		norm := strings.Join(strings.Fields(stmt), " ")
+		rest, isCreate := strings.CutPrefix(norm, "CREATE INDEX ")
+		if !isCreate {
+			continue
+		}
+		rest = strings.TrimPrefix(rest, "IF NOT EXISTS ")
+		name, def, ok := strings.Cut(rest, " ")
+		if !ok || !strings.HasPrefix(name, "idx_audit_") {
+			continue
+		}
+		defs[name] = def
+	}
+	return defs
+}
+
+// TestAuditIndexDefinitions_0021MatchesMigration0024 pins the five audit
+// index definitions in 0021 against the ones 0024 recreates.
+//
+// This became load-bearing the moment 0021's creates gained IF NOT EXISTS
+// (#656): on #492's repair path — a database that skipped 0021 and later
+// applied 0024 — 0021 runs against a table where 0024 has already created
+// these indexes, and IF NOT EXISTS then SKIPS each one. If the two files ever
+// disagree, the repair silently keeps 0024's definition and never applies
+// 0021's, with no error anywhere. Two copies of a definition, so: pinned,
+// exactly as auditTSRepairSQL is pinned against the migration it quotes.
+func TestAuditIndexDefinitions_0021MatchesMigration0024(t *testing.T) {
+	in21 := auditIndexDefinitions(t, migrationByVersion(t, 21))
+	in24 := auditIndexDefinitions(t, migration0024(t))
+
+	for _, name := range []string{"idx_audit_ts", "idx_audit_kind_ts", "idx_audit_account_ts", "idx_audit_node_ts", "idx_audit_job_ts"} {
+		def21, ok21 := in21[name]
+		def24, ok24 := in24[name]
+		switch {
+		case !ok21:
+			t.Errorf("%s is not created by 0021 — the five audit indexes live in 0021 and are recreated by 0024; if one moved, this pin must move with it (#656)", name)
+		case !ok24:
+			t.Errorf("%s is not created by 0024 — 0024 drops all five audit indexes around its row rewrite and must recreate every one (#656)", name)
+		case def21 != def24:
+			t.Errorf("%s is created differently by the two migrations:\n  0021: %s\n  0024: %s\nThey must be byte-identical modulo whitespace: 0021 creates it with IF NOT EXISTS, so on #492's repair path a drifted definition is SILENTLY SKIPPED rather than applied (#656).", name, def21, def24)
+		}
+	}
 }
 
 // runMigration0024 re-executes the shipped statements against a store where

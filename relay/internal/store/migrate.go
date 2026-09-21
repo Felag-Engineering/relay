@@ -125,13 +125,23 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
-		if elapsed := time.Since(start); elapsed >= migrationSlowThreshold {
-			logger.Info("applied schema migration", "name", m.name, "duration", elapsed)
-		} else {
-			logger.Debug("applied schema migration", "name", m.name, "duration", elapsed)
-		}
+		logMigrationApplied(logger, m.name, time.Since(start))
 	}
 	return nil
+}
+
+// logMigrationApplied records that one migration finished: at Info if it took
+// at least migrationSlowThreshold, at Debug otherwise.
+//
+// A function rather than two lines inline so the choice of level is directly
+// testable — TestLogMigrationApplied_InfoOnlyPastTheSlowThreshold pins both
+// branches without spending a second of test time to reach the slow one.
+func logMigrationApplied(logger *slog.Logger, name string, elapsed time.Duration) {
+	if elapsed >= migrationSlowThreshold {
+		logger.Info("applied schema migration", "name", name, "duration", elapsed)
+		return
+	}
+	logger.Debug("applied schema migration", "name", name, "duration", elapsed)
 }
 
 // schemaMigrationsExists reports whether the schema_migrations table has

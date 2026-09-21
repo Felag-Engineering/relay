@@ -13,15 +13,33 @@
 -- this table is actually read under pressure.
 --
 -- The five indexes are dropped and recreated around the UPDATE, each with
--- EXACTLY the definition 0021 gave it. Rebuilding a whole index is far
--- cheaper than maintaining it row by row through a full table rewrite. Four
--- of them already carry audit_id, so the new ORDER BY ts, audit_id is
--- index-satisfied on every path that has an index at all.
+-- EXACTLY the definition 0021 gave it -- pinned by
+-- TestAuditIndexDefinitions_0021MatchesMigration0024, because since #656 0021
+-- creates them with IF NOT EXISTS, and a drifted definition there would be
+-- silently skipped on #492's repair path rather than failing. Rebuilding a
+-- whole index is far cheaper than maintaining it row by row through a full
+-- table rewrite.
+--
+-- WHICH READERS THE NEW ORDER BY ts, audit_id COSTS NOTHING, read off
+-- EXPLAIN QUERY PLAN rather than assumed:
+--
+--   List        SCAN audit USING INDEX idx_audit_ts
+--   read lane   SCAN audit USING INDEX idx_audit_ts           (the DESC mirror)
+--   ByNode      SEARCH audit USING INDEX idx_audit_node_ts (node_id=?)
+--   ByAccount   SEARCH audit USING INDEX idx_audit_account_ts (account_id=?)
+--
+-- Those indexes carry (key, ts, audit_id), so the order comes out of the
+-- index with no sorting step at all. The other three readers each sort, and
+-- each for a different reason -- both stated below, because "it has an index"
+-- and "its ORDER BY is satisfied" are not the same claim.
 --
 -- idx_audit_job_ts DELIBERATELY STAYS (job_id, ts), two columns, and is NOT
--- widened to carry audit_id. Widening it was tried and measured, and it makes
--- things worse where it matters most: with three columns SQLite stops
--- choosing it for jobquery.go's per-Job audit aggregate and switches to
+-- widened to carry audit_id. ByJob therefore plans as SEARCH audit USING
+-- INDEX idx_audit_job_ts (job_id=?) plus USE TEMP B-TREE FOR LAST TERM OF
+-- ORDER BY -- the index orders ts and only the audit_id tie-break is sorted.
+-- Widening it was tried and measured, and it makes things worse where it
+-- matters most: with three columns SQLite stops choosing it for
+-- jobquery.go's per-Job audit aggregate and switches to
 -- idx_audit_kind_ts (kind=?) instead, which materialises an aggregate over
 -- EVERY dispatch row ever written on every Job-detail page view. That is the
 -- exact unboundedness TestJobQuery_SingleJobDoesNotScanEveryTask exists to
@@ -31,9 +49,17 @@
 -- Not a close call. The planner picks the narrower index only because it is
 -- narrower, so this is recorded here rather than left to be rediscovered.
 --
--- ByApproval/ByGrant/ByOnBehalfOf still have no index and still full-scan.
--- Left that way deliberately: three more indexes is write amplification on
--- every appended row, for queries nobody has complained about.
+-- ByApproval/ByGrant/ByOnBehalfOf DO each have an index -- idx_audit_approval
+-- and idx_audit_grant from 0015, idx_audit_asserted_on_behalf_of from 0010 --
+-- and the planner SEARCHes all three. What they pay is USE TEMP B-TREE FOR
+-- ORDER BY, the WHOLE order rather than just its last term, because those
+-- indexes are single-column: they constrain the key and carry neither ts nor
+-- audit_id. Deliberately left that way. The decision is about WIDENING three
+-- existing indexes to (key, ts, audit_id), not about creating three missing
+-- ones, and widening them is write amplification on every appended row for
+-- queries nobody has complained about -- with the idx_audit_job_ts result
+-- above standing as the warning that a wider index also changes which index
+-- the planner picks somewhere else.
 --
 -- THE SKIP GATE IS THE POSITIVE SHAPE. The first WHERE clause is "not already
 -- canonical", spelled as the exact 30-character GLOB rather than
@@ -54,10 +80,12 @@
 -- Re-running this file is a no-op: after conversion every row matches the
 -- canonical GLOB and the UPDATE matches nothing. An operator whose binary was
 -- rolled back to a pre-#656 Relay, and so re-introduced trimmed rows, can run
--- the UPDATE below verbatim to repair them. store/auditshape.go logs that
--- statement at every Open when it finds such rows, because roll-forward does
--- NOT self-heal -- this version is already recorded in schema_migrations and
--- migrate selects by presence, so it never runs again.
+-- the UPDATE below verbatim to repair them. They need telling, because
+-- roll-forward does NOT self-heal -- this version is already recorded in
+-- schema_migrations and migrate selects by presence, so it never runs again.
+-- store/auditshape.go is what tells them: it sees such rows at Open, logs
+-- this statement with the warning, and remembers in audit_shape_alert (0025)
+-- so the warning outlives the window that saw them.
 --
 -- COST, MEASURED, BECAUSE AN OPERATOR PAYS IT ON THE UPGRADE BOOT.
 --

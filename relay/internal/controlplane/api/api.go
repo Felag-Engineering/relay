@@ -379,11 +379,11 @@ var newAuditID = defaultAuditID
 // every row in the batch shares a ts and their order IS the id order. That
 // batch is exactly what an incident reviewer reads as a sequence.
 func defaultAuditID() (string, error) {
-	id, err := audit.NewID()
-	if err != nil {
-		return "", fmt.Errorf("api: generate audit record id: %w", err)
-	}
-	return id, nil
+	// Returned unwrapped: audit.NewID already says "audit: generate record
+	// id: ...", and a second wrap here only produced "api: generate audit
+	// record id: audit: generate record id: ..." — one failure announced
+	// twice.
+	return audit.NewID()
 }
 
 // recordLifecycle appends one lifecycle audit.Record (token mint/revoke,
