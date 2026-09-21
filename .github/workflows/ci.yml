@@ -76,6 +76,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-demo-fleet
 
+      # scripts/codex-review.sh's absent-vs-failed classifier, proved against a stubbed
+      # companion (#620). Shell + git only — no node, no Codex — so it runs here beside the
+      # other two guard self-tests rather than in a toolchain job.
+      - name: Codex-review gate self-test
+        if: ${{ !cancelled() }}
+        run: make test-codex-review
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:

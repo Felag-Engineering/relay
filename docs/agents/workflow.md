@@ -98,6 +98,9 @@ Findings from both are merged and deduplicated by the coordinator. The developer
 justifies each one; a finding neither fixed nor justified goes into the PR body under
 **Unresolved**, and the PR is labelled `loop:needs-human`. Codex is a reviewer only. It never
 implements, and its absence downgrades a gate to one reviewer, which the PR body must say.
+An exhausted usage quota and a rejected credential are forms of absence: `scripts/codex-review.sh`
+exits 3 for both, and the PR body must say the gate ran with one reviewer. Any other non-zero exit
+is a failed review, not an absence — it is escalated, and never recorded as a single-reviewer gate.
 
 ## The security surface
 

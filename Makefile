@@ -12,7 +12,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        test-security-surface \
+        test-security-surface test-codex-review \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-fault demo-up demo-down demo-creds test-demo-fleet \
         fuzz-relay fuzz-daemon \
@@ -23,7 +23,8 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the demo-fleet reset
-# guard self-test, the strict-umask test lane, and both cross-binary suites.
+# guard self-test, the codex-review gate self-test, the strict-umask test lane,
+# and both cross-binary suites.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
 #
@@ -41,7 +42,7 @@ export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/g
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-demo-fleet test-integration test-crossbinary
+        test-demo-fleet test-codex-review test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
 
@@ -196,6 +197,13 @@ test-security-surface:
 # stub under a throwaway WORKDIR, so this touches no real Docker engine.
 test-demo-fleet:
 	bash scripts/demo-fleet-test.sh
+
+# Proves scripts/codex-review.sh exits 3 only when Codex is ABSENT — plugin missing, quota
+# exhausted, credentials rejected — and never for a delivered report, a real review failure
+# or a killed run, and that no cause line carries a credential (#620). Hermetic: the
+# companion is a stub under a throwaway WORKDIR.
+test-codex-review:
+	bash scripts/codex-review-test.sh
 
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
