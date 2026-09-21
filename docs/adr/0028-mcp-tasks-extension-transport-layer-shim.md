@@ -1,5 +1,7 @@
 # Relay implements the MCP Tasks extension as a transport-layer shim
 
+**Status:** Accepted.
+
 A parked dispatch is today rendered as a `pending_approval` tool *result* (#371): honest,
 poll-by-re-driving, and universal. The MCP Tasks extension
 ([SEP-2663](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/seps/2663-tasks-extension.md),

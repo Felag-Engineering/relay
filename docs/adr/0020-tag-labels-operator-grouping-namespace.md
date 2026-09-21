@@ -1,5 +1,7 @@
 # `tag:` labels — an operator-set grouping namespace outside the security lane
 
+**Status:** Accepted; amended by ADR-0034.
+
 Operators need to group Nodes ad hoc from the Relay side ("these 40 boxes are the
 Postgres-15 canary") without a config-management round-trip. Neither existing namespace
 (ADR-0006) can serve: `node:` is node-rooted and Relay-immutable by invariant, and

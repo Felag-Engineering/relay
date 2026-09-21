@@ -1,5 +1,7 @@
 # AI-agent integrates via an MCP server with a meta-tool surface and selector fan-out
 
+**Status:** Accepted.
+
 The Relay exposes its capabilities to the AI-agent through a **Model Context Protocol
 (MCP)** server. The surface is a small, stable set of **meta-tools** plus vocabulary
 introspection, rather than one MCP tool per Operation:

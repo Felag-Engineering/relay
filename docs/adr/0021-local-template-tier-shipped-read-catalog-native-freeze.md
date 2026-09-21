@@ -1,5 +1,7 @@
 # A local Template tier, a shipped read catalog, and a frozen native vocabulary
 
+**Status:** Accepted.
+
 Template **execution** is separable from template **distribution** (owner decision
 2026-08-03, issue #266). ADR-0001 defined tier 2 — **Template Operations**, operator-authored
 shell templates with typed parameters — but sequenced it behind operator-signed distribution

@@ -1,5 +1,7 @@
 # In-band approval through the tool surface
 
+**Status:** Accepted.
+
 ADR-0027 decided *notify via MCP, decide out-of-band*, and named channel strength as
 per-rule configuration: `in-band` ("the elicitation answer *is* the decision") and
 `out-of-band` ("the decision must land on the authenticated decision endpoint"). The

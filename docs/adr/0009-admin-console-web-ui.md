@@ -1,5 +1,7 @@
 # Admin Console: a human web UI as a thin adapter over the operator capability layer
 
+**Status:** Superseded in part by ADR-0026.
+
 The Relay gains a human-facing **Admin Console** — a web UI for operators to observe the
 fleet and administer the control plane (enrollment lifecycle, revocation, registry and
 audit views). It is a **thin adapter** over the same Relay control-plane capability layer

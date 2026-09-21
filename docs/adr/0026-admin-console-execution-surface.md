@@ -1,5 +1,7 @@
 # The Admin Console gains an execution surface
 
+**Status:** Accepted (2026-08-03).
+
 Decision on issue #264, taken by the owner 2026-08-03, recorded here. It **supersedes the
 no-execution clause of [ADR-0009](0009-admin-console-web-ui.md)** and amends AGENTS.md
 invariant #10. The rest of ADR-0009 — thin adapter, internal-only exposure, Account auth,

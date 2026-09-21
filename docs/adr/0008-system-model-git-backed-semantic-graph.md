@@ -1,5 +1,7 @@
 # System Model: a Relay-maintained, git-backed semantic graph of the fleet
 
+**Status:** Accepted.
+
 The Relay maintains a **System Model** — a graph that links Nodes and Labels into
 higher-order **Services**, **Dependencies**, and **Annotations** — giving the AI-agent a
 persistent, shared understanding of the fleet as a connected system rather than a flat set

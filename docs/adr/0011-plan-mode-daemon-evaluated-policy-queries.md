@@ -1,5 +1,7 @@
 # Policy preflight: daemon-evaluated Policy queries, structurally separate from execution
 
+**Status:** Accepted; amended by ADR-0038.
+
 > **Amended by ADR-0038 (2026-09-12; recorded here 2026-09-20).** The mechanism this ADR
 > decides is now called the **Policy preflight**; the word **Plan** names an approved route of
 > execution. The body below keeps its original wording ("plan", "the Plan") for the preview;
