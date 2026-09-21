@@ -199,7 +199,11 @@ built from an enrolled host would carry a live token.
 
 Delivering it through `systemd LoadCredential=` or the customer's secret store removes this, at
 the cost of a second supported path; both are named in *Future work*. Accepted by the owner on
-2026-09-15 and recorded as **R16** in `docs/security/threat-model.md`.
+2026-09-15 and recorded as **R16** in `docs/security/threat-model.md`. The compensating controls
+are a short token TTL and use limit, and config management removing the join string after first
+start. **Revoking the token is not the cleanup step**: revocation is the containment cascade
+(`enrollment.md`) and disconnects every Node the token enrolled; reserve it for a token believed
+leaked (#584).
 
 ## Future work
 

@@ -52,9 +52,14 @@ and no Pending Tasks** behind, because the dispatcher has not been reached.
 
 ### Gate rules, and what ships
 
-Gate rules live in a root-owned file loaded at Relay startup. No API can write them, and they
-**narrow only** (invariant 11): a rule can require approval, never waive a guardrail. Operators
-loosen or tighten what is gated by editing that file.
+Gate rules are today an **optional root-owned file loaded at Relay startup**, and when none is
+configured there is no gate at all. No API Token and no MCP tool can write them, and they
+**narrow only**: a rule can require approval, never waive a guardrail. Operators loosen or
+tighten what is gated by editing that file. Gate rules are a *reach-bounding* setting under
+invariant 11, not part of the security floor: ADR-0027 (amended 2026-09-15/16) makes them a
+store-backed operator setting edited only by a human `admin` in the Admin Console with step-up
+re-authentication, audited (#590, #596); the startup refusal retires with the file when that
+lands. Until then the file behaviour above is what is built.
 
 **Relay ships a default gate-rule file**, so a fresh install is gated out of the box:
 
@@ -297,10 +302,12 @@ so the trail's count of asks stays truthful while polling stays visible.
 
 ## Governing ADRs and invariants
 
-- **ADR-0027 — needs amending.** The callout, the ladder, channel strength, plan-hash binding,
-  expiry, the attribution triple, and approval grants remain its decisions. Amendments: a shipped
-  default gate file; grants lose namespace pinning, cap their window at 4 hours, exclude Raw Exec,
-  and are issued only second-person out-of-band; pending-request expiry defaults to 1 hour.
+- **ADR-0027, as amended 2026-08-14 through 2026-09-20.** The callout, the ladder, channel
+  strength, plan-hash binding, expiry, the attribution triple, and approval grants remain its
+  decisions. Its amendments record: a shipped default gate file; grants lose namespace pinning,
+  cap their window at 4 hours, exclude Raw Exec, and are issued only second-person out-of-band;
+  pending-request expiry defaults to 1 hour; gate rules become a store-backed operator setting
+  (2026-09-15/16); ADR-0029's in-band path overtakes "held elicitation"; ADR-0038's *Plan* rename.
 - **ADR-0029** — in-band approval as a tool call, the asserted approver, the single guarded
   decision seam, and MRTR elicitation as the second envelope over the same decision path
   (decision 6). Now the default path for MCP mutations under the shipped file, which is the case
@@ -315,7 +322,8 @@ so the trail's count of asks stays truthful while polling stays visible.
 
 ## Seams and proof
 
-Gate configuration is loaded once at startup from a root-owned file. The approval domain holds the
+Gate configuration is loaded once at startup from an optional root-owned file (store-backed rules
+are designed, not built — #590). The approval domain holds the
 gate, the grant, the plan hash and the shape key, and its imports are pinned narrow by test. The
 capability layer owns parking, deciding and claiming; the surfaces hold neither.
 
@@ -373,7 +381,11 @@ Claims above with **no row**, and so nothing checking them:
 - That a decision's channel is set by the receiving surface rather than the caller. The channel
   *values* are well covered; which side chooses them is not.
 - That deciding from the Console records the same decision, channel and attribution as the
-  Control API (#435).
+  Control API (#435) — **proven** since #629 by `TestApprovalCallout_ConsoleDecideRun`, which
+  drives the real composition root through a sign-in, a CSRF-bearing decision POST with a
+  password, and asserts on the requester's API channel that the Request reads `approved`,
+  `channel: "out-of-band"`, `human: true`, with the deciding human attributed and both audit
+  records present (#630). Moves into the proof table at migration.
 - That an MRTR elicitation answer records the same in-band decision, channel and asserted
   attribution as `approve_request`, through the same guarded seam. Not built.
 - That a bulk decision is answered, refused and audited request by request against each request's

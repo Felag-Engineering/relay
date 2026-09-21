@@ -124,9 +124,11 @@ example `count: 2` with a single-member `audience`.
    returns the same park but audits as `approval_pending_observed`, not a
    second `approval_requested`: the request count stays truthful, and the
    polling itself stays on the record.
-3. A human decides through the decision endpoint. The decision arrives on an
-   authenticated channel — **never through the MCP session that requested the
-   action**.
+3. A human decides. An **out-of-band** decision arrives through the decision endpoint or the
+   Admin Console, on a channel other than the requesting MCP session. An **in-band** decision
+   (`approve_request`, and MRTR elicitation once built — ADR-0029) travels through the tool
+   surface with an *asserted* approver, and satisfies only an `in-band` rule, never an
+   `out-of-band` one.
 4. Once the requirement is satisfied, the same dispatch proceeds and the
    approval is bound to the Job it released, so audit can answer "who approved
    what actually ran" in one join.
@@ -301,9 +303,9 @@ What this buys, precisely:
 
 And what it explicitly does **not** change:
 
-- **Who may decide.** A handle is a poll token, not a decision one. No MCP
-  method accepts an approval, and the MCP surface is structurally incapable of
-  recording one — a build-time guard, not a convention.
+- **Who may decide.** A handle is a poll token, not a decision one. The only MCP path that
+  records a decision is the in-band one (`approve_request`, ADR-0029), through the same guarded
+  capability-layer seam as every other decision; a task handle never decides anything.
 - **What `tasks/cancel` reaches.** It marks the *handle* cancelled. If the
   dispatch is still parked, the approval request stays pending, stays in the
   queue, and stays decidable; a re-drive of the same Plan re-attaches to it. A

@@ -149,9 +149,12 @@ generous one. For a Template Operation the class is the most restrictive reporte
 that report it (`operations-and-templates.md`). The cap is an inclusive maximum: matched equal
 to the cap is allowed.
 
-Both are **operator-set at Relay startup and unreachable from any API** (invariant 11); a
-non-positive configured value is clamped to the built-in default rather than treated as
-unlimited. They cannot change at runtime — only by reconstruction at process start.
+Both are today **operator-set at Relay startup** (`relay-configuration.md`); a non-positive
+configured value is clamped to the built-in default rather than treated as unlimited, and they
+change only by reconstruction at process start. They are *reach-bounding* settings under
+invariant 11 as amended 2026-09-15 — never reachable from an API Token or an MCP tool, and
+designed to become store-backed operator settings edited only by a human `admin` with step-up
+re-authentication, audited (ADR-0004 and ADR-0012 amendments; #596).
 
 ### At-most-once execution (invariant 4, ADR-0004)
 

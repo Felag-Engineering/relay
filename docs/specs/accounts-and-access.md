@@ -2,8 +2,9 @@
 
 **Status:** aspirational — worked through with the owner, last confirmed `2026-09-19`. Describes
 intended behaviour, not the code (see the establishing phase in `README.md`). Migration to the
-claim format is deferred until #655 lands, so that Console step-up resolves as built or refused
-rather than parking a section under *Designed, not built*.
+claim format was deferred until #655 landed; it landed as #662 on 2026-09-20 (the Accounts write
+routes, step-up, reveal-once token mint), so this spec is ready to migrate and is sixth in
+#587's order.
 
 ## Purpose
 
@@ -25,7 +26,7 @@ Policy, approval, or the blast-radius cap.
 |---|---|
 | **Control API** | Admin-only Account lifecycle endpoints under `/api/v1/accounts`, API Token mint/list under `/api/v1/accounts/{id}/tokens`, and API Token revocation under `/api/v1/api-tokens/{token_id}`. Bearer API Tokens authenticate this surface. |
 | **MCP** | A per-Account API Token authenticates a headless caller. When configured, the endpoint is also an OAuth 2.1 protected resource: it publishes protected-resource metadata and accepts a verified external-IdP token that resolves to an existing Account. MCP does not expose Account or API Token administration. |
-| **Admin Console** | Human Accounts sign in with a local password, establish a Console-only session, and sign out. Console routes receive that session and its Account role. The Accounts and API Tokens administration screen (#654 read, #655 write) is in scope and not yet built; its step-up matrix is settled below. That screen is `admin`-only: a `viewer` is not shown it and cannot reach it. |
+| **Admin Console** | Human Accounts sign in with a local password, establish a Console-only session, and sign out. Console routes receive that session and its Account role. The Accounts and API Tokens administration screen is built: the read half in #660, the write routes with step-up and the reveal-once token mint in #662; its step-up matrix is settled below and the migration session maps each row to its test. That screen is `admin`-only: a `viewer` is not shown it and cannot reach it. |
 | **Local operator** | `relay bootstrap-token` creates an API Token for the stored founding admin using local access to the Relay store. It is the bootstrap escape from the authentication cycle, and the recovery path when no enabled `admin` can act. It is not a network surface. |
 
 ## Behaviour
