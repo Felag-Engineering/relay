@@ -13,7 +13,7 @@
 # environment says otherwise, before any Docker call except two read-only
 # checks (the local-engine context endpoint, and — once that passes — a check
 # that no OTHER checkout already owns the relay-demo project). See "The
-# fault, and resetting between takes" in docs/dev-fleet.md.
+# fault, and resetting between takes" in docs/operations/demo-fleet.md.
 #
 # Six subcommands: build (the only one that builds images), reset (wipe +
 # recreate + verify), fault (kill the #389 dev-fleet-service on a subset of
@@ -549,7 +549,7 @@ Usage: scripts/demo-fleet.sh <command>
                       (scripts/dev-fleet-mcp.sh init); run after 'reset' or 'up'
 
 Refuses to run against anything but the '${DEMO_PROJECT}' compose project on a
-local Docker engine. See docs/dev-fleet.md, "The fault, and resetting between takes".
+local Docker engine. See docs/operations/demo-fleet.md, "The fault, and resetting between takes".
 USAGE
     exit 2
 }
