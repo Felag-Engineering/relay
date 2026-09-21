@@ -179,6 +179,22 @@ type Deps struct {
 	// other is a composition-root trap, not a supported configuration — see
 	// decideOffered and TestDecide_UnwiredSeamsOfferNothing.
 	Decide ApprovalDecider
+
+	// AccountAdmin is the Console's THIRD write seam (#655,
+	// accounts_write.go): the same five capability.Service verbs the Control
+	// API calls — CreateAccount, SetAccountRole, SetAccountEnabled,
+	// MintAPIToken and RevokeAPIToken. The admin floor on all of them, the
+	// self-target refusal, the last-enabled-admin refusal and every audit row
+	// are the capability layer's; this package only renders what it decided.
+	//
+	// PAIRED with Auth AND with Accounts: accountsOffered refuses to offer
+	// any of the five controls unless all three are wired — Auth because a
+	// granting act that cannot be step-up-verified must not be offered at
+	// all (the Decide/Auth precedent above), Accounts because the role route
+	// reads the target's current role to tell a raise from a lower. Nil, or
+	// either partner nil, means the controls do not render and the routes
+	// answer unavailable.
+	AccountAdmin AccountAdministrator
 }
 
 // now reads the clock, defaulting when the composition root left it unset.
@@ -329,11 +345,11 @@ func Routes(d Deps) []Route {
 		// what comes next rather than an observation. Because this route
 		// constrainsReach(), Register mounts [methodMismatch] on the BARE
 		// "/console/accounts" as well, which collides with nothing in this
-		// table today. It does mean the write half (#655) cannot add a
+		// table today. It did mean the write half (#655) could not add a
 		// constrained "POST /console/accounts": Register would register the
-		// bare path a second time and net/http panics at registration.
-		// Distinct paths — /console/accounts/create and so on — are what
-		// that issue must use.
+		// bare path a second time and net/http panics at registration. The
+		// write half used the distinct literals this comment predicted —
+		// /console/accounts/create and so on — and they are below.
 		//
 		// The selected Account is "?account=<name>", not a
 		// /console/accounts/{account_id} detail page, and the reason is a
@@ -346,6 +362,44 @@ func Routes(d Deps) []Route {
 		// wants exactly such literals. Agents already selects this way
 		// (agents.go), so it is also the idiom this Console has.
 		{"GET", "/console/accounts", NavEntry{NavAdminister, "Accounts", 20}, accounts.RoleAdmin, handleAccounts},
+
+		// Accounts, write half (#655, accounts_write.go): the Console's
+		// third, fourth, fifth, sixth and seventh write routes. All five at
+		// accounts.RoleAdmin, which is exactly the floor
+		// authz.requiredControlRole returns for all eight account
+		// ControlActions — so each MinRole narrows to the capability layer's
+		// own floor and widens nothing. None is a navigation destination:
+		// they are form targets on the screen above.
+		//
+		// NOT gated behind d.Execution, for the reason cancel.go and
+		// decide.go each already make: ADR-0026 decision 5 scopes that flag
+		// to the composer and to dispatch, and none of these five composes or
+		// dispatches anything.
+		//
+		// THESE FIVE PATHS ARE FORCED, and were driven through a real
+		// net/http.ServeMux — with the bare-path second registration Register
+		// mounts for every constrainsReach() route — rather than reasoned
+		// about. They register clean. Two shapes do not, and both panic at
+		// registration, which in production is a process that does not start:
+		//
+		//   - a constrained "POST /console/accounts" — `pattern
+		//     "/console/accounts" … conflicts with pattern
+		//     "/console/accounts": /console/accounts matches the same
+		//     requests as /console/accounts`, because the GET route above
+		//     already owns that bare path;
+		//   - a constrained "GET /console/accounts/{account_id}" — `GET
+		//     /console/accounts/{account_id} matches fewer methods than
+		//     /console/accounts/create, but has a more general path pattern`,
+		//     which is why the read half selects with ?account= and why no
+		//     Account detail page may be added beside these literals.
+		//
+		// TestConsole_RegisterMountsEveryRouteWithoutPatternConflict is the
+		// standing guard and picks these rows up automatically.
+		{"POST", "/console/accounts/create", NavEntry{}, accounts.RoleAdmin, handleCreateAccount},
+		{"POST", "/console/accounts/{account_id}/role", NavEntry{}, accounts.RoleAdmin, handleSetAccountRole},
+		{"POST", "/console/accounts/{account_id}/enabled", NavEntry{}, accounts.RoleAdmin, handleSetAccountEnabled},
+		{"POST", "/console/accounts/{account_id}/tokens", NavEntry{}, accounts.RoleAdmin, handleMintAPIToken},
+		{"POST", "/console/api-tokens/{token_id}/revoke", NavEntry{}, accounts.RoleAdmin, handleRevokeAPIToken},
 
 		// Not a destination: the stylesheet the content security policy forces
 		// out of the layout, since style-src admits this origin and nothing

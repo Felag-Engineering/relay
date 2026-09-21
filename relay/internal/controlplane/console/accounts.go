@@ -54,8 +54,14 @@ package console
 // occupy, which is the structural half of that claim, and
 // TestAccounts_NoConsoleFileNamesSecretHash is the other. No Relay
 // configuration of any kind (invariant 11): the role block is prose about
-// where the boundary falls, never an inventory of editable values. No editor
-// and no permission matrix: the write half is #655.
+// where the boundary falls, never an inventory of editable values.
+//
+// The write half landed in #655 (accounts_write.go), so this file now renders
+// forms as well as rows. What stays absent is a role or PERMISSION editor of
+// any kind — the three roles are ADR-0010's closed set and a custom-permission
+// builder is a second authorization model — and any Relay configuration
+// whatsoever. The one place a minted credential appears is
+// accounts_write.go's mint response, never this screen.
 
 import (
 	"errors"
@@ -96,9 +102,43 @@ type accountsView struct {
 	Tokens           []tokenRow
 	TokensUnreadable bool
 
+	// SelectedMintAction is the selected Account's mint form action (#655),
+	// empty when nothing is selected or the write half is not wired. The
+	// mint form lives in the token panel because minting is about ONE
+	// Account, and the panel is the only part of this screen that is.
+	SelectedMintAction string
+
 	CallPage  int
 	RoleNotes []roleNote
 	Ceiling   string
+
+	// Write is nil when the write half is not wired (#655, accounts_write.go):
+	// no form of any kind renders, which is the honest-absence posture every
+	// other seam on this Deps takes. accountsOffered decides it.
+	Write *accountsWriteControls
+}
+
+// accountsWriteControls is everything the write forms need that is not
+// per-row: the CSRF token every Console POST carries, the create form's
+// action, and the two CLOSED option lists its selects render from.
+//
+// The option lists are built from accounts.RoleViewer/Operator/Admin and
+// accounts.KindHuman/KindMachine rather than hand-typed strings, so a screen
+// and the domain cannot come to disagree about what the closed sets are.
+type accountsWriteControls struct {
+	CSRFToken    string
+	CreateAction string
+	Roles        []string
+	Kinds        []string
+	TTLs         []ttlOption
+}
+
+// ttlOption is one entry in the mint form's closed lifetime select. The
+// VALUE is what the handler parses (ttlFor, accounts_write.go); the label is
+// what an operator reads.
+type ttlOption struct {
+	Value string
+	Label string
 }
 
 // accountRow is one Account.
@@ -127,6 +167,23 @@ type accountRow struct {
 	// missing. Current marks the Account the token panel is about.
 	Machine bool
 	Current bool
+
+	// The per-row write actions (#655). The ACTIONS, not the raw id, so an
+	// Account id never lands in a rendered form VALUE — the id is in the
+	// path, escaped once by the builder that made it. Empty when the write
+	// half is not wired.
+	RoleAction    string
+	EnabledAction string
+
+	// Enabled drives which of the two state controls renders: an enabled row
+	// gets a Disable button with no password field, a disabled row gets an
+	// Enable form with a required one. The asymmetry is in the markup, not
+	// only in the handler.
+	Enabled bool
+
+	// OtherRoles is the two roles this Account does not hold, so the per-row
+	// role select offers a change and never a no-op.
+	OtherRoles []string
 }
 
 // tokenRow is one API Token, as far as a screen is ever allowed to see one.
@@ -150,6 +207,11 @@ type tokenRow struct {
 	ExpiresAt time.Time
 
 	Revoked bool
+
+	// RevokeAction is this token's revoke form action (#655). Empty when the
+	// write half is not wired. A NAME, an id and a path — still no field a
+	// secret could occupy.
+	RevokeAction string
 }
 
 // roleNote is one role, described by the boundary it sits on.
@@ -271,6 +333,15 @@ func handleAccounts(d Deps) http.HandlerFunc {
 			RoleNotes: roleNotes,
 			Ceiling:   policyCeilingNote,
 		}
+		if accountsOffered(d) {
+			v.Write = &accountsWriteControls{
+				CSRFToken:    p.CSRFToken,
+				CreateAction: createAccountAction(),
+				Roles:        allRoleNames(),
+				Kinds:        []string{string(accounts.KindHuman), string(accounts.KindMachine)},
+				TTLs:         ttlOptions(),
+			}
+		}
 
 		var selected accounts.Account
 		for _, a := range accts {
@@ -289,9 +360,15 @@ func handleAccounts(d Deps) http.HandlerFunc {
 				// links to the wrong Account (#467).
 				Href:         "/console/accounts?" + url.Values{"account": {a.Name}}.Encode(),
 				LastCallHref: "/console/agents?" + url.Values{"account": {a.Name}}.Encode(),
+				Enabled:      a.Enabled,
 			}
 			if row.Machine {
 				row.LastCallAt = lastCallByAccountID[a.ID]
+			}
+			if v.Write != nil {
+				row.RoleAction = setAccountRoleAction(a.ID)
+				row.EnabledAction = setAccountEnabledAction(a.ID)
+				row.OtherRoles = rolesOtherThan(a.Role)
 			}
 			v.Accounts = append(v.Accounts, row)
 
@@ -301,18 +378,30 @@ func handleAccounts(d Deps) http.HandlerFunc {
 		}
 
 		if v.SelectedFound {
+			if v.Write != nil {
+				v.SelectedMintAction = mintAPITokenAction(selected.ID)
+			}
 			tokens, tokErr := d.Accounts.APITokens(r.Context(), caller, selected.ID)
 			switch {
 			case tokErr == nil:
 				for _, t := range tokens {
-					v.Tokens = append(v.Tokens, tokenRow{
+					row := tokenRow{
 						ID:         t.ID,
 						Name:       t.Name,
 						CreatedAt:  t.CreatedAt,
 						LastUsedAt: t.LastUsedAt,
 						ExpiresAt:  t.ExpiresAt,
 						Revoked:    t.Revoked(),
-					})
+					}
+					// Revoke is offered for any token not ALREADY revoked,
+					// including an expired one: revoking an expired token is
+					// harmless and idempotent (capability's RevokeAPIToken),
+					// and refusing it would be a second opinion about token
+					// state this screen must not hold.
+					if v.Write != nil && !row.Revoked {
+						row.RevokeAction = revokeAPITokenAction(t.ID)
+					}
+					v.Tokens = append(v.Tokens, row)
 				}
 			case errors.Is(tokErr, authz.ErrUnauthorized):
 				w.WriteHeader(http.StatusForbidden)
@@ -332,6 +421,35 @@ func handleAccounts(d Deps) http.HandlerFunc {
 
 		renderScreen(w, p, accountsTmpl, v)
 	}
+}
+
+// allRoleNames is the closed role set, in ascending authority, built from the
+// domain's own constants so this screen cannot drift from it.
+func allRoleNames() []string {
+	return []string{string(accounts.RoleViewer), string(accounts.RoleOperator), string(accounts.RoleAdmin)}
+}
+
+// rolesOtherThan is the closed role set minus the one held, so a per-row role
+// select offers a change and never a no-op.
+func rolesOtherThan(held accounts.Role) []string {
+	var out []string
+	for _, r := range allRoleNames() {
+		if r != string(held) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ttlOptions projects the mint form's closed lifetime vocabulary
+// (ttlChoices, accounts_write.go) onto the view, so the handler that PARSES a
+// value and the template that OFFERS one read from a single list.
+func ttlOptions() []ttlOption {
+	out := make([]ttlOption, 0, len(ttlChoices))
+	for _, c := range ttlChoices {
+		out = append(out, ttlOption{Value: c.Value, Label: c.Label})
+	}
+	return out
 }
 
 // accountState renders the durable off-switch in words.
@@ -354,12 +472,15 @@ var accountsRefusedTmpl = newScreen("accounts-refused", `
 
 var accountsTmpl = newScreen("accounts", `
 <p class="lede">Every identity that can reach this control plane, and the credentials that
-authenticate as one. Reading this page changes nothing: creating, disabling and re-roling an
-Account, and minting or revoking a token, are not offered here.</p>
+authenticate as one.{{if .Write}} Every act on this screen that could increase what a principal may
+do &mdash; creating an Account, raising a role, re-enabling a disabled one, minting a token &mdash;
+costs your password in the same request. Disabling, lowering a role and revoking a token only ever
+reduce, so they do not.{{else}} Reading this page changes nothing: creating, disabling and re-roling
+an Account, and minting or revoking a token, are not wired into this Relay's Console.{{end}}</p>
 
 <div class="tablescroll">
 <table class="rows">
-  <thead><tr><th>Account</th><th>Kind</th><th>Role</th><th>State</th><th>Last authentication</th><th>Last tool call</th></tr></thead>
+  <thead><tr><th>Account</th><th>Kind</th><th>Role</th><th>State</th><th>Last authentication</th><th>Last tool call</th>{{if .Write}}<th>Change</th>{{end}}</tr></thead>
   <tbody>
   {{range .Accounts}}
     <tr>
@@ -369,11 +490,69 @@ Account, and minting or revoking a token, are not offered here.</p>
       <td>{{.State}}</td>
       <td>{{stamp .LastAuthAt}}</td>
       <td>{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
+      {{if $.Write}}
+      <td>
+        <form method="post" action="{{.RoleAction}}">
+          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+          <label>Role
+            <select name="role">
+              {{range .OtherRoles}}<option value="{{.}}">{{.}}</option>{{end}}
+            </select>
+          </label>
+          <label>Password &mdash; required to raise a role
+            <input name="password" type="password" autocomplete="current-password">
+          </label>
+          <button type="submit">Set role</button>
+        </form>
+        {{if .Enabled}}
+        <form method="post" action="{{.EnabledAction}}">
+          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+          <input type="hidden" name="enabled" value="false">
+          <button type="submit">Disable</button>
+        </form>
+        {{else}}
+        <form method="post" action="{{.EnabledAction}}">
+          <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+          <input type="hidden" name="enabled" value="true">
+          <label>Password &mdash; required to re-enable
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">Enable</button>
+        </form>
+        {{end}}
+      </td>
+      {{end}}
     </tr>
   {{end}}
   </tbody>
 </table>
 </div>
+
+{{with .Write}}
+<section class="panel">
+  <h3>Create an Account</h3>
+  <form method="post" action="{{.CreateAction}}">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label for="create-name">Name</label>
+    <input id="create-name" name="name" maxlength="64" required>
+    <label for="create-kind">Kind</label>
+    <select id="create-kind" name="kind">
+      {{range .Kinds}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <label for="create-role">Role</label>
+    <select id="create-role" name="role">
+      {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+    </select>
+    <label for="create-password">Your password &mdash; creating an Account is a privilege-granting act</label>
+    <input id="create-password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Create Account</button>
+  </form>
+  <p class="note">A <b>human</b> Account created here cannot sign in until a password is set for it
+  with <code>relay console-password</code> on the Relay host. Nothing on this screen can set one:
+  that lever is local and root-owned on purpose, for the same reason
+  <code>relay bootstrap-token</code> is.</p>
+</section>
+{{end}}
 <p class="note">Last authentication is the most recent time this Account proved who it was — a
 sign-in, or a token accepted. Last tool call is read from the agent call trail and looks back over
 the last {{.CallPage}} recorded calls only, so an Account that called earlier than that reads as
@@ -389,7 +568,7 @@ absent from the window rather than as never having called.</p>
   {{else if .Tokens}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Token</th><th>Name</th><th>Created</th><th>Last used</th><th>Expires</th><th>State</th></tr></thead>
+    <thead><tr><th>Token</th><th>Name</th><th>Created</th><th>Last used</th><th>Expires</th><th>State</th>{{if $.Write}}<th>Revoke</th>{{end}}</tr></thead>
     <tbody>
     {{range .Tokens}}
       <tr>
@@ -399,6 +578,14 @@ absent from the window rather than as never having called.</p>
         <td>{{stamp .LastUsedAt}}</td>
         <td>{{if .ExpiresAt.IsZero}}<span class="dim">does not expire</span>{{else}}{{stamp .ExpiresAt}}{{end}}</td>
         <td>{{if .Revoked}}revoked{{else}}live{{end}}</td>
+        {{if $.Write}}
+        <td>{{with .RevokeAction}}
+          <form method="post" action="{{.}}">
+            <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
+            <button type="submit">Revoke</button>
+          </form>
+        {{end}}</td>
+        {{end}}
       </tr>
     {{end}}
     </tbody>
@@ -409,6 +596,21 @@ absent from the window rather than as never having called.</p>
   permanent — there is no un-revoke.</p>
   {{else}}
   <p class="dim">This Account has no API Tokens.</p>
+  {{end}}
+  {{if and .Write .SelectedMintAction}}
+  <form method="post" action="{{.SelectedMintAction}}">
+    <input type="hidden" name="csrf_token" value="{{.Write.CSRFToken}}">
+    <label for="mint-name">Token name</label>
+    <input id="mint-name" name="name" maxlength="128" required>
+    <label for="mint-ttl">Lifetime</label>
+    <select id="mint-ttl" name="ttl">
+      {{range .Write.TTLs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+    </select>
+    <label for="mint-password">Your password &mdash; minting brings a new credential into existence</label>
+    <input id="mint-password" name="password" type="password" autocomplete="current-password" required>
+    <button type="submit">Mint API Token</button>
+  </form>
+  <p class="note">The value is shown once, on the response to this form, and never again.</p>
   {{end}}
   {{else}}
   <div class="placeholder">

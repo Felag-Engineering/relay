@@ -32,10 +32,11 @@ package console
 // configuration — Execution — is a mirror the composition root sets, not a value
 // this package can read from anywhere.
 //
-// There are now TWO write seams on Deps — JobCanceller (cancel.go, #595) and
-// ApprovalDecider (decide.go, #453) — and neither lives in this file, on
-// purpose: each gets its own file so this file's "every seam here is
-// read-only" claim stays true of seams.go without qualification.
+// There are now THREE write seams on Deps — JobCanceller (cancel.go, #595),
+// ApprovalDecider (decide.go, #453) and AccountAdministrator
+// (accounts_write.go, #655) — and none lives in this file, on purpose: each
+// gets its own file so this file's "every seam here is read-only" claim stays
+// true of seams.go without qualification.
 //
 // The filtered, paginated, per-principal audit/Job query lane landed in the
 // capability layer as issue #441 — see QueryReader below. Job detail was the
@@ -159,14 +160,16 @@ type ApprovalReader interface {
 // spec 15). *capability.Service satisfies both methods, which landed on it in
 // #653 (PR #657), so no adapter is built for this seam.
 //
-// EVERY WRITE VERB ON THE ACCOUNT LANE IS ABSENT: CreateAccount,
-// SetAccountRole, SetAccountEnabled, MintAPIToken and RevokeAPIToken. As with
-// ApprovalReader's RevokeGrant above, one of those is worth naming on its own
-// — MintAPIToken is the one a future editor is most likely to add, because
-// "the Accounts screen needs a mint button" sounds like a rendering problem.
-// It is not: minting is a reveal-once credential issue, it belongs to the
-// write half (#655) with its own seam and its own step-up, and it stays off
-// this interface however convenient it looks.
+// EVERY WRITE VERB ON THE ACCOUNT LANE IS STILL ABSENT FROM THIS INTERFACE:
+// CreateAccount, SetAccountRole, SetAccountEnabled, MintAPIToken and
+// RevokeAPIToken. Since #655 all five live on AccountAdministrator in
+// accounts_write.go — the same split JobCanceller and ApprovalDecider already
+// take, which is what keeps this file's "every seam here is read-only" claim
+// true unqualified. MintAPIToken is the one worth naming on its own, because
+// "the Accounts screen needs a mint button" sounds like a rendering problem
+// and is not: minting is a reveal-once credential issue, it belongs to the
+// write half with its own seam and its own step-up, and it stays off this
+// interface however convenient it looks.
 //
 // Both reads authorize in the capability layer — ControlAccountRead and
 // ControlAPITokenRead, both floored at admin (authz.go) — so this Console
@@ -186,13 +189,28 @@ type ApprovalReader interface {
 // consoleReadAudit entry for GET /console/accounts say the same thing, so
 // whichever of the three a reader lands on tells the whole story.
 //
-// Account(ctx, p, id) — the single-Account read — is deliberately NOT here.
-// The read half selects an Account out of the list it already holds, so
-// nothing calls it, and this file's culture is to delete an unused method
-// rather than offer it (see AuditReader's List and ByJob). #655 adds it back
-// if its writes need it.
+// Account(ctx, p, id) — the single-Account read — was deliberately absent
+// until #655, because the read half selects an Account out of the list it
+// already holds and this file's culture is to delete an unused method rather
+// than offer it (see AuditReader's List and ByJob). It is here now, for
+// exactly ONE caller: handleSetAccountRole (accounts_write.go) reads the
+// target's CURRENT role so it can tell a raise from a lower, because a raise
+// costs a password and a lower does not (owner decision, 2026-09-19).
+//
+// That read carries a NAMED, BOUNDED RESIDUAL, stated here so a reader of the
+// seam meets it rather than discovering it: accounts.Repository.SetRole takes
+// no expected-current-role argument, so no surface can make read-then-write
+// atomic, and a concurrent demote by a second admin between the two could let
+// a raise through without step-up. The window is inherent to the contract, not
+// introduced by this adapter, and it is bounded three ways — the outcome is
+// capped at the role the handler OBSERVED, capability.ErrSelfTargeted refuses
+// a self-target unconditionally so it can never be used for self-elevation
+// (ADR-0009's named risk), and the last-admin guard does NOT contain it (it is
+// a count over enabled admins, orthogonal to whether a change was a raise).
+// See accounts_write.go's header and the PR body for the full write-up.
 type AccountReader interface {
 	Accounts(ctx context.Context, p capability.Principal) ([]accounts.Account, error)
+	Account(ctx context.Context, p capability.Principal, id string) (accounts.Account, error)
 	APITokens(ctx context.Context, p capability.Principal, accountID string) ([]accounts.APIToken, error)
 }
 
