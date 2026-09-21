@@ -88,7 +88,10 @@ Two decompositions are wrong, and only two:
 
 - **Per surface.** Invariant 10 makes the control plane surface-independent: MCP, the Control
   API and the Admin Console are adapters over the same decisions. A spec per surface states the
-  same behaviour three times and drifts the moment one adapter changes.
+  same behaviour three times and drifts the moment one adapter changes. What a surface does *on
+  its own* — the Console's session, CSRF/CSP, step-up windows, the `console_execution` flag —
+  is an aspect like any other and may have a file (`console.md`, decided 2026-09-20); what it
+  exposes of another capability belongs in that capability's Surfaces table.
 - **Per milestone.** A document organised around when work shipped rots on the day that work
   closes, which is exactly what a durable document must not do.
 
@@ -165,13 +168,14 @@ interrogation.
 | `enrollment.md` | Enrollment Tokens, join strings, bundles, identity issuance and revocation |
 | `accounts-and-access.md` | Accounts, roles, Grants, API tokens, OAuth sessions, attribution |
 | `policy-catalog.md` | First-party opt-in catalog fragments, their release digests, and the Console screen that arranges them into cohorts and exports them; never applied over the wire |
-| `policy.md` *(stub)* | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |
-| `operations-and-templates.md` *(stub)* | The Operation vocabulary and its golden schema, risk classes, the frozen Native set, the local Template catalog |
-| `node-connection.md` *(stub)* | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
-| `relay-configuration.md` *(stub)* | Operator-set startup config unreachable from any API, secrets as file paths, `relay init`, Relay packaging |
-| `daemon-installation.md` *(stub)* | Installing and configuring the relay-daemon on a Node through the customer's config management |
-| `quarantine-node.md` *(stub)* | Quarantining a distrusted Node: fencing it off from routine work, targeted only through `relay:` labels |
+| `policy.md` | The daemon's Policy itself: the local file, deny-by-default and deny-beats-allow, argument-level and canonical matching, the shipped default read Policy |
+| `operations-and-templates.md` | The Operation vocabulary and its golden schema, risk classes, the frozen Native set, the local Template catalog |
+| `node-connection.md` | The mTLS session, `Hello`, reconnect and dedup, liveness in the registry, the minimum-version gate |
+| `relay-configuration.md` | The security floor and the operator settings, secrets as file paths, `relay init`, Relay packaging |
+| `daemon-installation.md` | Installing and configuring the relay-daemon on a Node through the customer's config management |
+| `quarantine-node.md` | Quarantining a distrusted Node: fencing it off from routine work; engaging may target `relay:` or `tag:`, lifting `relay:` only |
 | `system-model.md` *(stub)* | Services, Dependencies and Annotations: the advisory, git-backed model and its AI-immutable grounding facts |
-| `observability.md` *(stub)* | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
+| `observability.md` | What an operator can see of Relay's own health: metrics, logs, and what they must never contain |
+| `console.md` *(not yet written)* | What only the Admin Console does: session, CSRF/CSP, step-up windows, the `console_execution` flag, role gating. Screens stay in `docs/design/console/` |
 
 Start from [`TEMPLATE.md`](TEMPLATE.md), and run `/spec-check` before opening the PR.

@@ -153,8 +153,9 @@ with no further human involvement — an Approval grant whose scope happens to b
 each remaining `mutate` step still waits for its own approval. It takes a grant's walls, and every
 one of them is mandatory:
 
-- **A window.** Root-owned Relay configuration (invariant 11): **1 hour by default, capped at 4
-  hours**, matching approval grants.
+- **A window.** A Relay operator setting (`relay-configuration.md`; reach-bounding under
+  invariant 11, so it may be store-backed): **1 hour by default, capped at 4 hours**, matching
+  approval grants.
 - **Revocable**, closing mid-route immediately.
 - **Expiry is terminal and never resumable.** An expired Plan stays where it stopped; the
   remaining steps need a new Plan and a new Approval.
@@ -232,7 +233,7 @@ per ADR-0025 the record holds steps, decisions and outcomes — **never read out
 | Refusal | Cause |
 |---|---|
 | Empty plan | A Plan with no steps |
-| Too many steps | Over the configured per-Plan step bound (Relay configuration, invariant 11) |
+| Too many steps | Over the configured per-Plan step bound (a Relay operator setting, `relay-configuration.md`) |
 | Fan-out over bound | The Selector matched more than one Node — reported with the count |
 | No Node matched | The Selector matched nothing, or its only match is not connected |
 | Unauthorized to propose | Below the role floor of the strictest step |
@@ -267,8 +268,10 @@ table. It is the step's Job refusing, reported as that Job's outcome, and it hal
   and is still never skipped.
 - **Invariant 10** — the Plan lives in the capability layer; every surface is an adapter that
   narrows only.
-- **Invariant 11** — the step bound and the window are root-owned Relay configuration, unreachable
-  from any API.
+- **Invariant 11** — the step bound and the window bound reach and are operator settings: never
+  reachable from an API Token or an MCP tool, editable (where store-backed) only by a human
+  `admin` with step-up re-authentication, audited. Both must appear in `relay-configuration.md`'s
+  operator-settings table when this capability is designed.
 - **Invariant 13** — each step's risk class is declared contract and selects its cap and its gate
   rule.
 

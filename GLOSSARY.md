@@ -17,8 +17,9 @@ ADR-0016 for the internal-naming boundary).
 **Relay**:
 The central server. Accepts relay-daemon connections, routes Operations to
 specific Nodes, returns results, and exposes the tool surface used by the
-AI-agent.
-_Avoid_: hub, server, master, control plane
+AI-agent. **Control plane** is the layer — the Relay together with its three surfaces — and is
+fine for that; it is never a name for the Relay binary, a Node, or the daemon.
+_Avoid_: hub, server, master
 
 **relay-daemon**:
 The non-AI daemon installed on each managed Node. Dials home to the Relay, holds
@@ -219,6 +220,12 @@ preflight reports the same conclusion for the same Node. Vocabulary is per-Node 
 `list_operations`/`describe_node` report what a given Node actually has (ADR-0021).
 _Avoid_: unknown operation, not found, unimplemented
 
+**Enrollment Bundle**:
+Everything a Node needs to enroll, minted and rendered in one act (ADR-0032): the join string
+and the per-config-management rendering of it (playbook, shell). Minted by an operator through
+the control plane; never re-rendered later, because the token inside it is shown once.
+_Avoid_: enrollment kit, onboarding package
+
 **Enrollment Token**:
 The reusable, scoped, expiring, revocable credential a daemon presents to join the fleet.
 Distinct from a Node's identity certificate: the token authorizes *enrollment* and stamps
@@ -250,7 +257,8 @@ issues a fresh certificate for the *same* node_id (derived from the verified pee
 the CSR), preserving provenance; renewals are jittered to spread the fleet over time. Distinct
 from *enrollment*: enrollment is token-authenticated and mints the first identity; renewal is
 cert-authenticated and refreshes the existing one. (ADR-0006)
-_Avoid_: re-enroll, reissue, cert refresh
+_Avoid_: reissue, cert refresh; "re-enroll" only for a fresh enrollment under a new token
+after revocation, never for renewal
 
 **Server certificate rotation**:
 The Relay *re-issuing* its own TLS server certificate from the in-process CA once the leaf
@@ -260,6 +268,13 @@ identity certificate over the wire: rotation never leaves the Relay process, and
 rotates independently. The server leaf's lifetime is its own constant, never the Node identity
 one — sharing it is what left the certificate expiring with nothing to renew it (ADR-0031 §5).
 _Avoid_: server cert renewal, cert refresh
+
+**Quarantine**:
+Fencing a distrusted Node off from routine work. Engaging one only ever *reduces* what may
+run and may target `relay:` or `tag:` labels; lifting one targets `relay:` only (invariant 7).
+The `state:quarantined` label is Relay-derived and read-only. The engage and lift actions are
+not built yet (#430); the derived state and the Console wall are.
+_Avoid_: isolate, cordon, drain (Kubernetes senses), blacklist
 
 **Freeze**:
 The Relay-wide emergency stop: halts all new Task dispatch (every risk class) while
@@ -372,12 +387,28 @@ never the reverse (ADR-0027).
 _Avoid_: transport (reserved for the gRPC/mTLS node plane), delivery envelope (that is
 *how* an approver is reached, not how strongly their answer is trusted)
 
+**Security floor**:
+The configuration that bounds *who may authenticate and how recently they proved it*:
+listeners, CA/TLS, auth bootstrap, the identity provider, session and step-up windows,
+`console_execution`, the approval notification path. Operator-set on the host, unreachable
+from every API, with no code path from a request to any of it (invariant 11). Contrast
+**operator settings**, which merely bound reach and may live in the store.
+_Avoid_: hard limits, static config (both also describe operator settings)
+
+**Requester exclusion**:
+The Gate-rule term (`requester_allowed: false`) under which the Account that requested a gated
+dispatch may not be among its approvers (ADR-0027). Enforced identically on every decision path.
+_Avoid_: self-approval ban, four-eyes (a count, not an exclusion)
+
 **Gate rule**:
-One rule in the Relay's root-owned approval-gate configuration, matching on risk class,
-blast size, Selector namespace, principal, and Operation, and requiring a `count`,
-`audience`, `requester_allowed`, `channel`, and `ttl`. File-only and above the AI's reach,
-like the blast cap (invariant 11). Narrows only: a Gate rule can demand approval where none
-was demanded, never grant what Policy refuses.
+One rule in the Relay's approval-gate configuration, matching on risk class, blast size,
+Selector namespace, Principal, and Operation, and requiring a `count`, `audience`,
+`requester_allowed`, `channel`, and `ttl`. Today an optional root-owned file loaded at
+startup, and no gate at all when none is configured; designed to become a store-backed
+operator setting that only a human `admin` edits, with step-up re-authentication, audited
+(ADR-0027 amendments of 2026-09-15/16; the reach-bounding class of invariant 11). Never
+reachable from an API Token or an MCP tool. Narrows only: a Gate rule can demand approval
+where none was demanded, never grant what Policy refuses.
 _Avoid_: approval policy (collides with **Policy**), approval rule, gate config (for a
 single rule)
 
@@ -505,6 +536,13 @@ the *session*, not that a human intended each *call*, so MCP-originated calls st
 agent-grade for approval gating whoever authorized them.
 _Avoid_: login, SSO session, user session (say OAuth session), "authenticated human"
 
+**Principal**:
+The verified identity a request runs as: the Account the capability layer resolved from the
+credential presented, with its role and kind. Every capability-layer decision takes a Principal;
+no adapter constructs one from anything but the verified lane. Distinct from the asserted
+`on_behalf_of` (see Attribution).
+_Avoid_: user, caller (for the verified identity), "the principal" for the verified-plus-asserted pair
+
 **Attribution**:
 Who an audited action is recorded as coming from, in **two structurally distinct lanes**
 (ADR-0010, `docs/design/approval-and-attribution.md`). The **verified lane** is what the
@@ -513,8 +551,8 @@ Token presented. The **asserted lane** is what the caller *claimed*: `on_behalf_
 free-form user or team), a session reference, a change reference, and the W3C
 `traceparent`. Asserted values are bounded, stored verbatim, and **never an authorization
 input** — a jailbroken AI-agent can assert anything and forge nothing. They are still
-worth recording: for an honest orchestrator the asserted lane is the join key back to the
-harness's own session logs, where the literal instruction lives. Keeping the lanes apart
+worth recording: for an honest orchestrator the asserted lane is what joins a record back to
+the harness's own session logs, where the literal instruction lives. Keeping the lanes apart
 is load-bearing — blurring them is how an audit trail becomes fiction.
 _Avoid_: "the principal" (for the pair), user id, requester (unqualified — say verified or
 asserted)

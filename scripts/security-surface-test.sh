@@ -199,7 +199,7 @@ grep -qx '/\.claude/\*' "$FIX/.gitignore" ||
 grep -qx '!/\.claude/commands/' "$FIX/.gitignore" ||
   { echo "FAIL: precondition: '!/.claude/commands/' not in .gitignore — case 4 assumes it" >&2; fail=$((fail + 1)); }
 
-for p in README.md notes.txt relay/internal/store/moved.go; do
+for p in README.md notes.txt relay/internal/metrics/moved.go; do
   if printf '%s\n' "$p" | "$SS" - >/dev/null 2>&1; then
     echo "FAIL: precondition: '$p' matches a surface glob — cases 5/6b/8b assume it does not" >&2
     fail=$((fail + 1))
@@ -258,15 +258,15 @@ check "case6-deletion" 0 exact "relay/internal/capability/base.go" empty
 # the OLD path — defect 2. With rename detection on, `--cached` alone reports only
 # the new path and this case fails against the pre-fix script.
 reset_fixture
-mkdir -p "$FIX/relay/internal/store"
-git -C "$FIX" mv relay/internal/capability/base.go relay/internal/store/moved.go
+mkdir -p "$FIX/relay/internal/metrics"
+git -C "$FIX" mv relay/internal/capability/base.go relay/internal/metrics/moved.go
 capture "$SS" main
 check "case6b-staged-rename-off-surface" 0 contains "relay/internal/capability/base.go" empty
 
 # 6c: same rename, committed — proves the base...HEAD arm also needs --no-renames.
 reset_fixture
-mkdir -p "$FIX/relay/internal/store"
-git -C "$FIX" mv relay/internal/capability/base.go relay/internal/store/moved.go
+mkdir -p "$FIX/relay/internal/metrics"
+git -C "$FIX" mv relay/internal/capability/base.go relay/internal/metrics/moved.go
 git -C "$FIX" commit -q -m "move guard off the surface"
 capture "$SS" main
 check "case6c-committed-rename-off-surface" 0 contains "relay/internal/capability/base.go" empty

@@ -98,3 +98,13 @@ v0.1.0-beta vertical slice.
   Console and the general API are cheap adapters later.
 - A phased build remains natural: monitoring (read-only) first, token/Node lifecycle
   second — each separately reviewable.
+
+## Amendment (2026-09-20): terminology, and the HTMX choice
+
+Terminology only, per ADR-0038: the supersession note above now says *preflight-by-default*;
+"Plan" in this ADR's body, where it means the no-execution preview, reads as **Policy preflight**.
+
+*Considered Options* records "Server-rendered Go + HTMX (chosen)". The Console shipped
+server-rendered Go templates with SSE for liveness and **no HTMX** — the shell decisions (#475)
+record why. The choice of server rendering over an SPA stands; the HTMX half of it was not
+taken up and is not planned.

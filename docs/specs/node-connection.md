@@ -26,7 +26,7 @@ died, and it holds that line at fleet scale without flooding the network.
 | **relay-daemon** | Dials the Relay address persisted at enrollment, checks the Relay against the pinned CA on every connect, holds the stream, and reconnects with bounded, jittered backoff. |
 | **Registry reads** | Connected state, last heartbeat, daemon version, `outdated`, clock skew and the other self-reported facts appear through `list_nodes`, `describe_node`, the Control API's Node routes and the Console fleet view. How they read is `query.md`. |
 | **Audit trail** | Changes to a Node's security-relevant self-report, and repeated stream replacement, are audit events. Querying them is `audit-and-read-lane.md`. |
-| **Relay configuration** | The heartbeat interval, the missed-heartbeat allowance, the acknowledgement deadline, the admission rate, the minimum daemon version and the server certificate. Operator-set at startup and unreachable from any API (invariant 11). |
+| **Relay configuration** | The heartbeat interval, the missed-heartbeat allowance, the acknowledgement deadline, the admission rate, the minimum daemon version and the server certificate. All operator-set at startup today (`relay-configuration.md`). The server certificate and listeners are security floor (invariant 11); the admission rate and the minimum daemon version are reach-bounding settings designed to become store-backed operator settings (ADR-0010 amendment 2026-09-15; #596). |
 | **MCP / Control API / Console** | No surface opens, closes or reshapes a connection. Revocation disconnects a live Node, but `enrollment.md` owns that. |
 
 ## Behaviour
@@ -167,7 +167,9 @@ Node offline.
   never carries binaries.
 - **Invariant 7** (ADR-0006, ADR-0017) — a self-report can carry `node:` labels and influence
   `state:`, but never write `relay:` or `tag:`.
-- **Invariant 11** — every timing value and the admission rate are operator-set at startup.
+- **Invariant 11** — the listeners and the server certificate are security floor; the admission
+  rate and the minimum daemon version merely bound reach and may become runtime operator settings.
+  Every value is operator-set at startup today.
 - **ADR-0005 — needs amending.** It names keepalive tuning at scale as a consequence; this spec
   decides the specifics: the heartbeat deadline, the Task acknowledgement, admission pacing, and
   one current stream per Node.

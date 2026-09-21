@@ -149,3 +149,15 @@ nobody else; `state:` is set by **nobody at all**.
 
 - Console surfaces are specified in `docs/design/console/` (01, 02, 05) and depend on this ADR
   landing first.
+
+## Amendment (2026-09-20): dated, and one consequence corrected
+
+This ADR carried no date. It was accepted on **2026-09-10**; invariant 7 was rewritten to name
+four namespaces on 2026-09-16, alongside ADR-0006's amendment of the same day. This section is
+the dated record of its amendment to invariant 7 that `AGENTS.md` expects each amending ADR to
+carry.
+
+Corrected: the body says the `state:cert-expiring` fraction is "file-only, invariant 11". Since
+ADR-0010's amendment of 2026-09-15 it is an **operator setting** — a reach-bounding value that
+may be a runtime object, edited only by a human `admin` with step-up re-authentication and
+audited. Today it is still read from `RELAY_CERT_EXPIRING_FRACTION` at startup.

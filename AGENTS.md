@@ -34,7 +34,7 @@ Internal identifiers say `Relay` / `RELAY_`, never "gleipnir" (ADR-0016).
 
 ## Architecture invariants — do not violate without a new ADR
 
-**Status: current as of 2026-09-10.** Every invariant below is a constraint the code is
+**Status: current as of 2026-09-20.** Every invariant below is a constraint the code is
 expected to satisfy today, except where the gap table names otherwise. The date says when
 this section was last audited against the code — not when it was last edited.
 
@@ -85,9 +85,10 @@ it needs an ADR, not a quiet workaround.
     capability specifications, not here. Reaching a Node any other way is a parallel control
     path, and there is never a reason to build one; the `no_dispatch` structural guard covers
     each adapter. The Console is **not** read-only by design (ADR-0026 superseded
-    ADR-0009's no-execution scope): where it executes, it does so plan-by-default, with
-    step-up re-auth on a mutate apply, role-gated by the capability layer, and behind the
-    root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026)
+    ADR-0009's no-execution scope): where it executes, it does so preflight-by-default, with
+    step-up re-authentication on a mutate apply, role-gated by the capability layer, and behind
+    the root-owned `console_execution` flag. (ADR-0009, ADR-0010, ADR-0026; wording amended
+    2026-09-20 for ADR-0038)
 11. **No credential can change the terms on which credentials are accepted.** Whatever
     bounds *who may authenticate, and how recently they proved it* — listeners, CA/TLS,
     auth bootstrap, the identity provider Relay believes, session and step-up windows,
@@ -101,10 +102,10 @@ it needs an ADR, not a quiet workaround.
     holding one must be root-owned and not world-readable, and the Relay refuses to
     start otherwise. Delivered on a host by a root-owned unit file and `EnvironmentFile`
     (`relay/packaging/`) — the mechanism may change, the property may not.
-    (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; settled in #362)
+    (ADR-0010, amended 2026-09-15; ADR-0004, ADR-0012, ADR-0027; host delivery settled in #362)
 12. **Policy is evaluated only by the daemon's live engine** — including hypotheticals
-    (`PolicyQuery`, plan mode). Never reimplement Policy evaluation on the Relay side.
-    (ADR-0011)
+    (`PolicyQuery`, the Policy preflight). Never reimplement Policy evaluation on the Relay side.
+    (ADR-0011; wording amended 2026-09-20 for ADR-0038)
 13. **Every Operation declares a risk class (`read` | `mutate`)**; blast caps are chosen by
     class, Raw Exec always takes the mutate-cap, and the class is security-relevant contract
     (`/proto`). (ADR-0012)
@@ -119,10 +120,11 @@ several Go source comments cite them by number. Amend an invariant in place and 
 amendment in its ADR. **Never renumber or drop one.**
 
 **Amending one is not finished until its consumers are updated.** `docs/security/threat-model.md`
-maps each invariant to the boundary it defends and is the one that goes silently wrong: three
-invariants were amended on 2026-09-08 to 09-10 and it was updated zero times, leaving it
-describing a two-tier execution model and two label namespaces. Check it, the capability specs
-that cite the invariant, and `GLOSSARY.md`.
+maps each invariant to the boundary it defends and is the one that goes silently wrong: it has
+no mechanism of its own to notice an amendment, so every amendment that skips it leaves it
+describing the previous system (three did, between 2026-09-08 and 09-10). An amendment PR
+checks it, the capability specs that cite the invariant, `GLOSSARY.md`, and the ADRs the
+amending ADR says it amends — each of those must record the amendment on its own page.
 
 ### Known gaps between these invariants and the code
 
@@ -246,8 +248,8 @@ Two toolchains. The `Makefile` wraps both — prefer it.
 
 **`make build test lint` is the fast inner loop. It is not what CI runs, and the gap has
 bitten.** CI additionally runs the race detector, the proto-drift and proto-breaking gates,
-the operation-schema and OpenAPI drift checks, the devharness absence check, and both
-cross-binary suites. Work can pass the inner loop and fail CI on a class of problem the author
+the operation-schema and OpenAPI drift checks, the docs and security-surface self-checks, the
+strict-umask runs, the devharness absence check, and both cross-binary suites. Work can pass the inner loop and fail CI on a class of problem the author
 never looked at. `make verify` mirrors CI gate for gate; it is deliberately slow and deliberately
 not what you run on every save. On a pull request CI skips the gates a change cannot reach — the
 toolchain jobs for documentation-only changes, the proto gates when neither `/proto` nor its
@@ -385,8 +387,9 @@ If you are an agent implementing an issue: **stay in scope**, you have **no merg
 
 **Always escalate — never try to land without review** — anything on the security surface
 (`docs/agents/security-surface.txt` is the one list: `proto/`, `docs/adr/`,
-Policy/exec/transport/mTLS/auth code, `AGENTS.md`/`GLOSSARY.md`, the `Makefile`, CI, and the
-workflow itself); any failed build; any high-severity review finding. These are the security surface and
+Policy/exec/transport/mTLS/auth/session/store code, the dependency manifests,
+`AGENTS.md`/`GLOSSARY.md`, the `Makefile`, CI, and the commands and agents that run the
+workflow); any failed build; any high-severity review finding. These are the security surface and
 the architecture invariants; they always land in front of a person. Editing an invariant is
 never a docs chore.
 

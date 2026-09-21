@@ -34,7 +34,7 @@ reading is exfiltration by construction.
 ## Decisions
 
 1. **Non-dispatching read tools are audited**, as `KindRead` records: who read, which tool,
-   what they aimed it at, and when. Both attribution lanes (ADR-0300/#300) apply exactly as
+   what they aimed it at, and when. Both attribution lanes (#300) apply exactly as
    they do to dispatches.
 
 2. **Metadata only, never content — for every read.** A `KindRead` record has no result

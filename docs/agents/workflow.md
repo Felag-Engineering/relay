@@ -21,6 +21,7 @@ you edit a spec (co-authored, human-driven)      /spec-author
   └─ label flip ────────────────────────────────► GATE 3  you set loop:ready
 /dev-loop-queue ► /dev-loop <n>                  unattended: plan, review, implement, verify,
   or /dev-loop-parallel (interactive: up to 3 issues at once, one runner per worktree)
+  or /dev-loop-drive (interactive, under /loop: a milestone in waves; never merges)
                                                  review, proof-row update, PR
   └─ PR ────────────────────────────────────────► GATE 4  you review and comment
 /pr-respond                                      unattended: address comments, re-verify, push

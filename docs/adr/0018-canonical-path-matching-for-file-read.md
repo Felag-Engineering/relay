@@ -52,7 +52,7 @@ the case/Unicode row as this residual rather than asserting it fs-independently.
 
 - **Canonicalize inside `Policy::evaluate`** (`std::fs::canonicalize` before matching). Rejected:
   it puts filesystem I/O into Policy evaluation (breaking its purity and its use in
-  hypotheticals — `PolicyQuery`, plan mode, ADR-0011), requires the target to already exist,
+  hypotheticals — `PolicyQuery`, the Policy preflight, ADR-0011), requires the target to already exist,
   and — because the executor opens the path *later* than the check — reintroduces a TOCTOU gap
   a symlink swap can drive through. Resolving on the descriptor the executor already holds
   (layer 2) avoids all three.
