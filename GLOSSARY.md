@@ -186,6 +186,16 @@ installed packages). Inform decisions but are never used for targeting — that 
 Labels (see Label).
 _Avoid_: metadata, attributes, properties
 
+**Policy view**:
+The display-only copy of a Node's effective Policy that the relay-daemon last reported — raw
+patterns, allowed Operations, operation and deny rules, the Policy fingerprint and, on MCP,
+whether Raw Exec is enabled — shown by `describe_node`, the Console Node detail and the Compare
+screen, with its
+Relay-stamped receipt time. A report, never a live query and never an input to a verdict: the
+Relay displays it and evaluates nothing (invariant 12). Template command bodies are not part of
+it today (ADR-0021).
+_Avoid_: Policy snapshot (that is the wire message the view is built from), cached Policy
+
 **Policy fingerprint**:
 A hash of a Node's loaded Policy that the daemon reports (in `Hello` and every
 `PolicySnapshot`) and the Relay records in the registry — fleet-wide Policy *drift visibility*

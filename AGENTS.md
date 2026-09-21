@@ -34,7 +34,7 @@ Internal identifiers say `Relay` / `RELAY_`, never "gleipnir" (ADR-0016).
 
 ## Architecture invariants — do not violate without a new ADR
 
-**Status: current as of 2026-09-20.** Every invariant below is a constraint the code is
+**Status: current as of 2026-09-21.** Every invariant below is a constraint the code is
 expected to satisfy today, except where the gap table names otherwise. The date says when
 this section was last audited against the code — not when it was last edited.
 
@@ -128,8 +128,9 @@ amending ADR says it amends — each of those must record the amendment on its o
 
 ### Known gaps between these invariants and the code
 
-Found by an adversarial review on 2026-09-08 and left in place deliberately: correcting
-invariant text needs an ADR amendment in front of a human, which is a separate change.
+Found by adversarial review — the first two on 2026-09-08, the third during a spec migration on
+2026-09-21 — and left in place deliberately: correcting invariant text needs an ADR amendment in
+front of a human, which is a separate change.
 **Until that lands, believe this table over the invariant text above.**
 
 **A row is deleted by the PR that closes its issue** — removing it is part of that issue's
@@ -139,7 +140,8 @@ and that rule is the only thing keeping it honest.
 | # | The clause | What is actually true today | Tracked |
 |---|---|---|---|
 | 7 | `tag:`'s writer, and `relay:`'s | `tag:` has **no storage on the Node record and no write path**, so nothing can be written to the namespace the invariant says an operator writes. Since #561 a `tag:` term is **refused at parse** with a recognisable sentinel rather than silently matching nothing, identically on every surface — so the gap is now an honest refusal instead of a false negative. `relay:` labels are stamped at enrollment today; the Relay actions that write them afterwards (quarantine engage and lift, `quarantine-node.md`) are unbuilt, so quarantine by either `relay:` or `tag:` does not exist yet. Behaviour detail in `docs/specs/selectors-and-labels.md`. | #430 |
-| 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today. | #438 |
+| 10 | Console execution | The Console does **not** execute yet. The route-gating mechanism is real and tested both ways, but the composition root hardcodes it off and ships no config key to change it — deliberately, since there is no execution route to gate. Forced on, `/console/run` renders a placeholder, not a composer. Everything else in the invariant, `no_dispatch` included, is true today — except the read gap in the next row. | #438 |
+| 10 | Adapters never reimplement the layer | Registry **reads** are the exception today: MCP and the Control API read the registry and the display-only Policy and vocabulary caches through their own narrow readers, wired from the composition root, and MCP `list_nodes` re-implements Selector match-and-collect instead of calling the capability lane — a deliberate choice in #450, ruled a gap by the owner on 2026-09-21. The Console reads through the lane except its Compare screen, which reads directly and records nothing (also a gap against ADR-0025's audited-read rule), and its Node-detail Policy panel, which reads the cache directly. Writes and dispatch are not affected: `no_dispatch` holds on every adapter. Behaviour detail in `docs/specs/query.md` (QRY-18, QRY-28). | #680 |
 
 ### Writing or amending an invariant
 
