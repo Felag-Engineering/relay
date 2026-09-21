@@ -17,18 +17,21 @@ for a team with a compliance function. The cost falls on the owner and the benef
 
 ## Decision
 
-1. **Two human gates.** The owner merges ADRs and merges PRs. Nothing else needs a human.
-   A spec, a design plan and an issue are agent-drafted and are approved when their PR
-   merges. The `loop:proposed` → `loop:ready` flip is retired; an issue an agent opens is
-   ready unless labelled `loop:needs-human`.
+1. **Three human gates, and the human writes what constrains the agent.** ADRs and
+   capability specs are co-authored with the owner in an interactive session and merged by
+   the owner — that is unchanged, and it is the security property: a document the loop may
+   rewrite to fit its own change cannot also be the thing that constrains it. The owner's
+   third gate is the PR merge. Everything between — design plans, issues, code, tests,
+   proof — is agent work approved at PR time. The `loop:proposed` → `loop:ready` flip is
+   retired; an issue an agent opens is ready unless labelled `loop:needs-human`.
 
-2. **A claim is a tagged test.** A capability spec still states claims with stable IDs, but
-   the binding artifact is the test that carries the ID in its name or a `// claim: QRY-7`
-   comment. Traceability is generated from the tree, never hand-written: a claim with no
-   tagged test is listed by the generator, not by a person. A failing tagged test is a spec
-   conflict and stops the loop; the loop may edit a claim only in the PR that changes its
-   test, and the PR says so. The proof tables, the `spec-proof-updater` agent and the
-   "loop may never edit a claim" rule are retired.
+2. **A claim is proven by a tagged test.** A capability spec states claims with stable IDs,
+   written by the owner. The proof is the test that carries the ID in its name or a
+   `// claim: QRY-7` comment, and traceability is generated from the tree, never
+   hand-written: a claim with no tagged test is listed by the generator, not by a person. A
+   failing tagged test is a spec conflict and stops the loop with `loop:needs-human`; the
+   loop never edits a claim. The hand-maintained proof tables and the `spec-proof-updater`
+   agent are retired; the "loop may never edit a claim" rule stays.
 
 3. **ADRs are immutable and short.** Every ADR carries a `Status:` header — `Accepted`,
    `Proposed`, `Not adopted`, or `Superseded by ADR-N` — and a body of one page: context,
@@ -62,9 +65,9 @@ for a team with a compliance function. The cost falls on the owner and the benef
 
 ## Consequences
 
-- A wrong spec claim can reach code before the owner reads it. The tagged test is the check:
-  the PR that lands it shows the claim and the test together, and the owner reviews both at
-  the one gate that remains.
+- No claim reaches code before the owner wrote it. What the owner gives up is the design
+  and issue gates, which were checkpoints on agent work derived from a spec the owner had
+  already approved; the PR gate still sees the result.
 - The invariants' authority does not change; their enforcement moves from prose to tests,
   which is stronger for the eleven that are testable and unchanged for the three that are not
   (9, 14, and the Principle half of 11), which stay prose in the architecture document.
