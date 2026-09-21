@@ -1,5 +1,7 @@
 # Raw Exec deny patterns are matched against canonical argv elements, and `argv[0]` may not contain whitespace
 
+**Status:** Accepted.
+
 `evaluate_raw_exec` matches deny patterns against `argv.join(" ")` **or** each individual
 `argv[i]`, and allow patterns against the joined string only. Finding **#227** (v0.0.8
 red-team, carried as residual **R1** in the #225 register) showed that an element-anchored

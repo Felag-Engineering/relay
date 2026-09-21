@@ -1,5 +1,7 @@
 # Daemon lifecycle: IaC-owned upgrades, a dispatch-level version gate, additive proto discipline
 
+**Status:** Accepted.
+
 The relay-daemon is upgraded only by the customer's config management; the Relay
 enforces a minimum daemon version by refusing to dispatch (not to connect); and the
 `/proto` contract evolves additively within a package version, with breaking changes

@@ -1,5 +1,7 @@
 # The shipped default Policy pre-allows the read class, with a confidentiality deny-list
 
+**Status:** Accepted.
+
 A freshly enrolled Node should be fully interrogable with zero Policy authoring: the
 AI-agent's dominant workload is observation (ADR-0012), and a default that denies
 `system.facts` pushes every evaluation toward authoring friction or — worse — toward

@@ -1,5 +1,7 @@
 # Polyglot: Rust relay-daemon, Go Relay, shared protobuf contract in a monorepo
 
+**Status:** Accepted.
+
 The relay-daemon is written in **Rust**; the Relay is written in **Go**. Both live in one
 monorepo beside a shared **`/proto`** directory that is the single source of truth for the
 wire protocol and the Operation vocabulary. Each side generates its own types from the proto

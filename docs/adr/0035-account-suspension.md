@@ -1,5 +1,7 @@
 # Account suspension — fencing one actor without freezing the fleet
 
+**Status:** Deferred — not adopted (2026-08-24).
+
 > **Status: Deferred — not adopted (2026-08-24).** Withdrawn in the review that followed its
 > drafting, before any code. Kept at its number so the reasoning, and the defects found in it, are
 > not re-derived. Nothing below is in force: the incident ladder remains ADR-0020's three rungs

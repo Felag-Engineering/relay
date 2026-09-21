@@ -1,5 +1,7 @@
 # Node-origin (`node:`) label trust is accepted for launch; the security lane stays `relay:`-only
 
+**Status:** Accepted.
+
 A compromised Node can forge its own `node:` labels. This is **accepted for the
 `v0.1.0-beta` real-fleet launch.** CM-signed node attributes — raising the trust of
 node-origin labels so a compromised daemon cannot forge them — are **not required for

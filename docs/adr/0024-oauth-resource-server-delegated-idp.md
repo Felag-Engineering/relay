@@ -1,5 +1,7 @@
 # Relay is an OAuth 2.1 protected resource, never an authorization server
 
+**Status:** Accepted.
+
 MCP's authorization layer lets a human connecting their own harness (Claude, or any
 off-the-shelf MCP client) obtain a token through a flow they complete themselves, so the
 session runs under **their** identity rather than a shared machine credential. #299 adopts

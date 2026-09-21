@@ -1,5 +1,7 @@
 # Asynchronous Job execution model with at-most-once Tasks and a blast-radius cap
 
+**Status:** Accepted.
+
 A `run_operation` or `raw_exec` call creates a **Job** composed of one **Task** per
 matched Node. Execution is asynchronous: the call returns a Job ID (optionally blocking
 up to a short `wait` budget) and the AI-agent polls for results. Each Task reports an

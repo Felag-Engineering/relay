@@ -1,5 +1,7 @@
 # `state:` labels — a Relay-derived namespace nobody can set
 
+**Status:** Accepted.
+
 Fleet maintenance targets operational state. "Run this on the Nodes still carrying the old
 Policy", "quarantine anything that cannot take work" — these are the everyday Selectors an
 operator reaches for, and today none of them can be written.

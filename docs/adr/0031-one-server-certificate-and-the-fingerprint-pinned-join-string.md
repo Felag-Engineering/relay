@@ -1,5 +1,7 @@
 # One server certificate, multi-SAN, and the fingerprint-pinned join string
 
+**Status:** Accepted.
+
 Three facts about the Relay's TLS surface, each defensible alone, which together make
 enrollment harder than it needs to be:
 

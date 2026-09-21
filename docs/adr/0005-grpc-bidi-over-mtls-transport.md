@@ -1,5 +1,7 @@
 # Transport is gRPC bidirectional streaming over mTLS
 
+**Status:** Accepted; amended by ADR-0031.
+
 The relay-daemon connects to the Relay over a single long-lived **gRPC bidirectional
 stream** secured with **mutual TLS**, on 443/HTTP-2. The connection is daemon-initiated
 (outbound-only, no inbound ports on Nodes). The Relay sends Task messages down the stream;

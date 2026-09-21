@@ -1,5 +1,7 @@
 # `file.read` path arguments are matched in canonical form, and the executor re-checks the resolved target
 
+**Status:** Accepted.
+
 A `[[deny]]` rule for `file.read` (e.g. the shipped `/etc/shadow` deny) is matched by exact
 byte string. Finding **#236** showed that deny is evaded by any non-canonical spelling of the
 same file — `/etc/../etc/shadow`, `//etc/shadow`, `/etc//shadow`, `/etc/./shadow`,

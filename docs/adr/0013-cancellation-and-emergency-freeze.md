@@ -1,5 +1,7 @@
 # Cancellation and the emergency Freeze
 
+**Status:** Accepted; amended by ADR-0038.
+
 Relay gains two stop controls: **Task/Job cancellation** (stop this action) and a
 Relay-wide **Freeze** (stop everything new). Before this, the system had no way to stop
 anything — an unacceptable gap in an AI-driven execution plane where the guardrails

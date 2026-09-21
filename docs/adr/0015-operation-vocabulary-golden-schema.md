@@ -1,5 +1,7 @@
 # Operation vocabulary is guarded by a daemon-generated golden schema
 
+**Status:** Accepted.
+
 The Operation vocabulary is represented three times: the `/proto` `OperationDescriptor`
 comment (names+risk, the human-authored contract), the daemon's live validators +
 `descriptors()` (the enforcement truth, Rust), and the Relay's `opvocab` (names+risk

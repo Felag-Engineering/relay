@@ -1,5 +1,7 @@
 # Node code never overrides the operator's umask — a declared mode is a ceiling
 
+**Status:** Accepted (2026-09-07).
+
 > If the Node specifies umask, that is a boundary we shouldn't be getting around. What is
 > created and enforced on the Node is enforced on the Node.
 > — owner decision, 2026-09-07 (issue #532)

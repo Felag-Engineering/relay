@@ -1,5 +1,7 @@
 # First-party installation artifacts
 
+**Status:** Accepted.
+
 "As automated as possible" pulls hard toward `curl -sfL https://get.relay.sh | sh`. It is
 what k3s does, what Docker does, what almost everything does, and it is the single
 fastest path from a bare host to a running service.

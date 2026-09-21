@@ -1,5 +1,7 @@
 # Control API: a REST control-plane surface with a unified Account model
 
+**Status:** Accepted.
+
 The Relay exposes **three user-facing surfaces**, all thin adapters over the single
 control-plane capability layer (ADR-0009): the **MCP surface** (ADR-0003 — the AI-agent's
 hands), the **Admin Console** (ADR-0009 — the human's eyes and lifecycle keys; execution

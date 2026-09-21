@@ -1,5 +1,7 @@
 # Retire the shared control-plane credential; bootstrap the first Account token locally
 
+**Status:** Accepted.
+
 Until now the control plane (MCP + `/api/v1`) was protected by a single **config-seeded
 bearer credential**: its SHA-256 hash in a root-owned file, its plaintext in the operator's
 vault, and every caller presenting the same string. That was the right staged choice while

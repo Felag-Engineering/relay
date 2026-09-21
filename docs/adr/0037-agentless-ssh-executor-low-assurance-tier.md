@@ -1,5 +1,7 @@
 # Agentless SSH execution as an explicitly low-assurance tier (control-plane-side enforcement, no Node veto)
 
+**Status:** Proposed.
+
 **Status: Proposed — a potential new avenue, not an accepted decision.** Records the
 option and the guardrails it would require. Ratification is a human call; this ADR
 touches the security surface and the founding thesis (ADR-0002) and must not be adopted

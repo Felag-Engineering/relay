@@ -1,5 +1,7 @@
 # Node-side Policy is locally-rooted and remotely-immutable
 
+**Status:** Accepted.
+
 Each relay-daemon enforces a local **Policy** that decides what may run on its Node,
 and the Relay (and therefore the AI-agent) can **query** that Policy but can **never
 modify it over the wire**. Policy lives in a root-owned file on the Node; changing it

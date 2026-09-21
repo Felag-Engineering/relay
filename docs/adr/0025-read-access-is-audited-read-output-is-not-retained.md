@@ -1,5 +1,7 @@
 # Read access is audited; read output is not retained
 
+**Status:** Accepted (2026-08-12).
+
 Decision on issue #288, taken 2026-08-12. It resolves two questions the shipped read
 catalog (#293) made live, and it **amends decision #122 (full-output-always)** for the
 `read` risk class only.

@@ -1,5 +1,7 @@
 # Internal naming: Relay, not Gleipnir
 
+**Status:** Accepted.
+
 The product built in this repo is **Relay** — the fleet-administration control plane.
 **Gleipnir** is a *different*, first-party project: the AI-agent system that drives Relay
 as a consumer (over MCP and the Control API), never a component of it (GLOSSARY.md). The

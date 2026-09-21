@@ -1,5 +1,7 @@
 # Plan is an approved route of execution; Policy preflight is its own capability
 
+**Status:** Accepted.
+
 "Plan" has meant two things since ADR-0011, and the collision is visible in that ADR's own
 opening: it describes the capability as "`terraform plan` / Ansible check-mode for the fleet".
 Those are not the same thing. Ansible's check-mode is a rehearsal. Terraform's plan is a saved

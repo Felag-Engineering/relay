@@ -1,5 +1,7 @@
 # `relay init` and the boundary of the `relay` binary
 
+**Status:** Accepted.
+
 Standing up a Relay and joining five Nodes takes roughly fifty discrete acts today, and
 the Relay-side share of that is choreography rather than decisions: edit the env file,
 start the service, run `bootstrap-token`, extract `ca-cert.pem` from a `0700` state

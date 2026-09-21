@@ -1,5 +1,7 @@
 # Structured Operations as the primary primitive, with a regex-gated Raw Exec escape hatch
 
+**Status:** Accepted; amended by ADR-0021.
+
 The relay-daemon's primary execution primitive is a fixed vocabulary of structured,
 typed **Operations** (e.g. restart a service, read a file, install a package) rather
 than arbitrary shell command strings. For actions the vocabulary cannot express, a

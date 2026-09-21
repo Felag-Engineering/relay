@@ -1,5 +1,7 @@
 # Approval callout: notify via MCP, decide out-of-band
 
+**Status:** Accepted; amended by ADR-0038.
+
 Some dispatches should not run on an AI-agent's say-so. This ADR decides how a human is
 asked, how their answer gets back, and — the part that matters — why the answer is
 trustworthy even when the harness that requested the action is not.
