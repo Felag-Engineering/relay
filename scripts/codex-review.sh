@@ -33,8 +33,12 @@
 # tiny) and to carry no report marker. Everything a delivered report could make ambiguous
 # resolves toward "failed review", which is the pre-#620 behaviour.
 #
-# Captured bytes are never destroyed. On exit 3, and on a signal, they are replayed to
-# STDERR under a marker; stdout stays empty so no caller can read them as a review. The
+# Captured bytes are never discarded by a CLASSIFICATION decision. On exit 3, and on a
+# signal, they are replayed to STDERR under a marker; stdout stays empty so no caller can
+# read them as a review. Stated that way rather than as "never destroyed": a signal landing
+# in the narrow window after a delivery path claims the bytes and before it writes them
+# loses the replay, which is the trade the comment above replay_capture's call sites makes
+# deliberately (doubling a replay is worse than losing one). The
 # replay passes through a redactor for the obvious API-key and bearer-token shapes, on
 # EVERY branch rather than only the auth one — a limit message can carry a credential just
 # as an auth failure can. That redaction is BEST-EFFORT PATTERN MATCHING, NOT A GUARANTEE:
@@ -47,7 +51,7 @@
 # assumption, and each is arranged so that being wrong costs a missed absence (exit
 # non-zero, which is today's behaviour) and never a false absence.
 #
-# Two residuals are stated rather than denied:
+# Four residuals are stated rather than denied:
 #   (i)  a failed run whose short, marker-free diagnostic quotes a limit phrase is recorded
 #        as absence rather than as failure. Both mean no review completed, and the bytes are
 #        replayed to stderr, so nothing is lost but the label.
@@ -58,8 +62,12 @@
 #        partial report on stdout alongside a short marker-free notice on stderr (256 bytes
 #        together) is classified as absence, and those stdout bytes are relabelled and
 #        moved to the stderr replay.
-# A fourth is closed outright: an exit-0 run whose stdout holds nothing but whitespace used
-# to be recorded as a completed review, and is now a failure.
+#  (iv)  the whitespace guard below tests POSIX [[:space:]] in the C locale, so stdout
+#        holding nothing but a UTF-8 non-breaking space or a BOM still counts as a
+#        delivered review. Far more contrived than the single space it closes, and it is
+#        named here rather than claimed away.
+# A fifth is closed outright: an exit-0 run whose stdout holds nothing but ASCII whitespace
+# used to be recorded as a completed review, and is now a failure.
 #
 # Accepted cost of capturing to files rather than streaming: the report is delivered at
 # process exit rather than as it arrives. All three call sites read the completed output,
@@ -90,8 +98,16 @@ repo_rules="Constraints come from AGENTS.md (the fourteen invariants and the esc
 # match are exactly what a CRASHED reviewer prints, and a crash misread as absence is the
 # one direction this script promises never to fail in. A bare `429 `/`401 ` matches a stack
 # frame (`session.js:429 `) and a line number (`line 401 during teardown`); a bare `login`
-# matches a path (`/etc/login.defs`). So the numeric codes are accepted only after `http `
-# or `status `, and the login wording only in a sentence that is about logging in.
+# matches a path (`/etc/login.defs`). So the numeric codes are accepted only as `http 429 `
+# or `status 401 ` — with a space on BOTH sides — and the login wording only in a sentence
+# that is about logging in.
+#
+# The trailing space is load-bearing and narrows this further than it first reads:
+# `HTTP/2 429`, `status 429:`, `codex: 429`, `Error: 401` and a bare `HTTP 429` at end of
+# line are all MISSED. That is the safe direction (a missed absence is a non-zero exit,
+# which is the pre-#620 behaviour), and in practice these two alternatives fire almost
+# never on their own — `429 Too Many Requests` and `HTTP/1.1 401 Unauthorized` classify via
+# `too many requests` and `unauthorized` instead.
 limit_re='usage limit|rate limit|quota (exceeded|exhausted)|too many requests|resource[_ ]exhausted|(http |status )429 '
 auth_re='not logged in|codex login|please log ?in|authentication (failed|error)|unauthorized|invalid api key|expired (token|session)|re-?authenticate|(http |status )401 '
 # `report_re` is the one matcher here that is NOT a guess about output we have never seen:
@@ -134,7 +150,7 @@ capture_bytes() {
 # for a terminal and not for a PR body.
 # The prefix is kept and only what follows it is replaced, so the replay still says WHICH
 # credential was rejected without saying what it was.
-redact_re='s/(sk-|[Bb]earer +)[A-Za-z0-9._-]{8,}/\1[redacted]/g'
+redact_re='s/(sk-|bearer +)[A-Za-z0-9._-]{8,}/\1[redacted]/gI'
 replay_capture() {
   [ -n "$capture_dir" ] || return 0
   [ "$(capture_bytes)" -gt 0 ] || return 0

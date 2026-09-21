@@ -139,7 +139,6 @@ NOTICE
 
 # The same notice four times over, so it exceeds notice_max_stderr (1024) while staying
 # marker-free: case1g's bound on branch one from above.
-HUGE_NOTICE="$WORKDIR/limit-notice-huge.txt"
 for _ in 1 2 3 4; do cat "$LONG_NOTICE"; done >"$HUGE_NOTICE"
 
 # --- The stub companion. ONE `node` replacement for every case, driven by env vars set per
