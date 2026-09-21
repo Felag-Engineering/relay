@@ -1,0 +1,89 @@
+# Accepted hits for the GLOSSARY `_Avoid_` sweep in scripts/check-crosslinks.sh (warning-only).
+# One entry per line: `term` allows the word everywhere; `term @ <path-glob>` allows it in the
+# files the glob matches; `* @ <path-glob>` allows every term there. Terms match whole words,
+# case-insensitively, with a hyphen counted as part of the word. `#` starts a comment.
+#
+# A term goes here for one of three reasons, and the reason is written next to it: it is
+# ordinary English that no Relay sense can own; the `_Avoid_` line rejects it only in a sense a
+# word-grep cannot see (its qualifier names the sense, and the hits are the other one); or the
+# hit is a historical note that names the old word to record the rename. Terms that are also
+# glossary headwords (`**Policy**:`, `**Task**:`) are never swept and need no entry here.
+#
+# Seeded 2026-09-21 from the first run over docs/specs/, AGENTS.md, README.md and GLOSSARY.md.
+# A hit that is real drift stays a warning: fix the prose, do not add it here.
+
+# --- ordinary English, or a canonical sense the _Avoid_ qualifier excludes ---------------------
+operator          # the human operator (operator settings, operator-set) is canonical; rejected only for the AI-agent role
+execution         # the capability's own name (execution.md, "route of execution"); rejected only as a synonym for Job
+step              # a Plan's step is canonical (the qualifier says so); rejected only for Stage
+rule              # "gate rule" is a headword and "rule" is English; rejected only for Grant
+caller            # "the caller is told" is TEMPLATE.md's own phrasing; rejected only for the verified identity
+tag               # nearly every hit is the `tag:` namespace, which the qualifier permits
+role              # Account roles (admin/operator/reader) are canonical; rejected only for a Policy fragment
+query             # query.md is a capability and PolicyQuery a wire message; rejected only for Selector
+run               # English verb; rejected only as a synonym for Job
+command           # English noun (the command that runs); rejected only for Operation/Task
+fingerprint       # the Policy, template-set and CA fingerprints are the hits; rejected only for a Job/Plan hash
+authorization     # "Relay-side authorization" is a headword and "authorization server" is OAuth vocabulary
+client            # client cert, MCP client; rejected only for relay-daemon
+machine           # "machine Account" is canonical; rejected only for Node
+unit              # the systemd unit; rejected only for Task
+target            # English verb ("targets `relay:`"); rejected only for Node
+secret            # secrets in general (the security floor); rejected only for Enrollment Token
+server            # server certificate, authorization server, MCP server, "Linux server"; rejected only for Relay
+stop              # English verb ("stop and escalate"); rejected only for Cancellation
+host              # the Relay's host (security floor); rejected only for Node
+match             # Policy and Selector matching as a verb; rejected only for Selector
+behind            # English; rejected only for Policy/template drift
+stale             # English; rejected only for Policy/template drift
+shell             # naming the shell that is never invoked; rejected only for Raw Exec
+requester         # "requester exclusion" is a headword; rejected only unqualified for the Principal pair
+tier              # the three execution tiers; rejected only for a Label group
+metadata          # English; rejected only for Labels
+phase             # "the establishing phase"; rejected only for Stage
+response          # English (HTTP response, "response and fleet administration"); rejected only for Decision
+transport         # every hit is the gRPC/mTLS node plane, which is the reserved sense
+task id           # the Relay Task's ID; rejected only when it means the MCP task handle
+mcp task          # "a Relay Job is the MCP task" names the protocol concept; rejected only for the handle
+the principal     # "the Principal" is the headword; rejected only for the verified-plus-asserted pair
+ai                # "an AI orchestrator" is English; rejected only as a name for the AI-agent role
+kill              # English verb; rejected only for Cancellation
+wave              # English verb ("wave through"); rejected only for Stage
+group             # English; rejected only unqualified for a Label group
+link              # the network link between daemon and Relay; rejected only for Dependency
+workflow          # the development workflow (docs/agents/workflow.md); rejected only for Plan
+permission        # file permissions; rejected only for Grant/Policy
+permissions       # file permissions; rejected only for Grant/Policy
+not found         # a status word; rejected only for the `unsupported` state
+unimplemented     # English adjective; rejected only for the `unsupported` state
+include           # English verb; rejected only for a Policy fragment
+core              # English; rejected only for the capability layer
+policy file       # the operator's root Policy file; rejected only for a single fragment
+gleipnir          # every hit names the Gleipnir project (ADR-0016), not the AI-agent role
+procedure         # English ("procedure versus architecture" in README.md); rejected only for Plan
+map               # English verb ("must map to an Account"); rejected only for System Model
+filter            # an audit-query filter, a syscall filter; rejected only for Selector
+profile           # `~/.profile`, the `pkg.install` sandbox profile; rejected only for a Policy fragment
+properties        # English; rejected only for Labels
+pack              # every hit is "template pack", which the qualifier names as a different thing
+runbook           # docs/operations/ holds operator-facing runbooks; rejected only for Plan
+
+# --- historical notes that name the old word to record the rename -------------------------------
+plan mode         # "called plan mode until ADR-0038" (execution.md, plan.md, GLOSSARY.md)
+policy author @ docs/specs/policy-catalog.md      # "Replaces Console screen spec 06's Policy Author"
+held elicitation @ docs/specs/approval.md         # History line: ADR-0029 overtakes "held elicitation"
+
+# --- per-file: another sense in that file ----------------------------------------------------------
+agent @ AGENTS.md                                 # the file is addressed to Claude agents; it also states the rule itself
+kill switch @ AGENTS.md                           # the `loop:halt` kill switch, not Freeze
+sign-off @ AGENTS.md                              # human sign-off on ADRs, not an approval rung
+elicitation @ docs/specs/approval.md              # "server-initiated elicitation" is qualified; the grep cannot see the qualifier
+service account @ docs/specs/relay-configuration.md   # the OS service account the unit runs as
+the service @ docs/specs/relay-configuration.md   # the systemd service
+notifications @ docs/specs/observability.md       # approval notifications, not the Event seam
+snippet @ docs/specs/README.md                    # "a snippet that encodes a decision" — the conventions text
+comment @ docs/specs/README.md                    # an issue comment
+
+# --- whole files ----------------------------------------------------------------------------------
+* @ GLOSSARY.md                                   # the definitions name the rejected words in order to reject them; its own _Avoid_ lines are excluded by the script
+* @ docs/specs/TEMPLATE.md                        # instructions to spec authors, not spec prose

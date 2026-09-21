@@ -57,7 +57,11 @@ jobs:
         id: paths
         run: bash scripts/ci-changed-paths.sh >> "$GITHUB_OUTPUT"
 
+      # GH_TOKEN lets check-crosslinks verify Designed-claim milestones against GitHub instead of
+      # reporting that check as skipped.
       - run: make docs-check
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # The dev-loop's security-surface gate, proved against a fixture repo (#634). Shell + git
       # only, and self-contained, so the shallow checkout above is irrelevant to it.

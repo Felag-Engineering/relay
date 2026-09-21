@@ -175,9 +175,15 @@ console-snapshots:
 	  go test ./internal/controlplane/console -run TestConsole_WriteScreenSnapshots -count=1 -v 2>&1 | grep -E 'wrote|FAIL|ok ' || true
 	@ls relay/console-snapshots
 
-.PHONY: docs-check
+.PHONY: docs-check adr-index
+# Both run so a PR sees every finding at once; the target fails if either does. check-crosslinks
+# includes the docs/adr/README.md drift gate (same pattern as opschema-check: regenerate, compare).
 docs-check:
-	@./scripts/check-docs.sh
+	@./scripts/check-docs.sh; a=$$?; ./scripts/check-crosslinks.sh; b=$$?; exit $$((a | b))
+
+# Regenerate the ADR index from the ADR files. Commit the result; docs-check fails on drift.
+adr-index:
+	@./scripts/adr-index.sh > docs/adr/README.md && echo "adr-index: wrote docs/adr/README.md"
 
 # Proves scripts/security-surface.sh sees what its header claims — untracked files, both halves
 # of a rename, and an unresolvable base ref, the three ways it used to report "clean" (#634).
