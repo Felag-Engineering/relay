@@ -39,8 +39,6 @@ package auditsink
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,14 +57,19 @@ import (
 // deterministic IDs; the production default is defaultID.
 type idGen func() (string, error)
 
-// defaultID generates a random 16-byte ID, hex-encoded with an "audit-"
-// prefix, mirroring capability.defaultID's shape.
+// defaultID delegates to audit.NewID: "audit-" plus 16 hex digits of the
+// mint time in Unix nanoseconds and 16 hex digits of crypto/rand — the same
+// 38-character shape as the random ids written before #656, but MONOTONIC, so
+// the trail's (ts, audit_id) tie-break orders rows by when they were appended.
+// That matters most here: Record's dispatch fan-out copies one clock reading
+// onto every per-Node Record, so a whole fan-out shares a ts and its order IS
+// the id order. See audit.NewID for the properties and their bounds.
 func defaultID() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	id, err := audit.NewID()
+	if err != nil {
 		return "", fmt.Errorf("auditsink: generate id: %w", err)
 	}
-	return "audit-" + hex.EncodeToString(b), nil
+	return id, nil
 }
 
 // Sink is the real capability.AuditSink, backed by an audit.Repository.

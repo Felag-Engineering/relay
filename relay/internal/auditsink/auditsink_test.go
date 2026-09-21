@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -35,13 +35,81 @@ func openSinkStore(t *testing.T) (*store.Store, audit.Repository, string) {
 	return st, st.Audit(), path
 }
 
-// sequentialIDs returns an idGen that yields prefix+"1", prefix+"2", ... in
-// call order, so tests can assert exact IDs deterministically.
+// sequentialIDs returns an idGen that yields prefix+"0001", prefix+"0002",
+// ... in call order, so tests can assert exact IDs deterministically.
+//
+// ZERO-PADDED, which is load-bearing rather than tidy. Production ids sort in
+// mint order (audit.NewID), and the trail's order is (ts, audit_id) — so a
+// test seam whose ids do NOT sort in call order stops modelling production.
+// Several tests here index records[i] against cases[i] and rely on the
+// tie-break equalling insertion order. The unpadded helper made that true
+// only up to nine records: "audit-10" sorts before "audit-2", so a tenth case
+// would have produced a baffling failure in a test that had nothing to do
+// with ids. That is the #656 landmine.
 func sequentialIDs(prefix string) idGen {
 	n := 0
 	return func() (string, error) {
 		n++
-		return prefix + strconv.Itoa(n), nil
+		return fmt.Sprintf("%s%04d", prefix, n), nil
+	}
+}
+
+// TestSequentialIDs_SortInCallOrderPastTen guards the helper above at the
+// boundary that used to break it.
+func TestSequentialIDs_SortInCallOrderPastTen(t *testing.T) {
+	gen := sequentialIDs("audit-")
+	ids := make([]string, 12)
+	for i := range ids {
+		id, err := gen()
+		if err != nil {
+			t.Fatalf("gen(): %v", err)
+		}
+		ids[i] = id
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i-1] >= ids[i] {
+			t.Fatalf("sequentialIDs(\"audit-\") ids do not sort in call order: %q then %q — tests here index records[i] against cases[i] and rely on the (ts, audit_id) tie-break equalling insertion order. This is the #656 landmine: with an unpadded helper \"audit-10\" sorts before \"audit-2\".", ids[i-1], ids[i])
+		}
+	}
+	if !sort.StringsAreSorted(ids) {
+		t.Errorf("12 sequentialIDs are not sorted: %v", ids)
+	}
+}
+
+// TestSink_SameTimestampRecordsReturnInAppendOrder is #656's end-to-end
+// proof, and the only test here that uses the PRODUCTION id generator: a
+// frozen clock puts every record at one ts, so the trail's order is entirely
+// audit_id order. It fails on a build without the tie-break AND on one
+// without monotonic ids — two independent reasons.
+func TestSink_SameTimestampRecordsReturnInAppendOrder(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+	principal := capability.Principal{Account: "alice", Role: "operator"}
+
+	const n = 12
+	var want []string
+	for i := 0; i < n; i++ {
+		reason := fmt.Sprintf("refusal-%02d", i)
+		want = append(want, reason)
+		if err := sink.Record(context.Background(), capability.AuditEntry{
+			Kind:      capability.AuditKindRefusal,
+			Principal: principal,
+			Reason:    reason,
+		}); err != nil {
+			t.Fatalf("Record %s: %v", reason, err)
+		}
+	}
+
+	records, err := repo.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var got []string
+	for _, r := range records {
+		got = append(got, r.Reason)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("records came back [%v], want append order [%v] — with every row sharing a timestamp the trail's order is audit_id order, so audit_id must be minted monotonically (#656 option 3)", got, want)
 	}
 }
 
@@ -80,6 +148,19 @@ func TestRecordDispatchFanOutOnePerNodeResult(t *testing.T) {
 	}
 	if len(byJob) != 4 {
 		t.Fatalf("ByJob(job-1) returned %d records, want 4", len(byJob))
+	}
+
+	// The real-world same-ts case, and the reason audit.NewID takes its time
+	// component from MINT time rather than from the Record's Timestamp: one
+	// baseRecord's single clock reading is copied onto every per-Node Record,
+	// so the whole fan-out shares a ts and its order is audit_id order (#656).
+	var gotNodeOrder []string
+	for _, rec := range byJob {
+		gotNodeOrder = append(gotNodeOrder, rec.NodeID)
+	}
+	wantNodeOrder := []string{"node-ok", "node-denied", "node-offline", "node-cancelled"}
+	if !reflect.DeepEqual(gotNodeOrder, wantNodeOrder) {
+		t.Errorf("fan-out came back as %v, want e.Results order %v — every per-Node Record carries the same ts, so the tie-break is the only thing ordering them", gotNodeOrder, wantNodeOrder)
 	}
 
 	wantOutcomes := map[string]jobs.Outcome{
@@ -574,6 +655,12 @@ func TestRecordCancelAttributesPrincipal(t *testing.T) {
 // audit.KindAPITokenMint/Revoke), attributed to the acting Principal, with
 // Reason carrying the field-per-kind strings recordLifecycle wrote directly
 // before #653 moved this surface into the capability layer.
+//
+// records[i] is indexed against cases[i], which rests on two things now
+// tested rather than assumed (#656): List orders by (ts, audit_id), and under
+// fixedClock all six rows share a ts — so this is also a tie-break proof. The
+// ids come from sequentialIDs, which sorts in call order past ten precisely so
+// a seventh case here cannot break this alignment.
 func TestSink_RecordAccountAdminMapsEveryKind(t *testing.T) {
 	_, repo, _ := openSinkStore(t)
 	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))

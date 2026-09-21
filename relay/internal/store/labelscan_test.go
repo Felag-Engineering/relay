@@ -298,9 +298,20 @@ func TestScanDeclinedLabels_CleanStoreLogsOnce(t *testing.T) {
 		t.Errorf("report.Any() = true, want false: %#v", report)
 	}
 
-	lines := strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n")
+	// Scoped to THIS scan's own summary, for the reason the sibling test above
+	// states: Open logs other things (since #656, one line per applied schema
+	// migration), and pinning the buffer's total would fail this test for a
+	// reason that has nothing to do with what it asserts. The count of THIS
+	// message still matters — exactly one, never zero and never two.
+	const summaryMsg = "startup scan: no stored labels declined on read-back"
+	var lines []string
+	for _, line := range strings.Split(strings.TrimRight(logBuf.String(), "\n"), "\n") {
+		if strings.Contains(line, summaryMsg) {
+			lines = append(lines, line)
+		}
+	}
 	if len(lines) != 1 {
-		t.Fatalf("log lines = %d, want 1; log:\n%s", len(lines), logBuf.String())
+		t.Fatalf("scan summary log lines = %d, want 1; log:\n%s", len(lines), logBuf.String())
 	}
 	var entry struct {
 		Level string `json:"level"`

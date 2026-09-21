@@ -27,6 +27,15 @@ const insertAuditSQL = `
 
 // auditInsertArgs builds the ordered argument list for insertAuditSQL from r.
 //
+// ts is written through formatAuditTime, not the store-wide formatTime: the
+// audit table's ts is fixed-width so that ORDER BY on it is chronological
+// (#656, migration 0024). Record.Timestamp is unaffected by that choice — the
+// driver re-renders the column on read and parseTime accepts either width —
+// so nothing above the store sees a representation change. The roundTripTime
+// call this replaced was doing nothing: an RFC3339Nano format/parse round
+// trip is lossless at nanosecond precision, and its stated purpose
+// ("byte-identical to what will be read back") is now the formatter's.
+//
 // Stdout/Stderr are stored raw, exactly as delivered — no redaction or
 // scrubbing (secrets in command output are retained by design; Policy is the
 // place to prevent secret-emitting commands, ADR-0002). This mirrors how
@@ -43,13 +52,29 @@ func auditInsertArgs(r audit.Record) ([]any, error) {
 
 	v, as := r.Attribution.Verified, r.Attribution.Asserted
 	return []any{
-		r.ID, formatTime(roundTripTime(r.Timestamp)), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
+		r.ID, formatAuditTime(r.Timestamp), r.Kind, r.Principal, r.Selector, r.JobID, nullIfEmpty(r.NodeID), r.ActionKind,
 		nullIfEmpty(r.OperationName), argsJSON, argvJSON, int(r.Outcome), nullIfEmpty(r.Reason), r.Stdout, r.Stderr, boolToInt(r.Truncated),
 		nullIfEmpty(v.AccountID), nullIfEmpty(v.AccountName), nullIfEmpty(v.Role), nullIfEmpty(v.TokenID), nullIfEmpty(v.Method), nullIfEmpty(v.Source),
 		nullIfEmpty(as.OnBehalfOf), nullIfEmpty(as.Traceparent), nullIfEmpty(as.SessionRef), nullIfEmpty(as.ChangeRef),
 		nullIfEmpty(r.ApprovalID), nullIfEmpty(r.GrantID), nullIfEmpty(r.ApprovalAnswer), nullIfEmpty(r.DecisionChannel), nullIfEmpty(r.PlanHash),
 	}, nil
 }
+
+// auditOrderAsc is the ONE ascending order every Repository reader uses:
+// Timestamp, ties broken by ID.
+//
+// Both halves are #656. Without ", audit_id" two rows sharing a ts come back
+// in whatever order the index yields, which was random-hex order and changed
+// on every write — and a dispatch fan-out guarantees rows share a ts, since
+// every per-Node Record copies one clock reading. Without migration 0024's
+// fixed-width ts, "ORDER BY ts" on a TEXT column puts a whole-second row
+// AFTER the .5 row in the same second, because RFC3339Nano trims trailing
+// zeros.
+//
+// auditquery.go's read lane holds the mirror of this, auditOrderDesc.
+// TestAuditSQL_EveryOrderByTsCarriesTheTieBreak is what keeps a clause added
+// later from spelling either one differently.
+const auditOrderAsc = `ORDER BY ts, audit_id`
 
 // Append persists a new Record.
 func (a *sqliteAudit) Append(ctx context.Context, r audit.Record) error {
@@ -111,54 +136,67 @@ func (a *sqliteAudit) AppendAll(ctx context.Context, rs []audit.Record) error {
 	return nil
 }
 
-// List returns all Records, ordered by Timestamp.
+// List returns all Records, ordered by Timestamp, ties broken by ID.
 func (a *sqliteAudit) List(ctx context.Context) ([]audit.Record, error) {
-	return a.query(ctx, `ORDER BY ts`)
+	return a.query(ctx, "")
 }
 
-// ByJob returns all Records for jobID, ordered by Timestamp.
+// ByJob returns all Records for jobID, ordered by Timestamp, ties broken
+// by ID.
 func (a *sqliteAudit) ByJob(ctx context.Context, jobID string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE job_id = ? ORDER BY ts`, jobID)
+	return a.query(ctx, `WHERE job_id = ?`, jobID)
 }
 
-// ByNode returns all Records for nodeID, ordered by Timestamp.
+// ByNode returns all Records for nodeID, ordered by Timestamp, ties broken
+// by ID.
 func (a *sqliteAudit) ByNode(ctx context.Context, nodeID string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE node_id = ? ORDER BY ts`, nodeID)
+	return a.query(ctx, `WHERE node_id = ?`, nodeID)
 }
 
 // ByAccount returns all Records for an Account ID (verified lane), ordered by
-// Timestamp.
+// Timestamp, ties broken by ID.
 func (a *sqliteAudit) ByAccount(ctx context.Context, accountID string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE account_id = ? ORDER BY ts`, accountID)
+	return a.query(ctx, `WHERE account_id = ?`, accountID)
 }
 
 // ByApproval returns all Records authorized by an approval Request, ordered by
-// Timestamp — the park, the decision, and everything that ran under it.
+// Timestamp, ties broken by ID — the park, the decision, and everything that
+// ran under it.
 func (a *sqliteAudit) ByApproval(ctx context.Context, approvalID string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE approval_id = ? ORDER BY ts`, approvalID)
+	return a.query(ctx, `WHERE approval_id = ?`, approvalID)
 }
 
 // ByGrant returns all Records released by a batch/window Grant, ordered by
-// Timestamp.
+// Timestamp, ties broken by ID.
 func (a *sqliteAudit) ByGrant(ctx context.Context, grantID string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE grant_id = ? ORDER BY ts`, grantID)
+	return a.query(ctx, `WHERE grant_id = ?`, grantID)
 }
 
 // ByOnBehalfOf returns all Records with an exact asserted OnBehalfOf value,
-// ordered by Timestamp. Exact match, never a prefix or LIKE: the value is
-// caller-controlled, and a pattern match over untrusted strings invites both
+// ordered by Timestamp, ties broken by ID. Exact match, never a prefix or
+// LIKE: the value is caller-controlled, and a pattern match over untrusted strings invites both
 // accidental over-matching and a query the caller can shape.
 func (a *sqliteAudit) ByOnBehalfOf(ctx context.Context, onBehalfOf string) ([]audit.Record, error) {
-	return a.query(ctx, `WHERE asserted_on_behalf_of = ? ORDER BY ts`, onBehalfOf)
+	return a.query(ctx, `WHERE asserted_on_behalf_of = ?`, onBehalfOf)
 }
 
+// query runs one by-key read: the caller supplies only its WHERE (empty for
+// List), and query appends auditOrderAsc itself, so the seven readers cannot
+// spell the order seven ways. That is the refactor half of #656.
+//
+// What it covers, exactly, and no more: every reader ON THIS PATH. A caller
+// that passed its own ORDER BY would get a RUNTIME SQL syntax error, not a
+// compile error, and a new reader that called a.db.QueryContext directly
+// bypasses this function entirely — visible to
+// TestAuditSQL_EveryOrderByTsCarriesTheTieBreak only if its clause is a
+// string literal in a non-test file of this package.
 func (a *sqliteAudit) query(ctx context.Context, whereClause string, args ...any) ([]audit.Record, error) {
 	rows, err := a.db.QueryContext(ctx, `
 		SELECT audit_id, ts, kind, principal, selector, job_id, node_id, action_kind, operation_name, args, raw_exec_argv, outcome, reason, stdout, stderr, truncated,
 		       account_id, account_name, account_role, token_id, auth_method, verified_source,
 		       asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
 		       approval_id, grant_id, approval_answer, decision_channel, plan_hash
-		FROM audit `+whereClause, args...)
+		FROM audit `+whereClause+` `+auditOrderAsc, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query audit records: %w", err)
 	}

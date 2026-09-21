@@ -157,6 +157,16 @@ func TestAuditQuery_Pagination(t *testing.T) {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
+	// Three rows sharing one timestamp, so the paged walk crosses a TIE and
+	// not only distinct instants (#656). Without the audit_id tie-break these
+	// three are ordered arbitrarily, and the keyset predicate then skips or
+	// repeats whichever of them straddles a page boundary.
+	for _, id := range []string{"id-02a", "id-02b", "id-02c"} {
+		ids = append(ids, id)
+		if err := repo.Append(ctx, queryRecord(id, base.Add(2*time.Minute))); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
 
 	var got []string
 	cursor := ""
@@ -177,7 +187,7 @@ func TestAuditQuery_Pagination(t *testing.T) {
 			break
 		}
 		cursor = page.Next
-		if pages > n {
+		if pages > len(ids) {
 			t.Fatalf("paging did not terminate after %d pages", pages)
 		}
 	}
@@ -270,8 +280,10 @@ func TestAuditQuery_ArgPrefixEscaping(t *testing.T) {
 }
 
 // TestAuditQuery_FractionalTimestamps covers records with 0, 3, and 9
-// fractional digits: every one is returned exactly once by a paged walk, and
-// a Since/Until window that brackets them includes all of them.
+// fractional digits: every one is returned exactly once, a Since/Until window
+// that brackets them includes all of them, and — since #656 — they come back
+// in the right ORDER. Set membership alone passed while the whole-second row
+// was sorting to the wrong end of its second.
 func TestAuditQuery_FractionalTimestamps(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
@@ -312,6 +324,133 @@ func TestAuditQuery_FractionalTimestamps(t *testing.T) {
 		if !seen[f.id] {
 			t.Errorf("fixture %s missing from the windowed query", f.id)
 		}
+	}
+
+	// Newest first: the 9-digit fraction is the latest instant, the
+	// whole-second row the earliest. Before #656 the whole-second row came
+	// back FIRST, because RFC3339Nano trimmed its fraction away and "Z" sorts
+	// above ".".
+	gotOrder := make([]string, len(page.Rows))
+	for i, r := range page.Rows {
+		gotOrder[i] = r.ID
+	}
+	wantOrder := []string{"nano-frac", "milli-frac", "zero-frac"}
+	if !reflect.DeepEqual(gotOrder, wantOrder) {
+		t.Errorf("rows = %v, want %v — the read lane is newest-first, and a shorter fraction must not sort after a longer one (#656)", gotOrder, wantOrder)
+	}
+}
+
+// TestAuditQuery_CursorIssuedBeforeTheMigrationDoesNotRepeatARow is the
+// regression for the silent infinite loop (#656).
+//
+// The cursor's ts has never been the stored bytes: ts is declared TIMESTAMP,
+// so the driver parses the column into a time.Time and database/sql renders
+// it back as TRIMMED RFC3339Nano. A cursor an older binary issued therefore
+// carries "...T00:00:03Z" while the migrated row holds
+// "...T00:00:03.000000000Z" — and "." (0x2E) sorts below "Z" (0x5A), so the
+// row compares as OLDER than its own cursor and is returned again, forever.
+//
+// Rejecting such cursors is not implementable: a cursor issued before 0024
+// and one issued after are byte-identical. decodeAuditCursor normalises
+// instead.
+func TestAuditQuery_CursorIssuedBeforeTheMigrationDoesNotRepeatARow(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	queries := st.AuditQueries()
+
+	// Four rows in the pre-0024 format, newest last.
+	legacy := []struct{ id, ts string }{
+		{"row-1", "2026-08-20T00:00:01Z"},
+		{"row-2", "2026-08-20T00:00:02Z"},
+		{"row-3", "2026-08-20T00:00:03Z"},
+		{"row-4", "2026-08-20T00:00:04Z"},
+	}
+	for _, r := range legacy {
+		insertLegacyAuditRow(t, st.db, r.id, r.ts)
+	}
+
+	// The cursor the OLD binary issued after page one: the scanned (trimmed)
+	// ts of the newest row, and that row's id.
+	staleCursor := encodeCursor2("2026-08-20T00:00:04Z", "row-4")
+
+	runMigration0024(t, st.db)
+
+	page, err := queries.Query(ctx, audit.Query{}, 1, staleCursor)
+	if err != nil {
+		t.Fatalf("Query with a pre-0024 cursor: %v", err)
+	}
+	if len(page.Rows) != 1 || page.Rows[0].ID != "row-3" {
+		t.Fatalf("page 2 with a pre-0024 cursor returned %+v again — the cursor mis-seeks, and a paging client loops on one row forever (#656)", page.Rows)
+	}
+}
+
+// TestAuditQuery_PagesExactlyOnceAcrossFractionalWidths walks the whole trail
+// one row at a time over mixed fractional widths and repeated timestamps:
+// every row exactly once, newest first, terminating.
+func TestAuditQuery_PagesExactlyOnceAcrossFractionalWidths(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+	repo := st.Audit()
+	queries := st.AuditQueries()
+
+	base := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	fixtures := []struct {
+		id     string
+		offset time.Duration
+	}{
+		{"r0", 0},
+		{"r1", 1},
+		{"r2", 100 * time.Millisecond},
+		{"r3", 123456789},
+		{"r4", time.Second},
+		{"r5", time.Second}, // a deliberate tie with r4
+		{"r6", time.Second + 500*time.Millisecond},
+		{"r7", 2 * time.Second},
+		{"r8", 2*time.Second + 999999999},
+		{"r9", 3 * time.Second},
+	}
+	for _, f := range fixtures {
+		if err := repo.Append(ctx, queryRecord(f.id, base.Add(f.offset))); err != nil {
+			t.Fatalf("append %s: %v", f.id, err)
+		}
+	}
+
+	var got []string
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > len(fixtures) {
+			t.Fatalf("paged walk did not terminate after %d pages over %d rows (#656)", pages, len(fixtures))
+		}
+		page, err := queries.Query(ctx, audit.Query{}, 1, cursor)
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(page.Rows) == 0 {
+			t.Fatalf("page %d returned zero rows before Next was empty", pages)
+		}
+		got = append(got, page.Rows[0].ID)
+		if page.Next == "" {
+			break
+		}
+		cursor = page.Next
+	}
+
+	want := []string{"r9", "r8", "r7", "r6", "r5", "r4", "r3", "r2", "r1", "r0"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("paged walk returned %v over %d pages, want %v — keyset pagination over a fixed-width ts must cover every row exactly once, newest first (#656)", got, len(got), want)
+	}
+}
+
+// TestAuditQuery_CursorRejectsAnUnparseableTimestamp pins the fail-loud half
+// of the normalisation: a cursor whose ts is not a timestamp is refused, never
+// compared as raw text.
+func TestAuditQuery_CursorRejectsAnUnparseableTimestamp(t *testing.T) {
+	st, _ := openTestStore(t)
+	ctx := context.Background()
+
+	_, err := st.AuditQueries().Query(ctx, audit.Query{}, 0, encodeCursor2("lunchtime", "id-1"))
+	if !errors.Is(err, audit.ErrInvalidCursor) {
+		t.Errorf("err = %v, want audit.ErrInvalidCursor — a cursor whose timestamp does not parse must be refused, never compared as raw text", err)
 	}
 }
 

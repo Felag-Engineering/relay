@@ -26,21 +26,30 @@
 -- idx_jobs_created_at and idx_tasks_job_outcome serve QueryJobs' ORDER BY
 -- created_at DESC and QueryTasks' WHERE job_id = ? AND outcome = ? .
 --
+-- IF NOT EXISTS on the five audit indexes (added by #656): migration 0024
+-- drops and recreates all five around its row rewrite, and migrate selects
+-- pending migrations by PRESENCE (#492), so a database that skipped this file
+-- and later applied 0024 repairs this one AFTERWARDS -- against a table where
+-- those indexes already exist. Without IF NOT EXISTS that repair fails and
+-- the Relay refuses to start, which is the opposite of what #492's repair
+-- path is for. Every definition below is the one 0024 recreates, so skipping
+-- a create here can only ever skip an identical statement.
+--
 -- NOTE: keep semicolons out of these comments. splitStatements
 -- (store/migrate.go) splits the file on that character without stripping
 -- comments first, so one inside a comment is executed as SQL.
 
 DROP INDEX IF EXISTS idx_audit_account_id;
 
-CREATE INDEX idx_audit_ts ON audit (ts, audit_id);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit (ts, audit_id);
 
-CREATE INDEX idx_audit_kind_ts ON audit (kind, ts, audit_id);
+CREATE INDEX IF NOT EXISTS idx_audit_kind_ts ON audit (kind, ts, audit_id);
 
-CREATE INDEX idx_audit_account_ts ON audit (account_id, ts, audit_id) WHERE account_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_account_ts ON audit (account_id, ts, audit_id) WHERE account_id IS NOT NULL;
 
-CREATE INDEX idx_audit_node_ts ON audit (node_id, ts, audit_id) WHERE node_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_audit_node_ts ON audit (node_id, ts, audit_id) WHERE node_id IS NOT NULL;
 
-CREATE INDEX idx_audit_job_ts ON audit (job_id, ts);
+CREATE INDEX IF NOT EXISTS idx_audit_job_ts ON audit (job_id, ts);
 
 CREATE INDEX idx_jobs_created_at ON jobs (created_at, job_id);
 

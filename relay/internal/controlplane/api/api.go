@@ -21,8 +21,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -363,22 +361,29 @@ func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capabili
 	return true
 }
 
-// newAuditID mints a unique audit.Record.ID: 16 crypto/rand bytes,
-// hex-encoded, "audit-" prefixed — mirroring
-// relay/internal/auditsink.defaultID. audit_id is the table's PRIMARY KEY
-// (store/migrations/0001_init.sql); every recordLifecycle call must set a
+// newAuditID mints a unique audit.Record.ID. audit_id is the table's PRIMARY
+// KEY (store/migrations/0001_init.sql); every recordLifecycle call must set a
 // fresh one or the second lifecycle insert in a session fails a UNIQUE
 // constraint. A package-level var (rather than a Deps field) so it stays out
 // of the deliberately narrow Deps struct while still being overridable from
 // this package's own tests.
 var newAuditID = defaultAuditID
 
+// defaultAuditID and relay/internal/auditsink.defaultID are now the SAME
+// generator, audit.NewID — one implementation of the ordering property rather
+// than two copies of a shape (#656). The ids it mints are monotonic, so the
+// trail's (ts, audit_id) tie-break orders rows by when they were appended.
+//
+// That is what recordLifecycleAllErr's AppendAll cascade needs: a
+// mass-revocation writes its whole batch of Records at one clock reading, so
+// every row in the batch shares a ts and their order IS the id order. That
+// batch is exactly what an incident reviewer reads as a sequence.
 func defaultAuditID() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	id, err := audit.NewID()
+	if err != nil {
 		return "", fmt.Errorf("api: generate audit record id: %w", err)
 	}
-	return "audit-" + hex.EncodeToString(b), nil
+	return id, nil
 }
 
 // recordLifecycle appends one lifecycle audit.Record (token mint/revoke,

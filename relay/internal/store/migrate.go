@@ -80,6 +80,12 @@ func loadMigrations() ([]migration, error) {
 // to start would leave an operator who just rolled back a bad deploy with no
 // in-band remedy, and there is no down-migration mechanism to undo a
 // refusal. See pendingMigrations' unknown return value.
+// migrationSlowThreshold is the duration past which a single migration is
+// logged at Info rather than Debug. One second: below it an operator would not
+// notice the pause anyway, and above it they are entitled to know which
+// migration they are waiting on.
+const migrationSlowThreshold = time.Second
+
 func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	applied, err := appliedVersions(ctx, db)
 	if err != nil {
@@ -99,9 +105,30 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 		)
 	}
 
+	// Timed because 0024 is the first migration whose cost is proportional to
+	// the size of a table rather than to the schema — it rewrites every audit
+	// row, at roughly 16 seconds per GB — so a boot that used to be instant can
+	// now take minutes, and the operator is owed the reason.
+	//
+	// Info only past migrationSlowThreshold, Debug otherwise. A fresh database
+	// applies two dozen migrations in microseconds each; logging all of them at
+	// Info buries the one line that matters under the ones that never do. The
+	// threshold is what makes a slow migration self-announcing rather than
+	// something to go looking for.
+	//
+	// Said plainly because the line cannot do more than this: it reports a
+	// migration's cost AFTER that migration returns. It is not a progress
+	// signal — an operator watching a boot still inside a 14-minute 0024 sees
+	// nothing from here until it finishes.
 	for _, m := range pending {
+		start := time.Now()
 		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
+		}
+		if elapsed := time.Since(start); elapsed >= migrationSlowThreshold {
+			logger.Info("applied schema migration", "name", m.name, "duration", elapsed)
+		} else {
+			logger.Debug("applied schema migration", "name", m.name, "duration", elapsed)
 		}
 	}
 	return nil
