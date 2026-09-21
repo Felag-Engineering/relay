@@ -186,6 +186,25 @@ func callerAuthorityIdents(scope ast.Node) map[string]bool {
 					out[id.Name] = true
 				}
 			}
+		case *ast.ValueSpec:
+			// `var who, _ = controlplane.PrincipalFromContext(ctx)` binds an
+			// allowlisted producer with a different keyword, and a ValueSpec
+			// is not an AssignStmt. Without this arm the binding FORM decided
+			// whether the guard saw a caller — which is not a property anyone
+			// would think to check, and exactly the kind of hole that reads
+			// as covered to someone trusting the doc comment above.
+			if len(v.Values) != 1 {
+				return true
+			}
+			call, ok := v.Values[0].(*ast.CallExpr)
+			if !ok || !producesAuthority(call) {
+				return true
+			}
+			for _, name := range v.Names {
+				if name.Name != "_" {
+					out[name.Name] = true
+				}
+			}
 		}
 		return true
 	})
@@ -539,6 +558,21 @@ func f(w any, r any) {
 			src: `package console
 func f(ctx any) bool {
 	who, _ := controlplane.PrincipalFromContext(ctx)
+	return who.Role == "admin"
+}
+`,
+			wantIDs: []string{"who"},
+		},
+		{
+			// The SAME allowlisted producer, bound with `var` instead of `:=`.
+			// A ValueSpec is not an AssignStmt, so before this arm existed the
+			// BINDING FORM decided whether the guard saw a caller at all —
+			// which is not a property anyone would think to check, and which
+			// read as covered to anyone trusting the doc comment.
+			name: "a var-bound Principal from a producer is flagged",
+			src: `package console
+func f(ctx any) bool {
+	var who, _ = controlplane.PrincipalFromContext(ctx)
 	return who.Role == "admin"
 }
 `,
@@ -937,7 +971,7 @@ func reducingActs() []writeAct {
 }
 
 // consoleWriteRoutePatterns derives the write-route set from the route table
-// itself: every POST route Routes mounts under /console/accounts or
+// itself: every UNSAFE-METHOD route Routes mounts under /console/accounts or
 // /console/api-tokens.
 //
 // DERIVED, not restated, and that is the whole point. The first cut of the
@@ -951,19 +985,29 @@ func reducingActs() []writeAct {
 // Execution is forced on because Routes returns a SMALLER slice when it is
 // off; a future write route gated behind that flag must still be classified.
 //
+// "Write" is isSafeMethod's complement, deliberately: that is the same
+// predicate Secure (security.go) uses to decide what needs a CSRF token, so
+// this guard and the middleware cannot drift apart on what counts as a write.
+// Requiring POST was narrower than both — a PUT route registers cleanly and
+// Secure treats it as unsafe, while this derivation, accountsWriteRoutes(),
+// the below-admin reach sweep and the CSRF sweeps would every one have
+// skipped it.
+//
 // THE SCOPE LIMIT, said out loud: this derivation is by PATH PREFIX, so a
 // write route belonging to this screen but mounted on some third path would
-// escape it. Both prefixes are forced anyway — the five patterns are the only
-// shapes that register beside GET /console/accounts without panicking
-// (accounts_write.go) — so a third path would be a deliberate act, and the
-// person taking it owns widening this filter with it.
+// escape it — and nothing forces the prefix. A third path registers cleanly
+// (only two shapes panic, and console.go records both); what the prefix rests
+// on is that choosing one is a deliberate act, and the person taking it owns
+// widening this filter with it. The METHOD dimension is closed above; the
+// PATH dimension is not, and this paragraph is the whole of what stands in
+// for it.
 func consoleWriteRoutePatterns() []string {
 	d := sweepFixture()
 	d.Execution = true
 
 	var out []string
 	for _, r := range Routes(d) {
-		if r.Method != http.MethodPost {
+		if isSafeMethod(r.Method) {
 			continue
 		}
 		if !strings.HasPrefix(r.Path, "/console/accounts") && !strings.HasPrefix(r.Path, "/console/api-tokens") {
