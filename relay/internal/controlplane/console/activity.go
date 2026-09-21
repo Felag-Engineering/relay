@@ -1102,7 +1102,7 @@ func summarize(f trailFacts) string {
 	case audit.KindRefusal:
 		return "was refused"
 	case audit.KindPlan:
-		return "resolved a Plan — nothing executed"
+		return "resolved a Preflight — nothing executed"
 	case audit.KindRead:
 		// A read that reached a Node arrives as a read-class DISPATCH and is
 		// rolled up by Job through the Job lane. What lands here is the other

@@ -1,4 +1,4 @@
-# 05 — Composer and Plan
+# 05 — Composer and Preflight
 
 **Artboard 4.** The execution surface, and the trust-building wedge. **Milestone v0.7.0.**
 
@@ -10,8 +10,8 @@ step-up re-auth.
 
 ADR-0026 reversed ADR-0009's no-execution stance for exactly this: *a skeptical operator does not
 come to trust a fleet-wide RCE system by reading its documentation. They trust it by probing the
-boundary themselves — composing an Operation, seeing the Plan, watching a Policy rule deny it, and
-reading the rule that fired.* **The wall is the same wall.** An Operation dispatched here traverses
+boundary themselves — composing an Operation, seeing the Preflight, watching a Policy rule deny it,
+and reading the rule that fired.* **The wall is the same wall.** An Operation dispatched here traverses
 Selector → Policy → blast cap → audit identically to one from MCP.
 
 ## The rhythm
@@ -19,12 +19,12 @@ Selector → Policy → blast cap → audit identically to one from MCP.
 **Compose → see the truth → confirm identity → run.** The mutating path is deliberately slower
 than the reading path, and the visual sequence must convey that.
 
-There is **no Run button**. `Plan` is the only primary action. `Apply` does not exist until a Plan
-has rendered beneath it.
+There is **no Run button**. `Preflight` is the only primary action. `Apply` does not exist until a
+Preflight has rendered beneath it.
 
 ## Layout
 
-Two columns. Left is the form, right is empty until planned.
+Two columns. Left is the form, right is empty until preflighted.
 
 **Left — the form.** An Operation picker driven by `list_operations` schemas, each entry showing
 its risk badge. Beneath it, schema-driven argument fields showing their constraints inline as
@@ -35,16 +35,16 @@ mutate-cap 2,500 ✓".
 A **Raw Exec** tab exists and is visible only to `admin`. Raw Exec is always mutate-class and
 always takes the mutate cap.
 
-**Right — the Plan.** Empty until planned, and the empty state says why: *this side stays empty
-until you press Plan; there is no path from the form to a running command that does not pass
-through here first.*
+**Right — the Preflight.** Empty until preflighted, and the empty state says why: *this side stays
+empty until you press Preflight; there is no path from the form to a running command that does not
+pass through here first.*
 
 Once rendered: fan-out summary with cap arithmetic, risk badge, plan hash in mono, a segmented
 verdict bar, then grouped verdicts — allow (collapsed, it is the mode), deny (expanded, showing
-the rule verbatim once when all denies share a reason), unknown/offline (collapsed). The Plan is
-**pinned** and never reflows while it is being read.
+the rule verbatim once when all denies share a reason), unknown/offline (collapsed). The Preflight
+is **pinned** and never reflows while it is being read.
 
-Beneath the Plan, and only then, **Apply**.
+Beneath the Preflight, and only then, **Apply**.
 
 ## The blast cap
 
@@ -58,15 +58,15 @@ this Relay's configuration, which no screen can edit and no Account of any role 
 Clicking Apply opens the **step-up** modal. This is the strongest per-action human-intent binding
 in the system and the reason a browser may dispatch at all. `read`-class dispatch does **not**
 require step-up — it is bounded by the read cap and audited metadata-only, and gating it would
-make the plan-first habit expensive enough to route around.
+make the preflight-first habit expensive enough to route around.
 
 If the deployment's approval gate matches this action, applying **parks** the Job for sign-off
 rather than dispatching. Say so before the click, not after.
 
-## Editing a plan
+## Editing after a Preflight
 
-Any edit re-plans: new plan hash, and **existing approvals fall away**. Approvers do not amend —
-an approver who wants changes sends it back. An approval commits to a plan hash over the
+Any edit re-preflights: new plan hash, and **existing approvals fall away**. Approvers do not
+amend — an approver who wants changes sends it back. An approval commits to a plan hash over the
 Operation, its arguments and the *resolved fan-out*; letting the thing change under a signature
 would make the signature meaningless, and letting an approver edit then approve collapses
 `requester_allowed: false`.
@@ -80,8 +80,8 @@ filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filli
 ## Must not appear
 
 - A Run button, at any point, in any state.
-- An Apply button before a Plan has rendered.
-- Any Relay-side computation of a Policy verdict. Plan mode is daemon-evaluated (ADR-0011); this
+- An Apply button before a Preflight has rendered.
+- Any Relay-side computation of a Policy verdict. A Preflight is daemon-evaluated (ADR-0011); this
   screen renders a verdict it did not compute (invariant #12).
 - Any editable blast cap, gate rule, or `console_execution` value.
 
@@ -92,8 +92,9 @@ filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filli
   whole point of the flag.
 - **`viewer`** — no Run nav item, no contextual entry.
 - **`operator`** — composer yes, Raw Exec tab no.
-- **Frozen** — Plans still resolve, Apply is refused with the Freeze reason. Say what is still true.
-- **Over cap** — Plan still renders; Apply is unavailable with the cap named.
+- **Frozen** — Preflights still resolve, Apply is refused with the Freeze reason. Say what is still
+  true.
+- **Over cap** — the Preflight still renders; Apply is unavailable with the cap named.
 
 ## Acceptance
 
@@ -104,7 +105,8 @@ filtered fleet view or a Node ("Run against these 4,012", "Run here"), pre-filli
       rendered.
 - [ ] `operator` can run an Operation and cannot reach Raw Exec; the refusal is decided by the
       capability layer's `RoleGate`, not by this screen.
-- [ ] A denied Node in the Plan shows the rule that fired, verbatim, styled informative-neutral.
-- [ ] Editing any field after a Plan renders invalidates the plan hash visibly.
+- [ ] A denied Node in the Preflight shows the rule that fired, verbatim, styled
+      informative-neutral.
+- [ ] Editing any field after a Preflight renders invalidates the plan hash visibly.
 - [ ] `console_execution` is file-only Relay configuration: it lands with the packaging config
       sample and its drift gate, and no API can read or set it.

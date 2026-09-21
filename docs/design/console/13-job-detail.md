@@ -63,8 +63,8 @@ shows its audited metadata only (ADR-0025).
 
 - A flat list of Tasks as the default render.
 - Retained read output presented as durable.
-- A re-run button that skips Plan. Re-running is composing again (spec 05), with a fresh Plan and a
-  fresh hash.
+- A re-run button that skips the Preflight. Re-running is composing again (spec 05), with a fresh
+  Preflight and a fresh plan hash.
 
 ## Acceptance
 

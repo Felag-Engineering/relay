@@ -380,7 +380,7 @@ func TestDenyBlock_WithNoBoundaryRefusesToRender(t *testing.T) {
 
 // TestDenyBlock_RendersThePreflightBoundary proves the preflight framing is
 // reachable from the block at all — it is the only exercise of that text
-// until #438 builds a plan-path composer with a live construction site.
+// until #438 builds a preflight-path composer with a live construction site.
 func TestDenyBlock_RendersThePreflightBoundary(t *testing.T) {
 	out := render(t, "deny-block", Deny{Rule: "deny x", Boundary: DenyBoundaryPreflight})
 	if !strings.Contains(out, escapedInATextNode(t, capability.PolicyDenyVerdictExplanation)) {
@@ -471,8 +471,8 @@ func TestPlan_CountsVerdictsAndRendersEveryDeny(t *testing.T) {
 		t.Fatalf("counts are %d allowed / %d denied, want 1 / 2", p.AllowedCount(), p.DeniedCount())
 	}
 	out := render(t, "plan", p)
-	// Every deny is rendered, not a summary of them: the whole point of plan
-	// mode is seeing which Nodes will refuse and why.
+	// Every deny is rendered, not a summary of them: the whole point of a
+	// Preflight is seeing which Nodes will refuse and why.
 	if !strings.Contains(out, "deny proc.list") || !strings.Contains(out, "deny everything") {
 		t.Errorf("the Plan does not render every deny: %s", out)
 	}

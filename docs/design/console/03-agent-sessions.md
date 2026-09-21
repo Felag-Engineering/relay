@@ -66,15 +66,16 @@ does not, and the screen says so rather than hiding it.
 
 One card per call, pairing **request and result**. The tool surface is eight tools:
 `list_nodes`, `describe_node`, `list_operations`, `get_job`, `run_operation`, `raw_exec`,
-`cancel_job`, `approve_request`. Plan mode is `plan: true` on `run_operation` / `raw_exec`, not a
-separate tool — render it as a distinct badge because it is the trust-critical case.
+`cancel_job`, `approve_request`. A Preflight is `plan: true` on `run_operation` / `raw_exec` — the
+option keeps its old spelling on the wire until the code follows (GLOSSARY.md) — not a separate
+tool; render it as a distinct badge because it is the trust-critical case.
 
 Card contents by kind:
 
 - **Dispatch in flight** — args, Selector with resolved fan-out, plan hash, who approved it if it
   was parked, then a live progress bar and per-outcome counts, with **Cancel** (v0.7.0).
-- **Plan** — the arguments, then the grouped verdicts and `would_be_rejected`, and a line saying
-  nothing executed and each Node's own engine answered.
+- **Preflight** — the arguments, then the grouped verdicts and `would_be_rejected`, and a line
+  saying nothing executed and each Node's own engine answered.
 - **Elicitation** (ADR-0029) — the Relay answered a call with `input_required` carrying an
   approval elicitation; the agent is blocked. Show the plan hash, quorum and TTL, then the
   `approve_request` decision when it arrives, with the deciding identity as a verified chip. The

@@ -33,7 +33,7 @@ Numbers are identifiers, not sequence. Build in this order:
 3. The v0.7.0 mutating surfaces, once step-up exists:
    [15](15-accounts-and-tokens.md), [09](09-add-nodes.md), [16](16-incident-ladder.md),
    [06](06-policy-author.md), [07](07-policy-fix-from-deny.md), then
-   [05](05-composer-and-plan.md) — the composer last, behind the step-up and approval machinery it
+   [05](05-composer-and-preflight.md) — the composer last, behind the step-up and approval machinery it
    depends on.
    [18](18-settings.md) and [19](19-approval-rules.md) follow step-up and store-backed settings
    (#590); neither mounts until its backend exists.
@@ -72,7 +72,7 @@ landed by hand, ahead of the loop.
 | 16 | [Incident](16-incident-ladder.md) | v0.7.0 | yes |
 | 6 | [Policy Catalog](06-policy-author.md) | v0.7.0 | **no — generate-and-copy only** |
 | 7 | [Policy fix, from a deny](07-policy-fix-from-deny.md) | v0.7.0 | **no — generate-and-copy only** |
-| 5 | [Composer and Plan](05-composer-and-plan.md) | v0.7.0 | yes |
+| 5 | [Composer and Preflight](05-composer-and-preflight.md) | v0.7.0 | yes |
 
 Specs 11–17 have no artboard; the wireframes cover 1–10 plus the shared-grammar sheet.
 

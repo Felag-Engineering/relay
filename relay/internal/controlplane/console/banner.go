@@ -45,7 +45,7 @@ func banner(d Deps, r *http.Request) *Banner {
 	return &Banner{
 		Kind: BannerFreeze,
 		Text: "Freeze engaged — no new Tasks are dispatching.",
-		Detail: "In-flight Tasks keep running and Plans still resolve, so you can " +
+		Detail: "In-flight Tasks keep running and Preflights still resolve, so you can " +
 			"still see what would happen. An admin releases it with a reason.",
 	}
 }

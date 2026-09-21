@@ -25,7 +25,7 @@ type BannerKind string
 
 const (
 	// BannerFreeze: all new Task dispatch halted. It must state what is STILL
-	// TRUE — in-flight Tasks keep running, Plans still resolve — because an
+	// TRUE — in-flight Tasks keep running, Preflights still resolve — because an
 	// emergency stop that looks like a total outage gets released in a panic.
 	BannerFreeze BannerKind = "freeze"
 

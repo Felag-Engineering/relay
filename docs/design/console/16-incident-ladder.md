@@ -48,7 +48,7 @@ under pressure.
 
 Cheap to engage, deliberate to release (ADR-0013). Engaging states what it does and what it does
 **not**: halts all new Task dispatch across every risk class, leaves in-flight Tasks running, leaves
-Plans available. Persisted across Relay restarts.
+Preflights available. Persisted across Relay restarts.
 
 **Engage is human-principal only** — a machine Account, whatever its role, cannot freeze the
 fleet (#397). Releasing requires `admin` and an audited reason. An emergency stop that looks like a total outage

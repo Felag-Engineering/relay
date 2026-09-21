@@ -168,7 +168,7 @@ noise rather than progress.
 ### D3. The word "outdated" — **RESOLVED 2026-08-24**
 
 **Settled by the code, not by preference.** `Outdated` is a live field on the MCP wire —
-`relay/internal/controlplane/mcp/tools_execution.go` returns it on every Plan entry, and
+`relay/internal/controlplane/mcp/tools_execution.go` returns it on every Preflight entry, and
 `mcp_plan_test.go` pins its meaning: *"outdated:true — a real dispatch would refuse it, but Plan
 mode never [does]."* That is ADR-0014's meaning, shipped and under test.
 
@@ -178,8 +178,8 @@ removed that concept from the UI regardless.
 
 The Console uses **`state:outdated`**, matching the wire. An earlier draft of these specs used
 `state:version-gated`, which was more legible in isolation and violated AGENTS.md's no-synonyms
-rule: an operator reading a Plan through MCP and the same Plan in the Console would have seen two
-words for one thing. Renaming the wire field instead was rejected — ADR-0014 mandates
+rule: an operator reading a Preflight through MCP and the same Preflight in the Console would have
+seen two words for one thing. Renaming the wire field instead was rejected — ADR-0014 mandates
 additive-only evolution within `relay.v1`, so a rename is a breaking contract change for a
 cosmetic gain.
 
@@ -284,6 +284,25 @@ Four reasons, recorded here rather than left an unrecorded omission:
 **What would close it:** a ruling on the sink (a new audit `kind`, most likely, given (3)), plus a
 bounded, rate-limited, unauthenticated route built to receive it — sized as its own change, not a
 rider on a CSRF fix.
+
+### D16. What the Console calls a Policy preflight — **RESOLVED 2026-09-20: "Preflight" (#575)**
+
+**What:** ADR-0038 gave the word **Plan** to an approved route of execution and renamed the
+no-execution preview **Policy preflight**. These specs and the Console's copy still said "Plan" in
+the old sense — and the Console is the one surface where both meanings will appear on screen at
+once: a preflight verdict before a mutate apply, and an approved Plan, with its plan hash, in the
+approval queue. A button or card labelled "Plan" would then be genuinely ambiguous to an operator
+who never read GLOSSARY.md, and the button label is a UX call, not a terminology correction.
+
+**Ruling (owner, 2026-09-20):** the Console says **Preflight**. The composer's primary action is
+`Preflight`; the rendered verdict is the Preflight; the Agents stream's outcome chip for a
+preflight call reads `preflight`. **Plan** is reserved for the approved route (ADR-0038) and for
+the plan hash an approval commits to (ADR-0027) — the approval object, the Job's Plan block and
+every "plan hash" keep the word, and the shared Plan renderer keeps its name because it renders a
+Preflight verdict in the composer and a Plan on the other two screens (00). Spec 05 was renamed
+from "Composer and Plan" to "Composer and Preflight" in the same sweep. The wire still spells the
+option `plan` until the code follows (GLOSSARY.md): that spelling is a contract, the label is copy,
+and they are allowed to differ until the contract moves.
 
 ## Prerequisites that already exist as issues
 
