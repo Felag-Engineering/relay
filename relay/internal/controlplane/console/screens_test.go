@@ -3154,25 +3154,25 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	}
 }
 
-// TestAgents_PlanOutcomeIsPlannedNotUnspecified.
+// TestAgents_PreflightOutcomeIsPreflightNotUnspecified.
 //
-// The Plan half's outcome guard, split from its naming guard for the reason
+// The Preflight half's outcome guard, split from its naming guard for the reason
 // the cancel pair is split: either must be able to fail alone.
 //
-// A Plan record carries no Outcome — it creates no Job and no Task, and the
+// A Preflight record carries no Outcome — it creates no Job and no Task, and the
 // per-Node verdicts it returned to the caller are deliberately not audited
-// (ADR-0011, capability's AuditKindPlan). "planned" is the word already in the
-// corrective switch, and this is what makes it reachable.
-func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
+// (ADR-0011, capability's AuditKindPlan). "preflight" is the chip word — the Console's
+// name for what the wire still spells `plan` (#575) — and this is what makes it reachable.
+func TestAgents_PreflightOutcomeIsPreflightNotUnspecified(t *testing.T) {
 	recs := sinkPlanRecords(t)
 
 	_, calls, _ := buildAgents(rowsOfRecords(recs), "", testNow)
 	if len(calls) != len(recs) {
-		t.Fatalf("the stream has %d rows for %d Plan records", len(calls), len(recs))
+		t.Fatalf("the stream has %d rows for %d Preflight records", len(calls), len(recs))
 	}
 	for _, c := range calls {
-		if c.Outcome != "planned" {
-			t.Errorf("a Plan renders the outcome chip %q, want \"planned\"", c.Outcome)
+		if c.Outcome != "preflight" {
+			t.Errorf("a Preflight renders the outcome chip %q, want \"preflight\"", c.Outcome)
 		}
 	}
 
@@ -3181,15 +3181,15 @@ func TestAgents_PlanOutcomeIsPlannedNotUnspecified(t *testing.T) {
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	if strings.Contains(body, `data-outcome="unspecified"`) {
-		t.Error(`a Plan renders the outcome chip "unspecified" — nothing executed and the ` +
+		t.Error(`a Preflight renders the outcome chip "unspecified" — nothing executed and the ` +
 			`Console knows it, which is the badge spec 03 asks for on the trust-critical case`)
 	}
 	if strings.Contains(body, `data-outcome="success"`) {
-		t.Error("a Plan renders as a success; nothing ran (ADR-0011)")
+		t.Error("a Preflight renders as a success; nothing ran (ADR-0011)")
 	}
-	chip := `<span class="chip outcome" data-outcome="planned">planned</span>`
+	chip := `<span class="chip outcome" data-outcome="preflight">preflight</span>`
 	if n := strings.Count(body, chip); n != len(recs) {
-		t.Errorf("%d of %d Plans render the outcome chip %q", n, len(recs), "planned")
+		t.Errorf("%d of %d Preflights render the outcome chip %q", n, len(recs), "preflight")
 	}
 }
 

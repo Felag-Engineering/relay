@@ -478,7 +478,7 @@ func Routes(d Deps) []Route {
 		rs = append(rs, Route{
 			"GET", "/console/run",
 			NavEntry{NavAct, "Run", 10}, accounts.RoleOperator,
-			placeholder("Run", "05-composer-and-plan.md"),
+			placeholder("Run", "05-composer-and-preflight.md"),
 		})
 	}
 	return rs

@@ -4,7 +4,7 @@
 **Milestone v0.7.0.**
 
 **Governing:** ADR-0002, ADR-0011, ADR-0018, ADR-0022, invariants #2, #3.
-**Backend:** the Plan's deny detail; `policyview` for the Node's effective Policy. **No write
+**Backend:** the Preflight's deny detail; `policyview` for the Node's effective Policy. **No write
 path.**
 
 ## What this screen is for
@@ -13,7 +13,7 @@ path.**
 exactly why, and what file to change in my IaC" without leaving the Console.* Until this screen,
 that sentence had no implementation.
 
-Reached from a deny — in a Plan, a Job result, or an approval card.
+Reached from a deny — in a Preflight, a Job result, or an approval card.
 
 ## Layout
 
@@ -64,7 +64,7 @@ Four steps, and step 3 is the one that closes the loop:
 2. Roll out through config management, which restarts the daemon; nothing is pushed from here.
 3. **Watch the Policy-fingerprint facet on the fleet view.** When the old fingerprint reaches zero
    Nodes, the rollout landed everywhere — by string comparison, not by trust.
-4. Re-run the Plan. The denies become allows, or they say what is still wrong.
+4. Re-run the Preflight. The denies become allows, or they say what is still wrong.
 
 ## Handoff to the Policy Catalog
 

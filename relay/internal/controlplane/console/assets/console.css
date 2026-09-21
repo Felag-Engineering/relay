@@ -1612,21 +1612,21 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
  *
  * Most of the family never reached a Node at all. Two do and are here anyway,
  * which is why the family is defined by "not a Task outcome" rather than by
- * distance: a Plan asks each matched daemon's own engine (ADR-0011) and still
+ * distance: a Preflight asks each matched daemon's own engine (ADR-0011) and still
  * executes nothing, and "requested" is a cancel_job — it reaches the Job's
  * in-flight Tasks over their Tunnels, but the row names a JOB, and whether any
  * given Task died is that Task's own `cancelled` outcome, on the Job page. A
  * chip here wearing the Task word would claim the whole Job's fate, which
  * best-effort cancellation cannot promise. */
 [data-outcome="parked"], [data-outcome="already parked"],
-[data-outcome="decided"], [data-outcome="planned"], [data-outcome="refused"],
+[data-outcome="decided"], [data-outcome="preflight"], [data-outcome="refused"],
 [data-outcome="audited"], [data-outcome="requested"], [data-outcome="revoked"] {
   --oc: var(--text-second); --ocbg: transparent;
 }
 .chip.outcome[data-outcome="parked"],
 .chip.outcome[data-outcome="already parked"],
 .chip.outcome[data-outcome="decided"],
-.chip.outcome[data-outcome="planned"],
+.chip.outcome[data-outcome="preflight"],
 .chip.outcome[data-outcome="refused"],
 .chip.outcome[data-outcome="requested"],
 .chip.outcome[data-outcome="revoked"],

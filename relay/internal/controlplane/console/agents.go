@@ -798,13 +798,13 @@ func railNote(listed, dropped int, scrolled bool) string {
 //
 // # Why two of the eight tools are admitted by KIND rather than by family
 //
-// `cancel_job` and plan mode matched neither arm and so rendered NOWHERE,
+// `cancel_job` and the Preflight matched neither arm and so rendered NOWHERE,
 // against spec 03's first acceptance criterion — every one of the eight tools
 // renders with a request line and a result line (#537). Both are calls in
 // exactly the sense this function means: an Account asked a control surface for
 // something and the Relay recorded the ask. A cancel is the one act spec 03
 // puts a CONTROL for on this very screen, so its record belonging here is not a
-// stretch; and plan mode is the trust-critical case spec 03 asks to be badged —
+// stretch; and the Preflight is the trust-critical case spec 03 asks to be badged —
 // an agent saying what it would run is the request an operator most wants read.
 //
 // They are named as KINDS because kindOf (activity.go) maps both to rowOther,
@@ -988,10 +988,10 @@ func agentCallFrom(f trailFacts) agentCall {
 		// did is one click away.
 		c.Outcome = "requested"
 	case audit.KindPlan:
-		// Live since #537. Plan records were filtered out of this screen by
+		// Live since #537. Preflight records (audit kind `plan`) were filtered out of this screen by
 		// isAgentCall, which left this arm unreachable from buildAgents: the
 		// corrective switch named the case and nothing could enter it.
-		c.Outcome = "planned"
+		c.Outcome = "preflight"
 	}
 	return c
 }
@@ -1019,7 +1019,7 @@ func agentCallFrom(f trailFacts) agentCall {
 // It also keeps the tool NAME, which the bare word "read" it replaces threw
 // away: on a trust surface, WHICH read happened is the useful half.
 //
-// # A cancel names its tool; a Plan names the tool it planned
+// # A cancel names its tool; a Preflight names the tool it asked about
 //
 // RecordCancel writes no Action at all — no Operation, no argv, not even an
 // ActionKind (auditsink.go) — so a cancel reaches the Kind switch at the
@@ -1033,12 +1033,12 @@ func agentCallFrom(f trailFacts) agentCall {
 // "cancelled Job 9d41" in prose and carries no Operation for it, so this is
 // that sentence's tool-cell spelling rather than a second name for one record.
 //
-// A Plan needs NO arm here, and that is a decision rather than an omission.
-// Plan mode is `plan: true` on run_operation / raw_exec and not a ninth tool
+// A Preflight needs NO arm here, and that is a decision rather than an omission.
+// A Preflight is `plan: true` on run_operation / raw_exec and not a ninth tool
 // (spec 03), and its record carries the same Action fields a dispatch does
 // (auditsink's baseRecord), so it falls through the two branches above and
 // renders `run_operation · service.restart` or `raw_exec` — which is what was
-// called. That it never ran is the OUTCOME chip's job ("planned",
+// called. That it never ran is the OUTCOME chip's job ("preflight",
 // agentCallFrom), which is exactly how Activity keeps the same two facts
 // apart: `operationText` names the Operation and the summary says nothing
 // executed.
@@ -1129,7 +1129,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
 <div class="agentcols">
   <aside class="agentrail">
-    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked, refused, parked and planned included · counted over the calls on this page · a collapsed row counts all the calls it stands for</span></div>
+    <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked — refused, parked and preflight calls included · counted over the calls on this page · a collapsed row counts all the calls it stands for</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
       <span class="dot" data-live="on"></span>

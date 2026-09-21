@@ -19,16 +19,16 @@ enough to hand the same keys to an AI-agent. Every rule below serves that.
    pixels on deviations.
 3. **One decision per screen.** Decision surfaces (approval, apply) carry exactly one primary
    action with nothing competing.
-4. **Plan before apply, everywhere.** Compose → see the truth → confirm identity → run. The
-   mutating path is deliberately slower than the reading path.
+4. **Preflight before apply, everywhere.** Compose → see the truth → confirm identity → run.
+   The mutating path is deliberately slower than the reading path.
 5. **The customer's taxonomy is the organising axis.** Their label values (`prod`, `payments`,
    `web`) are the headline structure. Relay's own bookkeeping is "group by nothing".
 6. **Live but stable.** Counters and lists may update live. Anything a human is reading in order
-   to decide — an open approval card, a rendered Plan — is pinned and never reflows. New events
-   queue behind an explicit click rather than pushing in.
+   to decide — an open approval card, a rendered Preflight — is pinned and never reflows. New
+   events queue behind an explicit click rather than pushing in.
 7. **No settings pages, ever.** Relay configuration (blast caps, listeners, gate rules,
-   `console_execution`) appears only as *effects in context* — a cap inside a plan line — never as
-   an inventory of editable values. Invariant #11.
+   `console_execution`) appears only as *effects in context* — a cap inside a preflight line —
+   never as an inventory of editable values. Invariant #11.
 
 ## The four questions
 
@@ -170,7 +170,8 @@ Build these once. They appear on three or more screens each.
 
 **Plan renderer** (composer, approval object, Job detail). Fan-out summary with the cap arithmetic
 visible, risk-class badge, grouped per-Node verdicts with expansion, and the plan hash in mono —
-the hash is what an approval commits to. Pinned once rendered.
+the hash is what an approval commits to. In the composer it renders the Preflight verdict; on the
+approval object and Job detail it renders the Plan an approval commits to. Pinned once rendered.
 
 **Segmented outcome bar** (Job detail, composer, Activity). Minority segments carry a **floor
 width**. At 10,000 Nodes, 14 denies are 0.14% and would vanish — and they are the entire reason
@@ -202,7 +203,7 @@ Three conditions, in descending urgency:
 
 | Condition | Says |
 |---|---|
-| **Freeze engaged** | all new Task dispatch halted; in-flight Tasks keep running and Plans still resolve; who engaged it and when |
+| **Freeze engaged** | all new Task dispatch halted; in-flight Tasks keep running and Preflights still resolve; who engaged it and when |
 | **Relay certificate near expiry** | automatic rotation has failed; the whole fleet fail-closes when it lapses |
 | **CA near expiry** | the trust root every Node pins is running out; there is no rotation path today (D14) |
 
