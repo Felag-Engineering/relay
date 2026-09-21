@@ -95,3 +95,10 @@ Node-side veto requires Node-side code.
 - If accepted: GLOSSARY.md gains a term for this execution mode, and the threat-model
   doc (v0.0.8) must cover it as an explicit reduced-assurance configuration with its own
   boundary diagram.
+
+## Note (2026-09-20): numbering
+
+This proposal was filed as a second `ADR-0015` on 2026-08-27, colliding with the golden-schema
+ADR; #570 renumbered it to **ADR-0037** on 2026-09-12. Any citation of "ADR-0015" that means
+the agentless tier is stale (#281 was retitled). Still **Proposed**; a spec's *Governing ADRs*
+section must not lean on it.

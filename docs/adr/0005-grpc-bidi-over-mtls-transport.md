@@ -35,3 +35,12 @@ stream.
   single Relay.
 - gRPC keepalive intervals must be tuned for many idle connections to avoid spurious
   wakeups or GOAWAYs.
+
+## Amendment (2026-09-20): amended by ADR-0031
+
+Recorded late — ADR-0031 (2026-08-18) says it amends this ADR and this file never said so. The
+Relay presents **one server certificate** on both listeners, and the daemon pins the Relay by the
+**CA fingerprint carried in the join string** rather than by a distributed CA bundle file. The
+transport decision here — gRPC bidirectional streaming over mTLS, one long-lived Tunnel per
+Node — is unchanged; what changed is how the daemon comes to trust the Relay's certificate.
+Designed, not built (#401, #406; milestone v0.6.5).

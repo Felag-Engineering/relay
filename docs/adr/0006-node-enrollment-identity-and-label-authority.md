@@ -180,3 +180,15 @@ and Plans on `relay:` targets; secret distribution is Future work there.
 that engage resolves to — an `operator` or an AI-agent holding an `operator` machine Account. The
 engage resolves once, shows the caller the exact Nodes, and every tag write is audited; nothing
 prevents it. Recorded as **R17** in `docs/security/threat-model.md`.
+
+## Amendment (2026-09-20): amended by ADR-0031 and ADR-0034
+
+Two amendments other ADRs made to this one were never recorded here.
+
+- **ADR-0031** (2026-08-18): enrollment is bootstrapped by a **join string** — Enrollment Token
+  plus CA fingerprint in one pasteable value — and the daemon pins the Relay's CA from it.
+  Designed, not built (milestone v0.6.5). Token scope and identity issuance are unchanged.
+- **ADR-0034**: the label namespaces are **four** — `node:`, `relay:`, `tag:`, `state:` — not the
+  three the History section above stops at. `state:` is Relay-derived from the registry at
+  Selector-resolution time, from a closed vocabulary, written by nobody. Invariant 7 as rewritten
+  on 2026-09-16 already names all four.

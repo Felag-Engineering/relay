@@ -70,7 +70,7 @@ is an audit-legibility choice, not a semantic one.
 so `denied by pattern "^--force$"` alone is not reconcilable against the argv a caller sent.
 The reason now reads `raw exec denied by pattern "^--force$" (matched canonical element
 "--force")`, distinguishing joined command / argv element / canonical element. This string is
-`PolicyVerdict.deciding_rule` verbatim, so `PolicyQuery`, plan mode and
+`PolicyVerdict.deciding_rule` verbatim, so `PolicyQuery`, the Policy preflight and
 `policy check --would-allow` all inherit it.
 
 Every caller-controlled fragment quoted into a reason — the matched text, and `argv[0]` in the

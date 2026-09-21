@@ -307,3 +307,12 @@ spending limit; a Plan is an itemised invoice.
 - **The Console renders Plans but does not compose them in v1.** Console execution remains behind
   the `console_execution` flag and is unbuilt (invariant 10's gap row, #438). Proposing a route is
   an agent act; approving one is a human act, and the approval queue is where a Plan meets a person.
+
+## Amendment (2026-09-20): dated, and its consumers recorded
+
+This ADR carried no date; it was accepted on **2026-09-12** (ADR-0013's inline note dates it).
+Consumers updated on 2026-09-20: invariants 10 and 12 in `AGENTS.md` now say
+*preflight-by-default* and *the Policy preflight*; ADR-0011 carries the rename at its head;
+ADR-0026 and ADR-0027 are reworded and record the amendment; ADR-0004, 0009, 0018 and 0019 lose
+their incidental "plan mode"; the Console's user-facing word is **Preflight** (#575). Left as
+written: the `plan` wire option, until the code follows.

@@ -97,3 +97,9 @@ Owner decision, 2026-09-16 (#582). Two decisions above are superseded; the rest 
 
 `tag:` storage and its write path are still unbuilt (#430); until they exist, a `tag:` term is
 refused at parse on every surface, quarantine included.
+
+## Amendment (2026-09-20): amended by ADR-0034
+
+ADR-0034 added a fourth namespace, `state:` (Relay-derived, written by nobody), beside `node:`,
+`relay:` and `tag:`. Wherever this ADR counts three namespaces, read four; the rules for `tag:`
+are unchanged.

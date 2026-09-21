@@ -33,7 +33,7 @@ with exit code, captured output (size-capped), and duration.
   connecting a second later gets nothing. No grace windows — a delayed queue would mean
   Tasks that fire with no intentional actor behind them, breaking the premise every
   guardrail (Plan, caps, Policy, audit attribution) rests on: *someone decided this
-  action, now*. Stragglers are the caller's decision to re-target; Plan mode's
+  action, now*. Stragglers are the caller's decision to re-target; the Policy preflight's
   `unknown(offline)` verdicts are exactly that retry list.
 
 ## Consequences

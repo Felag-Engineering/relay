@@ -6,7 +6,7 @@ invariant #10. The rest of ADR-0009 — thin adapter, internal-only exposure, Ac
 Policy read-only — stands unchanged.
 
 The Console will expose the same execution surface the MCP surface and the Control API
-expose: `run_operation`, plan mode, Raw Exec, Job and Task status. Not as a new control
+expose: `run_operation`, the Policy preflight, Raw Exec, Job and Task status. Not as a new control
 path — through the one capability layer, like everything else (ADR-0003, ADR-0010).
 
 ## What ADR-0009 decided, and why reversing it is not a climb-down
@@ -60,9 +60,9 @@ click would counterfeit the strongest credential in the model. See "Consequences
    test suite. The guard is extended, never dropped — a new execution surface is exactly
    when the temptation to shortcut appears.
 
-2. **Plan-by-default.** Every execution UI resolves and renders the Plan first — fan-out,
-   per-Node Policy verdicts, the rule that would fire — and applying is a separate,
-   deliberate act. Plan mode is daemon-evaluated (ADR-0011); the Console renders a verdict
+2. **Preflight-by-default.** Every execution UI resolves and renders the Policy preflight
+   first — fan-out, per-Node Policy verdicts, the rule that would fire — and applying is a
+   separate, deliberate act. The preflight is daemon-evaluated (ADR-0011); the Console renders a verdict
    it did not compute.
 
 3. **Step-up re-authentication on every `mutate` apply**, in addition to the existing
@@ -131,7 +131,7 @@ click would counterfeit the strongest credential in the model. See "Consequences
 - **The browser-borne fleet-RCE consequence class returns**, mitigated rather than
   eliminated. Session hijack, XSS, and CSRF are now on the path to command execution on
   every Node the session's role can reach. The mitigations are stacked and each is
-  load-bearing: internal-only exposure, plan-by-default, step-up on apply, role gates,
+  load-bearing: internal-only exposure, preflight-by-default, step-up on apply, role gates,
   Node Policy underneath everything, and `console_execution = off` for deployments that
   decline the trade entirely.
 
@@ -167,7 +167,7 @@ acceptance criterion here has been met for.
 
 The clause could not simply be deleted. It exists to correct ADR-0009's original no-execution
 scope, and removing it would reopen the assumption that the Console is read-only by design. It
-is now conditional — "where it executes, it does so plan-by-default…" — which states this ADR's
+is now conditional — "where it executes, it does so preflight-by-default…" — which states this ADR's
 constraints without asserting that the surface has shipped, and stays true when #438 lands.
 
 The same edit dropped the surface headcount. The invariant opened "One capability layer, three
@@ -184,3 +184,11 @@ configured (ADR-0029). An adapter **narrows only** — it may offer less, and ma
 reimplement, or decide. Which surface exposes what belongs in the capability specifications,
 not in the invariant. GLOSSARY.md's **Capability layer** entry carries the matching
 vocabulary.
+
+## Amendment (2026-09-20): terminology for ADR-0038
+
+ADR-0038 gave **Plan** to the approved route of execution and renamed the no-execution preview
+**Policy preflight**. This ADR's decision 2 and its references to "plan mode" / "plan-by-default"
+were reworded in place to *preflight*; nothing in the decision changed. Invariant 10's clause
+now reads "preflight-by-default" (amended 2026-09-20). The Console's user-facing word is
+**Preflight** (#575, owner decision 2026-09-20).

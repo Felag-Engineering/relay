@@ -231,7 +231,7 @@ stands alone — but the premium path's security claim is Gleipnir's to keep.
   so nobody later mistakes elicitation delivery for an end-to-end assurance Relay can make
   on its own. Relay's own guarantee is the out-of-band channel.
 
-- **Approval is now the third mechanism that must render a Plan** (plan mode, the Console
+- **Approval is now the third mechanism that must render a preflight** (the Policy preflight, the Console
   composer, the approval object). They share one rendering contract, or they will drift —
   and a Plan that renders differently in the approval queue than at execution *is* the
   approval-view fidelity gap, reintroduced by us.
@@ -435,3 +435,15 @@ Console must track several groups). The choice between them is future work in
 
 **Mitigation until then** is authoring: give a security-lane rule the widest match it needs, and do
 not let a broader rule with a different or empty audience overlap it.
+
+## Amendment (2026-09-20): amended by ADR-0038, and by ADR-0029
+
+Two amendments other ADRs made to this one were never recorded here.
+
+- **ADR-0038** (2026-09-12) reassigned the word **Plan** to an approved route of execution.
+  Where this ADR says a Plan hash binds an approval, the hash binds the *rendered preflight*
+  of the request being approved, and the "three mechanisms that must render a Plan" bullet
+  under Consequences now says *preflight*. The binding itself is unchanged.
+- **ADR-0029** (2026-07-28) overtook decision 2's "held elicitation" envelope: an in-band
+  decision travels through the tool surface (`approve_request`, and MRTR elicitation once
+  built), not a held call. Decision 2's text stands as written; this note is its amendment.

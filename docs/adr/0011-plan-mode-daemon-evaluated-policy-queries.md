@@ -1,4 +1,11 @@
-# Plan mode: daemon-evaluated Policy queries, structurally separate from execution
+# Policy preflight: daemon-evaluated Policy queries, structurally separate from execution
+
+> **Amended by ADR-0038 (2026-09-12; recorded here 2026-09-20).** The mechanism this ADR
+> decides is now called the **Policy preflight**; the word **Plan** names an approved route of
+> execution. The body below keeps its original wording ("plan", "the Plan") for the preview;
+> read it as *preflight*. The `terraform plan` / check-mode framing is withdrawn by ADR-0038 —
+> a preflight asks Policy a question and never reaches an executor; it is not a dry run of one.
+> The wire option is still spelled `plan` until the code follows.
 
 `run_operation` and `raw_exec` (MCP and Control API) accept a **plan** option: the Relay
 resolves the Selector, checks authorization and the blast-radius cap, and asks each
