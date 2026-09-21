@@ -6,15 +6,60 @@
 #   scripts/codex-review.sh security [<base-ref>]      the same diff, focused on the security surface
 #   scripts/codex-review.sh design   <design-file>     read-only critique of a design plan
 #
-# Prints Codex's report on stdout. Exit 0 on a report, 3 if Codex is not available —
-# the caller then records the gate as single-reviewer, never as passed. Codex is a
-# reviewer only: every mode here is read-only (no --write), and this script never
+# Prints Codex's report on stdout. The exit contract:
+#
+#   0                   a report on stdout.
+#   2                   this script refused (bad usage, unresolvable base, empty change,
+#                       unreadable design file, `mktemp -d` failure).
+#   3                   Codex is ABSENT: the plugin, the CLI or node is missing, OR the
+#                       companion reported an exhausted usage quota, OR it reported an
+#                       authentication failure. The caller records the gate as
+#                       single-reviewer, never as passed.
+#   any other non-zero  the review FAILED and must be escalated; never treated as absence.
+#
+# Codex is a reviewer only: every mode here is read-only (no --write), and this script never
 # invokes `task` with write access.
+#
+# --- How absence is told apart from failure (#620) -------------------------------------
+#
+# Absence is detected only on a FAILED run (rc != 0). A run that exits 0 is a report,
+# whatever words are in it — a review of a change about quotas, rate limits or
+# authentication contains every phrase matched below.
+#
+# rc != 0 is not sufficient. A real review can fail after delivering its report, and a
+# review of THIS script quotes every trigger phrase. So classification also requires the
+# capture to be notice-shaped (small, and with nothing on stdout unless the whole capture is
+# tiny) and to carry no report marker. Everything a delivered report could make ambiguous
+# resolves toward "failed review", which is the pre-#620 behaviour.
+#
+# Captured bytes are never destroyed. On exit 3, and on a signal, they are replayed to
+# STDERR under a marker; stdout stays empty so no caller can read them as a review.
+#
+# Codex is not installed in the environment this was written in, so the companion's real
+# limit and auth output was not observed: every claim about its wording below is a design
+# assumption, and each is arranged so that being wrong costs a missed absence (exit
+# non-zero, which is today's behaviour) and never a false absence.
+#
+# Two residuals are stated rather than denied:
+#   (i)  a failed run whose short, marker-free diagnostic quotes a limit phrase is recorded
+#        as absence rather than as failure. Both mean no review completed, and the bytes are
+#        replayed to stderr, so nothing is lost but the label.
+#   (ii) a short review delivered entirely on stderr, with a non-zero exit and no report
+#        marker anywhere, is recorded as absence. All three have to coincide, and the bytes
+#        still reach stderr.
+# A third is closed outright: an exit-0 run with an empty capture used to be recorded as a
+# completed review, and is now a failure.
+#
+# Accepted cost of capturing to files rather than streaming: the report is delivered at
+# process exit rather than as it arrives. All three call sites read the completed output,
+# and a killed run's partial capture is replayed by the signal trap.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 mode=${1:-}; arg=${2:-origin/main}
-[ -n "$mode" ] || { sed -n '2,11p' "$0"; exit 2; }
+# Usage is the header through the exit contract (lines 2-21), so a caller that gets the
+# invocation wrong also sees what each exit code means.
+[ -n "$mode" ] || { sed -n '2,21p' "$0"; exit 2; }
 
 companion=$(ls -d "$HOME"/.claude/plugins/cache/openai-codex/codex/*/scripts/codex-companion.mjs 2>/dev/null | sort -V | tail -1)
 if [ -z "$companion" ] || ! command -v codex >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
@@ -23,6 +68,177 @@ if [ -z "$companion" ] || ! command -v codex >/dev/null 2>&1 || ! command -v nod
 fi
 
 repo_rules="Constraints come from AGENTS.md (the fourteen invariants and the escalation list), GLOSSARY.md, docs/agents/workflow.md and the governing docs/specs/<capability>.md. Read them before judging. A change that would make an invariant, an ADR or a bound spec claim untrue is a blocking finding, never a suggestion. Cite file and line for every finding. Do not edit anything."
+
+# --- The absent-vs-failed classifier (#620) ---------------------------------------------
+#
+# `limit_re` and `auth_re` are the unobservable-signal ASSUMPTIONS named in the header: the
+# real wording was never seen, so a wrong guess here costs a missed absence (a non-zero exit,
+# which is the pre-#620 behaviour) and never a false one. Bare numeric codes match only
+# beside an http/status word or a trailing space, so a line number cannot match.
+limit_re='usage limit|rate limit|quota (exceeded|exhausted)|too many requests|resource[_ ]exhausted|(http |status )?429 '
+auth_re='not logged in|(run )?(codex )?login|authentication (failed|error)|unauthorized|invalid api key|expired (token|session)|re-?authenticate|(http |status )?401 '
+# `report_re` is the one matcher here that is NOT a guess about output we have never seen:
+# every word in it is one this script's own prompts demand of the report ("Output: Verdict …",
+# "tagged BLOCKING or SUGGESTION" — see the `case` arms below). It is a veto: a capture
+# carrying any of them is a report, not a notice, so it is never classified as absence.
+report_re='verdict|changes_requested|blocking|suggestion'
+
+# Byte bounds for "this is a diagnostic, not a report". Branch one is grounded in this
+# script's own contract — the report goes to stdout, so bytes on stdout mean something was
+# delivered. Branch two covers a notice that arrives on stdout instead (which we cannot rule
+# out) at a bound no report the prompts demand could fit inside.
+notice_max_stderr=1024   # a diagnostic on stderr with nothing at all on stdout
+notice_max_total=256     # the whole capture, whichever stream it came on
+
+capture_dir=""
+capture_consumed=0
+cleanup_done=0
+out_bytes=0
+err_bytes=0
+
+# Measured on demand rather than read from out_bytes/err_bytes: a signal can arrive before
+# the companion returns, when the only record of a partial report is the files themselves.
+capture_bytes() {
+  local n=0 f
+  for f in "$capture_dir/out" "$capture_dir/err"; do
+    [ -f "$f" ] || continue
+    n=$(( n + $(wc -c <"$f" 2>/dev/null || echo 0) ))
+  done
+  printf '%s' "$n"
+}
+
+# Captured bytes reach a human even when this script has decided they are not a review.
+# stdout stays exactly empty on every path that calls this, so no caller can read the
+# replay as a report.
+replay_capture() {
+  [ -n "$capture_dir" ] || return 0
+  [ "$(capture_bytes)" -gt 0 ] || return 0
+  { echo "codex-review: --- captured output --- ($1)"
+    cat -- "$capture_dir/out" "$capture_dir/err" 2>/dev/null
+    echo "codex-review: --- end captured output ---"; } >&2
+}
+
+# Idempotent, because the signal trap's `exit` re-enters the EXIT trap. `capture_consumed`
+# is set by every path that has already delivered the bytes, so nothing is replayed twice.
+codex_review_cleanup() {
+  [ "$cleanup_done" -eq 0 ] || return 0
+  cleanup_done=1
+  if [ "$capture_consumed" -eq 0 ]; then
+    replay_capture "run interrupted before completion"
+  fi
+  case "${capture_dir:-}" in /*) rm -rf "$capture_dir" ;; esac
+}
+
+# run_companion <prompt> — the last statement of every `case` arm, so the classification
+# cannot exist on one arm and not the other. Never returns.
+run_companion() {
+  # Allocated here rather than at the top, so the no-companion and refusal paths above
+  # allocate nothing and install no trap.
+  capture_dir=$(mktemp -d) || { echo "codex-review: mktemp -d failed" >&2; exit 2; }
+
+  # Two traps over one handler, deliberately: a single combined `trap … EXIT INT TERM HUP`
+  # cannot both leave a normal exit status alone and stop a signalled run resuming into the
+  # rest of the script. `exit 1` on a signal is non-zero and non-3 — a killed run is a
+  # failed review, never an absence.
+  trap 'codex_review_cleanup' EXIT
+  trap 'codex_review_cleanup; exit 1' INT TERM HUP
+
+  # Redirection to FILES, not a pipe, not `$( )` and not `local x=$(…)`: a pipeline makes
+  # $? depend on pipefail and the last stage, `$( )` buffers and strips trailing newlines,
+  # and `local x=$(cmd)` takes $? from `local`. With files, $rc is the companion's own
+  # status and a partial report survives a crash or a kill.
+  node "$companion" task --fresh "$1" >"$capture_dir/out" 2>"$capture_dir/err"
+  rc=$?
+  out_bytes=$(( $(wc -c <"$capture_dir/out" 2>/dev/null || echo 0) ))
+  err_bytes=$(( $(wc -c <"$capture_dir/err" 2>/dev/null || echo 0) ))
+
+  # A success with nothing on stdout is not a report. Exit 1 is non-3, so it is a failure,
+  # not an absence.
+  if [ "$rc" -eq 0 ] && [ "$out_bytes" -eq 0 ]; then
+    echo "codex-review: companion exited 0 but produced no report on stdout; treating this as a failed review, not a report" >&2
+    cat -- "$capture_dir/err" >&2 2>/dev/null
+    capture_consumed=1
+    exit 1
+  fi
+
+  # The success door, first among the delivery paths: a run that exits 0 is a report.
+  if [ "$rc" -eq 0 ]; then
+    cat -- "$capture_dir/out"
+    cat -- "$capture_dir/err" >&2 2>/dev/null
+    capture_consumed=1
+    exit 0
+  fi
+
+  # Notice shape, computed BEFORE any trigger-phrase match.
+  notice_shaped=0
+  if [ "$out_bytes" -eq 0 ] && [ "$err_bytes" -le "$notice_max_stderr" ]; then
+    notice_shaped=1
+  elif [ $((out_bytes + err_bytes)) -le "$notice_max_total" ]; then
+    notice_shaped=1
+  fi
+
+  # The report veto catches the one case the bounds miss: a short review delivered entirely
+  # on stderr. A false veto costs a missed absence (safe); it can never cause one.
+  if [ "$notice_shaped" -eq 1 ] && grep -qiE "$report_re" "$capture_dir/out" "$capture_dir/err" 2>/dev/null; then
+    notice_shaped=0
+  fi
+
+  # Limit first (the case observed on #614), auth second. `-q` suppresses matches, not
+  # errors, hence the 2>/dev/null on every read of a capture file.
+  cause=""
+  if [ "$notice_shaped" -eq 1 ]; then
+    if grep -qiE "$limit_re" "$capture_dir/out" "$capture_dir/err" 2>/dev/null; then
+      cause=limit
+    elif grep -qiE "$auth_re" "$capture_dir/out" "$capture_dir/err" 2>/dev/null; then
+      cause=auth
+    fi
+  fi
+
+  if [ "$cause" = limit ]; then
+    # A TIME SHAPE, not a charset bound: `grep -o` emits only the matched token and the `-x`
+    # re-validation requires the whole survivor to BE a time shape, so the only bytes that
+    # can reach stderr are digits, a colon, a space and a few lowercase unit letters. A
+    # charset bound wide enough for a reset clause is a superset of the bearer/API-key
+    # charset, and classification is limit-first, so a message carrying both a limit phrase
+    # and a credential reaches this line (AGENTS.md §9 — never log secrets). Nothing at all
+    # is extracted from an auth failure. A message that states no reset time yields the
+    # empty string and the parenthetical is dropped, never filled with what followed "reset".
+    # The re-validation and the length cap are backstops: while extraction uses `grep -o`
+    # they can never fire, and they are what keeps this line safe if it ever stops doing so.
+    # (Measured: with `-o` dropped, the cap alone rejects the leak; with the cap dropped too,
+    # a whole notice line reaches stderr.)
+    reset_re='[0-9]{1,3} *(sec|min|hour|day)[a-z]{0,4}|[0-9]{1,2}:[0-9]{2}'
+    reset=$(grep -shoiE "$reset_re" "$capture_dir/out" "$capture_dir/err" 2>/dev/null | head -1 | tr -d '\r\n')
+    printf '%s' "$reset" | grep -qxE "$reset_re" 2>/dev/null || reset=""
+    [ "${#reset}" -le 24 ] || reset=""
+    if [ -n "$reset" ]; then
+      printf 'codex-review: Codex unavailable — usage limit reached (message cites "%s"); this gate runs with one reviewer\n' "$reset" >&2
+    else
+      echo "codex-review: Codex unavailable — usage limit reached; this gate runs with one reviewer" >&2
+    fi
+  elif [ "$cause" = auth ]; then
+    echo "codex-review: Codex unavailable — authentication failed; this gate runs with one reviewer" >&2
+  fi
+
+  # AC1's "one stderr line naming the cause" is the FIRST line above, and the only line
+  # matching `^codex-review: Codex unavailable`; the replay below is delimited evidence, not
+  # a second cause.
+  if [ -n "$cause" ]; then
+    replay_capture "classified as Codex absent; these bytes are not a review"
+    capture_consumed=1
+    exit 3
+  fi
+
+  # Not absence: forward every byte unchanged and preserve the failure.
+  cat -- "$capture_dir/out"
+  cat -- "$capture_dir/err" >&2 2>/dev/null
+  capture_consumed=1
+  if [ "$rc" -eq 3 ]; then
+    echo "codex-review: companion exited 3 for a reason that is not a usage limit or an authentication failure; reporting 1 so it is not read as Codex being absent" >&2
+    exit 1
+  fi
+  exit "$rc"
+}
 
 case "$mode" in
   diff|security)
@@ -43,11 +259,11 @@ case "$mode" in
     else
       focus="Adversarial security review. This change touches the security surface (scripts/security-surface.sh lists which paths). Assume it is unsafe until proven otherwise: for each invariant in AGENTS.md the change could touch, walk the hostile path and say whether a crafted input, a forged label, a stolen credential or a compromised Node could defeat it. Classes to check: command or argument composition, trust-boundary errors, authn/authz gaps, Policy or deny-by-default erosion, secret handling, TLS weakening, hand-edited generated code. Output: Verdict PASS, CONCERNS or FAIL; then findings with severity and file:line."
     fi
-    node "$companion" task --fresh "$scope $focus $repo_rules Read-only: make no edits." ;;
+    run_companion "$scope $focus $repo_rules Read-only: make no edits." ;;
   design)
     f=$arg
     [ -r "$f" ] || { echo "codex-review: $f not readable" >&2; exit 2; }
-    node "$companion" task --fresh \
+    run_companion \
       "Adversarial review of the design plan at $f (docs/design/plans/README.md says what one is for). Do not take it at face value: verify every claim it makes about the codebase against the code, check it covers every acceptance criterion or spec claim it names, find what it misses, what it over-reaches, and where it would violate a repo constraint. Output: Verdict APPROVE or REVISE; Issues numbered, each tagged BLOCKING or SUGGESTION with file and line evidence; if REVISE, the specific corrections. $repo_rules Read-only: make no edits." ;;
   *) echo "codex-review: unknown mode $mode" >&2; exit 2 ;;
 esac
