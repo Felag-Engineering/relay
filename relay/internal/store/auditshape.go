@@ -49,7 +49,7 @@ const auditShapeCheckRows = 100
 // legacyTSWarnMsg is the one message both warning paths use, so an operator
 // grepping for it finds the first boot that saw the problem and every boot
 // since.
-const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows"
+const legacyTSWarnMsg = "audit trail holds pre-0024 timestamps — rows written by a Relay older than #656 sort out of order against migrated rows, and a pagination cursor landing on one can skip or repeat rows. If running the repair does not clear this warning, the offending rows are outside the statement's shape (no Relay binary can write such a value, so they were introduced by hand) and need manual inspection"
 
 // auditShapeCheckFailedMsg is logged when the detector itself cannot run. It
 // is never an error the caller sees: see warnOnLegacyAuditTimestamps.
@@ -204,6 +204,16 @@ func windowHoldsLegacyTimestamps(ctx context.Context, db *sql.DB) (legacyTSObser
 	// unlike ts DESC it assumes nothing about the clock. It reads
 	// auditShapeCheckRows table rows in reverse and decodes two columns of
 	// each, never the retained output blobs.
+	//
+	// THE PREMISE, stated because it is not a property of rowid in general:
+	// this holds because `audit` is append-only. Nothing in this repo deletes
+	// from it, VACUUMs it, or names a rowid on insert, so rowids are assigned
+	// in ascending order and never reused. SQLite reuses the highest rowid
+	// after the highest row is deleted, which would put a NEWER row below
+	// older ones and hide it from this window. Retention (#677) is the
+	// obvious future violator: deleting oldest-first stays safe, deleting
+	// newest or emptying the table does not. Anything that starts removing
+	// audit rows must re-check this window.
 	rows, err := db.QueryContext(ctx,
 		`SELECT audit_id, CAST(ts AS TEXT), ts GLOB ? FROM audit ORDER BY rowid DESC LIMIT ?`,
 		auditTSCanonicalGlob, auditShapeCheckRows)
