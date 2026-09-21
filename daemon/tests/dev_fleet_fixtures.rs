@@ -1214,13 +1214,14 @@ fn a_single_node_selector_survives_at_nine_nodes() {
 
 /// 5.9: doc drift guard, in the same spirit as
 /// `policy_allow_and_template_bodies_agree_on_the_script_path` above — every
-/// demo Node and the bastion fixture must be named in `docs/dev-fleet.md`.
+/// demo Node and the bastion fixture must be named in the demo runbook,
+/// `docs/operations/demo-fleet.md` (moved out of `docs/dev-fleet.md`).
 /// This catches an ADDED Node that was never documented; it cannot catch a
 /// STALE sentence about the old three-Node fleet (those are named edits in
 /// the implementation plan, not a cheap assertion).
 #[test]
 fn docs_dev_fleet_documents_every_demo_node() {
-    let doc_path = repo_root().join("docs/dev-fleet.md");
+    let doc_path = repo_root().join("docs/operations/demo-fleet.md");
     let doc = std::fs::read_to_string(&doc_path)
         .unwrap_or_else(|e| panic!("read {}: {e}", doc_path.display()));
 
@@ -1228,11 +1229,11 @@ fn docs_dev_fleet_documents_every_demo_node() {
         let needle = format!("dev-node-{n}");
         assert!(
             doc.contains(&needle),
-            "docs/dev-fleet.md never mentions {needle}"
+            "docs/operations/demo-fleet.md never mentions {needle}"
         );
     }
     assert!(
         doc.contains("policy.bastion.toml"),
-        "docs/dev-fleet.md never mentions policy.bastion.toml"
+        "docs/operations/demo-fleet.md never mentions policy.bastion.toml"
     );
 }

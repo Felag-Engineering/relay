@@ -29,11 +29,16 @@ if [ "${1:-}" != "--summary" ]; then
   done; echo "  ($m of $n unmentioned)"; echo
 
   echo "## Console routes  (docs/design/console/ counts until console.md exists)"
+  # Routes are not mux.HandleFunc calls: console.go registers them from a table of
+  # {"METHOD", "/console/...", ...} entries (Register, via r.Pattern()), so read the table.
   n=0; m=0
-  for r in $(grep -rhoE 'mux\.Handle(Func)?\("(GET|POST) (/console[^" ]*)' relay/internal/controlplane/console/*.go | grep -oE '/console[^" ]*' | sort -u); do
-    n=$((n+1)); k=$(echo "$r" | sed -E 's#\{[^}]+\}##g; s#/$##')
-    grep -qF -- "$k" "${SPECS[@]}" docs/design/console/*.md || { m=$((m+1)); echo "  - $r"; }
-  done; echo "  ($m of $n unmentioned)"; echo
+  while IFS=' ' read -r method r; do
+    [ -n "$r" ] || continue
+    n=$((n+1)); k=$(echo "$r" | sed -E 's#\{[^}]+\}##g; s#/+#/#g; s#/$##')
+    grep -qF -- "$k" "${SPECS[@]}" docs/design/console/*.md || { m=$((m+1)); echo "  - $method $r"; }
+  done < <(grep -hoE '\{"(GET|POST)", "/console[^"]*"' $(ls relay/internal/controlplane/console/*.go | grep -v _test) \
+           | sed -E 's/^\{"([A-Z]+)", "([^"]*)"$/\1 \2/' | sort -u)
+  echo "  ($m of $n unmentioned)"; echo
 
   echo "## Audit record kinds"
   n=0; m=0

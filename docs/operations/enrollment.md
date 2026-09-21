@@ -25,12 +25,12 @@ receives its own certificate. The risk of reuse is bounded by short TTL, scope,
 
 ## 1. Mint a token
 
-`POST /api/v1/enrollment-tokens` on the Relay's control plane (bearer-credential
-auth; [control-plane-credential.md](control-plane-credential.md)):
+`POST /api/v1/enrollment-tokens` on the Relay's control plane (`$RELAY_TOKEN` is an
+API Token; [control-plane-credential.md](control-plane-credential.md)):
 
 ```console
 $ curl --cacert ca-cert.pem \
-    -H "Authorization: Bearer $CONTROL_PLANE_CREDENTIAL" \
+    -H "Authorization: Bearer $RELAY_TOKEN" \
     -H "Content-Type: application/json" \
     -d '{"scope": ["relay:env=prod", "relay:cohort=web"], "ttl_seconds": 86400, "max_uses": 200}' \
     https://relay.example.internal:9443/api/v1/enrollment-tokens
@@ -131,7 +131,7 @@ Revoke a token at any time — this also cascade-revokes every Node it enrolled:
 
 ```console
 $ curl --cacert ca-cert.pem \
-    -H "Authorization: Bearer $CONTROL_PLANE_CREDENTIAL" \
+    -H "Authorization: Bearer $RELAY_TOKEN" \
     -X DELETE https://relay.example.internal:9443/api/v1/enrollment-tokens/<id>
 ```
 

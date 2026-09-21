@@ -226,8 +226,13 @@ Enrollment Token secret (`relay/internal/enroll/token.go`) — not low-entropy h
 passwords. A fast cryptographic hash compared in constant time
 (`crypto/subtle.ConstantTimeCompare`) is the correct, standard choice for that shape of
 secret; slow KDFs like bcrypt/argon2 exist to defend against brute-forcing low-entropy human
-secrets and are not needed here. The Relay's human-login credential model (Admin Console,
-v0.6.0) is a separate, future concern and may make a different choice.
+secrets and are not needed here. The Relay's human-login credential — the Admin Console
+password a human Account signs in with — is exactly that other shape, and does make the
+other choice: it is stored as an argon2id hash (`relay/internal/accounts`), verified by the
+Console's session layer (`relay/internal/consoleauth`), and set on the Relay host with
+`relay console-password` ([relay-install.md](relay-install.md)). The two credential kinds
+never substitute for one another: a password cannot call the API, and an API Token cannot
+sign in to the Console.
 
 ## Migrating from the seeded credential
 

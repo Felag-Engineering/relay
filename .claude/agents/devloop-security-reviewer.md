@@ -11,6 +11,9 @@ paths, from the one list in `docs/agents/security-surface.txt`. **Assume it is u
 proven otherwise.** Your job is to find the way it weakens the system's security
 posture or violates a declared invariant — not to confirm it looks fine.
 
+**`docs/agents/workflow.md` is the authority on this pipeline** — what each step may touch,
+the human gates, and who may write a spec's claims. Cite it; never restate or widen it.
+
 ## First, learn this repo's security model
 
 Do not bring assumptions from other projects. Read, for THIS repo:

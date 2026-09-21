@@ -6,7 +6,7 @@ How agent skills should consume this repo's domain documentation when exploring 
 
 - **`AGENTS.md`** at the repo root — how to work here, plus the fourteen architecture
   invariants. Each invariant names the ADR that governs it; use the list as the index into
-  `docs/adr/`, which is faster than reading all 36.
+  `docs/adr/`, which is faster than reading every ADR.
 - **`GLOSSARY.md`** at the repo root — the canonical glossary. Single-context repo; there is
   no `CONTEXT-MAP.md` and there should not be one.
 - **`docs/specs/<capability>.md`** — the capability specification for the area you're working

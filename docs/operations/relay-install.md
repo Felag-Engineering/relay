@@ -24,8 +24,8 @@ BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${V
 curl -fsSLO "${BASE}/${ARTIFACT}"
 curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS   # verify BEFORE install; failure is fatal
-install -m 0755 "${ARTIFACT}" /usr/local/sbin/relay
-/usr/local/sbin/relay --version                  # must self-identify as the pinned version
+install -m 0755 "${ARTIFACT}" /usr/local/bin/relay
+/usr/local/bin/relay --version                  # must self-identify as the pinned version
 ```
 
 `relay --version` (also `-version` and `-V`, identical to relay-daemon's spellings)
@@ -39,7 +39,8 @@ for a root-owned config file for the security-sensitive values (blast caps,
 minimum daemon version, listener addresses); the current flags+env mechanism is a
 documented interim — the security property that matters (set only at startup, never
 settable via any API, invariant #11) holds either way. All flags from
-`relay/cmd/relay/main.go`:
+`relay/cmd/relay/main.go`; `relay/packaging/relay.env.example` documents the same surface
+as an `EnvironmentFile`, with the reasoning behind each setting:
 
 | Flag | Env override | Default | Meaning |
 |---|---|---|---|
@@ -56,6 +57,7 @@ settable via any API, invariant #11) holds either way. All flags from
 | `-read-blast-cap` | `RELAY_READ_BLAST_CAP` | `10000` | Blast-radius cap for `read`-class Operations (max Nodes per Job; ADR-0004/0012). |
 | `-mutate-blast-cap` | `RELAY_MUTATE_BLAST_CAP` | `100` | Blast-radius cap for `mutate`-class Operations and Raw Exec. |
 | `-min-daemon-version` | `RELAY_MIN_DAEMON_VERSION` | *(empty)* | Minimum relay-daemon semver (ADR-0014). Empty disables the `outdated` gate; a malformed value refuses startup. See [iac-upgrades.md](iac-upgrades.md), and the prerelease caveat in [release-artifacts.md](release-artifacts.md) (#261). |
+| `-cert-expiring-fraction` | `RELAY_CERT_EXPIRING_FRACTION` | `0.25` | Fraction of a Node identity certificate's validity remaining below which `state:cert-expiring` fires (ADR-0034). Must be in `(0, 1]` — there is no off value; a value outside it refuses startup. |
 | `-control-enabled` | `RELAY_CONTROL_ENABLED` | `false` | Enable the control-plane listener (MCP + `/api/v1` + `/metrics`). |
 | `-control-addr` | `RELAY_CONTROL_ADDR` | `:9443` | Control-plane HTTPS listen address (distinct from `-addr`). |
 | `-oauth-issuer` | `RELAY_OAUTH_ISSUER` | *(empty)* | OIDC issuer for human MCP sessions (ADR-0024). Empty disables OAuth; set, it makes `-oauth-audience` and `-oauth-public-url` required and discovery run at startup. See [control-plane-credential.md](control-plane-credential.md). |
@@ -63,6 +65,14 @@ settable via any API, invariant #11) holds either way. All flags from
 | `-oauth-public-url` | `RELAY_OAUTH_PUBLIC_URL` | *(empty)* | Externally-reachable control-plane base URL, used to advertise protected-resource metadata. |
 | `-oauth-account-claim` | `RELAY_OAUTH_ACCOUNT_CLAIM` | `email` | Token claim naming the Account a session resolves to. |
 | `-oauth-required-scope` | `RELAY_OAUTH_REQUIRED_SCOPE` | *(empty)* | Scope every OAuth token must carry. |
+| `-approval-gate-config` | `RELAY_APPROVAL_GATE_CONFIG` | *(empty)* | Path to the root-owned approval-gate rules — which dispatches must wait for a human (ADR-0027; [approval-gates.md](approval-gates.md)). Empty disables approval gating. A configured path that cannot be loaded **refuses startup** rather than coming up with an empty rule set. |
+| `-approval-webhook-url` | `RELAY_APPROVAL_WEBHOOK_URL` | *(empty)* | HTTPS endpoint notified (fire-and-forget) when a dispatch parks for approval. Empty disables notification. Decisions never arrive this way — they land on `/api/v1`. |
+| `-approval-webhook-secret-file` | `RELAY_APPROVAL_WEBHOOK_SECRET_FILE` | *(empty)* | Path to a root-owned file holding the shared secret that signs approval webhook bodies (HMAC-SHA256). A path, never the secret itself; a world-readable file refuses startup. Empty sends unsigned notifications. |
+| `-approval-webhook-timeout` | `RELAY_APPROVAL_WEBHOOK_TIMEOUT` | `5s` | Total time budget for one approval webhook delivery attempt. |
+| `-console-enabled` | `RELAY_CONSOLE_ENABLED` | `false` | Serve the Admin Console on the control-plane listener (ADR-0009, ADR-0026); requires `-control-enabled`. Humans sign in with a password held as an argon2id hash in the store — set the first one with `relay console-password` (below). |
+| `-console-session-max-age` | `RELAY_CONSOLE_SESSION_MAX_AGE` | `12h` | Absolute lifetime of a Console session; never extended by activity. |
+| `-console-session-idle` | `RELAY_CONSOLE_SESSION_IDLE` | `30m` | Idle timeout of a Console session. |
+| `-console-step-up-window` | `RELAY_CONSOLE_STEP_UP_WINDOW` | `5m` | How recently a human must have re-authenticated for a step-up-gated action to proceed. Startup-only, like everything here: no Account of any role can extend it through any API. |
 
 Subcommands (checked before flag parsing):
 
@@ -71,6 +81,12 @@ Subcommands (checked before flag parsing):
   API Token and print it to stdout. This is how you obtain a control-plane credential;
   there is none in Relay configuration
   ([control-plane-credential.md](control-plane-credential.md), ADR-0023).
+- `relay console-password -store-path <path> -account <name> [-password-file <path>] [-clear]`
+  — set (or, with `-clear`, remove) a human Account's Admin Console sign-in password,
+  reading it from `-password-file` or standard input. There is deliberately no flag that
+  takes the password itself. The Account must already exist and be a human Account; the
+  Console has no default credential, so the first password is set here, on the Relay host,
+  against the root-owned store. Safe to run while the Relay is running.
 
 ## 3. First start
 
@@ -82,8 +98,11 @@ for `-hostname`. Both listeners chain to this CA:
   the pinned CA bundle; the Relay requires a client certificate for every RPC
   except the certless `Enrollment.Enroll` (ADR-0005/0006).
 - **Control plane** (`-control-addr`, when enabled): HTTPS serving the MCP surface
-  at `/mcp`, the Control API at `/api/v1`, and Prometheus metrics at `/metrics`,
-  all behind the seeded bearer credential. Its server certificate also chains to
+  at `/mcp`, the Control API at `/api/v1`, and Prometheus metrics at `/metrics`.
+  The Control API and MCP authenticate every call by a per-Account API Token (or, for
+  humans, an OAuth session when `-oauth-issuer` is set) — there is no shared
+  credential in Relay configuration (ADR-0023;
+  [control-plane-credential.md](control-plane-credential.md)). Its server certificate also chains to
   the Relay CA, so API/MCP clients need `ca-cert.pem` as their trust anchor (e.g.
   `curl --cacert`).
 
@@ -99,21 +118,32 @@ relay \
   -control-addr :9443
 ```
 
-Verify it is up:
+Verify it is up (`$RELAY_TOKEN` is an API Token minted per
+[control-plane-credential.md](control-plane-credential.md); there is no credential until
+you mint one):
 
 ```console
 $ curl --cacert /var/lib/relay/ca/ca-cert.pem \
-    -H "Authorization: Bearer $CONTROL_PLANE_CREDENTIAL" \
+    -H "Authorization: Bearer $RELAY_TOKEN" \
     https://relay.example.internal:9443/metrics | head
 ```
 
-## 4. Example systemd unit
+## 4. The packaged systemd unit
 
-The repository ships a hardened unit for the relay-daemon
-(`daemon/packaging/relay-daemon.service`) but **no packaged unit for the Relay
-binary yet** — the following is a documented example to adapt. The Relay does not
-need root: it needs write access to its CA directory and store, and the ability to
-bind its two ports.
+The repository ships a hardened unit for the Relay in `relay/packaging/`:
+`relay.service`, an example `EnvironmentFile` (`relay.env.example`) covering the
+whole configuration surface above, and a README with the install and enable steps
+(landed in #362). Use that, not a hand-written unit; the Node-side counterpart is
+`daemon/packaging/relay-daemon.service`. The Relay does not need root: it needs
+write access to its CA directory and store, and the ability to bind its two ports,
+and the packaged unit takes everything else away (empty capability bounding set,
+`NoNewPrivileges`, read-only filesystem apart from its state directory).
+
+The unit reads `/etc/relay/relay.env` (`0640 root:relay`), which holds no secret
+*values* — every credential is a file path — but does hold the security floor
+(invariant 11): whoever can edit it can lower that floor at the next restart.
+
+The abbreviated unit below shows the shape; the packaged file is the one to install.
 
 ```ini
 [Unit]
@@ -126,16 +156,11 @@ Type=exec
 # Dedicated unprivileged user; StateDirectory gives it /var/lib/relay.
 User=relay
 Group=relay
-DynamicUser=no
 StateDirectory=relay
 StateDirectoryMode=0700
-Environment=RELAY_ADDR=:7654
-Environment=RELAY_HOSTNAME=relay.example.internal
-Environment=RELAY_CA_DIR=/var/lib/relay/ca
-Environment=RELAY_STORE_PATH=/var/lib/relay/relay.db
-Environment=RELAY_CONTROL_ENABLED=true
-Environment=RELAY_CONTROL_ADDR=:9443
-ExecStart=/usr/local/sbin/relay
+# Configuration lives in /etc/relay/relay.env — see relay/packaging/relay.env.example.
+EnvironmentFile=-/etc/relay/relay.env
+ExecStart=/usr/local/bin/relay
 Restart=on-failure
 RestartSec=5s
 
@@ -152,6 +177,8 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 ```
 
+Install per `relay/packaging/README.md`, then:
+
 ```console
 $ sudo systemctl daemon-reload
 $ sudo systemctl enable --now relay
@@ -160,7 +187,8 @@ $ systemctl status relay
 
 The control plane comes up with no usable credential until you mint one. Run
 `relay bootstrap-token` on this host and switch your callers to the printed token —
-see [control-plane-credential.md](control-plane-credential.md).
+see [control-plane-credential.md](control-plane-credential.md). If the Admin Console is
+enabled, set the first human password with `relay console-password` the same way.
 
 ## 5. Operational levers on the Relay host
 

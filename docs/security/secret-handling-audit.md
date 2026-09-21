@@ -1,5 +1,12 @@
 # Secret-handling audit
 
+> **Scope note (2026-09-20).** This audit (dated 2026-08-11) was performed against the shared
+> control-plane credential model that ADR-0023 has since retired. It does **not** cover the
+> secrets added after it: Account passwords (argon2id hashes, `relay console-password`),
+> Admin Console sessions and their cookies, or the approval webhook signing secret
+> (`RELAY_APPROVAL_WEBHOOK_SECRET_FILE`). A re-audit is pending; until it lands, read the body
+> below as a record of what was checked then, not as a claim about today's secret inventory.
+
 ## Purpose & scope
 
 This note is a systematic sweep confirming that no secret — Enrollment Token, CA private

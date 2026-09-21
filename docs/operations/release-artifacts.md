@@ -61,10 +61,10 @@ curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
 
 # 3. Only a verified binary is installed (atomic: install(1) writes then renames).
-install -m 0755 "${ARTIFACT}" /usr/local/sbin/relay-daemon
+install -m 0755 "${ARTIFACT}" /usr/local/bin/relay-daemon
 
 # 4. Confirm the installed binary self-identifies as the pinned version.
-/usr/local/sbin/relay-daemon --version   # "relay-daemon 0.0.9 (commit ..., built ...)"
+/usr/local/bin/relay-daemon --version   # "relay-daemon 0.0.9 (commit ..., built ...)"
 ```
 
 Two hardening notes for the IaC role:

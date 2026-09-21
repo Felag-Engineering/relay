@@ -95,7 +95,11 @@ architecture invariants in [AGENTS.md](AGENTS.md) encode, and what
 
 - **Typed Operations, not shell strings.** A fixed vocabulary of structured Operations is the
   primary execution primitive; a regex-gated **Raw Exec** escape hatch covers the long tail.
-  ([ADR-0001](docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md))
+  Between them sit **Template Operations**: operator-authored, with the command structure
+  fixed in a root-owned local file and every parameter slot single-quoted, so an argument can
+  never change which command runs — new vocabulary is Templates, never new Natives.
+  ([ADR-0001](docs/adr/0001-structured-operations-with-regex-gated-raw-exec.md),
+  [ADR-0021](docs/adr/0021-local-template-tier-shipped-read-catalog-native-freeze.md))
 - **The Node distrusts the Relay.** Policy is locally-rooted and remotely-immutable, so a
   compromised Relay or jailbroken AI-agent still cannot exceed a Node's local limits.
   ([ADR-0002](docs/adr/0002-node-side-policy-is-locally-rooted-and-remotely-immutable.md))
@@ -127,11 +131,18 @@ at process start; nothing sets or raises them via an API.
 ## Repository layout
 
 ```
-/proto/        shared protobuf contract — source of truth for the wire + Operation vocabulary
-/relay/        the Relay (Go): gRPC server, MCP server, Job engine, CA, registry, store
-/daemon/       the relay-daemon (Rust): connection, Policy engine, Operation executors
-/docs/adr/     architecture decision records
-/docs/specs/   capability specifications — what each capability does today, every surface
+/proto/            shared protobuf contract — source of truth for the wire + Operation vocabulary
+/relay/            the Relay (Go): gRPC server, MCP server, Job engine, CA, registry, store
+/relay/packaging/  the Relay's hardened systemd unit and example EnvironmentFile
+/daemon/           the relay-daemon (Rust): connection, Policy engine, Operation executors
+/docs/adr/         architecture decision records — the *why*
+/docs/agents/      per-repo configuration agent skills read (tracker, labels, domain rules)
+/docs/api/         Control API reference and OpenAPI surface
+/docs/design/      console/ is the Console's live per-screen specification; the rest is pre-ADR design
+/docs/operations/  operator-facing runbooks (install, enrollment, packaging, recovery)
+/docs/security/    threat model — maps all fourteen invariants to the boundaries they defend
+/docs/specs/       capability specifications — what each capability does today, every surface
+/scripts/          CI gates and repo tooling (docs checks, spec coverage, security-surface list)
 GLOSSARY.md    the domain glossary — read this before touching anything
 AGENTS.md      instructions for AI agents working in this repo, and the invariants
 CLAUDE.md      Claude Code's entry point — a one-line import of AGENTS.md
@@ -140,13 +151,15 @@ CLAUDE.md      Claude Code's entry point — a one-line import of AGENTS.md
 ## Status
 
 Pre-release, and **not yet licensed for use** — publishing a `LICENSE` (source-available under
-the BSL) is a `v0.1.0-beta` deliverable and its parameters are still open.
+the BSL) is still open (#123) and its parameters are undecided.
 
-**`v0.1.0-beta`** — the first deployable vertical slice — is the next release. Because beta is
-specifically a *real-hardware* proof, several post-beta milestones were deliberately built ahead
-of it: the Template engine and shipped catalog, Accounts and access, the Control API, approval
-callout, and the MCP Tasks extension have all shipped. The Admin Console is in flight. The
-GitHub milestones are the authority on what is actually in progress.
+**The GitHub milestones are the authority on what is in progress**; read them with `gh` rather
+than inferring the target from any file. The latest tag is `v0.0.9`. Milestones were
+deliberately built out of order — the Template engine and shipped catalog, Accounts and access,
+the Control API, approval callout, and the MCP Tasks extension have all shipped ahead of a
+real-hardware proof. The Admin Console (monitoring, then administration and execution) is in
+flight, and the next milestone in line is the install path — **v0.6.5: `relay init`, the join
+string, and packages** (ADR-0030 through ADR-0033).
 
 ## Documentation
 
@@ -157,8 +170,8 @@ GitHub milestones are the authority on what is actually in progress.
 - **[docs/security/threat-model.md](docs/security/threat-model.md)** — the trust boundaries, and which invariant defends each.
 - **[docs/api/](docs/api/)** — Control API reference and OpenAPI surface.
 - **[docs/operations/beta-hardware-validation.md](docs/operations/beta-hardware-validation.md)** — the one validation that cannot be automated: proving the vertical slice on real machines.
-- **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `docker compose up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
-- **[docs/operations/relay-install.md](docs/operations/relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, flags/env, example `systemd` unit.
+- **[docs/dev-fleet.md](docs/dev-fleet.md)** — local dev fleet: `make dev-fleet-up` for one Relay + N relay-daemons, drivable over MCP (dev-only).
+- **[docs/operations/relay-install.md](docs/operations/relay-install.md)** — installing and running the Relay from a released artifact: verify-then-install, flags/env, the packaged `systemd` unit.
 - **[docs/operations/relay-daemon-install.md](docs/operations/relay-daemon-install.md)** — installing and running the relay-daemon on a Node: artifact, env config, Policy, the shipped unit.
 - **[docs/operations/enrollment.md](docs/operations/enrollment.md)** — joining Nodes to the fleet: scoped Enrollment Tokens, single-Node and bulk (Ansible) enrollment.
 - **[docs/operations/policy-as-code.md](docs/operations/policy-as-code.md)** — Policy files in the IaC repo: `policy check` in CI, config-management distribution, fingerprint-verified rollout.

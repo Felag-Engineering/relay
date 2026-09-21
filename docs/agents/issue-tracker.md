@@ -1,8 +1,9 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live in GitHub Issues on
+Issues for this repo live in GitHub Issues on
 [`Felag-Engineering/gleipnir-relay`](https://github.com/Felag-Engineering/gleipnir-relay),
-driven through the `gh` CLI.
+driven through the `gh` CLI. Capability specifications are files in `docs/specs/`, not
+issues — an issue is disposable and a spec is durable (`docs/agents/workflow.md`).
 
 ## Conventions
 
@@ -79,7 +80,7 @@ in the original body.
 ## Merge authority
 
 **No skill, agent, or routine merges anything.** The pipeline always ends by opening a PR
-for a human. This is not a style preference — see "How this repo is developed" in
+for a human. This is not a style preference — see "Routines & merge authority" in
 `AGENTS.md` and the escalation list there. An agent that believes it should merge has
 misread its instructions.
 
