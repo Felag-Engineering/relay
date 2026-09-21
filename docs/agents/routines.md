@@ -83,8 +83,8 @@ To stop permanently rather than temporarily, disable the routine at claude.ai/co
 ## What you come back to
 
 A stack of open PRs, each with a `make verify` result and an explicit statement of any skipped
-gate. Some will conflict — they were all cut from the same `main`. `resolving-merge-conflicts`
-is vendored for exactly that.
+gate. Some will conflict — they were all cut from the same `main`; rebasing them is a human's
+call, made PR by PR, and `/pr-respond` picks up whatever review comments follow.
 
 Issues labelled `loop:needs-human` are where the pipeline stopped rather than guessed:
 underspecified work, or a change that would have touched an architecture invariant. Those are
