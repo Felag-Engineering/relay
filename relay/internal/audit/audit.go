@@ -321,6 +321,10 @@ func AuthFailureKinds() []string {
 // self-contained primitives (no pointers into Job/Task state) so a Record
 // remains meaningful even after the Job or Task it describes is gone.
 type Record struct {
+	// ID is unique, and since #656 also MONOTONIC: NewID mints it so that
+	// lexicographic order over ids is mint order. That is what makes the
+	// (Timestamp, ID) tie-break below mean "append order" rather than
+	// "whichever random hex won".
 	ID        string
 	Timestamp time.Time
 	Kind      string
@@ -399,6 +403,18 @@ type Record struct {
 
 // Repository is the interface for the audit trail. Append-only: there is no
 // update or delete.
+//
+// Every reader below returns Records ordered by Timestamp, ties broken by ID.
+// That pair is a TOTAL order (#656): ID is minted monotonically by NewID, so
+// two Records sharing a Timestamp — which a dispatch fan-out guarantees, since
+// every per-Node Record copies one clock reading — come back in the same
+// order on every read, rather than in one that changes with each write.
+//
+// That order is the order the ids were MINTED in, which for the cases this
+// exists for is the order the Records were appended: a fan-out and an
+// AppendAll batch are both built in one pass, minting as they go. The two
+// differ only for concurrent Record calls that land on one Timestamp, where
+// "which was appended first" is not a question with an answer anyway.
 type Repository interface {
 	// Append persists a new Record.
 	Append(ctx context.Context, r Record) error
@@ -410,36 +426,40 @@ type Repository interface {
 	// connection, and the whole call holds it.
 	AppendAll(ctx context.Context, rs []Record) error
 
-	// List returns all Records, ordered by Timestamp.
+	// List returns all Records, ordered by Timestamp, ties broken by ID.
 	List(ctx context.Context) ([]Record, error)
 
-	// ByJob returns all Records for jobID, ordered by Timestamp.
+	// ByJob returns all Records for jobID, ordered by Timestamp, ties
+	// broken by ID.
 	ByJob(ctx context.Context, jobID string) ([]Record, error)
 
-	// ByNode returns all Records for nodeID, ordered by Timestamp — the
+	// ByNode returns all Records for nodeID, ordered by Timestamp, ties
+	// broken by ID — the
 	// "which Node" accountability query (AGENTS.md). Time-range querying is
 	// deferred to the first query surface; no acceptance need yet.
 	ByNode(ctx context.Context, nodeID string) ([]Record, error)
 
-	// ByAccount returns all Records for an Account ID, ordered by Timestamp —
+	// ByAccount returns all Records for an Account ID, ordered by Timestamp,
+	// ties broken by ID —
 	// the verified-lane query. It takes the ID rather than the name so the
 	// trail stays queryable across a rename, which is the reason the ID is
 	// recorded at all.
 	ByAccount(ctx context.Context, accountID string) ([]Record, error)
 
 	// ByApproval returns all Records authorized by an approval Request,
-	// ordered by Timestamp — including the park and the decision themselves, so
+	// ordered by Timestamp, ties broken by ID — including the park and the
+	// decision themselves, so
 	// one query answers "who asked, who approved, and what then ran". For a
 	// batch/window Grant's Request this is every dispatch the window released.
 	ByApproval(ctx context.Context, approvalID string) ([]Record, error)
 
 	// ByGrant returns all Records released by a batch/window Grant, ordered by
-	// Timestamp. Narrower than ByApproval on the same Request: this is the
+	// Timestamp, ties broken by ID. Narrower than ByApproval on the same Request: this is the
 	// dispatches only, which is what "what did that window actually do" means.
 	ByGrant(ctx context.Context, grantID string) ([]Record, error)
 
 	// ByOnBehalfOf returns all Records carrying an exact asserted OnBehalfOf
-	// value, ordered by Timestamp — the asserted-lane query.
+	// value, ordered by Timestamp, ties broken by ID — the asserted-lane query.
 	//
 	// Deliberately a separate method from ByAccount rather than a shared
 	// "principal" filter: a caller reading this trail must not be able to

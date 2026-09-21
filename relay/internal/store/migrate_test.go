@@ -480,3 +480,58 @@ func TestMigrate_UnknownAppliedVersionDoesNotBlockStartup(t *testing.T) {
 		t.Errorf("count = %d, want 1", entry.Count)
 	}
 }
+
+// TestLogMigrationApplied_InfoOnlyPastTheSlowThreshold pins the level the
+// per-migration line is logged at, in both directions.
+//
+// It matters twice. A fresh Open applies two dozen migrations in microseconds
+// each: at Info they bury the one line an operator is meant to see, which is
+// why everything below migrationSlowThreshold is Debug. And 0024 rewrites
+// every audit row — minutes on a large trail — which is the line that must
+// not be invisible.
+//
+// The durations here are ABSOLUTE rather than expressed relative to
+// migrationSlowThreshold on purpose: a test written as
+// "migrationSlowThreshold - 1ns must be Debug" passes even if the threshold
+// is set to zero, which is exactly the regression it would exist to catch.
+func TestLogMigrationApplied_InfoOnlyPastTheSlowThreshold(t *testing.T) {
+	cases := []struct {
+		name    string
+		elapsed time.Duration
+		want    string
+	}{
+		{"instant, as a schema-only migration is", 0, "DEBUG"},
+		{"a typical fresh-database migration", 50 * time.Microsecond, "DEBUG"},
+		{"slow, but not slow enough to notice", 999 * time.Millisecond, "DEBUG"},
+		{"one second", time.Second, "INFO"},
+		{"0024 on a large trail", 14 * time.Minute, "INFO"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var logBuf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			logMigrationApplied(logger, "0024_audit_ts_sortable.sql", c.elapsed)
+
+			var entry struct {
+				Level    string `json:"level"`
+				Msg      string `json:"msg"`
+				Name     string `json:"name"`
+				Duration int64  `json:"duration"`
+			}
+			if err := json.Unmarshal(logBuf.Bytes(), &entry); err != nil {
+				t.Fatalf("unmarshal %q: %v", logBuf.String(), err)
+			}
+			if entry.Level != c.want {
+				t.Errorf("a migration taking %s logged at %s, want %s — below %s the line is noise that buries the one that matters, at or above it the operator is entitled to know which migration they are waiting on",
+					c.elapsed, entry.Level, c.want, migrationSlowThreshold)
+			}
+			if entry.Msg != "applied schema migration" || entry.Name != "0024_audit_ts_sortable.sql" {
+				t.Errorf("line = %q — both levels must carry the same message and the migration's name", logBuf.String())
+			}
+			if entry.Duration != int64(c.elapsed) {
+				t.Errorf("duration = %d, want %d — the number is the whole point of the line", entry.Duration, int64(c.elapsed))
+			}
+		})
+	}
+}

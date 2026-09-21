@@ -58,6 +58,12 @@ func loadMigrations() ([]migration, error) {
 	return migrations, nil
 }
 
+// migrationSlowThreshold is the duration past which a single migration is
+// logged at Info rather than Debug. One second: below it an operator would not
+// notice the pause anyway, and above it they are entitled to know which
+// migration they are waiting on.
+const migrationSlowThreshold = time.Second
+
 // migrate applies every embedded migration whose version is ABSENT from
 // schema_migrations, each in its own transaction, recording the applied
 // version as it goes. This is selection by per-version presence, not by
@@ -99,12 +105,43 @@ func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 		)
 	}
 
+	// Timed because 0024 is the first migration whose cost is proportional to
+	// the size of a table rather than to the schema — it rewrites every audit
+	// row, at roughly 16 seconds per GB — so a boot that used to be instant can
+	// now take minutes, and the operator is owed the reason.
+	//
+	// Info only past migrationSlowThreshold, Debug otherwise. A fresh database
+	// applies two dozen migrations in microseconds each; logging all of them at
+	// Info buries the one line that matters under the ones that never do. The
+	// threshold is what makes a slow migration self-announcing rather than
+	// something to go looking for.
+	//
+	// Said plainly because the line cannot do more than this: it reports a
+	// migration's cost AFTER that migration returns. It is not a progress
+	// signal — an operator watching a boot still inside a 14-minute 0024 sees
+	// nothing from here until it finishes.
 	for _, m := range pending {
+		start := time.Now()
 		if err := applyMigration(ctx, db, m); err != nil {
 			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
+		logMigrationApplied(logger, m.name, time.Since(start))
 	}
 	return nil
+}
+
+// logMigrationApplied records that one migration finished: at Info if it took
+// at least migrationSlowThreshold, at Debug otherwise.
+//
+// A function rather than two lines inline so the choice of level is directly
+// testable — TestLogMigrationApplied_InfoOnlyPastTheSlowThreshold pins both
+// branches without spending a second of test time to reach the slow one.
+func logMigrationApplied(logger *slog.Logger, name string, elapsed time.Duration) {
+	if elapsed >= migrationSlowThreshold {
+		logger.Info("applied schema migration", "name", name, "duration", elapsed)
+		return
+	}
+	logger.Debug("applied schema migration", "name", name, "duration", elapsed)
 }
 
 // schemaMigrationsExists reports whether the schema_migrations table has

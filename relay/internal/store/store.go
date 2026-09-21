@@ -207,6 +207,18 @@ func Open(path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("backfill approval shape keys %q: %w", path, err)
 	}
 
+	// Diagnostic only, and deliberately after everything that can fail: it
+	// returns nothing and never gates startup (#656, and #492's
+	// tolerate-don't-refuse posture). It shares s.logger, set above before
+	// migrate, so a caller's WithLogger sees it exactly as it sees the
+	// schema-newer-than-binary warning.
+	//
+	// It touches no audit row. The one thing it can write is its own
+	// audit_shape_alert row (0025), which is how a warning about a
+	// rolled-back binary survives the hundred appends that would otherwise
+	// bury the evidence; a failure to write it is logged, not returned.
+	warnOnLegacyAuditTimestamps(context.Background(), db, s.logger)
+
 	return s, nil
 }
 

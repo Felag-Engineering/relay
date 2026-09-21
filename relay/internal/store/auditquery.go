@@ -30,6 +30,18 @@ const auditQueryColumns = `audit_id, ts, kind, principal, selector, job_id, node
 	asserted_on_behalf_of, asserted_traceparent, asserted_session_ref, asserted_change_ref,
 	approval_id, grant_id, approval_answer, decision_channel, plan_hash`
 
+// auditOrderDesc is the read lane's newest-first order, and the exact mirror
+// of audit.go's auditOrderAsc (#656).
+//
+// The ", audit_id DESC" half is not decoration: Query's keyset predicate
+// below is "ts < ? OR (ts = ? AND audit_id < ?)", which presumes the rows
+// arrive in descending audit_id within a timestamp. Spelling this clause any
+// other way — a bare "ORDER BY ts", or the mixed "ORDER BY ts DESC, audit_id"
+// — makes the paged walk skip or repeat every row that shares a timestamp
+// with a page boundary. TestAuditSQL_EveryOrderByTsCarriesTheTieBreak
+// requires this exact text, or auditOrderAsc's, and nothing else.
+const auditOrderDesc = `ORDER BY ts DESC, audit_id DESC`
+
 // auditArgKeyPattern bounds Query.ArgKey before it reaches
 // json_extract(args, '$.' || ?): defense in depth alongside
 // capability.AuditFilter.validate (#441 plan) — this store package trusts no
@@ -73,6 +85,12 @@ func checkBucketCount(groupCount int64) error {
 // after a cursor was issued sorts newer, so it appears on an EARLIER page the
 // caller already turned, never inside the one they are about to fetch).
 //
+// The "ts < ?" and "ts = ?" comparisons are TEXT comparisons, and they are
+// exact only because every stored ts is the same fixed width (#656, migration
+// 0024). decodeAuditCursor's normalisation is what extends that exactness to
+// a cursor issued by an older binary, whose ts came back from the driver in
+// the trimmed rendering.
+//
 // LIMIT is requested as limit+1 so Next can be computed from this one round
 // trip: a limit+1'th row means there is a next page, and its cursor is drawn
 // from the limit'th (the last row actually returned), not the extra one.
@@ -96,7 +114,7 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 	if len(conds) > 0 {
 		stmt += ` WHERE ` + strings.Join(conds, " AND ")
 	}
-	stmt += ` ORDER BY ts DESC, audit_id DESC LIMIT ?`
+	stmt += " " + auditOrderDesc + " LIMIT ?"
 	args = append(args, limit+1)
 
 	rows, err := a.db.QueryContext(ctx, stmt, args...)
@@ -105,17 +123,13 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 	}
 	defer rows.Close()
 
-	type scannedRow struct {
-		row audit.Row
-		ts  string // the raw stored ts text, for the cursor — see encodeAuditCursor
-	}
-	var fetched []scannedRow
+	var fetched []audit.Row
 	for rows.Next() {
-		row, ts, err := scanAuditQueryRow(rows)
+		row, err := scanAuditQueryRow(rows)
 		if err != nil {
 			return audit.Page{}, err
 		}
-		fetched = append(fetched, scannedRow{row, ts})
+		fetched = append(fetched, row)
 	}
 	if err := rows.Err(); err != nil {
 		return audit.Page{}, fmt.Errorf("iterate audit trail: %w", err)
@@ -127,12 +141,19 @@ func (a *sqliteAudit) Query(ctx context.Context, q audit.Query, limit int, curso
 		fetched = fetched[:limit]
 	}
 	page.Rows = make([]audit.Row, len(fetched))
-	for i, s := range fetched {
-		page.Rows[i] = s.row
-	}
+	copy(page.Rows, fetched)
 	if hasMore && len(fetched) > 0 {
+		// The cursor carries the STORED rendering of the last row's ts,
+		// re-derived from its parsed Timestamp — never the string that came
+		// back from the scan. modernc.org/sqlite reads the ts column's
+		// TIMESTAMP decltype and parses the text into a time.Time, and
+		// database/sql then renders that into a Go string as trimmed
+		// RFC3339Nano. So a scanned ts of a 30-character stored row is 20
+		// characters, and a cursor built from it compares unequal to the
+		// column it is compared against — which returned the same row forever
+		// (#656).
 		last := fetched[len(fetched)-1]
-		page.Next = encodeAuditCursor(last.ts, last.row.ID)
+		page.Next = encodeAuditCursor(last.Timestamp.UTC().Format(auditTimeLayout), last.ID)
 	}
 	return page, nil
 }
@@ -353,12 +374,19 @@ func buildAuditWhere(q audit.Query) (conds []string, args []any, err error) {
 }
 
 // secondPrefix formats t, floored to the whole second, and returns its
-// 19-character date/time prefix ("2006-01-02T15:04:05") — the only part of
-// an RFC3339Nano string that orders correctly as TEXT (D4): trailing zeros in
-// the fractional part are trimmed at format time, so e.g. "...00Z" sorts
-// BEFORE "...00.5Z" and "...00.1Z" sorts AFTER "...00.15Z". At whole-second
-// granularity this is a total, stable order, which is all a range bound or a
-// cursor comparison needs.
+// 19-character date/time prefix ("2006-01-02T15:04:05").
+//
+// It is NOT a workaround for the text format any more. Since #656 the whole
+// stored string orders correctly as TEXT, because migration 0024 made every
+// ts fixed-width — the claim this comment used to make, that the 19-character
+// prefix is the only part that orders correctly, is no longer true and was
+// the reason the bound looked like a hack.
+//
+// It stays because the WIDENING it produces on Until is a deliberate filter
+// semantic (D4): buildAuditWhere passes secondPrefix(Until + 1s) as an
+// exclusive bound, so Until's own second is included whole. Narrowing that to
+// nanosecond precision would change results for every caller of the read
+// lane, which is a different decision from this one.
 func secondPrefix(t time.Time) string {
 	s := t.UTC().Truncate(time.Second).Format(timeLayout)
 	if len(s) > 19 {
@@ -383,25 +411,45 @@ func escapeLikePrefix(s string) string {
 	return b.String()
 }
 
-// encodeAuditCursor is the opaque cursor Query returns as Page.Next:
-// the (ts, audit_id) of the last row emitted — see querycursor.go.
+// encodeAuditCursor is the opaque cursor Query returns as Page.Next: the
+// (ts, audit_id) of the last row emitted, with ts in the STORED rendering
+// (auditTimeLayout) so it compares byte-exactly against the column — see
+// querycursor.go and Query's comment at the call site.
 func encodeAuditCursor(ts, id string) string {
 	return encodeCursor2(ts, id)
 }
 
 // decodeAuditCursor is encodeAuditCursor's inverse. Strict: a cursor that
-// does not decode to base64, or does not split into exactly two non-empty
-// parts, is audit.ErrInvalidCursor — never a silent reset to page one, which
-// would loop a paging client forever.
+// does not decode to base64, does not split into exactly two non-empty parts,
+// or whose ts part is not RFC3339, is audit.ErrInvalidCursor — never a silent
+// reset to page one, which would loop a paging client forever.
+//
+// The ts part is NORMALISED to the stored rendering (#656). A cursor issued
+// before migration 0024 and one issued after are byte-identical — both are
+// the driver's trimmed RFC3339Nano re-rendering of the column — so "reject
+// stale cursors" is not implementable: there is nothing to detect. Normalising
+// is what makes both map to exactly the text the migrated row holds, so a
+// pre-0024 cursor neither skips a row nor repeats one.
 func decodeAuditCursor(cursor string) (ts, id string, err error) {
-	return decodeCursor2(cursor, audit.ErrInvalidCursor)
+	ts, id, err = decodeCursor2(cursor, audit.ErrInvalidCursor)
+	if err != nil {
+		return "", "", err
+	}
+	stored, err := normalizeAuditTimeText(ts)
+	if err != nil {
+		return "", "", fmt.Errorf("%w: cursor timestamp %q is not RFC3339", audit.ErrInvalidCursor, ts)
+	}
+	return stored, id, nil
 }
 
-// scanAuditQueryRow scans one row of auditQueryColumns into an audit.Row,
-// also returning the raw stored ts text (needed to build a cursor, since a
-// re-formatted time.Time is not guaranteed byte-identical to what a future
-// migration might store).
-func scanAuditQueryRow(row rowScanner) (audit.Row, string, error) {
+// scanAuditQueryRow scans one row of auditQueryColumns into an audit.Row.
+//
+// It no longer hands back a "raw stored ts text" for the cursor: there is no
+// such thing on this path. The driver parses the TIMESTAMP-declared column
+// into a time.Time and database/sql re-renders it as trimmed RFC3339Nano, so
+// the scanned string is not the stored bytes and never was (#656). Query
+// builds the cursor from Timestamp instead.
+func scanAuditQueryRow(row rowScanner) (audit.Row, error) {
 	var (
 		id, ts, kind, principal, selector, jobID, actionKind string
 		nodeID                                               sql.NullString
@@ -420,20 +468,20 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, string, error) {
 		&accountID, &accountName, &accountRole, &tokenID, &authMethod, &verifiedSource,
 		&onBehalfOf, &traceparent, &sessionRef, &changeRef,
 		&approvalID, &grantID, &approvalAnswer, &decisionChannel, &planHash); err != nil {
-		return audit.Row{}, "", fmt.Errorf("scan audit query row: %w", err)
+		return audit.Row{}, fmt.Errorf("scan audit query row: %w", err)
 	}
 
 	tsTime, err := parseTime(sql.NullString{String: ts, Valid: true})
 	if err != nil {
-		return audit.Row{}, "", fmt.Errorf("parse ts for audit record %q: %w", id, err)
+		return audit.Row{}, fmt.Errorf("parse ts for audit record %q: %w", id, err)
 	}
 	argsMap, err := decodeStringMap(argsJSON)
 	if err != nil {
-		return audit.Row{}, "", err
+		return audit.Row{}, err
 	}
 	argv, err := decodeStringSlice(argvJSON)
 	if err != nil {
-		return audit.Row{}, "", err
+		return audit.Row{}, err
 	}
 
 	return audit.Row{
@@ -471,5 +519,5 @@ func scanAuditQueryRow(row rowScanner) (audit.Row, string, error) {
 		ApprovalAnswer:  approvalAnswer.String,
 		DecisionChannel: decisionChannel.String,
 		PlanHash:        planHash.String,
-	}, ts, nil
+	}, nil
 }
