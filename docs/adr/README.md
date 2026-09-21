@@ -50,3 +50,4 @@ back-link.
 | [ADR-0036](0036-node-code-never-overrides-the-operator-s-umask.md) | Node code never overrides the operator's umask — a declared mode is a ceiling | Accepted (2026-09-07) | — | — |
 | [ADR-0037](0037-agentless-ssh-executor-low-assurance-tier.md) | Agentless SSH execution as an explicitly low-assurance tier (control-plane-side enforcement, no Node veto) | Proposed | — | — |
 | [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) | Plan is an approved route of execution; Policy preflight is its own capability | Accepted | [ADR-0011](0011-plan-mode-daemon-evaluated-policy-queries.md), [ADR-0013](0013-cancellation-and-emergency-freeze.md), [ADR-0027](0027-approval-callout-notify-via-mcp-decide-out-of-band.md) | — |
+| [ADR-0039](0039-development-system-second-edition.md) | The development system, second edition | Proposed — 2026-09-21. Supersedes the process half of `docs/agents/workflow.md`, | — | — |
