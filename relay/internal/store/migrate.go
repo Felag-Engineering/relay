@@ -58,6 +58,12 @@ func loadMigrations() ([]migration, error) {
 	return migrations, nil
 }
 
+// migrationSlowThreshold is the duration past which a single migration is
+// logged at Info rather than Debug. One second: below it an operator would not
+// notice the pause anyway, and above it they are entitled to know which
+// migration they are waiting on.
+const migrationSlowThreshold = time.Second
+
 // migrate applies every embedded migration whose version is ABSENT from
 // schema_migrations, each in its own transaction, recording the applied
 // version as it goes. This is selection by per-version presence, not by
@@ -80,12 +86,6 @@ func loadMigrations() ([]migration, error) {
 // to start would leave an operator who just rolled back a bad deploy with no
 // in-band remedy, and there is no down-migration mechanism to undo a
 // refusal. See pendingMigrations' unknown return value.
-// migrationSlowThreshold is the duration past which a single migration is
-// logged at Info rather than Debug. One second: below it an operator would not
-// notice the pause anyway, and above it they are entitled to know which
-// migration they are waiting on.
-const migrationSlowThreshold = time.Second
-
 func migrate(ctx context.Context, db *sql.DB, logger *slog.Logger) error {
 	applied, err := appliedVersions(ctx, db)
 	if err != nil {
