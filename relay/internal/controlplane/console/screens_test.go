@@ -440,7 +440,7 @@ func TestScreens_UnwiredSeamRefusesRatherThanRenderingEmpty(t *testing.T) {
 // so an `hx-on:` attribute — which IS script — would be silently dead rather
 // than merely non-conforming.
 func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
-	d := withExecution(fleetFixture(), true)
+	d := withExecution(sweepFixture(), true)
 	d.Approvals = &fakeApprovals{pending: []approval.Request{{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}}}}
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses
@@ -462,20 +462,33 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 
 	// Derived from the mounted route table (walkableScreens), so a screen
 	// added later is swept without anyone remembering to add it here.
+	walkable := walkableScreens(Routes(d), fixtureIDs)
 	var renders []struct {
 		name    string
 		handler http.Handler
 		path    string
 	}
-	for _, path := range walkableScreens(Routes(d), fixtureIDs) {
+	for _, path := range walkable {
 		renders = append(renders, struct {
 			name    string
 			handler http.Handler
 			path    string
 		}{path, h, path})
 	}
-	if len(renders) < 8 {
-		t.Fatalf("the sweep derived only %d screens — it is not walking the route table", len(renders))
+	// The floor is compared against WALKABLE, not len(renders): renders gains
+	// a second "/console/" entry (the day-one render) below, so comparing the
+	// floor against renders is one too lenient. want is every GET route minus
+	// the three walkableScreens itself never walks (assets, events, login) —
+	// TestConsole_EveryGetRouteIsSweptForCSP is the test that actually PROVES
+	// that subtraction is right; this is only a non-vacuity floor.
+	getRoutes := 0
+	for _, r := range Routes(d) {
+		if r.Method == http.MethodGet {
+			getRoutes++
+		}
+	}
+	if want := getRoutes - 3; len(walkable) < want {
+		t.Fatalf("the sweep derived only %d screens, want at least %d — it is not walking the route table", len(walkable), want)
 	}
 
 	// A SECOND rendering of "/console/", with a zero-Node fleet and the event
@@ -497,28 +510,13 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 			continue
 		}
 		body := rec.Body.String()
-		assertNoInlineScript(t, path, body)
-		if strings.Contains(body, "hx-on:") {
-			t.Errorf("%s rendered an hx-on: attribute, which IS script and would be dead under the CSP", path)
-		}
-		for _, handler := range []string{" onclick=", " onload=", " onerror=", " onfocus="} {
-			if strings.Contains(body, handler) {
-				t.Errorf("%s rendered %q — an event-handler attribute is inline script", path, handler)
-			}
-		}
-		// An inline STYLE is blocked by `style-src 'self'` exactly as an inline
-		// script is blocked by `script-src 'self'` — and it fails far more
-		// quietly, because the element still renders, just unstyled.
-		//
-		// This assertion exists because the outcome bar shipped with
-		// style="width:N%" and every segment painted at zero width: the bar the
-		// specification calls "the entire reason anyone is looking" had never
-		// once been visible. The Go tests all passed, because they asserted the
-		// segment was in the HTML and it was.
-		if strings.Contains(body, `style="`) || strings.Contains(body, "style='") {
-			t.Errorf("%s rendered an inline style attribute — the content security policy discards it, "+
-				"so the element renders unstyled and nothing says so. Use a class or a data attribute.", path)
-		}
+		// The whole CSP ban list — assertNoInlineScript's <script> shape rule,
+		// hx-on:, javascript:, every inline handler attribute, and an inline
+		// style attribute in either quote form — lives in assertCSPClean now
+		// (no_inline_script_test.go), including the explanation of why the
+		// inline-style check exists (the outcome bar shipped invisible once,
+		// with every Go test passing).
+		assertCSPClean(t, path, body)
 	}
 }
 

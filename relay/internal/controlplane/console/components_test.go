@@ -555,6 +555,27 @@ func TestStepUp_NamesWhatItAuthorises(t *testing.T) {
 // TestComponents_ContainNoInlineScript is the shell spec's acceptance
 // criterion, extended to the shared components: the CSP admits no inline
 // script, and `hx-on:` IS script even though the other hx-* attributes are not.
+//
+// This drops the bare "<script" ban the old copy of this list carried:
+// TestConsole_NoScriptTagOutsideTheLayout (no_inline_script_test.go) already
+// refuses that byte sequence in every non-test .go file in this package
+// except layout.go, which strictly subsumes a ban on it here — carrying it
+// forward would make assertCSPClean unusable on a full page, since day one
+// and Activity legitimately load one external script each. The old ban list
+// here matched onclick=/onload= UNANCHORED — no leading character required
+// at all — which is exactly what let it catch `class="x"onclick="…"`. The
+// original inlineHandler regexp, which required whitespace before "on",
+// would have MISSED that shape; widening it (no_inline_script_test.go) to
+// also accept a preceding quote or solidus is what makes reusing it here a
+// strict tightening of the old per-site list rather than a swap that drops
+// a case.
+//
+// "Strict tightening" holds in HTML-tokenizer semantics, not raw-substring
+// terms: an attribute name starts only after whitespace, a `/`, a closing
+// quote, or at the start of a fragment, so inlineHandler's `(^|["'/\s])`
+// prefix matches every real attribute-name boundary. Non-attribute text
+// like `xonclick=` or `data-onclick=` no longer matches, deliberately —
+// neither is an attribute-name boundary to a browser either.
 func TestComponents_ContainNoInlineScript(t *testing.T) {
 	samples := map[string]any{
 		"label-chip":  Label{Namespace: NamespaceRelay, Key: "quarantine"},
@@ -570,10 +591,6 @@ func TestComponents_ContainNoInlineScript(t *testing.T) {
 	}
 	for name, data := range samples {
 		out := render(t, name, data)
-		for _, banned := range []string{"<script", "hx-on:", "onclick=", "onload=", "javascript:"} {
-			if strings.Contains(strings.ToLower(out), banned) {
-				t.Errorf("%s renders %q, which the content security policy blocks", name, banned)
-			}
-		}
+		assertCSPClean(t, name, out)
 	}
 }

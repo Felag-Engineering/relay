@@ -801,14 +801,5 @@ func TestConsole_SignInPageCarriesNoInlineScript(t *testing.T) {
 		t.Fatal("the sign-in form did not render, so this asserts nothing")
 	}
 
-	assertNoInlineScript(t, LoginPath, body)
-	for _, banned := range []string{
-		"hx-on:", "javascript:", " onclick=", " onload=", " onerror=", " onfocus=",
-		`style="`, "style='",
-	} {
-		if strings.Contains(body, banned) {
-			t.Errorf("the sign-in page contains %q — the content security policy admits no inline "+
-				"script or style, and this is the only page an unauthenticated caller can render", banned)
-		}
-	}
+	assertCSPClean(t, LoginPath, body)
 }

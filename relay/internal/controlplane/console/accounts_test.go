@@ -525,12 +525,7 @@ func TestAccounts_ASelectedAccountsPageCarriesNoInlineScript(t *testing.T) {
 	path := accountsPath + "?account=gleipnir-prod"
 	body := get(t, newTestHandler(accountsFixture(), accounts.RoleAdmin), path).Body.String()
 
-	assertNoInlineScript(t, path, body)
-	for _, banned := range []string{"hx-on:", "javascript:", " onclick=", " onload=", " onerror=", " onfocus=", `style="`} {
-		if strings.Contains(body, banned) {
-			t.Errorf("%s rendered %q — the content security policy admits no inline script or style", path, banned)
-		}
-	}
+	assertCSPClean(t, path, body)
 }
 
 // TestAccounts_AnUnknownSelectionSaysSoRatherThanRenderingABlankPanel. A blank

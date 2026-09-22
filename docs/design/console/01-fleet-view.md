@@ -141,6 +141,12 @@ config management.
       count is the same number the composer would resolve.
 - [ ] A fleet of 10,000 Nodes renders without a scrollable list of rows: one segmented summary,
       one pixel wall, and the deviating rows.
+      **Partially met.** Proven on the rendered HTML by `TestFleet_TenThousandNodesRenderWithoutAList`,
+      which bounds the page by `groupCards` and `deviationRows` rather than by a number, and by an
+      absolute literal beside each derived bound. The box stays unticked because the ladder those two
+      constants describe permits 40 cards of 25 deviating rows — 1,040 table rows — which is a
+      scrollable list by any ordinary reading of this box. Whether that is the intended reading is an
+      open question for the owner; changing either constant is out of scope for a test-coverage issue.
 - [ ] The single quarantined Node in a 4,000-Node group is findable without reading any text.
 - [ ] No Fact appears on a row or in a facet.
 - [ ] No route on this screen mutates anything in v0.6.0.
