@@ -16,8 +16,10 @@ Releases publish `relay-<version>-x86_64-unknown-linux-gnu` (glibc-linked) plus 
 the binary is installed or executed, and a mismatch aborts:
 
 ```sh
-# Pinned by the operator — never resolved at install time.
-VERSION="0.1.0-beta"
+# Pinned by the operator — never resolved at install time. Substitute the
+# release you are installing: the published tag without its leading `v`
+# (see release-artifacts.md).
+VERSION="X.Y.Z"
 ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
 BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
 

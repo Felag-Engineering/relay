@@ -22,7 +22,7 @@ Follow the **verify-then-install** sequence
 **before** the binary is installed or executed, and a mismatch aborts:
 
 ```sh
-VERSION="0.1.0-beta"    # pinned by the operator, in config management
+VERSION="X.Y.Z"         # the release pinned by the operator, in config management
 ARTIFACT="relay-daemon-${VERSION}-x86_64-unknown-linux-musl"
 BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
 

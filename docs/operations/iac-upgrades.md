@@ -43,7 +43,7 @@ handler completes the swap:
 
 ```yaml
 # group_vars/prod.yml — the upgrade IS this diff, reviewed like any other
-relay_daemon_version: "0.1.0-beta"     # was: 0.0.9
+relay_daemon_version: "X.Y.Z"          # was: the previously pinned release
 relay_daemon_sha256: "<sha256 line for the new artifact, from SHA256SUMS>"
 ```
 

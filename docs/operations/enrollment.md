@@ -183,7 +183,7 @@ Vault):
 
 ```yaml
 # group_vars/prod.yml
-relay_daemon_version: "0.1.0-beta"
+relay_daemon_version: "X.Y.Z"   # the published tag without its leading `v`
 relay_daemon_sha256: "<digest copied from SHA256SUMS at pin time>"
 relay_addr: "https://relay.example.internal:7654"
 relay_enrollment_token: "{{ vault_relay_enrollment_token }}"
