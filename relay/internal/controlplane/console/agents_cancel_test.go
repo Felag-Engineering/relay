@@ -2,7 +2,9 @@ package console
 
 // agents_cancel_test.go covers the Agents stream's half of the Cancel
 // control (#595): one button per running Job, drawn on its newest dispatch
-// row, backed by exactly one extra lane read that a viewer never pays for.
+// row. The same single lane read also feeds the Agents stream's Running
+// section (#617), so every role makes it on the newest page — a viewer is
+// shown running Jobs but is never offered the control.
 
 import (
 	"fmt"
@@ -45,7 +47,15 @@ func TestAgents_OneCancelControlPerRunningJob(t *testing.T) {
 	}
 }
 
-func TestAgents_NoControlForACompleteJobOrANonDispatchRow(t *testing.T) {
+// TestAgents_NonDispatchRowsDrawNoControlButTheRunningCardDoes replaces
+// TestAgents_NoControlForACompleteJobOrANonDispatchRow (#617): neither a read
+// row nor a job_cancel row is a dispatch row, so onPage (assignRunning) never
+// counts them — job-1 still running with neither on the page draws its
+// Running-section card instead of nothing, and the ONE Cancel control on the
+// page is on that card, not on either row. The "complete Job" half of the old
+// name is now TestAgents_AResolvedJobIsNeitherCardedNorMarkedRunning
+// (agents_running_test.go).
+func TestAgents_NonDispatchRowsDrawNoControlButTheRunningCardDoes(t *testing.T) {
 	rows := []capability.AuditRow{
 		{Kind: audit.KindRead, Principal: "agent:op", JobID: "job-1", Timestamp: testNow},
 		{Kind: audit.KindJobCancel, Principal: "agent:op", JobID: "job-1", Timestamp: testNow},
@@ -54,8 +64,28 @@ func TestAgents_NoControlForACompleteJobOrANonDispatchRow(t *testing.T) {
 	d := cancelDeps(q, &fakeCanceller{})
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
-	if strings.Contains(body, `class="jobcancel"`) {
-		t.Error("a read row and a job_cancel row (neither a dispatch) drew a Cancel control")
+	if n := strings.Count(body, `class="jobcancel"`); n != 1 {
+		t.Fatalf("cancel forms rendered = %d, want exactly 1 — on the running card, never on the read or job_cancel row", n)
+	}
+	start := strings.Index(body, `class="agentrunning"`)
+	if start < 0 {
+		t.Fatal("no Running section rendered for job-1")
+	}
+	end := strings.Index(body[start:], "</section>")
+	if end < 0 {
+		t.Fatal("the Running section has no closing </section>")
+	}
+	section := body[start : start+end]
+	if !strings.Contains(section, `class="jobcancel"`) {
+		t.Error("the page's one Cancel control is not inside the running card — a read row or a job_cancel row drew it instead")
+	}
+	if !strings.Contains(body, `data-kind="running"`) {
+		t.Error("no running card rendered — onPage must count dispatch rows only, and neither fixture row is one")
+	}
+	for _, block := range agentRowBlocks(body) {
+		if strings.Contains(block, "job running") {
+			t.Error("a stream row carries the \"job running\" marker, but neither the read row nor the job_cancel row is a dispatch row")
+		}
 	}
 }
 
@@ -88,30 +118,42 @@ func TestAgents_RunningCheckIsOneStateFilteredRead(t *testing.T) {
 	}
 }
 
-func TestAgents_NoRunningJobsReadWithoutADispatchRow(t *testing.T) {
+// TestAgents_OlderPageWithoutADispatchRowMakesNoRunningJobsRead renames
+// TestAgents_NoRunningJobsReadWithoutADispatchRow (#617): on the NEWEST page
+// the running-Jobs read is now made unconditionally (AC1), so proving "a page
+// with nothing to explain makes no read" needs an OLDER page — built with a
+// cursor, as agents_paging_test.go's own scrolled tests are.
+func TestAgents_OlderPageWithoutADispatchRowMakesNoRunningJobsRead(t *testing.T) {
 	rows := []capability.AuditRow{
 		{Kind: audit.KindRead, Principal: "agent:op", Timestamp: testNow},
 	}
 	q := &fakeQueries{rows: rows}
 	d := cancelDeps(q, &fakeCanceller{})
-	get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents")
+	get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents?cursor=0")
 
 	if q.jobCalls != 0 {
-		t.Errorf("QueryJobs calls = %d, want 0 — a page with no dispatch row has nothing for Cancel to explain", q.jobCalls)
+		t.Errorf("QueryJobs calls = %d, want 0 — an older page with no dispatch row has nothing for the running-Jobs read to explain", q.jobCalls)
 	}
 }
 
-func TestAgents_ViewerMakesNoRunningJobsRead(t *testing.T) {
+// TestAgents_ViewerPaysOneRunningJobsRead renames
+// TestAgents_ViewerMakesNoRunningJobsRead (#617): a viewer now makes the same
+// running-Jobs read every role makes on the newest page (AC1's "the stream
+// shows the Job to whoever can read it"), and is still shown no control.
+func TestAgents_ViewerPaysOneRunningJobsRead(t *testing.T) {
 	rows := []capability.AuditRow{dispatchRow("job-1", "node-a")}
 	q := &fakeQueries{rows: rows, jobs: []capability.JobSummary{{JobID: "job-1", State: jobs.JobStateRunning}}}
 	d := cancelDeps(q, &fakeCanceller{})
-	get(t, newTestHandler(d, accounts.RoleViewer), "/console/agents")
+	body := get(t, newTestHandler(d, accounts.RoleViewer), "/console/agents").Body.String()
 
-	if q.jobCalls != 0 {
-		t.Errorf("QueryJobs calls = %d, want 0 for a viewer — cancelOffered is false", q.jobCalls)
+	if q.jobCalls != 1 {
+		t.Errorf("QueryJobs calls = %d, want 1 — a viewer now sees running Jobs too (#617)", q.jobCalls)
 	}
 	if q.auditCalls != 1 {
-		t.Errorf("QueryAudit calls = %d, want 1 — a viewer's page costs exactly what it did before #595", q.auditCalls)
+		t.Errorf("QueryAudit calls = %d, want 1", q.auditCalls)
+	}
+	if strings.Contains(body, `class="jobcancel"`) {
+		t.Error("a viewer's page rendered a Cancel control — cancelOffered is false for a viewer")
 	}
 }
 
