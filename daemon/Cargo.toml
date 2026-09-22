@@ -85,13 +85,13 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 # Used by renew.rs tests to construct rcgen certs with specific validity windows.
 # (rcgen's not_before/not_after fields are time::OffsetDateTime.)
 time = "0.3"
-# Enables rcgen's CSR-parsing API (CertificateSigningRequestParams::from_pem /
-# from_der) in tests so renewers can sign the CSR with a test CA, producing a
-# cert whose public key matches the freshly generated keypair (FIX A tests).
-# x509-parser is already a runtime dependency; this just enables rcgen's optional
-# gate for it during test builds without affecting the production binary.
-rcgen = { version = "0.13", default-features = false, features = ["pem", "ring", "x509-parser"] }
 proptest = "1"
+# Test-only CSR parsing and self-signature check for the enroll/renew tests'
+# test CA (identity::test_ca). It is the same 0.18 as the runtime dependency,
+# so there is no second ASN.1 stack. The verify feature uses ring, which is
+# already in the tree. It is dev-only (resolver 2) and does not reach the
+# production binary.
+x509-parser = { version = "0.18", features = ["verify"] }
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -349,6 +349,98 @@ pub(crate) mod mode_assert {
     }
 }
 
+/// Signs test CSRs the way rcgen's old CSR-parsing dev path did, without
+/// pulling rcgen's `x509-parser` dev feature (and with it a second ASN.1
+/// stack, x509-parser 0.16) into Cargo.lock (#672). It signs a daemon CSR
+/// with the CSR's (empty) subject and no extensions, matching what
+/// `build_keypair_and_csr` produces.
+#[cfg(test)]
+pub(crate) mod test_ca {
+    use rustls_pki_types::pem::PemObject;
+    use rustls_pki_types::CertificateSigningRequestDer;
+    use x509_parser::prelude::FromDer;
+
+    /// A CSR's SubjectPublicKeyInfo, adapted to rcgen's signing API.
+    struct CsrPublicKey(Vec<u8>);
+
+    impl rcgen::PublicKeyData for CsrPublicKey {
+        fn der_bytes(&self) -> &[u8] {
+            &self.0
+        }
+        fn algorithm(&self) -> &rcgen::SignatureAlgorithm {
+            &rcgen::PKCS_ECDSA_P256_SHA256
+        }
+    }
+
+    /// Parses and signs `csr_pem` with `ca_cert`/`ca_kp`, after checking its
+    /// self-signature and that it carries the P-256/ecdsa-with-SHA256, empty-
+    /// subject shape `build_keypair_and_csr` produces.
+    pub(crate) fn sign_csr(
+        csr_pem: &str,
+        ca_cert: &rcgen::Certificate,
+        ca_kp: &rcgen::KeyPair,
+    ) -> rcgen::Certificate {
+        let der =
+            CertificateSigningRequestDer::from_pem_slice(csr_pem.as_bytes()).expect("CSR PEM");
+        let (remainder, csr) =
+            x509_parser::certification_request::X509CertificationRequest::from_der(der.as_ref())
+                .expect("parse CSR");
+        assert!(remainder.is_empty(), "trailing bytes after CSR DER");
+
+        // Keeps the self-signature check that rcgen's old CSR-parsing dev
+        // path used to make.
+        csr.verify_signature().expect("CSR self-signature");
+
+        let subject_pki = &csr.certification_request_info.subject_pki;
+        assert_eq!(
+            subject_pki.algorithm.algorithm,
+            x509_parser::oid_registry::OID_KEY_TYPE_EC_PUBLIC_KEY,
+            "CSR public key is not an EC key"
+        );
+        // A future key-type or curve change should fail loudly here instead of
+        // being mis-signed as P-256.
+        let curve_oid = subject_pki
+            .algorithm
+            .parameters
+            .as_ref()
+            .expect("EC SPKI carries curve parameters")
+            .as_oid()
+            .expect("curve parameters are an OID");
+        assert_eq!(
+            curve_oid,
+            x509_parser::oid_registry::OID_EC_P256,
+            "CSR public key is not on the P-256 curve"
+        );
+        assert_eq!(
+            csr.signature_algorithm.algorithm,
+            x509_parser::oid_registry::OID_SIG_ECDSA_WITH_SHA256,
+            "CSR is not signed with ecdsa-with-SHA256"
+        );
+        assert!(
+            csr.certification_request_info
+                .subject
+                .iter_rdn()
+                .next()
+                .is_none(),
+            "CSR subject must be empty; the helper would otherwise drop it"
+        );
+
+        // CertificateParams::default() sets CN=rcgen self signed cert, which
+        // would give the leaf the same subject as its issuer. The old
+        // CSR-parsing dev path copied the CSR's empty subject.
+        let mut params = rcgen::CertificateParams::default();
+        params.distinguished_name = rcgen::DistinguishedName::new();
+
+        params
+            .signed_by(
+                &CsrPublicKey(subject_pki.subject_public_key.data.to_vec()),
+                ca_cert,
+                ca_kp,
+            )
+            .expect("sign CSR")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
