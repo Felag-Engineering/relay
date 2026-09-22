@@ -33,17 +33,26 @@ func silenceLogs(t *testing.T) {
 // slice of Nodes on each call to List(); once all slices are exhausted it
 // repeats the last one. SetRevoked is a no-op: these tests assert on the
 // denylist, not on persisted registry state.
+//
+// mu guards calls, the double's OWN bookkeeping — it says nothing about the
+// product under test. Without it, two cascades List()-ing this double at
+// once (the AC3 concurrency test) would report a data race in the double
+// itself under test-relay-race, not in revocation.Service. perCall is
+// read-only after construction, so it needs no lock.
 type fakeLister struct {
+	mu      sync.Mutex
 	calls   int
 	perCall [][]registry.Node
 }
 
 func (f *fakeLister) List() []registry.Node {
+	f.mu.Lock()
 	i := f.calls
 	if i >= len(f.perCall) {
 		i = len(f.perCall) - 1
 	}
 	f.calls++
+	f.mu.Unlock()
 	return f.perCall[i]
 }
 
@@ -73,9 +82,19 @@ type recorder struct {
 	// refactor. A code review pointed out the gap.
 	revokedAtRecordTime func(nodeID string) bool
 	recordedAfterRevoke []string
+
+	// hook, when set, runs inside record with r.mu NOT held, so a test can
+	// block one record call mid-flight (waiting on its own channel) without
+	// blocking anything else that calls contains on this same recorder from
+	// another goroutine.
+	hook func(nodeIDs []string)
 }
 
 func (r *recorder) record(nodeIDs []string) error {
+	if r.hook != nil {
+		r.hook(nodeIDs)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	callIndex := len(r.calls) + 1
@@ -116,6 +135,47 @@ func newServiceFixture(t *testing.T) (
 	tokenSvc = enroll.NewService(enroll.NewMemoryRepository())
 	svc = revocation.NewService(d, c, reg, tokenSvc)
 	return svc, d, c, reg, tokenSvc
+}
+
+// blockingRegistry is a test double for revocation.Registry over a real
+// registry.InMemory: List delegates unchanged, but SetRevoked for one
+// configured node id blocks until release is closed before delegating too.
+//
+// This is what makes the record-committed-but-not-yet-revoked window inside
+// revokeChunk reachable deterministically: without it, that window is only
+// microseconds wide and a test racing it would flake instead of reliably
+// exercising it.
+type blockingRegistry struct {
+	*registry.InMemory
+
+	blockID    string
+	release    chan struct{}
+	entered    chan struct{}
+	enteredOne sync.Once
+}
+
+// newBlockingRegistry wraps reg, blocking SetRevoked(blockID, ...) until
+// release is closed. entered is closed the instant SetRevoked for blockID is
+// called, so a test can wait for "inside the block" before proceeding rather
+// than racing it with a sleep.
+func newBlockingRegistry(reg *registry.InMemory, blockID string, release chan struct{}) *blockingRegistry {
+	return &blockingRegistry{
+		InMemory: reg,
+		blockID:  blockID,
+		release:  release,
+		entered:  make(chan struct{}),
+	}
+}
+
+func (b *blockingRegistry) SetRevoked(nodeID string, at time.Time) error {
+	if nodeID == b.blockID {
+		// A second SetRevoked(blockID, ...) cannot happen today — RevokeNode
+		// only calls it once per Node — but this double should not itself
+		// panic on a double-close if that ever changes.
+		b.enteredOne.Do(func() { close(b.entered) })
+		<-b.release
+	}
+	return b.InMemory.SetRevoked(nodeID, at)
 }
 
 func TestService_RevokeNode_DenylistAndDisconnect(t *testing.T) {

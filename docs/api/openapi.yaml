@@ -655,8 +655,19 @@ paths:
         quarantine < revoke < Freeze).
 
         **Requires a non-empty `reason`**, which is recorded in the audit
-        trail. Revocation is irreversible, and a trail that can say who and
+        trail (except in the one case below, where an earlier cascade record
+        already answers why). Revocation is irreversible, and a trail that can say who and
         when but not why leaves the irreversible rung unattributed (#487).
+
+        Repeat calls stay idempotent — 204 either way. If this Relay process
+        already recorded this Node's revocation as part of an Enrollment
+        Token cascade, this call revokes (or re-applies the revocation to)
+        the Node but does not write a second revocation record, for the
+        lifetime of this Relay process — regardless of which operator calls
+        this endpoint or what reason they give: the record the cascade wrote
+        stays the one that answers who ordered the revocation and why. A
+        Node with no such cascade record gets a record on every call,
+        including a repeat one.
       requestBody:
         required: true
         content:

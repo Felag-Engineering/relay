@@ -184,6 +184,14 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// on this same single connection, with context.Background and no
 		// deadline — that half of the original head-of-line block is
 		// unchanged by this issue.
+		//
+		// The budget starts here, BEFORE RevokeToken — so if a second
+		// concurrent revoke of this same token (#605) is already waiting on
+		// tokenLocks, this cascade's cascadeAuditBudget clock is already
+		// running for the whole of that wait too. Bounded harm: the wait
+		// itself is bounded by the first cascade's own run, and a budget that
+		// expires mid-wait is reported the same way as one that expires
+		// mid-cascade — a shortfall, not a silent success.
 		auditCtx, cancelAudit := context.WithTimeout(
 			context.WithoutCancel(r.Context()), cascadeAuditBudget)
 		defer cancelAudit()
@@ -197,14 +205,14 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// KindTokenRevoke stays AFTER the act and best-effort (recordLifecycle,
-		// not recordLifecycleErr) — unlike handleRevokeNode's record-before-act
-		// ordering, deliberately: RevokeToken CAN return an error, so recording
-		// first would risk a permanent record asserting a revoke that never
-		// happened. recordLifecycleErr's doc explains #487 was allowed to invert
-		// this ordering only because RevokeNode has no error return to strand;
-		// RevokeToken does, so this route keeps recordLifecycle's ordinary
-		// best-effort contract instead.
+		// KindTokenRevoke stays AFTER the act and best-effort (recordLifecycle) —
+		// unlike handleRevokeNode's record-before-act ordering, deliberately:
+		// RevokeToken CAN return an error, so recording first would risk a
+		// permanent record asserting a revoke that never happened.
+		// revocation.Service.RevokeNodeRecorded's doc explains #487 was allowed
+		// to invert this ordering only because RevokeNode has no error return
+		// to strand; RevokeToken does, so this route keeps recordLifecycle's
+		// ordinary best-effort contract instead.
 		recordLifecycle(r.Context(), d, p, audit.KindTokenRevoke, "", "token_id="+id)
 
 		if err != nil {

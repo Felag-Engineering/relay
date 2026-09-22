@@ -178,7 +178,7 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 			wantRefusal(t, rec, auditor, role)
 
 			if len(nr.calledWith) != 0 {
-				t.Errorf("NodeRevoker.RevokeNode called with %v on a refused request; the Tunnel must stay up", nr.calledWith)
+				t.Errorf("NodeRevoker.RevokeNodeRecorded called with %v on a refused request; the Tunnel must stay up", nr.calledWith)
 			}
 		})
 	}
@@ -194,7 +194,7 @@ func TestRevokeNode_RequiresAdmin(t *testing.T) {
 			t.Fatalf("admin revoke: status = %d, want 204; body = %s", rec.Code, rec.Body.String())
 		}
 		if len(nr.calledWith) != 1 || nr.calledWith[0] != "node-abc" {
-			t.Errorf("NodeRevoker.RevokeNode calls = %v, want [node-abc]", nr.calledWith)
+			t.Errorf("NodeRevoker.RevokeNodeRecorded calls = %v, want [node-abc]", nr.calledWith)
 		}
 	})
 }

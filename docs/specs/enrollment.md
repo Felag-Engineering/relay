@@ -234,6 +234,9 @@ None open.
 
 ## History
 
+- `2026-09-21` — `RevokeToken` serialised per token ID; a single-Node revoke racing a cascade for
+  the same Node now produces exactly one `node_revoke` record (#605). Spec unmigrated
+  (`aspirational`); claims not updated.
 - `2026-09-16` — Store change landed for the token-revocation cascade's per-Node audit inserts
   (#563). Spec unmigrated (`aspirational`); claims not updated; the lines this makes stale are listed in #563's PR.
 - `2026-09-14` — Worked through with the owner. The join string is first-pass behaviour; token scope of

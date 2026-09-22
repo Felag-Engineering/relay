@@ -67,7 +67,7 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // difference is not obvious. ReleaseFreeze cannot be bypassed: the ACTION
 // itself is a method on Service, so a surface that skips the check does not get
 // to release the Freeze at all. Node revocation has no such method — the
-// Control API calls revocation.Service.RevokeNode directly, and only
+// Control API calls revocation.Service.RevokeNodeRecorded directly, and only
 // authorization routes through the capability layer — so this is a validator a
 // surface must remember to call, not a gate it cannot get past.
 //
@@ -82,6 +82,17 @@ var ErrRevokeReasonMalformed = errors.New("capability: a Node-revocation reason 
 // written by a CALLER-supplied recorder, and its content is authored at the
 // surface that authenticated the operator while the set of Nodes is decided
 // inside the cascade's re-scan, the only place that knows it.
+//
+// Since #605, "cannot revoke unattributed" holds on the single-Node route in
+// one of two ways: either this reason is recorded through the caller's own
+// call, or — when this Relay process already wrote a node_revoke record for
+// this Node through a cascade — the record that already exists is the one
+// that stays attributed, and RevokeNodeRecorded revokes without writing a
+// second one. Either way there is at least one record naming who ordered the
+// revocation and why — a repeat operator revoke of an already-recorded Node
+// deliberately writes a second one instead of suppressing itself, so "at
+// least one" is the guarantee, not "exactly one"; see RevokeNodeRecorded's
+// doc for the exact scope of that suppression.
 //
 // enroll.Service also revokes a just-minted identity when enrollment fails
 // partway (its own nodeDenylister, never this validator). That one is correct
