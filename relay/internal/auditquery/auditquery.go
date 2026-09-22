@@ -220,6 +220,7 @@ func fromJobSummary(s jobs.JobSummary) capability.JobSummary {
 		Selector:           s.Selector,
 		Requester:          s.Requester,
 		RequesterAccountID: s.RequesterAccountID,
+		RequesterKind:      s.RequesterKind,
 		OnBehalfOf:         s.OnBehalfOf,
 		ApprovalID:         s.ApprovalID,
 		GrantID:            s.GrantID,

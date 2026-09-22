@@ -211,12 +211,33 @@ type Action struct {
 	TimeoutSeconds int32
 }
 
+// Requester is the verified Account that asked for a Job, recorded when the
+// Job is created (#616). The zero value means NO requester is recorded: a
+// Job created before the Relay recorded one, or by a caller with no Account.
+// It must never be inferred from anything else (execution.md Cancellation:
+// fail closed).
+//
+// Kind stays a plain string mirroring the accounts.Kind wire values ("human"
+// or "machine", or "" for unknown). This package must not import
+// internal/accounts, for the same reason given on capability.Principal.Kind:
+// an unknown Kind is treated as machine by every consumer.
+type Requester struct {
+	AccountID   string
+	AccountName string
+	Kind        string
+}
+
+// Recorded reports whether r names a requester at all.
+func (r Requester) Recorded() bool { return r.AccountID != "" }
+
 // Job is the unit of audit and blast-radius control: one Job comprises one
-// Task per matched Node, grouped into Stages. Selector and principal
-// provenance live in audit for now; a later issue may extend Job itself.
+// Task per matched Node, grouped into Stages. The requesting Account is
+// recorded on the Job at creation (Requester); the Selector and the rest of
+// the dispatch provenance still live in audit.
 type Job struct {
 	ID        string
 	CreatedAt time.Time
+	Requester Requester
 }
 
 // Stage is a batch of Tasks within a Job. v1 permits exactly one Stage per
@@ -288,7 +309,7 @@ type Verdict struct {
 
 // JobRepository persists Jobs and their Stages.
 type JobRepository interface {
-	// CreateJob persists a new Job.
+	// CreateJob persists a new Job, including its Requester, in one write.
 	CreateJob(ctx context.Context, job Job) error
 
 	// AddStage adds a Stage to a Job. Returns ErrSingleStageOnly if the Job

@@ -11,12 +11,20 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
-// createJobFixture persists a Job with one Stage and the given Tasks (each
-// CreateTask'd Pending, then transitioned per its own State/Outcome), for the
-// jobquery.go tests below.
+// createJobFixture persists a Job with no recorded Requester, one Stage, and
+// the given Tasks (each CreateTask'd Pending, then transitioned per its own
+// State/Outcome), for the jobquery.go tests below.
 func createJobFixture(t *testing.T, ctx context.Context, st *Store, jobID string, createdAt time.Time, tasks []jobs.Task) {
 	t.Helper()
-	if err := st.Jobs().CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: createdAt}); err != nil {
+	createJobFixtureBy(t, ctx, st, jobID, jobs.Requester{}, createdAt, tasks)
+}
+
+// createJobFixtureBy is createJobFixture with an explicit Requester (#616),
+// for the tests that need to prove the requester now comes from the Job row
+// rather than the audit trail.
+func createJobFixtureBy(t *testing.T, ctx context.Context, st *Store, jobID string, req jobs.Requester, createdAt time.Time, tasks []jobs.Task) {
+	t.Helper()
+	if err := st.Jobs().CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: createdAt, Requester: req}); err != nil {
 		t.Fatalf("CreateJob(%s): %v", jobID, err)
 	}
 	stageID := jobID + "-stage"
@@ -135,41 +143,41 @@ func nonDispatchAuditRecord(t *testing.T, ctx context.Context, st *Store, id, ki
 	}
 }
 
-// TestJobQuery_RequesterJoinIgnoresNonDispatchRows guards the auditWhere
-// filter in jobQuerySelect (`WHERE kind = 'dispatch'`): capability's
-// CancelJob (Service.CancelJob/authorizeMachineCancel) now writes a
-// job_id-carrying KindRefusal row on a machine-Account cancel refusal, and a
-// KindJobCancel row on a successful one. Neither may enter the requester
-// join — if the filter were loosened, a REFUSED caller's account_id could
-// still win the join's MIN(account_id) and be recorded as the Job's
-// requester, letting that same caller's second cancel attempt succeed
-// against the very refusal that was supposed to stop it.
+// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail (#616) proves the
+// requester now comes ONLY from the Job row: an audit dispatch/refusal/
+// cancel row attributed to a different Account never wins over the Job's
+// own recorded Requester, and a Job with no recorded Requester reads back
+// empty even though its audit trail names somebody.
 //
-// job-b-refused-first is lexically SMALLER than job-a-legit-dispatcher
-// ("acct-0" < "acct-z"), so an unfiltered MIN(account_id) would pick it if
-// the kind filter were ever dropped — this test would then fail loudly
-// rather than pass by accident of ordering.
-func TestJobQuery_RequesterJoinIgnoresNonDispatchRows(t *testing.T) {
+// This supersedes the pre-#616 concern the old test name recorded — that a
+// refused caller's account_id might win a MIN(account_id) audit join — which
+// no longer applies now that the requester is a plain column on the jobs
+// row, not an aggregate over audit at all.
+func TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
-	const legitRequester = "acct-z-legit-dispatcher"
-	const refusedCaller = "acct-0-refused-caller"
+	const recordedRequester = "acct-x-recorded"
+	const auditDispatcher = "acct-y-audit-dispatch"
+	const auditRefuser = "acct-z-audit-refusal"
 
-	createJobFixture(t, ctx, st, "job-scoped", base, []jobs.Task{
-		{ID: "job-scoped-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	// Job A: recorded requester X, but its audit trail holds a dispatch row
+	// for Y and refusal/cancel rows for Z. Its requester must read X.
+	req := jobs.Requester{AccountID: recordedRequester, AccountName: "recorded-machine", Kind: "machine"}
+	createJobFixtureBy(t, ctx, st, "job-a", req, base, []jobs.Task{
+		{ID: "job-a-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
-	dispatchAuditRecord(t, ctx, st, "audit-scoped-dispatch", "job-scoped", "relay:env=prod", legitRequester, "legit-machine", base)
-	nonDispatchAuditRecord(t, ctx, st, "audit-scoped-refusal", audit.KindRefusal, "job-scoped", refusedCaller, "refused-machine", base)
-	nonDispatchAuditRecord(t, ctx, st, "audit-scoped-cancel", audit.KindJobCancel, "job-scoped", refusedCaller, "refused-machine", base)
+	dispatchAuditRecord(t, ctx, st, "audit-a-dispatch", "job-a", "relay:env=prod", auditDispatcher, "audit-dispatcher", base)
+	nonDispatchAuditRecord(t, ctx, st, "audit-a-refusal", audit.KindRefusal, "job-a", auditRefuser, "audit-refuser", base)
+	nonDispatchAuditRecord(t, ctx, st, "audit-a-cancel", audit.KindJobCancel, "job-a", auditRefuser, "audit-refuser", base)
 
-	// A second Job with ONLY a refusal row (no dispatch row at all): its
-	// requester must read back empty, never the refused caller's account.
-	createJobFixture(t, ctx, st, "job-refusal-only", base, []jobs.Task{
-		{ID: "job-refusal-only-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	// Job B: no recorded requester, but a dispatch audit row for Y. Its
+	// requester must read empty — never inferred from the trail.
+	createJobFixture(t, ctx, st, "job-b", base, []jobs.Task{
+		{ID: "job-b-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
-	nonDispatchAuditRecord(t, ctx, st, "audit-refusal-only", audit.KindRefusal, "job-refusal-only", refusedCaller, "refused-machine", base)
+	dispatchAuditRecord(t, ctx, st, "audit-b-dispatch", "job-b", "relay:env=prod", auditDispatcher, "audit-dispatcher", base)
 
 	page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{}, 0, "")
 	if err != nil {
@@ -180,42 +188,39 @@ func TestJobQuery_RequesterJoinIgnoresNonDispatchRows(t *testing.T) {
 		byID[j.JobID] = j
 	}
 
-	scoped, ok := byID["job-scoped"]
+	a, ok := byID["job-a"]
 	if !ok {
-		t.Fatal("job-scoped missing from QueryJobs")
+		t.Fatal("job-a missing from QueryJobs")
 	}
-	if scoped.RequesterAccountID != legitRequester {
-		t.Errorf("job-scoped.RequesterAccountID = %q, want %q (the refusal/cancel rows must not win the join)",
-			scoped.RequesterAccountID, legitRequester)
+	if a.RequesterAccountID != recordedRequester || a.Requester != "recorded-machine" || a.RequesterKind != "machine" {
+		t.Errorf("job-a requester = %+v, want ID=%s Name=recorded-machine Kind=machine", a, recordedRequester)
+	}
+	// Selector still comes from the dispatch row, and only the dispatch row:
+	// kind = 'dispatch' still guards it against the refusal row.
+	if a.Selector != "relay:env=prod" {
+		t.Errorf("job-a.Selector = %q, want relay:env=prod (from the dispatch row, not the refusal row)", a.Selector)
 	}
 
-	refusalOnly, ok := byID["job-refusal-only"]
+	b, ok := byID["job-b"]
 	if !ok {
-		t.Fatal("job-refusal-only missing from QueryJobs")
+		t.Fatal("job-b missing from QueryJobs")
 	}
-	if refusalOnly.RequesterAccountID != "" {
-		t.Errorf("job-refusal-only.RequesterAccountID = %q, want empty (only a refusal row exists, no dispatch)",
-			refusalOnly.RequesterAccountID)
+	if b.RequesterAccountID != "" || b.Requester != "" || b.RequesterKind != "" {
+		t.Errorf("job-b requester = %+v, want all empty (no recorded requester, despite a dispatch audit row)", b)
 	}
 }
 
-// TestJobQuery_RequesterJoin covers a Job WITH an audit dispatch row and a
-// Job WITHOUT one yet (in-flight): both must still be listed, and only the
-// first carries Requester/RequesterAccountID/Selector.
-func TestJobQuery_RequesterJoin(t *testing.T) {
+// TestJobQuery_RequesterReadsFromTheJobRow (#616) proves an IN-FLIGHT Job (a
+// Dispatched Task, no audit row yet) already carries its requester — read
+// from the Job row, not the audit trail — while Selector stays empty until
+// the audit row lands.
+func TestJobQuery_RequesterReadsFromTheJobRow(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
-	createJobFixture(t, ctx, st, "job-attributed", base, []jobs.Task{
-		{ID: "job-attributed-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
-	})
-	dispatchAuditRecord(t, ctx, st, "audit-1", "job-attributed", "relay:env=prod", "acct-1", "gleipnir", base)
-
-	// In-flight: the Task exists (Dispatched), but the audit record has not
-	// been written yet — capability/service.go writes it only after
-	// disp.run returns.
-	createJobFixture(t, ctx, st, "job-inflight", base, []jobs.Task{
+	req := jobs.Requester{AccountID: "acct-1", AccountName: "gleipnir", Kind: "machine"}
+	createJobFixtureBy(t, ctx, st, "job-inflight", req, base, []jobs.Task{
 		{ID: "job-inflight-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateDispatched},
 	})
 
@@ -223,25 +228,17 @@ func TestJobQuery_RequesterJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryJobs: %v", err)
 	}
-	byID := map[string]jobs.JobSummary{}
-	for _, j := range page.Jobs {
-		byID[j.JobID] = j
+	if len(page.Jobs) != 1 || page.Jobs[0].JobID != "job-inflight" {
+		t.Fatalf("QueryJobs = %+v, want exactly [job-inflight]", page.Jobs)
 	}
 
-	attributed, ok := byID["job-attributed"]
-	if !ok {
-		t.Fatal("job-attributed missing from QueryJobs")
+	inflight := page.Jobs[0]
+	if inflight.RequesterAccountID != "acct-1" || inflight.Requester != "gleipnir" || inflight.RequesterKind != "machine" {
+		t.Errorf("job-inflight requester = %+v, want ID=acct-1 Name=gleipnir Kind=machine — read while every Task is still in flight, no audit row exists yet",
+			inflight)
 	}
-	if attributed.Requester != "gleipnir" || attributed.RequesterAccountID != "acct-1" || attributed.Selector != "relay:env=prod" {
-		t.Errorf("job-attributed = %+v, want Requester=gleipnir RequesterAccountID=acct-1 Selector=relay:env=prod", attributed)
-	}
-
-	inflight, ok := byID["job-inflight"]
-	if !ok {
-		t.Fatal("job-inflight (no audit row yet) missing from QueryJobs — an in-flight Job must never be hidden by a race with its own audit write")
-	}
-	if inflight.Requester != "" || inflight.RequesterAccountID != "" || inflight.Selector != "" {
-		t.Errorf("job-inflight = %+v, want empty Requester/RequesterAccountID/Selector", inflight)
+	if inflight.Selector != "" {
+		t.Errorf("job-inflight.Selector = %q, want empty — the audit row has not been written yet", inflight.Selector)
 	}
 	if inflight.State != jobs.JobStateRunning {
 		t.Errorf("job-inflight.State = %v, want Running", inflight.State)
@@ -249,36 +246,47 @@ func TestJobQuery_RequesterJoin(t *testing.T) {
 }
 
 // TestJobQuery_Filters exercises State, RequesterAccountID, Operation,
-// RiskClass, and the time window, each alone and combined in one call.
+// RiskClass, and the time window, each alone and combined in one call. The
+// requester is seeded on the Job row (#616), not the audit trail.
 func TestJobQuery_Filters(t *testing.T) {
 	st, _ := openTestStore(t)
 	ctx := context.Background()
 	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
-	createJobFixture(t, ctx, st, "job-target", base, []jobs.Task{
+	target := jobs.Requester{AccountID: "acct-target", AccountName: "gleipnir", Kind: "machine"}
+	other := jobs.Requester{AccountID: "acct-other", AccountName: "someone-else", Kind: "machine"}
+
+	createJobFixtureBy(t, ctx, st, "job-target", target, base, []jobs.Task{
 		{ID: "job-target-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
 	dispatchAuditRecord(t, ctx, st, "audit-target", "job-target", "relay:env=prod", "acct-target", "gleipnir", base)
 
-	createJobFixture(t, ctx, st, "job-other-op", base, []jobs.Task{
+	createJobFixtureBy(t, ctx, st, "job-other-op", target, base, []jobs.Task{
 		{ID: "job-other-op-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
 	dispatchAuditRecord(t, ctx, st, "audit-other-op", "job-other-op", "relay:env=prod", "acct-target", "gleipnir", base)
 
-	createJobFixture(t, ctx, st, "job-other-account", base, []jobs.Task{
+	createJobFixtureBy(t, ctx, st, "job-other-account", other, base, []jobs.Task{
 		{ID: "job-other-account-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
 	dispatchAuditRecord(t, ctx, st, "audit-other-account", "job-other-account", "relay:env=prod", "acct-other", "someone-else", base)
 
-	createJobFixture(t, ctx, st, "job-mutate", base, []jobs.Task{
+	createJobFixtureBy(t, ctx, st, "job-mutate", target, base, []jobs.Task{
 		{ID: "job-mutate-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
 	dispatchAuditRecord(t, ctx, st, "audit-mutate", "job-mutate", "relay:env=prod", "acct-target", "gleipnir", base)
 
-	createJobFixture(t, ctx, st, "job-outside-window", base.Add(48*time.Hour), []jobs.Task{
+	createJobFixtureBy(t, ctx, st, "job-outside-window", target, base.Add(48*time.Hour), []jobs.Task{
 		{ID: "job-outside-window-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 	})
 	dispatchAuditRecord(t, ctx, st, "audit-outside-window", "job-outside-window", "relay:env=prod", "acct-target", "gleipnir", base.Add(48*time.Hour))
+
+	// No recorded requester, even though its audit trail names acct-target:
+	// the RequesterAccountID filter must not match it (#616, no inference).
+	createJobFixture(t, ctx, st, "job-no-requester", base, []jobs.Task{
+		{ID: "job-no-requester-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "file.read", RiskClass: jobs.RiskClassRead}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
+	})
+	dispatchAuditRecord(t, ctx, st, "audit-no-requester", "job-no-requester", "relay:env=prod", "acct-target", "gleipnir", base)
 
 	readClass := jobs.RiskClassRead
 	complete := jobs.JobStateComplete
@@ -435,7 +443,7 @@ func TestJobQuery_SingleJob(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 
-	createJobFixture(t, ctx, st, "job-wanted", base, []jobs.Task{
+	createJobFixtureBy(t, ctx, st, "job-wanted", jobs.Requester{AccountID: "acct-1", AccountName: "gleipnir", Kind: "machine"}, base, []jobs.Task{
 		{ID: "job-wanted-t1", NodeID: "node-1", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeSuccess},
 		{ID: "job-wanted-t2", NodeID: "node-2", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateResolved, Outcome: jobs.OutcomeDeniedByPolicy},
 		{ID: "job-wanted-t3", NodeID: "node-3", Action: jobs.Action{Kind: jobs.ActionOperation, OperationName: "service.restart", RiskClass: jobs.RiskClassMutate}, State: jobs.DispatchStateDispatched},

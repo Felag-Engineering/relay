@@ -11,10 +11,10 @@ import (
 )
 
 // jobquery.go implements jobs.QueryRepository: the Job/Task read lane (#441).
-// It reads the SAME jobs/stages/tasks tables sqliteJobs/sqliteTasks write,
-// plus the audit trail for the requester/selector that a Job carries nowhere
-// of its own (jobs.Job's doc comment: "Selector and principal provenance
-// live in audit for now").
+// It reads the SAME jobs/stages/tasks tables sqliteJobs/sqliteTasks write.
+// The requester now comes from the jobs row itself (#616); the audit trail
+// still supplies the selector, on-behalf-of, approval, grant and args a Job
+// carries nowhere of its own.
 
 // sqliteJobQueries implements jobs.QueryRepository.
 type sqliteJobQueries struct {
@@ -93,14 +93,12 @@ func jobOutcomeSumColumns() []string {
 // column is named here, so paginating a Job list can never become a path to
 // captured output.
 func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
-	// kind = 'dispatch' is load-bearing, not tidying: capability's CancelJob
-	// (Service.CancelJob/authorizeMachineCancel) writes job_id-carrying
-	// KindRefusal and KindJobCancel audit rows too, and authorizeMachineCancel
-	// trusts RequesterAccountID below to decide whether a machine Account may
-	// cancel a Job. Drop this filter and a refused caller's own account_id
-	// could win the MIN(account_id) join and be recorded as the Job's
-	// requester, letting a second cancel attempt from that same caller
-	// succeed. See TestJobQuery_RequesterJoinIgnoresNonDispatchRows.
+	// kind = 'dispatch' is still load-bearing, even though the requester no
+	// longer comes from this join (#616): capability's CancelJob writes
+	// job_id-carrying KindRefusal and KindJobCancel audit rows too, and the
+	// Selector, on-behalf-of and approval columns below must come from the
+	// dispatch record, not from a refusal or cancel row. See
+	// TestJobQuery_RequesterIsNeverTakenFromTheAuditTrail.
 	taskWhere, auditWhere := "", "\n\tWHERE kind = 'dispatch'"
 	if filter.JobID != "" {
 		taskWhere = "\n\tWHERE job_id = ?"
@@ -111,7 +109,7 @@ func jobQuerySelect(filter jobs.JobQuery) (stmt string, args []any) {
 	COALESCE(t.total, 0), COALESCE(t.unresolved, 0),
 	t.action_kind, t.operation_name, t.risk_class,
 	` + strings.Join(jobOutcomeColumnRefs(), ", ") + `,
-	a.selector, a.account_id, a.account_name,
+	a.selector, j.requester_account_id, j.requester_account_name, j.requester_kind,
 	a.on_behalf_of, a.approval_id, a.grant_id, a.args, a.raw_exec_argv
 FROM jobs j
 LEFT JOIN (
@@ -126,7 +124,7 @@ LEFT JOIN (
 	GROUP BY job_id
 ) t ON t.job_id = j.job_id
 LEFT JOIN (
-	SELECT job_id, MIN(selector) AS selector, MIN(account_id) AS account_id, MIN(account_name) AS account_name,
+	SELECT job_id, MIN(selector) AS selector,
 		MIN(asserted_on_behalf_of) AS on_behalf_of, MIN(approval_id) AS approval_id, MIN(grant_id) AS grant_id,
 		MIN(args) AS args, MIN(raw_exec_argv) AS raw_exec_argv
 	FROM audit` + auditWhere + `
@@ -230,7 +228,10 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 		}
 	}
 	if filter.RequesterAccountID != "" {
-		conds = append(conds, `a.account_id = ?`)
+		// A plain column predicate on the jobs row itself (#616) — no join,
+		// no aggregate, and idx_jobs_requester_created_at (migration 0026)
+		// serves it directly.
+		conds = append(conds, `j.requester_account_id = ?`)
 		args = append(args, filter.RequesterAccountID)
 	}
 	if filter.OnBehalfOf != "" {
@@ -238,11 +239,12 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 		// is inside the aggregate, and the outer WHERE can only see what the
 		// aggregate projected.
 		//
-		// Like a.account_id above, this predicate lands in the OUTER WHERE and
-		// SQLite will not push it into the right operand of a LEFT JOIN (see
-		// jobQuerySelect's doc comment), so the aggregate still reads every
-		// dispatch row in the trail. That is the same plan the requester filter
-		// has had since it was written; it is stated here rather than implied.
+		// This predicate lands in the OUTER WHERE and SQLite will not push it
+		// into the right operand of a LEFT JOIN (see jobQuerySelect's doc
+		// comment), so the aggregate still reads every dispatch row in the
+		// trail. Unlike RequesterAccountID above, OnBehalfOf stays
+		// audit-joined: it is the caller-asserted lane, which has no home on
+		// the jobs row.
 		conds = append(conds, `a.on_behalf_of = ?`)
 		args = append(args, filter.OnBehalfOf)
 	}
@@ -273,7 +275,8 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		total, unresolved                    int
 		actionKind, operationName, riskClass sql.NullString
 		outcomeCounts                        = make([]int, len(jobOutcomeOrder))
-		selector, accountID, accountName     sql.NullString
+		selector, requesterID, requesterName sql.NullString
+		requesterKind                        sql.NullString
 		onBehalfOf, approvalID, grantID      sql.NullString
 		argsJSON, argvJSON                   sql.NullString
 	)
@@ -282,7 +285,7 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 	for i := range outcomeCounts {
 		dest = append(dest, &outcomeCounts[i])
 	}
-	dest = append(dest, &selector, &accountID, &accountName,
+	dest = append(dest, &selector, &requesterID, &requesterName, &requesterKind,
 		&onBehalfOf, &approvalID, &grantID, &argsJSON, &argvJSON)
 
 	if err := row.Scan(dest...); err != nil {
@@ -333,8 +336,9 @@ func scanJobSummary(row rowScanner) (jobs.JobSummary, string, error) {
 		OperationName:      operationName.String,
 		RiskClass:          riskClassFromString(riskClass.String),
 		Selector:           selector.String,
-		Requester:          accountName.String,
-		RequesterAccountID: accountID.String,
+		Requester:          requesterName.String,
+		RequesterAccountID: requesterID.String,
+		RequesterKind:      requesterKind.String,
 		OnBehalfOf:         onBehalfOf.String,
 		ApprovalID:         approvalID.String,
 		GrantID:            grantID.String,

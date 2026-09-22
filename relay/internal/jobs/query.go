@@ -45,10 +45,9 @@ type JobQuery struct {
 	// either.
 	State *JobState
 
-	// RequesterAccountID restricts to Jobs whose dispatch was attributed to
-	// this verified Account. Jobs carry no requester of their own (Job's doc
-	// comment: "Selector and principal provenance live in audit for now") —
-	// the store implementation joins this from the audit trail.
+	// RequesterAccountID restricts to Jobs whose recorded requester (Job's
+	// Requester field) is this verified Account. A Job with no recorded
+	// requester never matches any value here.
 	RequesterAccountID string
 
 	// Operation restricts to this operation_name. Every Task of a v1 Job
@@ -60,11 +59,11 @@ type JobQuery struct {
 	RiskClass *RiskClass
 
 	// OnBehalfOf restricts to Jobs whose dispatch carried this ASSERTED
-	// on-behalf-of value. Joined from the audit trail exactly as
-	// RequesterAccountID above is, and matched EXACTLY — never a prefix and
-	// never a LIKE, mirroring audit.Query.OnBehalfOf. The asserted lane is
-	// caller-claimed and nothing checked it; a fuzzy match over it would let
-	// one agent's claim answer a question asked about another's.
+	// on-behalf-of value. Joined from the audit trail, and matched EXACTLY —
+	// never a prefix and never a LIKE, mirroring audit.Query.OnBehalfOf. The
+	// asserted lane is caller-claimed and nothing checked it; a fuzzy match
+	// over it would let one agent's claim answer a question asked about
+	// another's.
 	OnBehalfOf string
 
 	// Since and Until bound CreatedAt, half-open [Since, Until). The zero
@@ -83,20 +82,24 @@ type JobSummary struct {
 	OperationName string
 	RiskClass     RiskClass
 
-	// Selector, Requester, and RequesterAccountID are joined from the audit
-	// trail (the dispatch record the Job engine wrote when it ran), exactly
-	// as RequesterAccountID above is. A Job whose audit row has not been
-	// written yet — an in-flight Job the Job engine is still inside disp.run
-	// for — still appears, with these three fields empty: the store's
-	// implementation LEFT JOINs so a Job is never hidden by a race with its
-	// own audit write.
+	// Requester, RequesterAccountID and RequesterKind come from the Job row.
+	// They are present from the moment the Job exists (in-flight Jobs
+	// included), empty for a Job with no recorded requester (legacy), and
+	// never filled from the trail.
+	//
+	// Selector is still audit-joined (the dispatch record the Job engine
+	// wrote when it ran): a Job whose audit row has not been written yet —
+	// an in-flight Job the Job engine is still inside disp.run for — still
+	// appears, with Selector empty: the store's implementation LEFT JOINs so
+	// a Job is never hidden by a race with its own audit write.
 	Selector           string
 	Requester          string
 	RequesterAccountID string
+	RequesterKind      string
 
 	// OnBehalfOf, ApprovalID, GrantID, Args and RawExecArgv join from the
-	// SAME per-Job audit aggregate Selector and Requester above join from,
-	// and are empty for an in-flight Job for the same LEFT-JOIN reason.
+	// SAME per-Job audit aggregate Selector above joins from, and are empty
+	// for an in-flight Job for the same LEFT-JOIN reason.
 	//
 	// They are exact, not a sample. Every dispatch record within one Job is
 	// written from ONE base record — the fan-out loop that writes a record

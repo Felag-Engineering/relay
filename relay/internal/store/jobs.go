@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -16,10 +17,25 @@ type sqliteJobs struct {
 
 var _ jobs.JobRepository = (*sqliteJobs)(nil)
 
-// CreateJob persists a new Job.
+// CreateJob persists a new Job, including its Requester, in one write.
+//
+// The requester is validated BEFORE the INSERT (#616): an AccountID-less
+// name or kind, or a kind outside human/machine, is rejected here rather
+// than silently dropped or left to the schema's CHECK constraint, which is
+// only the backstop.
 func (j *sqliteJobs) CreateJob(ctx context.Context, job jobs.Job) error {
-	_, err := j.db.ExecContext(ctx, `INSERT INTO jobs (job_id, created_at) VALUES (?, ?)`,
-		job.ID, formatTime(roundTripTime(job.CreatedAt)))
+	req := job.Requester
+	if !req.Recorded() && (req.AccountName != "" || req.Kind != "") {
+		return fmt.Errorf("store: job %q requester has a name or kind but no account id", job.ID)
+	}
+	if req.Kind != "" && !accounts.Kind(req.Kind).Valid() {
+		return fmt.Errorf("store: job %q requester kind %q is not human or machine", job.ID, req.Kind)
+	}
+
+	_, err := j.db.ExecContext(ctx,
+		`INSERT INTO jobs (job_id, created_at, requester_account_id, requester_account_name, requester_kind) VALUES (?, ?, ?, ?, ?)`,
+		job.ID, formatTime(roundTripTime(job.CreatedAt)),
+		nullIfEmpty(req.AccountID), nullIfEmpty(req.AccountName), nullIfEmpty(req.Kind))
 	if err != nil {
 		return fmt.Errorf("insert job: %w", err)
 	}
@@ -55,7 +71,10 @@ func (j *sqliteJobs) AddStage(ctx context.Context, stage jobs.Stage) error {
 // GetJob returns the Job with the given ID, or jobs.ErrJobNotFound.
 func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 	var createdAt string
-	err := j.db.QueryRowContext(ctx, `SELECT created_at FROM jobs WHERE job_id = ?`, id).Scan(&createdAt)
+	var requesterID, requesterName, requesterKind sql.NullString
+	err := j.db.QueryRowContext(ctx,
+		`SELECT created_at, requester_account_id, requester_account_name, requester_kind FROM jobs WHERE job_id = ?`, id).
+		Scan(&createdAt, &requesterID, &requesterName, &requesterKind)
 	if errors.Is(err, sql.ErrNoRows) {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
@@ -66,7 +85,15 @@ func (j *sqliteJobs) GetJob(ctx context.Context, id string) (jobs.Job, error) {
 	if err != nil {
 		return jobs.Job{}, fmt.Errorf("parse created_at for job %q: %w", id, err)
 	}
-	return jobs.Job{ID: id, CreatedAt: t}, nil
+	return jobs.Job{
+		ID:        id,
+		CreatedAt: t,
+		Requester: jobs.Requester{
+			AccountID:   requesterID.String,
+			AccountName: requesterName.String,
+			Kind:        requesterKind.String,
+		},
+	}, nil
 }
 
 // Stages returns all Stages for jobID, ordered by Index (at most one, in v1).

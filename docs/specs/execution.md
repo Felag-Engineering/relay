@@ -493,6 +493,12 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-22` — the Job row now records its requester (Account ID, name, and kind) in the
+  same write that creates the Job, before any Task is dispatched; Job queries read the
+  requester from the Job row, with the audit-row join kept only for the audit trail. Rows
+  written before this change carry no requester and read back as none, never inferred. This is
+  the storage the Cancellation section's `2026-09-17` machine-Account rule already described
+  (#616). Spec is still `aspirational`; proof not recorded per the legacy-spec rule.
 - `2026-09-17` — a zero-match dispatch is now refused as `no_nodes_matched` before any Job
   exists on every dispatch surface and audited as a refusal, while a Policy preflight reports
   it as `would_be_rejected` (#571). Spec is still `aspirational`; proof not recorded per the
