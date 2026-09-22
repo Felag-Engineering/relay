@@ -4,7 +4,437 @@ The nine-Node `demo` compose profile of the [local dev fleet](../dev-fleet.md), 
 roster, beats, fault injection and resetting between takes, and resource usage. Read
 [dev-fleet.md](../dev-fleet.md) first — its **DEV-ONLY** banner, prerequisites, bring-up and MCP
 connection all apply here, with more force: three times the Nodes sit behind the same committed
-dev credential.
+dev credential. This file is also the presenter's runbook for the Relay half of a stage demo
+([Presenter runbook](#presenter-runbook), below) — the overall script, including Gleipnir's own
+half of it, lives in [the Gleipnir-side runbook](https://github.com/Felag-Engineering/gleipnir/issues/933).
+Gleipnir is the AI-agent that drives the demo: a consumer of Relay, never a part of it.
+
+## Presenter runbook
+
+A presenter who has never run this fleet, from cold to on stage: bring-up, the credentials
+Gleipnir authenticates with, the human approver, the scripted bypass beat, the fault, and reset.
+
+### Posture, stated once
+
+This is containers on a laptop, not a production deployment. Every warning in
+[dev-fleet.md](../dev-fleet.md)'s **DEV-ONLY** banner applies here, with more force: nine Nodes
+sit behind the very same committed dev credential, the control plane is loopback-only, and every
+container shares one kernel. This section makes no hardening claims. It is worth saying anyway,
+because the Node's refusal in the bypass beat below is produced by the same relay-daemon Policy
+engine whether it runs in a container on a laptop or on a server in a datacenter — the posture
+paragraph costs nothing to state, and the refusal is real either way. One more number, stated
+once: the issue that commissioned this runbook planned for about 24 Nodes; the demo profile as
+built ([#452](https://github.com/Felag-Engineering/gleipnir-relay/issues/452)) is nine, and every
+count below is for nine.
+
+### From cold to ready
+
+1. **Prerequisites.** Docker Engine with the Compose v2 plugin, `python3` (both
+   `scripts/dev-fleet-mcp.sh` and `scripts/demo-fleet.sh` shell out to it), and `curl`. Add the
+   `/etc/hosts` mapping for any client other than `scripts/dev-fleet-mcp.sh` (that script pins
+   with `curl --resolve`, so it does not need it) — the control plane's server certificate has a
+   single SAN, `relay`, and Gleipnir and Claude Code both need to dial that name to get verified
+   TLS. Reuse the exact one-liner from
+   [Connecting Claude Code](../dev-fleet.md#connecting-claude-code):
+
+   ```console
+   $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
+   ```
+
+   Host ports `7654` and `9443` must be free: `make demo-reset` refuses if another compose
+   project already publishes them.
+
+2. **`make demo-build`.** Do it the day before, not on stage — it is the only demo-fleet target
+   that builds anything, and again after any code change.
+
+3. **`make demo-reset`.** Expected closing output *(predicted — the literal `echo` lines in
+   `scripts/dev-fleet-mcp.sh`'s `cmd_init` and `scripts/demo-fleet.sh`'s `cmd_reset`)*, in this
+   order, after compose's own progress output:
+
+   ```
+   dev-fleet-mcp: CA cert and both credentials are in .dev-fleet/
+   dev-fleet-mcp: copy-paste launch commands: .dev-fleet/start-claude.txt
+   demo-fleet: reset complete — 9 Nodes healthy, 6 web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted.
+   demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
+   demo-fleet:   claude mcp remove relay
+   demo-fleet:   claude mcp add --transport http relay https://relay:9443/mcp --header "Authorization: Bearer $(cat .dev-fleet/control-credential)"
+   ```
+
+   **Failure.** The script exits non-zero with a message prefixed `demo-fleet: ` on stderr. Some
+   messages name a service (a web Node not serving; the health wait lists what it is still
+   waiting on); others name only the step that failed (`compose down`/`up`, the approvals check,
+   `list_nodes`). Read the message: it names the step, and the service where it knows one — do
+   not expect every failure to name a service.
+
+4. **Enrollment timing from cold. Unmeasured.** No one has timed a cold `make demo-reset` at
+   nine Nodes, and no number is invented here. The only bound in code is `DEMO_WAIT_SECONDS`,
+   default 240s — reset fails past it, which is a timeout, not a measurement. To measure it: run
+   `make demo-build` once, then `time make demo-reset` three times back to back, recording wall
+   time and machine below (same style as [Resource usage](#resource-usage)):
+
+   | measured on | date | who | `demo-build` (first run) | `demo-reset` cold wall time — run 1 | run 2 | run 3 |
+   | --- | --- | --- | --- | --- | --- | --- |
+   | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ | _unmeasured_ |
+
+   **Credential lifetime.** Every credential a reset mints expires 24h later — the founding
+   admin's (`-ttl 24h`, `docker/mint-credential.sh`) and `dev-approver`'s (`ttl_seconds` 86400,
+   `docker/mint-approver.sh`) — and the Gleipnir token minted below matches that same 86400s. So
+   reset on demo day, not the night before.
+
+5. Mint Gleipnir's credentials — [Credentials for Gleipnir (copy-paste)](#credentials-for-gleipnir-copy-paste),
+   next — then run [Confirming the reset took](#confirming-the-reset-took).
+
+### Credentials for Gleipnir (copy-paste)
+
+**Re-run this after every reset.** `make demo-reset` runs `down -v`, which destroys the store:
+the `gleipnir` machine Account, its API Token, and the CA all die with it. After running the
+block below, make Gleipnir pick up the new token and the new CA. How Gleipnir reloads them
+(restart, or otherwise) is Gleipnir's own runbook to document
+([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) — most clients read a
+CA only at process start, so restarting it is the safe assumption *(predicted)*. A `make
+demo-up` keeps the store, so the Gleipnir token survives it; only `demo-reset` requires a re-run.
+
+The block below is one fenced shell block, run from the repo root. It runs in a subshell with
+fail-fast settings, is safe to re-run (create-or-lookup), never echoes the token, and writes the
+token file `0600` with no trailing newline. The shell below is literal — copy it as written:
+
+```console
+$ ( set -euo pipefail; umask 077
+    find_id() {
+      scripts/dev-fleet-mcp.sh api GET /api/v1/accounts \
+        | python3 -c 'import json,sys; print(next((a["id"] for a in json.load(sys.stdin)["accounts"] if a["name"]=="gleipnir"), ""))'
+    }
+    ACCOUNT_ID=$(find_id)
+    if [ -z "$ACCOUNT_ID" ]; then
+      scripts/dev-fleet-mcp.sh api POST /api/v1/accounts \
+        '{"name":"gleipnir","kind":"machine","role":"operator"}' >/dev/null
+      ACCOUNT_ID=$(find_id)
+    fi
+    test -n "$ACCOUNT_ID" || { echo "no gleipnir Account id; is .dev-fleet/ current?" >&2; exit 1; }
+    scripts/dev-fleet-mcp.sh api POST "/api/v1/accounts/$ACCOUNT_ID/tokens" \
+      '{"name":"gleipnir-demo","ttl_seconds":86400}' \
+      | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["token"])' \
+      > .dev-fleet/gleipnir-credential.tmp
+    test -s .dev-fleet/gleipnir-credential.tmp
+    mv .dev-fleet/gleipnir-credential.tmp .dev-fleet/gleipnir-credential
+    echo "gleipnir: Account $ACCOUNT_ID; API Token in .dev-fleet/gleipnir-credential" )
+```
+
+Expected output *(predicted)*: the one `gleipnir: Account ...` line. A python traceback here
+(typically a `KeyError`) means the call it wraps was refused — re-run the same
+`scripts/dev-fleet-mcp.sh api` call without the python filter to see why (most likely
+`.dev-fleet/` is stale; run `make demo-creds`).
+
+Why each guard, stated once on the page:
+
+- `scripts/dev-fleet-mcp.sh api` exits 0 even on an HTTP error (plain `curl -sS`, no `--fail`,
+  then a pretty-printer), so the guards above test the extracted values, not the exit code. A
+  409 on the create call (name already taken) is harmless: the second `find_id` resolves the id
+  regardless. This mirrors `docker/mint-approver.sh`'s own create-then-resolve pattern.
+- Without `pipefail` and the tmp-then-`mv` step, a failed mint would leave an empty file that
+  looks like a credential. With them, the real file only ever holds a token. A run that fails
+  before the `mv` can leave `.dev-fleet/gleipnir-credential.tmp` behind — harmless (it is
+  `0600`, inside the gitignored `.dev-fleet/`, and the next successful run overwrites it before
+  renaming it), but safe to `rm -f` before re-running if you want a clean directory.
+- No trailing newline, so a client that reads the file verbatim into a header does not send one.
+
+Field names come from the code
+(`relay/internal/controlplane/api/accounts.go`). The list response is an object with an
+`"accounts"` array, each entry carrying `"id"`, `"name"`, `"kind"` and `"role"`. The mint
+response carries `"api_token"` (redacted metadata) and `"token"` (the `glp_` plaintext).
+`ttl_seconds` is required — `0` means a token that never expires, so never use `0` here. Account
+`kind` is `"human"` or `"machine"`.
+
+The role choice, stated plainly:
+
+- **`kind: "machine"`.** The AI-agent authenticates as a machine Account (GLOSSARY). A machine
+  Account may never decide its own request, whatever `requester_allowed` says
+  (`approval.ErrMachineSelfDecision`), and it cannot engage the Freeze (human-only).
+- **`role: "operator"` is the default and the recommendation.** It is the lowest role that can
+  run the demo's Operations (running an Operation needs `operator`; `authz.requiredRole`) — the
+  "lowest role that does its job" rule
+  [control-plane-credential.md](control-plane-credential.md) states. It also keeps the approval
+  beat honest over the Control API: an operator cannot mint an API Token for anyone through that
+  surface, and it is not in the gate's audience either way — see
+  [The human approver](#the-human-approver) for what that separation does and does not guarantee
+  on a single laptop.
+- **The cost of operator.** Raw Exec is admin-only, so Gleipnir cannot request the Raw Exec
+  repair of the fault — the presenter drives that beat by hand instead (see
+  [Triggering and clearing the fault](#triggering-and-clearing-the-fault)). Gleipnir can still
+  discover the fault with a read (`file.read`) and request a mutate that parks:
+  `service.restart` on `node:role=web, node:env=prod` (fan-out 2, mutate class) parks under
+  `dev-fleet-wide-mutates-need-a-human` *(predicted)* — a different rule from the one beat (c)
+  below exercises (`dev-raw-exec-always-needs-a-human`, which is Raw Exec-specific, not
+  fan-out-specific). Approving it would not actually repair anything: `service.restart` hits the
+  same busybox limit as beat (d) below (`spawn systemctl: No such file or directory`)
+  *(predicted)*, so this parks-then-fails, and only demonstrates parking. Beat (d) is unaffected
+  by any of this: both of its Selectors are fan-out 1, so it runs with no human, and `operator`
+  is enough to run it. An operator-level repair of the fault, driven by Gleipnir itself, becomes
+  possible once [#626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626) makes the
+  `svc.restart` Template dispatchable.
+- **`role: "admin"` is the alternative**, and its trade-off is named rather than hidden: it lets
+  Gleipnir run the Raw Exec repair itself. But Account and API-Token administration are
+  admin-only and not human-only (`authz.requiredControlRole`; the owner decision to narrow them
+  is recorded there as open) — so a machine admin can mint an API Token for `dev-approver` and
+  decide its own parked dispatch as `dev-approver`. With `admin`, the "second human" is a
+  convention on stage, not a structural guarantee. If you choose `admin`, change `"operator"` to
+  `"admin"` in the create body above, and say this on stage rather than claim the gate is
+  structural. **A human should confirm this choice** before a presenter relies on it, and the
+  Gleipnir-side runbook ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933))
+  must agree with whichever role is actually used.
+- A pre-existing `gleipnir` Account is reused as it is, whatever its role. To see its role, read
+  `"role"` in `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`. After a reset there is none.
+
+**Export the CA.** `.dev-fleet/ca-cert.pem` is written by `make demo-reset` (it runs
+`scripts/dev-fleet-mcp.sh init`) and by `make demo-creds`. Give Gleipnir exactly three values:
+the MCP URL `https://relay:9443/mcp`; the CA file (the absolute path of
+`.dev-fleet/ca-cert.pem`); and the API Token in `.dev-fleet/gleipnir-credential`, sent in an
+`Authorization: Bearer` header. Gleipnir's own config keys are Gleipnir's to document
+([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)/[#928](https://github.com/Felag-Engineering/gleipnir/issues/928))
+— they are not invented here.
+
+Optional, needs `openssl`:
+
+```console
+$ openssl x509 -in .dev-fleet/ca-cert.pem -noout -subject -enddate -fingerprint -sha256
+```
+
+Verify the new API Token over verified TLS, mirroring the script's own `curl` flags:
+
+```console
+$ curl -sS --resolve relay:9443:127.0.0.1 --cacert .dev-fleet/ca-cert.pem \
+    -H "Authorization: Bearer $(cat .dev-fleet/gleipnir-credential)" \
+    https://relay:9443/api/v1/approvals
+```
+
+Expected *(predicted)*: an empty `approvals` array. Any authenticated caller may read the queue
+(`handleListApprovals`). Then prove the token is not an admin's:
+
+```console
+$ curl -sS -o /dev/null -w '%{http_code}\n' --resolve relay:9443:127.0.0.1 \
+    --cacert .dev-fleet/ca-cert.pem \
+    -H "Authorization: Bearer $(cat .dev-fleet/gleipnir-credential)" \
+    https://relay:9443/api/v1/accounts
+```
+
+Expected *(predicted)*: `403` — the floor is enforced in the capability layer
+(`writeAccountError` mapping `authz.ErrUnauthorized`), not a route-specific check. An admin
+token would get `200`.
+
+Like `scripts/dev-fleet-mcp.sh`, the verify commands above put the token on `curl`'s command
+line for the life of the call, where other local users of the laptop can see it. That is
+acceptable on a single-user dev laptop; never do it on a shared host.
+
+The token plaintext appears once, at mint (GLOSSARY: API Token). Never paste it anywhere but
+Gleipnir's own secret input, and never copy it off the laptop.
+
+### The human approver
+
+Nothing to create here. The `approver` one-shot (`docker/mint-approver.sh`) creates
+`dev-approver`, a human admin Account, on every reset, and `make demo-reset` copies its API
+Token to `.dev-fleet/approver-credential`.
+
+What is structural here is narrower than "two distinct people": on stage, one presenter holds
+both the founding admin's credential and `dev-approver`'s. What holds, with Gleipnir at
+`operator`, is that Gleipnir's own request cannot be approved with Gleipnir's own credential:
+
+- Both gate rules in `docker/fixtures/approval-gates.json` name `dev-approver` as their only
+  audience. Only `dev-approver` can satisfy them — neither Gleipnir nor the founding admin is in
+  the audience.
+- `requester_allowed` is unset (the strict default), so the requesting Account may not approve
+  its own parked dispatch. Independently of that, a machine Account may never decide its own
+  request (`ErrMachineSelfDecision`).
+- An operator Gleipnir cannot mint an API Token **through the Control API**, so it cannot obtain
+  `dev-approver`'s credential that way. (With `admin` it could — see the role trade-off above.)
+  That is a property of the API, not of the laptop: `make demo-reset` also writes
+  `.dev-fleet/approver-credential` and `.dev-fleet/control-credential` (`0600`) to the
+  filesystem, and a Gleipnir process running as the presenter's own OS user can read both
+  regardless of its Account role. The separation above is API-enforced only if Gleipnir cannot
+  also read `.dev-fleet/` — a different OS user, a container, or a machine separate from the
+  presenter's own shell. Where it can, the separation is a convention on stage, the same caveat
+  named for the `admin` role above, not a structural one.
+
+See [The approval gate](../dev-fleet.md#the-approval-gate) for the rule table.
+
+Confirm it exists: `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`, then look for
+`"name": "dev-approver"` with `"kind": "human"`.
+
+Where the decision is made: on the Control API, as `dev-approver`:
+
+```console
+$ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request-id>/decision \
+    '{"approve":true,"plan_hash":"<plan-hash>","reason":"approved on stage"}'
+```
+
+then re-issue the original call unchanged — see beat (c) below rather than a duplicate of it
+here.
+
+**Why not the Console.** The Console can decide an approval — it mounts an approval decision
+route, with step-up re-authentication. But it decides as the signed-in human, and the only
+Account with a Console password in this fleet is `admin`
+(`docker/console-password.sh` sets one only for `CONSOLE_ADMIN_NAME`). `admin` is not in the
+gate's audience, so a Console decision would be refused as not in the audience *(predicted)*.
+`dev-approver` has no Console password, and giving it one is out of scope here.
+
+### The bypass beat, scripted exactly
+
+Framing up front: the AI-agent is out of the loop for this beat. The presenter drives MCP by
+hand, with the founding admin's credential, and asks the bastion for `/etc/shadow`. That
+credential is `.dev-fleet/control-credential`: the founding-admin Account, human, role admin —
+the most powerful credential this control plane issues
+(`relay/internal/store/accounts.go`'s `EnsureFoundingAdmin`).
+
+Literal command (`scripts/dev-fleet-mcp.sh call` sends `tools/call` without the Tasks
+capability, so the result is a plain tool result, not a task handle):
+
+```console
+$ scripts/dev-fleet-mcp.sh call run_operation \
+    '{"selector":"node:role=bastion","operation":"file.read","args":{"path":"/etc/shadow"}}' \
+    | python3 -c 'import json,sys; [print(r["outcome"] + ": " + r["stderr"]) for r in json.load(sys.stdin)["result"]["structuredContent"]["results"]]'
+```
+
+The filter prints EVERY result, not just the first, so a stale second bastion would show up as a
+second line rather than hiding.
+
+Literal expected output (one line):
+
+```
+denied_by_policy: denied by explicit rule for operation 'file.read'
+```
+
+Evidence on the page:
+
+- The Policy engine's reason string is *(tested)*: the bastion fixture's explicit deny for
+  `file.read /etc/shadow` produces exactly `denied by explicit rule for operation 'file.read'`,
+  asserted in `bastion_allows_exactly_the_documented_read_and_nothing_else`
+  (`daemon/tests/dev_fleet_fixtures.rs`) through the policy-check path, not a dispatched Task's
+  stderr. `denied_by_policy_result` (daemon dispatch) copies that same reason into stderr
+  unchanged — mechanical, and not separately asserted by this test.
+- The same property, on a different Operation, is *(tested)*: an admin credential is refused
+  byte-identically to an operator machine Account in
+  `TestRefusalLegibilityE2E_AdminBypassIsRefusedIdentically`
+  (`relay/cmd/relay/refusal_legibility_e2e_test.go`). That test uses `service.restart`, not this
+  `file.read` — same property, different Operation.
+- `result.structuredContent` is the path `scripts/demo-fleet.sh`'s own `check_nodes_healthy`
+  already parses. The per-Node fields `outcome`, `stderr` and `refusal_explanation` are the MCP
+  `PerNodeResult` (`relay/internal/controlplane/mcp/wire.go`).
+- The end-to-end run above — the literal command producing the literal output on a live
+  nine-Node fleet — is *(predicted)*, not observed.
+
+Why this call, recorded so nobody "improves" it into one that parks:
+
+- `file.read` is `read` class, so neither gate rule matches
+  (`dev-fleet-wide-mutates-need-a-human` is `mutate` with fan-out 2 or more;
+  `dev-raw-exec-always-needs-a-human` is every Raw Exec). It dispatches straight to the Node
+  with no human.
+- Raw Exec on the bastion would be refused by the Node too
+  (`bastion_fixture_denies_every_raw_exec`). But it parks under the Raw Exec rule first, so the
+  stage would show a pending approval rather than a refusal — this obvious alternative is
+  rejected for exactly that reason.
+- `node:role=bastion` is fan-out 1, and the read-class blast cap (default 10000) is far above
+  nine, so there is no blast-cap interaction.
+- `/etc/shadow` is denied by an explicit deny rule in all three fixtures, so the fleet-wide
+  variant (selector `relay:env=dev`) would print nine denial lines. It is an optional encore,
+  marked *(predicted)*; only the bastion's verdict is asserted by a fixture test.
+
+Full response, for whoever wants to see the wire — drop the python filter. A *(predicted)*
+skeleton, derived from `RunOrPlanOutput`/`PerNodeResult`: a JSON-RPC 2.0 envelope, id `1`, whose
+result carries `"content"` (one text item holding the same JSON) and `"structuredContent"` with
+`"job_id"` and a `"results"` array. Each result carries `"node_id"` (`node-` followed by 32 hex),
+`"outcome": "denied_by_policy"`, `"stdout": ""`, `"stderr"` (the deny reason),
+`"stdout_truncated": false`, `"stderr_truncated": false`, `"duration_ms"`, and
+`"refusal_explanation"`. There is no `"exit_code"` key — nothing executed. `job_id`, `node_id`,
+`duration_ms` and key order all vary. `refusal_explanation` opens with
+`capability.PolicyDenyExplanation`'s first sentence, "Refused by the Node, not by this control
+plane" — quoted here only for its opening; the full constant is not reproduced, because it would
+go stale.
+
+The one-sentence framing, verbatim, for the presenter to say:
+
+> That refusal came from a root-owned Policy file on the bastion's own disk: the Relay can read
+> that file's fingerprint but has no code path to change it, so no credential this control plane
+> issues, the admin's included, can talk the bastion into it.
+
+That sentence stays inside invariant 2 and ADR-0002: it claims nothing about local root on the
+laptop, which can reach the container (the posture paragraph above covers that), and it does not
+call the Node a "machine" or a "host", nor widen "credential this control plane issues" to
+"credential in this room".
+
+**Pre-flight.** Run the command once before going on stage. If the filter raises `KeyError`,
+run it unfiltered to see the error — an authentication error means `.dev-fleet/` is stale; run
+`make demo-creds`. Immediately before the beat, run the `list_nodes` check the mutate-mixed-set
+beat (c) below already asks for, in literal form:
+
+```console
+$ scripts/dev-fleet-mcp.sh call list_nodes '{"selector":"node:role=bastion"}'
+```
+
+Expect exactly one Node. A stale second bastion would print two denial lines instead of one.
+
+### Triggering and clearing the fault
+
+Trigger with `make demo-fault`. Expected output *(predicted, the `cmd_fault` echo)*:
+
+```
+daemon-4: dev-fleet demo service DOWN (dev-fleet-service status: exit 3)
+daemon-6: dev-fleet demo service DOWN (dev-fleet-service status: exit 3)
+```
+
+Two ways to clear it:
+
+- **On stage:** the Raw Exec restart, parked under `dev-raw-exec-always-needs-a-human` and
+  approved as `dev-approver`. With Gleipnir at `operator` (the default), the presenter requests
+  it by hand as the founding admin, using the same fleet-wide selector as beat (c) below so both
+  faulted Nodes (`daemon-4`, `env=prod`; `daemon-6`, `env=staging`) clear in one call — a
+  narrower Selector such as `node:role=web, node:env=prod` would only reach `daemon-4`:
+
+  ```console
+  $ scripts/dev-fleet-mcp.sh call raw_exec \
+      '{"selector":"relay:env=dev","argv":["/usr/local/bin/dev-fleet-service","restart"]}'
+  ```
+
+  Then decide it as `dev-approver`, exactly as in [The human approver](#the-human-approver), and
+  re-issue the call unchanged. The founding admin and `dev-approver` are different Accounts, so
+  the unset `requester_allowed` does not block it. If Gleipnir asks for Raw Exec as `operator`,
+  the Relay refuses it on role before any gate or Node sees it — say so, so the presenter is not
+  surprised.
+- **Between takes:** `make demo-reset`.
+
+See [The fault, and resetting between takes](#the-fault-and-resetting-between-takes) below for
+discovery, repair and verification in full; this beat does not restate them.
+
+### Confirming the reset took
+
+`make demo-reset` already checks, by itself: every image present; `relay` and every daemon
+healthy; every one-shot exited `0`; the `dev-fleet-service status` probe exits `0` on every
+`role=web` Node; `GET /api/v1/approvals` is empty; and `list_nodes` reports the full compose
+roster, all connected. See the numbered list in
+[The fault, and resetting between takes](#the-fault-and-resetting-between-takes) below rather
+than a duplicate of it here.
+
+Independent checks for the presenter, as literal commands:
+
+- Nine Nodes, all connected:
+
+  ```console
+  $ scripts/dev-fleet-mcp.sh call list_nodes '{"selector":"relay:env=dev"}' \
+      | python3 -c 'import json,sys; n=json.load(sys.stdin)["result"]["structuredContent"]["nodes"]; print(len(n), "Nodes,", sum(1 for x in n if x.get("connected")), "connected")'
+  ```
+
+  Expected *(predicted)*: `9 Nodes, 9 connected`. It reads `result.structuredContent.nodes`, the
+  same path `check_nodes_healthy` reads.
+- `scripts/dev-fleet-mcp.sh api GET /api/v1/approvals`: an empty `approvals` array.
+- Re-run the [Gleipnir credential block](#credentials-for-gleipnir-copy-paste), then the
+  approvals curl above with the NEW token: `200` with an empty `approvals` array. Negative
+  check: a token saved from before the reset must now be refused, because the store was wiped —
+  expected `401` *(predicted)*. Save the old token to a scratch file outside the repo only if you
+  want to run this check; otherwise skip it.
+- Reload Gleipnir and any MCP client (the CA changed), then re-run
+  [the bypass beat](#the-bypass-beat-scripted-exactly).
+
+Back to back: run `make demo-reset` two or three times in a row. This has not been observed
+live — see [Verification honesty](#verification-honesty) below, which already says so; record
+the result there the first time someone runs it.
 
 ## The demo profile
 

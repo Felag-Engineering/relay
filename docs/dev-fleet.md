@@ -559,7 +559,11 @@ The nine-Node `demo` compose profile — its roster, the four beats, the injecte
 `make demo-reset`, and resource usage — has a runbook of its own:
 [docs/operations/demo-fleet.md](operations/demo-fleet.md). It is purely additive to the fleet
 above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`, enforces this), and
-everything in this document's DEV-ONLY banner applies to it with more force, not less.
+everything in this document's DEV-ONLY banner applies to it with more force, not less. That
+runbook's [Presenter runbook](operations/demo-fleet.md#presenter-runbook) section is what a
+presenter who has never run this fleet follows from cold to on stage, including
+[minting Gleipnir's credentials](operations/demo-fleet.md#credentials-for-gleipnir-copy-paste)
+and [the scripted bypass beat](operations/demo-fleet.md#the-bypass-beat-scripted-exactly).
 
 ## Scaling the fleet
 
