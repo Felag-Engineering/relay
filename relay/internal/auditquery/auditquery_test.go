@@ -282,10 +282,14 @@ func TestMapping_JobSummaryCarriesTheWholeDispatchAttribution(t *testing.T) {
 		Counts:             counts,
 		Requester:          "gleipnir",
 		RequesterAccountID: "acct-1",
+		RequesterKind:      "machine",
 	})
 
 	if got.OnBehalfOf != "agent-7" || got.ApprovalID != "appr-9" || got.GrantID != "grant-3" {
 		t.Errorf("attribution did not cross the seam: %+v", got)
+	}
+	if got.RequesterKind != "machine" {
+		t.Errorf("RequesterKind did not cross the seam: %+v", got)
 	}
 	if !reflect.DeepEqual(got.Args, args) || !reflect.DeepEqual(got.RawExecArgv, argv) {
 		t.Errorf("what was asked for did not cross the seam: Args=%#v Argv=%#v", got.Args, got.RawExecArgv)

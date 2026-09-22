@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
@@ -188,6 +189,77 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	}
 	if lastCreate > firstDispatch {
 		t.Errorf("a Task was dispatched before all Tasks were persisted: log = %v", log)
+	}
+}
+
+// TestEngineRecordsRequesterOnJob (#616, AC1) proves the requester is
+// written in the SAME CreateJob call that creates the Job: after run
+// returns, GetJob echoes the acting Principal's AccountID, name and Kind.
+func TestEngineRecordsRequesterOnJob(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+	}
+
+	p := Principal{AccountID: "acct-1", Account: "gleipnir", Kind: "machine"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(p, Selector{}, []registry.Node{testNode("node-1")}, act)
+
+	dr, err := e.run(context.Background(), d)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	job, err := jobsRepo.GetJob(context.Background(), dr.jobID)
+	if err != nil {
+		t.Fatalf("GetJob(%s): %v", dr.jobID, err)
+	}
+	want := jobs.Requester{AccountID: "acct-1", AccountName: "gleipnir", Kind: "machine"}
+	if job.Requester != want {
+		t.Errorf("Requester = %+v, want %+v", job.Requester, want)
+	}
+}
+
+// TestEngineRecordsNoRequesterWithoutAnAccountID (#616) proves a Principal
+// with no AccountID (a fixture, the dev harness) records NO requester — not
+// a name-only one, which could be mistaken for a verified owner.
+func TestEngineRecordsNoRequesterWithoutAnAccountID(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+	}
+
+	p := Principal{Account: "devharness"}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(p, Selector{}, []registry.Node{testNode("node-1")}, act)
+
+	dr, err := e.run(context.Background(), d)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	job, err := jobsRepo.GetJob(context.Background(), dr.jobID)
+	if err != nil {
+		t.Fatalf("GetJob(%s): %v", dr.jobID, err)
+	}
+	if job.Requester != (jobs.Requester{}) {
+		t.Errorf("Requester = %+v, want the zero value (no AccountID)", job.Requester)
 	}
 }
 
@@ -625,6 +697,105 @@ func TestWithExecutionAcceptsRealSeams(t *testing.T) {
 	}
 	if !authz.called || !capChecker.called || !audit.called {
 		t.Errorf("expected the real seams to be called: authz=%v cap=%v audit=%v", authz.called, capChecker.called, audit.called)
+	}
+}
+
+// probeAtFirstConnected wraps a Conduit, running probe exactly once — on the
+// FIRST call to Connected — then delegating for real. dispatchOne calls
+// Connected as its first step, after every Task's CreateTask and before any
+// MarkDispatched, so this is the earliest point at which every Task is
+// persisted Pending and none has been dispatched.
+type probeAtFirstConnected struct {
+	Conduit
+	probe  func()
+	probed bool
+}
+
+func (c *probeAtFirstConnected) Connected(nodeID string) bool {
+	if !c.probed {
+		c.probed = true
+		c.probe()
+	}
+	return c.Conduit.Connected(nodeID)
+}
+
+// TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending (#616, AC4's narrower
+// capability-package guard) proves the requester is durable and readable
+// through the real store while every Task is still Pending — before
+// dispatchOne's first MarkDispatched, and before the audit sink has
+// recorded anything. The read-lane counterpart (through Service.QueryJobs
+// and CancelJob) lives in internal/auditquery, which can import capability
+// without a cycle; this package cannot import auditquery.
+func TestRun_RequesterIsOnTheJobWhileEveryTaskIsPending(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay.db")
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+
+	inner := newFakeConduit(nil)
+	inner.connected["node-1"] = true
+	inner.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-1"}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	authz := &spyAuthorizer{}
+	capChecker := &spyCapChecker{}
+	auditSink := &spyAuditSink{}
+	freezeStore := &fakeFreezeStore{}
+
+	const jobID = "job-id-1" // sequentialIDs("id-"): job gets the first minted id.
+	var probeErrs []string
+	conduit := &probeAtFirstConnected{Conduit: inner, probe: func() {
+		ctx := context.Background()
+		tasks, err := st.Tasks().ByJob(ctx, jobID)
+		if err != nil {
+			probeErrs = append(probeErrs, fmt.Sprintf("ByJob(%s): %v", jobID, err))
+		}
+		for _, task := range tasks {
+			if task.State != jobs.DispatchStatePending {
+				probeErrs = append(probeErrs, fmt.Sprintf("task %s state = %v, want Pending", task.ID, task.State))
+			}
+		}
+
+		page, err := st.JobQueries().QueryJobs(ctx, jobs.JobQuery{JobID: jobID}, 0, "")
+		if err != nil {
+			probeErrs = append(probeErrs, fmt.Sprintf("QueryJobs(%s): %v", jobID, err))
+		} else if len(page.Jobs) != 1 {
+			probeErrs = append(probeErrs, fmt.Sprintf("QueryJobs(%s) returned %d rows, want 1", jobID, len(page.Jobs)))
+		} else if got := page.Jobs[0]; got.RequesterAccountID != "acct-1" || got.Requester != "gleipnir" || got.RequesterKind != "machine" {
+			probeErrs = append(probeErrs, fmt.Sprintf("requester = %+v, want ID=acct-1 Name=gleipnir Kind=machine", got))
+		}
+
+		if auditSink.called {
+			probeErrs = append(probeErrs, "the audit sink already recorded the dispatch before every Task left Pending")
+		}
+	}}
+
+	svc := New(reg,
+		WithAuthorizer(authz),
+		WithCapChecker(capChecker),
+		WithAuditSink(auditSink),
+		WithFreeze(freezeStore),
+		WithExecution(st.Jobs(), st.Tasks(), conduit, WithExecNewID(sequentialIDs("id-"))),
+	)
+
+	sel := Selector{Predicates: []Predicate{{Namespace: NamespaceNode, Key: "role", Value: "web"}}}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	p := Principal{AccountID: "acct-1", Account: "gleipnir", Kind: "machine", Role: "operator"}
+	if _, err := svc.Run(context.Background(), p, sel, act); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !conduit.probed {
+		t.Fatal("probe never ran — Connected was never called")
+	}
+	for _, msg := range probeErrs {
+		t.Error(msg)
 	}
 }
 

@@ -755,14 +755,14 @@ func (s *Service) refuseControl(ctx context.Context, p Principal, refusalErr err
 //
 // One message covers two different facts on purpose — "this Job was
 // requested by a different Account" and "this Job's requester is not
-// recorded at all" — and the caller must not be able to tell which. A Job's
-// requester is joined from the audit trail's dispatch row, written only
-// after the Job engine's own audit write (jobs.JobSummary's doc comment), so
-// a running Job usually has none; distinguishing "not recorded" from
-// "somebody else's" would let a machine Account learn that a Job it cannot
-// cancel exists and is still in flight, one bit at a time. Never inferred:
-// an unresolvable requester is refused exactly like a resolved one that
-// does not match.
+// recorded at all" — and the caller must not be able to tell which. The
+// requester is recorded on the Job at creation (#616), and a Job with no
+// recorded requester (one created before that) is refused exactly like
+// another Account's Job: distinguishing "not recorded" from "somebody
+// else's" would let a machine Account learn that a Job it cannot cancel
+// exists and is still in flight, one bit at a time. Never inferred: an
+// unresolvable requester is refused exactly like a resolved one that does
+// not match.
 var ErrJobNotRequestedByCaller = errors.New(
 	"capability: cancel refused: this Job was not requested by the caller, or its requester is not recorded")
 

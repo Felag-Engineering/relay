@@ -163,12 +163,16 @@ type JobSummary struct {
 	OperationName string
 	RiskClass     jobs.RiskClass
 
-	// Selector, Requester, and RequesterAccountID are empty for a Job whose
-	// audit row has not been written yet (in-flight) — see
+	// Requester, RequesterAccountID and RequesterKind come from the Job row:
+	// present from the moment the Job exists (in-flight Jobs included), and
+	// empty for a Job with no recorded requester (legacy) — never filled
+	// from the trail. Selector is still audit-joined, and is empty for a Job
+	// whose audit row has not been written yet (in-flight) — see
 	// jobs.JobSummary's doc comment.
 	Selector           string
 	Requester          string
 	RequesterAccountID string
+	RequesterKind      string
 
 	// OnBehalfOf, ApprovalID, GrantID, Args and RawExecArgv join from the
 	// same per-Job dispatch aggregate as the three fields above, and are

@@ -202,10 +202,9 @@ func (s *Service) ResolveTask(ctx context.Context, p Principal, taskID string) (
 //     scoping (#614, owner decision 2026-09-17): p must satisfy
 //     AuthorizeControl(ControlCancelJob), and — if p is a machine Account —
 //     the Job's recorded requester must be p, or this returns that refusal
-//     before the handle itself is touched. Until #616 records the requester
-//     at Job creation, that means a machine Account's own still-running Task
-//     cannot yet cancel itself through this path either: refused by design,
-//     not a gap in this method.
+//     before the handle itself is touched. The requester is recorded on the
+//     Job at creation (#616), so a machine Account's own still-running Task
+//     can cancel itself through this path.
 //   - Still parked, so there is nothing running to stop and CancelJob is never
 //     called. Only the handle is marked, and that stays owner-scoped and
 //     UNGATED by role: s.mcpTasks.Get already requires p.AccountID to own the

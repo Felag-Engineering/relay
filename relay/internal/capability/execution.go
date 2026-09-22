@@ -25,6 +25,9 @@
 //     sent and are NOT auto-run — there is no store-and-forward (ADR-0004);
 //     resuming a stalled Job is the caller's re-target decision, not an
 //     automatic behavior.
+//   - The requester (#616) is written in the CreateJob that precedes every
+//     CreateTask, so it is durable before any Task is Pending, let alone
+//     Dispatched.
 //   - Unreachable Tasks (MarkUnreachable) are already terminal — Resolved,
 //     never Dispatched — and are never part of InFlight() reconciliation.
 //     Version-refused Tasks (MarkVersionRefused, ADR-0014) are the same
@@ -92,6 +95,18 @@ func defaultID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// requesterOf projects the Principal that asked for a dispatch onto the
+// Requester recorded on its Job (#616). A Principal with no AccountID (a
+// fixture, the dev harness) records NO requester — it never records a
+// name-only one, which could be mistaken for a verified owner.
+func requesterOf(p Principal) jobs.Requester {
+	req := jobs.Requester{AccountID: p.AccountID, AccountName: p.Account, Kind: p.Kind}
+	if !req.Recorded() {
+		return jobs.Requester{}
+	}
+	return req
+}
+
 // jobEngine is the real Job engine: it implements the unexported dispatcher
 // interface (dispatch.go) and is reachable only through Service.Run, never
 // directly by a foreign package. It fans a resolved dispatch out to one
@@ -122,7 +137,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	if err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
 	}
-	if err := e.jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: e.now()}); err != nil {
+	if err := e.jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
 	// Published error-free by construction (#416): the sink is

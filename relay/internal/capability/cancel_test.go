@@ -331,9 +331,9 @@ func TestCancelJobRefusesMachineCancellingAnotherAccountsJob(t *testing.T) {
 }
 
 // TestCancelJobRefusesMachineCancellingAJobWithNoRecordedRequester: a Job
-// whose requester has not yet been joined from the audit trail (a still
-// in-flight Job, before #616) is refused exactly like one requested by
-// somebody else — never inferred as the caller's own.
+// with no requester recorded on its Job row (a legacy Job created before
+// #616) is refused exactly like one requested by somebody else — never
+// inferred as the caller's own.
 func TestCancelJobRefusesMachineCancellingAJobWithNoRecordedRequester(t *testing.T) {
 	const jobID = "job-in-flight"
 	machine := Principal{AccountID: "acct-m", Account: "gleipnir-prod", Role: "operator", Kind: "machine"}
