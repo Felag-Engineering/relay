@@ -62,7 +62,8 @@
   font-display: swap;
   src: url('/console/assets/fonts/ibm-plex-sans-600.woff2') format('woff2');
 }
-/* 700 is not decoration. The templates carry 42 <b>/<strong> tags, and the UA
+/* 700 is not decoration. The templates carry more than a hundred <b> tags (and
+ * no <strong> today, though it would be treated the same way), and the UA
  * default for both is font-weight: bold — that is, 700. Shipping only 400/500/
  * 600 meant every one of them was SYNTHESISED: the browser took the 600 face
  * and smeared it, which is why emphasis read as slightly muddy rather than
