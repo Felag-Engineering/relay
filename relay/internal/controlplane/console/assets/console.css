@@ -314,6 +314,11 @@ body {
 }
 a { color: var(--color-blue); text-decoration: none; }
 a:hover { color: var(--accent-hover); text-decoration: underline; }
+
+/* One visible focus ring for everything focusable. The UA default is faint on the
+ * dark theme, and links, nav items, buttons and summaries had no rule of their own.
+ * The more specific input and .cell rules below keep their own offsets. (#473) */
+:focus-visible { outline: 2px solid var(--color-blue); outline-offset: 2px; }
 code, pre, .mono { font-family: var(--font-mono); }
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: var(--radius-xs); }
@@ -1395,9 +1400,10 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
  * data attribute matched here.
  *
  * flex-grow rather than width, so the segments always fill the bar exactly and
- * rounding cannot leave a sliver of track showing at the end. 200 steps is half
- * a percent per step — below the threshold anyone can see, on a bar that is
- * already deliberately non-proportional because of the minority floor. */
+ * rounding cannot leave a sliver of track showing at the end. 40 steps is 2.5%
+ * per step — exactly the minority floor, so the floor is one step — on a bar
+ * that is already deliberately non-proportional. The rule count must equal
+ * growSteps in components.go. */
 .oseg { flex-grow: 0; flex-basis: 0; }
 .oseg[data-grow="1"] { flex-grow: 1; }
 .oseg[data-grow="2"] { flex-grow: 2; }
@@ -1439,166 +1445,6 @@ details.scope > dl, details.scope > p, details.scope > ul { margin-left: var(--s
 .oseg[data-grow="38"] { flex-grow: 38; }
 .oseg[data-grow="39"] { flex-grow: 39; }
 .oseg[data-grow="40"] { flex-grow: 40; }
-.oseg[data-grow="41"] { flex-grow: 41; }
-.oseg[data-grow="42"] { flex-grow: 42; }
-.oseg[data-grow="43"] { flex-grow: 43; }
-.oseg[data-grow="44"] { flex-grow: 44; }
-.oseg[data-grow="45"] { flex-grow: 45; }
-.oseg[data-grow="46"] { flex-grow: 46; }
-.oseg[data-grow="47"] { flex-grow: 47; }
-.oseg[data-grow="48"] { flex-grow: 48; }
-.oseg[data-grow="49"] { flex-grow: 49; }
-.oseg[data-grow="50"] { flex-grow: 50; }
-.oseg[data-grow="51"] { flex-grow: 51; }
-.oseg[data-grow="52"] { flex-grow: 52; }
-.oseg[data-grow="53"] { flex-grow: 53; }
-.oseg[data-grow="54"] { flex-grow: 54; }
-.oseg[data-grow="55"] { flex-grow: 55; }
-.oseg[data-grow="56"] { flex-grow: 56; }
-.oseg[data-grow="57"] { flex-grow: 57; }
-.oseg[data-grow="58"] { flex-grow: 58; }
-.oseg[data-grow="59"] { flex-grow: 59; }
-.oseg[data-grow="60"] { flex-grow: 60; }
-.oseg[data-grow="61"] { flex-grow: 61; }
-.oseg[data-grow="62"] { flex-grow: 62; }
-.oseg[data-grow="63"] { flex-grow: 63; }
-.oseg[data-grow="64"] { flex-grow: 64; }
-.oseg[data-grow="65"] { flex-grow: 65; }
-.oseg[data-grow="66"] { flex-grow: 66; }
-.oseg[data-grow="67"] { flex-grow: 67; }
-.oseg[data-grow="68"] { flex-grow: 68; }
-.oseg[data-grow="69"] { flex-grow: 69; }
-.oseg[data-grow="70"] { flex-grow: 70; }
-.oseg[data-grow="71"] { flex-grow: 71; }
-.oseg[data-grow="72"] { flex-grow: 72; }
-.oseg[data-grow="73"] { flex-grow: 73; }
-.oseg[data-grow="74"] { flex-grow: 74; }
-.oseg[data-grow="75"] { flex-grow: 75; }
-.oseg[data-grow="76"] { flex-grow: 76; }
-.oseg[data-grow="77"] { flex-grow: 77; }
-.oseg[data-grow="78"] { flex-grow: 78; }
-.oseg[data-grow="79"] { flex-grow: 79; }
-.oseg[data-grow="80"] { flex-grow: 80; }
-.oseg[data-grow="81"] { flex-grow: 81; }
-.oseg[data-grow="82"] { flex-grow: 82; }
-.oseg[data-grow="83"] { flex-grow: 83; }
-.oseg[data-grow="84"] { flex-grow: 84; }
-.oseg[data-grow="85"] { flex-grow: 85; }
-.oseg[data-grow="86"] { flex-grow: 86; }
-.oseg[data-grow="87"] { flex-grow: 87; }
-.oseg[data-grow="88"] { flex-grow: 88; }
-.oseg[data-grow="89"] { flex-grow: 89; }
-.oseg[data-grow="90"] { flex-grow: 90; }
-.oseg[data-grow="91"] { flex-grow: 91; }
-.oseg[data-grow="92"] { flex-grow: 92; }
-.oseg[data-grow="93"] { flex-grow: 93; }
-.oseg[data-grow="94"] { flex-grow: 94; }
-.oseg[data-grow="95"] { flex-grow: 95; }
-.oseg[data-grow="96"] { flex-grow: 96; }
-.oseg[data-grow="97"] { flex-grow: 97; }
-.oseg[data-grow="98"] { flex-grow: 98; }
-.oseg[data-grow="99"] { flex-grow: 99; }
-.oseg[data-grow="100"] { flex-grow: 100; }
-.oseg[data-grow="101"] { flex-grow: 101; }
-.oseg[data-grow="102"] { flex-grow: 102; }
-.oseg[data-grow="103"] { flex-grow: 103; }
-.oseg[data-grow="104"] { flex-grow: 104; }
-.oseg[data-grow="105"] { flex-grow: 105; }
-.oseg[data-grow="106"] { flex-grow: 106; }
-.oseg[data-grow="107"] { flex-grow: 107; }
-.oseg[data-grow="108"] { flex-grow: 108; }
-.oseg[data-grow="109"] { flex-grow: 109; }
-.oseg[data-grow="110"] { flex-grow: 110; }
-.oseg[data-grow="111"] { flex-grow: 111; }
-.oseg[data-grow="112"] { flex-grow: 112; }
-.oseg[data-grow="113"] { flex-grow: 113; }
-.oseg[data-grow="114"] { flex-grow: 114; }
-.oseg[data-grow="115"] { flex-grow: 115; }
-.oseg[data-grow="116"] { flex-grow: 116; }
-.oseg[data-grow="117"] { flex-grow: 117; }
-.oseg[data-grow="118"] { flex-grow: 118; }
-.oseg[data-grow="119"] { flex-grow: 119; }
-.oseg[data-grow="120"] { flex-grow: 120; }
-.oseg[data-grow="121"] { flex-grow: 121; }
-.oseg[data-grow="122"] { flex-grow: 122; }
-.oseg[data-grow="123"] { flex-grow: 123; }
-.oseg[data-grow="124"] { flex-grow: 124; }
-.oseg[data-grow="125"] { flex-grow: 125; }
-.oseg[data-grow="126"] { flex-grow: 126; }
-.oseg[data-grow="127"] { flex-grow: 127; }
-.oseg[data-grow="128"] { flex-grow: 128; }
-.oseg[data-grow="129"] { flex-grow: 129; }
-.oseg[data-grow="130"] { flex-grow: 130; }
-.oseg[data-grow="131"] { flex-grow: 131; }
-.oseg[data-grow="132"] { flex-grow: 132; }
-.oseg[data-grow="133"] { flex-grow: 133; }
-.oseg[data-grow="134"] { flex-grow: 134; }
-.oseg[data-grow="135"] { flex-grow: 135; }
-.oseg[data-grow="136"] { flex-grow: 136; }
-.oseg[data-grow="137"] { flex-grow: 137; }
-.oseg[data-grow="138"] { flex-grow: 138; }
-.oseg[data-grow="139"] { flex-grow: 139; }
-.oseg[data-grow="140"] { flex-grow: 140; }
-.oseg[data-grow="141"] { flex-grow: 141; }
-.oseg[data-grow="142"] { flex-grow: 142; }
-.oseg[data-grow="143"] { flex-grow: 143; }
-.oseg[data-grow="144"] { flex-grow: 144; }
-.oseg[data-grow="145"] { flex-grow: 145; }
-.oseg[data-grow="146"] { flex-grow: 146; }
-.oseg[data-grow="147"] { flex-grow: 147; }
-.oseg[data-grow="148"] { flex-grow: 148; }
-.oseg[data-grow="149"] { flex-grow: 149; }
-.oseg[data-grow="150"] { flex-grow: 150; }
-.oseg[data-grow="151"] { flex-grow: 151; }
-.oseg[data-grow="152"] { flex-grow: 152; }
-.oseg[data-grow="153"] { flex-grow: 153; }
-.oseg[data-grow="154"] { flex-grow: 154; }
-.oseg[data-grow="155"] { flex-grow: 155; }
-.oseg[data-grow="156"] { flex-grow: 156; }
-.oseg[data-grow="157"] { flex-grow: 157; }
-.oseg[data-grow="158"] { flex-grow: 158; }
-.oseg[data-grow="159"] { flex-grow: 159; }
-.oseg[data-grow="160"] { flex-grow: 160; }
-.oseg[data-grow="161"] { flex-grow: 161; }
-.oseg[data-grow="162"] { flex-grow: 162; }
-.oseg[data-grow="163"] { flex-grow: 163; }
-.oseg[data-grow="164"] { flex-grow: 164; }
-.oseg[data-grow="165"] { flex-grow: 165; }
-.oseg[data-grow="166"] { flex-grow: 166; }
-.oseg[data-grow="167"] { flex-grow: 167; }
-.oseg[data-grow="168"] { flex-grow: 168; }
-.oseg[data-grow="169"] { flex-grow: 169; }
-.oseg[data-grow="170"] { flex-grow: 170; }
-.oseg[data-grow="171"] { flex-grow: 171; }
-.oseg[data-grow="172"] { flex-grow: 172; }
-.oseg[data-grow="173"] { flex-grow: 173; }
-.oseg[data-grow="174"] { flex-grow: 174; }
-.oseg[data-grow="175"] { flex-grow: 175; }
-.oseg[data-grow="176"] { flex-grow: 176; }
-.oseg[data-grow="177"] { flex-grow: 177; }
-.oseg[data-grow="178"] { flex-grow: 178; }
-.oseg[data-grow="179"] { flex-grow: 179; }
-.oseg[data-grow="180"] { flex-grow: 180; }
-.oseg[data-grow="181"] { flex-grow: 181; }
-.oseg[data-grow="182"] { flex-grow: 182; }
-.oseg[data-grow="183"] { flex-grow: 183; }
-.oseg[data-grow="184"] { flex-grow: 184; }
-.oseg[data-grow="185"] { flex-grow: 185; }
-.oseg[data-grow="186"] { flex-grow: 186; }
-.oseg[data-grow="187"] { flex-grow: 187; }
-.oseg[data-grow="188"] { flex-grow: 188; }
-.oseg[data-grow="189"] { flex-grow: 189; }
-.oseg[data-grow="190"] { flex-grow: 190; }
-.oseg[data-grow="191"] { flex-grow: 191; }
-.oseg[data-grow="192"] { flex-grow: 192; }
-.oseg[data-grow="193"] { flex-grow: 193; }
-.oseg[data-grow="194"] { flex-grow: 194; }
-.oseg[data-grow="195"] { flex-grow: 195; }
-.oseg[data-grow="196"] { flex-grow: 196; }
-.oseg[data-grow="197"] { flex-grow: 197; }
-.oseg[data-grow="198"] { flex-grow: 198; }
-.oseg[data-grow="199"] { flex-grow: 199; }
-.oseg[data-grow="200"] { flex-grow: 200; }
 
 /* Outcomes that are NOT a per-Node Task result. They must not borrow a Task
  * outcome's colour — "parked" is the approval gate working, not a failure and
@@ -1687,7 +1533,7 @@ dl.kv dd { min-width: 0; }
   dl.kv { grid-template-columns: 1fr; }
 }
 
-/* --- Phone width (#640) ----------------------------------------------------
+/* --- Narrow width (#640, #473) ----------------------------------------------
  *
  * At ~400px the sidebar used to hold its full 220px+ desktop width beside the
  * content, which is how Fleet and Activity ended up 493px wide and Node
@@ -1697,8 +1543,11 @@ dl.kv dd { min-width: 0; }
  * would need a script, and the content security policy admits none inline.
  * Every wide table already scrolls INSIDE its own .tablescroll/.devtable
  * container (see the "Tables" section above); this block is what stops the
- * DOCUMENT itself from scrolling, so those containers are reachable at all. */
-@media (max-width: 720px) {
+ * DOCUMENT itself from scrolling, so those containers are reachable at all.
+ * The collapse starts at 800px, not at phone width: between 720 and 800px
+ * the 212px sidebar plus the 220px facet rail left under 400px for the
+ * deviation table. */
+@media (max-width: 800px) {
   .app { flex-direction: column; }
   .nav {
     width: auto; border-right: 0; border-bottom: 1px solid var(--border-subtle);

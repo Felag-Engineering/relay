@@ -188,10 +188,16 @@ type Segment struct {
 	Grow int
 }
 
-// growSteps is the flex-weight resolution: 200 steps over the bar, so one step
-// is half a percent. Fine enough that no one can see the quantisation, coarse
-// enough that the stylesheet carries 200 rules and not 1000.
-const growSteps = 200
+// growSteps is the flex-weight resolution: 40 steps over the bar, so one step
+// is 2.5% — exactly minSegmentPercent. The floor the bar guarantees is
+// therefore one step, the smallest weight growWeight returns, so a floored
+// segment is always drawn at least one step wide; it also means Grow alone
+// cannot distinguish a floored segment from a clamped one — the floor is a
+// property of Width. The stylesheet carries 40 rules, one per step
+// (.oseg[data-grow] in console.css); keep the two in step. Coarser is fine:
+// the bar is deliberately non-proportional and the exact counts live in the
+// key.
+const growSteps = 40
 
 // OutcomeBar is a rendered segmented bar.
 type OutcomeBar struct {

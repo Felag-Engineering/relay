@@ -1895,7 +1895,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
 <section class="panel">
   <h3>Decisions</h3>
   <table class="rows">
-    <thead><tr><th>Account</th><th>Answer</th><th>When</th><th>Channel</th><th>Note</th></tr></thead>
+    <thead><tr><th scope="col">Account</th><th scope="col">Answer</th><th scope="col">When</th><th scope="col">Channel</th><th scope="col">Note</th></tr></thead>
     <tbody>
     {{range .Decisions}}
       <tr>

@@ -480,7 +480,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
 
 <div class="tablescroll">
 <table class="rows">
-  <thead><tr><th>Account</th><th>Kind</th><th>Role</th><th>State</th><th>Last authentication</th><th>Last tool call</th>{{if .Write}}<th>Change</th>{{end}}</tr></thead>
+  <thead><tr><th scope="col">Account</th><th scope="col">Kind</th><th scope="col">Role</th><th scope="col">State</th><th scope="col">Last authentication</th><th scope="col">Last tool call</th>{{if .Write}}<th scope="col">Change</th>{{end}}</tr></thead>
   <tbody>
   {{range .Accounts}}
     <tr>
@@ -568,7 +568,7 @@ absent from the window rather than as never having called.</p>
   {{else if .Tokens}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Token</th><th>Name</th><th>Created</th><th>Last used</th><th>Expires</th><th>State</th>{{if $.Write}}<th>Revoke</th>{{end}}</tr></thead>
+    <thead><tr><th scope="col">Token</th><th scope="col">Name</th><th scope="col">Created</th><th scope="col">Last used</th><th scope="col">Expires</th><th scope="col">State</th>{{if $.Write}}<th scope="col">Revoke</th>{{end}}</tr></thead>
     <tbody>
     {{range .Tokens}}
       <tr>

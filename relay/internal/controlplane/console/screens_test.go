@@ -618,11 +618,16 @@ func TestOutcomeBar_SegmentsCarryAVisibleWeight(t *testing.T) {
 			denied = seg
 		}
 	}
-	// 14 in 10,000 is 0.14%; the floor lifts it to 2.5%, which at 200 steps is
-	// 5. Anything at or near 1 means the floor was lost in the rounding.
-	if denied.Grow < 4 {
-		t.Errorf("the 14 denies got flex weight %d of %d — the minority floor did not survive quantisation",
-			denied.Grow, total)
+	// 14 in 10,000 is 0.14%; the floor lifts the RENDERED width to at least 2.5%. At 40
+	// steps one step IS the floor, so Grow alone cannot tell a floored segment from a
+	// clamped one: prove the floor on Width, and that Grow is Width quantised.
+	if denied.Width < minSegmentPercent {
+		t.Errorf("the 14 denies render at %.2f%% of the bar — the %.1f%% minority floor was lost",
+			denied.Width, minSegmentPercent)
+	}
+	if d := math.Abs(float64(denied.Grow) - denied.Width*growSteps/100); d > 0.5 {
+		t.Errorf("the 14 denies got flex weight %d of %d for a %.2f%% width — quantisation "+
+			"moved it %.2f steps, more than half a step", denied.Grow, total, denied.Width, d)
 	}
 	if denied.Percent > 1 {
 		t.Errorf("Percent is %.2f, want the TRUE 0.14%% share — Percent must never be the floored value", denied.Percent)

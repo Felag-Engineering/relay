@@ -555,7 +555,11 @@ var nodeMissingTmpl = newScreen("nodemissing", `
 
 var nodeTmpl = newScreen("node", `
 <div class="nodehead">
-  <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}"></span>
+  {{/* When Connected, .seen below also renders "connected" — the wording is doubled on
+       purpose (#473): the dot's own name is what carries "not connected" when offline, since
+       .seen says "last seen X ago" there instead, so the dot cannot be decorative in one state
+       and named in the other. */}}
+  <span class="dot" data-live="{{if .Connected}}on{{else}}off{{end}}" role="img" aria-label="{{if .Connected}}connected{{else}}not connected{{end}}"></span>
   <code class="nodeid big">{{.ID}}</code>
   {{with .Hostname}}<span class="sub">{{.}}</span>{{end}}
   <span class="seen" title="{{.LastSeenAbs}}">{{if .Connected}}connected{{else}}last seen {{.LastSeen}} ago{{end}}</span>
@@ -690,7 +694,7 @@ var nodeTmpl = newScreen("node", `
       {{if .Tasks}}
       <div class="tablescroll">
       <table class="rows">
-        <thead><tr><th>When</th><th>Operation</th><th>By</th><th>Outcome</th><th>Job</th></tr></thead>
+        <thead><tr><th scope="col">When</th><th scope="col">Operation</th><th scope="col">By</th><th scope="col">Outcome</th><th scope="col">Job</th></tr></thead>
         <tbody>
         {{range .Tasks}}
           <tr>
