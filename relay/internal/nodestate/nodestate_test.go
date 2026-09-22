@@ -299,11 +299,36 @@ func TestFacts_OmitsHostileValueShapes(t *testing.T) {
 		"tag:x=y",
 		"state:offline",
 	}
-	for _, v := range hostile {
-		in := nodestate.Input{Node: registry.Node{NodeID: "n", DaemonVersion: v}, Now: testNow}
-		for _, l := range nodestate.Facts(in) {
-			if l.Key == string(nodestate.FactDaemonVersion) {
-				t.Errorf("Facts emitted state:daemon-version=%q from hostile value %q", l.Value, v)
+
+	// All three Fact-producing fields share validFactValue, so the same
+	// hostile shapes must be rejected identically from each.
+	// TemplateSetFingerprint also carries the TemplateUnloadable sentinel
+	// (nodestate.go:255), but none of the shapes above collide with it, so
+	// this loop does not touch that disputed behaviour (see
+	// TestMarkers_TemplateUnloadableFiresOnTheSentinelAndIsNotAmber).
+	fields := []struct {
+		name string
+		key  nodestate.Fact
+		node func(v string) registry.Node
+	}{
+		{"DaemonVersion", nodestate.FactDaemonVersion, func(v string) registry.Node {
+			return registry.Node{NodeID: "n", DaemonVersion: v}
+		}},
+		{"PolicyFingerprint", nodestate.FactPolicyFingerprint, func(v string) registry.Node {
+			return registry.Node{NodeID: "n", PolicyFingerprint: v}
+		}},
+		{"TemplateSetFingerprint", nodestate.FactTemplateFingerprint, func(v string) registry.Node {
+			return registry.Node{NodeID: "n", TemplateSetFingerprint: v}
+		}},
+	}
+
+	for _, f := range fields {
+		for _, v := range hostile {
+			in := nodestate.Input{Node: f.node(v), Now: testNow}
+			for _, l := range nodestate.Facts(in) {
+				if l.Key == string(f.key) {
+					t.Errorf("%s: Facts emitted %s=%q from hostile value %q", f.name, f.key, l.Value, v)
+				}
 			}
 		}
 	}
@@ -496,3 +521,380 @@ func TestFacts_ZeroWidthSpaceIsAcceptedKnownGap(t *testing.T) {
 			"tightened to close this gap, update this test rather than treating the failure as a regression")
 	}
 }
+
+// --- MarkerOffline ---
+
+func TestMarkers_OfflineComesFromConnectedness(t *testing.T) {
+	in := nodestate.Input{Node: registry.Node{NodeID: "n", Connected: false}, Now: testNow}
+	found := false
+	for _, l := range nodestate.Markers(in) {
+		if l.Key == string(nodestate.MarkerOffline) {
+			found = true
+			if !l.Attention {
+				t.Error("state:offline did not carry Attention — it is an alarm")
+			}
+		}
+	}
+	if !found {
+		t.Error("Connected: false did not fire state:offline")
+	}
+
+	connected := nodestate.Input{Node: registry.Node{NodeID: "n", Connected: true}, Now: testNow}
+	for _, l := range nodestate.Markers(connected) {
+		if l.Key == string(nodestate.MarkerOffline) {
+			t.Error("Connected: true fired state:offline")
+		}
+	}
+}
+
+// --- MarkerTemplateUnloadable ---
+
+func TestMarkers_TemplateUnloadableFiresOnTheSentinelAndIsNotAmber(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{NodeID: "n", Connected: true, TemplateSetFingerprint: nodestate.TemplateUnloadable},
+		Now:  testNow,
+	}
+	found := false
+	for _, l := range nodestate.Markers(in) {
+		if l.Key == string(nodestate.MarkerTemplateUnloadable) {
+			found = true
+			if l.Attention {
+				t.Error("state:template-unloadable carried Attention — an empty template vocabulary is inertness, not an alarm")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the unloadable sentinel did not fire state:template-unloadable")
+	}
+
+	// A real fingerprint, and an empty one (no templates installed at all),
+	// must both be quiet — only the literal sentinel fires the marker.
+	for _, v := range []string{"abc123def456", ""} {
+		clean := nodestate.Input{Node: registry.Node{NodeID: "n", Connected: true, TemplateSetFingerprint: v}, Now: testNow}
+		for _, l := range nodestate.Markers(clean) {
+			if l.Key == string(nodestate.MarkerTemplateUnloadable) {
+				t.Errorf("TemplateSetFingerprint=%q fired state:template-unloadable", v)
+			}
+		}
+	}
+}
+
+// --- Marker ordering ---
+
+func TestMarkers_AreOrderedBySeverity(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{
+			NodeID:                 "n",
+			Connected:              false,
+			Outdated:               true,
+			CertNotAfter:           testNow.Add(1 * time.Hour),
+			TemplateSetFingerprint: nodestate.TemplateUnloadable,
+		},
+		Now:                testNow,
+		CertExpiringWithin: 2 * time.Hour,
+	}
+	markers := nodestate.Markers(in)
+	want := []string{
+		string(nodestate.MarkerOffline),
+		string(nodestate.MarkerOutdated),
+		string(nodestate.MarkerCertExpiring),
+		string(nodestate.MarkerTemplateUnloadable),
+	}
+	if len(markers) != len(want) {
+		t.Fatalf("Markers(in) = %+v, want %d markers in order %v", markers, len(want), want)
+	}
+	for i, k := range want {
+		if markers[i].Key != k {
+			t.Errorf("Markers(in)[%d].Key = %q, want %q", i, markers[i].Key, k)
+		}
+	}
+}
+
+func TestMarkers_ACalmNodeHasNone(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{
+			NodeID:                 "n",
+			Connected:              true,
+			Outdated:               false,
+			CertNotAfter:           testNow.Add(1000 * time.Hour),
+			TemplateSetFingerprint: "abc123def456",
+		},
+		Now:                testNow,
+		CertExpiringWithin: 2 * time.Hour,
+	}
+	if markers := nodestate.Markers(in); len(markers) != 0 {
+		t.Errorf("Markers(in) = %+v, want none — a calm Node's empty slice is the calmest and most common answer", markers)
+	}
+}
+
+// --- Attention ---
+
+func TestAttention_IsTheAmberRollup(t *testing.T) {
+	cases := []struct {
+		name string
+		node registry.Node
+		want bool
+	}{
+		{"offline alone", registry.Node{NodeID: "n", Connected: false}, true},
+		{"outdated alone", registry.Node{NodeID: "n", Connected: true, Outdated: true}, true},
+		{"cert-expiring alone", registry.Node{NodeID: "n", Connected: true, CertNotAfter: testNow.Add(1 * time.Hour)}, true},
+		{"template-unloadable alone", registry.Node{NodeID: "n", Connected: true, TemplateSetFingerprint: nodestate.TemplateUnloadable}, false},
+		{"a calm Node", registry.Node{NodeID: "n", Connected: true}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := nodestate.Input{Node: c.node, Now: testNow, CertExpiringWithin: 2 * time.Hour}
+			if got := nodestate.Attention(in); got != c.want {
+				t.Errorf("Attention(%s) = %v, want %v", c.name, got, c.want)
+			}
+		})
+	}
+}
+
+// --- Facts omission ---
+
+func TestFacts_OmitsAnEmptyValue(t *testing.T) {
+	cases := []struct {
+		name       string
+		node       registry.Node
+		absentKey  string
+		wantOthers []string
+	}{
+		{
+			name:       "DaemonVersion empty",
+			node:       registry.Node{NodeID: "n", PolicyFingerprint: "abc123", TemplateSetFingerprint: "def456"},
+			absentKey:  string(nodestate.FactDaemonVersion),
+			wantOthers: []string{string(nodestate.FactPolicyFingerprint), string(nodestate.FactTemplateFingerprint)},
+		},
+		{
+			name:       "PolicyFingerprint empty",
+			node:       registry.Node{NodeID: "n", DaemonVersion: "1.4.2", TemplateSetFingerprint: "def456"},
+			absentKey:  string(nodestate.FactPolicyFingerprint),
+			wantOthers: []string{string(nodestate.FactDaemonVersion), string(nodestate.FactTemplateFingerprint)},
+		},
+		{
+			name:       "TemplateSetFingerprint empty",
+			node:       registry.Node{NodeID: "n", DaemonVersion: "1.4.2", PolicyFingerprint: "abc123"},
+			absentKey:  string(nodestate.FactTemplateFingerprint),
+			wantOthers: []string{string(nodestate.FactDaemonVersion), string(nodestate.FactPolicyFingerprint)},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			facts := nodestate.Facts(nodestate.Input{Node: c.node, Now: testNow})
+			for _, l := range facts {
+				if l.Key == c.absentKey {
+					t.Errorf("Facts emitted %q for a field left empty", l.Key)
+				}
+			}
+			for _, want := range c.wantOthers {
+				found := false
+				for _, l := range facts {
+					if l.Key == want {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("Facts omitted %q, which was well-formed", want)
+				}
+			}
+		})
+	}
+}
+
+// Whether nodestate.Facts (nodestate.go:255) renders the unloadable sentinel
+// as state:template-fingerprint=unloadable is deliberately untested here:
+// ADR-0034 (line 50) says that key carries "the template-set fingerprint, or
+// the literal `unloadable`", but Facts today excludes the sentinel. That is a
+// disagreement between the code and the ADR, not settled behaviour, and it is
+// escalated on issue #470 for a human to resolve — this package neither
+// enforces nor contradicts either side.
+
+func TestFacts_EmitsAllThreeWhenWellFormed(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{
+			NodeID:                 "n",
+			DaemonVersion:          "1.4.2",
+			PolicyFingerprint:      "abc123",
+			TemplateSetFingerprint: "def456",
+		},
+		Now: testNow,
+	}
+	facts := nodestate.Facts(in)
+	wantKeys := []string{string(nodestate.FactDaemonVersion), string(nodestate.FactPolicyFingerprint), string(nodestate.FactTemplateFingerprint)}
+	wantValues := []string{"1.4.2", "abc123", "def456"}
+	if len(facts) != len(wantKeys) {
+		t.Fatalf("Facts(in) = %+v, want %d facts", facts, len(wantKeys))
+	}
+	for i := range wantKeys {
+		if facts[i].Key != wantKeys[i] {
+			t.Errorf("Facts(in)[%d].Key = %q, want %q", i, facts[i].Key, wantKeys[i])
+		}
+		if facts[i].Value != wantValues[i] {
+			t.Errorf("Facts(in)[%d].Value = %q, want %q", i, facts[i].Value, wantValues[i])
+		}
+	}
+}
+
+// --- Labels composition ---
+
+func TestLabels_AreMarkersThenFacts(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{
+			NodeID:            "n",
+			Connected:         false,
+			DaemonVersion:     "1.4.2",
+			PolicyFingerprint: "abc123",
+		},
+		Now: testNow,
+	}
+	labels := nodestate.Labels(in)
+	want := append(nodestate.Markers(in), nodestate.Facts(in)...)
+	if len(labels) != len(want) {
+		t.Fatalf("Labels(in) has %d entries, want %d (Markers then Facts)", len(labels), len(want))
+	}
+	for i := range want {
+		if labels[i] != want[i] {
+			t.Errorf("Labels(in)[%d] = %+v, want %+v", i, labels[i], want[i])
+		}
+	}
+}
+
+// --- Label.String ---
+
+func TestLabel_StringRendersSelectorSyntax(t *testing.T) {
+	marker := nodestate.Label{Key: string(nodestate.MarkerOffline)}
+	if got, want := marker.String(), "state:offline"; got != want {
+		t.Errorf("marker.String() = %q, want %q", got, want)
+	}
+	fact := nodestate.Label{Key: string(nodestate.FactPolicyFingerprint), Value: "4b18c02"}
+	if got, want := fact.String(), "state:policy-fingerprint=4b18c02"; got != want {
+		t.Errorf("fact.String() = %q, want %q", got, want)
+	}
+}
+
+// --- CertExpiringWindow ---
+
+// TestCertExpiringWindow_IsAFractionOfTheLifetime names ADR-0034's threshold:
+// 25% of a 336h leaf lifetime is an 84h warning window. This package never
+// imports internal/ca (see the package doc's import note), so the lifetime is
+// a literal here rather than a reference to ca.LeafValidity.
+func TestCertExpiringWindow_IsAFractionOfTheLifetime(t *testing.T) {
+	const leafValidity = 336 * time.Hour
+	got := nodestate.CertExpiringWindow(leafValidity, nodestate.DefaultCertExpiringFraction)
+	if want := 84 * time.Hour; got != want {
+		t.Errorf("CertExpiringWindow(336h, DefaultCertExpiringFraction) = %v, want %v", got, want)
+	}
+}
+
+// --- CertExpiryKnown ---
+
+func TestCertExpiryKnown_FollowsTheRecordedProvenance(t *testing.T) {
+	if nodestate.CertExpiryKnown(registry.Node{NodeID: "n"}) {
+		t.Error("CertExpiryKnown was true for a zero CertNotAfter")
+	}
+	if !nodestate.CertExpiryKnown(registry.Node{NodeID: "n", CertNotAfter: testNow}) {
+		t.Error("CertExpiryKnown was false once CertNotAfter was recorded")
+	}
+}
+
+// --- Quarantined ---
+
+func TestQuarantined_NeedsTheKeyAndTheValue(t *testing.T) {
+	on := registry.Node{NodeID: "n", RelayLabels: map[string]string{registry.QuarantineKey: registry.QuarantineOn}}
+	if !nodestate.Quarantined(on) {
+		t.Error("Quarantined was false for relay:quarantine=on")
+	}
+	off := registry.Node{NodeID: "n", RelayLabels: map[string]string{registry.QuarantineKey: "off"}}
+	if nodestate.Quarantined(off) {
+		t.Error("Quarantined was true for relay:quarantine=off")
+	}
+	absent := registry.Node{NodeID: "n"}
+	if nodestate.Quarantined(absent) {
+		t.Error("Quarantined was true with no relay:quarantine label at all")
+	}
+
+	// This only proves what Labels(in) actually returns: no Label carries the
+	// key registry.QuarantineKey ("quarantine"). It does not claim that no
+	// quarantine state: Label may ever exist — GLOSSARY.md:285 describes
+	// `state:quarantined` as Relay-derived and read-only, which disagrees
+	// with nodestate.go's Quarantined doc comment (nodestate.go:444-461)
+	// here. That disagreement is escalated to a human (AGENTS.md, "When
+	// documents and the code disagree") and is not settled by this test in
+	// either direction.
+	in := nodestate.Input{Node: on, Now: testNow}
+	for _, l := range nodestate.Labels(in) {
+		if l.Key == registry.QuarantineKey {
+			t.Errorf("Labels(in) carried a %q key", l.Key)
+		}
+	}
+}
+
+// --- LabelSet ---
+
+// TestLabelSet_CarriesEveryMarkerAndFact is TestLabelSet_IsLabelsReduced's
+// sibling, pinning the exact shape rather than only the reduction property.
+//
+// TemplateSetFingerprint drives both MarkerTemplateUnloadable and
+// FactTemplateFingerprint from the SAME field (nodestate.go:205, :255), so
+// this Node's sentinel value exercises the field that couples them. Whether
+// the sentinel also renders as a state:template-fingerprint fact is disputed
+// (see the comment above TestFacts_EmitsAllThreeWhenWellFormed) — this test
+// asserts the four markers and the two undisputed facts (daemon-version,
+// policy-fingerprint) are present, not an exact entry count, and takes no
+// position on that fact's presence either way.
+func TestLabelSet_CarriesEveryMarkerAndFact(t *testing.T) {
+	in := nodestate.Input{
+		Node: registry.Node{
+			NodeID:                 "n",
+			Connected:              false,
+			Outdated:               true,
+			CertNotAfter:           testNow.Add(1 * time.Hour),
+			TemplateSetFingerprint: nodestate.TemplateUnloadable,
+			DaemonVersion:          "1.4.2",
+			PolicyFingerprint:      "abc123",
+		},
+		Now:                testNow,
+		CertExpiringWithin: 2 * time.Hour,
+	}
+	labels := nodestate.Labels(in)
+	set := nodestate.LabelSet(in)
+	if len(set) != len(labels) {
+		t.Fatalf("LabelSet has %d entries, Labels has %d — they must be the same shape", len(set), len(labels))
+	}
+	for _, l := range labels {
+		v, ok := set[l.Key]
+		if !ok {
+			t.Errorf("LabelSet is missing key %q, present in Labels", l.Key)
+			continue
+		}
+		if v != l.Value {
+			t.Errorf("LabelSet[%q] = %q, want %q (from Labels)", l.Key, v, l.Value)
+		}
+	}
+
+	wantPresent := map[string]string{
+		string(nodestate.MarkerOffline):            "",
+		string(nodestate.MarkerOutdated):           "",
+		string(nodestate.MarkerCertExpiring):       "",
+		string(nodestate.MarkerTemplateUnloadable): "",
+		string(nodestate.FactDaemonVersion):        "1.4.2",
+		string(nodestate.FactPolicyFingerprint):    "abc123",
+	}
+	for k, want := range wantPresent {
+		v, ok := set[k]
+		if !ok {
+			t.Errorf("LabelSet is missing key %q", k)
+			continue
+		}
+		if v != want {
+			t.Errorf("LabelSet[%q] = %q, want %q", k, v, want)
+		}
+	}
+}
+
+// Since (nodestate.go:466) and Until (nodestate.go:492) are the package's
+// only other exported functions, and neither has a test in this file,
+// deliberately: they are duration-rendering helpers, not state markers or
+// facts, and they are already exercised through the Console's fleet and
+// compare screens.

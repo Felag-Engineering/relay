@@ -72,6 +72,8 @@ shows its audited metadata only (ADR-0025).
       The counts come from ONE aggregate row (`capability.QueryJobs` filtered to the Job), so
       they are exact without a Task being materialised; rows come from at most one bounded page
       per outcome, and the success group fetches none at all above 50 Tasks.
+      Proven on the rendered page, and structurally through the read lane, by
+      `TestJob_TenThousandNodesRenderWithoutAList`.
 - [x] All eight outcomes render, with the three "did not run" kinds visually distinct.
 - [x] The denied group shows the rule verbatim and links to the Node's effective Policy.
       The link lands on the Node page; an anchor to its effective-Policy panel waits on #421.

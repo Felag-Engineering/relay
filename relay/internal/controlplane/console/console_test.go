@@ -198,24 +198,16 @@ func TestConsole_ExecutionOffMakesTheComposerAbsent(t *testing.T) {
 // that grows one produces a page that renders and quietly does not work —
 // exactly the failure a reviewer does not see.
 //
-// hx-on: is called out by name because it is the one HTMX attribute that IS
-// script, and it is the natural thing to reach for.
-//
-// The script rule itself is assertNoInlineScript (no_inline_script_test.go):
-// the property is that no script is INLINE, not that no script exists, since
-// the specification requires the one external file day one loads. The rest of
-// this list is unchanged.
+// The whole ban list — the <script> shape rule, hx-on:, javascript:, every
+// inline handler attribute, and an inline style in either quote form — now
+// lives in assertCSPClean (no_inline_script_test.go); this test keeps its
+// name and its purpose, the shell rendered as admin with execution on, and
+// simply stops carrying its own copy of the list.
 func TestConsole_NoInlineScript(t *testing.T) {
 	h := newTestHandler(withExecution(renderableDeps(), true), accounts.RoleAdmin)
 	body := get(t, h, "/console/").Body.String()
 
-	assertNoInlineScript(t, "/console/", body)
-
-	for _, banned := range []string{"hx-on:", "javascript:", " onclick=", " onload=", " onerror=", " onfocus="} {
-		if strings.Contains(body, banned) {
-			t.Errorf("rendered page contains %q — the content security policy admits no inline script", banned)
-		}
-	}
+	assertCSPClean(t, "/console/", body)
 }
 
 // TestConsole_SecurityHeaders asserts the policy actually ships. A CSP that is
