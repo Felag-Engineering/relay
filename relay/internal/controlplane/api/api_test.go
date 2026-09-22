@@ -71,15 +71,38 @@ func (f *fakeTokenRevoker) RevokeToken(_ context.Context, id string, record revo
 
 // fakeNodeRevoker is a NodeRevoker fake that records every node_id it was
 // called with.
+//
+// This double proves only that the route hands NodeRevoker the right node_id
+// and the right recorder, and renders the recorder's own error correctly —
+// the real ordering (record before act), the Node lock, and the
+// cascade-record suppression are all proven at their actual seam in
+// internal/revocation (#605), not here.
 type fakeNodeRevoker struct {
 	mu         sync.Mutex
 	calledWith []string
+
+	// err, when set, is returned by RevokeNodeRecorded instead of calling
+	// record — for a test that needs the method itself to fail, as opposed
+	// to the recorder it was handed.
+	err error
 }
 
-func (f *fakeNodeRevoker) RevokeNode(nodeID string) {
+func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, record revocation.RevocationRecorder) error {
+	f.mu.Lock()
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if recErr := record([]string{nodeID}); recErr != nil {
+		return recErr
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calledWith = append(f.calledWith, nodeID)
+	return nil
 }
 
 // fakeNodeReader is a NodeReader fake over a fixed map.
@@ -809,8 +832,8 @@ func TestHandleRevokeNode_RefusesWithoutAUsableReason(t *testing.T) {
 // performing it and returning 204.
 //
 // This deliberately inverts recordLifecycle's best-effort contract, which the
-// other lifecycle actions keep — see recordLifecycleErr for why revoke can and
-// they cannot.
+// other lifecycle actions keep — see revocation.Service.RevokeNodeRecorded
+// for why revoke can and they cannot.
 func TestHandleRevokeNode_RefusesWhenItCannotBeAudited(t *testing.T) {
 	nr := &fakeNodeRevoker{}
 	auditor := &fakeAuditor{err: errors.New("audit store unavailable")}
@@ -827,6 +850,30 @@ func TestHandleRevokeNode_RefusesWhenItCannotBeAudited(t *testing.T) {
 	// The detail must not leak the store's error to the caller.
 	if strings.Contains(rec.Body.String(), "audit store unavailable") {
 		t.Errorf("the audit backend error leaked into the response: %s", rec.Body.String())
+	}
+}
+
+// TestHandleRevokeNode_RefusesWhenTheRevokerFails covers the branch where
+// RevokeNodeRecorded itself fails before ever calling the recorder — e.g. a
+// caller whose wait for the Node's lock was abandoned. This is distinct from
+// TestHandleRevokeNode_RefusesWhenItCannotBeAudited, which fails INSIDE the
+// recorder: here the record closure is never invoked at all.
+func TestHandleRevokeNode_RefusesWhenTheRevokerFails(t *testing.T) {
+	nr := &fakeNodeRevoker{err: errors.New("node lock wait: context canceled")}
+	auditor := &fakeAuditor{}
+	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+		map[string]string{"reason": "compromised host"})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body = %s", rec.Code, rec.Body.String())
+	}
+	if len(auditor.all()) != 0 {
+		t.Errorf("a record was written despite RevokeNodeRecorded failing before ever calling the recorder: %v",
+			auditor.all())
+	}
+	if strings.Contains(rec.Body.String(), nr.err.Error()) {
+		t.Errorf("the revoker's error leaked into the response: %s", rec.Body.String())
 	}
 }
 
@@ -863,6 +910,29 @@ func TestHandleRevokeNode_ReasonIsTrimmedAndBounded(t *testing.T) {
 			t.Errorf("audit Reason was altered at the cap boundary")
 		}
 	})
+}
+
+// TestHandleRevokeNode_PassesExactlyOneNodeIDToTheRecorder guards against a
+// future caller widening the slice the route's recorder closure receives:
+// this route revokes exactly one Node, named by the path, and the recorder
+// it hands to NodeRevoker.RevokeNodeRecorded must cover that node_id and
+// nothing else.
+func TestHandleRevokeNode_PassesExactlyOneNodeIDToTheRecorder(t *testing.T) {
+	nr := &fakeNodeRevoker{}
+	auditor := &fakeAuditor{}
+	h := newTestHandler(Deps{Nodes: nr, Audit: auditor, Now: fixedNow})
+
+	rec := do(t, h, http.MethodPost, "/api/v1/nodes/node-abc/revoke",
+		map[string]string{"reason": "compromised host"})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+	if len(auditor.allCalls) != 1 {
+		t.Fatalf("AppendAll was called %d times, want exactly 1", len(auditor.allCalls))
+	}
+	if got := auditor.allCalls[0]; len(got) != 1 || got[0].NodeID != "node-abc" {
+		t.Errorf("the one AppendAll call carried %+v, want exactly one record for node-abc", got)
+	}
 }
 
 // -----------------------------------------------------------------------

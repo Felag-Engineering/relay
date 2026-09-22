@@ -56,8 +56,18 @@ type TokenRevoker interface {
 
 // NodeRevoker revokes a single Node, tearing down its live Tunnel
 // immediately. *revocation.Service satisfies this interface.
+//
+// The recorded variant is what serialises this route against a token
+// cascade revoking the same Node (#605): revocation.Service.RevokeNodeRecorded
+// holds the Node's lock across recording and revoking, so this interface
+// deliberately does not expose the unrecorded revocation.Service.RevokeNode
+// primitive at all — the same narrowing rationale Freezer states for
+// EngageFreezeLocal/ReleaseFreezeLocal. A returned error means the Node was
+// NOT revoked; a nil error means it is revoked and attributed, either by
+// this call's own record or by the cascade record this Relay already wrote
+// for it.
 type NodeRevoker interface {
-	RevokeNode(nodeID string)
+	RevokeNodeRecorded(ctx context.Context, nodeID string, record revocation.RevocationRecorder) error
 }
 
 // Freezer engages and releases the Relay-wide Freeze (ADR-0013).
@@ -386,10 +396,10 @@ func defaultAuditID() (string, error) {
 	return audit.NewID()
 }
 
-// recordLifecycle appends one lifecycle audit.Record (token mint/revoke,
-// Node revoke, or a refusal of one — see authorizeControl) attributed to p.
-// Freeze engage/release, and a refused Freeze, are audited intrinsically
-// by capability.Service (RecordFreeze) and must never call this — doing so
+// recordLifecycle appends one lifecycle audit.Record (token mint/revoke, or
+// a refusal of one — see authorizeControl) attributed to p. Freeze
+// engage/release, and a refused Freeze, are audited intrinsically by
+// capability.Service (RecordFreeze) and must never call this — doing so
 // would double-audit (see freeze.go). reason must never carry an Enrollment
 // Token plaintext.
 //
@@ -397,62 +407,33 @@ func defaultAuditID() (string, error) {
 // already-completed lifecycle action: the action happened; a failed audit
 // write must not be papered over by rolling it back, nor may it block the
 // caller from returning success for a mutation that already took effect.
+//
+// This is a BEST-EFFORT record, deliberately: every remaining caller has
+// already completed its act by the time it calls this, and rolling that act
+// back because the trail write failed would be worse than an incomplete
+// trail. Node revoke no longer calls this — it needed a fail-closed record
+// (#487), which is why it now goes through
+// revocation.Service.RevokeNodeRecorded instead (#605), the one place that
+// ordering can be atomic against a concurrent cascade for the same Node.
 func recordLifecycle(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) {
-	if err := recordLifecycleErr(ctx, d, p, kind, nodeID, reason); err != nil {
-		// Neutral message: this covers both the id-generation and the append
-		// failure, and the wrapped error says which.
-		slog.Error("control api: record lifecycle audit record", "kind", kind, "error", err)
-	}
-}
-
-// recordLifecycleErr is recordLifecycle's fail-closed half: it RETURNS the
-// audit-write error instead of logging it, for the one caller that must not
-// proceed without a record.
-//
-// handleRevokeNode calls this BEFORE revoking, and 500s if it fails, because
-// #487's whole premise is that an irreversible act must be attributable — a
-// revocation whose record was silently dropped is exactly the state the issue
-// set out to end, and "the trail failed to write" is not a better excuse for it
-// than "the endpoint accepted no reason". That inverts recordLifecycle's
-// documented best-effort contract, which is right for the actions that keep it:
-// they have already happened by the time it is called, and rolling them back is
-// Revoke can invert it because RevokeNode has no error return: it cannot report
-// failure to this handler, so there is no "the act failed after we recorded it"
-// branch to get wrong.
-//
-// The honest limit of that, since a stronger claim is tempting and would be
-// false: RevokeNode's DURABLE half can still fail quietly. It adds to the
-// in-process denylist first and disconnects reliably, but reg.SetRevoked is
-// best-effort and only logged (revocation/service.go). So a persist failure
-// leaves a permanent, attributed node_revoke record beside a registry that did
-// not record the revocation, and a later restart — which rehydrates the
-// denylist from the registry (#133) — could let the Node reconnect. That is
-// pre-existing and not this change's to fix; what this ordering guarantees is
-// narrower and still worth having: no revocation is ATTEMPTED without a
-// durable record of who ordered it and why.
-//
-// This mirrors the read lane's posture (ADR-0025: record before the seam, fail
-// closed) and handleGetNode's, which already 500s when its read audit cannot be
-// written — the same surface disagreeing with itself about whether an
-// unrecorded act may proceed was the inconsistency worth removing.
-func recordLifecycleErr(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) error {
 	rec, err := newLifecycleRecord(ctx, d, p, kind, nodeID, reason)
 	if err != nil {
-		return err
+		slog.Error("control api: build lifecycle audit record", "kind", kind, "error", err)
+		return
 	}
 	if err := d.Audit.Append(ctx, rec); err != nil {
-		return fmt.Errorf("api: append lifecycle audit record: %w", err)
+		slog.Error("control api: append lifecycle audit record", "kind", kind, "error", err)
 	}
-	return nil
 }
 
 // newLifecycleRecord builds one lifecycle audit.Record attributed to p,
 // carrying both the verified and asserted identity lanes and the derived
-// reason — the same construction recordLifecycleErr uses for a single write
-// and recordLifecycleAllErr uses for a cascaded chunk. Kept in one place so
-// the attribution mapping cannot drift between the two paths: a second copy
-// is what a security review would flag, and it is how a lane gets dropped on
-// one path only.
+// reason — the same construction recordLifecycle uses for a single
+// best-effort write and recordLifecycleAllErr uses for a cascaded chunk (and,
+// through it, RevokeNodeRecorded's single-Node fail-closed write). Kept in
+// one place so the attribution mapping cannot drift between the paths: a
+// second copy is what a security review would flag, and it is how a lane
+// gets dropped on one path only.
 func newLifecycleRecord(ctx context.Context, d Deps, p capability.Principal, kind, nodeID, reason string) (audit.Record, error) {
 	id, err := newAuditID()
 	if err != nil {
@@ -487,8 +468,11 @@ func newLifecycleRecord(ctx context.Context, d Deps, p capability.Principal, kin
 // recordLifecycleAllErr is the recorder-side half of RevocationRecorder's
 // all-or-nothing contract (revocation/service.go): it builds one lifecycle
 // audit.Record per Node in nodeIDs, attributed identically to
-// recordLifecycleErr, then writes all of them through a single
-// Auditor.AppendAll call.
+// recordLifecycle, then writes all of them through a single
+// Auditor.AppendAll call. handleRevokeNode's single-Node RevocationRecorder
+// (nodes.go) calls this with a one-element nodeIDs, so the fail-closed
+// single-Node write and the cascade's chunked write share this one
+// construction rather than a second one.
 //
 // Every record is built with newLifecycleRecord before any write is
 // attempted, so an ID-generation failure returns before any record for this

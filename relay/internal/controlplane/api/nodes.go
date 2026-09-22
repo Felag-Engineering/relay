@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
 
 // revokeNodeRequest is the POST /api/v1/nodes/{node_id}/revoke request body.
@@ -22,10 +24,10 @@ type revokeNodeRequest struct {
 }
 
 // handleRevokeNode implements POST /api/v1/nodes/{node_id}/revoke: revoke
-// the Node via NodeRevoker.RevokeNode (denylist + immediate live Tunnel
-// teardown, ADR-0006), audit the revoke (KindNodeRevoke), and return 204.
-// Idempotent: revoking an already-revoked or unknown node_id still returns
-// 204 (revocation.Service.RevokeNode is a no-op-safe denylist add).
+// the Node via NodeRevoker.RevokeNodeRecorded (record, then denylist +
+// immediate live Tunnel teardown, ADR-0006), and return 204. Idempotent:
+// revoking an already-revoked or unknown node_id still returns 204
+// (revocation.Service.RevokeNode is a no-op-safe denylist add).
 //
 // **Requires `admin`** (#397): revocation is the middle rung of ADR-0020's
 // incident ladder (quarantine < revoke < Freeze), and unlike quarantine it is
@@ -44,10 +46,26 @@ type revokeNodeRequest struct {
 // a second surface records the same thing — see its doc for why that is a
 // weaker guarantee here than ReleaseFreeze's.
 //
-// ORDER MATTERS: the reason is validated BEFORE RevokeNode is called. Revoking
-// first and rejecting after would leave a Node revoked by a request that
-// returned 400, which is the worst of both — an irreversible act whose caller
-// was told it did not happen, and no audit record explaining it.
+// ORDER MATTERS: the reason is validated BEFORE RevokeNodeRecorded is called.
+// Revoking first and rejecting after would leave a Node revoked by a request
+// that returned 400, which is the worst of both — an irreversible act whose
+// caller was told it did not happen, and no audit record explaining it.
+//
+// RECORD BEFORE THE ACT lives inside revocation.Service.RevokeNodeRecorded
+// now, under the Node's lock (#605) — the only place that ordering can be
+// atomic against a concurrent token cascade revoking the same Node. This
+// mirrors the read lane's posture (ADR-0025: record before the seam, fail
+// closed) and handleGetNode's, which already 500s when its read audit cannot
+// be written — the same surface disagreeing with itself about whether an
+// unrecorded act may proceed was the inconsistency #487 removed.
+//
+// THE ONE BEHAVIOUR NOTE #605 INTRODUCES: a Node whose cascade revocation
+// this Relay process already recorded still gets 204 here and writes no
+// second node_revoke record — the record that already exists is the
+// causative one. A Node that is merely denylisted with no record (the enroll
+// self-denylist path, a cascade chunk whose record failed, or denylist
+// rehydration at startup) still gets a record: this route is the backstop
+// that supplies attribution none of those paths can.
 func handleRevokeNode(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -75,21 +93,46 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// RECORD BEFORE THE ACT, and refuse if it cannot be recorded. A
-		// revocation whose record was silently dropped is exactly the
-		// unattributed irreversible act #487 exists to end, and a failing audit
-		// store is no better an excuse for it than an endpoint that accepted no
-		// reason. Safe in this direction because RevokeNode has no error return
-		// to strand — see recordLifecycleErr for the honest limit, which is
-		// that its durable half can still fail quietly.
-		if err := recordLifecycleErr(r.Context(), d, p, audit.KindNodeRevoke, nodeID, reason); err != nil {
-			slog.Error("control api: append node revoke audit record", "node_id", nodeID, "error", err)
+		// The recorder's content (Principal, reason) is authored here, where
+		// the operator is authenticated; the SET of Nodes it covers is always
+		// this one node_id — RevokeNodeRecorded decides when to call it, not
+		// this closure. Goes through recordLifecycleAllErr (an AppendAll of a
+		// one-element batch), the same construction the token cascade uses,
+		// rather than a second one: RevocationRecorder's contract is
+		// all-or-nothing per call, and recordLifecycleAllErr is the
+		// recorder-side half of it.
+		record := func(nodeIDs []string) error {
+			return recordLifecycleAllErr(r.Context(), d, p, audit.KindNodeRevoke, nodeIDs, reason)
+		}
+
+		// CONTEXT: r.Context(), not WithoutCancel — correct here because on
+		// this path the record precedes the act, so a caller whose wait for
+		// the Node's lock is cancelled has caused nothing at all. The
+		// cascade's WithoutCancel (tokens.go) exists because there the acts
+		// are already under way.
+		if err := d.Nodes.RevokeNodeRecorded(r.Context(), nodeID, record); err != nil {
+			// Distinguish the causes an on-call reader would otherwise have to
+			// guess at from the error text alone: a request context that ended
+			// (while queued behind another revoke of this Node, or inside the
+			// audit append once the lock was held — the error does not say
+			// which, so the log does not either), a caller bug (no
+			// recorder — unreachable here, record above is never nil), and an
+			// audit-store failure. The response body stays identical either
+			// way: none of these differences are the caller's to act on.
+			switch {
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+				slog.Error("control api: node revoke abandoned: request context ended before the revoke was recorded",
+					"node_id", nodeID, "error", err)
+			case errors.Is(err, revocation.ErrRecorderRequired):
+				slog.Error("control api: node revoke refused: no recorder supplied",
+					"node_id", nodeID, "error", err)
+			default:
+				slog.Error("control api: append node revoke audit record", "node_id", nodeID, "error", err)
+			}
 			writeProblem(w, http.StatusInternalServerError, "revoke not recorded",
 				"the revocation was not performed because it could not be audited")
 			return
 		}
-
-		d.Nodes.RevokeNode(nodeID)
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

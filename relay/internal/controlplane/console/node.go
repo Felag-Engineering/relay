@@ -409,6 +409,14 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 			// instead of the act that actually revoked the Node. Both records
 			// survive in the Activity trail either way; what is protected here
 			// is which one this summary attributes.
+			//
+			// #605 narrows how often a second record exists at all: the
+			// Control API no longer writes one for a Node whose cascade
+			// revocation this Relay process already recorded, so that specific
+			// case is rarer now. A repeat operator revoke, and any revoke that
+			// follows a Relay restart, still produce a second record exactly as
+			// before — so first-match stays the defence this screen needs, not
+			// a formality. No behaviour change on this screen.
 			for i := range recs {
 				if recs[i].Kind == audit.KindNodeRevoke {
 					v.RevokedBy = principalText(factsOfRecord(recs[i]))
