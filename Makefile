@@ -151,7 +151,7 @@ proto:
 # Versions must match the committed generated code; @latest is intentionally avoided
 # (protoc-gen-go-grpc@latest = v1.6.2 produces a spurious diff, false-positiving proto-drift).
 proto-tools:
-	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
 
