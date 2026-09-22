@@ -1007,7 +1007,7 @@ exposure either way. See the notes below.</p>
   {{if .Principals}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Account</th><th class="num">Node reads</th><th class="num">Enumerations</th><th class="num">Refused</th><th>Against its own baseline</th><th></th></tr></thead>
+    <thead><tr><th scope="col">Account</th><th scope="col" class="num">Node reads</th><th scope="col" class="num">Enumerations</th><th scope="col" class="num">Refused</th><th scope="col">Against its own baseline</th><th scope="col"><span class="vh">Narrow the feed</span></th></tr></thead>
     <tbody>
     {{range .Principals}}
       <tr>
@@ -1045,7 +1045,7 @@ exposure either way. See the notes below.</p>
   {{if .TargetRows}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Target</th><th class="num">Calls</th><th class="num">Nodes</th><th class="num">Refused</th></tr></thead>
+    <thead><tr><th scope="col">Target</th><th scope="col" class="num">Calls</th><th scope="col" class="num">Nodes</th><th scope="col" class="num">Refused</th></tr></thead>
     <tbody>
     {{range .TargetRows}}
       <tr{{if .Refused}} class="denyrow"{{end}}>
@@ -1086,7 +1086,7 @@ exposure either way. See the notes below.</p>
   {{if .Refusals}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Target</th><th>Node</th><th>Account</th><th>When</th></tr></thead>
+    <thead><tr><th scope="col">Target</th><th scope="col">Node</th><th scope="col">Account</th><th scope="col">When</th></tr></thead>
     <tbody>
     {{range .Refusals}}
       <tr class="denyrow">
@@ -1131,7 +1131,7 @@ exposure either way. See the notes below.</p>
   {{if .EnumTargets}}
   <div class="tablescroll">
   <table class="rows">
-    <thead><tr><th>Tool</th><th class="num">Calls</th></tr></thead>
+    <thead><tr><th scope="col">Tool</th><th scope="col" class="num">Calls</th></tr></thead>
     <tbody>
     {{range .EnumTargets}}
       <tr>

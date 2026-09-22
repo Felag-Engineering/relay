@@ -1132,7 +1132,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
     <div class="ftitle">{{if .Scrolled}}Accounts on this page{{else}}Accounts{{end}} <span class="phint">listed = an Account with a call in the last 15 minutes · mutate counts what was asked — refused, parked and preflight calls included · counted over the calls on this page · a collapsed row counts all the calls it stands for</span></div>
     {{range .Accounts}}
     <a class="arow{{if .Current}} on{{end}}" href="{{if .Current}}/console/agents{{else}}{{.Href}}{{end}}">
-      <span class="dot" data-live="on"></span>
+      <span class="dot" data-live="on" aria-hidden="true"></span>
       <span class="aname">{{template "trust-chip" (trust .Name .Verified)}}{{with .Role}}<span class="arole" title="The role the Relay authenticated this Account with at its most recent call on this page.">{{.}}</span>{{end}}</span>
       <span class="astats"><b>{{.Calls}}</b> {{plural .Calls "call" "calls"}}{{if .Mutates}} · {{.Mutates}} mutate{{end}}{{if .Denied}} · {{.Denied}} denied{{end}}</span>
       <span class="asub">{{with .FirstSeen}}first {{.}} · {{end}}last {{.LastSeen}}</span>
@@ -1148,7 +1148,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
     {{if .Account}}<p class="scoped">Showing <b>{{.Account}}</b> only. <a href="/console/agents">Show every Account</a>.</p>{{end}}
     {{range .Calls}}
     <article class="ev" data-kind="call" data-calls="{{.Calls}}">
-      <div class="evwhen"><time>{{.When}}</time></div>
+      <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time></div>
       <div class="evbody">
         <div class="evhead">
           {{template "trust-chip" (trust .Principal .Verified)}}

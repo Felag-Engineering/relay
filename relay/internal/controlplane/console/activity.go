@@ -1296,7 +1296,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
 <div class="feed">
 {{range .Rows}}
   <article class="ev" data-kind="{{.Kind}}"{{if .LiveHandle}} data-job-id="{{.JobID}}"{{end}}>
-    <div class="evwhen"><time>{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
+    <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time><span class="evkind">{{.EventKind}}</span></div>
     <div class="evbody">
       <div class="evhead">
         {{if .Unrecorded}}
