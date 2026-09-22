@@ -520,9 +520,7 @@ mod tests {
                 .expect("ca params")
                 .self_signed(&ca_kp)
                 .expect("ca cert");
-            let csr_params =
-                rcgen::CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse CSR");
-            let issued = csr_params.signed_by(&ca_cert, &ca_kp).expect("sign CSR");
+            let issued = crate::identity::test_ca::sign_csr(&csr_pem, &ca_cert, &ca_kp);
             Ok((nid, issued.pem(), ca_cert.pem()))
         })
         .await
