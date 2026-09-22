@@ -38,6 +38,18 @@ package console
 // partly on login/token/freeze records this screen was going to discard
 // anyway, and a 200-row PAGE with an Older link replaces a 200-record window
 // with none. See handleAgents and buildAgents below.
+//
+// # Running Jobs (#617)
+//
+// The stream used to show Cancel only on a dispatch row, and the Job engine
+// writes that row only AFTER a dispatch call returns — so a Job that was
+// still running almost never had one to draw Cancel on. The Running section
+// below closes that gap from its ONE source: the Job row itself, read
+// through the same QueryJobs{State: Running} call Cancel already made
+// (assignRunning). There is no second event source — no JobCreated
+// JobEvent, no console events SSE subscription — and a running card is not
+// counted on the rail, because it is not an audited call yet; it joins the
+// rail once its dispatch is recorded.
 
 import (
 	"context"
@@ -168,6 +180,55 @@ type agentCall struct {
 	// still fold into one run regardless of which one ends up carrying the
 	// control. Non-empty on at most one row per Job, its newest.
 	CancelAction string
+
+	// Running is set AFTER collapse too, in the same pass that sets
+	// CancelAction and for the same reason: it must never affect folding, so
+	// two otherwise-identical dispatch rows of a still-running Job still
+	// fold into one run regardless of which one ends up carrying the
+	// marker. True on EVERY dispatch row of a Job the running-Jobs read
+	// (assignRunning) still finds running — unlike CancelAction, which is
+	// set on at most one row per Job.
+	Running bool
+}
+
+// agentRunning is a running Job's card in the stream's Running section
+// (#617) — the section's ONLY source is the Job row itself, read through the
+// capability lane (assignRunning), never a dispatch audit record. It is
+// never counted on the rail, because it is not an audited call yet: the
+// rail's Calls/Mutates/Denied fields are call-grained by construction
+// (buildAgents), and a running Job with no dispatch row on the page has made
+// no call this screen's rail can count. Selector, OnBehalfOf and Args are
+// left out on purpose: they are audit-joined (JobSummary's doc comment) and
+// empty for a Job whose dispatch record has not been written yet — the Job
+// link is where they appear once it has.
+//
+// Empty Requester/RequesterAccountID render as "unattributed" here, where
+// Activity (activity.go ~966) renders a running Job with no requester as
+// "not yet recorded". The two disagree on purpose, not by drift: since #616
+// the requester is written on the Job row at CreateJob
+// (capability.requesterOf), so an empty Requester on a running Job is FINAL
+// — a legacy row, or a Principal with no AccountID — and does not mean "the
+// audit record is not written yet", which is what Activity's older wording
+// still says. Activity predates #616 and is not changed here (out of scope).
+type agentRunning struct {
+	When      string
+	Principal string
+	Verified  bool
+	Tool      string
+	Risk      string
+	State     string
+
+	Resolved int
+	Total    int
+
+	JobID   string
+	JobHref string
+
+	// CancelAction is set only when the caller's role and route both offer
+	// Cancel (offerCancel in buildRunning) — never unconditionally, unlike
+	// the rest of this struct, which is drawn for every role that can read
+	// the stream at all.
+	CancelAction string
 }
 
 // collapsible reports whether c may be folded into an adjacent identical row.
@@ -200,6 +261,11 @@ func collapsible(c agentCall) bool {
 // INTENDED failure. Do not "fix" it by hand-writing a partial key; add the
 // field to the exclusion list above only if it is provably render-irrelevant,
 // and say why in a comment when you do.
+//
+// The fields set AFTER collapse — CancelAction, Running — are always zero
+// when sameCall runs: collapseRuns runs before either is assigned
+// (handleAgents), so there is nothing here to zero for them, unlike
+// When/Calls/FirstWhen above.
 func sameCall(a, b agentCall) bool {
 	a.When, a.Calls, a.FirstWhen = "", 0, ""
 	b.When, b.Calls, b.FirstWhen = "", 0, ""
@@ -344,20 +410,33 @@ type agentsView struct {
 	// field, rather than the handler pre-building one per row.
 	CSRFToken string
 
-	// CancelTrailError is set when the running-Jobs read (handleAgents)
-	// failed: no control renders anywhere on the page, and PageNote's note
-	// says why rather than silently omitting every control.
-	CancelTrailError bool
+	// Running is the newest page's Running section (#617): every running Job
+	// with no dispatch row on this page, newest first. Built only when this
+	// page is not scrolled — see assignRunning.
+	Running []agentRunning
 
-	// CancelTruncated is set when the running-Jobs read's own page was not
-	// the whole result (capability.MaxPageSize hit): Cancel is offered here
-	// only for the newest MaxPageSize running Jobs, and the page says so.
-	CancelTruncated bool
+	// CancelOffered is cancelOffered's answer for this role, carried onto
+	// the view so the footer notes below can word themselves accordingly —
+	// a viewer is shown running Jobs but is never told Cancel is withheld,
+	// because it was never offered to a viewer in the first place.
+	CancelOffered bool
 
-	// CancelRunningLimit is capability.MaxPageSize, rendered rather than
-	// hardcoded into the template so the CancelTruncated note stays true if
+	// RunningReadError is set when the running-Jobs read (assignRunning)
+	// failed: no Running section and no Cancel control renders anywhere on
+	// the page, and a footer note says why rather than silently omitting
+	// both.
+	RunningReadError bool
+
+	// RunningTruncated is set when the running-Jobs read's own page was not
+	// the whole result (capability.MaxPageSize hit): the Running section and
+	// Cancel are both complete only for the newest MaxPageSize running Jobs,
+	// and the page says so.
+	RunningTruncated bool
+
+	// RunningLimit is capability.MaxPageSize, rendered rather than
+	// hardcoded into the template so the RunningTruncated note stays true if
 	// that constant ever changes.
-	CancelRunningLimit int
+	RunningLimit int
 }
 
 func handleAgents(d Deps) http.HandlerFunc {
@@ -431,77 +510,178 @@ func handleAgents(d Deps) http.HandlerFunc {
 
 		v.CSRFToken = p.CSRFToken
 		role := accounts.Role(caller.Role)
-		wantsCancel := false
+		offer := cancelOffered(d, role)
+		v.CancelOffered = offer
+
+		hasDispatch := false
 		for _, c := range v.Calls {
 			if c.Dispatch && c.JobID != "" {
-				wantsCancel = true
+				hasDispatch = true
 				break
 			}
 		}
-		// Cancel is offered per-row only when cancelOffered says the role and
-		// the route both admit it, AND there is at least one dispatch row to
-		// offer it on — a viewer, or a page of nothing but reads and
-		// approvals, makes no extra read at all (#595).
-		if cancelOffered(d, role) && wantsCancel {
-			assignAgentsCancelActions(r.Context(), d, caller, &v)
-			if refusedUnaudited(w, lane, "whether these Jobs are still running") {
+		// The running-Jobs read is made for EVERY role on the newest page —
+		// a viewer is shown running Jobs (QRY-15's viewer floor), though
+		// never offered Cancel — because AC1 asks the stream to show a
+		// running Job to whoever can read it at all, not only to a role
+		// Cancel is offered to. On an older page the read is made only when
+		// a dispatch row there could actually be marked running: a page of
+		// nothing but reads and approvals has nothing for it to explain
+		// (#617, formerly #595's wantsCancel gate).
+		if !v.Scrolled || hasDispatch {
+			assignRunning(r.Context(), d, caller, &v, offer)
+			if refusedUnaudited(w, lane, "which Jobs are still running") {
 				return
 			}
+		}
+		// An otherwise-empty rail must not still claim no Account has called
+		// a control surface once the Running section is filling the page it
+		// describes — the running Jobs ARE the activity, just not yet an
+		// audited call. Done here, not inside railNote, so railNote's own
+		// CONTRACT and its five pinned sentences stay untouched.
+		if len(v.Running) > 0 && v.RailNote == railNote(0, 0, false) {
+			v.RailNote = "No Account has a recorded call yet. The running Jobs shown in the " +
+				"stream join the rail once their dispatch is recorded."
 		}
 		renderScreen(w, p, agentsTmpl, v)
 	}
 }
 
-// assignAgentsCancelActions makes the ONE extra lane read Cancel needs on
-// this screen (#595) and sets v.CancelAction on at most one call per Job —
-// its newest row, so a Job with several dispatch rows on the page draws
-// exactly one button rather than one per row.
+// assignRunning makes the Running section's one extra lane read (#617) —
+// the SAME QueryJobs{State: Running} read this screen's Cancel control has
+// made since #595 — and uses it for three things at once: v.Running (the
+// newest page's Running section), c.Running on every dispatch row of a Job
+// still running, and — only when offerCancel is true — c.CancelAction on
+// that Job's newest dispatch row, exactly as #595's assignAgentsCancelActions
+// did.
 //
 // The read is a single QueryJobs{State: Running}, not a per-JobID probe.
 // That trade-off is deliberate and costs something worth stating: the State
 // predicate lands in the outer WHERE (store/jobquery.go's buildJobWhere), so
 // this is the SAME unscoped per-Job aggregate Activity's Job lane already
-// runs on every page view (activity.go) — no new cost class — and it is paid
-// only by an operator-or-above page that shows a dispatch row, never by a
-// viewer: an operator refresh now costs two of their OWN read rows on this
-// stream (the query_audit row this page already wrote, plus this one),
-// alternating and never folding into each other. The alternative, probing
-// per distinct JobID, is each an AUDITED read (ADR-0025, recordQueryRead)
-// that lands as its own KindRead row on THIS SAME STREAM (isAgentCallKind
-// admits rowRead) with a distinct JobID collapseRuns cannot fold — a
-// handful of operator refreshes during an incident would push the
-// operator's own probes onto the page whose purpose is showing AI-agent
-// calls, crowding out the very calls it exists to show. The real fix — a
-// State/JobIDs predicate pushed into the derived tables — is a store change
-// outside this issue, named as the follow-up in the PR body.
-func assignAgentsCancelActions(ctx context.Context, d Deps, caller capability.Principal, v *agentsView) {
+// runs on every page view (activity.go) — no new cost class. What #617
+// changes is who pays it: every newest-page view now adds TWO of the
+// caller's own read rows to this same stream — the query_audit row this
+// page already wrote, plus this query_jobs row — alternating so
+// collapseRuns cannot fold them, and a viewer pays it too, reversing #595's
+// "a viewer never pays". That is the accepted price of showing running
+// Jobs at all (AC1); a per-Job probe would be worse, not better — each is
+// an AUDITED read (ADR-0025, recordQueryRead) that lands as its own KindRead
+// row on THIS SAME STREAM (isAgentCallKind admits rowRead) with a distinct
+// JobID collapseRuns cannot fold, so a handful of operator refreshes during
+// an incident would push the operator's own probes onto the page whose
+// purpose is showing AI-agent calls. The real fix — a State/JobIDs
+// predicate pushed into the derived tables — is a store change outside this
+// issue, named as the follow-up in the PR body.
+func assignRunning(ctx context.Context, d Deps, caller capability.Principal, v *agentsView, offerCancel bool) {
 	running := jobs.JobStateRunning
 	pg, err := d.Queries.QueryJobs(ctx, caller,
 		capability.JobFilter{State: &running}, capability.PageRequest{Limit: capability.MaxPageSize})
 	if err != nil {
-		// No controls anywhere on the page: a control this read could not
-		// confirm is still running must not render as though it could.
-		v.CancelTrailError = true
+		// No section, no marks and no controls anywhere on the page: a
+		// running Job this read could not confirm must not render as
+		// though it could.
+		v.RunningReadError = true
 		return
 	}
 	if pg.Next != "" {
-		v.CancelTruncated = true
-		v.CancelRunningLimit = capability.MaxPageSize
+		v.RunningTruncated = true
+		v.RunningLimit = capability.MaxPageSize
 	}
 	runningSet := make(map[string]bool, len(pg.Jobs))
 	for _, j := range pg.Jobs {
 		runningSet[j.JobID] = true
 	}
 
+	// onPage is DISPATCH-ONLY, deliberately: a read or job_cancel row that
+	// names a Job is a request, not proof the Job resolved. Only the lane's
+	// own State says that, so a Job with only a read or job_cancel row on
+	// this page still gets a running card — it carries no control either
+	// way, but without the card it would carry NOTHING.
+	onPage := map[string]bool{}
 	claimed := map[string]bool{}
 	for i := range v.Calls {
 		c := &v.Calls[i]
-		if !c.Dispatch || c.JobID == "" || claimed[c.JobID] || !runningSet[c.JobID] {
+		if !c.Dispatch || c.JobID == "" {
 			continue
 		}
-		c.CancelAction = cancelJobAction(c.JobID)
-		claimed[c.JobID] = true
+		onPage[c.JobID] = true
+		if !runningSet[c.JobID] {
+			continue
+		}
+		c.Running = true
+		if offerCancel && !claimed[c.JobID] {
+			c.CancelAction = cancelJobAction(c.JobID)
+			claimed[c.JobID] = true
+		}
 	}
+
+	if !v.Scrolled {
+		v.Running = buildRunning(pg.Jobs, v.Account, onPage, offerCancel)
+	}
+}
+
+// buildRunning is buildAgents' Running-section counterpart: one card per
+// running Job that has NO dispatch row on this page (onPage), in the lane's
+// own newest-first order.
+//
+// It does not re-check State — js is already QueryJobs{State: Running}'s own
+// result, and re-testing it here would be the same defensive re-filter
+// buildAgents' doc comment argues against for the Kinds filter.
+func buildRunning(js []capability.JobSummary, account string, onPage map[string]bool, offerCancel bool) []agentRunning {
+	var out []agentRunning
+	for _, sum := range js {
+		// A Job already shown by its own dispatch rows is not shown twice.
+		if onPage[sum.JobID] {
+			continue
+		}
+		// The SAME "unattributed" fallback principalText (vocab.go) uses for
+		// a call with no verified or asserted principal, so ?account=
+		// unattributed scopes to a running Job with no recorded requester
+		// exactly as it scopes to an unattributed call.
+		principal := firstNonEmpty(sum.Requester, "unattributed")
+		if account != "" && account != principal {
+			continue
+		}
+		r := agentRunning{
+			When:      sum.CreatedAt.UTC().Format("2006-01-02 15:04:05Z"),
+			Principal: principal,
+			Verified:  sum.RequesterAccountID != "",
+			Tool:      runningToolName(sum),
+			Risk:      RiskLabel(sum.RiskClass),
+			State:     jobStateText(sum.State),
+			Resolved:  sum.Total - sum.Unresolved,
+			Total:     sum.Total,
+			JobID:     sum.JobID,
+			JobHref:   "/console/jobs/" + url.PathEscape(sum.JobID),
+		}
+		if offerCancel {
+			r.CancelAction = cancelJobAction(sum.JobID)
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+// runningToolName names a running Job's card in the stream's own tool
+// vocabulary (`run_operation · X`, `raw_exec`), built on jobOperationText
+// (job.go) so Operation naming stays in one place rather than growing a
+// second spelling here.
+func runningToolName(sum capability.JobSummary) string {
+	// Checked FIRST: an Operation actually named "raw_exec" must render as
+	// run_operation · raw_exec below, never be mistaken for the Raw Exec
+	// tier itself, which this screen's dispatch rows always name bare
+	// (toolName above).
+	if sum.ActionKind == jobs.ActionRawExec {
+		return rawExecActionKind
+	}
+	if op := jobOperationText(sum.OperationName, sum.ActionKind); op != "" {
+		return "run_operation · " + op
+	}
+	// A Job with neither an Operation name nor a Raw Exec ActionKind is one
+	// this screen has never had to name before (dispatch rows always carry
+	// one or the other) — say what it is rather than render an empty cell.
+	return "dispatch"
 }
 
 // agentsHref builds a /console/agents link preserving ?account=, the same
@@ -1146,6 +1326,29 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
 
   <div class="agentfeed">
     {{if .Account}}<p class="scoped">Showing <b>{{.Account}}</b> only. <a href="/console/agents">Show every Account</a>.</p>{{end}}
+    {{if .Running}}
+    <section class="agentrunning" aria-label="Running Jobs">
+      <div class="ftitle">Running <span class="phint">Jobs created and not yet resolved, read from the Job record. Each joins the stream below, and the rail, once its dispatch is recorded.</span></div>
+      {{range .Running}}
+      <article class="ev" data-kind="running">
+        <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time></div>
+        <div class="evbody">
+          <div class="evhead">
+            {{template "trust-chip" (trust .Principal .Verified)}}
+            <span class="evop"><code>{{.Tool}}</code></span>
+            <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
+            <span class="chip" data-state="{{.State}}">{{.State}}</span>
+          </div>
+          <div class="evmeta">
+            {{.Resolved}} of {{.Total}} {{plural .Total "Task" "Tasks"}} resolved
+            <a href="{{.JobHref}}">job {{short .JobID}}</a>
+            {{if .CancelAction}}{{template "job-cancel" (cancelControl .CancelAction $.CSRFToken)}}{{end}}
+          </div>
+        </div>
+      </article>
+      {{end}}
+    </section>
+    {{end}}
     {{range .Calls}}
     <article class="ev" data-kind="call" data-calls="{{.Calls}}">
       <div class="evwhen"><time datetime="{{.When}}">{{.When}}</time></div>
@@ -1157,6 +1360,7 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
           <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
           {{if .State}}<span class="chip state" data-state="{{.State}}">{{.State}}</span>
           {{else}}<span class="chip outcome" data-outcome="{{.Outcome}}">{{.Outcome}}</span>{{end}}
+          {{if .Running}}<span class="chip" data-state="running" title="This Job has Tasks not yet resolved.">job running</span>{{end}}
           {{if gt .Calls 1}}<span class="chip calls" title="Consecutive identical calls, collapsed for display. Each one is on the audit trail and each counts on the rail.">x{{.Calls}}</span>{{end}}
         </div>
         {{with .Args}}<div class="evargs mono">{{.}}</div>{{end}}
@@ -1179,11 +1383,11 @@ account of <em>why</em> is exactly what an agent under prompt injection would fa
     {{if .PageNote}}
     <p class="gap">{{.PageNote}}{{if .Scrolled}} <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.{{else if .Older}} <a href="{{.OlderHref}}">Older</a>.{{end}}</p>
     {{end}}
-    {{if .CancelTrailError}}
-    <p class="gap">Whether these Jobs are still running could not be read, so Cancel is not offered here; open a Job to cancel it.</p>
+    {{if .RunningReadError}}
+    <p class="gap">Which Jobs are still running could not be read, so running Jobs are not shown{{if .CancelOffered}} and Cancel is not offered here; open a Job to cancel it{{end}}.</p>
     {{end}}
-    {{if .CancelTruncated}}
-    <p class="note">Cancel is offered here only for the newest {{.CancelRunningLimit}} running Jobs.</p>
+    {{if .RunningTruncated}}
+    <p class="note">Only the newest {{.RunningLimit}} running Jobs are shown as running here{{if .CancelOffered}}, and Cancel is offered only for those{{end}}.</p>
     {{end}}
   </div>
 </div>

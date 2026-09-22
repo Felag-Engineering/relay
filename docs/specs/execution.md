@@ -493,6 +493,11 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-22` — the Console Agents stream now shows a running Job on its newest page from the
+  Job row's recorded requester, marked running until it resolves, with the existing Cancel
+  control where the role can reach the capability-layer cancel; the running Jobs come from the
+  same one audited QueryJobs read on the capability lane, with no second event source (#617).
+  Spec is still `aspirational`; proof not recorded per the legacy-spec rule.
 - `2026-09-22` — the Job row now records its requester (Account ID, name, and kind) in the
   same write that creates the Job, before any Task is dispatched; Job queries read the
   requester from the Job row, with the audit-row join kept only for the audit trail. Rows

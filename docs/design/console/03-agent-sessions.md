@@ -73,7 +73,11 @@ tool; render it as a distinct badge because it is the trust-critical case.
 Card contents by kind:
 
 - **Dispatch in flight** — args, Selector with resolved fan-out, plan hash, who approved it if it
-  was parked, then a live progress bar and per-outcome counts, with **Cancel** (v0.7.0).
+  was parked, then a live progress bar and per-outcome counts, with **Cancel** (v0.7.0). A Job
+  still running with no dispatch audit row yet (#617) shows as a **Running** card instead,
+  sourced only from the Job row: requester, Operation, risk class, resolved/total and Cancel.
+  Selector, arguments and approver appear once the dispatch record is written, because they are
+  audit-joined.
 - **Preflight** — the arguments, then the grouped verdicts and `would_be_rejected`, and a line
   saying nothing executed and each Node's own engine answered.
 - **Elicitation** (ADR-0029) — the Relay answered a call with `input_required` carrying an
@@ -131,6 +135,12 @@ identity — is already on the rail, as the trust chip beside the name.
 **No controls live here.** Cancel sits on the in-flight dispatch card (v0.7.0); token revocation
 is spec 15; Freeze is spec 16.
 
+**A running Job's card does not count on the rail (#617).** It is read from the Job row, not from
+an audited call, so it is not a call this screen's rail can count — the rail's Calls/Mutates/
+Denied fields stay call-grained. It joins the rail once its dispatch is recorded. An otherwise
+empty rail says so instead of "No Account has called a control surface yet.", since a page
+showing only running Jobs is not truthfully an empty one.
+
 ## Interruption
 
 **There is no hold-before-dispatch timer.** It was considered and dropped. Interruption is
@@ -153,16 +163,18 @@ retroactive cancel, and the cancelled Task ID stays deduped so at-most-once stil
 
 - [ ] Every one of the eight tools renders with a request line and a result line.
 - [ ] A read card states that output is not retained, and the scrollback genuinely has none.
-- [ ] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
+- [x] An in-flight dispatch is cancellable from this screen (v0.7.0) and the cancellation is
       audited; in v0.6.0 no control here reaches the capability layer.
-      **Partially met (#595).** The control is built, gated by the capability layer exactly as
-      Job detail's is (13-job-detail.md), and audited: it renders on a dispatch row whose Job is
-      still running, drawn on that Job's newest row, backed by one `QueryJobs{State: Running}`
-      read. What is not yet true is "an in-flight dispatch appears here" itself — this stream is
-      built from dispatch audit records, and the Job engine writes that record only AFTER the
-      dispatch call returns (the capability layer's `Run`), so a Job still running almost never has
-      a dispatch row on this page yet to draw the control on. Closing this waits on a dispatch
-      handing back its Job before finishing (execution.md, designed).
+      **Met (#595, #617).** A running Job appears on the newest page from its Job row's recorded
+      requester (#616, #617), through the same single `QueryJobs{State: Running}` lane read that
+      has backed Cancel since #595. That read is now made for every role on the newest page,
+      viewers included, because a viewer is shown running Jobs too (though never offered Cancel).
+      The Job is marked running until it resolves, and Cancel is drawn where the capability
+      layer's cancel route is reachable for the role — gated by `cancelOffered` exactly as Job
+      detail's is (13-job-detail.md). A dispatch row of a still-running Job is marked running too,
+      and its newest row carries the control, so a Job with several dispatch rows on the page
+      still draws exactly one. Running cards are not counted on the rail until their dispatch is
+      recorded — see the Accounts rail section below.
 - [ ] Polling collapses; an Account doing 200 `get_job` calls does not push everything else off.
 - [ ] A `raw_exec` refused by the role gate renders informative-neutral, not as an error.
 - [ ] With no Account active in the window the screen says so plainly and does not fabricate
