@@ -298,7 +298,7 @@ below) — that is expected, not a regression.
 | --- | --- | --- | --- |
 | Daemon runtime (`tokio`, full multi-thread) | `epoll_create1`/`epoll_ctl`/`epoll_wait`, `eventfd2`, `futex`, `clone`/`clone3`, `membarrier`, `rseq`, `timerfd_*` | `@io-event`, `@default`, `@process`, `@timer` | yes |
 | Transport (`tonic`+`rustls`/`ring`, over `AF_INET`/`AF_INET6`) | `socket`, `connect`, `sendmsg`, `recvmsg`, `getrandom` | `@network-io`, `@default` | yes |
-| Spawn chokepoint (`executor.rs::execute`) | `clone`/`clone3`+`execve` (fork+exec), `setpgid` (`process_group(0)`), `setrlimit`×5 (`apply_rlimits`), `kill(-pgid)`, `wait4`/`waitid` (reap) | `@process`, `@default`, `@resources`, `@system-service` (direct: `setpgid`) | yes |
+| Spawn chokepoint (`executor.rs::execute`) | `clone`/`clone3`+`execve` (fork+exec), `setpgid` (`process_group(0)`), `prlimit64`×5 (`apply_rlimits`, via `rustix::process::setrlimit`), `kill(-pgid)`, `wait4`/`waitid` (reap) | `@process`, `@default`, `@system-service` (direct: `setpgid`) | yes |
 | `system_facts.rs` (`system.facts`) | `/proc/sys` reads (`open`/`openat`/`read`/`close`), `libc::getifaddrs` → `AF_NETLINK` `socket`/`bind`/`sendto`/`recvmsg` | `@file-system`, `@basic-io`, `@network-io` | yes |
 | `file_read.rs` (`file.read`) | `open`/`openat`, `read`, `close` | `@file-system`, `@basic-io` | yes |
 | `service_restart.rs` child (`systemctl`) | `AF_UNIX` `socket`/`connect`/`sendmsg`/`recvmsg` to PID 1 over D-Bus | `@network-io` | yes |
@@ -323,7 +323,8 @@ against `systemd-analyze syscall-filter` output, not merely assumed from the gro
 
 - **Base (BOTH profiles share it): `SystemCallFilter=@system-service`.** This is systemd's
   own documented recommended base allowlist for a general system service. It already
-  contains `@resources` (⇒ covers `setrlimit`), `@setuid`, `@chown` (⇒ the package manager's
+  contains `@default` (⇒ covers `prlimit64`, the syscall `apply_rlimits` actually issues),
+  `@setuid`, `@chown` (⇒ the package manager's
   ownership syscalls), `@signal`, `@process`, `@network-io` (⇒ the `AF_UNIX` `systemctl`
   child and the `AF_INET`/`AF_INET6` mTLS transport), `@file-system` (⇒ the package manager's
   writes), `@io-event`, `@basic-io`, `@sync`.
@@ -367,11 +368,15 @@ against `systemd-analyze syscall-filter` output, not merely assumed from the gro
   - Rows that **stay ✗ and why** (documented, intentional residual — analogous to the
     existing `AF_NETLINK`/`AF_UNIX` residual in [Verification](#verification)):
     `SystemCallFilter=~@resources` ("`@resources` is included, e.g. `ioprio_set` is
-    allowed") — `@resources` contains `setrlimit`, which is load-bearing: denying it makes
-    `apply_rlimits`' `setrlimit` call return `EPERM`, `cmd.spawn()` returns `Err`, and every
-    exec Operation returns `OUTCOME_FAILURE` (see
-    [Deny-closed behavior](#resource-limits-on-spawned-children-v008-exec-audit) above), so
-    it **must** stay allowed. `SystemCallFilter=~@privileged` ("`@privileged` is included,
+    allowed") — `@resources` contains `setrlimit`, but `apply_rlimits` calls
+    `rustix::process::setrlimit`, which issues `prlimit64` directly; `prlimit64` is a member
+    of `@default`, not `@resources`. The rlimit deny-closed guarantee — denying `prlimit64`
+    would make that call return `EPERM`, `cmd.spawn()` return `Err`, and every exec Operation
+    return `OUTCOME_FAILURE` (see
+    [Deny-closed behavior](#resource-limits-on-spawned-children-v008-exec-audit) above) — is
+    therefore load-bearing on `@default`, which this checklist never offers to narrow, not on
+    `@resources`; `@resources` stays allowed here as part of the unnarrowed base.
+    `SystemCallFilter=~@privileged` ("`@privileged` is included,
     e.g. `chown` is allowed") — `@system-service` pulls in `@chown` and the `setuid`-class
     syscalls that overlap `@privileged`; in the strict profile those syscalls are allowed by
     the filter but `EPERM` at the kernel's capability check without the caps that back them,
