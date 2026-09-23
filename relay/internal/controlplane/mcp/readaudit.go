@@ -24,22 +24,24 @@ import (
 // they used, what they aimed it at, and when — never what came back. Recording
 // the result would copy the very material this decision is worried about into
 // a trail that outlives the Job (ADR-0025).
+//
+// #680 moved list_nodes, describe_node and list_operations onto the
+// capability read lane (ReadLane, mcp.go): the record and the read are now
+// the same call, made there rather than through this seam. This file's
+// ReadAuditor/auditRead now serve only get_job (tools_jobs.go) and the
+// Tasks read-back tools (tasks/get, tasks.go) — the tools that read back a
+// previously-dispatched Job's own Task rows rather than the registry or a
+// display-only cache.
 
 // ReadEvent is one non-dispatching read-tool call.
 //
 // Every field is either the tool or a pointer to what it was aimed at. There
 // is deliberately no result field — see the note above.
 type ReadEvent struct {
-	// Tool is the MCP tool name, e.g. "describe_node". Set by auditRead.
+	// Tool is the MCP tool name, e.g. "get_job". Set by auditRead.
 	Tool string
 
-	// Selector is the Selector as written, for tools that take one.
-	Selector string
-
-	// NodeID is the Node a single-Node tool targeted.
-	NodeID string
-
-	// JobID is the Job a get_job call read back.
+	// JobID is the Job a get_job/tasks-get call read back.
 	JobID string
 }
 

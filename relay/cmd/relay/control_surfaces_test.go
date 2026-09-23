@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,6 +12,9 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // TestDefaultControlSurfaces_MountWithoutCollision mounts every surface
@@ -177,6 +181,42 @@ func (stubVerifier) Verify(_ context.Context, credential string) (accounts.Accou
 	return accounts.Account{
 		Name: "stub-admin", Kind: accounts.KindHuman, Role: accounts.RoleAdmin, Enabled: true,
 	}, accounts.APIToken{ID: "tok-stub"}, nil
+}
+
+// TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache is the composition-root
+// half of the structural guard (#680): the three adapter packages'
+// no_dispatch_test.go guards (mcp, api, console) stop a SURFACE from
+// DECLARING a seam that hands back a registry.Node or a display-only
+// snapshot without a context; this test stops the ROOT from WIRING one.
+// After this issue no surface is handed the registry or a display-only
+// cache directly — every registry, Policy-view and Template-vocabulary
+// read goes through d.capability, the capability read lane.
+func TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache(t *testing.T) {
+	// Keyed by PkgPath, not a type-name substring: a substring match would
+	// pass a field concretely typed *registry.InMemory (it never spells
+	// "registry.Repository"), which is exactly the regression this guard
+	// exists to catch. Any type from these three packages is banned, not
+	// just their headline Repository/Cache types.
+	bannedPkgs := map[string]bool{
+		reflect.TypeOf((*registry.Repository)(nil)).Elem().PkgPath(): true,
+		reflect.TypeOf(policyview.Cache{}).PkgPath():                 true,
+		reflect.TypeOf(nodevocab.Cache{}).PkgPath():                  true,
+	}
+
+	typ := reflect.TypeOf(surfaceDeps{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		elem := f.Type
+		for elem.Kind() == reflect.Pointer || elem.Kind() == reflect.Slice {
+			elem = elem.Elem()
+		}
+		if bannedPkgs[elem.PkgPath()] {
+			t.Errorf("surfaceDeps.%s has type %s, whose element %s is from a banned package — no "+
+				"surface may be handed the registry or a display-only cache directly; read through "+
+				"d.capability (invariant 10, QRY-28)",
+				f.Name, f.Type, elem)
+		}
+	}
 }
 
 // TestConsoleTrustReader_ReportsNothingRatherThanGuessing: the server leaf is

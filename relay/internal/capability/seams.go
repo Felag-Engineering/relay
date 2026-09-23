@@ -7,6 +7,8 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 )
 
 // ControlAction names one administrative act on the control plane ITSELF —
@@ -589,6 +591,29 @@ type JobEventSink interface {
 type noopJobEventSink struct{}
 
 func (noopJobEventSink) RecordJob(JobEvent) {}
+
+// PolicyViewSource is the DISPLAY-ONLY read of a Node's daemon-reported
+// effective Policy (policyview.Cache, #680). Get only — Set is deliberately
+// absent, so the lane structurally cannot write a Node's reported Policy
+// (invariant 2, ADR-0002): the Tunnel handler is the only writer and it
+// holds the concrete *policyview.Cache pointer, which never crosses into
+// this package. A nil seam (the default) means "not wired", and
+// DescribeNode reports PolicyReported=false for it — never an empty Policy
+// (QRY-7: absence is never rendered as an unrestricted or empty Policy).
+type PolicyViewSource interface {
+	Get(nodeID string) (policyview.Snapshot, bool)
+}
+
+// TemplateVocabularySource is the DISPLAY-ONLY read of a Node's
+// daemon-reported Template Operation vocabulary (nodevocab.Cache, #680).
+// Get only, for the same reason PolicyViewSource's is: the concrete
+// *nodevocab.Cache pointer (which carries Set) stays with the Tunnel handler
+// and the composition root, never this package. A nil seam means "not
+// wired", and both DescribeNode and ListOperations report Reported=false for
+// it rather than an empty vocabulary.
+type TemplateVocabularySource interface {
+	Get(nodeID string) (nodevocab.Snapshot, bool)
+}
 
 // FrozenError is returned by Service.Run when the Relay-wide Freeze is
 // engaged: dispatch is refused before any Task is sent. It is exported and

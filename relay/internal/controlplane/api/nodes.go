@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -137,17 +136,16 @@ func handleRevokeNode(d Deps) http.HandlerFunc {
 	}
 }
 
-// NodeReader is the single-Node registry view this route needs.
+// NodeReader is the capability read lane's DescribeNode call, narrowed to
+// the one method this route needs (#680). capability.Service satisfies it
+// with no adapter, exactly as Exec/Approvals/AccountAdmin already do.
 //
-// Deliberately not registry.Repository: a read route has no business holding
-// Upsert, SetRelayLabels or SetRevoked, and the narrowing is what makes that a
-// fact about the type rather than a promise about the handler.
+// The narrowing here is no longer "a read route has no business holding
+// Upsert" — it is that there is one door to the registry, and it records
+// the read before it answers (invariant 10, ADR-0025).
 type NodeReader interface {
-	Get(nodeID string) (registry.Node, bool)
+	DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error)
 }
-
-// readCapabilityDescribeNode is the name this surface records for a Node read.
-const readCapabilityDescribeNode = "describe_node"
 
 // nodeResponse is GET /api/v1/nodes/{node_id}'s body.
 type nodeResponse struct {
@@ -205,7 +203,19 @@ type nodeCertificate struct {
 	LastRenewedAt string `json:"last_renewed_at,omitempty"`
 }
 
-// handleGetNode implements GET /api/v1/nodes/{node_id}.
+// handleGetNode implements GET /api/v1/nodes/{node_id}. The empty-nodeID 400
+// guard stays HERE, before the lane call: QRY-22's Control API sentence
+// (an empty id is refused with nothing recorded) is not retired by QRY-27 —
+// only the MCP sentence is.
+//
+// DELIBERATE BEHAVIOUR CHANGE (#680): an OVERSIZED node id (over 256 bytes)
+// used to record the probe and return 404; the lane's own bound
+// (validateNodeID) now refuses it FIRST, as ErrInvalidFilter, and returns
+// 400 "invalid node id" with nothing recorded. This makes neither QRY-21
+// (scoped to a well-formed id) nor QRY-22 (about an empty id, still guarded
+// above) untrue, but it is a status-code change on a security-relevant
+// route — named in the PR body beside the MCP Selector one, and documented
+// in docs/api/openapi.yaml.
 func handleGetNode(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p, ok := principal(w, r)
@@ -224,25 +234,31 @@ func handleGetNode(d Deps) http.HandlerFunc {
 			return
 		}
 
-		// Audited BEFORE any content is returned, and fail closed if it cannot
-		// be recorded — a Relay that cannot write its access trail must stop
-		// answering rather than answer invisibly. Recorded even when the Node
-		// does not exist: an attempted read of a Node id is exactly what an
-		// incident reviewer wants to see, and suppressing it would make
-		// enumeration the one read that leaves no trace.
-		if err := auditReadNode(r.Context(), d.Reads, p, readCapabilityDescribeNode, nodeID); err != nil {
-			writeProblem(w, http.StatusInternalServerError, "read audit failed", err.Error())
+		detail, err := d.NodeReader.DescribeNode(r.Context(), p, nodeID)
+		if err != nil {
+			switch {
+			case errors.Is(err, capability.ErrNodeNotFound):
+				writeProblem(w, http.StatusNotFound, "no such node",
+					"no Node with that id is in this Relay's registry")
+			case errors.Is(err, capability.ErrInvalidFilter):
+				// The lane's own text carries a "capability: invalid query
+				// filter: " prefix (readlane_registry.go's ErrInvalidFilter) —
+				// an internal package name that must never reach a published
+				// problem detail. Map to this route's own wording instead,
+				// mirroring the ErrNodeNotFound case above (security review,
+				// cycle 2, LOW 5).
+				writeProblem(w, http.StatusBadRequest, "invalid node id", "must be 1-256 bytes")
+			case errors.Is(err, capability.ErrReadUnaudited):
+				writeProblem(w, http.StatusInternalServerError, "read not recorded",
+					"the Node was not read because the access record could not be written")
+			case errors.Is(err, capability.ErrQueriesUnavailable):
+				writeProblem(w, http.StatusInternalServerError, "registry unavailable", err.Error())
+			default:
+				writeProblem(w, http.StatusInternalServerError, "describe node failed", err.Error())
+			}
 			return
 		}
-
-		n, found := d.NodeReader.Get(nodeID)
-		if !found {
-			writeProblem(w, http.StatusNotFound, "no such node",
-				"no Node with that id is in this Relay's registry")
-			return
-		}
-		ev := capability.StateEval{Now: d.Now(), CertExpiringWithin: d.CertExpiringWithin}
-		writeJSON(w, http.StatusOK, nodeResponseFrom(n, ev))
+		writeJSON(w, http.StatusOK, nodeResponseFrom(detail.Node, detail.Eval))
 	}
 }
 
@@ -300,16 +316,4 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 		}
 	}
 	return out
-}
-
-// auditReadNode records a Node read. Mirrors auditRead, differing only in which
-// positional field of the read event is populated — a Node id, not a Job id.
-func auditReadNode(ctx context.Context, a ReadAuditor, p capability.Principal, capabilityName, nodeID string) error {
-	if a == nil {
-		return nil
-	}
-	if err := a.RecordRead(ctx, p, capabilityName, "", nodeID, ""); err != nil {
-		return fmt.Errorf("record read audit for %s: %w", capabilityName, err)
-	}
-	return nil
 }

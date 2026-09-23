@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
@@ -43,6 +45,69 @@ const testToken = accounts.TokenPrefix + "abcdef0123456789.mcp-integration-test"
 type opsLister struct{}
 
 func (opsLister) Operations() []opvocab.Descriptor { return opvocab.Operations() }
+
+// testReadLane adapts a *capability.Service to mcp.ReadLane, mirroring
+// cmd/relay/main.go's composition-root adapter (mcpReadLane,
+// control_surfaces.go, #680): mcp.ReadLane is deliberately Principal-free,
+// so the Principal is resolved from ctx here, on this side of the seam,
+// exactly like the production adapter — and the real audit sink underneath
+// ts.store means every read this fixture makes is genuinely recorded.
+type testReadLane struct {
+	svc *capability.Service
+}
+
+var errNoPrincipalInContext = errors.New("mcp_test: no authenticated principal in context")
+
+func (l testReadLane) principal(ctx context.Context) (capability.Principal, error) {
+	p, ok := controlplane.PrincipalFromContext(ctx)
+	if !ok {
+		return capability.Principal{}, errNoPrincipalInContext
+	}
+	return p, nil
+}
+
+func (l testReadLane) ListNodes(ctx context.Context, selector string) (mcp.NodeListing, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeListing{}, err
+	}
+	listing, err := l.svc.ListNodes(ctx, p, selector)
+	if err != nil {
+		return mcp.NodeListing{}, err
+	}
+	return mcp.NodeListing{Nodes: listing.Nodes, Eval: listing.Eval}, nil
+}
+
+func (l testReadLane) DescribeNode(ctx context.Context, nodeID string) (mcp.NodeDescription, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeDescription{}, err
+	}
+	detail, err := l.svc.DescribeNode(ctx, p, nodeID)
+	if err != nil {
+		return mcp.NodeDescription{}, err
+	}
+	return mcp.NodeDescription{
+		Node:              detail.Node,
+		Eval:              detail.Eval,
+		Policy:            detail.Policy,
+		PolicyReported:    detail.PolicyReported,
+		Templates:         detail.Templates,
+		TemplatesReported: detail.TemplatesReported,
+	}, nil
+}
+
+func (l testReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.NodeVocabulary, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeVocabulary{}, err
+	}
+	vocab, err := l.svc.ListOperations(ctx, p, nodeID)
+	if err != nil {
+		return mcp.NodeVocabulary{}, err
+	}
+	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
+}
 
 // selfSignedCert mints a throwaway, self-signed TLS certificate for tests
 // (mirrors controlplane's own selfSignedCert test helper — unexported there,
@@ -228,10 +293,12 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		capability.WithCapChecker(capability.NewBlastCap(readCap, mutateCap)),
 		capability.WithAuditSink(auditsink.New(st.Audit())),
 		capability.WithFreeze(st.Freeze()),
+		capability.WithPolicyView(policyCache),
+		capability.WithTemplateVocabulary(vocabCache),
 	)
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 
-	handler := mcp.New(reg, policyCache, vocabCache, opsLister{}, capSvc, results, nil, nil)
+	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
 
 	cert := selfSignedCert(t)
 	controlSrv := controlplane.New(
@@ -279,6 +346,112 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		store:   st,
 		conduit: conduit,
 	}
+}
+
+// failingReadSink wraps a real *auditsink.Sink but refuses every RecordRead
+// call — the fixture for proving the read lane's fail-closed contract
+// (ADR-0025, #680): an unauditable read must not silently happen. Every
+// other AuditSink method is inherited unchanged.
+type failingReadSink struct {
+	*auditsink.Sink
+}
+
+func (failingReadSink) RecordRead(context.Context, capability.Principal, string, string, string, string) error {
+	return errors.New("mcp_test: audit trail unavailable")
+}
+
+// newTestServerWithFailingReadSink mirrors newTestServer, seeding one Node,
+// but wires failingReadSink in place of the real one — used to prove every
+// read tool fails closed, and records nothing, when its access record
+// cannot be written.
+func newTestServerWithFailingReadSink(t *testing.T) testServer {
+	t.Helper()
+
+	const nodeA = "node-a"
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{
+		NodeID: nodeA,
+		Facts:  registry.Facts{Hostname: "web-1", OS: "linux"},
+	}); err != nil {
+		t.Fatalf("seed node A: %v", err)
+	}
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { st.Close() }) //nolint:errcheck
+
+	conduit := newFakeConduit()
+	capSvc := capability.New(reg,
+		capability.WithExecution(st.Jobs(), st.Tasks(), conduit, capability.WithExecNewID(deterministicIDs())),
+		capability.WithAuthorizer(testAuthorizer{}),
+		capability.WithCapChecker(capability.NewBlastCap(0, 0)),
+		capability.WithAuditSink(failingReadSink{Sink: auditsink.New(st.Audit())}),
+		capability.WithFreeze(st.Freeze()),
+	)
+	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
+	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
+
+	cert := selfSignedCert(t)
+	controlSrv := controlplane.New(
+		controlplane.Config{
+			Addr:           "127.0.0.1:0",
+			GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &cert, nil },
+		},
+		controlplane.NewAuthenticator(staticVerifier{credential: testToken}),
+	)
+	controlSrv.Mux().Handle("/mcp", handler)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() {
+		_ = controlSrv.Serve(lis)
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = controlSrv.Shutdown(ctx)
+	})
+
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(leaf)
+	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}
+
+	return testServer{
+		base:    "https://" + lis.Addr().String(),
+		plain:   &http.Client{Transport: transport},
+		authed:  &http.Client{Transport: relaytest.BearerRoundTripper{Base: transport, Token: testToken}},
+		nodeA:   nodeA,
+		store:   st,
+		conduit: conduit,
+	}
+}
+
+// auditReadRecords returns every KindRead Record on ts's trail — the
+// capability read lane's own access log, queried directly rather than
+// through the lane itself, so these tests prove what actually landed on
+// the trail rather than re-asking the thing under test.
+func auditReadRecords(t *testing.T, ts testServer) []audit.Record {
+	t.Helper()
+	all, err := ts.store.Audit().List(context.Background())
+	if err != nil {
+		t.Fatalf("Audit().List: %v", err)
+	}
+	var reads []audit.Record
+	for _, r := range all {
+		if r.Kind == audit.KindRead {
+			reads = append(reads, r)
+		}
+	}
+	return reads
 }
 
 // connect opens an authenticated MCP client session against ts.
@@ -367,6 +540,16 @@ func TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("the refusal does not mention %q, so the caller cannot tell why: %s", want, msg)
 		}
+	}
+	// The lane's own error renders "capability: invalid query filter:
+	// capability: tag: selectors …", doubling the internal package prefix —
+	// list_nodes must map it back to the same "invalid selector: <parse
+	// error>" wrap run_operation/raw_exec already use, so this cannot drift
+	// back to the doubled form silently.
+	const wantPrefix = "invalid selector: capability:"
+	if !strings.HasPrefix(msg, wantPrefix) {
+		t.Errorf("refusal text = %q, want prefix %q (not the doubled "+
+			"\"capability: invalid query filter: capability: …\" lane wrap)", msg, wantPrefix)
 	}
 }
 
@@ -526,6 +709,29 @@ func TestMCP_ListNodes_SelectorFilter(t *testing.T) {
 		res := callTool(t, session, "list_nodes", map[string]any{"selector": "state:bogus"})
 		if !res.IsError {
 			t.Fatalf("list_nodes(state:bogus): IsError = false, want true (closed vocabulary, fail-closed)")
+		}
+	})
+
+	// A Selector matching no Node resolves through capability.Selector.Resolve,
+	// which returns a NIL slice — the response must still render an empty
+	// JSON array, never null (#207/#253), so this is the regression guard for
+	// the nil-slice trap the lane's return value introduces.
+	t.Run("a Selector matching nothing renders an empty array, never null", func(t *testing.T) {
+		res := callTool(t, session, "list_nodes", map[string]any{"selector": "node:role=no-such-role"})
+		var out mcp.ListNodesOutput
+		decodeResult(t, res, &out)
+		if out.Nodes == nil {
+			t.Error("ListNodesOutput.Nodes decoded as nil, want a non-nil empty slice")
+		}
+		if len(out.Nodes) != 0 {
+			t.Errorf("list_nodes(node:role=no-such-role) = %+v, want none", out.Nodes)
+		}
+		text := resultText(t, res)
+		if !strings.Contains(text, `"nodes":[]`) {
+			t.Errorf("list_nodes JSON = %s, want it to contain %q", text, `"nodes":[]`)
+		}
+		if strings.Contains(text, `"nodes":null`) {
+			t.Errorf("list_nodes JSON = %s, must never contain %q", text, `"nodes":null`)
 		}
 	})
 }
@@ -710,6 +916,201 @@ func TestMCP_DescribeNode(t *testing.T) {
 			t.Fatal("describe_node(no-such-node): IsError = false, want true")
 		}
 	})
+}
+
+// TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt is QRY-27's MCP-seam
+// proof: the capability read lane bounds a Node ID BEFORE it records
+// (readlane_registry.go's validateNodeID, ahead of recordQueryRead), so once
+// describe_node goes through the lane a missing or oversized id is refused
+// with nothing on the trail. Deliberately distinct from the lane's own
+// TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt (QRY-22's proof row,
+// capability seam): that test proves the lane's ordering, and this one
+// proves the MCP surface actually goes through the lane rather than
+// recording first itself.
+func TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	cases := []struct {
+		name   string
+		nodeID string
+	}{
+		{"empty node_id", ""},
+		{"oversized node_id", strings.Repeat("a", 257)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			before := len(auditReadRecords(t, ts))
+			res := callTool(t, session, "describe_node", map[string]any{"node_id": tc.nodeID})
+			if !res.IsError {
+				t.Fatalf("describe_node(%q): IsError = false, want true", tc.nodeID)
+			}
+			after := len(auditReadRecords(t, ts))
+			if after != before {
+				t.Errorf("describe_node(%q) left %d new read record(s) on the trail, want 0 (QRY-27: the lane bounds a Node ID before it records)", tc.nodeID, after-before)
+			}
+			// LOW 5 (security review, cycle 2): the lane's ErrInvalidFilter
+			// carries an internal "capability: invalid query filter: …"
+			// prefix that must never reach a model-facing tool error.
+			msg := toolErrorText(t, res)
+			if strings.Contains(msg, "capability:") {
+				t.Errorf("describe_node(%q) refusal text = %q, leaks the internal capability: package prefix", tc.nodeID, msg)
+			}
+			const want = "invalid node_id: must be 1-256 bytes"
+			if msg != want {
+				t.Errorf("describe_node(%q) refusal text = %q, want %q", tc.nodeID, msg, want)
+			}
+		})
+	}
+}
+
+// TestMCP_ListOperations_BoundsTheNodeIdBeforeRecordingIt mirrors
+// TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt for list_operations:
+// an oversized node_id is refused by the lane's before-any-record bound
+// (validateNodeID), so the refusal must carry neither a trail record nor the
+// lane's internal "capability:" package prefix (security review, cycle 2,
+// LOW 5).
+func TestMCP_ListOperations_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	oversized := strings.Repeat("a", 257)
+	before := len(auditReadRecords(t, ts))
+	res := callTool(t, session, "list_operations", map[string]any{"node_id": oversized})
+	if !res.IsError {
+		t.Fatalf("list_operations(%q): IsError = false, want true", oversized)
+	}
+	after := len(auditReadRecords(t, ts))
+	if after != before {
+		t.Errorf("list_operations(%q) left %d new read record(s) on the trail, want 0", oversized, after-before)
+	}
+	msg := toolErrorText(t, res)
+	if strings.Contains(msg, "capability:") {
+		t.Errorf("list_operations(%q) refusal text = %q, leaks the internal capability: package prefix", oversized, msg)
+	}
+	const want = "invalid node_id: must be 1-256 bytes"
+	if msg != want {
+		t.Errorf("list_operations(%q) refusal text = %q, want %q", oversized, msg, want)
+	}
+}
+
+// TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary is QRY-26's
+// MCP-seam proof: a well-formed but unknown node_id is refused as "no such
+// Node" — not answered with a successful, empty (templates_reported=false)
+// result — and the refused probe is recorded with the id it asked about.
+func TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	const unknown = "no-such-node"
+	res := callTool(t, session, "list_operations", map[string]any{"node_id": unknown})
+	if !res.IsError {
+		var out mcp.ListOperationsOutput
+		decodeResult(t, res, &out)
+		t.Fatalf("list_operations(%q): IsError = false, want true (got templates_reported=%v, a successful-but-empty result)",
+			unknown, out.TemplatesReported)
+	}
+	msg := toolErrorText(t, res)
+	if !strings.Contains(msg, unknown) || !strings.Contains(msg, "not found") {
+		t.Errorf("refusal text = %q, want it to name the unknown Node as not found", msg)
+	}
+
+	found := false
+	for _, r := range auditReadRecords(t, ts) {
+		if r.OperationName == "list_operations" && r.NodeID == unknown {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no list_operations read record aimed at the probed unknown Node — QRY-26 requires the refused read to be recorded with the probed id")
+	}
+}
+
+// TestMCP_ReadToolsRecordThroughTheRealLane is QRY-28's MCP-seam proof: every
+// read tool records exactly one entry per call — including a fleet-wide
+// list_operations, whose record carries the tool and no target — and every
+// one of them fails closed (and returns nothing) when the trail cannot be
+// written.
+func TestMCP_ReadToolsRecordThroughTheRealLane(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	callTool(t, session, "list_nodes", nil)
+	callTool(t, session, "describe_node", map[string]any{"node_id": ts.nodeA})
+	callTool(t, session, "list_operations", map[string]any{"node_id": ts.nodeA})
+	callTool(t, session, "list_operations", nil)
+
+	counts := map[[2]string]int{}
+	for _, r := range auditReadRecords(t, ts) {
+		counts[[2]string{r.OperationName, r.NodeID}]++
+	}
+	wantCounts := map[[2]string]int{
+		{"list_nodes", ""}:            1,
+		{"describe_node", ts.nodeA}:   1,
+		{"list_operations", ts.nodeA}: 1,
+		{"list_operations", ""}:       1,
+	}
+	for k, want := range wantCounts {
+		if counts[k] != want {
+			t.Errorf("read records for tool=%q node=%q = %d, want %d", k[0], k[1], counts[k], want)
+		}
+	}
+
+	tsFail := newTestServerWithFailingReadSink(t)
+	sessionFail := tsFail.connect(t)
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_nodes", nil},
+		{"describe_node", map[string]any{"node_id": tsFail.nodeA}},
+		{"list_operations", map[string]any{"node_id": tsFail.nodeA}},
+		{"list_operations", nil},
+	} {
+		t.Run(tc.tool+" fails closed when the trail cannot be written", func(t *testing.T) {
+			res := callTool(t, sessionFail, tc.tool, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s: IsError = false, want true (the audit sink refuses every RecordRead)", tc.tool)
+			}
+		})
+	}
+}
+
+// TestMCP_ListNodes_SelectorIsResolvedByTheLane is QRY-28's Selector-routing
+// proof: the lane records the CANONICAL Selector form, not the caller's raw
+// bytes, and a refused tag: Selector (validated before it is recorded)
+// leaves nothing on the trail — the deliberate behaviour change named in the
+// PR body. TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty proves the refusal
+// text itself keeps passing unchanged; this test proves what the lane does
+// to the trail around that same call.
+func TestMCP_ListNodes_SelectorIsResolvedByTheLane(t *testing.T) {
+	ts := newTestServer(t)
+	session := ts.connect(t)
+
+	callTool(t, session, "list_nodes", map[string]any{"selector": "  node:role=web  "})
+	found := false
+	for _, r := range auditReadRecords(t, ts) {
+		if r.OperationName != "list_nodes" {
+			continue
+		}
+		found = true
+		if r.Selector != "node:role=web" {
+			t.Errorf("recorded Selector = %q, want the canonical form %q", r.Selector, "node:role=web")
+		}
+	}
+	if !found {
+		t.Fatal("no list_nodes read record found")
+	}
+
+	before := len(auditReadRecords(t, ts))
+	res := callTool(t, session, "list_nodes", map[string]any{"selector": "tag:env=prod"})
+	if !res.IsError {
+		t.Fatal("list_nodes(tag:env=prod): IsError = false, want true")
+	}
+	after := len(auditReadRecords(t, ts))
+	if after != before {
+		t.Errorf("a refused tag: Selector left %d new read record(s), want 0 (the lane validates before it records)", after-before)
+	}
 }
 
 // TestMCP_ListOperations_PerNode is #291's discovery half (ADR-0021): the

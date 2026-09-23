@@ -53,7 +53,6 @@ func (v roleVerifier) Verify(_ context.Context, credential string) (accounts.Acc
 // route table inside this package's Secure middleware, inside the real
 // Authenticator.Middleware.
 func newTestHandler(d Deps, role accounts.Role) http.Handler {
-	d = mirrorFleetIntoLane(d)
 	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
 	mux := http.NewServeMux()
 	Register(mux, d)
@@ -69,7 +68,6 @@ func newTestHandler(d Deps, role accounts.Role) http.Handler {
 // path or MinRole a second time, so it cannot drift from what Register
 // actually mounts.
 func newTestHandlerWithEventsLimiter(d Deps, role accounts.Role, limiter *streamLimiter) http.Handler {
-	d = mirrorFleetIntoLane(d)
 	authn := controlplane.NewAuthenticator(roleVerifier{role: role})
 	mux := http.NewServeMux()
 	nf := notFoundHandler(d)
@@ -85,30 +83,6 @@ func newTestHandlerWithEventsLimiter(d Deps, role accounts.Role, limiter *stream
 	}
 	mux.HandleFunc("/console/", nf)
 	return authn.Middleware(Secure(mux))
-}
-
-// mirrorFleetIntoLane makes a fixture's fleet visible through BOTH doors the
-// Console reads the registry through.
-//
-// #450 moved the fleet listing and node detail onto the capability layer's
-// AUDITED read lane (Deps.Queries), while the comparison screen still reads
-// FleetReader. Screen fixtures name their fleet once — d.Fleet = fakeFleet{…}
-// — and a fixture that fed only that door would describe a fleet half the
-// Console cannot see, which renders as an empty page rather than as a failing
-// assertion about the thing the test is really about.
-//
-// So this copies, and only ever in the direction that cannot mask a bug: it
-// fills the lane's nodes when a fixture left them UNSET, and never touches a
-// fixture that set them deliberately. A test that wants the two doors to
-// disagree — or wants the lane to fail — sets fakeQueries.nodes (or
-// nodesErr) itself and this leaves it alone.
-func mirrorFleetIntoLane(d Deps) Deps {
-	q, ok := d.Queries.(*fakeQueries)
-	if !ok || q == nil || q.nodes != nil || d.Fleet == nil {
-		return d
-	}
-	q.nodes = d.Fleet.List()
-	return d
 }
 
 func get(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {

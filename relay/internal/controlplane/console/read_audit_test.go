@@ -11,10 +11,10 @@ package console
 // and #422/#423/#425 and inherited its auditing for free; the rest kept
 // reading FleetReader, PolicyReader and AuditReader directly, which is a door
 // with no record on the other side of it. #450 moved the fleet listing and
-// node detail through that door and closed it behind them, and #542 moved
-// agent history's whole-trail read onto QueryAudit. The comparison screen is
-// what remains: it still resolves its columns through FleetReader and
-// PolicyReader, and it is the last data-read exemption in the table below.
+// node detail through that door and closed it behind them, #542 moved agent
+// history's whole-trail read onto QueryAudit, and #680 moved the comparison
+// screen — every column it reads is now recorded, one describe_node per
+// pinned Node — closing the last data-read exemption in the table below.
 //
 // The thing that stops this recurring is not the migration, it is this file.
 // A Console screen is cheap to add — it is a row in [Routes] and a handler —
@@ -75,6 +75,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/auditsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
@@ -117,11 +118,10 @@ func (r readAuditRule) audited() bool { return r.tool != "" }
 //
 // A READ exemption is a screen that reads fleet or trail data off the lane. It
 // names the migration that closes it WHERE ONE IS FILED, and it disappears
-// when that migration lands. Two rows below deliberately name no issue number,
-// and each says why in its own words rather than borrowing a ticket that does
-// not close it: GET /console/compare is the last registry read off the lane
-// and its migration has not been ticketed (the numbers it cites are the
-// migrations that already landed for other screens), and GET /console/approvals
+// when that migration lands. After #680 there is no such exemption left: the
+// comparison screen — the last registry read off the lane — now resolves
+// every pinned Node through Queries.DescribeNode, one audited record per id.
+// One row below deliberately names no issue number: GET /console/approvals
 // is classified by what it CAN read — its trail reads ARE on the audited lane
 // and are recorded whenever there is a Request to read for, so there is
 // nothing to migrate at all.
@@ -204,14 +204,10 @@ var consoleReadAudit = map[string]readAuditRule{
 		tool: "query_audit",
 	},
 
-	// ── Not yet on the lane ──────────────────────────────────────────────
+	// ── The comparison screen (#680) ──────────────────────────────────────
 	"GET /console/compare": {
 		path: "/console/compare?nodes=" + auditFixtureNode,
-		why: "the comparison screen still resolves its columns through FleetReader " +
-			"and PolicyReader. It is the last registry read off the lane, and the last " +
-			"data-read exemption in this table — agent history moved onto query_audit " +
-			"in #542; compare.go was left out of #450's slice to keep one migration " +
-			"provable rather than three rushed and follows in its own ticket",
+		tool: "describe_node",
 	},
 
 	// ── The live-read seam (#539) ─────────────────────────────────────────
@@ -305,6 +301,7 @@ var consoleReadAudit = map[string]readAuditRule{
 
 const (
 	auditFixtureNode     = "node-web-1"
+	auditFixtureNode2    = "node-web-2"
 	auditFixtureJob      = "job-1"
 	auditFixtureApproval = "ap-1"
 )
@@ -468,6 +465,42 @@ func TestConsole_ProbingForAMissingNodeIsStillRecorded(t *testing.T) {
 	}
 }
 
+// TestCompare_RecordsOneReadPerPinnedNode is the comparison screen's own
+// proof (#680): pinning two Nodes writes exactly two describe_node records,
+// each aimed at one pinned id, and ZERO list_nodes records — the "never
+// enumerates the fleet" guard (node_test.go's
+// TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet), now
+// expressed on the trail rather than on a fake's call count.
+func TestCompare_RecordsOneReadPerPinnedNode(t *testing.T) {
+	trail := &recordingTrail{}
+	d := realLaneDeps(trail)
+
+	rec := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes="+auditFixtureNode+","+auditFixtureNode2)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /console/compare = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	reads := trail.ofKind(audit.KindRead)
+	var described []string
+	for _, r := range reads {
+		switch r.OperationName {
+		case "describe_node":
+			described = append(described, r.NodeID)
+		case "list_nodes":
+			t.Error("the comparison screen wrote a list_nodes record — it must never enumerate the fleet")
+		}
+	}
+	want := map[string]bool{auditFixtureNode: true, auditFixtureNode2: true}
+	if len(described) != 2 {
+		t.Fatalf("describe_node records = %v, want exactly 2", described)
+	}
+	for _, id := range described {
+		if !want[id] {
+			t.Errorf("describe_node recorded %q, which was not pinned", id)
+		}
+	}
+}
+
 // TestConsole_AnUnauditableReadRefusesTheScreen is decision 4, demonstrated
 // rather than asserted: with the trail refusing writes, every audited route
 // must refuse to render.
@@ -609,11 +642,25 @@ func realLaneDeps(trail *recordingTrail) Deps {
 	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
 		panic("read_audit_test: seed registry: " + err.Error())
 	}
+	// A second Node, for TestCompare_RecordsOneReadPerPinnedNode's two-pin
+	// case — this file's only test that needs more than one.
+	if _, err := reg.Upsert(registry.Report{
+		NodeID:            auditFixtureNode2,
+		PolicyFingerprint: "sha256:bbbb",
+	}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+		panic("read_audit_test: seed registry: " + err.Error())
+	}
 
 	sink := auditsink.New(trail, auditsink.WithClock(func() time.Time { return testNow }))
+	// WithPolicyView gives the comparison screen and the Node-detail Policy
+	// panel something to render (#680) — both now read it through
+	// DescribeNode, the same audited call this fixture proves recorded.
+	policy := policyview.New()
+	policy.Set(auditFixtureNode, policyview.Snapshot{AllowedOperations: []string{"system.facts"}})
 	svc := capability.New(reg,
 		capability.WithAuditSink(sink),
 		capability.WithQueries(emptyAuditQuery{}, emptyJobQuery{}),
+		capability.WithPolicyView(policy),
 	)
 
 	d := renderableDeps()

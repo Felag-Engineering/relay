@@ -6,8 +6,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
+
+// fakePolicyView is a minimal PolicyViewSource test double: a map keyed by
+// node id, mirroring policyview.Cache.Get's (Snapshot, bool) contract
+// without carrying Set.
+type fakePolicyView map[string]policyview.Snapshot
+
+func (f fakePolicyView) Get(nodeID string) (policyview.Snapshot, bool) {
+	s, ok := f[nodeID]
+	return s, ok
+}
+
+// fakeTemplateVocab is TemplateVocabularySource's sibling.
+type fakeTemplateVocab map[string]nodevocab.Snapshot
+
+func (f fakeTemplateVocab) Get(nodeID string) (nodevocab.Snapshot, bool) {
+	s, ok := f[nodeID]
+	return s, ok
+}
 
 // registryLaneFixture builds a Service over a seeded registry with a spy
 // AuditSink — the registry read lane's half of readLaneFixture.
@@ -27,18 +47,41 @@ func registryLaneFixture(t *testing.T, nodes ...registry.Report) (*Service, *spy
 	return New(reg, WithQueries(&spyAuditQuery{}, &spyJobQuery{}), WithAuditSink(sink)), sink
 }
 
-// TestListNodes_RecordsTheEnumeration is ADR-0025 decision 1 for the fleet
-// read: who enumerated, which tool, and when — with no result on the record.
+// registryLaneFixtureWithViews is registryLaneFixture, additionally wired
+// with a PolicyViewSource and a TemplateVocabularySource — the fixture for
+// DescribeNode/ListOperations tests that need something to report.
+func registryLaneFixtureWithViews(t *testing.T, policy PolicyViewSource, vocab TemplateVocabularySource, nodes ...registry.Report) (*Service, *spyAuditSink) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, r := range nodes {
+		if _, err := reg.Upsert(r); err != nil {
+			t.Fatalf("Upsert(%s): %v", r.NodeID, err)
+		}
+	}
+	sink := &spyAuditSink{}
+	return New(reg,
+		WithQueries(&spyAuditQuery{}, &spyJobQuery{}),
+		WithAuditSink(sink),
+		WithPolicyView(policy),
+		WithTemplateVocabulary(vocab),
+	), sink
+}
+
+// TestListNodes_RecordsTheEnumeration is QRY-16 (also ADR-0025 decision 1)
+// for the fleet read: who enumerated, which tool, and when, with the record
+// written before the enumeration's content is returned to the caller — and
+// with the Selector that was resolved riding the record, even the empty one
+// that means "the whole fleet".
 func TestListNodes_RecordsTheEnumeration(t *testing.T) {
 	svc, sink := registryLaneFixture(t,
 		registry.Report{NodeID: "node-1"}, registry.Report{NodeID: "node-2"})
 
-	nodes, err := svc.ListNodes(context.Background(), testPrincipal)
+	listing, err := svc.ListNodes(context.Background(), testPrincipal, "")
 	if err != nil {
 		t.Fatalf("ListNodes: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Fatalf("ListNodes returned %d Nodes, want 2", len(nodes))
+	if len(listing.Nodes) != 2 {
+		t.Fatalf("ListNodes returned %d Nodes, want 2", len(listing.Nodes))
 	}
 	if len(sink.readCalls) != 1 {
 		t.Fatalf("ListNodes wrote %d read records, want 1", len(sink.readCalls))
@@ -52,8 +95,86 @@ func TestListNodes_RecordsTheEnumeration(t *testing.T) {
 	}
 	// A fleet enumeration is aimed at no single thing, and saying otherwise
 	// would put a Node id on a record that read every Node.
-	if got.NodeID != "" || got.JobID != "" || got.Selector != "" {
-		t.Errorf("record carries %+v, want no NodeID/JobID/Selector for an enumeration", got)
+	if got.NodeID != "" || got.JobID != "" {
+		t.Errorf("record carries %+v, want no NodeID/JobID for an enumeration", got)
+	}
+	// The Selector rides the record too, even the empty one that resolved to
+	// the whole fleet — QRY-16 does not exempt an unfiltered enumeration from
+	// carrying its Selector.
+	if got.Selector != "" {
+		t.Errorf("recorded Selector = %q, want the resolved (empty, fleet-wide) Selector", got.Selector)
+	}
+}
+
+// TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm covers both
+// halves of ListNodes' new shape (#680): it actually resolves selector
+// against the registry (not just enumerates), and what lands on the trail is
+// the CANONICAL Selector form, not the caller's raw bytes — the same
+// precedent NoNodesMatchedError sets (QRY-20).
+func TestListNodes_ResolvesTheSelectorAndRecordsItsCanonicalForm(t *testing.T) {
+	svc, sink := registryLaneFixture(t,
+		registry.Report{NodeID: "node-1"}.WithNodeLabels(map[string]string{"role": "web"}),
+		registry.Report{NodeID: "node-2"}.WithNodeLabels(map[string]string{"role": "db"}),
+	)
+
+	listing, err := svc.ListNodes(context.Background(), testPrincipal, "  node:role=web  ")
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	if len(listing.Nodes) != 1 || listing.Nodes[0].NodeID != "node-1" {
+		t.Fatalf("ListNodes(node:role=web) = %+v, want only node-1", listing.Nodes)
+	}
+	if listing.Selector != "node:role=web" {
+		t.Errorf("NodeListing.Selector = %q, want the canonical form %q", listing.Selector, "node:role=web")
+	}
+	if len(sink.readCalls) != 1 {
+		t.Fatalf("ListNodes wrote %d read records, want 1", len(sink.readCalls))
+	}
+	if got := sink.readCalls[0].Selector; got != "node:role=web" {
+		t.Errorf("recorded Selector = %q, want the canonical form %q, not the caller's raw bytes", got, "node:role=web")
+	}
+}
+
+// TestListNodes_RefusesAMalformedSelectorBeforeRecordingAnything mirrors
+// DescribeNode's existing Node-ID bound: a malformed Selector must not be
+// able to use the trail as storage.
+func TestListNodes_RefusesAMalformedSelectorBeforeRecordingAnything(t *testing.T) {
+	svc, sink := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
+
+	listing, err := svc.ListNodes(context.Background(), testPrincipal, "bare-key")
+	if !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("ListNodes(malformed) error = %v, want ErrInvalidFilter", err)
+	}
+	if listing.Nodes != nil {
+		t.Errorf("ListNodes(malformed) returned %+v alongside its refusal", listing.Nodes)
+	}
+	if len(sink.readCalls) != 0 {
+		t.Errorf("a malformed Selector was written to the trail (%+v) — the trail is not caller storage", sink.readCalls)
+	}
+}
+
+// TestListNodes_ReturnsMatchesInNodeIdOrder pins that Node-ID ordering
+// (QRY-3) survives the move onto Selector.Resolve: registry.InMemory.List
+// sorts by NodeID and Resolve preserves that order, so no surface needs to
+// sort again.
+func TestListNodes_ReturnsMatchesInNodeIdOrder(t *testing.T) {
+	svc, _ := registryLaneFixture(t,
+		registry.Report{NodeID: "node-c"},
+		registry.Report{NodeID: "node-a"},
+		registry.Report{NodeID: "node-b"},
+	)
+
+	listing, err := svc.ListNodes(context.Background(), testPrincipal, "")
+	if err != nil {
+		t.Fatalf("ListNodes: %v", err)
+	}
+	var ids []string
+	for _, n := range listing.Nodes {
+		ids = append(ids, n.NodeID)
+	}
+	want := []string{"node-a", "node-b", "node-c"}
+	if strings.Join(ids, ",") != strings.Join(want, ",") {
+		t.Errorf("ListNodes order = %v, want %v", ids, want)
 	}
 }
 
@@ -115,7 +236,7 @@ func TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited(t *testing.T) {
 		svc, sink := registryLaneFixture(t, seeded...)
 		sink.err = errors.New("the trail is unwritable")
 
-		nodes, err := svc.ListNodes(context.Background(), testPrincipal)
+		listing, err := svc.ListNodes(context.Background(), testPrincipal, "")
 		if err == nil {
 			t.Fatal("ListNodes answered with an unwritable audit trail — an unauditable read must fail")
 		}
@@ -123,9 +244,9 @@ func TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited(t *testing.T) {
 			t.Errorf("error = %v, want it to wrap ErrReadUnaudited so a surface can say which "+
 				"component failed", err)
 		}
-		if nodes != nil {
+		if listing.Nodes != nil {
 			t.Errorf("ListNodes returned %d Nodes alongside its refusal — nothing may be "+
-				"disclosed by a read that was not recorded", len(nodes))
+				"disclosed by a read that was not recorded", len(listing.Nodes))
 		}
 	})
 
@@ -174,7 +295,7 @@ func TestReadLane_TrailHalfAlsoWrapsErrReadUnaudited(t *testing.T) {
 func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
 	svc := New(registry.NewInMemory())
 
-	if _, err := svc.ListNodes(context.Background(), testPrincipal); !errors.Is(err, ErrReadUnaudited) {
+	if _, err := svc.ListNodes(context.Background(), testPrincipal, ""); !errors.Is(err, ErrReadUnaudited) {
 		t.Errorf("ListNodes on a Service with the no-op sink = %v, want ErrReadUnaudited — it "+
 			"would otherwise answer every fleet read while recording none of them", err)
 	}
@@ -187,6 +308,11 @@ func TestRegistryLane_RefusesWithoutARealAuditSink(t *testing.T) {
 // readlane.go applies (F2, #441 cycle-2 security review): the value is
 // caller-controlled and would land in the append-only trail, so an oversized
 // one is refused BEFORE anything is written rather than stored and truncated.
+//
+// This is QRY-22's proof row, at the capability seam. QRY-27's own proof
+// (mcp_test.go's TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt) is
+// deliberately separate: this test proves the LANE's ordering, that one
+// proves the MCP surface actually goes through it.
 func TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
 	svc, sink := registryLaneFixture(t)
 
@@ -203,4 +329,153 @@ func TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
 		t.Errorf("DescribeNode(\"\") error = %v, want ErrInvalidFilter — an empty id is not a "+
 			"Node, and recording a read aimed at nothing is worse than refusing it", err)
 	}
+}
+
+// TestDescribeNode_CarriesThePolicyViewAndTemplateVocabulary is #680's
+// disclosure half: describe_node's Policy/Template views come from the same
+// call, with no second record — the record already covers this Node ID.
+func TestDescribeNode_CarriesThePolicyViewAndTemplateVocabulary(t *testing.T) {
+	policy := fakePolicyView{"node-1": policyview.Snapshot{PolicyFingerprint: "sha256:aaa", RawExecEnabled: true}}
+	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "sha256:ttt"}}
+	svc, sink := registryLaneFixtureWithViews(t, policy, vocab, registry.Report{NodeID: "node-1"})
+
+	d, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1")
+	if err != nil {
+		t.Fatalf("DescribeNode: %v", err)
+	}
+	if !d.PolicyReported || d.Policy.PolicyFingerprint != "sha256:aaa" {
+		t.Errorf("Policy/PolicyReported = %+v/%v, want the fake's reported Snapshot", d.Policy, d.PolicyReported)
+	}
+	if !d.TemplatesReported || d.Templates.Fingerprint != "sha256:ttt" {
+		t.Errorf("Templates/TemplatesReported = %+v/%v, want the fake's reported Snapshot", d.Templates, d.TemplatesReported)
+	}
+	// Still exactly one record — the Policy/Template views ride the SAME
+	// describe_node read, not a second one.
+	if len(sink.readCalls) != 1 {
+		t.Errorf("DescribeNode wrote %d read records, want 1 (no second record for the Policy/Template views)", len(sink.readCalls))
+	}
+}
+
+// TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy is QRY-7's
+// "never absence as an unrestricted or empty Policy", proved at the lane: a
+// nil PolicyViewSource/TemplateVocabularySource (the New default) must
+// report *Reported=false, not a zero-value Snapshot that reads as "nothing
+// restricted".
+func TestDescribeNode_AnUnwiredCacheReportsNotReportedNotAnEmptyPolicy(t *testing.T) {
+	svc, _ := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
+
+	d, err := svc.DescribeNode(context.Background(), testPrincipal, "node-1")
+	if err != nil {
+		t.Fatalf("DescribeNode: %v", err)
+	}
+	if d.PolicyReported {
+		t.Error("PolicyReported = true with no PolicyViewSource wired, want false")
+	}
+	if d.TemplatesReported {
+		t.Error("TemplatesReported = true with no TemplateVocabularySource wired, want false")
+	}
+}
+
+// TestListOperations_RecordsTheNodeItWasAimedAt covers ListOperations'
+// per-Node happy path: the Template vocabulary comes back and the read is
+// recorded aimed at that Node.
+func TestListOperations_RecordsTheNodeItWasAimedAt(t *testing.T) {
+	vocab := fakeTemplateVocab{"node-1": nodevocab.Snapshot{Fingerprint: "sha256:ttt"}}
+	svc, sink := registryLaneFixtureWithViews(t, fakePolicyView{}, vocab, registry.Report{NodeID: "node-1"})
+
+	got, err := svc.ListOperations(context.Background(), testPrincipal, "node-1")
+	if err != nil {
+		t.Fatalf("ListOperations: %v", err)
+	}
+	if !got.Reported || got.Templates.Fingerprint != "sha256:ttt" {
+		t.Errorf("OperationVocabulary = %+v, want the fake's reported Snapshot", got)
+	}
+	if len(sink.readCalls) != 1 || sink.readCalls[0].Tool != toolListOperations || sink.readCalls[0].NodeID != "node-1" {
+		t.Fatalf("record = %+v, want tool %q aimed at node-1", sink.readCalls, toolListOperations)
+	}
+}
+
+// TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe is QRY-26's
+// lane-seam proof: a well-formed but unknown Node ID is refused as
+// ErrNodeNotFound, and the refused read is recorded with the probed id —
+// written BEFORE the registry lookup, so the probe itself is never lost.
+func TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe(t *testing.T) {
+	svc, sink := registryLaneFixtureWithViews(t, fakePolicyView{}, fakeTemplateVocab{}, registry.Report{NodeID: "node-1"})
+
+	_, err := svc.ListOperations(context.Background(), testPrincipal, "node-guessed")
+	if !errors.Is(err, ErrNodeNotFound) {
+		t.Fatalf("ListOperations(unknown) error = %v, want ErrNodeNotFound", err)
+	}
+	if len(sink.readCalls) != 1 || sink.readCalls[0].Tool != toolListOperations || sink.readCalls[0].NodeID != "node-guessed" {
+		t.Fatalf("a probe for a Node that does not exist recorded %+v; want one record aimed "+
+			"at the id that was probed for", sink.readCalls)
+	}
+}
+
+// TestListOperations_WithNoNodeIdRecordsTheToolAndNoTarget is the fleet-wide
+// shape (QRY-12: an empty Node ID is legal here, not malformed) — the same
+// no-target record shape queryJobs already writes (readlane.go).
+func TestListOperations_WithNoNodeIdRecordsTheToolAndNoTarget(t *testing.T) {
+	svc, sink := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
+
+	got, err := svc.ListOperations(context.Background(), testPrincipal, "")
+	if err != nil {
+		t.Fatalf("ListOperations(fleet-wide): %v", err)
+	}
+	if got.Reported {
+		t.Errorf("OperationVocabulary.Reported = true for a fleet-wide call, want false (no Node was named)")
+	}
+	if len(sink.readCalls) != 1 {
+		t.Fatalf("ListOperations(fleet-wide) wrote %d read records, want 1", len(sink.readCalls))
+	}
+	if got := sink.readCalls[0]; got.Tool != toolListOperations || got.NodeID != "" || got.Selector != "" {
+		t.Errorf("record = %+v, want tool %q with no target", got, toolListOperations)
+	}
+}
+
+// TestListOperations_BoundsTheNodeIdBeforeRecordingIt mirrors DescribeNode's
+// bound: a non-empty but oversized Node ID must not use the trail as
+// storage.
+func TestListOperations_BoundsTheNodeIdBeforeRecordingIt(t *testing.T) {
+	svc, sink := registryLaneFixture(t)
+
+	_, err := svc.ListOperations(context.Background(), testPrincipal, strings.Repeat("n", maxNodeIDBytes+1))
+	if !errors.Is(err, ErrInvalidFilter) {
+		t.Fatalf("ListOperations(oversized id) error = %v, want ErrInvalidFilter", err)
+	}
+	if len(sink.readCalls) != 0 {
+		t.Errorf("an oversized id was written to the trail (%+v) — the trail is not caller storage", sink.readCalls)
+	}
+}
+
+// TestListOperations_FailsClosedWhenTheReadCannotBeAudited covers BOTH
+// shapes — with a node_id and fleet-wide — since a lane that calls the sink
+// only for the per-Node case would leave the fleet-wide call unrecorded and
+// never fail closed (the gap BLOCKING finding 1 caught in plan review).
+func TestListOperations_FailsClosedWhenTheReadCannotBeAudited(t *testing.T) {
+	t.Run("with a node_id", func(t *testing.T) {
+		svc, sink := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
+		sink.err = errors.New("the trail is unwritable")
+
+		got, err := svc.ListOperations(context.Background(), testPrincipal, "node-1")
+		if !errors.Is(err, ErrReadUnaudited) {
+			t.Fatalf("ListOperations(node-1) error = %v, want ErrReadUnaudited", err)
+		}
+		if got.Reported {
+			t.Error("ListOperations returned a reported vocabulary alongside its refusal")
+		}
+	})
+
+	t.Run("fleet-wide", func(t *testing.T) {
+		svc, sink := registryLaneFixture(t, registry.Report{NodeID: "node-1"})
+		sink.err = errors.New("the trail is unwritable")
+
+		got, err := svc.ListOperations(context.Background(), testPrincipal, "")
+		if !errors.Is(err, ErrReadUnaudited) {
+			t.Fatalf("ListOperations(fleet-wide) error = %v, want ErrReadUnaudited", err)
+		}
+		if got.Reported {
+			t.Error("ListOperations returned a reported vocabulary alongside its refusal")
+		}
+	})
 }

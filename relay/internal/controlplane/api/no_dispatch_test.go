@@ -33,6 +33,9 @@ import (
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	contextImportPath    = "context"
 )
 
 // localImportAlias resolves the local identifier file uses for importPath: the
@@ -68,11 +71,48 @@ func localImportAlias(file *ast.File, importPath string) (alias string, ok bool)
 //   - a type assertion (or type-switch case) to registry.Repository: the
 //     runtime path from a narrowed reader back to the full registry write
 //     surface (Upsert/SetRelayLabels/Delete/...).
+//   - G1 (#680): naming policyview.Cache, policyview.New, nodevocab.Cache or
+//     nodevocab.New. Package api does not import either package today and
+//     must not start — those are the types that carry Set (invariant 2,
+//     ADR-0002).
+//   - G2 (#680), same formulation as mcp's and the Console's: an interface
+//     method declared in a non-test file whose RESULTS name registry.Node,
+//     policyview.Snapshot or nodevocab.Snapshot and whose PARAMETERS contain
+//     no context.Context — a read no lane could have recorded or
+//     attributed (invariant 10, ADR-0025).
+//   - a dot-import of capability, registry, policyview or nodevocab
+//     (security review, cycle 2): it erases the package qualifier every
+//     rule above matches on, so it is refused outright.
+//
+// This guard is flat by design — no read/exec partition, because every file
+// in package api legitimately handles capability.Principal (see the file
+// header) — so both new rules are unconditional, alongside the
+// capability.Service/capability.New/newDispatch ones, and a new source file
+// is covered automatically.
 func dispatchViolations(fileName string, file *ast.File) []string {
 	var violations []string
 
 	capAlias, capImported := localImportAlias(file, capabilityImportPath)
 	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
+
+	// A dot-import of any of these four erases the package qualifier every
+	// check in this function matches on: `import . ".../registry"` turns
+	// `registry.Repository` into a bare `Repository` this guard cannot see,
+	// and the same holds for capability/policyview/nodevocab. There is no
+	// legitimate reason for one here, so it is a violation on its own.
+	// Mirrors console/no_dispatch_test.go's identical rule (security review,
+	// cycle 2).
+	for _, banned := range []struct{ alias, pkg string }{
+		{capAlias, "capability"}, {regAlias, "registry"}, {pvAlias, "policyview"}, {nvAlias, "nodevocab"},
+	} {
+		if banned.alias == "." {
+			violations = append(violations, fmt.Sprintf(
+				"%s dot-imports %s — that erases the package qualifier this guard matches on, so "+
+					"every check below silently stops working", fileName, banned.pkg))
+		}
+	}
 
 	checkRepositoryAssertion := func(expr ast.Expr) {
 		sel, ok := expr.(*ast.SelectorExpr)
@@ -91,22 +131,33 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.SelectorExpr:
-			if !capImported {
-				break
+			if capImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == capAlias {
+					switch v.Sel.Name {
+					case "Service":
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.Service — Control API routes must never hold a capability.Service directly, only the injected Executor interface (no-dispatch structural guarantee)",
+							fileName))
+					case "New":
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.New — the exported dispatch constructor must never be called from a Control API route file (no-dispatch structural guarantee)",
+							fileName))
+					}
+				}
 			}
-			pkg, ok := v.X.(*ast.Ident)
-			if !ok || pkg.Name != capAlias {
-				break
+			if pvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
+					violations = append(violations, fmt.Sprintf(
+						"%s references policyview.%s — the Control API must never hold or construct a *policyview.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+						fileName, v.Sel.Name))
+				}
 			}
-			switch v.Sel.Name {
-			case "Service":
-				violations = append(violations, fmt.Sprintf(
-					"%s references capability.Service — Control API routes must never hold a capability.Service directly, only the injected Executor interface (no-dispatch structural guarantee)",
-					fileName))
-			case "New":
-				violations = append(violations, fmt.Sprintf(
-					"%s references capability.New — the exported dispatch constructor must never be called from a Control API route file (no-dispatch structural guarantee)",
-					fileName))
+			if nvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == nvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
+					violations = append(violations, fmt.Sprintf(
+						"%s references nodevocab.%s — the Control API must never hold or construct a *nodevocab.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+						fileName, v.Sel.Name))
+				}
 			}
 		case *ast.Ident:
 			if v.Name == "newDispatch" {
@@ -116,6 +167,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			}
 		case *ast.TypeAssertExpr:
 			checkRepositoryAssertion(v.Type)
+		case *ast.InterfaceType:
+			violations = append(violations, seamHandsBackUnauditedRead(fileName, v, file)...)
 		case *ast.CaseClause:
 			for _, expr := range v.List {
 				checkRepositoryAssertion(expr)
@@ -124,6 +177,105 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		return true
 	})
 
+	return violations
+}
+
+// seamHandsBackUnauditedRead is G2: an interface method declared in a
+// non-test file whose RESULTS name registry.Node, policyview.Snapshot or
+// nodevocab.Snapshot (bare, pointer, or slice) and whose PARAMETERS contain
+// no context.Context is a violation — it declares a seam that hands back a
+// Node or a display-only snapshot with no context, which is a read no lane
+// could have recorded or attributed (invariant 10, ADR-0025). Phrased as a
+// property, not a type denylist: it fires on the deleted Get-by-id
+// NodeReader shape and does not fire on the lane-shaped one, whose
+// DescribeNode takes a context.Context. Mirrors mcp/no_dispatch_test.go's
+// and console/no_dispatch_test.go's identically-formulated rule.
+//
+// This closes the obvious door, not every door (security review, cycle 2):
+// MapType/ChanType below catch a map or channel of one of the three banned
+// types, but a local type alias for one of them, a generic type parameter
+// shaped like one, or an anonymous struct embedding one would not be. The
+// real bar is the composition-root guard
+// (TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache,
+// cmd/relay/control_surfaces_test.go) plus no surface being handed a
+// registry or cache at all.
+func seamHandsBackUnauditedRead(fileName string, iface *ast.InterfaceType, file *ast.File) []string {
+	if iface.Methods == nil {
+		return nil
+	}
+	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
+	ctxAlias, ctxImported := localImportAlias(file, contextImportPath)
+
+	var namesBannedType func(expr ast.Expr) bool
+	namesBannedType = func(expr ast.Expr) bool {
+		switch t := expr.(type) {
+		case *ast.StarExpr:
+			return namesBannedType(t.X)
+		case *ast.ArrayType:
+			return namesBannedType(t.Elt)
+		case *ast.MapType:
+			return namesBannedType(t.Key) || namesBannedType(t.Value)
+		case *ast.ChanType:
+			return namesBannedType(t.Value)
+		case *ast.SelectorExpr:
+			pkg, ok := t.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			switch {
+			case regImported && pkg.Name == regAlias && t.Sel.Name == "Node":
+				return true
+			case pvImported && pkg.Name == pvAlias && t.Sel.Name == "Snapshot":
+				return true
+			case nvImported && pkg.Name == nvAlias && t.Sel.Name == "Snapshot":
+				return true
+			}
+		}
+		return false
+	}
+
+	hasContextParam := func(ft *ast.FuncType) bool {
+		if !ctxImported || ft.Params == nil {
+			return false
+		}
+		for _, p := range ft.Params.List {
+			sel, ok := p.Type.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == ctxAlias && sel.Sel.Name == "Context" {
+				return true
+			}
+		}
+		return false
+	}
+
+	var violations []string
+	for _, m := range iface.Methods.List {
+		ft, ok := m.Type.(*ast.FuncType)
+		if !ok || ft.Results == nil {
+			continue
+		}
+		bannedResult := false
+		for _, r := range ft.Results.List {
+			if namesBannedType(r.Type) {
+				bannedResult = true
+				break
+			}
+		}
+		if !bannedResult || hasContextParam(ft) {
+			continue
+		}
+		methodName := "<unnamed>"
+		if len(m.Names) > 0 {
+			methodName = m.Names[0].Name
+		}
+		violations = append(violations, fmt.Sprintf(
+			"%s: interface method %s declares a seam that hands back a Node or a display-only snapshot with no context — a read no lane could have recorded or attributed (invariant 10, ADR-0025); read through the capability read lane",
+			fileName, methodName))
+	}
 	return violations
 }
 
@@ -177,6 +329,8 @@ func TestNoDispatchConstruction(t *testing.T) {
 func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
 
 	cases := []struct {
 		name       string
@@ -257,6 +411,116 @@ func f(p capability.Principal, s string) (capability.PlanResult, []capability.No
 }
 `,
 			wantSubstr: "",
+		},
+		{
+			name: "constructing a policyview cache",
+			src: `package api
+import ` + pvImport + `
+var _ = policyview.New()
+`,
+			wantSubstr: "policyview.New",
+		},
+		{
+			name: "type assertion recovering the policyview cache",
+			src: `package api
+import ` + pvImport + `
+func f(p any) { _ = p.(*policyview.Cache) }
+`,
+			wantSubstr: "policyview.Cache",
+		},
+		{
+			name: "constructing a nodevocab cache",
+			src: `package api
+import ` + nvImport + `
+var _ = nodevocab.New()
+`,
+			wantSubstr: "nodevocab.New",
+		},
+		{
+			name: "type assertion recovering the nodevocab cache",
+			src: `package api
+import ` + nvImport + `
+func f(v any) { _ = v.(*nodevocab.Cache) }
+`,
+			wantSubstr: "nodevocab.Cache",
+		},
+		{
+			name: "the deleted Get-by-id NodeReader shape hands back a Node with no context",
+			src: `package api
+import ` + regImport + `
+type NodeReader interface {
+	Get(nodeID string) (registry.Node, bool)
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			name: "an interface method returning registry.Node WITH a context does not violate",
+			src: `package api
+import (
+	"context"
+	` + regImport + `
+)
+type NodeReader interface {
+	Get(ctx context.Context, nodeID string) (registry.Node, bool)
+}
+`,
+			wantSubstr: "",
+		},
+		{
+			// LOW 3 (security review, cycle 2): a map result is one of the two
+			// shapes namesBannedType did not walk before this guard was
+			// hardened.
+			name: "a seam handing back a map of registry.Node with no context",
+			src: `package api
+import ` + regImport + `
+type NodeReader interface {
+	ByID() map[string]registry.Node
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The other shape: a channel result.
+			name: "a seam handing back a channel of nodevocab.Snapshot with no context",
+			src: `package api
+import ` + nvImport + `
+type VocabReader interface {
+	Stream() <-chan nodevocab.Snapshot
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The dot-import evasion (security review, cycle 2): erasing the
+			// registry qualifier would otherwise let a map/chan/slice of Node
+			// slip past namesBannedType silently.
+			name: "dot-importing registry erases the qualifier G2 matches on",
+			src: `package api
+import . ` + regImport + `
+`,
+			wantSubstr: "dot-imports registry",
+		},
+		{
+			name: "dot-importing policyview erases the qualifier G2 matches on",
+			src: `package api
+import . ` + pvImport + `
+`,
+			wantSubstr: "dot-imports policyview",
+		},
+		{
+			name: "dot-importing nodevocab erases the qualifier G2 matches on",
+			src: `package api
+import . ` + nvImport + `
+`,
+			wantSubstr: "dot-imports nodevocab",
+		},
+		{
+			name: "dot-importing capability erases the qualifier this guard matches on",
+			src: `package api
+import . ` + capImport + `
+`,
+			wantSubstr: "dot-imports capability",
 		},
 	}
 

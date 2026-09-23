@@ -39,9 +39,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/eventsink"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/metrics"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
 
@@ -50,10 +47,15 @@ import (
 // every surface in defaultControlSurfaces() — most fields are unused by any
 // single surface (e.g. apiSurface never touches ops), which is expected: the
 // struct is a shared dependency bag, not a per-surface signature.
+//
+// After #680 no surface is handed the registry or a display-only cache
+// directly: every registry, Policy-view and Template-vocabulary read goes
+// through d.capability, the capability read lane, which records the read
+// before it answers and fails closed (invariant 10, QRY-28). The registry,
+// the Policy-view cache and the Template-vocabulary cache are wired only
+// into d.capability itself (main.go) and into the Tunnel handler, which
+// remains their only writer.
 type surfaceDeps struct {
-	registry   registry.Repository
-	policy     *policyview.Cache
-	vocab      *nodevocab.Cache
 	ops        mcp.OperationLister
 	capability *capability.Service // one instance: mcp.Executor AND api.Freezer
 	jobs       jobs.JobRepository
@@ -116,7 +118,12 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// *capability.Service once more. Resolving a task handle reads an approval
 	// Request and may cancel a Job, so it goes through the one capability layer
 	// like everything else (invariant 10) rather than reaching a store.
-	mux.Handle("/mcp", mcp.New(d.registry, d.policy, d.vocab, d.ops, d.capability,
+	//
+	// mcp.WithCertExpiringWindow is gone (#680): the MCP read tools no longer
+	// resolve or evaluate anything — state: Labels arrive already evaluated
+	// on the lane's StateEval, which d.capability resolves against the same
+	// root-owned window every other surface uses (invariant 11).
+	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.capability}, d.ops, d.capability,
 		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
 		readAuditor{sink: d.auditSink}, d.capability,
 		// The in-band approval rung (#391, ADR-0029): the SAME
@@ -134,10 +141,7 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// The tool-call event publisher (#416, D9) — every tools/call
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.
-		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
-		// state:cert-expiring's warning window (#414, ADR-0034) — the same
-		// value every other surface resolves `state:` against.
-		mcp.WithCertExpiringWindow(d.certExpiringWithin)))
+		mcp.WithToolCallObserver(toolCallObserver{bus: d.events})))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —
@@ -162,9 +166,11 @@ func (apiSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// audit row as every other administrative act, rather than this
 		// surface re-deriving any of them (invariant 10).
 		AccountAdmin: d.capability,
-		// The Node read route (#440). The same registry every other surface
-		// reads, narrowed to a single Get on the way in.
-		NodeReader: d.registry,
+		// The Node read route (#440, #680). The capability read lane — the
+		// same *capability.Service every other surface holds — records the
+		// read before it answers and fails closed, rather than reading the
+		// registry directly.
+		NodeReader: d.capability,
 		Now:        d.now,
 		// Execution (#356): the SAME *capability.Service instance the MCP
 		// surface dispatches through — one capability layer, two thin surfaces
@@ -233,18 +239,11 @@ func (consoleSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// no execution route for console_execution to gate, and shipping the
 		// flag ahead of the surface would be a knob that turns nothing off.
 		Execution: false,
-		// The read seams. registry.Repository arrives as console.FleetReader,
-		// which has no Upsert, no SetRelayLabels and no SetRevoked. That is
-		// what makes "the Console cannot change the fleet" a fact about the
-		// types rather than a promise about the handlers, and it is the
-		// property console/no_dispatch_test.go's registry.Repository
-		// assertion guard exists to keep from being undone by a type switch.
-		//
-		// There is no separate Liveness seam (#414): registry.Node.Connected
-		// is itself derived from the same live-Tunnel set, so the fleet view
-		// and a state:offline Selector now read one fact instead of two.
-		Fleet:     d.registry,
-		Policy:    d.policy,
+		// Every registry and Policy-view read is Deps.Queries now (#680,
+		// QRY-28) — there is no separate Fleet/Policy seam any more. There is
+		// also no separate Liveness seam (#414): registry.Node.Connected is
+		// itself derived from the same live-Tunnel set, so the fleet view
+		// and a state:offline Selector read one fact instead of two.
 		Audit:     d.audit,
 		Approvals: d.capability,
 		Freeze:    d.freeze,
@@ -327,6 +326,70 @@ func defaultControlSurfaces() []controlSurface {
 	return []controlSurface{mcpSurface{}, apiSurface{}, metricsSurface{}}
 }
 
+// mcpReadLane adapts *capability.Service to mcp.ReadLane (#680, QRY-28): the
+// ONE audited seam the MCP read tools call for every registry, Policy-view
+// and Template-vocabulary read.
+//
+// It lives here, beside readAuditor, for the same reason: the mcp package
+// must not name a capability type on its read path (no_dispatch_test.go), so
+// mcp.ReadLane is deliberately Principal-free and the Principal is resolved
+// on THIS side of the seam. Every error passes through unwrapped, so
+// errors.Is(err, capability.ErrNodeNotFound) still works at the tool
+// boundary (tools_nodes.go, tools_operations.go).
+type mcpReadLane struct{ svc *capability.Service }
+
+func (l mcpReadLane) principal(ctx context.Context) (capability.Principal, error) {
+	p, ok := controlplane.PrincipalFromContext(ctx)
+	if !ok {
+		return capability.Principal{}, errors.New(
+			"mcp read lane: no authenticated principal in context; refusing to serve an unattributed read")
+	}
+	return p, nil
+}
+
+func (l mcpReadLane) ListNodes(ctx context.Context, selector string) (mcp.NodeListing, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeListing{}, err
+	}
+	listing, err := l.svc.ListNodes(ctx, p, selector)
+	if err != nil {
+		return mcp.NodeListing{}, err
+	}
+	return mcp.NodeListing{Nodes: listing.Nodes, Eval: listing.Eval}, nil
+}
+
+func (l mcpReadLane) DescribeNode(ctx context.Context, nodeID string) (mcp.NodeDescription, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeDescription{}, err
+	}
+	detail, err := l.svc.DescribeNode(ctx, p, nodeID)
+	if err != nil {
+		return mcp.NodeDescription{}, err
+	}
+	return mcp.NodeDescription{
+		Node:              detail.Node,
+		Eval:              detail.Eval,
+		Policy:            detail.Policy,
+		PolicyReported:    detail.PolicyReported,
+		Templates:         detail.Templates,
+		TemplatesReported: detail.TemplatesReported,
+	}, nil
+}
+
+func (l mcpReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.NodeVocabulary, error) {
+	p, err := l.principal(ctx)
+	if err != nil {
+		return mcp.NodeVocabulary{}, err
+	}
+	vocab, err := l.svc.ListOperations(ctx, p, nodeID)
+	if err != nil {
+		return mcp.NodeVocabulary{}, err
+	}
+	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
+}
+
 // readAuditor adapts the audit sink to mcp.ReadAuditor (#288, ADR-0025).
 //
 // It lives here, in the composition root, for the same reason every other
@@ -348,7 +411,12 @@ func (a readAuditor) RecordRead(ctx context.Context, e mcp.ReadEvent) error {
 	if !ok {
 		return errors.New("read audit: no authenticated principal in context; refusing to record an unattributed read")
 	}
-	return a.sink.RecordRead(ctx, p, e.Tool, e.Selector, e.NodeID, e.JobID)
+	// mcp.ReadEvent carries no Selector/NodeID (#680 moved list_nodes/
+	// describe_node/list_operations onto the capability read lane, which
+	// records those itself) — this seam now only ever reads back a Job's
+	// own Task rows, so the sink's selector/nodeID columns are always empty
+	// here.
+	return a.sink.RecordRead(ctx, p, e.Tool, "", "", e.JobID)
 }
 
 // toolCallObserver adapts the event bus to mcp.ToolCallObserver (#416, D9).

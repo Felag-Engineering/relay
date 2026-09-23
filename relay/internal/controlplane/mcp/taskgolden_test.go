@@ -16,7 +16,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // taskgolden_test.go is #376's conformance half: fixture request -> asserted
@@ -142,12 +141,11 @@ func goldenServer(t *testing.T, tasks mcp.TaskResolver) *httptest.Server {
 
 func goldenServerWithExec(t *testing.T, tasks mcp.TaskResolver, exec mcp.Executor) *httptest.Server {
 	t.Helper()
-	reg := registry.NewInMemory()
-	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
-		t.Fatalf("seed registry: %v", err)
-	}
 
-	handler := mcp.New(reg, nil, nil, opsLister{}, exec, goldenJobs{}, nil, tasks,
+	// No golden test here calls list_nodes/describe_node/list_operations, so
+	// the read lane is left nil — mirroring the pre-existing nil ReadAuditor
+	// argument below, both unneeded by this file's Tasks-focused goldens.
+	handler := mcp.New(nil, opsLister{}, exec, goldenJobs{}, nil, tasks,
 		mcp.WithClock(func() time.Time { return goldenNow }))
 
 	mux := http.NewServeMux()

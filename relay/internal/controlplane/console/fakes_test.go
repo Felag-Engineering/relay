@@ -26,28 +26,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// fakeFleet is a registry read seam over a slice.
-type fakeFleet struct{ nodes []registry.Node }
-
-func (f fakeFleet) List() []registry.Node { return f.nodes }
-
-func (f fakeFleet) Get(nodeID string) (registry.Node, bool) {
-	for _, n := range f.nodes {
-		if n.NodeID == nodeID {
-			return n, true
-		}
-	}
-	return registry.Node{}, false
-}
-
-// fakePolicy is a policyview read seam.
-type fakePolicy map[string]policyview.Snapshot
-
-func (f fakePolicy) Get(nodeID string) (policyview.Snapshot, bool) {
-	s, ok := f[nodeID]
-	return s, ok
-}
-
 // reportedSnapshot stamps s with the receipt time policyview.Cache.Set would
 // have stamped it with, so a screen test can assert the rendered timestamp
 // without standing up the cache. In production the field is only ever written
@@ -55,21 +33,6 @@ func (f fakePolicy) Get(nodeID string) (policyview.Snapshot, bool) {
 func reportedSnapshot(s policyview.Snapshot, at time.Time) policyview.Snapshot {
 	s.ReportedAt = at
 	return s
-}
-
-// countingFleet records how many times a screen enumerated the fleet.
-//
-// It exists for one assertion: the comparison screen resolves the Nodes it was
-// named and never calls List. That is what keeps it a hand-assembled 2-3 Node
-// view rather than a fleet surface.
-type countingFleet struct {
-	fakeFleet
-	lists *int
-}
-
-func (f countingFleet) List() []registry.Node {
-	*f.lists++
-	return f.fakeFleet.List()
 }
 
 // fakeAudit is an audit read seam over a slice, ordered oldest-first as the
@@ -272,13 +235,17 @@ type fakeQueries struct {
 	subscriptionResumed []bool
 	subscriptionErr     error
 
-	// nodes is the registry half of the lane (#450). A screen test that
-	// renders the fleet or a Node puts them HERE rather than on fakeFleet:
-	// the audited lane is the door those screens now use, and a fixture that
-	// filled only fakeFleet would render an empty fleet and quietly assert
-	// nothing.
+	// nodes is the registry half of the lane (#450, and since #680 the ONLY
+	// door: FleetReader/PolicyReader are gone). A screen test that renders
+	// the fleet or a Node puts them here, through withFleet.
 	nodes    []registry.Node
 	nodesErr error
+
+	// policy is the DISPLAY-ONLY Policy view DescribeNode attaches to its
+	// result (#680), keyed by node id — set through withPolicy. A node id
+	// absent from this map answers PolicyReported=false, never an empty
+	// Policy.
+	policy map[string]policyview.Snapshot
 
 	// listNodeCalls and describedNodes record the registry half's traffic.
 	// describedNodes is what proves the pin bar resolves through the lane
@@ -488,12 +455,16 @@ func (f *fakeQueries) AuditReach(_ context.Context, _ capability.Principal, filt
 // records anything. The record itself is proved in read_audit_test.go against
 // a real *capability.Service over a real *auditsink.Sink, because a fake that
 // answered "yes, audited" would be asserting its own implementation.
-func (f *fakeQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
+// ListNodes ignores selector — the fake does not resolve Selectors, and the
+// lane's own tests (readlane_registry_test.go) prove that resolution; a
+// screen test asserting a Selector actually filters the fleet does so
+// against the real lane (read_audit_test.go's realLaneDeps), not this fake.
+func (f *fakeQueries) ListNodes(context.Context, capability.Principal, string) (capability.NodeListing, error) {
 	f.listNodeCalls++
 	if f.nodesErr != nil {
-		return nil, f.nodesErr
+		return capability.NodeListing{}, f.nodesErr
 	}
-	return f.nodes, nil
+	return capability.NodeListing{Nodes: f.nodes}, nil
 }
 
 func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, nodeID string) (capability.NodeDetail, error) {
@@ -516,6 +487,10 @@ func (f *fakeQueries) DescribeNode(_ context.Context, _ capability.Principal, no
 			if n.TemplateSetFingerprint != "" && other.TemplateSetFingerprint == n.TemplateSetFingerprint {
 				d.TemplatePeers++
 			}
+		}
+		if snap, ok := f.policy[nodeID]; ok {
+			d.Policy = snap
+			d.PolicyReported = true
 		}
 		return d, nil
 	}
@@ -980,11 +955,11 @@ func foundingAdminFixture() accounts.Account {
 // several properties in spec 10 are only visible in it.
 func dayOneDeps() Deps {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{}
+	d = withFleet(d)
 	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
 	d.Events = newFakeEvents()
-	// Restated rather than inherited from renderableDeps, exactly as d.Fleet
-	// is above: this is what a fresh Relay IS. EnsureFoundingAdmin seeded an
+	// Restated rather than inherited from renderableDeps, exactly as the
+	// fleet is above: this is what a fresh Relay IS. EnsureFoundingAdmin seeded an
 	// enabled human admin at startup who has never authenticated, so "day
 	// one" for the Accounts screen is one row and not an empty table — see
 	// accounts.go's header and the named skip in dayone_test.go.
@@ -1000,14 +975,15 @@ var testNow = time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
 // Screen tests start here and override the one seam they are about.
 func renderableDeps() Deps {
 	return Deps{
-		Fleet: fakeFleet{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
 		Audit: fakeAudit{},
 		// Every screen that reads through the capability layer's read lane
 		// needs one wired, or its route answers 500 — a fixture route that
 		// 500s is not a fixture. Activity (#422) reads that lane exclusively
 		// and refuses rather than rendering an empty feed when it is missing,
-		// so every sweep that renders every screen needs one.
-		Queries: &fakeQueries{},
+		// so every sweep that renders every screen needs one. Its one Node
+		// (#680: the fleet listing and node detail have no other door) is
+		// what used to live on the now-deleted FleetReader seam.
+		Queries: &fakeQueries{nodes: []registry.Node{{NodeID: "node-a", Connected: true}}},
 		// THE SMALLEST TRUTHFUL ACCOUNT FIXTURE IS ONE, NOT ZERO. A Relay
 		// that mounts the Console has run EnsureFoundingAdmin in the same
 		// startup branch, so it cannot hold fewer Accounts than this — and a
@@ -1016,6 +992,51 @@ func renderableDeps() Deps {
 		Accounts: &fakeAccounts{accounts: []accounts.Account{foundingAdminFixture()}},
 		Now:      func() time.Time { return testNow },
 	}
+}
+
+// withFleet replaces d.Queries' registry half with nodes, copying the
+// underlying *fakeQueries first so two Deps built from the same base never
+// alias one fixture's mutation into another's (#680; replaces the deleted
+// d.Fleet = fakeFleet{...} assignment — see fleetFixture and its callers).
+// A d.Queries that is not yet a *fakeQueries starts from an empty one.
+func withFleet(d Deps, nodes ...registry.Node) Deps {
+	cp := fakeQueriesCopy(d)
+	cp.nodes = nodes
+	d.Queries = cp
+	return d
+}
+
+// withPolicy replaces d.Queries' DISPLAY-ONLY Policy view with m, on the
+// same copy-first discipline withFleet uses (#680; replaces the deleted
+// d.Policy = fakePolicy{...} assignment).
+func withPolicy(d Deps, m map[string]policyview.Snapshot) Deps {
+	cp := fakeQueriesCopy(d)
+	cp.policy = m
+	d.Queries = cp
+	return d
+}
+
+// fakeQueriesCopy returns a copy of d.Queries' underlying *fakeQueries, or a
+// fresh one if d.Queries is not yet one — the shared first step withFleet
+// and withPolicy both take.
+func fakeQueriesCopy(d Deps) *fakeQueries {
+	q, ok := d.Queries.(*fakeQueries)
+	if !ok || q == nil {
+		return &fakeQueries{}
+	}
+	cp := *q
+	return &cp
+}
+
+// fleetNodes reads back the nodes a fixture built with withFleet holds,
+// for the unit tests that call buildFleetView directly rather than through
+// HTTP (#680; replaces the deleted d.Fleet.List() reads).
+func fleetNodes(d Deps) []registry.Node {
+	q, ok := d.Queries.(*fakeQueries)
+	if !ok || q == nil {
+		return nil
+	}
+	return q.nodes
 }
 
 // withExecution returns d with the console_execution mirror set, so a test
@@ -1057,6 +1078,11 @@ func sweepFixture() Deps {
 		{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow},
 	}}
 	d.Queries = &fakeQueries{
+		// The fleet fleetFixture already put on the lane, carried forward:
+		// this literal REPLACES d.Queries rather than extending it, and a
+		// replacement with no nodes field would silently empty the fleet
+		// every sweep test renders against (#680).
+		nodes: fleetNodes(d),
 		jobs: []capability.JobSummary{{
 			JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
 			RiskClass: jobs.RiskClassMutate, Total: 1,

@@ -41,7 +41,7 @@ import (
 // these screens is about the minority.
 func fleetFixture() Deps {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{
 			NodeID:            "node-web-1",
 			NodeLabels:        map[string]string{"role": "web", "env": "prod"},
@@ -79,7 +79,7 @@ func fleetFixture() Deps {
 			LastSeen:          testNow.Add(-2 * time.Hour),
 			// Not connected: this is the fixture's offline, quarantined Node.
 		},
-	}}
+	}...)
 	return d
 }
 
@@ -92,7 +92,7 @@ func fleetFixture() Deps {
 // from a broken one.
 func TestFleet_EmptyRegistryRendersDayOneNotAnEmptyTable(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{}
+	d = withFleet(d)
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
 
 	if !strings.Contains(body, "No Nodes have enrolled yet") {
@@ -131,7 +131,7 @@ func TestFleet_NoFactAppearsOnARowOrInAFacet(t *testing.T) {
 // state, and the pixel wall has exactly four buckets.
 func TestFleet_DerivesStateAndBucketsTheWall(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 
 	byKey := map[string]fleetGroup{}
 	for _, g := range v.Groups {
@@ -174,13 +174,13 @@ func TestFleet_DerivesStateAndBucketsTheWall(t *testing.T) {
 // resolves `unreachable`, and the screen and the dispatcher disagree.
 func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{{
+	d = withFleet(d, []registry.Node{{
 		NodeID:   "node-a",
 		LastSeen: testNow.Add(-1 * time.Second), // seen a heartbeat ago
 		// Connected left false: not connected now, despite the recent LastSeen.
-	}}}
+	}}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	if len(v.Groups) != 1 || v.Groups[0].Offline != 1 {
 		t.Fatalf("a Node seen 1s ago but not connected was not rendered offline: %+v", v.Groups)
 	}
@@ -192,7 +192,7 @@ func TestFleet_OfflineComesFromConnectednessNotLastSeen(t *testing.T) {
 func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 	d := fleetFixture()
 
-	v := buildFleetView(d, d.Fleet.List(), "node:role=web", "-")
+	v := buildFleetView(d, fleetNodes(d), "node:role=web", "-")
 	if !v.FilterOK {
 		t.Fatalf("a valid node: selector was rejected: %s", v.FilterError)
 	}
@@ -200,7 +200,7 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 		t.Errorf("node:role=web matched %d Nodes, want 3", v.Matched)
 	}
 
-	v = buildFleetView(d, d.Fleet.List(), "relay:quarantine=on", "-")
+	v = buildFleetView(d, fleetNodes(d), "relay:quarantine=on", "-")
 	if v.Matched != 1 {
 		t.Errorf("relay:quarantine=on matched %d Nodes, want 1", v.Matched)
 	}
@@ -213,11 +213,11 @@ func TestFleet_FilterUsesTheRealSelectorParser(t *testing.T) {
 func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 	d := fleetFixture()
 	term := "tag:pci"
-	v := buildFleetView(d, d.Fleet.List(), term, "-")
+	v := buildFleetView(d, fleetNodes(d), term, "-")
 	if v.FilterOK {
 		t.Errorf("%s was accepted as a filter, but nothing can resolve it yet", term)
 	}
-	if v.Matched != len(d.Fleet.List()) {
+	if v.Matched != len(fleetNodes(d)) {
 		t.Errorf("%s blanked the fleet — a rejected filter must leave the fleet on screen", term)
 	}
 	if !strings.Contains(v.FilterError, "#") {
@@ -242,7 +242,7 @@ func TestFleet_UnresolvableNamespacesAreRefusedByName(t *testing.T) {
 func TestFleet_StateFilterResolvesLikeAnyOtherNamespace(t *testing.T) {
 	d := fleetFixture()
 
-	v := buildFleetView(d, d.Fleet.List(), "state:offline", "-")
+	v := buildFleetView(d, fleetNodes(d), "state:offline", "-")
 	if !v.FilterOK {
 		t.Fatalf("state:offline was rejected as a filter: %s", v.FilterError)
 	}
@@ -445,8 +445,11 @@ func TestScreens_NoInlineScriptSurvivesAnywhere(t *testing.T) {
 	d.Audit = fakeAudit{records: []audit.Record{{Kind: audit.KindDispatch, JobID: "job-1", NodeID: "node-web-1", OperationName: "service.restart", Timestamp: testNow}}}
 	// Job detail reads through the capability layer's query lane and refuses
 	// rather than rendering an empty Job when it is not wired (#423), so this
-	// cross-screen sweep has to wire it to reach the screen at all.
+	// cross-screen sweep has to wire it to reach the screen at all. nodes is
+	// carried forward from sweepFixture's fleet (#680): this literal
+	// REPLACES d.Queries rather than extending it.
 	d.Queries = &fakeQueries{
+		nodes: fleetNodes(d),
 		jobs: []capability.JobSummary{{
 			JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
 			RiskClass: jobs.RiskClassMutate, Total: 1,
@@ -547,12 +550,12 @@ func contentOf(body string) string {
 // table simply IS the fleet. Nothing special-cased."
 func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
 		{NodeID: "node-b", NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 	g := v.Groups[0]
 
 	if !g.Open {
@@ -584,9 +587,9 @@ func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
 		})
 	}
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 	if v.Groups[0].Open {
 		t.Error("a large, entirely healthy group did not compress to one line")
 	}
@@ -996,7 +999,7 @@ func TestNode_RepeatedDeniesExplainThemselvesOnce(t *testing.T) {
 // system.
 func TestFleet_OneWallForTheWholeFleet(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 
 	if len(v.Wall) != 2 {
 		t.Fatalf("the wall has %d groups, want 2 (web, db)", len(v.Wall))
@@ -1024,7 +1027,7 @@ func TestFleet_OneWallForTheWholeFleet(t *testing.T) {
 // would put it last, because it is rare — which is precisely why it matters.
 func TestFleet_WallLegendCountsEveryBucketAndLeadsWithTheWorst(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 
 	if len(v.Legend) == 0 {
 		t.Fatal("the wall has no legend")
@@ -1076,13 +1079,13 @@ func TestFleet_CellScaleAdaptsToFleetSize(t *testing.T) {
 func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
 	revokedAt := testNow.Add(-3 * time.Hour)
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-revoked", NodeLabels: map[string]string{"role": "web"}, RevokedAt: revokedAt},
 		{NodeID: "node-offline", NodeLabels: map[string]string{"role": "web"}},
 		{NodeID: "node-fine", NodeLabels: map[string]string{"role": "web"}, Connected: true},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 	g := v.Groups[0]
 
 	if g.Revoked != 1 {
@@ -1135,9 +1138,9 @@ func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 		nodes = append(nodes, registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}, Connected: true})
 	}
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "role")
+	v := buildFleetView(d, fleetNodes(d), "", "role")
 	rows := v.Groups[0].Deviations
 
 	if len(rows) != 10 {
@@ -1170,9 +1173,9 @@ func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
 		})
 	}
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "shard")
+	v := buildFleetView(d, fleetNodes(d), "", "shard")
 
 	if len(v.Groups) > groupCards {
 		t.Errorf("rendered %d group cards, want at most %d", len(v.Groups), groupCards)
@@ -1191,13 +1194,13 @@ func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
 // "refuses every Task" and "template set failed to load" are the same problem.
 func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{{
+	d = withFleet(d, []registry.Node{{
 		NodeID:                 "node-a",
 		TemplateSetFingerprint: nodestate.TemplateUnloadable,
 		// Connected left false: offline.
-	}}}
+	}}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	bySeverity := map[string]bool{}
 	for _, c := range v.Groups[0].Deviations[0].States {
 		bySeverity[c.Key] = c.Attention
@@ -1223,11 +1226,11 @@ func TestFleet_StateChipsCarryTheirSeverity(t *testing.T) {
 func TestFleet_CertExpiringMarkerFires(t *testing.T) {
 	d := renderableDeps()
 	d.CertExpiringWithin = 84 * time.Hour
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, CertNotAfter: testNow.Add(10 * time.Hour)},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	g := v.Groups[0]
 	if g.Expiring != 1 {
 		t.Fatalf("group Expiring = %d, want 1", g.Expiring)
@@ -1272,13 +1275,13 @@ func TestFleet_NamesTheNodesWithNoRecordedValidity(t *testing.T) {
 // judgement can be complete, exactly as it is for every other clean marker.
 func TestFleet_SilentAboutValidityWhenEveryNodeHasIt(t *testing.T) {
 	d := fleetFixture()
-	f := d.Fleet.(fakeFleet)
-	nodes := make([]registry.Node, len(f.nodes))
-	copy(nodes, f.nodes)
+	q := d.Queries.(*fakeQueries)
+	nodes := make([]registry.Node, len(q.nodes))
+	copy(nodes, q.nodes)
 	for i := range nodes {
 		nodes[i].CertNotAfter = testNow.Add(30 * 24 * time.Hour)
 	}
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
 	if strings.Contains(body, "no recorded validity at all") {
@@ -1443,15 +1446,15 @@ func TestFleet_TablesAndLivenessAreNamed(t *testing.T) {
 // nowhere.
 func TestFleet_TemplateSetFacetExists(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "a", TemplateSetFingerprint: "aaaa1111", Connected: true},
 		{NodeID: "b", TemplateSetFingerprint: "aaaa1111", Connected: true},
 		{NodeID: "c", TemplateSetFingerprint: "bbbb2222", Connected: true},
 		{NodeID: "d", TemplateSetFingerprint: nodestate.TemplateUnloadable, Connected: true},
 		{NodeID: "e", Connected: true},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	var tf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Template set" {
@@ -1482,13 +1485,13 @@ func TestFleet_TemplateSetFacetExists(t *testing.T) {
 // the Nodes the facet counted.
 func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "a", PolicyFingerprint: "aaaa111122223333", Connected: true},
 		{NodeID: "b", PolicyFingerprint: "aaaa111122223333", Connected: true},
 		{NodeID: "c", PolicyFingerprint: "bbbb444455556666", Connected: true},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	var pf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
@@ -1511,7 +1514,7 @@ func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 		t.Fatalf("facet term = %q, want the FULL fingerprint, not the short hash", term)
 	}
 
-	got := buildFleetView(d, d.Fleet.List(), term, "-")
+	got := buildFleetView(d, fleetNodes(d), term, "-")
 	if !got.FilterOK {
 		t.Fatalf("the facet's own term %q was rejected as a filter: %s", term, got.FilterError)
 	}
@@ -1529,7 +1532,7 @@ func TestFleet_FingerprintFacetTermsResolveToTheFullValue(t *testing.T) {
 // Selector separator.
 func TestFleet_FacetTermsAreAlwaysExactlyOneSelectorTerm(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
 		{NodeID: "node-b", Connected: true, PolicyFingerprint: "aaaa111122223333"},
 		{
@@ -1539,9 +1542,9 @@ func TestFleet_FacetTermsAreAlwaysExactlyOneSelectorTerm(t *testing.T) {
 			TemplateSetFingerprint: "bbbb4444, tag:pci=yes",
 			DaemonVersion:          "1.4.2, tag:x=y",
 		},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	checked := 0
 	for _, g := range v.Groups {
 		for _, f := range g.Facets {
@@ -1593,13 +1596,13 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 	d := renderableDeps()
 	honest := "aaaa111122223333"
 	hostile := honest + ", relay:quarantine=on"
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, PolicyFingerprint: honest},
 		{NodeID: "node-b", Connected: true, PolicyFingerprint: honest},
 		{NodeID: "node-z-hostile", Connected: true, PolicyFingerprint: hostile},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	var pf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Policy fingerprint" {
@@ -1634,7 +1637,7 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 		t.Errorf("the colliding value's row is targetable: %+v", hostileRow)
 	}
 
-	got := buildFleetView(d, d.Fleet.List(), honestRow.Term, "-")
+	got := buildFleetView(d, fleetNodes(d), honestRow.Term, "-")
 	if !got.FilterOK {
 		t.Fatalf("the honest bucket's own term %q was rejected as a filter: %s", honestRow.Term, got.FilterError)
 	}
@@ -1660,15 +1663,15 @@ func TestFleet_ACollidingShortHashDoesNotHijackTheHonestBucket(t *testing.T) {
 // this change removes that accident.
 func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		// Genuine "no templates installed" — the field is simply empty.
 		{NodeID: "node-genuine", Connected: true},
 		// A Node self-reporting the sentinel's own operator-facing words as if
 		// they were a template-set fingerprint.
 		{NodeID: "node-hostile", Connected: true, TemplateSetFingerprint: "none installed"},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	var tf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Template set" {
@@ -1689,8 +1692,8 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 		}
 		hostileRow = &tf.Values[i]
 	}
-	if sum != len(d.Fleet.List()) {
-		t.Errorf("facet counts sum to %d, want %d (one row per Node)", sum, len(d.Fleet.List()))
+	if sum != len(fleetNodes(d)) {
+		t.Errorf("facet counts sum to %d, want %d (one row per Node)", sum, len(fleetNodes(d)))
 	}
 	if sentinelRow == nil || sentinelRow.Count != 1 {
 		t.Fatalf("want exactly one Node in the genuine 'none installed' bucket; got %+v", tf.Values)
@@ -1710,11 +1713,11 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 	// wants to name a fingerprint) is counted as unloadable, unaffected by any
 	// other value reported alongside it.
 	d2 := renderableDeps()
-	d2.Fleet = fakeFleet{nodes: []registry.Node{
+	d2 = withFleet(d2, []registry.Node{
 		{NodeID: "node-a", Connected: true, TemplateSetFingerprint: nodestate.TemplateUnloadable},
 		{NodeID: "node-b", Connected: true, TemplateSetFingerprint: "none installed"},
-	}}
-	v2 := buildFleetView(d2, d2.Fleet.List(), "", "-")
+	}...)
+	v2 := buildFleetView(d2, fleetNodes(d2), "", "-")
 	for i := range v2.Groups[0].Facets {
 		if v2.Groups[0].Facets[i].Title != "Template set" {
 			continue
@@ -1754,13 +1757,13 @@ func TestFleet_ASelfReportedSentinelDoesNotJoinTheSentinelBucket(t *testing.T) {
 // injection. Not named by the issue, but in scope for the same reason.
 func TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, DaemonVersion: "1.4.2"},
 		{NodeID: "node-b", Connected: true, DaemonVersion: "1.4.2"},
 		{NodeID: "node-hostile", Connected: true, DaemonVersion: "1.4.2, tag:x=y"},
-	}}
+	}...)
 
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 	var vf *facet
 	for i := range v.Groups[0].Facets {
 		if v.Groups[0].Facets[i].Title == "Daemon version" {
@@ -1798,10 +1801,10 @@ func TestFleet_DaemonVersionFacetIsGatedLikeTheFingerprints(t *testing.T) {
 // hint at all — the hint is driven by a refusal, never by !Targetable.
 func TestFleet_FacetSaysWhyAValueIsNotALink(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
 		{NodeID: "node-hostile", Connected: true, PolicyFingerprint: "aaaa111122223333, relay:quarantine=on"},
-	}}
+	}...)
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/").Body.String()
 
 	if !strings.Contains(body, `class="fhint"`) {
@@ -1816,10 +1819,10 @@ func TestFleet_FacetSaysWhyAValueIsNotALink(t *testing.T) {
 	}
 
 	clean := renderableDeps()
-	clean.Fleet = fakeFleet{nodes: []registry.Node{
+	clean = withFleet(clean, []registry.Node{
 		{NodeID: "node-a", Connected: true, PolicyFingerprint: "aaaa111122223333"},
 		{NodeID: "node-b", Connected: true, PolicyFingerprint: "aaaa111122223333"},
-	}}
+	}...)
 	cleanBody := get(t, newTestHandler(clean, accounts.RoleAdmin), "/console/").Body.String()
 	if strings.Contains(cleanBody, `class="fhint"`) {
 		t.Error("a clean fixture rendered a facet hint — no value here was refused")
@@ -1832,7 +1835,7 @@ func TestFleet_FacetSaysWhyAValueIsNotALink(t *testing.T) {
 // whose whole chip grammar exists to keep those apart.
 func TestFleet_StateFacetKeepsNamespacesApart(t *testing.T) {
 	d := fleetFixture()
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 
 	var sf *facet
 	for i := range v.Groups[0].Facets {
@@ -1905,10 +1908,10 @@ func TestRegistry_QuarantineIsPinnedToItsValue(t *testing.T) {
 // and specifically the two that must never blur.
 func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "gone", RevokedAt: testNow.Add(-time.Hour)},
-	}}
-	v := buildFleetView(d, d.Fleet.List(), "", "-")
+	}...)
+	v := buildFleetView(d, fleetNodes(d), "", "-")
 
 	var found bool
 	for _, f := range v.Groups[0].Facets {
@@ -1943,7 +1946,7 @@ func TestFleet_RevokedIsDeclaredInTheFacetToo(t *testing.T) {
 // never once exercised.
 func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 	d := fleetFixture()
-	d.Policy = fakePolicy{"node-web-1": policyview.Snapshot{
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": policyview.Snapshot{
 		RawExecEnabled:    true,
 		RawAllowPatterns:  []string{`^/usr/bin/systemctl (status|restart) (nginx|php-fpm)$`},
 		RawDenyPatterns:   []string{`\brm\b`},
@@ -1951,7 +1954,7 @@ func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 		OperationRules:    []policyview.OperationRule{{Name: "service.restart", AllowedArgs: [][]string{{"nginx", "php-fpm"}}}},
 		DenyRules:         []policyview.DenyRule{{Name: "file.read", Args: [][]string{{"/etc/shadow"}}}},
 		PolicyFingerprint: "aaaa111122223333",
-	}}
+	}})
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 
@@ -1996,7 +1999,7 @@ func TestNode_ReportedPolicyComesFromTheDaemonsOwnEngine(t *testing.T) {
 func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 	joined := testNow.Add(-30 * 24 * time.Hour)
 	d := fleetFixture()
-	nodes := d.Fleet.List()
+	nodes := fleetNodes(d)
 	for i := range nodes {
 		if nodes[i].NodeID == "node-web-1" {
 			nodes[i].EnrolledAt = joined
@@ -2005,7 +2008,7 @@ func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 			nodes[i].LastRenewedAt = testNow.Add(-3 * 24 * time.Hour)
 		}
 	}
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 
@@ -2029,7 +2032,7 @@ func TestNode_RecordedCertificateProvenanceRenders(t *testing.T) {
 			nodes[i].CertNotAfter = testNow.Add(-2 * 24 * time.Hour)
 		}
 	}
-	d.Fleet = fakeFleet{nodes: nodes}
+	d = withFleet(d, nodes...)
 	body = get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 	if !strings.Contains(body, "expired 2d ago") {
 		t.Error("a lapsed certificate does not read as expired")

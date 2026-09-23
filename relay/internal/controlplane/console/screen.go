@@ -25,7 +25,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
 // screenFuncs are the template helpers every screen may use.
@@ -310,8 +309,8 @@ func (l *auditLatch) latch(err error) error {
 	return err
 }
 
-func (l *auditLatch) ListNodes(ctx context.Context, p capability.Principal) ([]registry.Node, error) {
-	ns, err := l.QueryReader.ListNodes(ctx, p)
+func (l *auditLatch) ListNodes(ctx context.Context, p capability.Principal, selector string) (capability.NodeListing, error) {
+	ns, err := l.QueryReader.ListNodes(ctx, p, selector)
 	return ns, l.latch(err)
 }
 

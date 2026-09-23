@@ -1,6 +1,6 @@
 # Query
 
-**Status:** designed, not built, as of `2026-09-21`.
+**Status:** designed, not built, as of `2026-09-23`.
 **Claim prefix:** `QRY`
 
 ## Purpose
@@ -97,6 +97,11 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   read the registry and the display-only caches through their own narrow readers, and the
   Console Compare screen and Node-detail Policy panel read directly. Only the Compare screen is
   unrecorded. This is the invariant-10 gap in `AGENTS.md` (#680); QRY-28 closes it.
+- **QRY-28** Every registry, Policy-view and vocabulary read on MCP, the Control API and the
+  Console goes through the capability read lane, is recorded before content is returned, and
+  fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors
+  itself, and the Compare screen's exemption is gone (#680). Retires QRY-18, the Compare-screen
+  exception in QRY-16 and the Control API qualifier in QRY-17.
 
 ## Refusals
 
@@ -118,6 +123,12 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-24** No query surface can set Labels, modify Policy, load Templates, refresh a daemon
   snapshot, issue a Policy verdict or dispatch an Operation: each adapter's structural guard
   forbids the write and dispatch seams, and the read seams expose reads alone.
+- **QRY-26** `list_operations` with a well-formed Node ID not in the registry is refused as "no
+  such Node", and the refused read is recorded with the probed ID, exactly as `describe_node`
+  does (#680). Retires the `list_operations` sentence of QRY-21 and the `list_operations`
+  exception in QRY-16.
+- **QRY-27** MCP `describe_node` refuses a missing or oversized Node ID before recording
+  anything, as the capability read lane does (#680). Retires the MCP sentence of QRY-22.
 
 ## Governing ADRs and invariants
 
@@ -173,13 +184,16 @@ proto gates.
 | QRY-13 | `TestMCP_ListOperations` | MCP |
 | QRY-15 | `TestMCP_RequiresCredential` | MCP |
 | QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestDescribeNode_RecordsTheNodeItWasAimedAt` | capability |
-| QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink` | capability |
+| QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | capability, API |
 | QRY-19 | `TestMCP_RequiresCredential`, `TestConsole_UnauthenticatedIsRefused` | MCP, Console |
 | QRY-20 | `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_TagSelectorIsRefusedNotEmpty` | MCP |
 | QRY-21 | `TestDescribeNode_RecordsAProbeForAMissingNode` | capability |
 | QRY-22 | `TestDescribeNode_BoundsTheNodeIdBeforeRecordingIt` | capability |
 | QRY-23 | `TestMCP_DescribeNode` | MCP |
 | QRY-24 | `TestNoDispatchConstruction`, `TestConsole_NoDispatchOutsideCapabilityLayer` | compile-time |
+| QRY-26 | `TestListOperations_RefusesAnUnknownNodeAndRecordsTheProbe`, `TestMCP_ListOperations_UnknownNodeIsRefusedNotAnEmptyVocabulary` | capability, MCP |
+| QRY-27 | `TestMCP_DescribeNode_BoundsTheNodeIdBeforeRecordingIt` | MCP |
+| QRY-28 | `TestDispatchViolations_Fixtures` (MCP, API, Console), `TestNoDispatchConstruction`, `TestConsole_NoDispatchOutsideCapabilityLayer`, `TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache`, `TestMCP_ReadToolsRecordThroughTheRealLane`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded`, `TestCompare_RecordsOneReadPerPinnedNode`, `TestMCP_ListNodes_SelectorIsResolvedByTheLane` | compile-time, MCP, API, Console |
 
 Claims with **no row**, and so nothing checking them:
 
@@ -191,8 +205,6 @@ Claims with **no row**, and so nothing checking them:
 - **QRY-14** — a statement of absence on the Console.
 - **QRY-15**, Control API and Console halves — the `viewer` floor is exercised per route, not
   asserted as cross-surface parity.
-- **QRY-17**, Control API half — the Node read audits before the registry and refuses on
-  failure, but no test drives it, and a nil auditor is a silent pass-through.
 - **QRY-21**, `list_operations` half, and **QRY-22**, MCP half — statements of what is missing.
 - **QRY-18** — four direct readers; a statement of what is missing, closed by QRY-28.
 
@@ -209,9 +221,6 @@ Claims with **no row**, and so nothing checking them:
 | Claim | Statement | Milestone |
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | v0.8.1 — Read and Preflight Wire Contract |
-| QRY-26 | `list_operations` with a well-formed Node ID not in the registry is refused as "no such Node", and the refused read is recorded with the probed ID, exactly as `describe_node` does (#680). Retires the `list_operations` sentence of QRY-21 and the `list_operations` exception in QRY-16. | v1.0.0 — Production Release |
-| QRY-27 | MCP `describe_node` refuses a missing or oversized Node ID before recording anything, as the capability read lane does (#680). Retires the MCP sentence of QRY-22. | v1.0.0 — Production Release |
-| QRY-28 | Every registry, Policy-view and vocabulary read on MCP, the Control API and the Console goes through the capability read lane, is recorded before content is returned, and fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors itself, and the Compare screen's exemption is gone (#680). Retires QRY-18, the Compare-screen exception in QRY-16 and the Control API qualifier in QRY-17. | v1.0.0 — Production Release |
 
 ## Out of scope
 
@@ -262,6 +271,14 @@ returns peer counts and that every MCP read records its target; QRY-5, QRY-21, Q
 
 ## History
 
+- `2026-09-23` — QRY-26, QRY-27 and QRY-28 promoted from *Designed, not built*: `list_operations`
+  and MCP `describe_node` now refuse an unknown/missing/oversized Node ID before recording
+  anything, and every registry, Policy-view and vocabulary read on MCP, the Control API and the
+  Console goes through the capability read lane. QRY-17's Control API half gained a proof row
+  (`TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded`). The Designed rows' own retirement
+  language (of QRY-16, QRY-17, QRY-18, QRY-21, QRY-22) was carried over verbatim but not yet
+  acted on — those claims still describe the pre-#680 readers and are now stale; a human
+  reconciles them. QRY-25 remains Designed. (#680)
 - `2026-09-22` — QRY-26 and QRY-27 re-sequenced from v0.8.1 to v1.0.0, to land with QRY-28
   (owner ruling). Closing the invariant-10 gap means the adapters call the capability read lane,
   and the lane bounds a Node ID before it records anything, so QRY-27 arrives by construction and

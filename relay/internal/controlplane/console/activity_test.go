@@ -26,7 +26,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
@@ -926,8 +925,8 @@ type endlessQueries struct {
 
 // The registry half of the lane, unused by this fixture: Activity reads the
 // trail, never the fleet. Present only to satisfy QueryReader.
-func (q *endlessQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
-	return nil, nil
+func (q *endlessQueries) ListNodes(context.Context, capability.Principal, string) (capability.NodeListing, error) {
+	return capability.NodeListing{}, nil
 }
 
 func (q *endlessQueries) DescribeNode(context.Context, capability.Principal, string) (capability.NodeDetail, error) {
@@ -1035,8 +1034,8 @@ type scriptedQueries struct {
 }
 
 // The registry half of the lane, unused by this fixture (see endlessQueries).
-func (q *scriptedQueries) ListNodes(context.Context, capability.Principal) ([]registry.Node, error) {
-	return nil, nil
+func (q *scriptedQueries) ListNodes(context.Context, capability.Principal, string) (capability.NodeListing, error) {
+	return capability.NodeListing{}, nil
 }
 
 func (q *scriptedQueries) DescribeNode(context.Context, capability.Principal, string) (capability.NodeDetail, error) {

@@ -372,27 +372,24 @@ func buildNodeView(d Deps, r *http.Request, detail capability.NodeDetail, role a
 	// honest.
 	v.PolicyShared, v.TemplateShared = detail.PolicyPeers, detail.TemplatePeers
 
-	// The reported-Policy panel reads the display-only policyview cache
-	// directly, and that is NOT a second unaudited door: this whole screen is
-	// one describe_node read, recorded above against this Node id, and
-	// ADR-0025 names a Node's Policy as part of exactly what describe_node
-	// discloses. The cache is a Relay-side mirror of what the daemon
-	// reported, keyed by the id already on the record — there is nothing here
-	// the record does not already say was read.
-	if d.Policy != nil {
-		if snap, ok := d.Policy.Get(n.NodeID); ok {
-			v.Policy = &snap
-			v.PolicyReported = true
-			if !snap.ReportedAt.IsZero() {
-				v.PolicyReportedAt = snap.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
-				v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
-			}
-			// A snapshot refreshes on (re)connect and at no other moment, so an
-			// offline Node's panel is the last thing its engine said and cannot
-			// be re-asked. Saying so is the difference between a stale answer
-			// and an answer known to be stale.
-			v.PolicyStale = !n.Connected
+	// The reported-Policy panel arrives with the describe_node result itself
+	// (#680): detail.Policy/detail.PolicyReported are the same lane call
+	// already recorded above against this Node id, not a second door into
+	// the display-only policyview cache. ADR-0025 names a Node's Policy as
+	// part of exactly what describe_node discloses.
+	if detail.PolicyReported {
+		snap := detail.Policy
+		v.Policy = &snap
+		v.PolicyReported = true
+		if !snap.ReportedAt.IsZero() {
+			v.PolicyReportedAt = snap.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
+			v.PolicyReportedAgo = nodestate.Since(snap.ReportedAt, d.now())
 		}
+		// A snapshot refreshes on (re)connect and at no other moment, so an
+		// offline Node's panel is the last thing its engine said and cannot
+		// be re-asked. Saying so is the difference between a stale answer
+		// and an answer known to be stale.
+		v.PolicyStale = !n.Connected
 	}
 
 	if d.Audit != nil {
