@@ -257,12 +257,25 @@ not what you run on every save. On a pull request CI skips the gates a change ca
 toolchain jobs for documentation-only changes, the proto gates when neither `/proto` nor its
 generated code moved (`scripts/ci-changed-paths.sh`); pushes to `main` run everything.
 
-- **Go (relay):** standard `go` toolchain; `gofmt`/`go vet`/`golangci-lint`.
-- **Rust (daemon):** stable toolchain; `cargo fmt`/`cargo clippy -- -D warnings`. Build the
-  daemon for musl when producing release artifacts (small static binary for the fleet).
+- **Go (relay):** `gofmt`/`go vet`/`golangci-lint`, under the toolchain the `Makefile` exports.
+  The version is named once, in `relay/go.mod`'s `go` directive, and the `Makefile` derives
+  `GOTOOLCHAIN` from it so every target runs that toolchain whatever the host's `go` happens to
+  be. Two limits, stated because both have bitten: `GOTOOLCHAIN` re-execs the `go` command and
+  not its sibling binaries, so `gofmt` is invoked out of `go env GOROOT`; and a bare
+  `cd relay && go test ./...` outside `make` is not pinned at all — `internal/version`'s
+  toolchain contract test is what catches that one. `GOTOOLCHAIN=local make <target>` is the
+  one-run escape hatch. Raising the Go version is a decision, not a chore: it is one edit in
+  `relay/go.mod`, and #572 is the open question it waits on.
+- **Rust (daemon):** stable toolchain, with the floor declared as `rust-version` in
+  `daemon/Cargo.toml`; `cargo fmt`/`cargo clippy -- -D warnings`. There is deliberately no
+  `rust-toolchain.toml` — it would override the components and targets CI and the musl Docker
+  build install. Build the daemon for musl when producing release artifacts (small static
+  binary for the fleet).
 - **Proto codegen is version-sensitive.** Run `make proto-tools` before `make proto`: it pins
-  protoc-gen-go v1.36.11, protoc-gen-go-grpc v1.5.1, and buf v1.54.0. Unpinned `@latest`
-  produces a spurious diff that false-positives the proto-drift gate.
+  protoc-gen-go, protoc-gen-go-grpc and buf, at the versions the `proto-tools` target names.
+  Unpinned `@latest` produces a spurious diff that false-positives the proto-drift gate, and so
+  does a second checkout that installed a different version into the shared `GOPATH/bin` — if
+  the gate reports drift you did not cause, re-run `make proto-tools` before believing it.
 - `make test` is hermetic and will not catch real-binary startup bugs. `make verify` includes
   `make test-integration`; run that target on its own when the diff touches Relay startup, the
   composition root, or config defaults and you are not yet ready for a full verify.
