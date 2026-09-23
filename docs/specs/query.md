@@ -143,7 +143,8 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   items below would amend it and land only after that amendment.
 - **ADR-0025** — query access is audited and fails closed when it cannot be recorded (QRY-16,
   QRY-17). The Compare screen's unrecorded read (QRY-18) is a gap against this ADR as well as
-  invariant 10, tracked in #680. Retention and output rules are `audit-and-read-lane.md`'s.
+  invariant 10, and `list_operations` recording no Node ID (QRY-21) is a second shortfall against
+  its "what they aimed it at" rule; both are tracked in #680 and closed by QRY-26 and QRY-28. Retention and output rules are `audit-and-read-lane.md`'s.
 
 ## Seams and proof
 
@@ -208,9 +209,9 @@ Claims with **no row**, and so nothing checking them:
 | Claim | Statement | Milestone |
 |---|---|---|
 | QRY-25 | `list_operations` takes a Selector and reports each Operation reachable across the matched Nodes — description, typed slots and allowed values, risk class, and which Nodes report it; a single Node ID is the one-Node case. Retires the Node-ID-only half of QRY-12 and the vocabulary row in *Performance*. | v0.8.1 — Read and Preflight Wire Contract |
-| QRY-26 | `list_operations` with a well-formed Node ID not in the registry is refused as "no such Node", and the refused read is recorded with the probed ID, exactly as `describe_node` does. Retires the `list_operations` sentence of QRY-21 and the second exception in QRY-16. | v0.8.1 — Read and Preflight Wire Contract |
-| QRY-27 | MCP `describe_node` refuses a missing or oversized Node ID before recording anything, as the capability read lane does. Retires the MCP sentence of QRY-22. | v0.8.1 — Read and Preflight Wire Contract |
-| QRY-28 | Every registry, Policy-view and vocabulary read on MCP, the Control API and the Console goes through the capability read lane, is recorded before content is returned, and fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors itself, and the Compare screen's exemption is gone (#680). Retires QRY-18, the remaining exception in QRY-16 and the Control API qualifier in QRY-17. | v1.0.0 — Production Release |
+| QRY-26 | `list_operations` with a well-formed Node ID not in the registry is refused as "no such Node", and the refused read is recorded with the probed ID, exactly as `describe_node` does (#680). Retires the `list_operations` sentence of QRY-21 and the `list_operations` exception in QRY-16. | v1.0.0 — Production Release |
+| QRY-27 | MCP `describe_node` refuses a missing or oversized Node ID before recording anything, as the capability read lane does (#680). Retires the MCP sentence of QRY-22. | v1.0.0 — Production Release |
+| QRY-28 | Every registry, Policy-view and vocabulary read on MCP, the Control API and the Console goes through the capability read lane, is recorded before content is returned, and fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors itself, and the Compare screen's exemption is gone (#680). Retires QRY-18, the Compare-screen exception in QRY-16 and the Control API qualifier in QRY-17. | v1.0.0 — Production Release |
 
 ## Out of scope
 
@@ -261,6 +262,12 @@ returns peer counts and that every MCP read records its target; QRY-5, QRY-21, Q
 
 ## History
 
+- `2026-09-22` — QRY-26 and QRY-27 re-sequenced from v0.8.1 to v1.0.0, to land with QRY-28
+  (owner ruling). Closing the invariant-10 gap means the adapters call the capability read lane,
+  and the lane bounds a Node ID before it records anything, so QRY-27 arrives by construction and
+  QRY-26 is its `list_operations` counterpart. QRY-25 stays v0.8.1: it changes the
+  `list_operations` wire contract rather than where a read is recorded. QRY-16's two retirement
+  pointers renamed from positional to content-named, since both now land in one milestone. (#680)
 - `2026-09-21` — Migrated to the claim format (QRY-1 … QRY-28; 29 and 30 were drafted as
   Designed and withdrawn to *Future work* before the first commit, so the IDs are unused).
   Owner decisions: the four "decided" items of 2026-09-14 were all unbuilt. Two become Designed —
