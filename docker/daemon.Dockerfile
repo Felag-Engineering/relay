@@ -16,6 +16,10 @@
 # docs/operations/version-stamping.md.
 
 # ---- build stage: compile the relay-daemon (Rust) as a musl static binary -----
+# rust:1 (latest stable) satisfies daemon/Cargo.toml's `rust-version` floor by
+# construction (#667). The one way that can now fail is a stale locally-cached
+# rust:1 older than the MSRV, which cargo reports by name; `docker build --pull`
+# is the fix. CI always pulls fresh.
 FROM rust:1-bookworm AS build
 
 # musl-tools provides the musl linker; add the musl target. build.rs uses
