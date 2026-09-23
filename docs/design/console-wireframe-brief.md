@@ -3,7 +3,21 @@
 > **Expanded by [docs/design/console/](console/) (2026-09-20).** The per-screen specifications
 > there are the live description of each Console screen and supersede the four prompts below
 > where they differ; this brief is kept as the designer-facing origin of the design language.
-> In this note **Plan** means what GLOSSARY.md now calls the **Policy preflight** — the no-execution preview of a dispatch. ADR-0038 gave the word "Plan" to an approved route of execution after this was written; read every "Plan" below as "preflight".
+>
+> **"Plan" below usually means the Policy preflight.** ADR-0038 gave "Plan" to an approved
+> route of execution after this was written, and on 2026-09-20 the owner ruled (#575, D16 in
+> [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)) that the
+> Console's composer says **Preflight**. D16 keeps the word where it means the approved
+> route — verbatim: *the approval object, the Job's Plan block and every "plan hash" keep
+> the word, and the shared Plan renderer keeps its name* — and the wire option is still
+> spelled `plan` until the code follows. So read a "Plan" that means the composer's
+> no-execution preview as **preflight**, and leave the rest. This brief keeps its 2026-08-07
+> wording as the pre-ADR record; the live vocabulary is [docs/design/console/](console/),
+> swept in #663.
+>
+> **A screen prompt pasted into a mockup tool travels without this header:** substitute
+> "Preflight" for "Plan" in the prompt text first, and never ask for a button labelled
+> "Plan" (Screen 4's primary button, below, predates the ruling).
 
 **Status:** designer-facing brief, 2026-08-07. Derived from `ui-advisory.md` (authoritative
 design plan) and ADR-0009/ADR-0020; written as paste-able prompts for mockup generation —

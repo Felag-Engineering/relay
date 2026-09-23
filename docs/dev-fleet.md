@@ -9,8 +9,10 @@ It exists to demo and dogfood the real control path end to end.
 > **DEV-ONLY — no production posture.** This environment ships committed
 > credentials and a fixture Policy for convenience, runs everything on one host,
 > and makes no availability, isolation, or hardening claims. It is **not** a
-> deployment guide. The real deployment story is the future `v0.1.0-beta` install
-> docs. Never reuse the credentials or Policy below anywhere real. The published
+> deployment guide. The real deployment story is
+> [docs/operations/relay-install.md](operations/relay-install.md) and
+> [docs/operations/relay-daemon-install.md](operations/relay-daemon-install.md).
+> Never reuse the credentials or Policy below anywhere real. The published
 > ports (`7654`, `9443`) are bound to `127.0.0.1` only: the control plane accepts
 > a committed dev credential, so exposing it on the LAN would be remote code
 > execution for anyone on your network. For the hardened production posture, see

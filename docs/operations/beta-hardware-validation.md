@@ -57,7 +57,7 @@ ARTIFACT="relay-${VERSION}-x86_64-unknown-linux-gnu"
 BASE="https://github.com/Felag-Engineering/gleipnir-relay/releases/download/v${VERSION}"
 curl -fsSLO "${BASE}/${ARTIFACT}" && curl -fsSLO "${BASE}/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
-sudo install -m 0755 "${ARTIFACT}" /usr/local/sbin/relay
+sudo install -m 0755 "${ARTIFACT}" /usr/local/bin/relay
 relay --version
 ```
 

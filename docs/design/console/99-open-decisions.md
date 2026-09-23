@@ -304,6 +304,13 @@ from "Composer and Plan" to "Composer and Preflight" in the same sweep. The wire
 option `plan` until the code follows (GLOSSARY.md): that spelling is a contract, the label is copy,
 and they are allowed to differ until the contract moves.
 
+**Residual, recorded by the #675 loop on 2026-09-22 — not part of the ruling above:** the two
+pre-ADR design notes that predate it — `docs/design/console-wireframe-brief.md` and
+`docs/design/ui-advisory.md` — were deliberately **not** swept. They are kept as the pre-ADR
+record: rewriting them would make the 2026-08-07 planning session appear to have used a word it
+did not, and a naive sweep would rename the shared Plan renderer and the Plan blocks this ruling
+keeps. Each carries a reader note in its header pointing here instead.
+
 ## Prerequisites that already exist as issues
 
 ### D8. [#397](https://github.com/Felag-Engineering/gleipnir-relay/issues/397) — three route families have no role gate — **RESOLVED: gates landed**

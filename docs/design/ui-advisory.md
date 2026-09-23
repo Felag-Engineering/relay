@@ -3,7 +3,17 @@
 > **Superseded (2026-09-20).** The Console execution surface this brief argued for is decided in
 > [ADR-0026](../adr/0026-admin-console-execution-surface.md), and the live per-screen
 > specification is [docs/design/console/](console/), cited from source; this file's own status
-> line below already records that move. It is kept as the pre-ADR design intent. In this note **Plan** means what GLOSSARY.md now calls the **Policy preflight** — the no-execution preview of a dispatch. ADR-0038 gave the word "Plan" to an approved route of execution after this was written; read every "Plan" below as "preflight".
+> line below already records that move. It is kept as the pre-ADR design intent.
+>
+> **"Plan" below usually means the Policy preflight.** ADR-0038 gave "Plan" to an approved route
+> of execution after this was written, and on 2026-09-20 the owner ruled (#575, D16 in
+> [docs/design/console/99-open-decisions.md](console/99-open-decisions.md)) that the Console's
+> composer says **Preflight**. D16 keeps the word where it means the approved route — verbatim:
+> *the approval object, the Job's Plan block and every "plan hash" keep the word, and the shared
+> Plan renderer keeps its name* — and the wire option is still spelled `plan` until the code
+> follows. So read a "Plan" that means the composer's no-execution preview as **preflight**, and
+> leave the rest; this file keeps its 2026-08-07 wording; the live vocabulary is
+> [docs/design/console/](console/), swept in #663.
 
 **Status:** draft from the 2026-08-07 planning session, for owner ratification. **Amended
 2026-08-24:** the word `outdated` here originally covered Policy-fingerprint drift; it is pinned to
