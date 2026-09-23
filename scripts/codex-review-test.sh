@@ -34,6 +34,22 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 REAL_NODE_DIR="$(dirname "$(command -v node)")"
+# The directories holding the core tools the script under test shells out to. Every case's PATH
+# is built from these plus a stub directory, so a host that keeps node outside /usr/bin still
+# resolves `env`, `git` and friends. Duplicates are dropped; node keeps precedence by ordering.
+CORE_BIN_DIRS=""
+for _tool in env git awk sed cat mktemp rm; do
+  _dir="$(command -v "$_tool" 2>/dev/null)" || {
+    echo "FAIL: $_tool is required to run this suite; the script under test shells out to it" >&2
+    exit 1
+  }
+  _dir="$(dirname "$_dir")"
+  case ":$CORE_BIN_DIRS:" in
+    *":$_dir:"*) ;;
+    *) CORE_BIN_DIRS="${CORE_BIN_DIRS:+$CORE_BIN_DIRS:}$_dir" ;;
+  esac
+done
+unset _tool _dir
 REAL_NODE="$(command -v node)"
 
 WORKDIR="$(mktemp -d)" || { echo "FAIL: mktemp -d failed" >&2; exit 1; }
@@ -245,10 +261,18 @@ capture() {
 # run <env assignments...> -- <script args...>
 # Every stub-facing variable is unset first, so a leftover from an earlier case cannot leak
 # into this one; the caller re-adds exactly what it needs. PATH is deliberately minimal —
-# the STUB_BIN's `codex` plus the real node's own directory — so a real `codex` or a
-# developer's node flags on the host's ambient PATH can never reach the classifier
+# the STUB_BIN's `codex`, the real node's own directory, and CORE_BIN_DIRS — so a real `codex`
+# or a developer's node flags on the host's ambient PATH can never reach the classifier
 # (RELAY_CODEX_MODEL and NODE_OPTIONS are unset for the same reason: a developer's export must
 # not make the default-model case, or the classifier's output, pass or fail spuriously).
+#
+# CORE_BIN_DIRS is not a loosening: the script under test shells out to `env`, `git`, `awk`,
+# `sed`, `cat`, `mktemp` and `rm`, and none of them is a stub-facing surface. It was omitted
+# in the first cut only because node lives in /usr/bin on the author's host, so /usr/bin rode
+# in on REAL_NODE_DIR by accident. On a GitHub runner node is in /usr/local/bin, the script's
+# own `env` call was not found, and every case failed with rc=127 before the stub was ever
+# reached — caught by the precondition below, which is what it exists for. Derived from the
+# tools themselves rather than hardcoded, and node keeps precedence by ordering.
 run() {
   local envs=()
   while [ $# -gt 0 ] && [ "$1" != "--" ]; do
@@ -259,7 +283,7 @@ run() {
   capture env \
     -u STUB_CASE -u STUB_OUT_TEXT -u STUB_ERR_TEXT -u STUB_OUT_FILE -u STUB_ERR_FILE -u STUB_EXIT \
     -u RELAY_CODEX_MODEL -u NODE_OPTIONS \
-    PATH="$STUB_BIN:$REAL_NODE_DIR" HOME="$FAKE_HOME" \
+    PATH="$STUB_BIN:$REAL_NODE_DIR:$CORE_BIN_DIRS" HOME="$FAKE_HOME" \
     STUB_ARGV_LOG="$STUB_ARGV_LOG" STUB_READY="$STUB_READY" STUB_PGID="$STUB_PGID" \
     "${envs[@]}" \
     bash "$SCRIPT" "$@"
@@ -551,7 +575,7 @@ c_terminator=$(grep -c '^codex-review: --- end captured output ---$' "$ERRFILE" 
 # 9 without reading stdin.
 capture env -u STUB_CASE -u STUB_OUT_TEXT -u STUB_ERR_TEXT -u STUB_OUT_FILE -u STUB_ERR_FILE -u STUB_EXIT \
   -u RELAY_CODEX_MODEL -u NODE_OPTIONS -u NODE_PATH \
-  PATH="$BREAK_CLASSIFY_BIN:$REAL_NODE_DIR" HOME="$FAKE_HOME" \
+  PATH="$BREAK_CLASSIFY_BIN:$REAL_NODE_DIR:$CORE_BIN_DIRS" HOME="$FAKE_HOME" \
   STUB_ARGV_LOG="$STUB_ARGV_LOG" STUB_READY="$STUB_READY" STUB_PGID="$STUB_PGID" \
   STUB_CASE=emit STUB_EXIT=0 STUB_OUT_FILE="$PDIR/approve.json" \
   bash "$SCRIPT" diff main
@@ -651,7 +675,7 @@ fi
 
 # case-no-codex-cli: node present (via REAL_NODE_DIR), codex absent.
 capture env -u STUB_CASE -u RELAY_CODEX_MODEL -u NODE_OPTIONS \
-  PATH="$NOCODEX_BIN:$REAL_NODE_DIR" HOME="$FAKE_HOME" \
+  PATH="$NOCODEX_BIN:$REAL_NODE_DIR:$CORE_BIN_DIRS" HOME="$FAKE_HOME" \
   STUB_ARGV_LOG="$STUB_ARGV_LOG" bash "$SCRIPT" diff main
 [ "$RC" -eq 3 ] || echo "FAIL: case-no-codex-cli: rc=$RC want=3" >&2
 check "case-no-codex-cli" 3 exact "" "contains:the plugin, the Codex CLI or node is not installed"
@@ -681,7 +705,7 @@ else
   rm -rf "$c10_tmp"; mkdir -p "$c10_tmp"
   rm -f "$STUB_READY" "$STUB_PGID"
   env -u STUB_CASE -u RELAY_CODEX_MODEL -u NODE_OPTIONS \
-      PATH="$STUB_BIN:$REAL_NODE_DIR" HOME="$FAKE_HOME" TMPDIR="$c10_tmp" \
+      PATH="$STUB_BIN:$REAL_NODE_DIR:$CORE_BIN_DIRS" HOME="$FAKE_HOME" TMPDIR="$c10_tmp" \
       STUB_ARGV_LOG="$STUB_ARGV_LOG" STUB_READY="$STUB_READY" STUB_PGID="$STUB_PGID" \
       STUB_CASE=signal STUB_OUT_TEXT="PARTIAL REPORT MARKER 4711"$'\n' \
       setsid --wait bash "$SCRIPT" diff main >"$OUTFILE" 2>"$ERRFILE" &
