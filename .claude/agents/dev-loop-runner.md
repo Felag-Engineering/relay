@@ -1,6 +1,6 @@
 ---
 name: dev-loop-runner
-description: "Runs the complete /dev-loop pipeline for ONE GitHub issue, unattended, inside its own git worktree: plan, plan review, implement, make verify, Claude and Codex code review, security review when the surface is touched, spec proof update, PR. Launched by /dev-loop-parallel with worktree isolation; never merges."
+description: "Runs the complete /dev-loop pipeline for ONE GitHub issue, unattended, inside its own git worktree: plan, plan review, implement, make verify, Claude code review, security review when the surface is touched, one Codex review of the final diff, spec proof update, PR. Launched by /dev-loop-parallel with worktree isolation; never merges."
 tools: Bash, Read, Edit, Write, Grep, Glob, LSP, Agent
 model: opus
 ---
@@ -43,7 +43,7 @@ Outcome: PR_OPENED | ESCALATED | NO_CHANGES | FAILED
 PR: <url or none>
 Branch: <name or none>
 Verify: <gate and lanes that passed> | skipped lanes: <list or none>
-Reviews: plan <verdict> · code Claude <verdict> / Codex <verdict or absent> · security <verdicts or not run>
+Reviews: plan <verdict> · code Claude <verdict> · security Claude <verdict or not run> · Codex: once, final diff <verdict, or absent (reason=<token>, model <slug>)>
 Spec proof: <promoted IDs, or n/a, or legacy spec>
 Escalations: <one line each, or none>
 ```

@@ -55,11 +55,26 @@ the issue. It edits; it never commits.
 ## Stage 3 — Verify and re-review
 
 `make verify` (full gate; **max 2 fix attempts** via the developer, then escalate). Then
-**use the `devloop-code-reviewer` agent** on the new diff, and `scripts/codex-review.sh diff`;
-if `scripts/security-surface.sh` matches (**exit 2 = the check could not run — treat it
-as a failed gate and escalate, never as clean**), also the `devloop-security-reviewer` and
-`scripts/codex-review.sh security`. Blocking findings go back to Stage 2 once; a second
-failure escalates.
+**use the `devloop-code-reviewer` agent** on the new diff; if `scripts/security-surface.sh`
+matches (**exit 2 = the check could not run — treat it as a failed gate and escalate, never
+as clean**), also the `devloop-security-reviewer`. Blocking findings from either go back to
+Stage 2 once; a second failure escalates.
+
+Then, **at most one** Codex run, after Claude's fixes and before Stage 4's commit:
+`scripts/codex-review.sh security` if the surface matched, else `diff`.
+
+**Guard first:** if nothing is uncommitted after Stage 2 (a question-only comment answered
+without a code change, for instance), **skip the Codex run** and record "Codex: not run — no
+code change to review". Do not run it into the script's empty-working-tree refusal (exit 2)
+and do not treat that as a failed gate — this path is common and legitimate.
+
+Otherwise: **exit 0** → a delivered verdict; blocking findings (severity `critical` or `high`)
+go back to Stage 2 once, a second failure escalates — no second Codex run on a tick. **Exit 3**
+→ absence: record `Codex: absent (reason=<token>, model <slug>)`, single-reviewer, never a
+pass. **Exit 2, exit 1, or any other non-zero** → a failed gate: escalate. If stderr prints
+`codex-review: scope-partial files=<n>`, part of the branch's history was already committed
+before this run and Codex saw only the uncommitted remainder — say which committed files it
+did not see in the PR body's Review responses entry.
 
 ## Stage 4 — Push and reply
 
@@ -68,7 +83,9 @@ Reply in **each** thread you acted on, one or two sentences: what changed and th
 to questions with the answer. Do not resolve threads; the reviewer does.
 
 Append to the PR body under **Review responses**: the date, what was fixed, the gate that
-passed and every lane it covered, both reviewers' verdicts, and anything escalated.
+passed and every lane it covered, Claude's verdicts, and "Codex: once, after the fixes —
+`<verdict>`, or absent (`reason=<token>`, model `<slug>`), or not run (no code change)", and
+anything escalated.
 
 ## Stage 5 — Escalate, or finish
 

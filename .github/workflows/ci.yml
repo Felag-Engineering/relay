@@ -76,9 +76,9 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-demo-fleet
 
-      # scripts/codex-review.sh's absent-vs-failed classifier, proved against a stubbed
-      # companion (#620). Shell + git only — no node, no Codex — so it runs here beside the
-      # other two guard self-tests rather than in a toolchain job.
+      # scripts/codex-review.sh's structural verdict classifier, proved against a stubbed
+      # companion (#694). Shell, git and node — the stub companion is a Node program and the
+      # gate's classifier parses JSON with node. No Codex CLI, no network.
       - name: Codex-review gate self-test
         if: ${{ !cancelled() }}
         run: make test-codex-review

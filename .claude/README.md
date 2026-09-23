@@ -34,9 +34,9 @@ tool and no `AskUserQuestion`; the interactive ones (`spec-author`, `design`, `d
 needs — reviewers cannot edit, the developer cannot commit, the proof updater can edit only a
 spec's evidence rows.
 
-Codex is the second reviewer on the design, code and security gates, reached through
-`scripts/codex-review.sh`, read-only. When the plugin is absent the gate runs single-vendor and
-says so.
+Codex is the second reviewer on the design gate and once per issue on the final diff, reached
+through `scripts/codex-review.sh`, read-only. When it returns no structured verdict the gate
+runs single-vendor and says so, with the reason and the model.
 
 ## Repo-specific configuration
 

@@ -1,0 +1,24 @@
+{
+  "review": "Adversarial Review",
+  "target": {
+    "mode": "working-tree",
+    "label": "working tree diff",
+    "explicit": true
+  },
+  "threadId": "01a0ce4c-b9dd-7ca0-ab49-6842b9b20873",
+  "context": {
+    "repoRoot": "/home/mrapp/felag/gleipnir-relay/.claude/worktrees/agent-a06660ce3b68775be",
+    "branch": "loop/issue-694-codex-review-structured-json",
+    "summary": "Reviewing 0 staged, 0 unstaged, and 1 untracked file(s)."
+  },
+  "codex": {
+    "status": 1,
+    "stderr": "",
+    "stdout": "",
+    "reasoning": []
+  },
+  "result": null,
+  "rawOutput": "",
+  "parseError": "You've hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Sep 28th, 2026 6:19 PM.",
+  "reasoningSummary": []
+}

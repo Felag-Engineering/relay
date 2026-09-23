@@ -83,24 +83,45 @@ writes any artifact in the first two rows, and stops rather than guessing.
 
 ## Reviewers
 
-Two vendors sit on the gates where a second model pays for itself, because it has different
-blind spots and the value of a review is in what the author did not see:
+Two vendors sit where a second model pays for itself, because it has different blind spots and
+the value of a review is in what the author did not see — and because the Codex allowance is
+plan quota rather than API spend, not every gate, every cycle: Codex is spent once per issue,
+on the finished change.
 
 | Gate | Claude | Codex |
 |---|---|---|
-| Spec conflicts | `spec-conflict-reviewer` | — (docs-only; one reviewer is enough) |
-| Design | `design-reviewer` | `scripts/codex-review.sh design` |
-| Issue plan | `devloop-plan-reviewer` | — (caught again at code review, where both run) |
-| Code | `devloop-code-reviewer` | `scripts/codex-review.sh diff` |
-| Security surface | `devloop-security-reviewer` | `scripts/codex-review.sh security` |
+| Spec conflicts | `spec-conflict-reviewer` | — |
+| Design | `design-reviewer` | `scripts/codex-review.sh design` — once per plan |
+| Issue plan | `devloop-plan-reviewer` | — |
+| Code | `devloop-code-reviewer` | — (Claude alone, every cycle) |
+| Security surface | `devloop-security-reviewer` | — (Claude alone, every cycle) |
+| Final diff, once per issue | — | `scripts/codex-review.sh diff`, or `security` when the surface is touched |
 
-Findings from both are merged and deduplicated by the coordinator. The developer fixes or
-justifies each one; a finding neither fixed nor justified goes into the PR body under
-**Unresolved**, and the PR is labelled `loop:needs-human`. Codex is a reviewer only. It never
-implements, and its absence downgrades a gate to one reviewer, which the PR body must say.
-An exhausted usage quota and a rejected credential are forms of absence: `scripts/codex-review.sh`
-exits 3 for both, and the PR body must say the gate ran with one reviewer. Any other non-zero exit
-is a failed review, not an absence — it is escalated, and never recorded as a single-reviewer gate.
+Five or six Codex runs per issue — the plan review, each code-review cycle, the security
+review, and `/pr-respond`'s re-review — exhausted the ChatGPT-plan quota in one night (#694).
+Claude alone does the plan review and every fix cycle. Codex runs ONCE per issue, on the final
+diff, BEFORE the commit: its review scope is the uncommitted working tree, so a run after the
+commit would review an empty diff. A blocking finding buys one fix cycle and one further Codex
+run, then the issue escalates. `/pr-respond` gets at most one Codex run after its fixes. Model
+`gpt-5.6-terra` by default, overridable per run with `RELAY_CODEX_MODEL`.
+
+Claude's findings are worked to a close first; Codex's single review arrives afterwards, at its
+own stage, and its findings are merged into the same record. The developer fixes or justifies
+each one; a finding neither fixed nor justified goes into the PR body under **Unresolved**, and
+the PR is labelled `loop:needs-human`. Codex is a reviewer only. It never implements, and
+because it now sits on only one gate per issue, its absence leaves the WHOLE ISSUE
+single-vendor, not one gate of several — the PR body must say so.
+
+Absence is anything that is not a structured verdict — an exhausted usage quota and a rejected
+credential both land there — decided on the parsed payload, never on message text:
+`scripts/codex-review.sh` exits 3 for all of them. Exit 2 (the script refused before ever
+invoking Codex) and exit 1 (a killed run, or a failed classifier) are failures: escalate, never
+record as a single-reviewer gate. A recorded absence must carry the script's structural reason
+token and the model (`Codex: absent (reason=<token>, model <slug>)`): the token NARROWS the
+cause without fully distinguishing it — `reason=no-result` covers both a transient quota
+exhaustion and a permanent misconfiguration such as a rejected model slug, and only the
+script's own stderr replay, never quoted into anything durable, says which. A blocking Codex
+finding is severity `critical` or `high` in the plugin's output schema.
 
 ## The security surface
 
