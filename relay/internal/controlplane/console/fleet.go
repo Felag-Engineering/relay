@@ -406,7 +406,7 @@ func handleFleet(d Deps) http.HandlerFunc {
 		//
 		// Fail closed, with no exception for this screen or any other: a
 		// Console page whose read cannot be audited refuses to render.
-		nodes, err := d.Queries.ListNodes(r.Context(), caller)
+		listing, err := d.Queries.ListNodes(r.Context(), caller, "")
 		if err != nil {
 			readFailed(w, err, "this Relay's Node registry")
 			return
@@ -414,6 +414,11 @@ func handleFleet(d Deps) http.HandlerFunc {
 		if refusedUnaudited(w, lane, "this Relay's Node registry") {
 			return
 		}
+		// listing.Nodes may be a NIL slice when the whole fleet is empty —
+		// buildFleetView and knownIn both range over it, so both already
+		// tolerate that; stated here so the next reader does not have to
+		// re-derive it (#680).
+		nodes := listing.Nodes
 
 		// An empty registry is not an empty table. Spec 10: a Console with zero
 		// Nodes is a distinct screen with a distinct job — it is watching for

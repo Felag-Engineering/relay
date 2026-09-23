@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -55,9 +56,9 @@ func policyPanelOf(body string) string {
 // criterion exists to prevent.
 func TestNode_PolicyPanelCarriesTheReceiptTime(t *testing.T) {
 	d := fleetFixture()
-	d.Policy = fakePolicy{"node-web-1": reportedSnapshot(policyview.Snapshot{
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
 		AllowedOperations: []string{"service.restart"},
-	}, testNow.Add(-90*time.Second))}
+	}, testNow.Add(-90*time.Second))})
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String()
 	panel := policyPanelOf(body)
@@ -89,7 +90,7 @@ func TestNode_PolicyPanelCarriesTheReceiptTime(t *testing.T) {
 // rendered absolutely is a Policy read in 1970.
 func TestNode_PolicyPanelWithNoReceiptTimeSaysSo(t *testing.T) {
 	d := fleetFixture()
-	d.Policy = fakePolicy{"node-web-1": {AllowedOperations: []string{"service.restart"}}}
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": {AllowedOperations: []string{"service.restart"}}})
 
 	panel := policyPanelOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-web-1").Body.String())
 
@@ -106,9 +107,9 @@ func TestNode_PolicyPanelWithNoReceiptTimeSaysSo(t *testing.T) {
 // re-ask it, rather than presenting a stale answer as a live one.
 func TestNode_OfflineNodePolicyCannotBeRefreshed(t *testing.T) {
 	d := fleetFixture() // node-db-1 is the fixture's offline Node.
-	d.Policy = fakePolicy{"node-db-1": reportedSnapshot(policyview.Snapshot{
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-db-1": reportedSnapshot(policyview.Snapshot{
 		AllowedOperations: []string{"system.facts"},
-	}, testNow.Add(-2*time.Hour))}
+	}, testNow.Add(-2*time.Hour))})
 
 	panel := policyPanelOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-db-1").Body.String())
 
@@ -122,19 +123,19 @@ func TestNode_OfflineNodePolicyCannotBeRefreshed(t *testing.T) {
 		t.Error("an offline Node's Policy panel dropped the rules it had been told")
 	}
 	// A connected Node must not carry the claim.
-	live := policyPanelOf(get(t, newTestHandler(withPolicy(d, "node-web-1"), accounts.RoleAdmin),
+	live := policyPanelOf(get(t, newTestHandler(withNodePolicy(d, "node-web-1"), accounts.RoleAdmin),
 		"/console/nodes/node-web-1").Body.String())
 	if strings.Contains(live, "cannot be refreshed") {
 		t.Error("a connected Node's Policy panel claims it cannot be refreshed")
 	}
 }
 
-// withPolicy wires a reported Snapshot for nodeID onto d.
-func withPolicy(d Deps, nodeID string) Deps {
-	d.Policy = fakePolicy{nodeID: reportedSnapshot(policyview.Snapshot{
+// withNodePolicy wires a reported Snapshot for nodeID onto d, over the
+// shared withPolicy fixture helper (fakes_test.go, #680).
+func withNodePolicy(d Deps, nodeID string) Deps {
+	return withPolicy(d, map[string]policyview.Snapshot{nodeID: reportedSnapshot(policyview.Snapshot{
 		AllowedOperations: []string{"system.facts"},
-	}, testNow.Add(-time.Minute))}
-	return d
+	}, testNow.Add(-time.Minute))})
 }
 
 // TestNode_IsStructurallyReadOnly is the rendered half of "read-only
@@ -146,10 +147,10 @@ func withPolicy(d Deps, nodeID string) Deps {
 // and the route walk below are the other three halves.
 func TestNode_IsStructurallyReadOnly(t *testing.T) {
 	d := fleetFixture()
-	d.Policy = fakePolicy{"node-web-1": reportedSnapshot(policyview.Snapshot{
+	d = withPolicy(d, map[string]policyview.Snapshot{"node-web-1": reportedSnapshot(policyview.Snapshot{
 		RawExecEnabled:    true,
 		AllowedOperations: []string{"service.restart"},
-	}, testNow.Add(-time.Minute))}
+	}, testNow.Add(-time.Minute))})
 	h := newTestHandler(withExecution(d, true), accounts.RoleAdmin)
 
 	for _, path := range []string{
@@ -190,7 +191,7 @@ func TestNode_NoRouteUnderThisScreenMutates(t *testing.T) {
 // advertises as targetable is the wrong place to discover that.
 func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{
 			NodeID: "node-ok", Connected: true,
 			PolicyFingerprint:      "aaaa111122223333",
@@ -202,7 +203,7 @@ func TestNode_FingerprintLinksTargetTheSameValueAsASelector(t *testing.T) {
 			NodeID: "node-hostile", Connected: true,
 			PolicyFingerprint: "aaaa1111, tag:pci=yes",
 		},
-	}}
+	}...)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	body := get(t, h, "/console/nodes/node-ok").Body.String()
@@ -284,7 +285,7 @@ func TestNode_RunHereFollowsTheExecutionFlagAndTheRole(t *testing.T) {
 func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 	revoked := registry.Node{NodeID: "node-gone", RevokedAt: testNow.Add(-time.Hour)}
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{revoked}}
+	d = withFleet(d, []registry.Node{revoked}...)
 
 	// The revoke record is the OLDEST of many: a Node with more later records
 	// than the recent-Task window holds must not lose the one act that
@@ -359,10 +360,10 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 // two Nodes to compare.
 func TestNode_PinIsCarriedInTheUrlAndCapsAtThree(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "n1", Connected: true}, {NodeID: "n2", Connected: true},
 		{NodeID: "n3", Connected: true}, {NodeID: "n4", Connected: true},
-	}}
+	}...)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	unpinned := get(t, h, "/console/nodes/n1").Body.String()
@@ -413,9 +414,9 @@ func TestNode_PinIsCarriedInTheUrlAndCapsAtThree(t *testing.T) {
 // draws it, rather than on the one that happened to be wrong.
 func TestPin_BarIsOneComponentAndAlwaysCarriesTheSetOnward(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "n1", Connected: true}, {NodeID: "n2", Connected: true}, {NodeID: "n3", Connected: true},
-	}}
+	}...)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	for _, c := range []struct {
@@ -451,7 +452,7 @@ func TestPin_BarIsOneComponentAndAlwaysCarriesTheSetOnward(t *testing.T) {
 // machine that exists, on any screen that draws the bar.
 func TestPin_UnresolvableIdIsNotDrawnAsANode(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{{NodeID: "n1", Connected: true}}}
+	d = withFleet(d, []registry.Node{{NodeID: "n1", Connected: true}}...)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	for _, path := range []string{
@@ -508,22 +509,24 @@ func TestParsePins_CapsAsItReadsRatherThanAfterwards(t *testing.T) {
 // surface" line: it resolves the ids it was named, one at a time, and never
 // asks the registry for the fleet.
 func TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet(t *testing.T) {
-	lists := 0
 	nodes := []registry.Node{
 		{NodeID: "n1", Connected: true}, {NodeID: "n2", Connected: true},
 		{NodeID: "n-unasked", Connected: true},
 	}
 	d := renderableDeps()
-	d.Fleet = countingFleet{fakeFleet: fakeFleet{nodes: nodes}, lists: &lists}
-	// Seeded explicitly so mirrorFleetIntoLane does not enumerate on the
-	// fixture's behalf and spend the very call this test counts.
-	d.Queries = &fakeQueries{nodes: nodes}
+	q := &fakeQueries{nodes: nodes}
+	d.Queries = q
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
 
-	if lists != 0 {
-		t.Errorf("the comparison called FleetReader.List %d times — an enumerating comparison "+
-			"is a fleet surface, and this one may not become one", lists)
+	if q.listNodeCalls != 0 {
+		t.Errorf("the comparison called ListNodes %d times — an enumerating comparison "+
+			"is a fleet surface, and this one may not become one", q.listNodeCalls)
+	}
+	wantDescribed := []string{"n1", "n2"}
+	if !reflect.DeepEqual(q.describedNodes, wantDescribed) {
+		t.Errorf("describedNodes = %v, want exactly the pinned ids %v — one describe_node record "+
+			"per pinned Node, nothing else", q.describedNodes, wantDescribed)
 	}
 	if strings.Contains(body, "n-unasked") {
 		t.Error("a Node in the registry but not in ?nodes= appeared in the comparison")
@@ -536,11 +539,11 @@ func TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet(t *testing
 // happens in the daemon's engine.
 func TestCompare_MarksDifferencesAndNeverAdjudicatesThem(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "n1", Connected: true, PolicyFingerprint: "aaaa1111"},
 		{NodeID: "n2", Connected: true, PolicyFingerprint: "bbbb2222"},
-	}}
-	d.Policy = fakePolicy{
+	}...)
+	d = withPolicy(d, map[string]policyview.Snapshot{
 		"n1": reportedSnapshot(policyview.Snapshot{
 			RawExecEnabled:    true,
 			AllowedOperations: []string{"service.restart", "system.facts"},
@@ -549,7 +552,7 @@ func TestCompare_MarksDifferencesAndNeverAdjudicatesThem(t *testing.T) {
 		"n2": reportedSnapshot(policyview.Snapshot{
 			AllowedOperations: []string{"service.restart", "system.facts"},
 		}, testNow.Add(-time.Minute)),
-	}
+	})
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
 
@@ -583,10 +586,10 @@ func TestCompare_MarksDifferencesAndNeverAdjudicatesThem(t *testing.T) {
 // screen has to say which of the two it is.
 func TestCompare_NothingReportedIsNotAgreement(t *testing.T) {
 	d := renderableDeps() // no policyview wired at all: a legal Deps.
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "n1", Connected: true, PolicyFingerprint: "aaaa1111"},
 		{NodeID: "n2", Connected: true, PolicyFingerprint: "aaaa1111"},
-	}}
+	}...)
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
 
@@ -611,7 +614,7 @@ func TestCompare_NothingReportedIsNotAgreement(t *testing.T) {
 // whatever the screen is called.
 func TestCompare_RendersNoFact(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{
+	d = withFleet(d, []registry.Node{
 		{NodeID: "n1", Connected: true, Facts: registry.Facts{
 			Hostname: "web-1", OS: "debian", Kernel: "6.1.0", Arch: "x86_64",
 			IPAddresses: []string{"10.0.0.1"},
@@ -620,7 +623,7 @@ func TestCompare_RendersNoFact(t *testing.T) {
 			Hostname: "web-2", OS: "alpine", Kernel: "5.15.0", Arch: "aarch64",
 			IPAddresses: []string{"10.0.0.2"},
 		}},
-	}}
+	}...)
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/compare?nodes=n1,n2").Body.String()
 
@@ -647,7 +650,7 @@ func TestCompare_RendersNoFact(t *testing.T) {
 // that was never enrolled look the same from here, and both are answers.
 func TestCompare_OneNodeAsksForASecondRatherThanRenderingHalfATable(t *testing.T) {
 	d := renderableDeps()
-	d.Fleet = fakeFleet{nodes: []registry.Node{{NodeID: "n1", Connected: true}}}
+	d = withFleet(d, []registry.Node{{NodeID: "n1", Connected: true}}...)
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	one := get(t, h, "/console/compare?nodes=n1").Body.String()

@@ -86,20 +86,14 @@ type Deps struct {
 	// fleet ("you have no Nodes"), and a Console that makes it because nobody
 	// wired the registry has lied about something an operator will act on.
 	//
-	// Fleet and Policy are the UNAUDITED registry doors, and they are down to
-	// one screen: #450 moved the fleet listing and node detail onto Queries,
-	// whose reads are audited by construction (ADR-0025), and the comparison
-	// screen is what still reads these. A NEW screen must not reach for them —
-	// read through Queries — and read_audit_test.go is what makes that choice
-	// visible rather than silent. Node detail still reads Policy for its
-	// reported-Policy panel, which is covered by the describe_node record it
-	// already wrote for that Node.
+	// Every registry and Policy-view read is Deps.Queries now (#680, QRY-28):
+	// the Compare screen and the Node-detail Policy panel ask through
+	// DescribeNode, the same audited door the fleet listing and node detail
+	// have used since #450. There is no unaudited registry door left.
 	//
 	// Audit is down to one screen too: #542 moved agent history onto Queries,
 	// leaving node detail's Recent Tasks panel and its node_revoke lookup as
 	// the only reader of the whole trail through this seam.
-	Fleet     FleetReader
-	Policy    PolicyReader
 	Audit     AuditReader
 	Approvals ApprovalReader
 	Freeze    FreezeReader
@@ -124,16 +118,16 @@ type Deps struct {
 	//
 	// It is THE audited door. Every method on it writes the read's own access
 	// record before it answers and fails closed when it cannot (ADR-0025),
-	// which is why a screen that reads fleet or trail data asks here and never
-	// through Fleet/Policy/Audit above.
+	// which is why a screen that reads fleet, Policy or trail data asks here
+	// and nowhere else (#680).
 	Queries QueryReader
 
 	// Accounts is the Account registry and its API Tokens, read-only
 	// (#654, seams.go). It is satisfied by the same *capability.Service as
-	// Queries above, and it is deliberately NOT inside the Fleet/Policy/Audit
-	// block: that comment is about the last unaudited REGISTRY doors and says
-	// a new screen must not reach for them, and this seam must not read as
-	// having inherited that permission by sitting next to it.
+	// Queries above, and it is deliberately NOT the same field: that comment
+	// is about the registry/Policy-view door and says a new screen asks
+	// there, and this seam must not read as having inherited that permission
+	// by sitting next to it.
 	//
 	// It is, though, a FOURTH door whose successful reads record nothing.
 	// ControlAccountRead and ControlAPITokenRead are authorized and answered

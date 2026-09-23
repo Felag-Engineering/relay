@@ -888,6 +888,19 @@ func TestCapabilityImportsOnlyRegistryAndJobs(t *testing.T) {
 		// imports (crypto/*, encoding/*, golang.org/x/crypto/argon2, ...) are
 		// not this package's direct imports and so do not need entries here.
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts": true,
+		// internal/policyview and internal/nodevocab joined with #680, on
+		// exactly the terms approval, mcptask, nodestate and accounts were
+		// admitted: proto-free, SQL-free, stdlib-only domain mirrors, each
+		// guarded by its own import test (policyview.TestPolicyViewImportsStayNarrow,
+		// nodevocab.TestNodeVocabImportsStayNarrow). Admitted so the Policy
+		// view and the Template vocabulary have ONE definition rather than a
+		// mirrored copy here that can disagree with the cache it describes —
+		// the accounts rationale, applied again. Both are DISPLAY-ONLY
+		// caches with no evaluation surface (Get only; Set stays out of this
+		// package's reach), so admitting them cannot become a Relay-side
+		// Policy decision (invariant 12, ADR-0011).
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview": true,
+		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab":  true,
 	}
 	forbidden := map[string]bool{
 		"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1": true,

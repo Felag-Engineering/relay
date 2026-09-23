@@ -443,7 +443,11 @@ func TestConsole_EveryScriptAScreenLoadsIsActuallyServed(t *testing.T) {
 	// an unwired sweep would walk right past the thing this test is for.
 	d.Events = newFakeEvents()
 	d.Trust = fakeTrust{ca: testCAFingerprint, server: testServerFingerprint}
-	d.Queries = &fakeQueries{}
+	// nodes is carried forward from fleetFixture's fleet (#680): this literal
+	// REPLACES d.Queries rather than extending it.
+	d.Queries = &fakeQueries{
+		nodes: fleetNodes(d),
+	}
 	h := newTestHandler(d, accounts.RoleAdmin)
 
 	paths := walkableScreens(Routes(d), fixtureIDs)

@@ -85,6 +85,14 @@ type Service struct {
 	auditQ AuditQuery
 	jobQ   JobQuery
 
+	// policyView and nodeVocab are the DISPLAY-ONLY Policy-view and Template-
+	// vocabulary reads (#680, seams.go). Both nil by default: DescribeNode
+	// and ListOperations report *Reported=false for a nil seam rather than an
+	// empty Policy or vocabulary — absence is never rendered as "nothing
+	// restricted" (QRY-7).
+	policyView PolicyViewSource
+	nodeVocab  TemplateVocabularySource
+
 	// now and newApprovalID are seams so tests get deterministic parks.
 	now           func() time.Time
 	newApprovalID idGen
@@ -247,6 +255,29 @@ func WithQueries(audit AuditQuery, job JobQuery) Option {
 		s.auditQ = audit
 		s.jobQ = job
 	}
+}
+
+// WithPolicyView wires the DISPLAY-ONLY Policy-view read (#680): source is
+// typically a *policyview.Cache, narrowed to Get only. Absence (the default)
+// is the honest state of a Relay that has just restarted, before any Node
+// reconnects — DescribeNode reports PolicyReported=false, never an empty
+// Policy (QRY-7).
+func WithPolicyView(source PolicyViewSource) Option {
+	if source == nil {
+		panic("capability: WithPolicyView: source must not be nil")
+	}
+	return func(s *Service) { s.policyView = source }
+}
+
+// WithTemplateVocabulary wires the DISPLAY-ONLY Template-vocabulary read
+// (#680): source is typically a *nodevocab.Cache, narrowed to Get only.
+// Absence (the default) means DescribeNode and ListOperations report
+// Reported=false rather than an empty vocabulary.
+func WithTemplateVocabulary(source TemplateVocabularySource) Option {
+	if source == nil {
+		panic("capability: WithTemplateVocabulary: source must not be nil")
+	}
+	return func(s *Service) { s.nodeVocab = source }
 }
 
 // WithAccountAdmin wires Account and API-Token administration (#653,

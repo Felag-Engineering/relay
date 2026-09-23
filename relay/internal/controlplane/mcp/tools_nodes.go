@@ -2,8 +2,8 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -168,12 +168,11 @@ type describeNodeInput struct {
 	NodeID string `json:"node_id" jsonschema:"exact Node ID to describe"`
 }
 
-// registerNodeTools registers list_nodes and describe_node on srv. now and
-// certExpiringWithin build the capability.StateEval each tool call resolves
-// its Selector and renders state_labels against — ONE instant, ONE
-// cert-expiring window per response, so a Node's rendered labels can never
-// disagree with whether it matched the request's own filter.
-func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader, vocab VocabReader, reads ReadAuditor, now func() time.Time, certExpiringWithin time.Duration) {
+// registerNodeTools registers list_nodes and describe_node on srv, both
+// backed by lane — the capability read lane (#680, QRY-28): the record and
+// the read are the same call, so neither tool can reach the registry without
+// it.
+func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_nodes",
 		Description: "List Nodes in the fleet registry, optionally filtered by a Selector " +
@@ -183,29 +182,29 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"the Relay's configured minimum daemon version (ADR-0014); always false when no " +
 			"minimum is set.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listNodesInput) (*sdkmcp.CallToolResult, ListNodesOutput, error) {
-		if err := auditRead(ctx, reads, "list_nodes", ReadEvent{Selector: in.Selector}); err != nil {
+		listing, err := lane.ListNodes(ctx, in.Selector)
+		if err != nil {
+			if errors.Is(err, capability.ErrInvalidFilter) {
+				// The lane's own error renders "capability: invalid query
+				// filter: capability: selector …", doubling the internal
+				// package prefix. Re-parse to recover ParseSelector's own
+				// text and wrap it the way run_operation/raw_exec already do
+				// (tools_execution.go's "invalid selector: %w").
+				if _, perr := capability.ParseSelector(in.Selector); perr != nil {
+					return nil, ListNodesOutput{}, fmt.Errorf("invalid selector: %w", perr)
+				}
+			}
 			return nil, ListNodesOutput{}, err
 		}
 
-		sel, err := capability.ParseSelector(in.Selector)
-		if err != nil {
-			return nil, ListNodesOutput{}, fmt.Errorf("invalid selector: %w", err)
+		// listing.Nodes may be a NIL slice when the Selector matched nothing
+		// (capability.Selector.Resolve never returns an empty non-nil slice) —
+		// an explicit zero-length, pre-sized make keeps the response an empty
+		// JSON array rather than null (#207/#253).
+		items := make([]NodeItem, 0, len(listing.Nodes))
+		for _, n := range listing.Nodes {
+			items = append(items, nodeItemFromNode(n, listing.Eval))
 		}
-
-		ev := capability.StateEval{Now: now(), CertExpiringWithin: certExpiringWithin}
-		items := make([]NodeItem, 0)
-		// This loop reimplements capability.Selector.Resolve's match-and-collect
-		// logic (selector.go) against the narrower NodeReader (Get/List only)
-		// rather than calling Resolve directly, which requires a full
-		// registry.Repository. Deliberate narrowing to keep this package's
-		// registry dependency minimal (see NodeReader's doc comment) — Matches
-		// itself (the only non-trivial part) is still reused, not reimplemented.
-		for _, n := range nodes.List() {
-			if sel.Matches(n, ev) {
-				items = append(items, nodeItemFromNode(n, ev))
-			}
-		}
-		sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
 
 		return nil, ListNodesOutput{Nodes: items}, nil
 	})
@@ -227,34 +226,43 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			"Policy denial. state_labels are Relay-derived state: labels (ADR-0034): the boolean " +
 			"markers state:offline, state:outdated, state:template-unloadable, state:cert-expiring, " +
 			"and the facts state:daemon-version=, state:policy-fingerprint=, state:template-fingerprint= " +
-			"— set by nobody, targetable verbatim in a list_nodes/run_operation/raw_exec selector.",
+			"— set by nobody, targetable verbatim in a list_nodes/run_operation/raw_exec selector. " +
+			"A missing or oversized node_id is refused before anything is read or recorded.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in describeNodeInput) (*sdkmcp.CallToolResult, DescribeNodeOutput, error) {
-		if err := auditRead(ctx, reads, "describe_node", ReadEvent{NodeID: in.NodeID}); err != nil {
+		desc, err := lane.DescribeNode(ctx, in.NodeID)
+		if err != nil {
+			switch {
+			case errors.Is(err, capability.ErrNodeNotFound):
+				// The lane's own error renders "capability: node not found:
+				// <id>", which would leak an internal package prefix into a
+				// model-facing tool — map it to the tool's own wording
+				// instead.
+				return nil, DescribeNodeOutput{}, fmt.Errorf("node %q not found", in.NodeID)
+			case errors.Is(err, capability.ErrInvalidFilter):
+				// The lane's before-any-record bound on a missing/oversized
+				// id (QRY-27) renders "capability: invalid query filter: …",
+				// the same internal-prefix leak — mapped the same way
+				// (security review, cycle 2, LOW 5).
+				return nil, DescribeNodeOutput{}, errors.New("invalid node_id: must be 1-256 bytes")
+			}
 			return nil, DescribeNodeOutput{}, err
 		}
 
-		n, ok := nodes.Get(in.NodeID)
-		if !ok {
-			return nil, DescribeNodeOutput{}, fmt.Errorf("node %q not found", in.NodeID)
-		}
-
-		ev := capability.StateEval{Now: now(), CertExpiringWithin: certExpiringWithin}
 		out := DescribeNodeOutput{
-			NodeItem:    nodeItemFromNode(n, ev),
-			Certificate: certificateFromNode(n),
+			NodeItem:    nodeItemFromNode(desc.Node, desc.Eval),
+			Certificate: certificateFromNode(desc.Node),
 		}
-		vsnap, vok := vocab.Get(in.NodeID)
-		out.TemplateVocabulary = templateVocabularyOutput(vsnap, vok)
-		if snap, ok := policy.Get(in.NodeID); ok {
+		out.TemplateVocabulary = templateVocabularyOutput(desc.Templates, desc.TemplatesReported)
+		if desc.PolicyReported {
 			out.EffectivePolicy = EffectivePolicyOutput{
-				RawExecEnabled:    snap.RawExecEnabled,
-				RawAllowPatterns:  snap.RawAllowPatterns,
-				RawDenyPatterns:   snap.RawDenyPatterns,
-				AllowedOperations: snap.AllowedOperations,
-				PolicyFingerprint: snap.PolicyFingerprint,
+				RawExecEnabled:    desc.Policy.RawExecEnabled,
+				RawAllowPatterns:  desc.Policy.RawAllowPatterns,
+				RawDenyPatterns:   desc.Policy.RawDenyPatterns,
+				AllowedOperations: desc.Policy.AllowedOperations,
+				PolicyFingerprint: desc.Policy.PolicyFingerprint,
 				Reported:          true,
-				OperationRules:    operationRuleOutputsFromSnapshot(snap.OperationRules),
-				DenyRules:         denyRuleOutputsFromSnapshot(snap.DenyRules),
+				OperationRules:    operationRuleOutputsFromSnapshot(desc.Policy.OperationRules),
+				DenyRules:         denyRuleOutputsFromSnapshot(desc.Policy.DenyRules),
 			}
 		} else {
 			// No snapshot captured yet: still surface the registry's Policy
@@ -264,7 +272,7 @@ func registerNodeTools(srv *sdkmcp.Server, nodes NodeReader, policy PolicyReader
 			// empty arrays, never null (#207/#253) — reported=false is the
 			// only "no data yet" signal.
 			out.EffectivePolicy = EffectivePolicyOutput{
-				PolicyFingerprint: n.PolicyFingerprint,
+				PolicyFingerprint: desc.Node.PolicyFingerprint,
 				Reported:          false,
 				OperationRules:    []OperationRuleOutput{},
 				DenyRules:         []DenyRuleOutput{},

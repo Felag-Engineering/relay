@@ -21,6 +21,9 @@ import (
 const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	contextImportPath    = "context"
 )
 
 // capabilityReadAllowlist is the exhaustive set of capability-package
@@ -48,6 +51,13 @@ var capabilityReadAllowlist = map[string]bool{
 	// straight to Matches, exactly as it already hands ParseSelector's
 	// output there.
 	"StateEval": true,
+	// ErrNodeNotFound, ErrInvalidFilter and ErrReadUnaudited (#680) are inert
+	// sentinel VALUES the read tools need for errors.Is, so they can tell "no
+	// such Node" from "this Relay is broken" from "the trail is down" and
+	// render honestly — none of them carries any path to a *capability.Service.
+	"ErrNodeNotFound":  true,
+	"ErrInvalidFilter": true,
+	"ErrReadUnaudited": true,
 }
 
 // readFiles and execFiles partition this package's non-test .go files
@@ -149,6 +159,104 @@ func localImportAlias(file *ast.File, importPath string) (alias string, ok bool)
 	return "", false
 }
 
+// seamHandsBackUnauditedRead is G2 (#680): an interface method declared in a
+// non-test file whose RESULTS name registry.Node, policyview.Snapshot or
+// nodevocab.Snapshot (bare, pointer, or slice) and whose PARAMETERS contain
+// no context.Context is a violation — it declares a seam that hands back a
+// Node or a display-only snapshot with no context, which is a read no lane
+// could have recorded or attributed (invariant 10, ADR-0025). Phrased as a
+// property, not a type denylist: it fires on the deleted NodeReader/
+// PolicyReader/VocabReader shapes and does not fire on the lane-shaped
+// ReadLane, whose every method takes a context.Context.
+//
+// This closes the obvious door, not every door (security review, cycle 2):
+// MapType/ChanType below catch a map or channel of one of the three banned
+// types, but a local type alias for one of them, a generic type parameter
+// shaped like one, or an anonymous struct embedding one would not be. The
+// real bar is the composition-root guard
+// (TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache,
+// cmd/relay/control_surfaces_test.go) plus no surface being handed a
+// registry or cache at all.
+func seamHandsBackUnauditedRead(fileName string, iface *ast.InterfaceType, file *ast.File) []string {
+	if iface.Methods == nil {
+		return nil
+	}
+	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
+	ctxAlias, ctxImported := localImportAlias(file, contextImportPath)
+
+	var namesBannedType func(expr ast.Expr) bool
+	namesBannedType = func(expr ast.Expr) bool {
+		switch t := expr.(type) {
+		case *ast.StarExpr:
+			return namesBannedType(t.X)
+		case *ast.ArrayType:
+			return namesBannedType(t.Elt)
+		case *ast.MapType:
+			return namesBannedType(t.Key) || namesBannedType(t.Value)
+		case *ast.ChanType:
+			return namesBannedType(t.Value)
+		case *ast.SelectorExpr:
+			pkg, ok := t.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			switch {
+			case regImported && pkg.Name == regAlias && t.Sel.Name == "Node":
+				return true
+			case pvImported && pkg.Name == pvAlias && t.Sel.Name == "Snapshot":
+				return true
+			case nvImported && pkg.Name == nvAlias && t.Sel.Name == "Snapshot":
+				return true
+			}
+		}
+		return false
+	}
+
+	hasContextParam := func(ft *ast.FuncType) bool {
+		if !ctxImported || ft.Params == nil {
+			return false
+		}
+		for _, p := range ft.Params.List {
+			sel, ok := p.Type.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == ctxAlias && sel.Sel.Name == "Context" {
+				return true
+			}
+		}
+		return false
+	}
+
+	var violations []string
+	for _, m := range iface.Methods.List {
+		ft, ok := m.Type.(*ast.FuncType)
+		if !ok || ft.Results == nil {
+			continue
+		}
+		bannedResult := false
+		for _, r := range ft.Results.List {
+			if namesBannedType(r.Type) {
+				bannedResult = true
+				break
+			}
+		}
+		if !bannedResult || hasContextParam(ft) {
+			continue
+		}
+		methodName := "<unnamed>"
+		if len(m.Names) > 0 {
+			methodName = m.Names[0].Name
+		}
+		violations = append(violations, fmt.Sprintf(
+			"%s: interface method %s declares a seam that hands back a Node or a display-only snapshot with no context — a read no lane could have recorded or attributed (invariant 10, ADR-0025); read through the capability read lane",
+			fileName, methodName))
+	}
+	return violations
+}
+
 // dispatchViolations AST-inspects file (whose source came from fileName,
 // used only in messages) and returns one message per rule it catches. Every
 // rule below fires regardless of strictCapabilityIdents:
@@ -167,6 +275,10 @@ func localImportAlias(file *ast.File, importPath string) (alias string, ok bool)
 //     interface (Upsert/SetRelayLabels/Delete/…), even though mcp.New's
 //     adapters (mcp.go) make this fail at runtime today, this guard catches
 //     the attempt at test time with a clear message.
+//   - a dot-import of capability, registry, policyview or nodevocab
+//     (security review, cycle 2): it erases the package qualifier every
+//     rule above and below matches on, so it is refused outright, in both
+//     read and exec files.
 //
 // One rule is gated by strictCapabilityIdents: any other selector on the
 // capability import that isn't in capabilityReadAllowlist. When true (a
@@ -182,6 +294,25 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 
 	capAlias, capImported := localImportAlias(file, capabilityImportPath)
 	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
+
+	// A dot-import of any of these four erases the package qualifier every
+	// check in this function matches on: `import . ".../registry"` turns
+	// `registry.Repository` into a bare `Repository` this guard cannot see,
+	// and the same holds for capability/policyview/nodevocab. There is no
+	// legitimate reason for one here in either a read or an exec file, so it
+	// is a violation on its own, unconditionally. Mirrors
+	// console/no_dispatch_test.go's identical rule (security review, cycle 2).
+	for _, banned := range []struct{ alias, pkg string }{
+		{capAlias, "capability"}, {regAlias, "registry"}, {pvAlias, "policyview"}, {nvAlias, "nodevocab"},
+	} {
+		if banned.alias == "." {
+			violations = append(violations, fmt.Sprintf(
+				"%s dot-imports %s — that erases the package qualifier this guard matches on, so "+
+					"every check below silently stops working", fileName, banned.pkg))
+		}
+	}
 
 	checkRepositoryAssertion := func(expr ast.Expr) {
 		sel, ok := expr.(*ast.SelectorExpr)
@@ -200,26 +331,44 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch v := n.(type) {
 		case *ast.SelectorExpr:
-			if !capImported {
-				break
+			if capImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == capAlias {
+					switch {
+					case v.Sel.Name == "Service":
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.Service — mcp tools must never hold a capability.Service directly, only the injected Executor interface (no-dispatch structural guarantee)",
+							fileName))
+					case v.Sel.Name == "New":
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.New — the exported dispatch constructor must never be called from an mcp tool file (no-dispatch structural guarantee)",
+							fileName))
+					case strictCapabilityIdents && !capabilityReadAllowlist[v.Sel.Name]:
+						violations = append(violations, fmt.Sprintf(
+							"%s references capability.%s, which is not on the pure-read allow-list (%v) — audit it before allowing it here (no-dispatch structural guarantee)",
+							fileName, v.Sel.Name, capabilityReadAllowlist))
+					}
+				}
 			}
-			pkg, ok := v.X.(*ast.Ident)
-			if !ok || pkg.Name != capAlias {
-				break
+			// G1 (#680): policyview.Cache/New and nodevocab.Cache/New are the
+			// types that carry Set. package mcp is handed ReadLane
+			// (mcp.go), which exposes ListNodes/DescribeNode/ListOperations
+			// only, and this rule stops any file in the package from
+			// recovering either writer by naming the concrete type — no
+			// adapter may hold or construct a display-only cache (ADR-0002/
+			// invariant 2, ADR-0011/invariant 12).
+			if pvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
+					violations = append(violations, fmt.Sprintf(
+						"%s references policyview.%s — mcp must never hold or construct a *policyview.Cache: Cache carries Set, and this package's Policy view is read-only STRUCTURALLY rather than by permission (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+						fileName, v.Sel.Name))
+				}
 			}
-			switch {
-			case v.Sel.Name == "Service":
-				violations = append(violations, fmt.Sprintf(
-					"%s references capability.Service — mcp tools must never hold a capability.Service directly, only the injected Executor interface (no-dispatch structural guarantee)",
-					fileName))
-			case v.Sel.Name == "New":
-				violations = append(violations, fmt.Sprintf(
-					"%s references capability.New — the exported dispatch constructor must never be called from an mcp tool file (no-dispatch structural guarantee)",
-					fileName))
-			case strictCapabilityIdents && !capabilityReadAllowlist[v.Sel.Name]:
-				violations = append(violations, fmt.Sprintf(
-					"%s references capability.%s, which is not on the pure-read allow-list (%v) — audit it before allowing it here (no-dispatch structural guarantee)",
-					fileName, v.Sel.Name, capabilityReadAllowlist))
+			if nvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == nvAlias && (v.Sel.Name == "Cache" || v.Sel.Name == "New") {
+					violations = append(violations, fmt.Sprintf(
+						"%s references nodevocab.%s — mcp must never hold or construct a *nodevocab.Cache: Cache carries Set, and this package's Template vocabulary view is read-only STRUCTURALLY rather than by permission (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+						fileName, v.Sel.Name))
+				}
 			}
 		case *ast.Ident:
 			if v.Name == "newDispatch" {
@@ -229,6 +378,8 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 			}
 		case *ast.TypeAssertExpr:
 			checkRepositoryAssertion(v.Type)
+		case *ast.InterfaceType:
+			violations = append(violations, seamHandsBackUnauditedRead(fileName, v, file)...)
 		case *ast.CaseClause:
 			for _, expr := range v.List {
 				checkRepositoryAssertion(expr)
@@ -249,14 +400,14 @@ func dispatchViolations(fileName string, file *ast.File, strictCapabilityIdents 
 //
 // This mirrors capability/dispatch_construction_test.go's own AST guard and
 // jobs.TestNoDatabaseSQLImport's parse-and-inspect style. The structural
-// guarantee it defends is the read-only interfaces in mcp.go (NodeReader /
-// PolicyReader / OperationLister — Get/List/Operations only, never Run) and
-// their runtime narrowing via nodeReaderAdapter/policyReaderAdapter/
+// guarantee it defends is the read-only interfaces in mcp.go (ReadLane /
+// OperationLister — ListNodes/DescribeNode/ListOperations/Operations only,
+// never Run) and their runtime narrowing via readLaneAdapter/
 // operationListerAdapter in New (mcp.go), PLUS #118's execution tools
 // dispatching only through the injected Executor/JobResultReader
 // (execAdapter/jobResultReaderAdapter), never a capability.Service or
 // capability.New held directly, and never registry.Repository recovered
-// from a narrowed NodeReader. This test is defense in depth that catches the
+// from a narrowed reader. This test is defense in depth that catches the
 // mistake at `go test` time with an explicit message, rather than an opaque
 // compiler error or runtime panic.
 func TestNoDispatchConstruction(t *testing.T) {
@@ -340,6 +491,8 @@ func TestFileClassification_UnclassifiedNameFails(t *testing.T) {
 func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
+	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
 
 	cases := []struct {
 		name       string
@@ -461,6 +614,152 @@ func f(nodes NodeReader) {
 			strict:     true,
 			wantSubstr: "registry.Repository",
 		},
+		{
+			name: "constructing a policyview cache",
+			src: `package mcp
+import ` + pvImport + `
+var _ = policyview.New()
+`,
+			strict:     true,
+			wantSubstr: "policyview.New",
+		},
+		{
+			name: "type assertion recovering the policyview cache",
+			src: `package mcp
+import ` + pvImport + `
+func f(p any) { _ = p.(*policyview.Cache) }
+`,
+			strict:     true,
+			wantSubstr: "policyview.Cache",
+		},
+		{
+			name: "constructing a nodevocab cache",
+			src: `package mcp
+import ` + nvImport + `
+var _ = nodevocab.New()
+`,
+			strict:     true,
+			wantSubstr: "nodevocab.New",
+		},
+		{
+			name: "type assertion recovering the nodevocab cache",
+			src: `package mcp
+import ` + nvImport + `
+func f(v any) { _ = v.(*nodevocab.Cache) }
+`,
+			strict:     true,
+			wantSubstr: "nodevocab.Cache",
+		},
+		{
+			name: "the deleted NodeReader shape hands back a Node with no context",
+			src: `package mcp
+import ` + regImport + `
+type NodeReader interface {
+	Get(nodeID string) (registry.Node, bool)
+	List() []registry.Node
+}
+`,
+			strict:     true,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			name: "the deleted PolicyReader shape hands back a Snapshot with no context",
+			src: `package mcp
+import ` + pvImport + `
+type PolicyReader interface {
+	Get(nodeID string) (policyview.Snapshot, bool)
+}
+`,
+			strict:     true,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			name: "the deleted VocabReader shape hands back a Snapshot with no context",
+			src: `package mcp
+import ` + nvImport + `
+type VocabReader interface {
+	Get(nodeID string) (nodevocab.Snapshot, bool)
+}
+`,
+			strict:     true,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			name: "the new ReadLane shape takes a context and does not violate",
+			src: `package mcp
+import (
+	"context"
+	` + regImport + `
+)
+type ReadLane interface {
+	ListNodes(ctx context.Context, selector string) ([]registry.Node, error)
+	DescribeNode(ctx context.Context, nodeID string) (registry.Node, error)
+}
+`,
+			strict:     true,
+			wantSubstr: "",
+		},
+		{
+			// LOW 3 (security review, cycle 2): a map result is one of the
+			// two shapes namesBannedType did not walk before this guard was
+			// hardened.
+			name: "a seam handing back a map of registry.Node with no context",
+			src: `package mcp
+import ` + regImport + `
+type NodeReader interface {
+	ByID() map[string]registry.Node
+}
+`,
+			strict:     true,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The other shape: a channel result.
+			name: "a seam handing back a channel of nodevocab.Snapshot with no context",
+			src: `package mcp
+import ` + nvImport + `
+type VocabReader interface {
+	Stream() <-chan nodevocab.Snapshot
+}
+`,
+			strict:     true,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The dot-import evasion (security review, cycle 2): erasing the
+			// registry qualifier would otherwise let a map/chan/slice of Node
+			// slip past namesBannedType silently.
+			name: "dot-importing registry erases the qualifier G2 matches on",
+			src: `package mcp
+import . ` + regImport + `
+`,
+			strict:     true,
+			wantSubstr: "dot-imports registry",
+		},
+		{
+			name: "dot-importing policyview erases the qualifier G2 matches on",
+			src: `package mcp
+import . ` + pvImport + `
+`,
+			strict:     true,
+			wantSubstr: "dot-imports policyview",
+		},
+		{
+			name: "dot-importing nodevocab erases the qualifier G2 matches on",
+			src: `package mcp
+import . ` + nvImport + `
+`,
+			strict:     true,
+			wantSubstr: "dot-imports nodevocab",
+		},
+		{
+			name: "dot-importing capability erases the qualifier this guard matches on, in exec mode too",
+			src: `package mcp
+import . ` + capImport + `
+`,
+			strict:     false,
+			wantSubstr: "dot-imports capability",
+		},
 	}
 
 	for _, tc := range cases {
@@ -472,6 +771,12 @@ func f(nodes NodeReader) {
 			}
 
 			violations := dispatchViolations("fixture.go", file, tc.strict)
+			if tc.wantSubstr == "" {
+				if len(violations) != 0 {
+					t.Fatalf("dispatchViolations() = %v, want none", violations)
+				}
+				return
+			}
 			if len(violations) == 0 {
 				t.Fatalf("dispatchViolations() = empty, want a violation containing %q", tc.wantSubstr)
 			}

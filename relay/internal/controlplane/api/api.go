@@ -153,11 +153,12 @@ type Deps struct {
 	// the capability layer by #653). Nil refuses every identity route with a
 	// 500, on the same unwired-gate posture Authz above documents.
 	AccountAdmin AccountAdmin
-	// NodeReader is the single-Node registry view behind GET
-	// /api/v1/nodes/{node_id} (#440). A read-only narrowing of
-	// registry.Repository: this surface has no business holding Upsert,
-	// SetRelayLabels or SetRevoked, and the revoke route reaches revocation
-	// through Nodes above rather than through the registry.
+	// NodeReader is the capability read lane behind GET
+	// /api/v1/nodes/{node_id} (#440, #680): it is not a registry narrowing
+	// any more — it is the one door to the registry, which records the read
+	// before it answers (invariant 10, ADR-0025). The revoke route reaches
+	// revocation through Nodes above rather than through this seam. Nil
+	// still 500s.
 	NodeReader NodeReader
 	// Exec and Jobs back the execution routes (#356). Exec is the SAME
 	// capability layer the MCP surface dispatches through — never a second
@@ -187,7 +188,11 @@ type Deps struct {
 	// CertExpiringWithin is the state:cert-expiring warning window
 	// (ADR-0034, #414): a mirror of a root-owned startup value (invariant
 	// 11) — this surface is TOLD it, and no route reads or sets it. Zero
-	// (the default) means the marker never fires.
+	// (the default) means the marker never fires. Since #680 it is no
+	// longer read by handleGetNode, whose state: instant now comes from the
+	// capability read lane's own clock (NodeReader.DescribeNode's
+	// capability.NodeDetail.Eval); GET /api/v1/jobs/{id} (jobs.go) still
+	// uses this field directly, so it stays wired and is not dead.
 	CertExpiringWithin time.Duration
 }
 

@@ -25,11 +25,20 @@ package console
 // # It renders only the Nodes it was named, and never enumerates the fleet
 //
 // Every id comes from the URL and is resolved one at a time through
-// FleetReader.Get. There is no List call here and there must not be one: an
+// Queries.DescribeNode (#680) — one audited record per pinned Node, at most
+// maxPins (3). There is no ListNodes call here and there must not be one: an
 // enumerating comparison screen is a fleet surface, and the rule above is only
 // true while this screen cannot become one.
 // TestCompare_ResolvesOnlyThePinnedNodesAndNeverEnumeratesTheFleet is the
 // guard.
+//
+// # Every column it reads is recorded (#680)
+//
+// This screen used to read FleetReader/PolicyReader directly and record
+// nothing — the last gap invariant 10 named against this package. It now
+// asks through the SAME audited door node detail does: one describe_node
+// read per pinned Node, which is what makes "who compared which Nodes"
+// answerable on the trail.
 //
 // # It states differences; it never adjudicates them
 //
@@ -41,11 +50,14 @@ package console
 // deny".
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 )
@@ -284,8 +296,8 @@ type compareView struct {
 
 func handleCompare(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if d.Fleet == nil {
-			unavailable(w, "the Node registry")
+		caller, ok := principal(w, r)
+		if !ok {
 			return
 		}
 		p, ok := page(d, w, r, "Compare Nodes")
@@ -293,33 +305,73 @@ func handleCompare(d Deps) http.HandlerFunc {
 			return
 		}
 		p.Banner = banner(d, r)
+
+		if d.Queries == nil {
+			unavailable(w, "the audited read lane")
+			return
+		}
+		d, lane := latched(d)
+
 		ids, overflow := parsePins(r.URL.Query().Get("nodes"))
-		v := buildCompareView(d, ids)
+		v, err := buildCompareView(r.Context(), d, caller, ids)
+		if err != nil {
+			readFailed(w, err, "the pinned Nodes' registry records")
+			return
+		}
+		if refusedUnaudited(w, lane, "the pinned Nodes' registry records") {
+			return
+		}
 		v.Truncated = overflow
 		renderScreen(w, p, compareTmpl, v)
 	}
 }
 
+// pinnedResolution is one pinned id's DescribeNode result — resolved
+// against the audited lane before buildCompareView renders anything, so the
+// pin bar (which needs every id's known/unknown answer) and the columns
+// (which need the detail) come from the SAME set of reads.
+type pinnedResolution struct {
+	id     string
+	detail capability.NodeDetail
+	known  bool
+}
+
 // buildCompareView is the whole screen as a function of the ids named in the
-// URL. Pure, so the "never enumerates the fleet" guard can be asserted without
-// HTTP (buildFleetView precedent).
-func buildCompareView(d Deps, ids []string) compareView {
-	// The comparison screen has NOT migrated to the audited read lane (#450
-	// left it, and #424 owns the screens work): it still resolves its columns
-	// through FleetReader, so its pin bar resolves through the same door
-	// rather than inventing a second answer on one page.
-	v := compareView{Pin: buildPinState(fleetKnown(d), ids, comparePath, "nodes")}
+// URL, each resolved through the audited read lane (#680): one
+// describe_node record per pinned id, at most maxPins (3) — the same honest
+// accounting pinsKnown (node.go) already documents. An unknown or malformed
+// id resolves to the Unknown list, a dead chip on the pin bar; any OTHER
+// error is returned so the page fails closed as a whole.
+func buildCompareView(ctx context.Context, d Deps, caller capability.Principal, ids []string) (compareView, error) {
+	var resolutions []pinnedResolution
+	for _, id := range ids {
+		detail, err := d.Queries.DescribeNode(ctx, caller, id)
+		switch {
+		case err == nil:
+			resolutions = append(resolutions, pinnedResolution{id: id, detail: detail, known: true})
+		case errors.Is(err, capability.ErrNodeNotFound), errors.Is(err, capability.ErrInvalidFilter):
+			resolutions = append(resolutions, pinnedResolution{id: id, known: false})
+		default:
+			return compareView{}, err
+		}
+	}
+
+	known := make(map[string]bool, len(resolutions))
+	for _, res := range resolutions {
+		known[res.id] = res.known
+	}
+	v := compareView{Pin: buildPinState(func(id string) bool { return known[id] }, ids, comparePath, "nodes")}
 
 	var snaps []*policyview.Snapshot
-	for _, id := range ids {
-		n, ok := d.Fleet.Get(id)
-		if !ok {
+	for _, res := range resolutions {
+		if !res.known {
 			// Named rather than dropped: a Node that was revoked out of the
 			// registry, or an id that was mistyped, is the answer to the
 			// question the operator asked.
-			v.Unknown = append(v.Unknown, id)
+			v.Unknown = append(v.Unknown, res.id)
 			continue
 		}
+		n := res.detail.Node
 		col := compareColumn{
 			ID:        n.NodeID,
 			Hostname:  n.Facts.Hostname,
@@ -329,13 +381,12 @@ func buildCompareView(d Deps, ids []string) compareView {
 		}
 
 		var snap *policyview.Snapshot
-		if d.Policy != nil {
-			if s, ok := d.Policy.Get(n.NodeID); ok {
-				snap = &s
-				col.PolicyReported = true
-				if !s.ReportedAt.IsZero() {
-					col.PolicyReportedAt = s.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
-				}
+		if res.detail.PolicyReported {
+			s := res.detail.Policy
+			snap = &s
+			col.PolicyReported = true
+			if !s.ReportedAt.IsZero() {
+				col.PolicyReportedAt = s.ReportedAt.UTC().Format("2006-01-02 15:04:05Z")
 			}
 		}
 		if snap == nil {
@@ -351,7 +402,7 @@ func buildCompareView(d Deps, ids []string) compareView {
 	markDiffs(v.FingerprintRows)
 	v.PolicyRows = comparePolicyRows(snaps)
 	v.AllPolicyMissing = len(snaps) > 0 && !anyReported(snaps)
-	return v
+	return v, nil
 }
 
 // appendCell adds one column's value to the row named key, creating the row on
@@ -590,19 +641,3 @@ is — the same use a fleet row makes of it — and it is self-reported too: rec
 never trust it.</p>
 {{end}}
 `)
-
-// fleetKnown is the pin resolver backed by the unaudited FleetReader seam.
-//
-// It exists so the ONE screen still on that seam has a named, greppable use
-// of it rather than an inline closure that reads like every other pin
-// resolver. read_audit_test.go names the comparison screen as the exemption
-// this represents; when #424 migrates it, this function goes with it.
-func fleetKnown(d Deps) func(string) bool {
-	if d.Fleet == nil {
-		return nil
-	}
-	return func(id string) bool {
-		_, ok := d.Fleet.Get(id)
-		return ok
-	}
-}

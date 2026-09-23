@@ -105,12 +105,44 @@ func (f *fakeNodeRevoker) RevokeNodeRecorded(_ context.Context, nodeID string, r
 	return nil
 }
 
-// fakeNodeReader is a NodeReader fake over a fixed map.
-type fakeNodeReader map[string]registry.Node
+// fakeCapabilityAuditSink is a minimal capability.AuditSink test double
+// (#680): NodeReader is now the capability read lane itself, so exercising
+// it needs a real *capability.Service, which needs a real (non-noop)
+// AuditSink. Only RecordRead is exercised by DescribeNode; the rest of the
+// interface is a no-op.
+type fakeCapabilityAuditSink struct {
+	err       error
+	readCalls int
+}
 
-func (f fakeNodeReader) Get(nodeID string) (registry.Node, bool) {
-	n, ok := f[nodeID]
-	return n, ok
+func (*fakeCapabilityAuditSink) Record(context.Context, capability.AuditEntry) error { return nil }
+func (*fakeCapabilityAuditSink) RecordFreeze(context.Context, capability.FreezeEvent) error {
+	return nil
+}
+func (*fakeCapabilityAuditSink) RecordCancel(context.Context, capability.Principal, string) error {
+	return nil
+}
+func (s *fakeCapabilityAuditSink) RecordRead(context.Context, capability.Principal, string, string, string, string) error {
+	s.readCalls++
+	return s.err
+}
+func (*fakeCapabilityAuditSink) RecordAccountAdmin(context.Context, capability.Principal, capability.AccountAdminEvent) error {
+	return nil
+}
+
+// newNodeReaderLane builds a real *capability.Service over reg, wired as a
+// NodeReader (#680): capability.Service satisfies NodeReader directly, with
+// no adapter, exactly like Exec/Approvals/AccountAdmin already do. now and
+// certExpiringWithin are pinned so a test asserting a state: label does not
+// race the wall clock — the `state:` instant now comes from the lane's own
+// clock (detail.Eval), not from Deps.Now/Deps.CertExpiringWithin.
+func newNodeReaderLane(t *testing.T, reg registry.Repository, sink capability.AuditSink, now func() time.Time, certExpiringWithin time.Duration) NodeReader {
+	t.Helper()
+	return capability.New(reg,
+		capability.WithAuditSink(sink),
+		capability.WithClock(now),
+		capability.WithCertExpiringWindow(certExpiringWithin),
+	)
 }
 
 // releaseCall captures one ReleaseFreeze invocation.
@@ -944,8 +976,12 @@ func TestHandleRevokeNode_PassesExactlyOneNodeIDToTheRecorder(t *testing.T) {
 // null — the same nodestate.Labels every other surface renders.
 func TestHandleGetNode_StateLabels(t *testing.T) {
 	t.Run("offline Node carries state:offline", func(t *testing.T) {
-		nr := fakeNodeReader{"node-a": {NodeID: "node-a"}} // never connected
-		d := Deps{NodeReader: nr, Audit: &fakeAuditor{}, Now: fixedNow}
+		reg := registry.NewInMemory()
+		if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil { // never connected
+			t.Fatalf("Upsert: %v", err)
+		}
+		lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
+		d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
 		h := newTestHandler(d)
 
 		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
@@ -974,9 +1010,13 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 	})
 
 	t.Run("no Node carries no state label at all: empty array, not null", func(t *testing.T) {
-		n := registry.Node{NodeID: "node-b", Connected: true}
-		nr := fakeNodeReader{"node-b": n}
-		d := Deps{NodeReader: nr, Audit: &fakeAuditor{}, Now: fixedNow}
+		reg := registry.NewInMemory()
+		if _, err := reg.Upsert(registry.Report{NodeID: "node-b"}); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+		reg.SetConnected("node-b", true)
+		lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{}, fixedNow, 0)
+		d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
 		h := newTestHandler(d)
 
 		rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-b", nil)
@@ -994,6 +1034,66 @@ func TestHandleGetNode_StateLabels(t *testing.T) {
 			t.Errorf("state_labels = %v, want empty — this Node is connected, current, and its template set is not unloadable", out.StateLabels)
 		}
 	})
+}
+
+// TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded is the Control
+// API's half of QRY-28's fail-closed proof, and closes the "QRY-17, Control
+// API half" no-row gap: a real *capability.Service over an AuditSink whose
+// RecordRead errors must answer 500 with the problem body — never a
+// node_id, Labels or Facts in the response.
+func TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded(t *testing.T) {
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+	lane := newNodeReaderLane(t, reg, &fakeCapabilityAuditSink{err: errors.New("the trail is unwritable")}, fixedNow, 0)
+	d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+	h := newTestHandler(d)
+
+	rec := do(t, h, http.MethodGet, "/api/v1/nodes/node-a", nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d; body = %s", rec.Code, http.StatusInternalServerError, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "node-a") || strings.Contains(body, "node_id") {
+		t.Errorf("response body = %s, must not disclose the Node when the read could not be recorded", body)
+	}
+}
+
+// TestHandleGetNode_AnOversizedNodeIdIsRefusedNotNotFound pins the
+// behaviour change named in the PR body (#680): an oversized node_id used
+// to record the probe and return 404; the lane's validateNodeID now refuses
+// it first, returning 400 with nothing on the trail.
+func TestHandleGetNode_AnOversizedNodeIdIsRefusedNotNotFound(t *testing.T) {
+	reg := registry.NewInMemory()
+	sink := &fakeCapabilityAuditSink{}
+	lane := newNodeReaderLane(t, reg, sink, fixedNow, 0)
+	d := Deps{NodeReader: lane, Audit: &fakeAuditor{}, Now: fixedNow}
+	h := newTestHandler(d)
+
+	oversized := strings.Repeat("n", 257)
+	rec := do(t, h, http.MethodGet, "/api/v1/nodes/"+oversized, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d (oversized node_id refused before recording); body = %s",
+			rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if sink.readCalls != 0 {
+		t.Errorf("RecordRead was called %d time(s) for an oversized id, want 0 — the trail is not caller storage", sink.readCalls)
+	}
+
+	// LOW 5 (security review, cycle 2): the lane's ErrInvalidFilter carries
+	// an internal "capability: invalid query filter: " prefix that must
+	// never reach a published problem detail.
+	var body problem
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode problem body: %v", err)
+	}
+	if strings.Contains(body.Title, "capability:") || strings.Contains(body.Detail, "capability:") {
+		t.Errorf("problem body = %+v, leaks the internal capability: package prefix", body)
+	}
+	if body.Detail != "must be 1-256 bytes" {
+		t.Errorf("problem detail = %q, want the route's own wording", body.Detail)
+	}
 }
 
 // -----------------------------------------------------------------------

@@ -64,7 +64,7 @@ func TestFleet_TenThousandNodesRenderWithoutAList(t *testing.T) {
 		// four cards open and the deviation table is drawn.
 		nodes := tenThousandNodes("env", 4, func(i int) bool { return i%3 == 0 })
 		d := renderableDeps()
-		d.Fleet = fakeFleet{nodes: nodes}
+		d = withFleet(d, nodes...)
 		h := newTestHandler(d, accounts.RoleAdmin)
 
 		rec := get(t, h, "/console/?group=env")
@@ -134,7 +134,7 @@ func TestFleet_TenThousandNodesRenderWithoutAList(t *testing.T) {
 		// deviationRows) bind simultaneously.
 		nodes := tenThousandNodes("shard", 250, func(int) bool { return true })
 		d := renderableDeps()
-		d.Fleet = fakeFleet{nodes: nodes}
+		d = withFleet(d, nodes...)
 		h := newTestHandler(d, accounts.RoleAdmin)
 
 		rec := get(t, h, "/console/?group=shard")

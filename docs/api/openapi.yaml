@@ -619,13 +619,16 @@ paths:
         Any authenticated Account may call this — the read floor is `viewer`.
         **The read is audited** before any content is returned, and the call
         fails closed if the trail cannot be written (ADR-0025): `read` means
-        "cannot change Node state", not "safe to see".
+        "cannot change Node state", not "safe to see". A Node id that is
+        empty or longer than 256 bytes is refused as a bad request before
+        anything is read or recorded.
       responses:
         "200":
           description: The Node.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Node' }
+        "400": { $ref: '#/components/responses/BadRequest' }
         "401": { $ref: '#/components/responses/Unauthorized' }
         "404":
           description: No such Node.

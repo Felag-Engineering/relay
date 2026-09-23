@@ -51,7 +51,9 @@ package console
 // those two screens audited (ADR-0025) rather than merely bounded. #542
 // moved agent history onto QueryAudit too, reshaping its 200-record WINDOW
 // into a 200-row PAGE with an Older link — the last of #450's writing-time
-// exemptions to close.
+// exemptions to close. #680 closed the last exemption: every registry and
+// Policy-view read is Deps.Queries now — there is no longer a second,
+// unaudited door (see QueryReader below, and compare.go).
 //
 // AuditReader now serves exactly ONE thing: node detail's Recent Tasks panel
 // and its node_revoke lookup, both read BY NODE through ByNode. That panel is
@@ -69,41 +71,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
-
-// FleetReader is the registry, read-only. registry.Repository satisfies it.
-//
-// Note what is absent: Upsert, SetRelayLabels, SetRevoked. The v0.7.0 label
-// management issue (#430) adds writes through the capability layer, NOT by
-// widening this interface — a Console that could write a label directly would
-// be a second control path, and `relay:` is the security-lane namespace.
-//
-// ALSO NOTE WHAT IS ABSENT ON THE OTHER SIDE: a read through here leaves no
-// trace. ADR-0025 audits reads because `read` means "cannot change Node
-// state", not "safe to see", and the fleet's shape is exactly the disclosure
-// it names first. #450 moved the fleet listing and node detail onto
-// QueryReader below, which records before it answers; the comparison screen is
-// the one caller left here, and read_audit_test.go carries that exemption in
-// writing. A new screen reads through QueryReader.
-type FleetReader interface {
-	List() []registry.Node
-	Get(nodeID string) (registry.Node, bool)
-}
-
-// PolicyReader is the display-only cache of each Node's daemon-reported
-// effective Policy (ADR-0011, invariant 12). *policyview.Cache satisfies it.
-//
-// "Display-only" is not a disclaimer, it is the invariant: the Relay never
-// evaluates Policy and never sets it. This seam returns what a daemon REPORTED,
-// with ok=false for a Node that has not reconnected since the last restart —
-// which node detail must render as "not reported" rather than as an empty
-// Policy, because an empty Policy reads as "this Node permits nothing" and that
-// is a different and much more alarming claim.
-type PolicyReader interface {
-	Get(nodeID string) (policyview.Snapshot, bool)
-}
 
 // AuditReader is the append-only trail, read-only. audit.Repository satisfies
 // it.
@@ -226,23 +194,21 @@ type AccountReader interface {
 // one settled contract instead of four independently-guessed ones.
 //
 // #450 added the REGISTRY half — ListNodes and DescribeNode. They are on this
-// seam rather than on FleetReader for the reason the whole issue exists: a
-// read that goes through the capability layer is audited by construction
-// (ADR-0025), and a read that goes through FleetReader is not audited at all.
-// The fleet listing and node detail were the two screens whose reads
-// disclosed the most and recorded the least; they now ask here.
-//
-// Note the asymmetry with FleetReader, which is deliberate rather than
-// leftover: FleetReader still exists, still carries List and Get, and the
-// comparison screen still uses it. What a future editor must not do is reach
-// for it on a NEW screen because it is one line shorter — read_audit_test.go
-// is the guard that makes that choice visible instead of silent.
+// seam because a read that goes through the capability layer is audited by
+// construction (ADR-0025). The fleet listing and node detail were the two
+// screens whose reads disclosed the most and recorded the least; they now ask
+// here — and since #680 there is no unaudited door left at all: FleetReader
+// and PolicyReader are gone, and the Compare screen and the Node-detail
+// Policy panel ask here too, through DescribeNode.
 type QueryReader interface {
-	// The registry half (#450). ListNodes is the fleet enumeration;
-	// DescribeNode is one Node plus its fingerprint peer counts, which the
-	// lane computes so a single-Node screen never has to enumerate the fleet
-	// to render two integers.
-	ListNodes(ctx context.Context, p capability.Principal) ([]registry.Node, error)
+	// The registry half (#450, reshaped by #680). ListNodes resolves and
+	// records selector (the empty string means the whole fleet — the
+	// Console's fleet filter is a facet over the page it already read, not a
+	// Selector; Selector-scoped enumeration is MCP's, QRY-3). DescribeNode is
+	// one Node plus its fingerprint peer counts and its DISPLAY-ONLY Policy
+	// view, which the lane computes so a single-Node screen never has to
+	// enumerate the fleet or hold a second cache to render it.
+	ListNodes(ctx context.Context, p capability.Principal, selector string) (capability.NodeListing, error)
 	DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error)
 
 	QueryAudit(ctx context.Context, p capability.Principal, f capability.AuditFilter, page capability.PageRequest) (capability.AuditPage, error)

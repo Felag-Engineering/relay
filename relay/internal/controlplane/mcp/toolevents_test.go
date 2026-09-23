@@ -89,7 +89,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	// capSvc doubles as the Tasks resolver (last arg), exactly like
 	// cmd/relay/control_surfaces.go's mcpSurface.Mount — needed so tasks/get
 	// is actually registered for TestToolCallMiddleware_DoesNotFireFor.
-	handler := mcp.New(reg, nil, nil, opsLister{}, capSvc, results, nil, capSvc, opts...)
+	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, capSvc, opts...)
 
 	cert := selfSignedCert(t)
 	controlSrv := controlplane.New(

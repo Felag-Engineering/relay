@@ -2,10 +2,13 @@ package mcp
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 )
@@ -127,8 +130,15 @@ func slotConstraintProse(sl nodevocab.Slot) string {
 	}
 }
 
-// registerOperationTools registers list_operations on srv.
-func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab VocabReader, reads ReadAuditor) {
+// registerOperationTools registers list_operations on srv. The Native half
+// always comes from ops.Operations() — a frozen, fleet-wide, compile-time
+// table (ADR-0015/ADR-0021) that discloses nothing about this fleet and
+// reads no registry or cache, so it never touches the audited lane. The
+// per-Node Template half comes from lane.ListOperations, called
+// UNCONDITIONALLY — including for a fleet-wide call with no node_id — so the
+// lane records the whole call under one name and fails closed for both
+// shapes (#680, QRY-28).
+func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, lane ReadLane) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "list_operations",
 		Description: "List the Operation vocabulary: for each Operation, its purpose, risk class, argument " +
@@ -138,11 +148,23 @@ func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab Vocab
 			"Vocabulary is PER-NODE (ADR-0021): the four native Operations (source=native) exist on every " +
 			"Node, while Template Operations (source=template) are loaded from local root-owned files on " +
 			"individual Nodes. Pass node_id to see one Node's full vocabulary; without it you get the native " +
-			"part only. Dispatching an Operation to a Node that does not have it reports the `unsupported` " +
+			"part only. An unknown node_id is refused, not answered with an empty template set. " +
+			"Dispatching an Operation to a Node that does not have it reports the `unsupported` " +
 			"outcome — nothing runs and Policy is never consulted, so it is neither a failure nor a denial. " +
 			"Raw Exec is a separate tool (#118), not an Operation, and is always mutate.",
 	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in listOperationsInput) (*sdkmcp.CallToolResult, ListOperationsOutput, error) {
-		if err := auditRead(ctx, reads, "list_operations", ReadEvent{}); err != nil {
+		vocab, err := lane.ListOperations(ctx, in.NodeID)
+		if err != nil {
+			switch {
+			case errors.Is(err, capability.ErrNodeNotFound):
+				return nil, ListOperationsOutput{}, fmt.Errorf("node %q not found", in.NodeID)
+			case errors.Is(err, capability.ErrInvalidFilter):
+				// The lane's before-any-record bound on an oversized node_id
+				// renders "capability: invalid query filter: …", the same
+				// internal-prefix leak fixed for describe_node — mapped the
+				// same way (security review, cycle 2, LOW 5).
+				return nil, ListOperationsOutput{}, errors.New("invalid node_id: must be 1-256 bytes")
+			}
 			return nil, ListOperationsOutput{}, err
 		}
 
@@ -166,10 +188,9 @@ func registerOperationTools(srv *sdkmcp.Server, ops OperationLister, vocab Vocab
 			// entries and templates_reported=false — never a claim that it has
 			// none (nodevocab.Cache.Get).
 			out.NodeID = in.NodeID
-			snap, ok := vocab.Get(in.NodeID)
-			out.TemplatesReported = ok
-			out.TemplateSetFingerprint = snap.Fingerprint
-			items = append(items, templateOperationItems(snap)...)
+			out.TemplatesReported = vocab.Reported
+			out.TemplateSetFingerprint = vocab.Templates.Fingerprint
+			items = append(items, templateOperationItems(vocab.Templates)...)
 		}
 
 		sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })

@@ -2,23 +2,28 @@
 // list_nodes, describe_node, list_operations — plus, since #118, the
 // execution meta-tools — run_operation, raw_exec, cancel_job, get_job — all
 // thin adapters over the same control-plane capability layer (invariant 10).
-// The read tools adapt the registry, the display-only effective-Policy
-// cache, and the Operation vocabulary; the execution tools adapt an injected
-// Executor (Service.Run/CancelJob's exact shape) and JobResultReader
-// (per-Job Task read-back for rendering per-Node results).
+// Since #680 the read tools adapt ONE audited seam, ReadLane, and hold no
+// registry or cache of their own — every registry, Policy-view and
+// Template-vocabulary read goes through the capability read lane, which
+// records it before returning content and fails closed (QRY-28). The
+// execution tools adapt an injected Executor (Service.Run/CancelJob's exact
+// shape) and JobResultReader (per-Job Task read-back for rendering per-Node
+// results).
 //
 // This file (mcp.go) — along with tools_nodes.go, tools_operations.go,
 // attribution.go, and toolevents.go (#416, the tool-call event publisher) —
-// is a strict READ file: its non-test source never spells a
-// capability. token at all (not even capability.Principal), never imports
-// *capability.Service, and never calls capability.New. NodeReader,
-// PolicyReader, and OperationLister below are read-only interfaces —
-// Get/List/Operations, no Run — so a read tool structurally cannot reach the
-// execution path. The execution tools (tools_execution.go, tools_jobs.go)
-// are relaxed EXEC files: they may reference capability.Principal/Selector/
-// NodeResult/FrozenError/CapExceededError (needed for Executor's signature
-// and error rendering) but, like every file in this package, may never
-// spell capability.Service/capability.New/newDispatch or type-assert to
+// is a strict READ file: its non-test source names no capability. identifier
+// outside capabilityReadAllowlist (e.g. capability.StateEval, needed for
+// NodeListing/NodeDescription's Eval field), and never
+// capability.Principal, capability.Service or capability.New. ReadLane below
+// is a read-only, Principal-free interface — the Principal is resolved on
+// the composition root's side of the seam (the ReadAuditor precedent,
+// readaudit.go) — so a read tool structurally cannot reach the execution
+// path. The execution tools (tools_execution.go, tools_jobs.go) are relaxed
+// EXEC files: they may reference capability.Principal/Selector/NodeResult/
+// FrozenError/CapExceededError (needed for Executor's signature and error
+// rendering) but, like every file in this package, may never spell
+// capability.Service/capability.New/newDispatch or type-assert to
 // registry.Repository — those remain unconditionally forbidden.
 // no_dispatch_test.go AST-guards this whole partition: every non-test .go
 // file must be classified as a read file or an exec file (an unclassified
@@ -28,22 +33,19 @@
 //
 // Wiring note (RB1, plan review): New's Executor/JobResultReader parameters
 // are narrowed via execAdapter/jobResultReaderAdapter below New, mirroring
-// nodeReaderAdapter/policyReaderAdapter/operationListerAdapter for the read
-// inputs. execAdapter itself is defined in tools_execution.go (an exec
-// file, since its method bodies must spell capability.Principal/Selector/
-// NodeResult) — New wires it here with an UNQUALIFIED composite literal
-// (`execAdapter{r: exec}`) so this file's own source still names no
-// capability. token.
+// readLaneAdapter/operationListerAdapter for the read inputs. execAdapter
+// itself is defined in tools_execution.go (an exec file, since its method
+// bodies must spell capability.Principal/Selector/NodeResult) — New wires it
+// here with an UNQUALIFIED composite literal (`execAdapter{r: exec}`) so
+// this file never names capability.Principal, the allowlist exclusion that
+// is still load-bearing for the Principal-free ReadLane.
 //
 // The narrow interfaces here are a compile-time guarantee, not a runtime one
-// on their own: composition roots pass concrete values (e.g.
-// registry.Repository, *policyview.Cache, *capability.Service) whose dynamic
-// type is wider than the interface. Without more, a value read through
-// NodeReader could still be type-asserted back to registry.Repository to
-// recover Upsert/SetRelayLabels/Delete (and, for Executor, back to
-// *capability.Service to recover EngageFreeze/ReleaseFreeze). New
-// immediately re-wraps every input in an unexported adapter
-// (nodeReaderAdapter / policyReaderAdapter / operationListerAdapter /
+// on their own: composition roots pass concrete values (e.g. a
+// *capability.Service-backed adapter) whose dynamic type could be wider than
+// the interface. Without more, a value read through ReadLane could still be
+// type-asserted back to something wider. New immediately re-wraps every
+// input in an unexported adapter (readLaneAdapter / operationListerAdapter /
 // execAdapter / jobResultReaderAdapter) whose ONLY dynamic type exposes the
 // narrow method set — so such a type assertion fails at runtime too, not
 // just at the interface boundary.
@@ -56,6 +58,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
@@ -63,36 +66,60 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// NodeReader is the read-only registry view the mcp package needs. It is
-// deliberately narrower than registry.Repository (Get/List only, no
-// Upsert/SetRelayLabels/SetRevoked/...) so this package's write surface to
-// the registry is structurally nil — it is satisfied by registry.Repository
-// as passed from the composition root, but callers here can never reach a
-// write method through it.
-type NodeReader interface {
-	Get(nodeID string) (registry.Node, bool)
-	List() []registry.Node
+// NodeListing is list_nodes' result, as ReadLane returns it. Nodes may be a
+// NIL slice when the Selector matched nothing (capability.Selector.Resolve
+// returns nil) — the tool must build its response array with an explicit
+// zero-length, pre-sized make rather than range straight into a var-declared
+// slice, so a no-match result renders an empty JSON array, never null
+// (#207/#253).
+type NodeListing struct {
+	Nodes []registry.Node
+	Eval  capability.StateEval
 }
 
-// PolicyReader is the read-only view over the display-only effective-Policy
-// cache (policyview.Cache). Display-only: the Relay never evaluates or sets
-// Policy through this or any other path (ADR-0002, invariant 12).
-type PolicyReader interface {
-	Get(nodeID string) (policyview.Snapshot, bool)
+// NodeDescription is describe_node's result, as ReadLane returns it: the
+// Node plus its DISPLAY-ONLY Policy and Template views. PolicyReported/
+// TemplatesReported=false is the ONLY "nothing captured yet" signal — never
+// an empty Policy or vocabulary (QRY-7). Deliberately omits PolicyPeers/
+// TemplatePeers: MCP does not report peer counts today (QRY-5, Future work),
+// and this type must not make that claim untrue by carrying them anyway.
+type NodeDescription struct {
+	Node              registry.Node
+	Eval              capability.StateEval
+	Policy            policyview.Snapshot
+	PolicyReported    bool
+	Templates         nodevocab.Snapshot
+	TemplatesReported bool
 }
 
-// VocabReader is the read-only view over the display-only per-Node Template
-// Operation vocabulary cache (nodevocab.Cache; ADR-0021). Display-only, like
-// PolicyReader: the Relay reports which Operations a Node has, and never sets
-// them (ADR-0002) or decides whether one may run (invariant 12).
-type VocabReader interface {
-	Get(nodeID string) (nodevocab.Snapshot, bool)
+// NodeVocabulary is list_operations' Node-scoped result, as ReadLane
+// returns it for a non-empty node_id.
+type NodeVocabulary struct {
+	Templates nodevocab.Snapshot
+	Reported  bool
+}
+
+// ReadLane is the ONE audited seam the read tools call (#680, QRY-28): every
+// registry, Policy-view and Template-vocabulary read goes through it, which
+// records the read before returning content and fails closed. It is
+// deliberately Principal-free — capability.Principal is not on
+// capabilityReadAllowlist (no_dispatch_test.go), so this package can never
+// name it even on its strict read files — and the composition root resolves
+// the Principal on its side of the seam (mirrors ReadAuditor, readaudit.go).
+type ReadLane interface {
+	ListNodes(ctx context.Context, selector string) (NodeListing, error)
+	DescribeNode(ctx context.Context, nodeID string) (NodeDescription, error)
+	ListOperations(ctx context.Context, nodeID string) (NodeVocabulary, error)
 }
 
 // OperationLister is the read-only view over the FLEET-WIDE Native Operation
 // vocabulary (opvocab, invariant 8). Since ADR-0021 the full vocabulary is
 // per-Node — natives are frozen and uniform, Template Operations are local to
-// each Node — so a per-Node view needs this plus VocabReader.
+// each Node — so a per-Node view needs this plus ReadLane's
+// ListOperations. It reads no registry and no cache and discloses nothing
+// about this fleet, so it stays a plain seam rather than going through
+// ReadLane: the frozen, compile-time table (ADR-0015/ADR-0021) has nothing
+// for an audited lane to record.
 type OperationLister interface {
 	Operations() []opvocab.Descriptor
 }
@@ -111,35 +138,28 @@ type JobResultReader interface {
 	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
 }
 
-// nodeReaderAdapter narrows an arbitrary NodeReader down to a value whose
-// dynamic type is nodeReaderAdapter itself, exposing only Get/List. See the
-// package doc comment: this is what makes a `.(registry.Repository)` type
+// readLaneAdapter narrows an arbitrary ReadLane down to a value whose dynamic
+// type is readLaneAdapter itself, exposing only ListNodes/DescribeNode/
+// ListOperations. See the package doc comment: this is what makes a type
 // assertion on the value New() was given fail at runtime, not just at the
 // static-interface boundary.
-type nodeReaderAdapter struct {
-	r NodeReader
+type readLaneAdapter struct {
+	r ReadLane
 }
 
-func (a nodeReaderAdapter) Get(nodeID string) (registry.Node, bool) { return a.r.Get(nodeID) }
-func (a nodeReaderAdapter) List() []registry.Node                   { return a.r.List() }
-
-// policyReaderAdapter is nodeReaderAdapter's sibling for PolicyReader: it
-// strips a *policyview.Cache (which also exposes Set) down to Get only.
-type policyReaderAdapter struct {
-	r PolicyReader
+func (a readLaneAdapter) ListNodes(ctx context.Context, selector string) (NodeListing, error) {
+	return a.r.ListNodes(ctx, selector)
 }
 
-func (a policyReaderAdapter) Get(nodeID string) (policyview.Snapshot, bool) { return a.r.Get(nodeID) }
-
-// vocabReaderAdapter is policyReaderAdapter's sibling for VocabReader: it
-// strips a *nodevocab.Cache (which also exposes Set) down to Get only.
-type vocabReaderAdapter struct {
-	r VocabReader
+func (a readLaneAdapter) DescribeNode(ctx context.Context, nodeID string) (NodeDescription, error) {
+	return a.r.DescribeNode(ctx, nodeID)
 }
 
-func (a vocabReaderAdapter) Get(nodeID string) (nodevocab.Snapshot, bool) { return a.r.Get(nodeID) }
+func (a readLaneAdapter) ListOperations(ctx context.Context, nodeID string) (NodeVocabulary, error) {
+	return a.r.ListOperations(ctx, nodeID)
+}
 
-// operationListerAdapter is nodeReaderAdapter's sibling for OperationLister.
+// operationListerAdapter is readLaneAdapter's sibling for OperationLister.
 // Today's only caller (opvocabLister) is already this narrow, but New
 // re-wraps unconditionally so the guarantee doesn't depend on callers
 // remembering to.
@@ -149,7 +169,7 @@ type operationListerAdapter struct {
 
 func (a operationListerAdapter) Operations() []opvocab.Descriptor { return a.r.Operations() }
 
-// jobResultReaderAdapter is nodeReaderAdapter's sibling for JobResultReader:
+// jobResultReaderAdapter is readLaneAdapter's sibling for JobResultReader:
 // it strips whatever concrete JobRepository/TaskRepository-backed value the
 // composition root passed down to GetJob/TasksByJob only.
 type jobResultReaderAdapter struct {
@@ -171,7 +191,7 @@ func (a jobResultReaderAdapter) TasksByJob(ctx context.Context, jobID string) ([
 const serverVersion = "0.1.0"
 
 // New builds the Relay's MCP server, registers the read tools against
-// nodes/policy/ops and the execution tools against exec/results, and
+// lane/ops and the execution tools against exec/results, and
 // returns it as a plain http.Handler (the SDK's StreamableHTTPHandler) —
 // mountable directly on controlplane.Server.Mux() behind the existing
 // Authenticator.Middleware (invariant 10: one control path, auth inherited
@@ -184,6 +204,12 @@ const serverVersion = "0.1.0"
 // turn on production dispatch — that depends on whether exec's own
 // dispatcher was configured with capability.WithExecution, which is the
 // composition root's call, isolated to #154.
+//
+// A nil lane is legal only for a server whose read tools (list_nodes,
+// describe_node, list_operations) are never called — e.g. a golden-file
+// fixture exercising only the execution tools; a stray read-tool call
+// through a nil lane panics rather than failing legibly, mirroring the
+// pre-existing nil ReadAuditor.
 // Option configures a server built by New. The only one today is WithClock;
 // it exists because the Tasks surface renders wall-clock values (SEP-2663's
 // ttlMs, createdAt, lastUpdatedAt) and a golden wire test cannot assert exact
@@ -192,10 +218,9 @@ const serverVersion = "0.1.0"
 type Option func(*serverOptions)
 
 type serverOptions struct {
-	now                func() time.Time
-	approvals          ApprovalDecider
-	toolCalls          ToolCallObserver
-	certExpiringWithin time.Duration
+	now       func() time.Time
+	approvals ApprovalDecider
+	toolCalls ToolCallObserver
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
@@ -214,16 +239,7 @@ func WithToolCallObserver(o ToolCallObserver) Option {
 	return func(cfg *serverOptions) { cfg.toolCalls = o }
 }
 
-// WithCertExpiringWindow sets the state:cert-expiring warning window
-// (ADR-0034) the read tools evaluate list_nodes/describe_node's state_labels
-// and Selector filtering against. The composition root computes the same
-// value it hands the capability layer and the Console (invariant 11) — a
-// zero window (the default) means the marker never fires.
-func WithCertExpiringWindow(d time.Duration) Option {
-	return func(o *serverOptions) { o.certExpiringWithin = d }
-}
-
-func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
+func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultReader, reads ReadAuditor, tasks TaskResolver, opts ...Option) http.Handler {
 	cfg := serverOptions{now: func() time.Time { return time.Now().UTC() }}
 	for _, o := range opts {
 		o(&cfg)
@@ -231,11 +247,9 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 
 	// Re-wrap every input immediately: from this point on, nothing in this
 	// package ever holds a value whose dynamic type is wider than what
-	// NodeReader/PolicyReader/OperationLister/Executor/JobResultReader
-	// expose (see the package doc comment and the adapter types above).
-	nodes = nodeReaderAdapter{r: nodes}
-	policy = policyReaderAdapter{r: policy}
-	vocab = vocabReaderAdapter{r: vocab}
+	// ReadLane/OperationLister/Executor/JobResultReader expose (see the
+	// package doc comment and the adapter types above).
+	lane = readLaneAdapter{r: lane}
 	ops = operationListerAdapter{r: ops}
 	exec = execAdapter{r: exec}
 	results = jobResultReaderAdapter{r: results}
@@ -251,8 +265,8 @@ func New(nodes NodeReader, policy PolicyReader, vocab VocabReader, ops Operation
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
-	registerNodeTools(srv, nodes, policy, vocab, reads, cfg.now, cfg.certExpiringWithin)
-	registerOperationTools(srv, ops, vocab, reads)
+	registerNodeTools(srv, lane)
+	registerOperationTools(srv, ops, lane)
 	registerExecutionTools(srv, exec, results, ops)
 	registerJobTools(srv, exec, results, reads)
 	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers

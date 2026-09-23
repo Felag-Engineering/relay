@@ -752,6 +752,14 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// state:cert-expiring's warning window (#414, ADR-0034), computed
 		// once above and shared by every surface below.
 		capability.WithCertExpiringWindow(certExpiringWithin),
+		// The DISPLAY-ONLY Policy-view and Template-vocabulary reads (#680,
+		// QRY-28): the same policyCache/vocabCache the Tunnel handler writes
+		// into below (ts), Get-only from this side. Wiring them here is what
+		// lets describe_node/list_operations disclose a Node's Policy and
+		// Template vocabulary through the ONE capability layer, on every
+		// surface, instead of each surface holding its own cache reference.
+		capability.WithPolicyView(policyCache),
+		capability.WithTemplateVocabulary(vocabCache),
 		// The event seam's Job-grained publisher (#416). Appended last so
 		// this hunk stays additive alongside concurrent branches also
 		// touching the end of this slice.
@@ -951,9 +959,6 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// for the ControlSurface seam (#162) this replaces the two inline
 		// mount stanzas with.
 		sd := surfaceDeps{
-			registry:   reg,
-			policy:     policyCache,
-			vocab:      vocabCache,
 			ops:        opvocabLister{},
 			capability: capSvc,
 			jobs:       st.Jobs(),

@@ -54,6 +54,8 @@ const (
 	capabilityImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
+	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
+	contextImportPath    = "context"
 	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 
 	// authzImportPath is cancel.go's own import (#595); decide.go (#453),
@@ -106,6 +108,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	capAlias, capImported := localImportAlias(file, capabilityImportPath)
 	regAlias, regImported := localImportAlias(file, registryImportPath)
 	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
 	evAlias, evImported := localImportAlias(file, eventsImportPath)
 	authzAlias, authzImported := localImportAlias(file, authzImportPath)
 
@@ -113,8 +116,12 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 	// below matches on: `import . ".../events"` turns the recovery into
 	// `d.Events.(*Bus)`, which names nothing this guard can see. There is no
 	// legitimate reason for one here, so it is a violation on its own.
+	// policyview and nodevocab (security review, cycle 2) are on this list
+	// for the identical reason: a dot-import of either erases the qualifier
+	// G2's namesBannedType matches results against, below.
 	for _, banned := range []struct{ alias, pkg string }{
 		{regAlias, "registry"}, {evAlias, "events"}, {capAlias, "capability"}, {authzAlias, "authz"},
+		{pvAlias, "policyview"}, {nvAlias, "nodevocab"},
 	} {
 		if banned.alias == "." {
 			violations = append(violations, fmt.Sprintf(
@@ -426,24 +433,34 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 					}
 				}
 			}
-			// policyview.Cache is the type that carries Set. The Console is
-			// handed PolicyReader (seams.go), which is Get only, and this rule
-			// stops any file in the package recovering the writer by naming
-			// the concrete type — a type assertion, a type switch case, or a
-			// second construction of the cache.
+			// policyview.Cache and nodevocab.Cache (#680) are the types that
+			// carry Set. The Console is handed QueryReader (seams.go), whose
+			// DescribeNode is Get-only for both, and this rule stops any file
+			// in the package recovering either writer by naming the concrete
+			// type — a type assertion, a type switch case, or a second
+			// construction of the cache.
 			//
 			// What this buys is narrower than "no type can be recovered". An
-			// anonymous interface — `d.Policy.(interface{ Set(string,
-			// policyview.Snapshot) })` — recovers Set without ever naming
-			// Cache, and this guard would not see it (the registry.Repository
-			// rule above has the identical hole). It closes the obvious door,
-			// not every door; the seam's type and review close the rest.
+			// anonymous interface recovers Set without ever naming Cache, and
+			// this guard would not see it (the registry.Repository rule above
+			// has the identical hole). It closes the obvious door, not every
+			// door; the seam's type and review close the rest.
 			if pvImported {
 				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == pvAlias {
 					switch v.Sel.Name {
 					case "Cache", "New":
 						violations = append(violations, fmt.Sprintf(
 							"%s references policyview.%s — the Console must never hold a *policyview.Cache: Cache carries Set, and the effective-Policy panel is read-only STRUCTURALLY rather than by permission (ADR-0002, invariant 2; ADR-0011, invariant 12)",
+							fileName, v.Sel.Name))
+					}
+				}
+			}
+			if nvImported {
+				if pkg, ok := v.X.(*ast.Ident); ok && pkg.Name == nvAlias {
+					switch v.Sel.Name {
+					case "Cache", "New":
+						violations = append(violations, fmt.Sprintf(
+							"%s references nodevocab.%s — the Console must never hold a *nodevocab.Cache: Cache carries Set (ADR-0002, invariant 2; ADR-0011, invariant 12)",
 							fileName, v.Sel.Name))
 					}
 				}
@@ -456,6 +473,8 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 			}
 		case *ast.TypeAssertExpr:
 			checkRecoveredWriteSurface(v.Type)
+		case *ast.InterfaceType:
+			violations = append(violations, seamHandsBackUnauditedRead(fileName, v, file)...)
 		case *ast.CaseClause:
 			for _, expr := range v.List {
 				checkRecoveredWriteSurface(expr)
@@ -463,6 +482,105 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		return true
 	})
+	return violations
+}
+
+// seamHandsBackUnauditedRead is G2 (#680): an interface method declared in a
+// non-test file whose RESULTS name registry.Node, policyview.Snapshot or
+// nodevocab.Snapshot (bare, pointer, or slice) and whose PARAMETERS contain
+// no context.Context is a violation — it declares a seam that hands back a
+// Node or a display-only snapshot with no context, which is a read no lane
+// could have recorded or attributed (invariant 10, ADR-0025). Phrased as a
+// property, not a type denylist: it fires on the deleted FleetReader/
+// PolicyReader shapes and does not fire on QueryReader, whose DescribeNode
+// takes a context.Context. Mirrors mcp/no_dispatch_test.go's and
+// api/no_dispatch_test.go's identically-formulated rule.
+//
+// This closes the obvious door, not every door (security review, cycle 2):
+// MapType/ChanType below catch a map or channel of one of the three banned
+// types, but a local type alias for one of them, a generic type parameter
+// shaped like one, or an anonymous struct embedding one would not be. The
+// real bar is the composition-root guard
+// (TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache,
+// cmd/relay/control_surfaces_test.go) plus no surface being handed a
+// registry or cache at all.
+func seamHandsBackUnauditedRead(fileName string, iface *ast.InterfaceType, file *ast.File) []string {
+	if iface.Methods == nil {
+		return nil
+	}
+	regAlias, regImported := localImportAlias(file, registryImportPath)
+	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
+	ctxAlias, ctxImported := localImportAlias(file, contextImportPath)
+
+	var namesBannedType func(expr ast.Expr) bool
+	namesBannedType = func(expr ast.Expr) bool {
+		switch t := expr.(type) {
+		case *ast.StarExpr:
+			return namesBannedType(t.X)
+		case *ast.ArrayType:
+			return namesBannedType(t.Elt)
+		case *ast.MapType:
+			return namesBannedType(t.Key) || namesBannedType(t.Value)
+		case *ast.ChanType:
+			return namesBannedType(t.Value)
+		case *ast.SelectorExpr:
+			pkg, ok := t.X.(*ast.Ident)
+			if !ok {
+				return false
+			}
+			switch {
+			case regImported && pkg.Name == regAlias && t.Sel.Name == "Node":
+				return true
+			case pvImported && pkg.Name == pvAlias && t.Sel.Name == "Snapshot":
+				return true
+			case nvImported && pkg.Name == nvAlias && t.Sel.Name == "Snapshot":
+				return true
+			}
+		}
+		return false
+	}
+
+	hasContextParam := func(ft *ast.FuncType) bool {
+		if !ctxImported || ft.Params == nil {
+			return false
+		}
+		for _, p := range ft.Params.List {
+			sel, ok := p.Type.(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == ctxAlias && sel.Sel.Name == "Context" {
+				return true
+			}
+		}
+		return false
+	}
+
+	var violations []string
+	for _, m := range iface.Methods.List {
+		ft, ok := m.Type.(*ast.FuncType)
+		if !ok || ft.Results == nil {
+			continue
+		}
+		bannedResult := false
+		for _, r := range ft.Results.List {
+			if namesBannedType(r.Type) {
+				bannedResult = true
+				break
+			}
+		}
+		if !bannedResult || hasContextParam(ft) {
+			continue
+		}
+		methodName := "<unnamed>"
+		if len(m.Names) > 0 {
+			methodName = m.Names[0].Name
+		}
+		violations = append(violations, fmt.Sprintf(
+			"%s: interface method %s declares a seam that hands back a Node or a display-only snapshot with no context — a read no lane could have recorded or attributed (invariant 10, ADR-0025); read through the capability read lane",
+			fileName, methodName))
+	}
 	return violations
 }
 
@@ -503,6 +621,7 @@ func TestDispatchViolations_Fixtures(t *testing.T) {
 	const capImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"`
 	const regImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"`
 	const pvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"`
+	const nvImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"`
 	const authzImport = `"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"`
 
 	cases := []struct {
@@ -545,7 +664,12 @@ var _ = pv.New()
 		{
 			// The false-positive guard: this is exactly what seams.go and
 			// node.go do, and must keep doing.
-			name: "reading a reported Snapshot produces nothing",
+			// This is the deleted PolicyReader shape (#680): a Get-by-id seam
+			// with no context.Context, which is exactly what G2 now forbids —
+			// a read no lane could have recorded or attributed. It is no
+			// longer legitimate: the Node-detail Policy panel reads through
+			// QueryReader.DescribeNode instead.
+			name: "the deleted PolicyReader shape hands back a Snapshot with no context",
 			src: `package console
 import ` + pvImport + `
 type reader interface {
@@ -556,7 +680,89 @@ func f(r reader) *policyview.Snapshot {
 	return &s
 }
 `,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The false-positive guard for the new shape: QueryReader's
+			// DescribeNode takes a context.Context, so it must not fire.
+			name: "QueryReader's DescribeNode takes a context and does not violate",
+			src: `package console
+import (
+	"context"
+	` + capImport + `
+)
+type reader interface {
+	DescribeNode(ctx context.Context, p capability.Principal, nodeID string) (capability.NodeDetail, error)
+}
+`,
 			wantSubstr: "",
+		},
+		{
+			name: "the deleted FleetReader shape hands back a Node with no context",
+			src: `package console
+import ` + regImport + `
+type reader interface {
+	Get(nodeID string) (registry.Node, bool)
+	List() []registry.Node
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// LOW 3 (security review, cycle 2): a map result is one of the two
+			// shapes namesBannedType did not walk before this guard was hardened.
+			name: "a seam handing back a map of registry.Node with no context",
+			src: `package console
+import ` + regImport + `
+type reader interface {
+	ByID() map[string]registry.Node
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The other shape: a channel result.
+			name: "a seam handing back a channel of policyview.Snapshot with no context",
+			src: `package console
+import ` + pvImport + `
+type reader interface {
+	Stream() <-chan policyview.Snapshot
+}
+`,
+			wantSubstr: "hands back a Node or a display-only snapshot with no context",
+		},
+		{
+			// The dot-import evasion (security review, cycle 2): erasing the
+			// policyview qualifier would otherwise let a map/chan/slice of
+			// Snapshot slip past namesBannedType silently.
+			name: "dot-importing policyview erases the qualifier G2 matches on",
+			src: `package console
+import . ` + pvImport + `
+`,
+			wantSubstr: "dot-imports policyview",
+		},
+		{
+			name: "dot-importing nodevocab erases the qualifier G2 matches on",
+			src: `package console
+import . ` + nvImport + `
+`,
+			wantSubstr: "dot-imports nodevocab",
+		},
+		{
+			name: "constructing a nodevocab cache",
+			src: `package console
+import ` + nvImport + `
+var _ = nodevocab.New()
+`,
+			wantSubstr: "nodevocab.New",
+		},
+		{
+			name: "type assertion recovering the nodevocab cache",
+			src: `package console
+import ` + nvImport + `
+func f(v any) { _ = v.(*nodevocab.Cache) }
+`,
+			wantSubstr: "nodevocab.Cache",
 		},
 		{
 			name: "type assertion recovering registry.Repository",
