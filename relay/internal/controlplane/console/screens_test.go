@@ -2225,8 +2225,9 @@ func TestConsole_ShipsNoEmoji(t *testing.T) {
 
 // TestConsole_EveryRenderedWeightHasAFace.
 //
-// The templates carry dozens of <b> and <strong> tags, and the UA default for
-// both is font-weight: bold — 700. The stylesheet shipped 400/500/600 only, so
+// The templates carry more than a hundred <b> tags (and no <strong> today,
+// though it would be treated the same way), and the UA default for both is
+// font-weight: bold — 700. The stylesheet shipped 400/500/600 only, so
 // every one of them was SYNTHESISED off the 600 face rather than drawn, which
 // is why emphasis read as smeared instead of heavier. Nothing in Go could see
 // it: the markup was correct, the font loaded, and the browser quietly faked
@@ -2248,11 +2249,46 @@ func TestConsole_EveryRenderedWeightHasAFace(t *testing.T) {
 		}
 	}
 
-	// The markup that needs 700. If this ever stops being true the face above
-	// becomes dead weight rather than a fix.
-	body := get(t, h, "/console/").Body.String()
-	if !strings.Contains(body, "<b>") && !strings.Contains(body, "<strong>") {
-		t.Skip("no bold markup on the fleet view any more")
+	// The markup that needs 700. If this ever stops being true the face
+	// above is dead weight rather than a fix — so it is asserted, not
+	// skipped past (#673: the skip turned a shrunken UI into a pass).
+	//
+	// Scoped to the screen CONTENT, because layoutTmpl renders <b> in the
+	// brand and the signed-in-as footer of EVERY page: a whole-body check
+	// passes on the chrome alone and can never fail. contentOf falls back
+	// to the whole body when its <main id="content"> anchor is missing, so
+	// the anchor is asserted first — otherwise a layout edit as small as
+	// adding an attribute to <main> silently restores that vacuity.
+	//
+	// Every screen below renders bold in its own content today (13/5/8/5),
+	// so this is a conjunction: it catches ONE screen losing its emphasis,
+	// which a some-screen-somewhere check cannot. Not every screen belongs
+	// here — the approvals queue is empty under this fixture and correctly
+	// renders no bold at all — but each of these four does.
+	for _, path := range []string{
+		"/console/",
+		"/console/nodes/node-web-1",
+		"/console/reads",
+		"/console/activity",
+	} {
+		rr := get(t, h, path)
+		if rr.Code != 200 {
+			t.Fatalf("%s returned %d — a page that did not render carries no bold, "+
+				"so the check below would prove nothing", path, rr.Code)
+		}
+		body := rr.Body.String()
+		content := contentOf(body)
+		if content == body {
+			t.Fatalf("contentOf found no <main id=\"content\"> in %s and fell back to "+
+				"the whole body, where the chrome bold satisfies any check. Fix "+
+				"the anchor in layoutTmpl or fix contentOf — do not let this test "+
+				"pass on the chrome.", path)
+		}
+		if !strings.Contains(content, "<b>") && !strings.Contains(content, "<strong>") {
+			t.Errorf("%s renders no <b> or <strong> in its screen content — nothing on "+
+				"it needs the 700 face. Decide deliberately: either the @font-face "+
+				"and its woff2 should go, or this screen lost emphasis it wanted.", path)
+		}
 	}
 }
 
@@ -2352,7 +2388,10 @@ func TestNode_RecentTasksScrollsInsideItsPanel(t *testing.T) {
 	body := get(t, h, "/console/nodes/node-web-1").Body.String()
 	i := strings.Index(body, `<table class="rows">`)
 	if i < 0 {
-		t.Skip("the Recent Tasks table did not render for this fixture")
+		t.Fatalf("no <table class=\"rows\"> in the node-detail body, so the wrapper "+
+			"assertion below proves nothing. This test gives the fixture a Task of "+
+			"its own, so an absent table is a node.go regression, not fixture "+
+			"drift:\n%s", contentOf(body))
 	}
 	if before := body[:i]; !strings.Contains(before[max0(len(before)-120):], `<div class="tablescroll">`) {
 		t.Error("the Recent Tasks table is not wrapped in a scroll container — " +

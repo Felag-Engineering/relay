@@ -552,7 +552,10 @@ func TestReads_TargetTableSaysItIsASample(t *testing.T) {
 // from the slice's current contents.
 func TestReads_TargetKeyFollowsTheTrailsOwnPrecedence(t *testing.T) {
 	if len(audit.TargetArgKeys) < 2 {
-		t.Skip("the precedence order needs at least two keys to be a precedence order")
+		t.Fatalf("audit.TargetArgKeys = %v — this test proves a PRECEDENCE order and "+
+			"needs at least two keys to have one. A shorter list means the trail "+
+			"changed shape and this test must be rewritten, not skipped.",
+			audit.TargetArgKeys)
 	}
 	first, second := audit.TargetArgKeys[0], audit.TargetArgKeys[1]
 
@@ -572,6 +575,11 @@ func TestReads_TargetKeyFollowsTheTrailsOwnPrecedence(t *testing.T) {
 	}
 
 	// Reordered. A local copy of the key list does not move.
+	//
+	// Hazard: this mutates a package-level var owned by another package and restores
+	// it with t.Cleanup. That is only sound while nothing runs
+	// concurrently with it — do not add t.Parallel to this test, or to any
+	// test that reads audit.TargetArgKeys, without replacing this seam.
 	original := audit.TargetArgKeys
 	t.Cleanup(func() { audit.TargetArgKeys = original })
 	audit.TargetArgKeys = []string{second, first}
