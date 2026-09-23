@@ -37,8 +37,12 @@ the milestone, the claim IDs, and the claims diff if present. Write its output t
 In parallel:
 
 - **Use the `design-reviewer` agent** on the plan file.
-- `scripts/codex-review.sh design docs/design/plans/<slug>.md` (exit 3 means Codex is absent;
-  record the gate as single-reviewer).
+- `scripts/codex-review.sh design docs/design/plans/<slug>.md` — **once per plan.** This runs
+  BEFORE Stage 3 commits the plan file: the review scope is the working tree, so a run after
+  the commit would have nothing to read. Exit 3 means Codex is absent — record the gate as
+  single-reviewer, `Codex: absent (reason=<token>, model <slug>)`, copying the reason token and
+  the model from the script's own stderr line. Any other non-zero exit is a failed gate, not
+  absence — escalate.
 
 Merge the two reports. Deduplicate. For each BLOCKING item: run `design-architect` again with
 the item and the current plan; overwrite the plan. **Max 2 revision cycles.** A BLOCKED verdict
@@ -54,8 +58,9 @@ git push -u origin design/<slug>
 gh pr create --title "design(<capability>): <milestone title>" --body-file <body>
 ```
 
-Body: the spec and claim IDs; both reviewers' verdicts (or "Codex: absent"); revision cycles;
-**Unresolved** if any; a line saying a human merges and `/decompose` runs after the merge.
+Body: the spec and claim IDs; both reviewers' verdicts, or "Codex: absent (reason=<token>,
+model <slug>)"; revision cycles; **Unresolved** if any; a line saying a human merges and
+`/decompose` runs after the merge.
 End the commit message and the PR body with the attribution lines the session requires.
 
 ## Stage 4 — `NO DESIGN NEEDED`

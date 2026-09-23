@@ -230,10 +230,11 @@ test-security-surface:
 test-demo-fleet:
 	bash scripts/demo-fleet-test.sh
 
-# Proves scripts/codex-review.sh exits 3 only when Codex is ABSENT — plugin missing, quota
-# exhausted, credentials rejected — and never for a delivered report, a real review failure
-# or a killed run, and that no cause line carries a credential (#620). Hermetic: the
-# companion is a stub under a throwaway WORKDIR.
+# Proves scripts/codex-review.sh exits 0 only on a parsed result.verdict, 3 on anything else
+# — including the recorded real quota capture (#673) — a refusal with 2, and a killed run
+# with 1; that no count it prints can be forged by a hostile payload; and that it stays
+# read-only. Hermetic: a stub companion under a throwaway WORKDIR. Needs node and git; no
+# Codex CLI, no network (#694).
 test-codex-review:
 	bash scripts/codex-review-test.sh
 

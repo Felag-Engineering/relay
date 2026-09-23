@@ -114,8 +114,9 @@ Never leave `loop:in-progress` set at the end of a tick.
 ## Stage 6 — Report
 
 One short summary: the issue taken, the PR number, whether `make verify` was fully green,
-whether both reviewers ran on each gate or Codex was absent, and **explicitly whether any gate
-was skipped.** In a cloud environment `buf` may be absent, which
+whether Claude reviewed each gate, and whether the single Codex run on the final diff returned
+a verdict or was absent — and when absent, its reason token and model — and **explicitly
+whether any gate was skipped.** In a cloud environment `buf` may be absent, which
 skips the proto-drift and proto-breaking checks with a notice — a skipped gate is not a passed
 gate, and the human reading this in three weeks needs it stated, not implied.
 

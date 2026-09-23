@@ -17,6 +17,21 @@ Behaviour, from the user's perspective. Not a file-by-file list.
 > `/proto`, say so here — CI runs those gates regardless, and the reviewer needs to know
 > the local run did not.
 
+## Reviews
+
+- Claude: plan / code / security — <verdicts, cycles used>
+- Codex: once, final diff — `<verdict>`, or absent (`reason=<token>`, model `<slug>`): the gate
+  ran with one reviewer
+- If Codex's stderr printed `codex-review: scope-partial files=<n>`, part of this branch was
+  already committed when Codex ran and it saw only the uncommitted remainder — name which
+  committed files it did not see: <files, or n/a>
+
+> Codex runs once per issue, on the final diff — not every review cycle, because its allowance
+> is plan quota, not API spend. "Absent" is never a pass. The reason token NARROWS the cause, it
+> does not fully distinguish it: `reason=no-result` covers both an exhausted quota and a
+> rejected model slug, and only the script's own stderr replay — terminal diagnostics, never
+> quoted here — says which (#694).
+
 ## Capability spec
 
 - [ ] The governing spec in `docs/specs/` is still true of the code after this change

@@ -1,5 +1,5 @@
 ---
-description: "Implement one GitHub issue end to end: plan, adversarial plan review (Claude + Codex), implement, full verify, code review (Claude + Codex), security review when the surface is touched, spec proof update, and open a PR for a human to merge. Never merges."
+description: "Implement one GitHub issue end to end: plan, adversarial plan review (Claude), implement, full verify, code review (Claude), security review when the surface is touched, spec proof update, one Codex review of the final diff, and open a PR for a human to merge. Never merges."
 argument-hint: "<issue-number> [--non-interactive]"
 allowed-tools: Bash(*), Read, Edit, Write, Grep, Glob, LSP, Agent
 ---
@@ -94,8 +94,8 @@ unattended, comment with the claim ID, label `loop:needs-human`, delete the bran
 ## Stage 4 — Plan review
 
 **Use the `devloop-plan-reviewer` agent** on `issue.md` + `plan.md`. Record its findings in
-`review-feedback.md` under `## Plan review`. (One vendor here: a bad plan is caught again at
-code review, where both run, and a Codex pass per plan is cost without coverage.)
+`review-feedback.md` under `## Plan review`. (Claude alone: Codex is spent once per issue, at
+Stage 6.7, on the finished change — a Codex pass per plan is cost without coverage.)
 
 Any BLOCKING → `devloop-architect` again with the findings; overwrite `plan.md`. **Max 2
 cycles.** A BLOCKING item still standing → escalate as in Stage 3.
@@ -127,11 +127,11 @@ stop).
 Record in `review-feedback.md` under `## Verify`: the command, every lane it covered, and any
 lane that skipped.
 
-## Stage 6 — Code review, two vendors
+## Stage 6 — Code review
 
-In parallel: **the `devloop-code-reviewer` agent** (reads issue, plan, `review-feedback.md`,
-`git diff origin/<default>...HEAD`) and `scripts/codex-review.sh diff`. Merge, deduplicate,
-append under `## Cycle <c> — Code review`.
+**The `devloop-code-reviewer` agent** (reads issue, plan, `review-feedback.md`,
+`git diff origin/<default>...HEAD`). Append under `## Cycle <c> — Code review`. Codex does not
+run here — it is spent once per issue, at Stage 6.7, on the finished change (#694).
 
 - All clear → Stage 6.5.
 - Blocking findings → increment `c`, back to Stage 5 with the findings. **Max 2 review
@@ -149,11 +149,11 @@ append under `## Cycle <c> — Code review`.
 ref that does not resolve, one that cannot be diffed). That is a skipped gate, not a clean
 surface: escalate as in Stage 3.
 
-Otherwise, in parallel: **the `devloop-security-reviewer` agent** and
-`scripts/codex-review.sh security`. PASS from both → carry the summaries into the PR body.
-CONCERNS fixable in scope → Stage 5 once (counts as a review cycle). FAIL, or anything that
-would need an invariant or ADR to change → escalate as in Stage 3; the PR opens as `[WIP]`.
-The PR body gets a **Security surface** section listing the paths and why each changed.
+Otherwise, **the `devloop-security-reviewer` agent** alone. PASS → carry the summary into the
+PR body. CONCERNS fixable in scope → Stage 5 once (counts as a review cycle). FAIL, or anything
+that would need an invariant or ADR to change → escalate as in Stage 3; the PR opens as `[WIP]`.
+The PR body gets a **Security surface** section listing the paths and why each changed. Codex's
+security pass runs at Stage 6.7, added to its diff focus rather than as a separate run.
 
 ## Stage 6.6 — Spec proof
 
@@ -169,6 +169,30 @@ makes stale may be updated.
 
 If a spec changed, re-run `make docs-check`; if any buildable file changed since Stage 5.5,
 re-run `make verify`.
+
+## Stage 6.7 — Codex, once, on the final diff
+
+Codex is spent exactly once per issue, on the finished change, here — after every Claude-only
+review cycle above, before Stage 7 commits. The review scope is the uncommitted working tree,
+so this must run BEFORE the commit: after it, there would be nothing left for Codex to read.
+
+Run `scripts/codex-review.sh security` if Stage 6.5 found security-surface paths, else
+`scripts/codex-review.sh diff`. One run. This may take minutes; the runner backgrounds it per
+`dev-loop-runner.md` rule 4.
+
+- **Exit 0** → record the verdict and findings under `## Codex — final diff` in
+  `review-feedback.md`. A finding with severity `critical` or `high` is BLOCKING; `medium` and
+  `low` are suggestions.
+- **Exit 3** → record `Codex: absent (reason=<token>, model <slug>) — gate ran with one
+  reviewer` and continue. Never a pass. Copy the reason token and the model from the script's
+  own stderr line; do not paraphrase.
+- **Exit 2, exit 1, or any other non-zero** → a failed gate: escalate as in Stage 3.
+- Blocking findings → back to Stage 5 **once** (re-run 5.5, and 6.6 if a spec file moved), then
+  **one more** Codex run. Anything still blocking goes under **Unresolved** in the PR body with
+  `loop:needs-human`. No third run, ever.
+- **`codex-review: scope-partial files=<n>` on stderr** → part of this issue's own history was
+  already committed before this run, so Codex reviewed only the uncommitted remainder. The PR
+  body must name which committed files it did not see (the accompanying note line lists them).
 
 ## Stage 7 — Commit and open the PR
 
@@ -187,8 +211,11 @@ Closes #<n>
 
 - `Closes #<n>`; **Spec** and **Claims** (promoted; not promoted and why); **Design** step
 - **Verification**: the exact gate, every lane, every skipped lane, and whether CI was relied on
-- **Reviews**: plan (Claude), code and security (both vendors) — verdicts, cycles used, or
-  "Codex: absent"
+- **Reviews**: plan (Claude), code and security (Claude), and Codex: once, final diff —
+  `<verdict>`, or absent (`reason=<token>`, model `<slug>`) — plus the cycles used. The
+  parenthesis is required, not optional: the token NARROWS the cause, it does not fully
+  distinguish it — `reason=no-result` covers both an exhausted quota and a rejected model slug,
+  and only the script's own stderr replay (never durable, never quoted here) says which (#694).
 - **Security surface** section, if Stage 6.5 ran
 - **Unresolved** and **Escalations**, if any (and the `loop:needs-human` label)
 - the plan in a `<details>` block; a line that this was produced by the dev-loop and **must be

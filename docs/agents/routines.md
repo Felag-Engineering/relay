@@ -20,19 +20,27 @@ schedule for weeks.
 ```
 
 One tick takes the oldest open loop PR with unaddressed human review comments, fixes what was
-asked, re-runs the full gate and both reviewers, pushes, and replies per thread. Questions and
-anything that would change a spec claim are escalated with `loop:needs-human`, never answered
-on your behalf. A sensible cadence is every hour while you are reviewing and twice a day
-otherwise; it exits in seconds when there is nothing to respond to.
+asked, re-runs the full gate, Claude's reviewers and at most one Codex run, pushes, and replies
+per thread. Questions and anything that would change a spec claim are escalated with
+`loop:needs-human`, never answered on your behalf. A sensible cadence is every hour while you
+are reviewing and twice a day otherwise; it exits in seconds when there is nothing to respond
+to.
 
-Both need the Codex CLI on the environment for the second reviewer. Without it every review
-gate runs single-vendor and the PR body says so — degraded, and stated, never silent.
+Both need the Codex CLI, and now node too, on the environment for the second reviewer. Without
+either, every review gate runs single-vendor and the PR body says so — degraded, and stated,
+never silent. `RELAY_CODEX_MODEL` overrides the default model (`gpt-5.6-terra`) per run.
 
 ## Environment
 
 Cloud sessions run Ubuntu 24.04 on 4 vCPU / 16 GB RAM / 30 GB disk, with a fresh clone per run.
-**Go, Rust (rustc + cargo), Docker, and `gh` are pre-installed**; `gh` picks up `GH_TOKEN`
-automatically and its traffic bypasses the network allowlist.
+**Go, Rust (rustc + cargo), Docker, and `gh` are pre-installed**; `gh` picks up
+`GH_TOKEN` automatically and its traffic bypasses the network allowlist. Whether node is
+pre-installed on the image is not something this file can confirm — but node is now
+load-bearing, not merely useful, whether or not it ships by default: `scripts/codex-review.sh`
+runs the Codex companion and classifies its output with node, and `make test-codex-review`
+FAILS without it rather than skipping — before #694 a node-less host merely degraded the Codex
+gate to absent. Confirm node is present on the image; if it is missing, an unattended
+`make verify` now goes red on this gate rather than degrading it.
 
 One thing is missing, and it matters here:
 
