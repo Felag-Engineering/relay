@@ -12,6 +12,16 @@ name = "relay-daemon"
 # docs/operations/version-stamping.md.
 version = "0.0.9"
 edition = "2021"
+# MSRV (#667): the oldest rustc this daemon is *claimed* to build on. A floor,
+# not a pin — the daemon tracks stable (AGENTS.md), so there is deliberately no
+# rust-toolchain.toml. Read the number as advisory: every first-party build, CI
+# and the fleet images alike, uses current stable, so nothing ever compiles the
+# daemon at exactly this version and the claim can go stale without anything
+# noticing. Its two effects are real, though: cargo refuses an older rustc by
+# naming this version instead of failing somewhere in the middle of a compile,
+# and with no clippy.toml here clippy reads it as its MSRV and stops suggesting
+# constructs newer than it — a safe direction, but a real effect.
+rust-version = "1.96"
 description = "The Relay relay-daemon: the non-AI daemon that runs on each managed Node."
 license = "Proprietary"
 

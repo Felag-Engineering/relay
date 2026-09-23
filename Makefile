@@ -6,6 +6,38 @@
 # Schedulers (cron, Claude routines) don't source ~/.profile, so cargo/go/buf may be absent.
 export PATH := $(HOME)/.cargo/bin:$(HOME)/go/bin:$(HOME)/.local/bin:/usr/local/go/bin:$(PATH)
 
+# The Go toolchain every `make` target builds and tests with (#667).
+# relay/go.mod's `go` directive is a FLOOR: under GOTOOLCHAIN=auto the go
+# command upgrades to it and never downgrades to it, so a developer with Go
+# 1.26 installed runs every gate under 1.26 while CI (actions/setup-go, reading
+# the same `go` line) runs 1.25.12 — a red `make verify` CI cannot reproduce
+# (#572's ServeMux 301-vs-307 is the known symptom). Exporting the exact
+# toolchain makes the floor a ceiling too. A `toolchain` directive would not
+# have done this, and go.mod cannot even hold one equal to its own `go` line:
+# the go command deletes it as redundant.
+#
+# `+auto` rather than a bare name: this repo's modules get the pinned toolchain,
+# but a `go install <tool>@<version>` below whose own go.mod needs a NEWER one
+# still upgrades instead of hard-failing. That is also the one residual path by
+# which a newer toolchain runs anything here — every tool pinned below asks for
+# 1.25.x or older today, so none of them takes it, and the relay module never
+# does either way.
+#
+# Reach, stated so it is not over-read: GOTOOLCHAIN only re-execs the `go`
+# command. Sibling binaries are not covered — which is why gofmt below is
+# invoked out of `go env GOROOT` — and a bare `cd relay && go test ./...` run
+# outside make is not pinned at all; internal/version's toolchain contract test
+# is what catches that one.
+#
+# Derived from relay/go.mod so the version is named once. `?=` leaves a one-run
+# escape hatch: `GOTOOLCHAIN=local make test-relay`. A `go` directive with no
+# patch component (`go 1.26`) is not a valid toolchain name, so the awk yields
+# nothing, the export is skipped, and the go command keeps its default.
+GO_TOOLCHAIN := $(shell awk '$$1=="go" && $$2 ~ /^[0-9]+\.[0-9]+\.[0-9]+$$/ {print "go" $$2 "+auto"; exit}' relay/go.mod)
+ifneq ($(GO_TOOLCHAIN),)
+export GOTOOLCHAIN ?= $(GO_TOOLCHAIN)
+endif
+
 .PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
         test-strict-umask-daemon lint-relay lint-daemon lint-tools tools \
@@ -231,13 +263,36 @@ test-relay:
 test-relay-race:
 	cd relay && go test -race ./...
 
+# gofmt is invoked out of the running toolchain's GOROOT here and in fmt-relay,
+# not off PATH (#667): the GOTOOLCHAIN export at the top re-execs `go` only, so
+# a bare `gofmt` would be whatever the host happens to ship, and formatting the
+# tree with one toolchain while compiling it with another is the skew #667 is
+# about. The lookup is guarded before the path is built, because an absent or
+# half-installed `go` makes `$(go env GOROOT)/bin/gofmt` collapse to the absolute
+# `/bin/gofmt` — which on a Debian-style host exists and is some other Go's
+# formatter, i.e. exactly that skew, passing silently. `gofmt -l` only LISTS
+# drift — it exits 0 either way, so this target does not fail on unformatted
+# files; fmt-relay below is the gate that does.
 lint-relay:
-	cd relay && gofmt -l . && go vet ./... && golangci-lint run
+	@root="$$(go env GOROOT)" || { echo "lint-relay: go env GOROOT failed — is go on PATH?" >&2; exit 1; }; \
+	test -n "$$root" || { echo "lint-relay: go env GOROOT is empty — is go on PATH?" >&2; exit 1; }; \
+	gofmt="$$root/bin/gofmt"; \
+	test -x "$$gofmt" || { echo "lint-relay: no gofmt at $$gofmt" >&2; exit 1; }; \
+	cd relay && "$$gofmt" -l . && go vet ./... && golangci-lint run
 
 ## --- format-only targets (no compile; fmt-relay is the relay CI job's gofmt step) ---
 # fmt-relay fails loudly if any file is unformatted: gofmt -l alone exits 0 even on drift.
+# Same guarded lookup as lint-relay — an empty GOROOT, or a GOROOT with no
+# executable gofmt in it, fails here instead of formatting with whatever
+# `/bin/gofmt` the host ships. Resolving once also keeps `test -z` from reading
+# a failed formatter's empty output as a clean tree.
 fmt-relay:
-	@test -z "$$(cd relay && gofmt -l .)" || { cd relay && gofmt -l . >&2; exit 1; }
+	@root="$$(go env GOROOT)" || { echo "fmt-relay: go env GOROOT failed — is go on PATH?" >&2; exit 1; }; \
+	test -n "$$root" || { echo "fmt-relay: go env GOROOT is empty — is go on PATH?" >&2; exit 1; }; \
+	gofmt="$$root/bin/gofmt"; \
+	test -x "$$gofmt" || { echo "fmt-relay: no gofmt at $$gofmt" >&2; exit 1; }; \
+	unformatted="$$(cd relay && "$$gofmt" -l .)" || exit 1; \
+	test -z "$$unformatted" || { printf '%s\n' "$$unformatted" >&2; exit 1; }
 
 fmt-daemon:
 	cd daemon && cargo fmt --check
