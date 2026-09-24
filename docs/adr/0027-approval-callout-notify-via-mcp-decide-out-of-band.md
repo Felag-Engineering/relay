@@ -79,6 +79,9 @@ Two properties fall out, and they are the whole point:
      approval surfaces under `inputRequests` on `tasks/get`.
    - **Out-of-band webhook / link** — the universal path. Required, always available, and
      the only one that is a *guarantee* rather than a delivery convenience.
+     *(Amended 2026-09-24 by ADR-0040: still true of the authenticated decision endpoint's
+     **availability**, and no longer a description of where an agent-originated approval is
+     expected to arrive — that is the requesting MCP client.)*
 
    The Tasks extension is still stabilizing (retry and expiry lifecycle gaps), so it is an
    optimization we adopt, never a dependency we assume. **A deployment with no
@@ -97,6 +100,9 @@ Two properties fall out, and they are the whole point:
    The honest framing: in-band is *an assumption about the client*; out-of-band is
    *evidence*. Default the self-confirmation rung to in-band and the second-person rung to
    out-of-band; deployments move the dial in root-owned config.
+   *(Amended 2026-09-24 by ADR-0040: the first half stands and the second is shelved in the
+   shipped posture — no shipped or seeded rule sets a second-person rung, so nothing demands
+   `out-of-band`. The mechanism is unchanged and unexercised.)*
 
 5. **The confirmation ladder.** Gate rules select a rung:
    1. **No gate** — below thresholds, runs immediately.
@@ -518,3 +524,28 @@ at that bullet; `docs/security/threat-model.md` repeats the ceiling and is corre
 change; and `docs/specs/plan.md` states the 4-hour figure already, as intent — it is `aspirational`
 and unmigrated, so it adopts this amendment at its migration rather than now. `approval.md` carries
 AP-56, AP-57 and AP-58.
+
+## Amendment (2026-09-24): one answer path per origin — this ADR is amended by ADR-0040
+
+[ADR-0040](0040-the-surface-that-created-a-request-answers-it.md) narrows this ADR's posture that
+a decision reaches Relay by two paths existing **side by side because they reach different
+people**. Both paths still exist and both still work; what is removed is the freedom to answer a
+request on the path that did not create it. **The surface that created a request is the surface
+that answers it** — a request created over MCP is answerable only over MCP, and the Console and
+Control API decide only what they themselves originated.
+
+Two consequences for this ADR's text, signposted in place above: decision 2's out-of-band envelope
+remains the guarantee of the decision **endpoint's availability** and stops describing where an
+agent-originated approval arrives; and decision 4's "default the second-person rung to
+out-of-band" keeps its mechanism and loses its use, because no shipped or seeded rule sets a
+second-person rung.
+
+Nothing else here moves. The gate's position, the ladder, the plan-hash binding, drift re-parking,
+quorum, expiry, the attribution triple, approval grants and their bounds are all unchanged, and an
+approval is still never authorization. What ADR-0040 gives up — a Relay-verified approver in the
+default path for agent work — it states plainly rather than argues away, and the reasoning shelved
+with it is kept in `docs/specs/approval-assurance.md`.
+
+**The decision is explicitly interim**, pending the permissions rework, and it must not be
+enforced before #646 lands: today a Gleipnir-parked request is answered by a human in the Console,
+and closing that before the MRTR round trip exists would leave no answer path at all.

@@ -77,7 +77,10 @@ it seeds:
 | Raw Exec, any surface | Self-confirmation, in-band |
 
 Second-person audiences and out-of-band channel requirements are fully supported today; an
-operator who wants them configures them. The seeded default simply will not demand them.
+operator who wants them configures them. The seeded default simply will not demand them — and
+since ADR-0040, **self-confirmation in-band is the only rung the shipped posture uses at all**.
+The seed's content is unchanged by that decision; what changed is that it is no longer one
+posture among several that ship.
 
 **Why the seed is not a hole in invariant 11.** That invariant says a reach-bounding runtime
 object is changed only by a human Account with step-up re-authentication, and AP-55's seed is one
@@ -105,6 +108,13 @@ that same ADR-0027 amendment orders this spec to describe the file behaviour as 
 
 The three rungs are ADR-0027 decision 5's, named as `GLOSSARY.md` defines them: **no gate**,
 **self-confirmation**, **second-person**. "Confirmation" unqualified names none of them.
+
+**No shipped or seeded rule demands `out-of-band`, and none sets a second-person rung.** Since
+ADR-0040 the shipped posture uses one rung — self-confirmation, in-band — so the channel
+machinery below (AP-12, AP-13, AP-14, and the weak-channel refusal AP-47) is present, correct and
+**unexercised**: an operator who writes a rule reaches all of it, and nothing Relay ships does.
+That is a decision about the shipped configuration, not about the code, and it is explicitly
+interim; what it gives up, and what would bring it back, is `approval-assurance.md`.
 
 - **AP-9** A gate rule selects one of three rungs: **no gate** — below thresholds, runs
   immediately; **self-confirmation** — the request is confirmed by the requester's side; and
@@ -152,7 +162,11 @@ credential the AI-agent session does not hold.
 ### Two decision paths
 
 A decision reaches Relay by one of two paths, and they exist side by side because they reach
-different people.
+different people. **This is current behaviour and ADR-0040 narrows it**: the surface that created
+a request becomes the surface that answers it, so a request created over MCP is answerable only
+over MCP. That is AP-74 … AP-76, Designed at v0.7.0 and blocked by #646 — until the MRTR round
+trip exists, closing the Console to an MCP-originated request would leave it no answer path at
+all. Both paths are open today.
 
 - **AP-15** **In-band, through the requesting client.** Relay authors the question; the client puts
   it in front of a human and returns the answer over its own session. `approve_request` is that
@@ -267,10 +281,14 @@ is deliberately small and conspicuous.
   namespace, a request still naming one is refused, and a stored pinned approval grant covers
   nothing.
 
-AP-30, AP-31 and AP-32 are today's truth and not the intent. The first pass the owner settled on
-`2026-09-14` — never Raw Exec, a 4-hour window, and issuance only by second-person out-of-band
-approval — went unwritten for ten days; it is now ADR-0027's amendment of `2026-09-24`, and it is
-AP-56, AP-57 and AP-58, which retire them.
+AP-30 and AP-31 are today's truth and not the intent: the first pass the owner settled on
+`2026-09-14` went unwritten for ten days, became ADR-0027's amendment of `2026-09-24`, and
+is AP-56 and AP-57, which retire them. **AP-32 has no Designed counterpart any more.** The
+third bound of that pass — a grant issued only by second-person, out-of-band approval — was
+AP-58 until ADR-0040 shelved it the same day; it is in `approval-assurance.md` with its
+reasoning, and AP-32 stands alone as what is true and expected to stay true for the interim.
+The other two bounds did not move with it: neither depends on who may answer or on which
+surface.
 
 Four rules govern a grant, and each closes a way the mechanism could invert. The first is a
 structural statement rather than a claim about a code path, and it is the one worth keeping in
@@ -352,12 +370,22 @@ most MCP approvals will be the second kind, and the trail will say so.
 
 ## Governing ADRs and invariants
 
+- **ADR-0040** — the surface that created a request is the surface that answers it, and
+  out-of-band as a rule *requirement* is shelved. **Explicitly interim**, pending the permissions
+  rework: for now Gleipnir owns the permission model for agent-originated work, and the Console
+  and Control API keep an approval capability only for work they themselves originated. It amends
+  ADR-0027's two-paths-side-by-side posture to one path per origin (AP-74 … AP-76), and it may not
+  be enforced before #646 — a constraint on promotion, not an aside. What it gives up — a
+  Relay-verified approver in the default path for agent-originated work — is stated in *Accepted
+  residual
+  risk* and in threat model R21; what it shelves is `approval-assurance.md`.
 - **ADR-0027, as amended 2026-08-14 through 2026-09-24.** The callout, the ladder, channel
   strength, plan-hash binding, expiry, quorum, the attribution triple, and approval grants remain
   its decisions. Several of its amendments are recorded intent that the code does not yet carry,
   and each is a Designed claim here rather than a description of today: gate rules as a
   store-backed, Console-edited operator setting (2026-09-15, AP-72), the default seeded into that
-  store on first boot (2026-09-16, AP-55), and the three grant bounds (2026-09-24, AP-56 … AP-58).
+  store on first boot (2026-09-16, AP-55), and two of the three grant bounds (2026-09-24, AP-56
+  and AP-57 — the third, grant issuance, is shelved by ADR-0040).
   The `2026-09-16` amendment is also what orders this spec to describe the file behaviour as
   current until AP-72 lands, which is why AP-4, AP-8 and AP-54 read as they do. It carries no
   figure for pending-request expiry; the 1-hour default recorded in this spec's `2026-09-14`
@@ -505,7 +533,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-55 | A Relay whose store holds no gate rules at first start **seeds the shipped default** — `read` ungated, `mutate` and Raw Exec at self-confirmation in-band, with second-person and out-of-band available to raise any rule to — as one audited act attributed to the system and not to an Account. After that the store is the only source: no file is read, and the Relay does not re-seed on a later start. Retires AP-7; depends on AP-72. (ADR-0027 §Amendment 2026-09-16, which declined a root-owned file seeding the store as two sources for one setting; #590.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, alone or within a bulk act, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
-| AP-58 | An approval grant is issued only by second-person, out-of-band approval — never self-confirmed and never in-band, whatever the gate rules allow for ordinary requests — and one approved on a weaker rung is refused. Retires AP-32. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-60 | A gated dispatch that parks under an in-band rule, from a client that can be asked, is answered with an approval **question** carrying the Relay-authored summary, the request ID and the plan hash — and leaves no Job and no Tasks behind, exactly as a park does today (AP-2). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-61 | A question is emitted only where an answer from that caller could be **accepted**: the rule's channel is in-band, the rule does not exclude the requester, and its audience admits the calling Account. Otherwise the park renders as today's `pending_approval`. | v0.7.0 — Admin Console: Administration & Execution |
@@ -519,6 +546,9 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-69 | An `out-of-band` rule yields **no answerable question**, on any client: the envelope a park is rendered in never weakens the channel the rule demands (AP-13). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-70 | A client that cannot be asked sees **no change**: `pending_approval`, `approve_request` and the Control API decision endpoint all behave exactly as before. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-71 | A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment 2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.) | v0.7.0 — Admin Console: Administration & Execution |
+| AP-74 | The surface that created a request is the surface that answers it: a request created over MCP is answerable only over MCP, and one created on the Admin Console or the Control API is answerable only on the surface that originated it. Blocked by #646 — see ADR-0040's sequencing constraint. (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
+| AP-75 | A Console or Control API decision on a request that surface did not originate is **refused**, whatever the decider's role, audience membership or step-up state — the origin check is not a role gate and no role clears it. (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
+| AP-76 | The refusal names **where the answer belongs**: it says the request was created on another surface and which one, so a human who reached the wrong surface is told the right one rather than left to read the gate rules. A refusal that did not say so would be indistinguishable from "you may not approve this". (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
@@ -538,6 +568,13 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 - **The Freeze** — a global stop, not a per-request judgement (`freeze.md`).
 - **Loading and validating the gate file at startup** — `relay-configuration.md`.
 - **Querying the approval audit trail after the fact** — `audit-and-read-lane.md`.
+- **The assurance properties shelved on `2026-09-24`** — `approval-assurance.md`, a `stub`:
+  out-of-band as a rule *requirement*, an approver Relay verifies rather than one a client
+  asserts, the grant-issuance floor that AP-58 was, and second-person rules whose second
+  person Relay authenticated. Each is kept there with the argument that was made for it, so
+  the permissions rework argues with the reasoning rather than with a summary of it. None of
+  it is a claim, none of it has a milestone, and none of it may be cited here as a
+  requirement (ADR-0040).
 
 ## Accepted residual risk
 
@@ -560,6 +597,22 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   client. The trail records the approver as asserted, never verified (AP-39), and an operator who
   needs evidence raises the rule to second-person or out-of-band. Stated to the owner and accepted
   on `2026-09-14`. Threat model **R21**.
+- **Every approval of agent-originated work is an assertion, and there is no verified
+  alternative.** Before ADR-0040 an operator who wanted evidence raised the rule to
+  `out-of-band` and got an approver Relay authenticated. That option is still in the code and is
+  no longer in the shipped posture: no shipped or seeded rule demands a channel, and an
+  MCP-originated request is answered by the client that made it (AP-74 … AP-76). So for the whole
+  of agent-originated work the audit trail answers *"a client told us a human approved this"* and
+  cannot answer *"a human authenticated to Relay approved this"*. Accepted by the owner on
+  `2026-09-24` as **interim**, pending the permissions rework, on four grounds ADR-0040 records:
+  the client is where the human already is, behind a firewall Relay sits the far side of; Gleipnir
+  enforces its own approver role check server-side and stamps the responder from an authenticated
+  session, so the assertion is backed by an authentication *somebody* performed; the alternative
+  in practice was an approval nobody answered; and one permission model is a prerequisite for a
+  good one. Bounded by everything an approval never was: Relay-side authorization on who may
+  request, the blast cap, the plan-hash binding, drift re-parking, and Node Policy, which no
+  approval has ever been able to lower. Threat model **R21** and **R26**; what is shelved, and
+  what would bring it back, is `approval-assurance.md`.
 - **An in-band approval is only as honest as the client's path to the human.** Behind a firewall,
   in-band is expected to be the everyday path, so for `in-band` rules the guarantee that a human
   decided rests on the client — Gleipnir's HIL router, or an operator's harness — keeping
@@ -650,6 +703,35 @@ Deciding from the Console (#435) is in scope, not open. ADR-0028's stale `tasks/
 no longer open either: the amendment is drafted in this change.
 
 ## History
+
+- `2026-09-24` — **Direction change, owner, same day: one answer path per origin, and out-of-band
+  as a rule requirement is shelved.** Recorded as **ADR-0040**, explicitly interim pending a
+  permissions rework. The owner's decision, in their words: *"For now I want Gleipnir to manage
+  all the permissions and the only reason for Console or API to have approval permission is for us
+  running a command from those tools."* Asked to be specific they chose **strict separation** over
+  a permissive version — a request created over MCP is answerable only over MCP, and the Console
+  and Control API decide only what they themselves originated — because a rule saying a request
+  *may* be answered anywhere leaves two permission models live over one object and is not
+  something a reviewer can check a diff against. New Designed claims **AP-74**, **AP-75** and
+  **AP-76** at v0.7.0, each **blocked by #646**: the sequencing is load-bearing, not housekeeping.
+  Today a Gleipnir-parked request is answered by a human in the Relay Console; enforce the
+  separation before the MRTR round trip exists and the only remaining answer is an
+  `approve_request` call Gleipnir does not make, so every gated dispatch would sit until it
+  expired — the gate would become a denial of service delivered as a safety improvement.
+  **AP-58 is removed from *Designed, not built*** and moves to the new `approval-assurance.md`
+  stub with its reasoning; AP-32 now stands alone, and AP-56 and AP-57 do not move, because
+  neither depends on who may answer. **AP-69 stays** — while the channel mechanism exists, a rule
+  that sets `out-of-band` must not produce a park nobody can answer, which is precisely the
+  failure the sequencing constraint warns about. **The built channel claims stay and stay true**
+  (AP-12, AP-13, AP-14, AP-47): the code still does all of it, and a spec describes what the
+  system does rather than what its shipped configuration exercises. One sentence added where the
+  ladder is introduced saying no shipped or seeded rule demands out-of-band, and one on AP-55's
+  seed confirming self-confirmation in-band is now the only rung the shipped posture uses. Threat
+  model: **R21** re-premised from "most MCP approvals are asserted" to "every approval of
+  agent-originated work is", **R23** loses a human deciding in the Console from its compensating
+  controls for those requests, and **R26** is added for the separation itself. The demo runbook
+  (`docs/operations/demo-fleet.md`) has its approval beat move from the Console to Gleipnir's UI;
+  it is named as a consumer and left for whoever next walks it.
 
 - `2026-09-24` — **The shipped default is seeded into the store, not shipped as a file.** The
   migration draft made AP-55 a root-owned default gate file; ADR-0027's amendment of `2026-09-16`

@@ -38,7 +38,7 @@ back-link.
 | [ADR-0024](0024-oauth-resource-server-delegated-idp.md) | Relay is an OAuth 2.1 protected resource, never an authorization server | Accepted | — | — |
 | [ADR-0025](0025-read-access-is-audited-read-output-is-not-retained.md) | Read access is audited; read output is not retained | Accepted (2026-08-12) | — | — |
 | [ADR-0026](0026-admin-console-execution-surface.md) | The Admin Console gains an execution surface | Accepted (2026-08-03) | [ADR-0009](0009-admin-console-web-ui.md) | — |
-| [ADR-0027](0027-approval-callout-notify-via-mcp-decide-out-of-band.md) | Approval callout: notify via MCP, decide out-of-band | Accepted; amended by ADR-0038 | — | [ADR-0010](0010-control-api-and-account-model.md), [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) |
+| [ADR-0027](0027-approval-callout-notify-via-mcp-decide-out-of-band.md) | Approval callout: notify via MCP, decide out-of-band | Accepted; amended by ADR-0038 | — | [ADR-0010](0010-control-api-and-account-model.md), [ADR-0038](0038-plan-is-an-approved-route-of-execution.md), [ADR-0040](0040-the-surface-that-created-a-request-answers-it.md) |
 | [ADR-0028](0028-mcp-tasks-extension-transport-layer-shim.md) | Relay implements the MCP Tasks extension as a transport-layer shim | Accepted | — | — |
 | [ADR-0029](0029-in-band-approval-through-the-tool-surface.md) | In-band approval through the tool surface | Accepted | — | — |
 | [ADR-0030](0030-relay-init-and-the-boundary-of-the-relay-binary.md) | `relay init` and the boundary of the `relay` binary | Accepted | — | — |
@@ -51,3 +51,4 @@ back-link.
 | [ADR-0037](0037-agentless-ssh-executor-low-assurance-tier.md) | Agentless SSH execution as an explicitly low-assurance tier (control-plane-side enforcement, no Node veto) | Proposed | — | — |
 | [ADR-0038](0038-plan-is-an-approved-route-of-execution.md) | Plan is an approved route of execution; Policy preflight is its own capability | Accepted | [ADR-0011](0011-plan-mode-daemon-evaluated-policy-queries.md), [ADR-0013](0013-cancellation-and-emergency-freeze.md), [ADR-0027](0027-approval-callout-notify-via-mcp-decide-out-of-band.md) | — |
 | [ADR-0039](0039-development-system-second-edition.md) | The development system, second edition | Proposed — 2026-09-21. Supersedes the process half of `docs/agents/workflow.md`, | — | — |
+| [ADR-0040](0040-the-surface-that-created-a-request-answers-it.md) | The surface that created a request is the surface that answers it | Accepted (2026-09-24). **Explicitly interim** — see *What is interim, and what | [ADR-0027](0027-approval-callout-notify-via-mcp-decide-out-of-band.md) | — |
