@@ -75,6 +75,32 @@ type verdictWaiter struct {
 	ch     chan *relayv1.PolicyVerdict
 }
 
+// violationAuditBudget bounds recordViolation's call to the ViolationRecorder.
+// Matches the register reconcileDispatchTimeout uses for its own bounded
+// call on this package's dispatching path (reconcile.go:18), and the
+// revocation cascade's audit budget (controlplane/api/tokens.go,
+// cascadeAuditBudget).
+const violationAuditBudget = 5 * time.Second
+
+// ViolationRecorder records a relay-daemon's protocol violation as a
+// durable, queryable audit event (#638). Structural, like Conduit in the
+// other direction: *auditsink.Sink satisfies it, and this package imports
+// neither internal/audit nor internal/capability to say so — the
+// composition root wires them (cmd/relay/dispatch_wiring.go).
+//
+// It is a REQUIRED parameter of NewRouter, not an option, and that is
+// the security property rather than a style choice: a production wiring
+// that forgot it would give a deployment refused-and-unrecorded
+// violations — audited dispatch with an unaudited refusal — and the
+// capability layer's own fail-open guard cannot reach here to catch it
+// (capability/seams.go:208-216 makes that argument for a sink method it
+// COULD reach; see NewRouter). Making it positional moves the same
+// guarantee from start-up to compile time. nil is permitted and means
+// "log only", which is what every hermetic test in this package passes.
+type ViolationRecorder interface {
+	RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error
+}
+
 // Router is the production capability.Conduit: it sends Tasks down a
 // connected Node's authenticated Tunnel (the existing mTLS stream and its
 // cert-derived node_id — ADR-0005/0006; Router creates no new transport or
@@ -106,16 +132,40 @@ type Router struct {
 	// function — including reconnects. It is the restart-reconciliation hook:
 	// the composition root wires it to Reconciler.ReconcileNode.
 	onConnect func(nodeID string)
+
+	// violations records a relay-daemon's protocol violation (#638). See
+	// ViolationRecorder and NewRouter's doc comment.
+	violations ViolationRecorder
 }
 
-// NewRouter returns a Router. onConnect may be nil (no reconciliation hook —
-// used by hermetic tests that only exercise Dispatch/Deliver/Cancel).
-func NewRouter(onConnect func(nodeID string)) *Router {
+// NewRouter returns a Router. onConnect may be nil (no reconciliation
+// hook — used by hermetic tests that only exercise Dispatch/Deliver/
+// Cancel).
+//
+// violations is REQUIRED POSITIONALLY and may be nil. Nil is a real,
+// supported mode — a Router that logs a refused TaskResult and records
+// nothing — and every test in this package uses it deliberately, as a
+// log-only fixture with no store to write to. It is a parameter rather
+// than an option so that adding a second production assembly cannot
+// silently inherit that mode: the compiler asks. Production must pass a
+// real recorder; the compiler cannot enforce that a non-nil argument is
+// the RIGHT one, so NewRouter logs a construction-time warning when
+// violations is nil, which is what makes a mis-wired deployment announce
+// itself instead of failing silently at the first refused TaskResult. The
+// production wiring is asserted end to end by
+// TestNewDispatchStack_AProtocolViolationOnAReadClassTaskIsRecordedWithNoOutput
+// (cmd/relay).
+func NewRouter(onConnect func(nodeID string), violations ViolationRecorder) *Router {
+	if violations == nil {
+		slog.Warn("dispatch: NewRouter called with no ViolationRecorder; this Router will not " +
+			"record protocol violations durably — wire-boundary refusals will be log-only")
+	}
 	return &Router{
 		conns:          make(map[string]*conn),
 		waiters:        make(map[string]*waiter),
 		verdictWaiters: make(map[string]*verdictWaiter),
 		onConnect:      onConnect,
+		violations:     violations,
 	}
 }
 
@@ -227,8 +277,10 @@ func (r *Router) Dispatch(ctx context.Context, nodeID string, t jobs.Task) (jobs
 		}
 		res, v := result(tr)
 		if v.Violated() {
-			slog.Warn("dispatch: node reported an outcome the wire contract forbids; recorded as a protocol violation",
+			slog.Warn("dispatch: node reported an outcome the wire contract forbids; the Relay "+
+				"refused the report and resolved the Task as a Relay-authored failure",
 				"node_id", nodeID, "task_id", t.ID, "reported_outcome", v.ReportedOutcome, "rule", v.Rule)
+			r.recordViolation(ctx, nodeID, t, v)
 		}
 		// The nil error is load-bearing: returning one here would leave the
 		// Task Dispatched, so InFlight() hands it to the Reconciler, which
@@ -249,6 +301,50 @@ func (r *Router) removeWaiter(taskID string) {
 	r.mu.Lock()
 	delete(r.waiters, taskID)
 	r.mu.Unlock()
+}
+
+// recordViolation writes v as a durable, queryable audit event (#638),
+// before the caller sees the Relay-authored failure Dispatch resolves the
+// Task with — so there is no window in which a surface shows the failure
+// and the trail cannot explain it. It is a no-op when r.violations is nil
+// (the supported "log only" mode; see NewRouter's doc comment).
+//
+// A record failure must NOT become a returned error. Dispatch's nil error
+// is load-bearing (see the comment above its return): an error leaves the
+// Task Dispatched, the Reconciler resends, and the attacker supplies the
+// same forged answer again. An unrecorded violation is a logged one; an
+// unresolved Task is an attacker-controlled loop (invariant 4).
+//
+// The residual of that choice is not swallowed: the composition root counts
+// a failed write on relay_protocol_violations_unrecorded_total, so "the
+// trail is missing violations" is an aggregate an operator can alert on
+// rather than a log line nobody reads. Naming the counter here keeps the two
+// halves of the decision readable together.
+//
+// The context is detached and re-bounded (violationAuditBudget) because the
+// violation arrived — whether the caller's request context has since
+// expired must not decide whether the evidence is kept. Same shape as the
+// revocation cascade's audit budget (controlplane/api/tokens.go,
+// cascadeAuditBudget). It runs on the dispatching goroutine and holds no
+// lock — mu guards only the maps (Router's doc comment), and that stays
+// true here.
+func (r *Router) recordViolation(ctx context.Context, nodeID string, t jobs.Task, v jobs.ProtocolViolation) {
+	if r.violations == nil {
+		return
+	}
+	ev := jobs.ProtocolViolationEvent{
+		NodeID:        nodeID,
+		TaskID:        t.ID,
+		JobID:         t.JobID,
+		OperationName: t.Action.OperationName,
+		Violation:     v,
+	}
+	auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), violationAuditBudget)
+	defer cancel()
+	if err := r.violations.RecordProtocolViolation(auditCtx, ev); err != nil {
+		slog.Error("dispatch: failed to record protocol violation; this violation has no durable row",
+			"node_id", nodeID, "task_id", t.ID, "job_id", t.JobID, "rule", v.Rule, "err", err)
+	}
 }
 
 // Deliver routes an inbound TaskResult to the Dispatch call waiting on it.

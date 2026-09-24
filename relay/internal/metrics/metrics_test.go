@@ -222,6 +222,58 @@ func TestIncRefusal_PendingApprovalStillCountsAsInternal(t *testing.T) {
 	}
 }
 
+// TestMetrics_ProtocolViolationSeries drives IncProtocolViolation across
+// every named rule plus an out-of-range jobs.ViolationRule, and asserts the
+// out-of-range value is counted in the rendered "other" bucket rather than
+// dropped or mislabelled "none" — the #638 correction on the plain
+// enum-indexed idiom IncDispatch/IncRefusal use.
+func TestMetrics_ProtocolViolationSeries(t *testing.T) {
+	m := New(GaugeSources{})
+
+	m.IncProtocolViolation(jobs.ViolationRelayOnlyOutcome)
+	m.IncProtocolViolation(jobs.ViolationUnresolvedOutcome)
+	m.IncProtocolViolation(jobs.ViolationUnresolvedOutcome)
+	m.IncProtocolViolation(jobs.ViolationRule(999))
+
+	_, body := scrape(t, m)
+	if !strings.Contains(body, `# TYPE relay_protocol_violations_total counter`) {
+		t.Errorf("body missing relay_protocol_violations_total TYPE line; body = %s", body)
+	}
+	for _, want := range []string{
+		`relay_protocol_violations_total{rule="relay_only_outcome"} 1`,
+		`relay_protocol_violations_total{rule="unresolved_outcome"} 2`,
+		`relay_protocol_violations_total{rule="other"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; body = %s", want, body)
+		}
+	}
+	if strings.Contains(body, `rule="none"`) {
+		t.Errorf("body renders a rule=\"none\" series — a real violation must never be countable under a label meaning \"no violation\"; body = %s", body)
+	}
+}
+
+// TestMetrics_ProtocolViolationUnrecordedSeries pins that the unlabelled
+// counter renders at 0 before any increment and at N after, so the "the
+// trail is missing violations" signal is never silently absent from the
+// scrape.
+func TestMetrics_ProtocolViolationUnrecordedSeries(t *testing.T) {
+	m := New(GaugeSources{})
+
+	_, body := scrape(t, m)
+	if !strings.Contains(body, "relay_protocol_violations_unrecorded_total 0") {
+		t.Errorf("body missing relay_protocol_violations_unrecorded_total 0 before any increment; body = %s", body)
+	}
+
+	m.IncProtocolViolationUnrecorded()
+	m.IncProtocolViolationUnrecorded()
+
+	_, body = scrape(t, m)
+	if !strings.Contains(body, "relay_protocol_violations_unrecorded_total 2") {
+		t.Errorf("body missing relay_protocol_violations_unrecorded_total 2; body = %s", body)
+	}
+}
+
 func TestIncEnrollment(t *testing.T) {
 	m := New(GaugeSources{})
 	m.IncEnrollment()

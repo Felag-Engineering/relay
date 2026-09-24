@@ -158,7 +158,7 @@ func (f *fakeTaskRepository) ByJob(_ context.Context, jobID string) ([]jobs.Task
 func TestReconciler_ResendResolvesInFlightTask(t *testing.T) {
 	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
 	tasks := newFakeTaskRepository(task)
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	send := &recordingSend{}
@@ -214,7 +214,7 @@ func TestReconciler_ResendResolvesInFlightTask(t *testing.T) {
 // under it: Resolve returning ErrInvalidTaskState is not an error.
 func TestReconciler_IdempotentUnderAlreadyResolved(t *testing.T) {
 	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	send := &recordingSend{}
@@ -252,7 +252,7 @@ func TestReconciler_SkipsOtherNodesTasks(t *testing.T) {
 		jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched},
 		jobs.Task{ID: "task-2", NodeID: "node-2", State: jobs.DispatchStateDispatched},
 	)
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	sendA := &recordingSend{}
@@ -289,7 +289,7 @@ func TestReconciler_SkipsOtherNodesTasks(t *testing.T) {
 // second waiter overwriting the first's in Router's flat waiters map).
 func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
 	tasks := newFakeTaskRepository(jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched})
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	send := &recordingSend{}
@@ -335,7 +335,7 @@ func TestReconciler_PerNodeGuardPreventsDoubleDispatch(t *testing.T) {
 func TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing.T) {
 	task := jobs.Task{ID: "task-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
 	tasks := newFakeTaskRepository(task)
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	send := &recordingSend{}
@@ -380,11 +380,66 @@ func TestReconciler_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing
 	}
 }
 
+// TestReconciler_AForgedOutcomeOnReconnectIsRecorded is #638's reconnect-path
+// acceptance test: the issue's "the reconnect path writes nothing" gap.
+// reconcileTask dispatches through this same *Router (router.go), so the
+// same recorder that closes the live-path gap closes this one too, with no
+// audit sink on the Reconciler itself.
+func TestReconciler_AForgedOutcomeOnReconnectIsRecorded(t *testing.T) {
+	task := jobs.Task{ID: "task-1", JobID: "job-1", NodeID: "node-1", State: jobs.DispatchStateDispatched}
+	tasks := newFakeTaskRepository(task)
+	fake := &fakeViolationRecorder{}
+	router := NewRouter(nil, fake)
+	reconciler := NewReconciler(tasks, router)
+
+	send := &recordingSend{}
+	unregister := router.Register("node-1", send.send)
+	defer unregister()
+
+	done := make(chan error, 1)
+	go func() { done <- reconciler.ReconcileNode(context.Background(), "node-1") }()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	router.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReconcileNode: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReconcileNode did not return")
+	}
+
+	got, err := tasks.Get(context.Background(), "task-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.State != jobs.DispatchStateResolved || got.Outcome != jobs.OutcomeFailure {
+		t.Fatalf("task-1 State/Outcome = %v/%v, want Resolved/OutcomeFailure", got.State, got.Outcome)
+	}
+
+	events := fake.recorded()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d protocol violation events, want exactly 1", len(events))
+	}
+	if events[0].JobID != "job-1" {
+		t.Errorf("event JobID = %q, want job-1", events[0].JobID)
+	}
+	if events[0].TaskID != "task-1" {
+		t.Errorf("event TaskID = %q, want task-1", events[0].TaskID)
+	}
+}
+
 // TestReconciler_NoInFlightTasksIsANoOp asserts ReconcileNode on a Node with
 // no in-flight Tasks returns cleanly without touching the Conduit.
 func TestReconciler_NoInFlightTasksIsANoOp(t *testing.T) {
 	tasks := newFakeTaskRepository()
-	router := NewRouter(nil)
+	router := NewRouter(nil, nil)
 	reconciler := NewReconciler(tasks, router)
 
 	send := &recordingSend{}

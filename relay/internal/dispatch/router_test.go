@@ -1,8 +1,10 @@
 package dispatch
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +52,7 @@ func (s *recordingSend) last() *relayv1.RelayMessage {
 // exactly the Result correlated by its own task_id, never another Task's
 // Result — the flat waiters[task_id] map's core correctness property.
 func TestRouter_CorrelatesConcurrentTasksAcrossNodes(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	sendA := &recordingSend{}
 	sendB := &recordingSend{}
 	unregA := r.Register("node-a", sendA.send)
@@ -117,7 +119,7 @@ func TestRouter_CorrelatesConcurrentTasksAcrossNodes(t *testing.T) {
 // blocked Dispatch call must return ErrNodeDisconnected (not hang) when the
 // Node's Tunnel unregisters while the call is still waiting.
 func TestRouter_DisconnectFailsPendingWaiter(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 
@@ -143,7 +145,7 @@ func TestRouter_DisconnectFailsPendingWaiter(t *testing.T) {
 // TestRouter_DispatchHonorsContextCancel asserts ctx cancellation unblocks
 // Dispatch and removes its waiter (no leak).
 func TestRouter_DispatchHonorsContextCancel(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -178,7 +180,7 @@ func TestRouter_DispatchHonorsContextCancel(t *testing.T) {
 // TestRouter_SendErrorRemovesWaiter asserts a failed send does not leave a
 // dangling waiter.
 func TestRouter_SendErrorRemovesWaiter(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{err: errors.New("stream broken")}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -199,7 +201,7 @@ func TestRouter_SendErrorRemovesWaiter(t *testing.T) {
 // TestRouter_DispatchNotConnected asserts Dispatch fails fast for an
 // unregistered Node (ADR-0004's offline fail-fast) rather than blocking.
 func TestRouter_DispatchNotConnected(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	_, err := r.Dispatch(context.Background(), "node-absent", jobs.Task{ID: "task-1", NodeID: "node-absent"})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Dispatch error = %v, want ErrNotConnected", err)
@@ -212,7 +214,7 @@ func TestRouter_DispatchNotConnected(t *testing.T) {
 // TestRouter_CancelSendsTaskCancel asserts Cancel sends the TaskCancel body
 // and returns immediately (never waits for a Result).
 func TestRouter_CancelSendsTaskCancel(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -234,7 +236,7 @@ func TestRouter_CancelSendsTaskCancel(t *testing.T) {
 // with no live Tunnel is a no-op, not an error — cancellation is inherently
 // best-effort (ADR-0013).
 func TestRouter_CancelOfflineNodeIsBestEffort(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	if err := r.Cancel(context.Background(), "node-absent", "task-1"); err != nil {
 		t.Errorf("Cancel on an offline node = %v, want nil (best-effort)", err)
 	}
@@ -243,7 +245,7 @@ func TestRouter_CancelOfflineNodeIsBestEffort(t *testing.T) {
 // TestRouter_DeliverUncorrelatedTaskIDDropped asserts a Result for an
 // unknown (or already-delivered) task_id is silently dropped, never panics.
 func TestRouter_DeliverUncorrelatedTaskIDDropped(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
@@ -256,7 +258,7 @@ func TestRouter_DeliverUncorrelatedTaskIDDropped(t *testing.T) {
 // check: a Result arriving on the wrong Node's stream for a task_id it
 // should never have seen is dropped, not delivered to the waiter.
 func TestRouter_DeliverWrongNodeDropped(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	sendA := &recordingSend{}
 	sendB := &recordingSend{}
 	unregA := r.Register("node-a", sendA.send)
@@ -296,7 +298,7 @@ func TestRouter_DeliverWrongNodeDropped(t *testing.T) {
 // TestRouter_ConnectedAndWaitForNode covers the connectivity gate + the
 // e2e sync-point helper.
 func TestRouter_ConnectedAndWaitForNode(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	if r.Connected("node-1") {
 		t.Error("Connected(node-1) = true before Register")
 	}
@@ -316,7 +318,7 @@ func TestRouter_ConnectedAndWaitForNode(t *testing.T) {
 
 // TestRouter_WaitForAny covers the no-known-nodeID e2e sync point.
 func TestRouter_WaitForAny(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	if _, err := r.WaitForAny(50 * time.Millisecond); err == nil {
 		t.Error("WaitForAny with no registered node should time out")
 	}
@@ -337,7 +339,7 @@ func TestRouter_WaitForAny(t *testing.T) {
 // blocks Register itself.
 func TestRouter_RegisterFiresOnConnect(t *testing.T) {
 	fired := make(chan string, 4)
-	r := NewRouter(func(nodeID string) { fired <- nodeID })
+	r := NewRouter(func(nodeID string) { fired <- nodeID }, nil)
 
 	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
@@ -359,7 +361,7 @@ func TestRouter_RegisterFiresOnConnect(t *testing.T) {
 // same nodeID, and must not close a waiter conn2's Dispatch created — even
 // though both waiters would share the same task_id+nodeID key.
 func TestRouter_StaleUnregisterDoesNotClobberFreshRegistration(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send1 := &recordingSend{}
 	send2 := &recordingSend{}
 
@@ -410,7 +412,7 @@ func TestRouter_StaleUnregisterDoesNotClobberFreshRegistration(t *testing.T) {
 // TestRouter_ConnectedNodes asserts ConnectedNodes returns every currently
 // registered Node and drops one once it unregisters.
 func TestRouter_ConnectedNodes(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	if got := r.ConnectedNodes(); len(got) != 0 {
 		t.Errorf("ConnectedNodes() = %v, want empty before any Register", got)
 	}
@@ -445,7 +447,7 @@ func TestRouter_ConnectedNodes(t *testing.T) {
 // sends a PolicyQuery, and the query_id it minted is what DeliverVerdict
 // must be called with for Query to return the mapped jobs.Verdict.
 func TestRouter_QueryCorrelatesVerdict(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -495,7 +497,7 @@ func TestRouter_QueryCorrelatesVerdict(t *testing.T) {
 // TestRouter_QueryDenyCarriesDecidingRule asserts a deny verdict's
 // DecidingRule round-trips through Query.
 func TestRouter_QueryDenyCarriesDecidingRule(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -531,7 +533,7 @@ func TestRouter_QueryDenyCarriesDecidingRule(t *testing.T) {
 // blocked Query call must return ErrNodeDisconnected (not hang) when the
 // Node's Tunnel unregisters while the call is still waiting.
 func TestRouter_QueryDisconnectMidQuery(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 
@@ -557,7 +559,7 @@ func TestRouter_QueryDisconnectMidQuery(t *testing.T) {
 // TestRouter_QueryHonorsContextCancel asserts ctx cancellation unblocks
 // Query and removes its verdict waiter (no leak).
 func TestRouter_QueryHonorsContextCancel(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -594,7 +596,7 @@ func TestRouter_QueryHonorsContextCancel(t *testing.T) {
 // for an unknown (or already-delivered) query_id is silently dropped, never
 // panics — mirrors TestRouter_DeliverUncorrelatedTaskIDDropped.
 func TestRouter_DeliverVerdictUncorrelatedQueryIDDropped(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	unregister := r.Register("node-1", func(*relayv1.RelayMessage) error { return nil })
 	defer unregister()
 
@@ -606,7 +608,7 @@ func TestRouter_DeliverVerdictUncorrelatedQueryIDDropped(t *testing.T) {
 // TestRouter_DeliverVerdictWrongNodeDropped mirrors
 // TestRouter_DeliverWrongNodeDropped for the verdict-waiter ID space.
 func TestRouter_DeliverVerdictWrongNodeDropped(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	sendA := &recordingSend{}
 	sendB := &recordingSend{}
 	unregA := r.Register("node-a", sendA.send)
@@ -647,7 +649,7 @@ func TestRouter_DeliverVerdictWrongNodeDropped(t *testing.T) {
 // TestRouter_QueryNotConnected asserts Query fails fast for an unregistered
 // Node rather than blocking, mirroring TestRouter_DispatchNotConnected.
 func TestRouter_QueryNotConnected(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	_, err := r.Query(context.Background(), "node-absent", jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts"})
 	if !errors.Is(err, ErrNotConnected) {
 		t.Errorf("Query error = %v, want ErrNotConnected", err)
@@ -659,7 +661,7 @@ func TestRouter_QueryNotConnected(t *testing.T) {
 // i.e. the map entry itself is removed and its channel closed, mirroring
 // the waiters-map half of the same guarantee.
 func TestRouter_UnregisterClosesVerdictWaiter(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 
@@ -691,7 +693,7 @@ func TestRouter_UnregisterClosesVerdictWaiter(t *testing.T) {
 // never as an error (an error would leave the Task Dispatched and hand the
 // Reconciler an attacker-controlled resend loop, invariant 4).
 func TestRouter_ForgedRelayOnlyOutcomeResolvesAsProtocolViolation(t *testing.T) {
-	r := NewRouter(nil)
+	r := NewRouter(nil, nil)
 	send := &recordingSend{}
 	unregister := r.Register("node-1", send.send)
 	defer unregister()
@@ -741,5 +743,315 @@ func waitUntil(t *testing.T, deadline time.Duration, cond func() bool) {
 	}
 	if !cond() {
 		t.Fatal("condition not met before deadline")
+	}
+}
+
+// fakeViolationRecorder is a ViolationRecorder that captures every event it
+// is given, safe for concurrent use, and can be made to fail on demand
+// (TestDispatch_AFailedViolationRecordIsNotAReturnedError).
+//
+// started and release, left nil by every test but
+// TestDispatch_AViolationIsRecordedAfterTheCallerContextIsCancelled, let
+// that one test pin down a race window between "RecordProtocolViolation has
+// begun" and "the caller's context is cancelled": a nil channel is simply
+// skipped, so every other test in this file (which never sets them) runs
+// exactly as before.
+type fakeViolationRecorder struct {
+	mu      sync.Mutex
+	events  []jobs.ProtocolViolationEvent
+	err     error
+	started chan struct{} // closed when RecordProtocolViolation begins, if non-nil
+	release chan struct{} // blocks RecordProtocolViolation until closed, if non-nil
+	ctxErr  error         // ctx.Err(), captured at call time
+}
+
+func (f *fakeViolationRecorder) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error {
+	if f.started != nil {
+		close(f.started)
+	}
+	if f.release != nil {
+		<-f.release
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.events = append(f.events, ev)
+	f.ctxErr = ctx.Err()
+	return f.err
+}
+
+func (f *fakeViolationRecorder) recorded() []jobs.ProtocolViolationEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]jobs.ProtocolViolationEvent(nil), f.events...)
+}
+
+// capturedCtxErr returns the ctx.Err() RecordProtocolViolation observed on
+// its most recent call.
+func (f *fakeViolationRecorder) capturedCtxErr() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctxErr
+}
+
+// TestDispatch_AForgedRelayOnlyOutcomeIsRecordedAsAProtocolViolation is
+// #638's live-path acceptance test: a forged TaskResult must produce exactly
+// one durable ProtocolViolationEvent, carrying the Task's own ids, on top of
+// #632's unchanged terminal-failure contract.
+func TestDispatch_AForgedRelayOnlyOutcomeIsRecordedAsAProtocolViolation(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	task := jobs.Task{
+		ID:      "task-1",
+		JobID:   "job-1",
+		NodeID:  "node-1",
+		Action:  jobs.Action{Kind: jobs.ActionOperation, OperationName: "list_files"},
+		StageID: "stage-1",
+	}
+
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := r.Dispatch(context.Background(), "node-1", task)
+		resultCh <- res
+		errCh <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+		Stdout:  []byte("i actually ran"),
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch returned an error for a forged outcome, want nil: %v", err)
+	}
+	res := <-resultCh
+	if res.Outcome != jobs.OutcomeFailure {
+		t.Errorf("Dispatch result Outcome = %v, want jobs.OutcomeFailure", res.Outcome)
+	}
+	if res.ExitCode != -1 {
+		t.Errorf("Dispatch result ExitCode = %d, want -1", res.ExitCode)
+	}
+	if len(res.Stdout) != 0 {
+		t.Errorf("Dispatch result Stdout = %q, want empty", res.Stdout)
+	}
+
+	events := fake.recorded()
+	if len(events) != 1 {
+		t.Fatalf("recorded %d protocol violation events, want exactly 1", len(events))
+	}
+	ev := events[0]
+	if ev.NodeID != "node-1" {
+		t.Errorf("event NodeID = %q, want node-1", ev.NodeID)
+	}
+	if ev.TaskID != "task-1" {
+		t.Errorf("event TaskID = %q, want task-1", ev.TaskID)
+	}
+	if ev.JobID != "job-1" {
+		t.Errorf("event JobID = %q, want job-1", ev.JobID)
+	}
+	if ev.OperationName != "list_files" {
+		t.Errorf("event OperationName = %q, want list_files", ev.OperationName)
+	}
+	if ev.Violation.Rule != jobs.ViolationRelayOnlyOutcome {
+		t.Errorf("event Violation.Rule = %v, want jobs.ViolationRelayOnlyOutcome", ev.Violation.Rule)
+	}
+	if ev.Violation.ReportedOutcome != "OUTCOME_VERSION_REFUSED" {
+		t.Errorf("event Violation.ReportedOutcome = %q, want OUTCOME_VERSION_REFUSED", ev.Violation.ReportedOutcome)
+	}
+}
+
+// TestDispatch_ANonViolatingResultRecordsNothing pins that an ordinary
+// success does not fill the protocol-violation trail with non-events.
+func TestDispatch_ANonViolatingResultRecordsNothing(t *testing.T) {
+	fake := &fakeViolationRecorder{}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	resultCh := make(chan jobs.Result, 1)
+	go func() {
+		res, _ := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:   "task-1",
+		Outcome:  relayv1.Outcome_OUTCOME_SUCCESS,
+		ExitCode: 0,
+	})
+	<-resultCh
+
+	if events := fake.recorded(); len(events) != 0 {
+		t.Errorf("recorded %d protocol violation events for a non-violating result, want 0", len(events))
+	}
+}
+
+// TestDispatch_AFailedViolationRecordIsNotAReturnedError is the #632 loop
+// property: an audit-write failure must never strand the Task as Dispatched.
+func TestDispatch_AFailedViolationRecordIsNotAReturnedError(t *testing.T) {
+	fake := &fakeViolationRecorder{err: errors.New("store unavailable")}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+		errCh <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch returned an error when the audit write failed, want nil: %v", err)
+	}
+	res := <-resultCh
+	if res.Outcome != jobs.OutcomeFailure {
+		t.Errorf("Dispatch result Outcome = %v, want jobs.OutcomeFailure", res.Outcome)
+	}
+	if recorded := fake.recorded(); len(recorded) != 1 {
+		t.Errorf("recorded %d protocol violation events, want exactly 1 attempt", len(recorded))
+	}
+}
+
+// TestDispatch_AViolationIsRecordedAfterTheCallerContextIsCancelled proves
+// recordViolation detaches from the caller's context (context.WithoutCancel):
+// evidence must not be decided by the caller's deadline. The fake blocks
+// inside RecordProtocolViolation until the test has already cancelled the
+// caller's context, then captures ctx.Err() — so, unlike a bare "did an
+// event eventually show up" check, this deterministically fails if
+// recordViolation is changed to pass ctx straight through instead of
+// context.WithoutCancel(ctx).
+func TestDispatch_AViolationIsRecordedAfterTheCallerContextIsCancelled(t *testing.T) {
+	fake := &fakeViolationRecorder{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	r := NewRouter(nil, fake)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	resultCh := make(chan jobs.Result, 1)
+	go func() {
+		res, _ := r.Dispatch(ctx, "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+	})
+
+	select {
+	case <-fake.started:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for RecordProtocolViolation to start")
+	}
+	cancel()
+	close(fake.release)
+	<-resultCh
+
+	if events := fake.recorded(); len(events) != 1 {
+		t.Fatalf("recorded %d protocol violation events, want exactly 1", len(events))
+	}
+	if err := fake.capturedCtxErr(); err != nil {
+		t.Errorf("RecordProtocolViolation's context was already cancelled: %v (recordViolation must detach from the caller's context)", err)
+	}
+}
+
+// TestDispatch_ANilViolationRecorderIsLogOnly pins that nil is a supported
+// mode: it must not panic, and Dispatch must still return #632's terminal
+// contract.
+func TestDispatch_ANilViolationRecorderIsLogOnly(t *testing.T) {
+	r := NewRouter(nil, nil)
+	send := &recordingSend{}
+	unregister := r.Register("node-1", send.send)
+	defer unregister()
+
+	resultCh := make(chan jobs.Result, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		res, err := r.Dispatch(context.Background(), "node-1", jobs.Task{ID: "task-1", NodeID: "node-1"})
+		resultCh <- res
+		errCh <- err
+	}()
+
+	waitUntil(t, time.Second, func() bool { return send.len() == 1 })
+
+	r.Deliver("node-1", &relayv1.TaskResult{
+		TaskId:  "task-1",
+		Outcome: relayv1.Outcome_OUTCOME_VERSION_REFUSED,
+	})
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Dispatch returned an error with a nil ViolationRecorder, want nil: %v", err)
+	}
+	if res := <-resultCh; res.Outcome != jobs.OutcomeFailure {
+		t.Errorf("Dispatch result Outcome = %v, want jobs.OutcomeFailure", res.Outcome)
+	}
+}
+
+// captureDefaultLog swaps slog's default logger for one that writes JSON
+// lines to a buffer, restoring the previous default on test cleanup, and
+// returns the buffer — mirroring cmd/relay/labelscan_wiring_test.go's
+// TestNewServer_RunsDeclinedLabelScanAtStartup idiom, which is what proves a
+// package-level slog call happened rather than merely that a function
+// returned successfully.
+func captureDefaultLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
+
+// TestNewRouter_NilViolationRecorderWarnsAtConstruction is security-review
+// finding 2 (#638, Stage 6.5): a nil ViolationRecorder is a supported
+// log-only mode, but it must never be a SILENT one — a production wiring
+// that forgot to pass a real recorder must announce itself at start-up
+// rather than only when the first protocol violation goes unrecorded.
+func TestNewRouter_NilViolationRecorderWarnsAtConstruction(t *testing.T) {
+	buf := captureDefaultLog(t)
+	NewRouter(nil, nil)
+
+	if !strings.Contains(buf.String(), "will not record protocol violations durably") {
+		t.Errorf("NewRouter(nil, nil) did not warn that violations will not be recorded durably; log:\n%s", buf.String())
+	}
+}
+
+// TestNewRouter_RealViolationRecorderDoesNotWarn is
+// TestNewRouter_NilViolationRecorderWarnsAtConstruction's converse: a
+// properly-wired Router must not print a warning that would train an
+// operator to ignore it.
+func TestNewRouter_RealViolationRecorderDoesNotWarn(t *testing.T) {
+	buf := captureDefaultLog(t)
+	NewRouter(nil, &fakeViolationRecorder{})
+
+	if strings.Contains(buf.String(), "will not record protocol violations durably") {
+		t.Errorf("NewRouter with a real ViolationRecorder logged the nil-recorder warning; log:\n%s", buf.String())
 	}
 }

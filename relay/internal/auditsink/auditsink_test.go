@@ -649,6 +649,99 @@ func TestRecordCancelAttributesPrincipal(t *testing.T) {
 	}
 }
 
+// TestSink_RecordProtocolViolationWritesTheRowAndNoOutput is #638's trail
+// acceptance test: a KindProtocolViolation row over a real store, with no
+// Principal, no Outcome, and no Stdout/Stderr/Truncated — every field is
+// Relay-authored or Relay-minted, and none of it is Node output.
+func TestSink_RecordProtocolViolationWritesTheRowAndNoOutput(t *testing.T) {
+	_, repo, _ := openSinkStore(t)
+	sink := New(repo, WithNewID(sequentialIDs("audit-")), WithClock(fixedClock(time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC))))
+
+	ev := jobs.ProtocolViolationEvent{
+		NodeID:        "node-1",
+		TaskID:        "task-1",
+		JobID:         "job-1",
+		OperationName: "list_files",
+		Violation: jobs.ProtocolViolation{
+			Rule:            jobs.ViolationRelayOnlyOutcome,
+			ReportedOutcome: "OUTCOME_VERSION_REFUSED",
+		},
+	}
+	if err := sink.RecordProtocolViolation(context.Background(), ev); err != nil {
+		t.Fatalf("RecordProtocolViolation: %v", err)
+	}
+
+	records, err := repo.ByNode(context.Background(), "node-1")
+	if err != nil {
+		t.Fatalf("ByNode: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("ByNode(node-1) returned %d records, want 1", len(records))
+	}
+	rec := records[0]
+	if rec.Kind != audit.KindProtocolViolation {
+		t.Errorf("Kind = %q, want %q", rec.Kind, audit.KindProtocolViolation)
+	}
+	if rec.Principal != "" {
+		t.Errorf("Principal = %q, want empty — no Account did this", rec.Principal)
+	}
+	if rec.Outcome != jobs.OutcomeUnspecified {
+		t.Errorf("Outcome = %v, want jobs.OutcomeUnspecified", rec.Outcome)
+	}
+	if rec.NodeID != "node-1" {
+		t.Errorf("NodeID = %q, want node-1", rec.NodeID)
+	}
+	if rec.JobID != "job-1" {
+		t.Errorf("JobID = %q, want job-1", rec.JobID)
+	}
+	if rec.OperationName != "list_files" {
+		t.Errorf("OperationName = %q, want list_files", rec.OperationName)
+	}
+	if len(rec.Stdout) != 0 || len(rec.Stderr) != 0 || rec.Truncated {
+		t.Errorf("record carries Stdout/Stderr/Truncated: %+v", rec)
+	}
+	wantReason := "rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-1"
+	if rec.Reason != wantReason {
+		t.Errorf("Reason = %q, want %q", rec.Reason, wantReason)
+	}
+}
+
+// TestProtocolViolationReason_Fields pins the exact
+// "rule=... reported_outcome=... task_id=..." rendering (a stable,
+// greppable contract), and the "unnamed" fallback for an empty
+// ReportedOutcome.
+func TestProtocolViolationReason_Fields(t *testing.T) {
+	cases := []struct {
+		name string
+		ev   jobs.ProtocolViolationEvent
+		want string
+	}{
+		{
+			name: "relay only outcome",
+			ev: jobs.ProtocolViolationEvent{
+				TaskID:    "task-1",
+				Violation: jobs.ProtocolViolation{Rule: jobs.ViolationRelayOnlyOutcome, ReportedOutcome: "OUTCOME_VERSION_REFUSED"},
+			},
+			want: "rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-1",
+		},
+		{
+			name: "unresolved outcome with no reported name",
+			ev: jobs.ProtocolViolationEvent{
+				TaskID:    "task-2",
+				Violation: jobs.ProtocolViolation{Rule: jobs.ViolationUnresolvedOutcome},
+			},
+			want: "rule=unresolved_outcome reported_outcome=unnamed task_id=task-2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := protocolViolationReason(tc.ev); got != tc.want {
+				t.Errorf("protocolViolationReason() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSink_RecordAccountAdminMapsEveryKind is #653's mapping proof: every
 // capability.AccountAdminKind this package knows about maps to its own
 // audit.Kind* string (audit.KindAccountCreate/Role/Enable/Disable,

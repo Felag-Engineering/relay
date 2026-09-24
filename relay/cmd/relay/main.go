@@ -817,7 +817,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		// dispatch and refusal is audited (#102). This flip adds no new
 		// bypass — it only turns on the same pipeline every other surface
 		// already dispatches through.
-		router, reconciler, sink := newDispatchStack(st.Tasks())
+		router, reconciler, sink := newDispatchStack(st.Tasks(), violationRecorder{audit: auditSink, metrics: appMetrics})
 		// reconciler is captured by router's onConnect closure
 		// (dispatch_wiring.go) and fires on every Node (re)connect — this is
 		// what makes crash-mid-Job restart reconciliation happen; it is not

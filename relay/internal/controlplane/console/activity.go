@@ -1121,6 +1121,8 @@ func summarize(f trailFacts) string {
 		// same audit row. Two screens naming one thing two ways is how an
 		// operator stops trusting either.
 		return "enumerated " + readTargetOf(f)
+	case audit.KindProtocolViolation:
+		return "a Node reported something the wire contract does not permit"
 	default:
 		return f.Kind
 	}

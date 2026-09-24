@@ -34,6 +34,41 @@ const (
 	KindNodeRevoke    = "node_revoke"
 	KindPlan          = "plan"
 
+	// KindProtocolViolation is a relay-daemon reporting something the wire
+	// contract (/proto) does not permit — the refusal #632 added at the wire
+	// boundary, made queryable (#638). Distinct from KindDispatch because it
+	// is not a Task's outcome: the Task still resolves, truthfully, as a
+	// Relay-authored failure and keeps its own dispatch row. Distinct from
+	// KindRefusal because nothing was denied — the Relay refused a REPORT,
+	// not a request.
+	//
+	// Its own kind rather than prose in a dispatch row's Reason because
+	// "which Nodes are misbehaving" must be a WHERE clause, and because a
+	// dispatch row's Stderr — where #632's explanation rides — is not
+	// retained for a read-class Task (ADR-0025, auditsink's retainOutput). A
+	// kind is queryable on every surface that already filters the trail by
+	// kind, with no new filter to build.
+	//
+	// NodeID is the SUBJECT: the Node that sent the impermissible report.
+	// Principal is empty — no Account did this, and the empty verified lane
+	// is what keeps any surface from rendering the Node as an authenticated
+	// actor. The Job and the Account that asked for it are one join away on
+	// job_id.
+	//
+	// It carries no Stdout/Stderr/Truncated, on any risk class: the wire
+	// boundary discards the daemon's bytes before this record exists
+	// (internal/dispatch/convert.go), so the row is Relay-authored end to end.
+	//
+	// RESIDUAL, stated because it is the one thing this kind does not
+	// guarantee: the writer at the wire boundary is deliberately FAIL-OPEN
+	// (internal/dispatch's recordViolation says why — failing the dispatch
+	// would strand the Task and hand a compromised Node a resend loop). If
+	// the store cannot be written, NO ROW EXISTS for that violation; the
+	// trace is a log line plus the
+	// relay_protocol_violations_unrecorded_total counter, which is why that
+	// counter exists.
+	KindProtocolViolation = "protocol_violation"
+
 	// KindApprovalRequested is a dispatch parked for a human (#269, ADR-0027).
 	// Distinct from KindDispatch because nothing ran, and distinct from
 	// KindRefusal because nothing was denied — a park is a suspension, and
@@ -200,6 +235,7 @@ var allKinds = []string{
 	KindTokenRevoke,
 	KindNodeRevoke,
 	KindPlan,
+	KindProtocolViolation,
 	KindApprovalRequested,
 	KindApprovalGrantRequested,
 	KindApprovalPendingObserved,
@@ -278,6 +314,7 @@ var notAnAuthFailureKinds = []string{
 	KindTokenRevoke,
 	KindNodeRevoke,
 	KindPlan,
+	KindProtocolViolation,
 	KindApprovalRequested,
 	KindApprovalGrantRequested,
 	KindApprovalPendingObserved,
