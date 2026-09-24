@@ -21,7 +21,7 @@ information, so access is attributable and auditable.
 |---|---|
 | **MCP** | `list_nodes` lists registry Nodes, optionally resolved against a Selector. `describe_node` returns one Node's registry data, certificate provenance, the Policy view, and the reported Template Operation vocabulary. `list_operations` returns the frozen Native vocabulary and, given a Node ID, that Node's last-reported Template Operations. |
 | **Control API** | `GET /api/v1/nodes/{node_id}` returns one Node's registry data and certificate provenance. No fleet enumeration, Policy-view or vocabulary route (QRY-1). |
-| **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view — read from the display-only cache directly — with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads the registry and the Policy view directly and records nothing (QRY-18). |
+| **Admin Console** | The Fleet view and Node detail read the registry through the capability read lane. Node detail renders the Policy view — read from the display-only cache directly — with its receipt time, and the template-set fingerprint; it does not render the Template vocabulary (QRY-14). The Compare screen reads through the lane and is recorded like every other read (QRY-28). |
 
 No surface exposes a general registry search, a way to refresh a daemon snapshot, or any way
 to query, author or alter Policy over the wire; a live hypothetical is `policy-preflight.md`.
@@ -87,21 +87,14 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
 - **QRY-16** On the capability read lane, on the MCP tools and on the Control API Node read, a
   read is recorded before content is returned. The record identifies the authenticated caller
   and the target: an enumeration records its Selector, a single-Node read records the requested
-  Node ID, including one that does not exist. Two reads fall short today: the Console Compare
-  screen records nothing (QRY-18), and `list_operations` records no Node ID (QRY-21).
+  Node ID, including one that does not exist.
 - **QRY-17** On the capability read lane and the MCP tools, if the access record cannot be
-  written the read is refused before the registry is consulted; the Control API Node read
-  refuses too, but only when a recorder is wired. A record holds metadata about the read and
-  never its result.
-- **QRY-18** Four readers sit beside the capability read lane today: MCP and the Control API
-  read the registry and the display-only caches through their own narrow readers, and the
-  Console Compare screen and Node-detail Policy panel read directly. Only the Compare screen is
-  unrecorded. This is the invariant-10 gap in `AGENTS.md` (#680); QRY-28 closes it.
+  written the read is refused before the registry is consulted, on the Control API Node read
+  as on the others. A record holds metadata about the read and never its result.
 - **QRY-28** Every registry, Policy-view and vocabulary read on MCP, the Control API and the
   Console goes through the capability read lane, is recorded before content is returned, and
   fails closed; the adapters hold no reader of their own, MCP no longer resolves Selectors
-  itself, and the Compare screen's exemption is gone (#680). Retires QRY-18, the Compare-screen
-  exception in QRY-16 and the Control API qualifier in QRY-17.
+  itself, and the Compare screen's exemption is gone (#680).
 
 ## Refusals
 
@@ -111,12 +104,11 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   recognisable sentinel, because a successful empty response would falsely assert that no Node
   matched (#430).
 - **QRY-21** A well-formed Node ID that is not in the registry is refused as "no such Node" on
-  `describe_node` and on the Control API, and the refused read is still recorded with the ID
-  that was probed. `list_operations` with an unknown Node ID returns the Native vocabulary with
-  no templates reported and records no target today (QRY-26 changes this).
+  `describe_node`, on `list_operations` and on the Control API, and the refused read is still
+  recorded with the ID that was probed.
 - **QRY-22** On the capability lane a missing or oversized Node ID is refused before anything is
-  recorded; the Control API refuses an empty ID before recording; MCP `describe_node` records
-  the ID as supplied today (QRY-27 changes this).
+  recorded, on MCP `describe_node` as on the lane itself; the Control API refuses an empty ID
+  before recording.
 - **QRY-23** A missing Policy or Template snapshot is represented as not reported on MCP, and a
   missing Policy view as not reported on the Console. The Console's template panel does not
   distinguish "never reported" from "none installed" today.
@@ -125,10 +117,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   forbids the write and dispatch seams, and the read seams expose reads alone.
 - **QRY-26** `list_operations` with a well-formed Node ID not in the registry is refused as "no
   such Node", and the refused read is recorded with the probed ID, exactly as `describe_node`
-  does (#680). Retires the `list_operations` sentence of QRY-21 and the `list_operations`
-  exception in QRY-16.
+  does (#680).
 - **QRY-27** MCP `describe_node` refuses a missing or oversized Node ID before recording
-  anything, as the capability read lane does (#680). Retires the MCP sentence of QRY-22.
+  anything, as the capability read lane does (#680).
 
 ## Governing ADRs and invariants
 
@@ -141,9 +132,9 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   never invents a second wire vocabulary. Both *Future work* items change what the daemon
   reports and start in `/proto`.
 - **Invariant 10 and ADR-0009** — MCP, the Control API and the Console are adapters over the
-  capability layer and may narrow only. Two adapters and two Console screens read the registry
-  or its caches directly today (QRY-18); that is recorded in the `AGENTS.md` gap table against
-  this invariant and closed by QRY-28 (#680).
+  capability layer and may narrow only. Every registry, Policy-view and vocabulary read on all
+  three goes through the capability read lane; no adapter holds a reader of its own (QRY-28,
+  #680).
 - **Invariant 12 and ADR-0011** — only the relay-daemon's live engine evaluates Policy. Displaying
   a snapshot never becomes a Relay-side verdict (QRY-9); a hypothetical is `policy-preflight.md`.
 - **ADR-0014** — `outdated` is a registry observation and a dispatch gate; a query neither
@@ -153,16 +144,15 @@ to query, author or alter Policy over the wire; a live hypothetical is `policy-p
   template-set fingerprint travels and the templates do not (QRY-2, QRY-10); both *Future work*
   items below would amend it and land only after that amendment.
 - **ADR-0025** — query access is audited and fails closed when it cannot be recorded (QRY-16,
-  QRY-17). The Compare screen's unrecorded read (QRY-18) is a gap against this ADR as well as
-  invariant 10, and `list_operations` recording no Node ID (QRY-21) is a second shortfall against
-  its "what they aimed it at" rule; both are tracked in #680 and closed by QRY-26 and QRY-28. Retention and output rules are `audit-and-read-lane.md`'s.
+  QRY-17). Both shortfalls against its "what they aimed it at" rule — the Compare screen's
+  unrecorded read and `list_operations` recording no Node ID — are closed (QRY-26, QRY-28, #680).
+  Retention and output rules are `audit-and-read-lane.md`'s.
 
 ## Seams and proof
 
 The capability read lane holds the registry-query methods for enumeration and the single-Node
-read, with their access-recording requirement; the Console's Fleet view and Node detail read
-through it. MCP and the Control API hold their own narrow readers over the registry and the
-display-only caches today (QRY-18, QRY-28). The Policy view and the Template vocabulary are
+read, with their access-recording requirement; every surface reads through it and none holds a
+reader of its own (QRY-28). The Policy view and the Template vocabulary are
 read from caches the Tunnel handler fills; nothing else writes them. `make verify` is sufficient
 for every claim here; a change to what the daemon reports starts in `/proto` and needs the
 proto gates.
@@ -205,8 +195,6 @@ Claims with **no row**, and so nothing checking them:
 - **QRY-14** — a statement of absence on the Console.
 - **QRY-15**, Control API and Console halves — the `viewer` floor is exercised per route, not
   asserted as cross-surface parity.
-- **QRY-21**, `list_operations` half, and **QRY-22**, MCP half — statements of what is missing.
-- **QRY-18** — four direct readers; a statement of what is missing, closed by QRY-28.
 
 ### Performance
 
@@ -265,12 +253,19 @@ its consumers. The rest is ordinary Future work.
 None of this capability's own. Neighbours that state one of today's decisions the other way and
 adopt this spec at their migration: `operations-and-templates.md` (states Selector-scoped
 `list_operations` as current; it is QRY-25), `policy.md` (states template bodies in the Policy
-view as current; see *Future work*), `selectors-and-labels.md` (says no surface evaluates a
-Selector itself; MCP does today, QRY-18), `audit-and-read-lane.md` (says MCP `describe_node`
-returns peer counts and that every MCP read records its target; QRY-5, QRY-21, QRY-18).
+view as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describe_node` returns
+peer counts; QRY-5). `selectors-and-labels.md` and `audit-and-read-lane.md` no longer disagree
+about Selector resolution or MCP read records: #680 made both statements true (QRY-28).
 
 ## History
 
+- `2026-09-23` — The five claims QRY-28, QRY-26 and QRY-27 retire are removed now that #680 has
+  merged: QRY-18 is deleted, both exceptions leave QRY-16, the "only when a recorder is wired"
+  qualifier leaves QRY-17, the `list_operations` sentence leaves QRY-21 and the MCP sentence
+  leaves QRY-22. The Surfaces table, the invariant-10 and ADR-0025 bullets, the Seams paragraph
+  and two proof-gap bullets follow. The retirement pointers drop off QRY-26, QRY-27 and QRY-28,
+  having been executed. Left for its own change: promoting the three claims out of *Designed,
+  not built* is already done; QRY-25 remains the one Designed claim. (#680)
 - `2026-09-23` — QRY-26, QRY-27 and QRY-28 promoted from *Designed, not built*: `list_operations`
   and MCP `describe_node` now refuse an unknown/missing/oversized Node ID before recording
   anything, and every registry, Policy-view and vocabulary read on MCP, the Control API and the
