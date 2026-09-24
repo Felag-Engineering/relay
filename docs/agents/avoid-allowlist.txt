@@ -78,6 +78,7 @@ agent @ AGENTS.md                                 # the file is addressed to Cla
 kill switch @ AGENTS.md                           # the `loop:halt` kill switch, not Freeze
 sign-off @ AGENTS.md                              # human sign-off on ADRs, not an approval rung
 elicitation @ docs/specs/approval.md              # "server-initiated elicitation" is qualified; the grep cannot see the qualifier
+confirmation @ docs/specs/approval.md             # every hit is the canonical `self-confirmation` rung, the "### The confirmation ladder" heading, or the new GLOSSARY headword of that name — the _Avoid_ line rejects the word unqualified, which this file no longer does
 service account @ docs/specs/relay-configuration.md   # the OS service account the unit runs as
 the service @ docs/specs/relay-configuration.md   # the systemd service
 notifications @ docs/specs/observability.md       # approval notifications, not the Event seam

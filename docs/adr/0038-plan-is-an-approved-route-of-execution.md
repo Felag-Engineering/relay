@@ -129,6 +129,8 @@ spending limit; a Plan is an itemised invoice.
   therefore takes the same discipline, and for the reasons `approval.md` already argues:
 
   - a **mandatory window**, within ADR-0027's 24-hour ceiling and expected to be far shorter;
+    *(Amended 2026-09-24: that ceiling is now 4 hours — ADR-0027 §Amendment (2026-09-24). The
+    rule is unchanged; only the number it cites moved.)*
   - **revocable**, closing mid-route immediately;
   - **expiry is terminal and never resumable** — an expired Plan stays where it stopped, and the
     remaining steps need a new Plan and a new Approval;

@@ -41,7 +41,8 @@ The shim owns **only the task envelope**, in two pieces:
 
 1. **The result rewrite**: when a dispatch parks *and* the client advertised the Tasks
    capability, the shim rewrites the outgoing parked tool result into a
-   `CreateTaskResult` carrying an MCP task handle.
+   `CreateTaskResult` carrying an MCP task handle. *(Amended 2026-09-24: and the park did
+   not emit an answerable approval question — see the amendment of that date.)*
 2. **The task methods**: `tasks/get` and `tasks/cancel`, served as custom methods beside
    the SDK's own dispatch table.
 
@@ -93,7 +94,9 @@ tests pin both facts so the change announces itself as a build failure, not a su
 is precisely the open rung-2 question on #272: the Relay can only verify the *session's*
 Account, so an answer routed to a human by the harness would be recorded as the agent's.
 Until #272 settles that question, Relay emits no `inputRequests`, and therefore no client
-has any reason to call `tasks/update`.
+has any reason to call `tasks/update`. *(Amended 2026-09-24: ADR-0029 settled the question,
+and #646 makes Relay emit them, so this premise is void as a premise — the boundary now
+rests on a different one. See the amendment of that date.)*
 
 This is stated as a boundary because the failure mode is someone later "completing the
 extension" and thereby opening a decision channel on the AI's own session by accident.
@@ -280,3 +283,82 @@ and the shim can go.
 **Still owed, unchanged:** no genuinely Tasks-capable client has spoken to this server. The
 goldens pin what Relay emits; they cannot confirm it is what SEP-2663 asks for. That remains
 [6/6]'s to settle or waive.
+
+## Amendment, 2026-09-24 — MRTR elicitation: a new premise for the `tasks/update` boundary, and one carve-out (#646)
+
+ADR-0029 settled the question this ADR was waiting on, and #646 builds its decision 6: a gated
+`tools/call` may answer with an MRTR input-required result carrying a Relay-authored approval
+question, and the client retries the call carrying the answer. That makes two things in the text
+above wrong — one a premise that has expired, one a rule with a missing case. Both are corrected
+here rather than in the spec, because both are this ADR's to say.
+
+### 1. The `tasks/update` boundary keeps its position and loses its reason
+
+The boundary said: *"Until #272 settles that question, Relay emits no `inputRequests`, and
+therefore no client has any reason to call `tasks/update`."* **The question is settled, and it was
+not settled there.** ADR-0029 decided that an in-band answer can be a valid approval, recorded as
+an assertion rather than as a verified human; #272 was closed as *not planned*, superseded by this
+ADR, and what shipped was deliberately narrower. So the premise is void **as a premise** — not
+because a fact about the code changed, but because the condition it was waiting on has been
+decided, and decided the other way.
+
+To be exact about what is and is not true today: **Relay does not emit `inputRequests` yet.** #646
+is what makes it, as `approval.md` AP-60, Designed at v0.7.0. A boundary may not rest on a premise
+that a decided-and-milestoned change is going to falsify, which is why the reason is replaced now
+rather than on the day the code lands.
+
+**The boundary itself is unchanged and is not weakened.** `tasks/update` remains out of scope, the
+`no_decision_test.go` literal-string ban on `"tasks/update"` stands, and an in-band answer arrives
+on a retried `tools/call` — never on a task method. What changes is the argument holding it up, and
+replacing it matters more than it looks: a one-line edit that only deleted the stale fact would
+leave a security boundary standing on nothing, which is exactly how a boundary gets "completed" by
+someone who cannot find its reason.
+
+**The replacement premise is the precedence decision below.** A park that emits an answerable
+question emits no task envelope, so **there is no task to update**. A client is never holding a
+handle and a question for the same park at the same time, and the two answer channels cannot race
+or disagree, because only one of them is ever open. This is a stronger footing than the old one:
+the old premise was a fact about what Relay had not built yet, and this one is a property of the
+mechanism rather than of the calendar — it holds on the day AP-60 lands and every day after.
+
+The rest of the boundary's original reasoning is untouched and still load-bearing: an answer
+arriving with no human anywhere in the path is what the guard exists to prevent, and ADR-0029
+decision 5 keeps the whole of that hole in one auditable file. Implementing `tasks/update` still
+requires amending **both** this ADR and that guard, in front of a human.
+
+### 2. Precedence: an emitted question wins over the task envelope
+
+*The boundary, exactly* says the shim rewrites a parked result into a `CreateTaskResult` "when a
+dispatch parks *and* the client advertised the Tasks capability". That rule has no case for a park
+that has already been rendered as a question, and a client advertising both would otherwise receive
+a handle for a park it was simultaneously being asked to answer.
+
+**Decided: elicitation wins.** A park that emits an answerable approval question emits **no** MCP
+task envelope; the rewrite condition gains "and no question was emitted". Everything else about the
+rewrite is unchanged, including that a client which did not advertise the capability is untouched
+byte for byte, and that a park which emits *no* question — an `out-of-band` rule, an audience that
+excludes the caller — is rewritten exactly as before.
+
+Elicitation wins rather than the handle because the question is the thing that can be *answered*.
+A handle is a polling contract over a wait somebody else must end; a question ends the wait on the
+same call. Handing a Tasks-capable client the weaker envelope, when Relay has already decided this
+caller's answer would be accepted, would make capability negotiation a downgrade.
+
+**What this does not decide.** Which envelope a Tasks-capable client should get for a park that
+*cannot* be asked is deliberately left where it is — such a park is still rewritten into a handle.
+That question belongs with #644 and with `execution.md`'s migration, and is recorded as an Open
+question in `docs/specs/approval.md`.
+
+### Consequences
+
+- **SEP-2663 conformance is unaffected.** The extension says a server must not return task results
+  to clients that did not advertise the capability; it does not require that every eligible result
+  become one. Declining to mint a handle is always conformant.
+- **The universal path is still universal.** A client that can be asked gets a question; a client
+  that cannot gets `pending_approval` or a handle, exactly as before. ADR-0027 decision 2's "never
+  hard-depend on an envelope" holds across all three.
+- **The removal condition is unchanged** (#385): when go-sdk#626 lands, the carve-out moves with
+  the rewrite it qualifies.
+- `docs/specs/approval.md` carries this as claims AP-60 and AP-71, Designed at **v0.7.0**; GLOSSARY
+  *MCP task handle* is corrected in the same change, since it said Relay mints one handle per
+  parked dispatch.

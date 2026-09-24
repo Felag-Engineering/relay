@@ -64,6 +64,14 @@ Two properties fall out, and they are the whole point:
    spec's removal of protocol sessions. A Job is already a durable handle; approval reuses
    that rather than inventing a second one.
 
+   > **Amended, 2026-09-24.** There is no Job to park. The gate sits before the dispatcher,
+   > so **parking creates no Job and no Tasks at all** — ADR-0028's amendment of 2026-08-17
+   > recorded this while building the handle store (#269), and it is a claim in
+   > `docs/specs/approval.md`. What parks is the approval **Request**; a Job is minted only
+   > if a decision releases one, or never. The durability argument above still holds, on the
+   > Request instead of the Job. Corrected here because decision 1 is the sentence a reader
+   > starts from.
+
 2. **Three delivery envelopes, and we never hard-depend on any of them.**
    - **Held elicitation** — `elicitation/create` for short waits on elicitation-capable
      harnesses.
@@ -312,12 +320,15 @@ otherwise re-derive from the code.
    requester exclusion, the machine-self-decision rule, and channel strength therefore
    apply to a window exactly as to a single dispatch, because it is the same code. Had
    grants been a separate path, they would have been a cheaper one — and the cheaper path
-   is always the one that gets used.
+   is always the one that gets used. *(Amended 2026-09-24: exactly-as is now a floor, not
+   an equality — a grant's issuance may never fall below second-person and `out-of-band`,
+   whatever the gate derives.)*
 
 3. **What a grant costs to approve is derived, never declared.** The Requirement is
    computed by evaluating the live gate at the Scope's *worst case*: the fan-out ceiling,
-   every Operation in the allow-list, Raw Exec if opted in, and every namespace a Selector
-   could use when the Scope does not pin one — merged with the same strictest-wins rule
+   every Operation in the allow-list, Raw Exec if opted in *(amended 2026-09-24: a Scope
+   may no longer cover Raw Exec at all, so there is nothing to price)*, and every namespace
+   a Selector could use when the Scope does not pin one — merged with the same strictest-wins rule
    the gate uses for overlapping rules. If "mutate on 10+ Nodes needs two people" and a
    grant could release exactly that, the grant needs two people. A request body that could
    name its own requirement could name a cheap one. A Scope over work nothing gates is
@@ -331,7 +342,8 @@ otherwise re-derive from the code.
    The same query requires the authorizing Request to be `approved`, so the window a grant
    row describes stays shut until a human opens it. Hard maxima (24h, 1000 uses) sit in
    code as well as in the request, because the difference between a batch approval and a
-   standing grant is only ever a number somebody typed.
+   standing grant is only ever a number somebody typed. *(Amended 2026-09-24: the window
+   maximum is **4 hours**; the use limit is unchanged.)*
 
 5. **The approval link becomes a column, because "what did that window release" is a query
    under time pressure.** Decision 11 requires "who asked / who approved / what happened"
@@ -449,3 +461,60 @@ Two amendments other ADRs made to this one were never recorded here.
 - **ADR-0029** (2026-07-28) overtook decision 2's "held elicitation" envelope: an in-band
   decision travels through the tool surface (`approve_request`, and MRTR elicitation once
   built), not a held call. Decision 2's text stands as written; this note is its amendment.
+
+## Amendment (2026-09-24): the three approval-grant bounds — 4 hours, never Raw Exec, second-person out-of-band
+
+Owner decisions of **2026-09-14**, taken while working through `docs/specs/approval.md` and never
+written down here. They are adopted now, as decisions of this ADR, because three claims in that
+spec have been resting on a History line in a document this ADR outranks — and a bound whose only
+record is a spec's changelog is a bound nobody will find when they next widen the mechanism.
+
+Each tightens something the 2026-08-16 amendment settled, and each is named against the text it
+changes rather than left to be inferred.
+
+- **An approval grant's window is capped at 4 hours.** This replaces the **24-hour** hard maximum
+  in that amendment's decision 4 ("Hard maxima (24h, 1000 uses) sit in code as well as in the
+  request"). The use limit is unchanged. The reasoning for the cap is unchanged too — "the
+  difference between a batch approval and a standing grant is only ever a number somebody typed" —
+  and four hours is the number that keeps a grant inside one person's shift, so that the human who
+  opened a window is still the human who is there when it closes.
+
+- **An approval grant never covers Raw Exec.** This removes "**Raw Exec if opted in**" from that
+  amendment's decision 3, which priced a Raw Exec-bearing Scope at the `admin` floor and let it
+  through. Pricing is not the control here. A grant hands the AI-agent its *choice* of covered work
+  within the Scope (ADR-0029's client-integrity assumption compounds this), and Raw Exec's Scope is
+  "an arbitrary command" — there is no allow-list to enumerate and therefore nothing for an
+  approver to have seen. Every Raw Exec needs its own decision, alone or inside one bulk act. This
+  is ADR-0001's conspicuous-exception rule holding for *granting* as well as for asking, the same
+  shape as the 2026-08-14 amendment's decision 2 on the role floor.
+
+- **An approval grant is issued only by second-person, out-of-band approval.** This narrows that
+  amendment's decision 2, which said quorum, audience, requester exclusion, the
+  machine-self-decision rule and channel strength "apply to a window exactly as to a single
+  dispatch, because it is the same code". Exactly-as is now a floor, not an equality: whatever the
+  live gate derives for the Scope, a grant's own issuance may not fall below second-person and
+  `out-of-band`. Deriving the requirement from the Scope's worst case (decision 3) stays as the
+  thing that can only make it *stricter*. The reason the derivation alone is not enough: it prices
+  a grant at what the gate demands, and the gate's shipped default is self-confirmation in-band
+  (the 2026-09-16 amendment), so a fresh Relay would issue standing authorization on one asserted
+  answer from the requesting session. A grant is the one object that converts a single approval
+  into many dispatches, and it is the last place to accept an assertion.
+
+**Not changed:** the Scope's shape, its mandatory bounds, the claiming transaction, revocation, the
+audit link, or the derivation rule. **Declined:** raising the *ordinary* gate default to match —
+these three bounds are properties of the standing-authorization mechanism, not of the ladder, and
+conflating them would make every routine mutation as expensive as issuing a window.
+
+**Consequence.** Three bounds currently hold at different values or not at all: the cap is 24
+hours, a Scope carries a Raw Exec opt-in that is accepted and priced at `admin`, and issuance is
+priced by whatever the gate rules say — so a one-approval in-band grant is representable today.
+`docs/specs/approval.md` states both sides: the built behaviour as current claims, and these three
+as Designed at **v0.6.5**, citing this amendment. Until they land, the residual is recorded as
+**R25** in `docs/security/threat-model.md`.
+
+**Consumers updated on 2026-09-24**, because an amendment is not finished until they are:
+**ADR-0038**, whose mandatory-window bullet cited this ADR's 24-hour ceiling, carries a dated note
+at that bullet; `docs/security/threat-model.md` repeats the ceiling and is corrected in the same
+change; and `docs/specs/plan.md` states the 4-hour figure already, as intent — it is `aspirational`
+and unmigrated, so it adopts this amendment at its migration rather than now. `approval.md` carries
+AP-56, AP-57 and AP-58.
