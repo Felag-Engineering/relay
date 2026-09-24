@@ -38,13 +38,14 @@ ifneq ($(GO_TOOLCHAIN),)
 export GOTOOLCHAIN ?= $(GO_TOOLCHAIN)
 endif
 
-.PHONY: build test lint proto proto-tools proto-check proto-breaking build-relay build-daemon \
+.PHONY: build test lint proto proto-tools proto-tools-check proto-check proto-breaking \
+        build-relay build-daemon \
         test-relay test-relay-race test-daemon test-strict-umask test-strict-umask-relay \
         test-strict-umask-daemon lint-relay lint-daemon lint-tools tools \
         clean test-integration \
         fmt fmt-relay fmt-daemon vuln-relay vuln-daemon build-daemon-release \
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
-        test-security-surface test-codex-review \
+        test-security-surface test-codex-review test-proto-tools-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
         demo-build demo-reset demo-fault demo-up demo-down demo-creds test-demo-fleet \
         fuzz-relay fuzz-daemon \
@@ -55,8 +56,8 @@ endif
 # the gap has bitten: CI additionally runs the race detector, the proto-drift
 # and proto-breaking gates, the operation-schema drift check, the devharness
 # absence check, the security-surface gate self-test, the demo-fleet reset
-# guard self-test, the codex-review gate self-test, the strict-umask test lane,
-# and both cross-binary suites.
+# guard self-test, the codex-review gate self-test, the proto-tools pin check
+# self-test, the strict-umask test lane, and both cross-binary suites.
 # Work can pass the inner loop and fail CI on a class of problem the author
 # never looked at.
 #
@@ -74,7 +75,7 @@ endif
 verify: fmt lint-relay lint-daemon lint-devharness devharness-absent-check \
         test-relay-race test-daemon test-strict-umask opschema-check openapi-check \
         apiclient-check verify-proto docs-check test-security-surface \
-        test-demo-fleet test-codex-review test-integration test-crossbinary
+        test-demo-fleet test-codex-review test-proto-tools-check test-integration test-crossbinary
 	@echo
 	@echo "verify: all local CI-equivalent gates passed."
 
@@ -176,7 +177,7 @@ lint: lint-relay lint-daemon
 # CI runs make proto-tools then make proto for the proto-drift check; Rust types are
 # generated at cargo-build time by daemon/build.rs (tonic-build), so there is no
 # Rust step here.  Run `make proto-tools` once before regenerating locally.
-proto:
+proto: proto-tools-check
 	cd proto && PATH="$$(go env GOPATH)/bin:$$PATH" buf generate
 
 # Install the proto codegen toolchain at pinned versions (into $(go env GOPATH)/bin).
@@ -186,6 +187,21 @@ proto-tools:
 	go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 	go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
 	go install github.com/bufbuild/buf/cmd/buf@v1.54.0
+
+# The three `go install` lines above are the ONLY copy of these pins. Three consumers read
+# that exact line shape and none may be given a second copy: this recipe; ci.yml's cache-key
+# step in both the relay and proto jobs (`grep -hE '^\s+go install ' Makefile | sha256sum`); and
+# scripts/proto-tools-check.sh below, which parses them and refuses — before any codegen
+# runs — if the installed tools disagree (#710: parallel dev-loop worktrees share
+# $GOPATH/bin, so one runner's install used to surface on a sibling as a proto-drift diff
+# whose entire content was the generator stamp). Reshape this recipe and update all three in
+# the same change.
+#
+# proto-tools-check asserts buf too, even though buf's own version is not recorded anywhere in
+# the generated stamp — nothing else here can catch a wrong buf, and buf's version is what
+# decides what `buf lint` and `buf breaking` accept. Silent on success, like proto-check.
+proto-tools-check:
+	@bash scripts/proto-tools-check.sh
 
 # golangci-lint at a pinned version (full module path required: v2 module). Pinned
 # here rather than in ci.yml so every `go install` pin lives in one place: CI keys
@@ -238,6 +254,16 @@ test-demo-fleet:
 test-codex-review:
 	bash scripts/codex-review-test.sh
 
+# Proves scripts/proto-tools-check.sh fires on a wrong version and on an absent plugin, reads
+# the binary `make proto` would actually invoke (GOPATH/bin first, then the ambient PATH,
+# never merely whatever happens to be first on the caller's own PATH), and refuses rather
+# than passing when it parses no pins from the proto-tools recipe OR meets a recipe line it
+# cannot parse (#710). Hermetic: a stub `go` and stub tools under a throwaway WORKDIR, touching
+# no real toolchain, installing nothing, deriving the pins from the Makefile so a pin bump
+# needs no test edit.
+test-proto-tools-check:
+	bash scripts/proto-tools-check-test.sh
+
 # Verify no committed generated code drifts from the proto source (ADR-0007).
 # Runs proto (which regenerates) then fails if relay/internal/relay/v1 differs.
 proto-check: proto
@@ -248,7 +274,7 @@ proto-check: proto
 # the repo root; `subdir=proto` points buf at the proto module inside that revision.
 # PROTO_BREAKING_REF defaults to origin/main for local use; CI passes the PR base SHA.
 PROTO_BREAKING_REF ?= origin/main
-proto-breaking:
+proto-breaking: proto-tools-check
 	PATH="$$(go env GOPATH)/bin:$$PATH" buf breaking proto \
 		--against ".git#ref=$(PROTO_BREAKING_REF),subdir=proto"
 
