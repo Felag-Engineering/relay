@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -184,6 +185,10 @@ type testServer struct {
 	nodeB   string       // node:env=prod; no Policy snapshot captured
 	store   *store.Store
 	conduit *fakeConduit
+	// reg is the same registry the capability lane reads, exposed so a test
+	// can seed further Nodes after the fixture is built — the fleet-ordering
+	// test needs an insertion order that differs from Node-ID order.
+	reg *registry.InMemory
 }
 
 // newTestServer builds the fixture described on testServer with generous
@@ -345,6 +350,7 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 		nodeB:   nodeB,
 		store:   st,
 		conduit: conduit,
+		reg:     reg,
 	}
 }
 
@@ -432,6 +438,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 		nodeA:   nodeA,
 		store:   st,
 		conduit: conduit,
+		reg:     reg,
 	}
 }
 
@@ -662,6 +669,53 @@ func TestMCP_Outdated(t *testing.T) {
 			t.Error("describe_node(node A): Outdated = false, want true (below 1.2.0 minimum)")
 		}
 	})
+}
+
+// TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder is QRY-3's ordering half at
+// the surface the claim names: list_nodes returns the matches in Node-ID
+// order, and this adapter does not re-order what the capability read lane
+// handed it. The lane's own half is capability's
+// TestListNodes_ReturnsMatchesInNodeIdOrder.
+//
+// The extra Nodes are seeded out of ID order and interleaved around the
+// fixture's node-a/node-b, so insertion order and ID order genuinely differ —
+// with only node-a and node-b the two coincide and the assertion would be
+// vacuous.
+//
+// Residual: proves the MCP surface does not re-order what the lane returned,
+// for the EMPTY Selector only. A filtered resolution's order is asserted
+// neither here nor at the lane. The order originates in the registry's List
+// and is preserved by Selector.Resolve; neither is pinned by this test.
+func TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder(t *testing.T) {
+	ts := newTestServer(t)
+
+	insertion := []string{ts.nodeA, ts.nodeB}
+	for _, id := range []string{"node-z", "node-0", "node-m"} {
+		if _, err := ts.reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+		insertion = append(insertion, id)
+	}
+
+	session := ts.connect(t)
+	res := callTool(t, session, "list_nodes", nil)
+	var out mcp.ListNodesOutput
+	decodeResult(t, res, &out)
+
+	got := make([]string, 0, len(out.Nodes))
+	for _, n := range out.Nodes {
+		got = append(got, n.NodeID)
+	}
+	want := append([]string(nil), insertion...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("list_nodes order = %v, want Node-ID order %v", got, want)
+	}
+	// Non-vacuity: the seeded order is not the sorted order, so a surface
+	// that simply echoed insertion order would have failed above.
+	if reflect.DeepEqual(insertion, want) {
+		t.Fatalf("the fixture's insertion order %v already IS Node-ID order — this test cannot fail", insertion)
+	}
 }
 
 func TestMCP_ListNodes_SelectorFilter(t *testing.T) {

@@ -208,6 +208,62 @@ func TestDescribeNode_RecordsTheNodeItWasAimedAt(t *testing.T) {
 	}
 }
 
+// TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints is QRY-5's
+// arithmetic half under a citable name: the lane counts the registry Nodes
+// sharing the subject Node's NON-EMPTY Policy and template-set fingerprints,
+// counts the subject itself among them, and counts nothing at all when the
+// subject's own fingerprint is empty — an absent report is not a fingerprint
+// that every other silent Node happens to share.
+//
+// Residual: proves the lane's arithmetic and the empty-fingerprint skip only.
+// Says nothing about which surface renders the counts, nothing about the
+// counts' freshness, and nothing about the O(N)-per-read cost the method's own
+// doc comment records — no benchmark is added.
+func TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints(t *testing.T) {
+	svc, _ := registryLaneFixture(t,
+		registry.Report{NodeID: "node-1", PolicyFingerprint: "sha256:aaa", TemplateSetFingerprint: "sha256:ttt"},
+		registry.Report{NodeID: "node-2", PolicyFingerprint: "sha256:aaa"},
+		registry.Report{NodeID: "node-3", PolicyFingerprint: "sha256:bbb"},
+		registry.Report{NodeID: "node-4"},
+	)
+
+	describe := func(t *testing.T, nodeID string) NodeDetail {
+		t.Helper()
+		d, err := svc.DescribeNode(context.Background(), testPrincipal, nodeID)
+		if err != nil {
+			t.Fatalf("DescribeNode(%s): %v", nodeID, err)
+		}
+		return d
+	}
+
+	// node-1 shares its Policy fingerprint with node-2 and is counted itself;
+	// it is the only Node reporting a template-set fingerprint.
+	if d := describe(t, "node-1"); d.PolicyPeers != 2 || d.TemplatePeers != 1 {
+		t.Errorf("node-1: PolicyPeers = %d, TemplatePeers = %d; want 2 and 1 (self-inclusive)",
+			d.PolicyPeers, d.TemplatePeers)
+	}
+
+	// node-2 is the empty-fingerprint skip: two other Nodes (node-3, node-4)
+	// report none either — the count is still 0, not the 3 an
+	// empty-matches-empty comparison would give — while its non-empty Policy
+	// fingerprint is counted normally.
+	if d := describe(t, "node-2"); d.TemplatePeers != 0 || d.PolicyPeers != 2 {
+		t.Errorf("node-2: PolicyPeers = %d, TemplatePeers = %d; want 2 and 0 — an empty "+
+			"template-set fingerprint matches nothing, not every other unreporting Node",
+			d.PolicyPeers, d.TemplatePeers)
+	}
+
+	// node-4 reports neither fingerprint, so neither count sweeps up the Nodes
+	// it shares that silence with: an empty-matches-empty comparison would give
+	// 1 (node-4 is the only Node with no Policy fingerprint) and 3 (node-2,
+	// node-3 and node-4 report no template set).
+	if d := describe(t, "node-4"); d.PolicyPeers != 0 || d.TemplatePeers != 0 {
+		t.Errorf("node-4: PolicyPeers = %d, TemplatePeers = %d; want 0 and 0, not the 1 and 3 an "+
+			"empty-matches-empty comparison would give",
+			d.PolicyPeers, d.TemplatePeers)
+	}
+}
+
 // TestDescribeNode_RecordsAProbeForAMissingNode is why the record is written
 // BEFORE the registry is consulted: enumeration by guessing ids is exactly
 // what an audited read surface exists to make visible, and a trail that

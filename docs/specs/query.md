@@ -161,18 +161,21 @@ proto gates.
 
 | Claim | Proven by | Seam |
 |---|---|---|
+| QRY-1 | `TestQueryRoutes_TheControlAPIServesNoEnumerationPolicyOrVocabularyRead` (the negative half only, and over `api.Routes()` rather than the composed mux — `controlplane.New` registers `/api/v1/ping` straight on the mux and `net/http.ServeMux` cannot be enumerated, the identical residual the Policy-preflight spec's Control-API route guard carries. The three predicates are a **name heuristic**: a route disclosing registry, Policy-view or vocabulary data under a name matching none of those tokens and not under `/api/v1/nodes` is not caught. QRY-1's positive half — that fleet enumeration, the Policy view and vocabulary discovery are MCP and Console only — is not asserted here; that rests on QRY-3's, QRY-7's and QRY-11's own rows) | API |
 | QRY-2 | `TestMCP_ListNodes_All`, `TestMCP_ListNodes_StateLabels`, `TestHandleGetNode_StateLabels` | MCP, API |
-| QRY-3 | `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All` | MCP |
+| QRY-3 | Ordering half: `TestListNodes_ReturnsMatchesInNodeIdOrder` (the lane, where the order originates) and `TestMCP_ListNodes_ReturnsMatchesInNodeIdOrder` (the surface the claim names, seeded out of ID order so echoing insertion order would fail) — both assert order for the **empty Selector only**; a filtered resolution's order is unasserted at either seam, and neither the registry's `List` nor `Selector.Resolve` is pinned. Rest of the claim: `TestMCP_ListNodes_SelectorFilter`, `TestMCP_ListNodes_All` | capability, MCP |
 | QRY-4 | `TestConnected_IsNotInferredFromLastSeen` | registry |
+| QRY-5 | Three separate legs, one per surface the claim joins. `TestDescribeNode_CountsFingerprintPeersAndSkipsEmptyFingerprints` — the lane's arithmetic and the empty-fingerprint skip only: nothing about which surface renders the counts, nothing about their freshness, and nothing about the O(N)-per-read cost the lane's own documentation records (no benchmark is added). `TestNode_FingerprintPanelReportsThePeerCounts` — that a real lane's numbers reach this screen's Fingerprints panel; it proves *this* screen, is a string slice of rendered HTML so a markup rename breaks the test rather than the property, and checks the prose only at n=0 and n=1. `TestMCP_DescribeNode_ReportsNoFingerprintPeerCounts` — the claim's last sentence, which pins **today's gap** (QRY-5 names the MCP half *Future work*), not a permanent prohibition: the change that adds peer counts to MCP replaces this test | capability, Console, MCP |
 | QRY-6 | `TestMCP_ListOperations_PerNode`, `TestMCP_DescribeNode` | MCP |
 | QRY-7 | `TestMCP_DescribeNode` | MCP |
 | QRY-8 | `TestNode_PolicyPanelCarriesTheReceiptTime`, `TestNode_OfflineNodePolicyCannotBeRefreshed` | Console |
 | QRY-9 | `TestCompare_MarksDifferencesAndNeverAdjudicatesThem` | Console |
 | QRY-10 | `TestMCP_DescribeNode` | MCP |
 | QRY-11 | `TestMCP_ListOperations` | MCP |
-| QRY-12 | `TestMCP_ListOperations_PerNode` | MCP |
+| QRY-12 | `TestMCP_ListOperations_PerNode`; body half `TestMCP_ListOperations_NeverCarriesATemplateBody` (a rendering/shape proof on this surface, armed on both legs so an empty response cannot satisfy it — but its structural predicate keys on the token `body` alone, so a field carrying a body under another name passes both legs, and nothing in the tree pins `/proto`'s `TemplateDescriptor` field set, which is the durable reason a body cannot appear) | MCP |
 | QRY-13 | `TestMCP_ListOperations` | MCP |
-| QRY-15 | `TestMCP_RequiresCredential` | MCP |
+| QRY-14 | `TestNode_DetailShowsTheTemplateFingerprintAndNeverTheTemplateVocabulary` (armed first on the lane, so the absence is not "no vocabulary was ever wired" — but it proves *this* screen and *this* view struct, not every Console page: another screen could render a vocabulary and neither leg would notice, and the Console's own structural guards speak to writers and dispatch, not to rendering. QRY-14 names the absence *Future work*, so this pins today's behaviour, not a permanent ban) | Console |
+| QRY-15 | `TestMCP_RequiresCredential`; Control API and Console halves `TestQueryReadFloor_IsViewerOnMCPTheControlAPIAndTheConsole` (one `viewer` Account reaching each of today's query reads on all three adapters, and refused by that same credential where a narrower floor genuinely applies. Two residuals it must not be read past: today's query reads are **enumerated by hand** there, so it does not prove that no narrower gate exists on an unlisted query path; and because `viewer` is the **lowest** valid role, the Control API Node read is classified ungated and MCP declares no floor at all, so it proves "no gate narrower than viewer applies on these paths" and **cannot distinguish that from "no role gate exists on this path"**. It is not an asserted floor, and it says nothing about roles above `viewer`) | MCP, e2e |
 | QRY-16 | `TestListNodes_RecordsTheEnumeration`, `TestDescribeNode_RecordsTheNodeItWasAimedAt` | capability |
 | QRY-17 | `TestRegistryLane_FailsClosedWhenTheReadCannotBeAudited`, `TestRegistryLane_RefusesWithoutARealAuditSink`, `TestHandleGetNode_FailsClosedWhenTheReadCannotBeRecorded` | capability, API |
 | QRY-19 | `TestMCP_RequiresCredential`, `TestConsole_UnauthenticatedIsRefused` | MCP, Console |
@@ -187,14 +190,9 @@ proto gates.
 
 Claims with **no row**, and so nothing checking them:
 
-- **QRY-1** — the absence of enumeration, Policy and vocabulary routes on the Control API; the
-  route table proves what is present, nothing names the absences.
-- **QRY-3**, ordering half — no test asserts Node-ID order.
-- **QRY-5** — the peer counts are asserted in the read lane's tests but under no citable name.
-- **QRY-12**, body half — the "never a body" assertion exists only on `describe_node`.
-- **QRY-14** — a statement of absence on the Console.
-- **QRY-15**, Control API and Console halves — the `viewer` floor is exercised per route, not
-  asserted as cross-surface parity.
+- **QRY-3**, ordering under a *filtered* Selector — Node-ID order is now asserted at the lane and
+  at MCP, but for the empty Selector only; nothing checks that a Selector-filtered resolution
+  preserves it (#681).
 
 ### Performance
 
@@ -259,6 +257,23 @@ about Selector resolution or MCP read records: #680 made both statements true (Q
 
 ## History
 
+- `2026-09-24` — Proof rows added for the six Behaviour claims (or halves) that had none: QRY-1
+  (the Control API serves no enumeration, Policy-view or vocabulary read), QRY-3's ordering half,
+  QRY-5 (three legs — the lane's peer arithmetic and its empty-fingerprint skip, the Console's
+  rendering of both counts from a *real* lane rather than a test double, and MCP's
+  non-reporting), QRY-12's "never a template body" on `list_operations`, QRY-14's Console
+  vocabulary absence, and QRY-15's Control API and Console halves as one cross-surface `viewer`
+  parity test through the composition root. Test-only: seven test files, no production
+  code, no claim promoted, so QRY-25 remains the one Designed claim and the Status does not move.
+  Every row carries its test's own residual rather than reading as broader than the evidence —
+  QRY-1 is `api.Routes()` and a name heuristic, not the composed mux, and its positive half is
+  unasserted; QRY-3's order is the empty Selector only; QRY-12's structural predicate keys on the
+  token `body` alone and nothing pins `/proto`'s descriptor field set; QRY-5's MCP leg and QRY-14
+  pin today's *Future work* gaps rather than permanent prohibitions; and QRY-15 cannot
+  distinguish "no gate narrower than `viewer`" from "no role gate at all", because `viewer` is the
+  lowest valid role. Still with no row: Node-ID order under a filtered Selector. All three
+  *Performance* rows stay *(none)* — nothing here measures a performance characteristic, and the
+  single-Node detail row's O(N)-per-read cost is deliberately left unmeasured. (#681)
 - `2026-09-23` — The five claims QRY-28, QRY-26 and QRY-27 retire are removed now that #680 has
   merged: QRY-18 is deleted, both exceptions leave QRY-16, the "only when a recorder is wired"
   qualifier leaves QRY-17, the `list_operations` sentence leaves QRY-21 and the MCP sentence
