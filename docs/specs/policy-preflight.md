@@ -183,38 +183,28 @@ they are the names in the tree. They are renamed by the PR that lands PF-19, not
 
 | Claim | Proven by | Seam |
 |---|---|---|
+| PF-1 | `TestNoPreflightToolOrMethodIsRegistered`, `TestNoSeparatePreflightRouteIsServed`, `TestRunOperationAndRawExecShareOnePlanFlag`, `TestConsoleServesNoSeparatePreflightRoute` | MCP; Control API (the guard is over `api.Routes()` only — the control-plane server's own composition registers `/api/v1/ping` directly on the same mux outside that table, and `net/http.ServeMux` exposes no way to enumerate a live mux's patterns, so a hypothetical second registrar under `/api/v1` is a stated residual, not covered); Console (a mirror guard over `console.Routes(Deps{Execution: true})`) |
 | PF-2 | `TestPlanReturnsPerNodeVerdictsNoJobOrTask`, `TestMCP_Plan_PlanVsRealRunParity` | capability, MCP |
 | PF-3 | `TestPlanFrozenReportsAdvisoryWhileRunRefuses`, `TestMCP_RunOperation_Plan_FrozenReportsWhileRealRunErrors` | capability, MCP |
 | PF-4 | `TestPlanOverCapReportsNotErrors`, `TestMCP_RunOperation_Plan_OverCap_ReportsNotErrors` | capability, MCP |
 | PF-5 | `TestPlanZeroMatchReportsNoNodesMatchedWhileRunRefuses`, `TestMCP_Plan_ZeroMatchReportsWhatARealRunRefuses` | capability, MCP |
 | PF-6 | `TestPlanOfflineNodeIsUnknownNeverQueried`, `TestMCP_RunOperation_Plan_OfflineIsUnknown` | capability, MCP |
+| PF-7 | `TestPreflightNeverConsultsCachedPolicyOrVocabulary` (behavioural: contradicting Policy-view/Template-vocabulary spies plus an armed control — a later `DescribeNode` call on the same Service shows both spies non-empty, so the zero-Gets result during `Plan` is not just an unwired seam), `TestCachedPolicyAndVocabularyReachOnlyTheDisplayReadLane` (structural: four AST allowlists pin the two cached sources that exist today by name — fields, seam types, imports, and the `DescribeNode`/`ListOperations` read-lane methods; the seam's own declaring module is allowlisted wholesale, so these guards establish that the two named sources are unreached outside the display read lane, not the general property that no cached verdict source can ever exist) | capability |
 | PF-8 | `TestPlanReturnsPerNodeVerdictsNoJobOrTask`, `TestMCP_RunOperation_Plan_VerdictsNoExecution`, `TestMCP_RunOperation_Plan_AuditedAsPlanNoJobOrTask`, `policy_query_spawns_no_process_and_records_no_dedup` | capability, MCP, daemon |
-| PF-9 | `TestPolicyQuery_CarriesNoTaskID`, `TestWireCarriesNoCallerIdentity` (its exact-field-set assertion on `PolicyQuery`) | compile-time |
-| PF-10 | `TestPlanReportsUnsupportedDistinctFromDeny` | capability |
+| PF-9 | `TestPolicyQuery_CarriesNoTaskID`, `TestWireCarriesNoCallerIdentity` (exact-field-set assertions on `PolicyQuery`, `Operation` and `RawExec`), `TestTaskRequest_CarriesNoPreviewFlag` (second half: `TaskRequest`'s exact top-level field set plus a nested regex walk of its reachable fields — the walk does not traverse enums, and the neighbouring exact-field-set assertions on `Operation`/`RawExec` are what carry the rest) | compile-time |
+| PF-10 | `TestPlanReportsUnsupportedDistinctFromDeny`, `TestPlanReturnsPerNodeVerdictsNoJobOrTask` (asserts the deny verdict's `DecidingRule == "deny-rm-rf"`, proving the deciding-rule half) | capability |
 | PF-11 | `plan_and_apply_agree_on_unsupported` | daemon |
 | PF-12 | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
-| PF-13 | `TestBuildOperationAction_UnknownArgOnAValidCallIsRejected` | MCP |
+| PF-13 | `TestBuildOperationAction_UnknownArgOnAValidCallIsRejected` (name half); value half, three independent tests on three different Operations, not one end-to-end chain: `TestPreflightCarriesAnIllFormedArgumentValueToTheDaemon` (capability, Relay-side only — the value passes through unaltered and its canned verdict says nothing about what the daemon would actually decide), `TestBuildOperationAction_IllFormedArgValueIsNotRefused` (MCP), and the daemon's own existing `plan_and_apply_agree_on_a_non_canonical_template_path` (not written by this change) | MCP, capability, daemon |
 | PF-14 | `TestPlanOutdatedNodeGetsRealVerdictAdvisoryOnly`, `TestMCP_RunOperation_Plan_OutdatedAdvisory` | capability, MCP |
 | PF-15 | `TestPolicyQuery_RawExecRoundTrip` | Relay wire conversion |
 | PF-16 | `TestMCP_RawExec_Plan_ArgvVerbatimMutateClass` | MCP |
 | PF-18 | `TestPlanAuthzDeniedRecordsRefusalNoVerdicts` | capability |
+| PF-22 | `TestVerdictZeroValueIsUnknownNeverAllow` (zero-value half), `TestPolicyVerdict_CannotExpressUnknown` (wire half: `PolicyVerdict`'s exact top-level field set plus a nested regex walk that does not traverse enums) | capability, compile-time |
+| PF-23 | `TestPreflightNeverConsultsTheApprovalGate` (behavioural, with an armed control — the same Principal/Selector/Action driven through `Run` returns a `*ParkedError`, proving the gate really would have parked it, so zero gate calls during `Plan` means "never consulted" and not "never wired"), `TestPreflightResultCarriesNoApprovalField` (response half, asserted on `PlanResult`'s and `NodeVerdict`'s exact field sets alone, resting on invariant 10's adapters-narrow-only rule rather than on a per-surface MCP/API assertion) | capability |
 
 Claims with **no row**, and so nothing checking them:
 
-- **PF-1** — that no surface exposes a separate preflight tool or route. True by inspection of
-  the tool registry and route table; nothing asserts the absence.
-- **PF-7** — that the Relay never consults its Policy view or cached vocabulary. The
-  observable consequences (PF-6, PF-11) are covered; the *absence* of a consulting path is not.
-  The `no_verdicts` guard in *Future work* would close it.
-- **PF-13**, value half — that an ill-formed argument value surfaces as the daemon's verdict on a
-  preflight rather than a Relay refusal.
-- **PF-9**, second half — that the Task message carries no preview flag; both cited tests
-  assert on `PolicyQuery` only.
-- **PF-10**, deciding-rule half — that a `deny` carries its rule; the row proves only that the
-  verdicts are distinct.
-- **PF-22** — the zero value and the never-a-wire-value half.
-- **PF-23** — nothing asserts that a preflight never touches the approval gate or store; the
-  capability tests are built without a gate installed at all.
 - **PF-17** — a property of the design, not a test target.
 
 ### Performance
@@ -291,6 +281,22 @@ cheap enough that a caller always does it.
 
 ## History
 
+- `2026-09-24` — Proof rows added for PF-1, PF-7, PF-9 (second half), PF-10 (deciding-rule half,
+  proven for free by an existing test), PF-13 (value half), PF-22 and PF-23 (#678, the
+  capability's testing issue: five new test files, no production code changed). The reasoning
+  that had to change: the issue's suggested seam for PF-7 — an import-boundary guard forbidding
+  package `capability` from importing `internal/policyview`/`internal/nodevocab` — is no longer
+  possible, because #702 (issue #680) routed the display-only Policy-view and Template-vocabulary
+  reads through the capability read lane, so package `capability` now legitimately imports both.
+  PF-7 is proven instead by a behavioural spy test (contradicting cache spies, plus an armed
+  `DescribeNode` control) and a four-allowlist AST guard pinning the two named cached sources to
+  the read lane — not the retired import guard. PF-1, PF-7, PF-13 and PF-23's rows carry stated
+  residuals rather than reading as broader than what was proven: the Control API guard covers
+  `api.Routes()` only, not the composed mux; the AST guard pins today's two named cached sources,
+  not the general absence of any cached-verdict source; PF-13's three tests are independent links
+  on three different Operations, not one end-to-end chain; PF-23's response half rests on
+  invariant 10's adapters-narrow-only rule, not a per-surface MCP/API assertion. Full detail is
+  documented alongside each test.
 - `2026-09-20` — Migrated to the claim format (PF-1 … PF-23). Owner decisions: a zero-match
   Selector is reported, not refused (PF-5 — the legacy text said refused; the code and its test
   were right); `unsupported` is the daemon's answer, never inferred by the Relay from cached
