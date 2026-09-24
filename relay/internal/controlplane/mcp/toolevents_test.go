@@ -132,6 +132,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 		nodeA:   nodeID,
 		store:   st,
 		conduit: conduit,
+		reg:     reg,
 	}, conduit
 }
 
