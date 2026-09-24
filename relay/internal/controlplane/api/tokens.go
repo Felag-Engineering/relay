@@ -169,21 +169,40 @@ func handleRevokeToken(d Deps) http.HandlerFunc {
 		// on a single connection (SetMaxOpenConns(1)). The records are now
 		// written in chunked transactions (revocation.cascadeRecordChunk), one
 		// commit per chunk rather than one per Node, so a token covering a
-		// large fleet no longer head-of-line blocks every other store-backed
-		// request — registry reads, Job persistence, the fail-closed
-		// read-audit path — for the whole cascade, only for the chunk in
-		// flight. The deadline still bounds the total: a chunk that is in
-		// flight or not yet started when the budget expires fails whole and is
-		// counted whole by the cascade, while earlier committed chunks stay.
-		// N must still stay unbounded: capping the cascade would leave Nodes
-		// either unrevoked (an authentication hole) or unrecorded (the bug
-		// this closes).
+		// large fleet no longer makes every other store-backed request —
+		// registry reads, Job persistence, the fail-closed read-audit path —
+		// queue behind one commit per Node; the connection is instead held
+		// for one chunk's transaction at a time. The deadline still bounds
+		// the total: a chunk that is in flight or not yet started when the
+		// budget expires fails whole and is counted whole by the cascade,
+		// while earlier committed chunks stay. N must still stay unbounded:
+		// capping the cascade would leave Nodes either unrevoked (an
+		// authentication hole) or unrecorded (the bug this closes).
 		//
-		// This reduces the stall; it does not eliminate it. revocation.Service.
-		// RevokeNode still performs one SetRevoked autocommit UPDATE per Node
-		// on this same single connection, with context.Background and no
-		// deadline — that half of the original head-of-line block is
-		// unchanged by this issue.
+		// The registry writes are now chunked the same way (#607): on the
+		// happy path the cascade marks each chunk's Nodes revoked in ONE
+		// transaction per revocation.cascadeRecordChunk, not one autocommit
+		// UPDATE per Node; a batch failure falls back to exactly that
+		// per-Node autocommit loop for the chunk (revocation.Service).
+		// Both halves are the same two-sided trade, and it is worth stating
+		// precisely. SetMaxOpenConns(1) serialises STATEMENTS, not
+		// transactions (store/accounts.go), so the per-Node autocommits
+		// already let other store callers interleave between every pair of
+		// them; what they cost was one commit — one WAL fsync — per Node,
+		// and that total is what made a large cascade's run, and everyone
+		// else's queuing behind it, scale with N. Chunking divides that by
+		// the chunk size. In exchange the single connection is now held for
+		// a whole chunk transaction, so a dispatch write or a read-audit
+		// write arriving mid-chunk waits for the chunk rather than for one
+		// statement. Accepted deliberately, in both halves.
+		//
+		// The registry half is deliberately NOT bound by this budget. A
+		// budget expiry that stopped persisting revocations would leave
+		// Nodes denylisted in memory only, and a restart rehydrates the
+		// denylist from the registry (#133, ADR-0006) — it would silently
+		// un-revoke them. That is under-denying, which this cascade's stated
+		// posture forbids; the chunk SIZE, not a deadline, is what bounds
+		// the registry write.
 		//
 		// The budget starts here, BEFORE RevokeToken — so if a second
 		// concurrent revoke of this same token (#605) is already waiting on

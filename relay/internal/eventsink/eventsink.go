@@ -196,8 +196,8 @@ type registryObserver struct {
 // SetConnected(id, true) -> TransitionConnected, SetConnected(id, false) ->
 // TransitionDisconnected, and a successful SetRelayLabels ->
 // TransitionLabelsChanged. Every other method — Upsert, UpdateLastSeen,
-// SetRevoked, RecordEnrollment, RecordRenewal, Get, List, RevokedNodeIDs,
-// Count — delegates and publishes NOTHING.
+// SetRevoked, SetRevokedAll, RecordEnrollment, RecordRenewal, Get, List,
+// RevokedNodeIDs, Count — delegates and publishes NOTHING.
 //
 // UpdateLastSeen is the load-bearing omission: it is the heartbeat, called
 // on every message from every connected Node. Publishing it would let a
@@ -257,6 +257,10 @@ func (o registryObserver) SetConnected(nodeID string, connected bool) {
 
 func (o registryObserver) SetRevoked(nodeID string, at time.Time) error {
 	return o.r.SetRevoked(nodeID, at)
+}
+
+func (o registryObserver) SetRevokedAll(nodeIDs []string, at time.Time) ([]string, error) {
+	return o.r.SetRevokedAll(nodeIDs, at)
 }
 
 func (o registryObserver) RevokedNodeIDs() ([]string, error) {

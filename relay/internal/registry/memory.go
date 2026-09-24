@@ -180,6 +180,32 @@ func (r *InMemory) SetRevoked(nodeID string, at time.Time) error {
 	return nil
 }
 
+// SetRevokedAll is SetRevoked's chunked twin: it revokes every id in nodeIDs
+// as of at under a single lock, the in-memory analogue of the store's single
+// transaction. A missing row is not an error: it is appended to missing and
+// the rest of the batch still applies. Never returns a non-nil error — there
+// is no failure mode to model in memory; the transaction and rollback proofs
+// live at the store level.
+func (r *InMemory) SetRevokedAll(nodeIDs []string, at time.Time) ([]string, error) {
+	if len(nodeIDs) == 0 {
+		return nil, nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var missing []string
+	for _, id := range nodeIDs {
+		n, ok := r.nodes[id]
+		if !ok {
+			missing = append(missing, id)
+			continue
+		}
+		n.RevokedAt = at
+	}
+	return missing, nil
+}
+
 // RecordEnrollment persists first-enrollment certificate provenance.
 func (r *InMemory) RecordEnrollment(nodeID string, cert Certificate, at time.Time) error {
 	r.mu.Lock()

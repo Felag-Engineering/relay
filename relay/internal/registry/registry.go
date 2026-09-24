@@ -70,7 +70,8 @@ type Node struct {
 	// (never revoked). Relay-set, Node-immutable — the structural sibling of
 	// RelayLabels: a daemon can never revoke or un-revoke itself, exactly as
 	// it can never set relay: labels. Deliberately NOT settable via Report
-	// (see below); only SetRevoked writes it.
+	// (see below); only SetRevoked and its chunked twin SetRevokedAll write
+	// it.
 	RevokedAt time.Time
 
 	// The certificate provenance the RELAY issued (#440). Every field here is
@@ -305,10 +306,40 @@ type Repository interface {
 	SetConnected(nodeID string, connected bool)
 
 	// SetRevoked records that a Node is revoked as of at. It is the
-	// structural sibling of SetRelayLabels: Relay-set, Node-immutable, and
-	// the only write path for RevokedAt. Returns ErrNotFound if the Node is
-	// not in the registry.
+	// structural sibling of SetRelayLabels: Relay-set, Node-immutable. It
+	// and its chunked twin SetRevokedAll below are the only write paths for
+	// RevokedAt. Returns ErrNotFound if the Node is not in the registry.
 	SetRevoked(nodeID string, at time.Time) error
+
+	// SetRevokedAll is SetRevoked's chunked twin: it writes the same column
+	// for every id in nodeIDs, all under ONE transaction. On a nil error
+	// every id that has a registry row was written; on a non-nil error none
+	// were, and missing is nil. Same all-or-nothing contract as
+	// audit.Repository.AppendAll, which #601 used for the cascade's
+	// records — deliberately the same shape.
+	//
+	// A missing row is NOT an error. An id with no registry row is returned
+	// in missing and does not abort the write for the rest of the batch.
+	// This is the batch form of the ErrNotFound tolerance the per-Node
+	// cascade already applies (revocation/service.go): a Node that never
+	// connected has no row, and the in-memory denylist still holds for this
+	// process. missing never aliases nodeIDs.
+	//
+	// Takes no context.Context, like every other method on this interface.
+	// A durable revocation write must not become cancellable: if it were
+	// bound to the Control API's cascade audit budget, a budget expiry
+	// would stop persisting revocations while the in-memory denylist kept
+	// adding them, and the next Relay restart — which rehydrates the
+	// denylist from RevokedNodeIDs() — would let those Nodes back in (#133,
+	// ADR-0006). Over-denying beats under-denying; an un-persisted revoke is
+	// under-denying.
+	//
+	// nodeIDs is a READ-ONLY BORROW: implementations must not modify it in
+	// place, append within its spare capacity, or retain it after
+	// returning.
+	//
+	// Empty nodeIDs is a no-op returning (nil, nil).
+	SetRevokedAll(nodeIDs []string, at time.Time) (missing []string, err error)
 
 	// RevokedNodeIDs returns the IDs of every Node with a non-zero
 	// RevokedAt, for rehydrating a connect-time denylist after a restart.

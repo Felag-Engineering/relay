@@ -500,6 +500,57 @@ func TestSetRevoked_RoundTripAndRevokedNodeIDs(t *testing.T) {
 	}
 }
 
+func TestSetRevokedAll_SetsEveryPresentNodeAndReportsMissing(t *testing.T) {
+	reg := NewInMemory()
+
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	at := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	missing, err := reg.SetRevokedAll([]string{"node-a", "no-such", "node-b"}, at)
+	if err != nil {
+		t.Fatalf("SetRevokedAll: %v", err)
+	}
+	if len(missing) != 1 || missing[0] != "no-such" {
+		t.Errorf("missing: got %v, want [no-such] (a missing row must not stop the rest of the batch)", missing)
+	}
+
+	for _, id := range []string{"node-a", "node-b"} {
+		n, _ := reg.Get(id)
+		if !n.RevokedAt.Equal(at) {
+			t.Errorf("%s RevokedAt: got %v, want %v", id, n.RevokedAt, at)
+		}
+	}
+
+	ids, err := reg.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != "node-a" || ids[1] != "node-b" {
+		t.Errorf("RevokedNodeIDs: got %v, want [node-a node-b]", ids)
+	}
+}
+
+func TestSetRevokedAll_EmptyIsANoOp(t *testing.T) {
+	reg := NewInMemory()
+	if _, err := reg.Upsert(Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	missing, err := reg.SetRevokedAll(nil, time.Now())
+	if err != nil || missing != nil {
+		t.Errorf("SetRevokedAll(nil): got (%v, %v), want (nil, nil)", missing, err)
+	}
+
+	n, _ := reg.Get("node-a")
+	if !n.RevokedAt.IsZero() {
+		t.Errorf("node-a RevokedAt: got %v, want zero value (nothing revoked)", n.RevokedAt)
+	}
+}
+
 func TestCount(t *testing.T) {
 	reg := NewInMemory()
 

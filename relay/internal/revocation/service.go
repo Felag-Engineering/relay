@@ -23,6 +23,11 @@ import (
 type Registry interface {
 	List() []registry.Node
 	SetRevoked(nodeID string, at time.Time) error
+
+	// SetRevokedAll is the cascade's persistence path (revokeAll): one
+	// registry write per chunk instead of one per Node. See
+	// registry.Repository.SetRevokedAll for the all-or-nothing contract.
+	SetRevokedAll(nodeIDs []string, at time.Time) (missing []string, err error)
 }
 
 // TokenRevoker marks an Enrollment Token as revoked in the token store.
@@ -182,6 +187,12 @@ func NewService(d *Denylist, c *Connections, reg Registry, tokens TokenRevoker) 
 // nothing to serialise against. Adding a nodeLocks acquisition here would
 // self-deadlock the first two callers and is the one change to this method a
 // future author is most likely to reach for; don't.
+//
+// revokeAll is this method's chunked twin, used only by revokeChunk for the
+// token cascade: it keeps this method's three-phase order (denylist,
+// persist, teardown) but persists a whole chunk in one registry call instead
+// of one per Node. A future change to the order in one of these two methods
+// should check the other.
 func (s *Service) RevokeNode(nodeID string) {
 	// Add to the denylist FIRST so the in-process barrier is instant even if the
 	// persist below fails — over-denying beats under-denying on this surface.
@@ -202,6 +213,103 @@ func (s *Service) RevokeNode(nodeID string) {
 
 	s.conns.Disconnect(nodeID)
 	slog.Info("node revoked", "node_id", nodeID)
+}
+
+// revokeAll is RevokeNode's chunked twin, called only by revokeChunk for the
+// token cascade. It keeps RevokeNode's per-Node relative order — denylist,
+// then persist, then teardown — for every id in the chunk, but persists the
+// whole chunk in ONE registry call instead of one per Node.
+//
+// THE PERSISTENCE TRADE, stated both ways (#607): one transaction per chunk
+// instead of one autocommit UPDATE per Node. SetMaxOpenConns(1) serialises
+// statements, not transactions, so the autocommits this replaces already let
+// other store callers interleave between every pair of them; what they cost
+// was one commit per Node, and that total is what a large cascade made
+// everyone else queue behind. The chunk cuts that by the chunk factor and,
+// in exchange, holds the single connection for one chunk's transaction
+// rather than releasing it between every Node. Same trade #601 made for
+// this cascade's audit records.
+//
+// Phase (1) — denylist.Add for every id — runs regardless of what phase (2)
+// returns, and phase (2)'s error is logged and never returned: over-denying
+// beats under-denying, the same posture RevokeNode and revokeChunk state. A
+// caller that could refuse to revoke on a store failure would leave a Node
+// whose enrolling token is already dead holding a live Tunnel. Phase (3) —
+// the live-Tunnel teardown — runs for every id regardless of (2) too; it is
+// not conditional on persistence.
+//
+// WHY THE WHOLE CHUNK IS DENYLISTED BEFORE ANY STORE I/O rather than
+// interleaved per Node: it makes every Node's in-memory barrier land EARLIER
+// than it does today (today the 500th Node in a chunk waits behind 499
+// autocommits), and it is what lets phase (2) be one call.
+//
+// THE ONE DIRECTIONAL COST: the chunk's FIRST Node keeps an
+// already-authenticated, live Tunnel for up to one chunk transaction LONGER
+// than it does today — phase (3) does not run for it until the chunk's
+// store write returns, and neither dispatch nor Selector resolution filters
+// on the denylist or on RevokedAt, so during that window the Node can still
+// send and receive on that stream AND receive and execute a newly
+// dispatched Task. Bounded by one chunk's transaction; its denylist barrier
+// lands no later than today (phase (1) is first), so it cannot reconnect.
+// Net across a chunk this is still an improvement: Nodes 2..N disconnect
+// far earlier than they did under the per-Node loop, so only the chunk's
+// first Node is marginally worse off. Accepted.
+//
+// THE FALLBACK ON A BATCH FAILURE. SetRevokedAll is all-or-nothing
+// (registry.Repository.SetRevokedAll): one store fault partway through the
+// chunk — SQLITE_FULL, an IOERR, a BUSY or failed COMMIT — rolls back every
+// row in the chunk, not only the one that faulted. Because the in-memory
+// denylist is rehydrated from RevokedNodeIDs() at every start (#133,
+// ADR-0006), an unrecovered batch failure would leave up to
+// cascadeRecordChunk Nodes denylisted in memory only, and a restart would
+// let every one of them back in. Falling back to the pre-#607 per-Node
+// SetRevoked loop on error degrades exactly to that loop's behaviour instead
+// of losing the chunk: whichever ids the fallback still manages to persist
+// survive a restart, and the per-id log lines below (the same message and
+// key RevokeNode uses) make every id in the chunk recoverable by an operator
+// even where the fallback itself fails. One batch attempt only, no retry,
+// then the fallback loop, then stop. The happy path above is unchanged.
+//
+// ids is handed to SetRevokedAll WITHOUT a defensive copy, unlike the record
+// call above it in revokeChunk: RevocationRecorder is a caller-supplied
+// closure from outside this package, whereas every Registry implementation
+// is in-repo and bound by the read-only-borrow contract documented on
+// registry.Repository.SetRevokedAll — a review contract, not one the
+// compiler can check, which is why the doubles in this package's tests copy
+// what they retain.
+func (s *Service) revokeAll(ids []string) {
+	for _, id := range ids {
+		s.denylist.Add(id)
+	}
+
+	now := time.Now().UTC()
+	missing, err := s.reg.SetRevokedAll(ids, now)
+	for _, id := range missing {
+		slog.Info("node revocation not persisted: no registry row",
+			"node_id", id)
+	}
+	if err != nil {
+		// The batch is all-or-nothing, so this chunk's ids are the
+		// recoverable set — see the fallback below and the doc above.
+		slog.Warn("persist node revocations failed; falling back to per-Node writes",
+			"chunk_size", len(ids), "error", err)
+		for _, id := range ids {
+			if ferr := s.reg.SetRevoked(id, now); ferr != nil {
+				if errors.Is(ferr, registry.ErrNotFound) {
+					slog.Info("node revocation not persisted: no registry row",
+						"node_id", id)
+				} else {
+					slog.Warn("persist node revocation failed",
+						"node_id", id, "error", ferr)
+				}
+			}
+		}
+	}
+
+	for _, id := range ids {
+		s.conns.Disconnect(id)
+		slog.Info("node revoked", "node_id", id)
+	}
 }
 
 // RevokeNodeRecorded is the operator-ordered single-Node revoke: it records
@@ -413,7 +521,7 @@ func (s *Service) RevokeToken(ctx context.Context, tokenID string, record Revoca
 // other revoke path — a concurrent RevokeNodeRecorded, or another cascade
 // pass, though a Node belongs to exactly one enrolling token so that second
 // case cannot actually contend — can observe one of these Nodes in the
-// window between this chunk's record committing and its RevokeNode loop
+// window between this chunk's record committing and its revokeAll call
 // below, because reaching that Node at all requires this same lock.
 func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID string) (revoked, unrecorded int) {
 	unlockNodes := s.nodeLocks.lockAll(ids)
@@ -465,13 +573,26 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 	//
 	// This still leaves a wider crash window than the old one-Node-at-a-
 	// time cascade did: a process crash between this chunk's commit and
-	// the end of the RevokeNode loop below can leave up to
+	// the end of the revokeAll call below can leave up to
 	// cascadeRecordChunk records for Nodes not yet revoked (the
 	// per-Node cascade before #563: at most 1). That is the same
 	// failure direction #557 chose — a record with no matching revoke
 	// is an audit-trail overstatement, never an unattributed revoke —
 	// just wider now that recording and revoking happen per chunk
 	// instead of per Node. Accepted; do not reorder.
+	//
+	// The revoke half below is now one store transaction per chunk (#607)
+	// rather than len(ids) autocommits — see revokeAll's doc for that trade.
+	// The crash window this comment describes is unchanged in KIND (a
+	// committed record with no matching revoke) and its BOUND is unchanged
+	// (still at most cascadeRecordChunk), but the window no longer decays
+	// across the chunk the way the per-Node loop's did: that loop shrank
+	// the exposed count by one for every Node it revoked, so a crash at a
+	// random point left roughly half the chunk exposed on average. This is
+	// a step function instead — the full chunk is exposed for the entire
+	// transaction, then zero the instant it commits; on a batch failure the
+	// fallback below closes the window per Node as each autocommit lands,
+	// not in one step.
 	//
 	// record is handed a defensive copy, never ids itself: ids is what the
 	// revoke loop below (and the error log above it) reads once record
@@ -498,8 +619,6 @@ func (s *Service) revokeChunk(ids []string, record RevocationRecorder, tokenID s
 		// operator route must still be able to supply its attribution.
 		s.recorded.markAll(ids)
 	}
-	for _, id := range ids {
-		s.RevokeNode(id)
-	}
+	s.revokeAll(ids)
 	return len(ids), unrecorded
 }
