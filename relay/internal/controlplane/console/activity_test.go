@@ -967,6 +967,29 @@ func (q *endlessQueries) RecordEventSubscription(_ context.Context, _ capability
 	return kinds, nil
 }
 
+// TestActivity_AProtocolViolationRendersASentence is #638's Console
+// assertion: without summarize's KindProtocolViolation case, the row would
+// render as the bare token "protocol_violation" — the fate every other kind
+// on this surface gets a sentence instead of.
+func TestActivity_AProtocolViolationRendersASentence(t *testing.T) {
+	row := eventRowFromTrail(factsOfRow(capability.AuditRow{
+		Kind:      audit.KindProtocolViolation,
+		NodeID:    "node-1",
+		Reason:    "rule=relay_only_outcome reported_outcome=OUTCOME_VERSION_REFUSED task_id=task-1",
+		Timestamp: testNow,
+	}))
+	if row.Summary == audit.KindProtocolViolation {
+		t.Errorf("row.Summary = %q, want a sentence, not the bare kind token", row.Summary)
+	}
+	const want = "a Node reported something the wire contract does not permit"
+	if row.Summary != want {
+		t.Errorf("row.Summary = %q, want %q", row.Summary, want)
+	}
+	if row.Kind != rowOther {
+		t.Errorf("row.Kind = %q, want rowOther", row.Kind)
+	}
+}
+
 // TestActivity_TheRiskChipIsOnlyOnRowsThatRan. riskOf answers "mutate" for
 // anything it does not recognise, because mutate is the safe direction for an
 // unrecognised OPERATION. A Freeze engage is not an unrecognised Operation, it

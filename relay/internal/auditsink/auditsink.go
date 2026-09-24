@@ -20,6 +20,8 @@
 // ApprovalAnswer and DecisionChannel — the structured answer a decision
 // carries alongside its prose Reason. Nothing else is added: no enrichment
 // from tokens, keys, or other in-memory secrets the sink never even sees.
+// RecordProtocolViolation copies only Relay-authored fields and never any
+// Node-produced bytes, on any risk class.
 //
 // Logging (#181): Record additionally emits exactly one structured slog Info
 // "audit decision" line per call, for each of the three Kinds it persists
@@ -325,6 +327,38 @@ func (s *Sink) RecordCancel(ctx context.Context, p capability.Principal, jobID s
 		JobID:       jobID,
 	}
 	return s.append(ctx, rec)
+}
+
+// protocolViolationReason renders ev as the record's Reason: stable,
+// machine-greppable "key=value" fields, never prose. Every value comes
+// from a closed vocabulary or a Relay-minted id — a Node cannot write a
+// byte of it, which is what keeps an append-only table out of reach of
+// the subject it is evidence about.
+//
+//	rule=<relay_only_outcome|unresolved_outcome> reported_outcome=<NAME> task_id=<id>
+func protocolViolationReason(ev jobs.ProtocolViolationEvent) string {
+	name := ev.Violation.ReportedOutcome
+	if name == "" {
+		name = "unnamed"
+	}
+	return fmt.Sprintf("rule=%s reported_outcome=%s task_id=%s",
+		ev.Violation.Rule, name, ev.TaskID)
+}
+
+// RecordProtocolViolation records a relay-daemon's wire-contract violation
+// (#638) as a KindProtocolViolation row: no Principal (no Account acted —
+// see the Kind's doc comment), no Outcome, no Stdout/Stderr/Truncated
+// (nothing to put in them — see the Kind's doc comment and this package's
+// Redaction paragraph).
+func (s *Sink) RecordProtocolViolation(ctx context.Context, ev jobs.ProtocolViolationEvent) error {
+	return s.append(ctx, audit.Record{
+		Timestamp:     s.now(),
+		Kind:          audit.KindProtocolViolation,
+		NodeID:        ev.NodeID,
+		JobID:         ev.JobID,
+		OperationName: ev.OperationName,
+		Reason:        protocolViolationReason(ev),
+	})
 }
 
 // accountAdminReason renders e's Reason string, carrying the SAME field

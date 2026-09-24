@@ -51,6 +51,23 @@ const nOutcomes = 9
 // series.
 const nRefusalKinds = int(capability.RefusalNoNodesMatched) + 1
 
+// nViolationRules is the number of relay_protocol_violations_total
+// series. Unlike dispatches and refusals, THE SLOT IS NOT THE
+// jobs.ViolationRule VALUE: there is no such thing as a violation whose
+// rule is ViolationNone, so slot 0 would be a series that can never
+// advance, and folding an unrecognised rule into it would label a real
+// violation "none" — the one lie this whole change is about.
+// violationSlot maps the vocabulary onto these three slots and is TOTAL;
+// anything it does not name, including a rule added to internal/jobs
+// later, lands in "other".
+const nViolationRules = 3
+
+const (
+	violationSlotRelayOnly  = 0
+	violationSlotUnresolved = 1
+	violationSlotOther      = 2
+)
+
 // ServerCertListener names the listener whose server certificate rotated. It
 // is a closed two-value enum rather than a string so the label it renders is
 // bounded by construction, like every other label in this package.
@@ -165,6 +182,37 @@ func refusalLabel(k capability.RefusalKind) string {
 	}
 }
 
+// violationSlot maps r onto one of the three relay_protocol_violations_total
+// slots (see nViolationRules). An unrecognised rule — including a future one
+// added to internal/jobs without a case here — falls back to
+// violationSlotOther rather than to slot 0, which is what keeps a real
+// violation from ever being counted under a label meaning "no violation".
+func violationSlot(r jobs.ViolationRule) int {
+	switch r {
+	case jobs.ViolationRelayOnlyOutcome:
+		return violationSlotRelayOnly
+	case jobs.ViolationUnresolvedOutcome:
+		return violationSlotUnresolved
+	default:
+		return violationSlotOther
+	}
+}
+
+// violationSlotLabel maps a violationSlot* constant to its Prometheus label
+// value. It must NOT call jobs.ViolationRule.String() — that returns
+// "unknown_violation_rule(N)" for an unrecognised value, which is an
+// unbounded label this package's doc comment forbids.
+func violationSlotLabel(slot int) string {
+	switch slot {
+	case violationSlotRelayOnly:
+		return "relay_only_outcome"
+	case violationSlotUnresolved:
+		return "unresolved_outcome"
+	default:
+		return "other"
+	}
+}
+
 // listenerLabel maps l to its Prometheus label value. Any unrecognized value
 // (defensive only — the enum is closed) falls back to the node plane, the
 // listener whose certificate expiring is the fleet-wide failure.
@@ -191,15 +239,24 @@ var refusalOrder = []capability.RefusalKind{
 	capability.RefusalNoNodesMatched,
 }
 
+// violationSlotOrder is the rendering order of the
+// relay_protocol_violations_total series — the fallback bucket ("other")
+// last and still RENDERED, exactly like outcomeOrder's "unspecified" (the
+// #291 lesson: a counted value nothing renders is silently dropped at scrape
+// time).
+var violationSlotOrder = []int{violationSlotRelayOnly, violationSlotUnresolved, violationSlotOther}
+
 // Metrics is the real capability.MetricsSink and enroll.EnrollmentObserver,
 // backed by lock-free atomic counters and the caller-supplied GaugeSources.
 type Metrics struct {
 	src GaugeSources
 
-	dispatches   [nOutcomes]atomic.Int64
-	refusals     [nRefusalKinds]atomic.Int64
-	enrollments  atomic.Int64
-	certRotation [nServerCertListeners]atomic.Int64
+	dispatches           [nOutcomes]atomic.Int64
+	refusals             [nRefusalKinds]atomic.Int64
+	enrollments          atomic.Int64
+	certRotation         [nServerCertListeners]atomic.Int64
+	violations           [nViolationRules]atomic.Int64
+	violationsUnrecorded atomic.Int64
 }
 
 var _ capability.MetricsSink = (*Metrics)(nil)
@@ -251,6 +308,25 @@ func (m *Metrics) IncServerCertRotation(l ServerCertListener) {
 	m.certRotation[idx].Add(1)
 }
 
+// IncProtocolViolation records one relay-daemon report refused at the wire
+// boundary as a protocol violation (#638), by rule. It is not on
+// capability.MetricsSink — the increment happens at the composition root
+// (cmd/relay's violationRecorder), the same place enroll.EnrollmentObserver's
+// methods live on this type without being on the capability port.
+func (m *Metrics) IncProtocolViolation(r jobs.ViolationRule) {
+	m.violations[violationSlot(r)].Add(1)
+}
+
+// IncProtocolViolationUnrecorded records one protocol violation the audit
+// lane could not durably record. The wire boundary is fail-open by design
+// (internal/dispatch's recordViolation), so an unwritable store means the
+// trail is MISSING a violation it should contain. This counter is the only
+// aggregate that says so; an operator alerts on a non-zero increase, not on
+// grep.
+func (m *Metrics) IncProtocolViolationUnrecorded() {
+	m.violationsUnrecorded.Add(1)
+}
+
 // Handler returns the http.Handler that serves the Prometheus text
 // exposition. It is reached only through the control-plane mux's existing
 // bearer-auth middleware (relay/cmd/relay/control_surfaces.go); this package
@@ -268,6 +344,10 @@ func (m *Metrics) serveMetrics(w http.ResponseWriter, _ *http.Request) {
 	buf = appendRefusals(buf, &m.refusals)
 	buf = appendCounter(buf, "relay_enrollments_total", "Total successful Node enrollments.", m.enrollments.Load())
 	buf = appendCertRotations(buf, &m.certRotation)
+	buf = appendProtocolViolations(buf, &m.violations)
+	buf = appendCounter(buf, "relay_protocol_violations_unrecorded_total",
+		"Total protocol violations the Relay refused but could not durably record in the audit trail.",
+		m.violationsUnrecorded.Load())
 	if m.src.LabelsDeclined != nil {
 		node, relay := m.src.LabelsDeclined()
 		buf = appendLabelsDeclined(buf, node, relay)
@@ -340,6 +420,17 @@ func appendCertRotations(buf []byte, rotations *[nServerCertListeners]atomic.Int
 	for _, l := range listenerOrder {
 		buf = fmt.Appendf(buf, "relay_server_cert_rotations_total{listener=%q} %d\n",
 			listenerLabel(l), rotations[int(l)].Load())
+	}
+	return buf
+}
+
+func appendProtocolViolations(buf []byte, violations *[nViolationRules]atomic.Int64) []byte {
+	buf = appendHelp(buf, "relay_protocol_violations_total",
+		"Total relay-daemon reports refused at the wire boundary as protocol violations, by rule.")
+	buf = appendType(buf, "relay_protocol_violations_total", "counter")
+	for _, slot := range violationSlotOrder {
+		buf = fmt.Appendf(buf, "relay_protocol_violations_total{rule=%q} %d\n",
+			violationSlotLabel(slot), violations[slot].Load())
 	}
 	return buf
 }

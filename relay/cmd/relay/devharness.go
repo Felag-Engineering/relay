@@ -119,7 +119,12 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 			"the control plane (Config.ControlEnabled) and the dev harness must never be enabled together")
 	}
 
-	router, reconciler, sink := newDispatchStack(deps.tasks)
+	// One sink, one trail (#638): the same *auditsink.Sink records both the
+	// harness's protocol violations (via newDispatchStack's ViolationRecorder)
+	// and its normal capability-layer audit entries, as main.go does.
+	harnessAudit := auditsink.New(deps.audit)
+
+	router, reconciler, sink := newDispatchStack(deps.tasks, harnessAudit)
 	// reconciler is captured by router's onConnect closure (dispatch_wiring.go)
 	// and fires on every Node registration, including reconnects — this is
 	// what makes the crash-mid-Job test's restart reconciliation happen; it
@@ -131,7 +136,7 @@ func installDevHarness(cfg Config, deps *appDeps) (stop func(), err error) {
 		capability.WithExecution(deps.jobs, deps.tasks, router),
 		capability.WithAuthorizer(devHarnessAuthorizer{}),
 		capability.WithCapChecker(capability.NewBlastCap(cfg.ReadBlastCap, cfg.MutateBlastCap)),
-		capability.WithAuditSink(auditsink.New(deps.audit)),
+		capability.WithAuditSink(harnessAudit),
 		capability.WithFreeze(deps.store.Freeze()))
 
 	st := &harnessState{deps: deps, router: router, capSvc: capSvc}

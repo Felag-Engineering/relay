@@ -163,6 +163,25 @@ func (v ProtocolViolation) Explanation() string {
 	return base
 }
 
+// ProtocolViolationEvent is one relay-daemon's protocol violation as
+// observed at the wire boundary (#632's refusal point), carried to the
+// audit lane so the violation is a durable, queryable event and not only
+// a log line (#638).
+//
+// It carries NO Stdout, Stderr or Truncated field and must never grow
+// one. Every field is Relay-authored or Relay-minted: the ids come from
+// the Task the Relay itself dispatched, and Violation's two fields come
+// from a closed rule vocabulary and the generated wire enum's own name
+// table. That is what makes recording it independent of ADR-0025's
+// read-output retention rule — there is no Node-authored byte in it.
+type ProtocolViolationEvent struct {
+	NodeID        string
+	TaskID        string
+	JobID         string
+	OperationName string // empty for Raw Exec and for an unset Action
+	Violation     ProtocolViolation
+}
+
 // RiskClass mirrors relayv1.RiskClass. The zero value, RiskClassUnspecified,
 // keeps the enum's zero value defined, matching how Outcome mirrors Unspecified.
 type RiskClass int
