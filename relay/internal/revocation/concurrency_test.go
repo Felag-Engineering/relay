@@ -321,14 +321,24 @@ func TestService_RevokeNodeRecorded_WritesNoSecondRecordAfterACascadeRecordedThe
 
 // TestService_RevokeNodeRecorded_NoSecondRecordWhileAChunkIsRecordedButNotYetRevoked
 // is AC2's literal window: a chunk of two Nodes whose record call has
-// already returned, so both are marked recorded, but whose RevokeNode loop
-// is still in progress — node-a's SetRevoked is blocked, so node-b (which
-// sorts after node-a; this test depends on registry.InMemory.List returning
-// Nodes sorted by NodeID, so node-a's RevokeNode runs before node-b's in the
-// chunk's revoke loop) is recorded but not yet denylisted. A concurrent
-// RevokeNodeRecorded for node-b must block on its lock — still held by the
-// chunk until the whole chunk's revoke loop finishes — and then write no
-// second record.
+// already returned, so both are marked recorded, but whose revokeAll call is
+// still in progress — the chunk's SetRevokedAll (containing node-a) is
+// blocked.
+//
+// #607 changed what this window looks like: revokeAll denylists the WHOLE
+// chunk (phase 1) before it makes its one SetRevokedAll call (phase 2), so
+// by the time that call is blocked, both node-a and node-b are ALREADY
+// denylisted — a strictly stronger property than the one this test asserted
+// before #607, when the chunk's revoke loop denylisted one Node at a time
+// and node-b (sorted after node-a by registry.InMemory.List) would still be
+// waiting its turn. That per-Node ordering dependency on List's sort order
+// is gone: the chunk is one call now, and ordering within it is irrelevant
+// to what this test proves. What the Node lock still covers is the
+// record-committed-but-teardown-incomplete window: node-a and node-b are
+// denylisted, but revokeAll's phase (3) Disconnect has not run for either of
+// them yet. A concurrent RevokeNodeRecorded for node-b must still block on
+// its lock — still held by the chunk until revokeAll finishes — and then
+// write no second record.
 func TestService_RevokeNodeRecorded_NoSecondRecordWhileAChunkIsRecordedButNotYetRevoked(t *testing.T) {
 	ctx := context.Background()
 
@@ -358,16 +368,18 @@ func TestService_RevokeNodeRecorded_NoSecondRecordWhileAChunkIsRecordedButNotYet
 	select {
 	case <-blockingReg.entered:
 	case <-time.After(waitTimeout):
-		t.Fatal("cascade never reached node-a's blocked SetRevoked — test setup broken")
+		t.Fatal("cascade never reached the chunk's blocked SetRevokedAll — test setup broken")
 	}
 
 	// At this instant: the chunk's record call has already returned (it ran
-	// before the revoke loop that is now blocked on node-a), so both Nodes
-	// are marked recorded; node-a is denylisted (RevokeNode adds to the
-	// denylist before calling SetRevoked); node-b is recorded but NOT yet
-	// denylisted, because the revoke loop has not reached it.
-	if d.IsRevoked("node-b") {
-		t.Fatal("node-b should not be denylisted yet — the chunk's revoke loop is still on node-a")
+	// before revokeAll, which is now blocked in SetRevokedAll for the chunk
+	// containing node-a), so both Nodes are marked recorded; and BOTH are
+	// already denylisted, because revokeAll's phase (1) denylists the whole
+	// chunk before phase (2) ever touches the store. Neither has had its
+	// live-Tunnel teardown (phase (3)) yet.
+	if !d.IsRevoked("node-a") || !d.IsRevoked("node-b") {
+		t.Fatalf("both Nodes should already be denylisted while the chunk's registry write is in flight: node-a=%v node-b=%v",
+			d.IsRevoked("node-a"), d.IsRevoked("node-b"))
 	}
 
 	singleRec := &recorder{}

@@ -382,6 +382,164 @@ func TestSqliteRegistry_SetRevoked(t *testing.T) {
 	}
 }
 
+func TestSqliteRegistry_SetRevokedAll_OneTransactionOverTheWholeChunk(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	at := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	missing, err := reg.SetRevokedAll([]string{"node-a", "node-b", "node-c", "no-such"}, at)
+	if err != nil {
+		t.Fatalf("SetRevokedAll: %v", err)
+	}
+	if len(missing) != 1 || missing[0] != "no-such" {
+		t.Errorf("missing: got %v, want [no-such]", missing)
+	}
+
+	for _, id := range []string{"node-a", "node-b", "node-c"} {
+		got, ok := reg.Get(id)
+		if !ok {
+			t.Fatalf("Get %s: not found", id)
+		}
+		if !got.RevokedAt.Equal(at) {
+			t.Errorf("%s RevokedAt: got %v, want %v", id, got.RevokedAt, at)
+		}
+	}
+
+	ids, err := reg.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	if len(ids) != 3 || ids[0] != "node-a" || ids[1] != "node-b" || ids[2] != "node-c" {
+		t.Errorf("RevokedNodeIDs: got %v, want [node-a node-b node-c]", ids)
+	}
+}
+
+func TestSqliteRegistry_SetRevokedAll_EmptyTouchesNothing(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	missing, err := reg.SetRevokedAll(nil, time.Now())
+	if err != nil || missing != nil {
+		t.Errorf("SetRevokedAll(nil): got (%v, %v), want (nil, nil)", missing, err)
+	}
+
+	got, ok := reg.Get("node-a")
+	if !ok {
+		t.Fatal("Get: not found")
+	}
+	if !got.RevokedAt.IsZero() {
+		t.Errorf("node-a RevokedAt: got %v, want zero (nothing revoked)", got.RevokedAt)
+	}
+}
+
+// TestSqliteRegistry_SetRevokedAll_MidBatchFailureRollsBackEarlierIds is the
+// all-or-nothing proof, and it exercises the ROLLBACK itself, not merely a
+// failed BeginTx: a trigger aborts the UPDATE for one sentinel row partway
+// through the batch, and the assertion is that an EARLIER id's already-
+// executed UPDATE was rolled back with the rest of the transaction. Closing
+// the Store first would only prove "a failure before the first statement
+// writes nothing" — it never reaches a rollback at all, because BeginTx
+// itself fails before any statement runs.
+func TestSqliteRegistry_SetRevokedAll_MidBatchFailureRollsBackEarlierIds(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	for _, id := range []string{"node-a", "node-boom", "node-c"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	if _, err := st.db.Exec(`
+		CREATE TRIGGER boom BEFORE UPDATE ON nodes
+		WHEN NEW.node_id = 'node-boom'
+		BEGIN SELECT RAISE(ABORT, 'boom'); END`); err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	defer func() {
+		if _, err := st.db.Exec(`DROP TRIGGER boom`); err != nil {
+			t.Errorf("drop trigger: %v", err)
+		}
+	}()
+
+	missing, err := reg.SetRevokedAll([]string{"node-a", "node-boom", "node-c"}, time.Now())
+	if err == nil {
+		t.Fatal("SetRevokedAll: want error from the aborted trigger, got nil")
+	}
+	if missing != nil {
+		t.Errorf("missing: got %v, want nil on a batch failure", missing)
+	}
+
+	ids, err := reg.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Errorf("RevokedNodeIDs after a rolled-back batch: got %v, want empty (node-a's earlier UPDATE must have rolled back too)", ids)
+	}
+}
+
+func TestSqliteRegistry_SetRevokedAll_FailureBeforeTheFirstStatementWritesNothing(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	missing, err := reg.SetRevokedAll([]string{"node-a"}, time.Now())
+	if err == nil {
+		t.Fatal("SetRevokedAll on a closed store: want error, got nil")
+	}
+	if missing != nil {
+		t.Errorf("missing: got %v, want nil on error", missing)
+	}
+}
+
+func TestSqliteRegistry_SetRevoked_And_SetRevokedAll_WriteTheSameColumn(t *testing.T) {
+	st, _ := openTestStore(t)
+	reg := st.Registry()
+
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("upsert %s: %v", id, err)
+		}
+	}
+
+	at := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	if err := reg.SetRevoked("node-a", at); err != nil {
+		t.Fatalf("SetRevoked: %v", err)
+	}
+	if _, err := reg.SetRevokedAll([]string{"node-b"}, at); err != nil {
+		t.Fatalf("SetRevokedAll: %v", err)
+	}
+
+	a, ok := reg.Get("node-a")
+	if !ok {
+		t.Fatal("Get node-a: not found")
+	}
+	b, ok := reg.Get("node-b")
+	if !ok {
+		t.Fatal("Get node-b: not found")
+	}
+	if !a.RevokedAt.Equal(at) || !b.RevokedAt.Equal(at) || !a.RevokedAt.Equal(b.RevokedAt) {
+		t.Errorf("RevokedAt via SetRevoked vs SetRevokedAll: got %v and %v, want both equal to %v", a.RevokedAt, b.RevokedAt, at)
+	}
+}
+
 func TestSqliteRegistry_Count(t *testing.T) {
 	st, _ := openTestStore(t)
 	reg := st.Registry()

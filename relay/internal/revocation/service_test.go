@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +58,10 @@ func (f *fakeLister) List() []registry.Node {
 }
 
 func (f *fakeLister) SetRevoked(string, time.Time) error { return nil }
+
+// SetRevokedAll is a no-op for the same reason SetRevoked is: these tests
+// assert on the denylist, not on persisted registry state.
+func (f *fakeLister) SetRevokedAll([]string, time.Time) ([]string, error) { return nil, nil }
 
 // fakeTokenRevoker is a test double for revocation.TokenRevoker.
 type fakeTokenRevoker struct{ err error }
@@ -138,13 +143,23 @@ func newServiceFixture(t *testing.T) (
 }
 
 // blockingRegistry is a test double for revocation.Registry over a real
-// registry.InMemory: List delegates unchanged, but SetRevoked for one
-// configured node id blocks until release is closed before delegating too.
+// registry.InMemory: List delegates unchanged, but SetRevokedAll for a chunk
+// containing one configured node id blocks until release is closed before
+// delegating too.
 //
-// This is what makes the record-committed-but-not-yet-revoked window inside
-// revokeChunk reachable deterministically: without it, that window is only
-// microseconds wide and a test racing it would flake instead of reliably
-// exercising it.
+// This is what makes the record-committed-but-registry-write-in-flight
+// window inside revokeChunk reachable deterministically: without it, that
+// window is only microseconds wide and a test racing it would flake instead
+// of reliably exercising it. The cascade now reaches the registry once per
+// chunk (#607), so the reachable window is "a chunk whose record has
+// committed and whose registry write is in flight", not a per-Node
+// SetRevoked mid-loop — the SetRevoked override this double used to carry is
+// gone because nothing in this suite reaches it anymore: blockingRegistry is
+// constructed in exactly one place (the cascade test below), and the cascade
+// never calls SetRevoked. The embedded *registry.InMemory still supplies
+// SetRevoked — which is what the concurrent RevokeNodeRecorded(node-b) in
+// that test reaches — so the type still satisfies revocation.Registry
+// without an explicit override.
 type blockingRegistry struct {
 	*registry.InMemory
 
@@ -154,10 +169,10 @@ type blockingRegistry struct {
 	enteredOne sync.Once
 }
 
-// newBlockingRegistry wraps reg, blocking SetRevoked(blockID, ...) until
-// release is closed. entered is closed the instant SetRevoked for blockID is
-// called, so a test can wait for "inside the block" before proceeding rather
-// than racing it with a sleep.
+// newBlockingRegistry wraps reg, blocking SetRevokedAll(nodeIDs, ...) until
+// release is closed, when blockID is among nodeIDs. entered is closed the
+// instant that call is made, so a test can wait for "inside the block"
+// before proceeding rather than racing it with a sleep.
 func newBlockingRegistry(reg *registry.InMemory, blockID string, release chan struct{}) *blockingRegistry {
 	return &blockingRegistry{
 		InMemory: reg,
@@ -167,15 +182,17 @@ func newBlockingRegistry(reg *registry.InMemory, blockID string, release chan st
 	}
 }
 
-func (b *blockingRegistry) SetRevoked(nodeID string, at time.Time) error {
-	if nodeID == b.blockID {
-		// A second SetRevoked(blockID, ...) cannot happen today — RevokeNode
-		// only calls it once per Node — but this double should not itself
-		// panic on a double-close if that ever changes.
+func (b *blockingRegistry) SetRevokedAll(nodeIDs []string, at time.Time) ([]string, error) {
+	if slices.Contains(nodeIDs, b.blockID) {
+		// A second SetRevokedAll call containing blockID cannot happen today
+		// — but this double should not itself panic on a double-close if
+		// that ever changes.
 		b.enteredOne.Do(func() { close(b.entered) })
 		<-b.release
 	}
-	return b.InMemory.SetRevoked(nodeID, at)
+	// Block BEFORE delegating, exactly as the old SetRevoked override did, so
+	// no InMemory lock is held while parked.
+	return b.InMemory.SetRevokedAll(nodeIDs, at)
 }
 
 func TestService_RevokeNode_DenylistAndDisconnect(t *testing.T) {

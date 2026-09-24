@@ -14,10 +14,12 @@ import (
 	"context"
 	"crypto/tls"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 	"google.golang.org/grpc"
@@ -193,5 +195,67 @@ func TestRevokedToken_EnrollRefusedAfterRestart(t *testing.T) {
 		Facts:           &relayv1.Facts{Hostname: "host-133", Os: "linux"},
 	}); err == nil {
 		t.Fatal("expected Enroll with revoked token to fail after restart, got nil")
+	}
+}
+
+// TestRevokedTokenCascade_NodeRevocationsPersistAcrossRestart is #607's
+// closing gap: without it, no test anywhere exercised the cascade's batch
+// SetRevokedAll write against real SQLite through the production
+// composition root — the existing cascade test above runs over an EMPTY
+// registry and never reaches it, and TestRevokedNode_RefusedAfterRestart
+// revokes through the single-Node RevokeNode path instead. This test seeds
+// three registry rows under one token, cascade-revokes the token, and
+// asserts both that the batch write reached deps.registry (the eventsink
+// observer over the real sqliteRegistry, the production wiring) and that a
+// restart rehydrates the denylist from what that transaction committed
+// (#133, ADR-0006).
+func TestRevokedTokenCascade_NodeRevocationsPersistAcrossRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	cfg := persistTestConfig(t)
+	_, deps, srv := bootServer(t, cfg)
+
+	tok, _, err := deps.tokens.Create(ctx, []string{"relay:env=prod"}, time.Hour)
+	if err != nil {
+		t.Fatalf("seed Enrollment Token: %v", err)
+	}
+
+	nodeIDs := []string{"casc-node-1", "casc-node-2", "casc-node-3"}
+	for _, id := range nodeIDs {
+		if _, err := deps.registry.Upsert(registry.Report{NodeID: id, EnrollingTokenID: tok.ID}); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+
+	recorder := func([]string) error { return nil }
+	if err := deps.revocation.RevokeToken(ctx, tok.ID, recorder); err != nil {
+		t.Fatalf("RevokeToken: %v", err)
+	}
+
+	revoked, err := deps.registry.RevokedNodeIDs()
+	if err != nil {
+		t.Fatalf("RevokedNodeIDs: %v", err)
+	}
+	for _, id := range nodeIDs {
+		if !slices.Contains(revoked, id) {
+			t.Errorf("RevokedNodeIDs after cascade = %v, want it to contain %s — the batch write must have reached real SQLite", revoked, id)
+		}
+	}
+
+	// Restart the Relay against the SAME CADir + StorePath.
+	srv.Stop()
+	if err := deps.store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	_, deps2, srv2 := bootServer(t, cfg)
+	t.Cleanup(srv2.Stop)
+	t.Cleanup(func() { deps2.store.Close() }) //nolint:errcheck
+
+	for _, id := range nodeIDs {
+		if !deps2.denylist.IsRevoked(id) {
+			t.Errorf("%s should be denylisted after restart — the rows the chunk transaction committed are what rehydration reads", id)
+		}
 	}
 }

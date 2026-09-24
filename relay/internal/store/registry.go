@@ -260,14 +260,85 @@ func (r *sqliteRegistry) isConnected(nodeID string) bool {
 	return ok
 }
 
+// updateRevokedSQL is the one UPDATE text shared by SetRevoked and
+// SetRevokedAll, so the single-Node and batch paths provably write the same
+// column with the same statement.
+const updateRevokedSQL = `UPDATE nodes SET revoked_at = ? WHERE node_id = ?`
+
 func (r *sqliteRegistry) SetRevoked(nodeID string, at time.Time) error {
 	ctx := context.Background()
-	res, err := r.db.ExecContext(ctx, `UPDATE nodes SET revoked_at = ? WHERE node_id = ?`,
-		formatTime(roundTripTime(at)), nodeID)
+	res, err := r.db.ExecContext(ctx, updateRevokedSQL, formatTime(roundTripTime(at)), nodeID)
 	if err != nil {
 		return fmt.Errorf("update revoked_at: %w", err)
 	}
 	return requireRowsAffected(res)
+}
+
+// SetRevokedAll is SetRevoked's chunked twin: it marks every id in nodeIDs
+// revoked as of at, all inside ONE transaction (see
+// registry.Repository.SetRevokedAll for the all-or-nothing contract). A
+// missing row is not an error: it is appended to missing and does not abort
+// the rest of the batch.
+//
+// One commit for the whole batch instead of one per id — and, under WAL at
+// SQLite's default synchronous, one fsync instead of len(nodeIDs) — which is
+// where a large cascade's wall-clock, and everyone else's queuing behind it,
+// actually goes. In exchange this holds the Store's single connection (Open
+// sets SetMaxOpenConns(1), which serialises STATEMENTS, not transactions —
+// see accounts.go) for the whole batch, where the per-id autocommits it
+// replaces released it between every UPDATE. A concurrent store call
+// arriving mid-batch therefore waits for the batch, not for one statement.
+// Deliberate, and the same trade AppendAll already makes for the cascade's
+// audit records (#601). Keep the batch bounded by
+// revocation.cascadeRecordChunk.
+//
+// On a non-nil error the transaction rolled back and nothing was written;
+// missing rows are returned, never an error, and never abort the batch.
+//
+// Per-id UPDATEs inside one transaction, rather than one
+// "WHERE node_id IN (...)" statement, deliberately: an IN-list can only
+// report a row COUNT, and the cascade's existing per-Node "no registry row"
+// Info log needs the ids. The cost that matters on SQLite is the commit, not
+// the statement count.
+func (r *sqliteRegistry) SetRevokedAll(nodeIDs []string, at time.Time) ([]string, error) {
+	if len(nodeIDs) == 0 {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	ts := formatTime(roundTripTime(at))
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin set revoked: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	stmt, err := tx.PrepareContext(ctx, updateRevokedSQL)
+	if err != nil {
+		return nil, fmt.Errorf("prepare set revoked: %w", err)
+	}
+	defer stmt.Close() //nolint:errcheck
+
+	var missing []string
+	for i, id := range nodeIDs {
+		res, err := stmt.ExecContext(ctx, ts, id)
+		if err != nil {
+			return nil, fmt.Errorf("set revoked %d of %d: %w", i+1, len(nodeIDs), err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return nil, fmt.Errorf("rows affected %d of %d: %w", i+1, len(nodeIDs), err)
+		}
+		if n == 0 {
+			missing = append(missing, id)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit set revoked: %w", err)
+	}
+	return missing, nil
 }
 
 // RevokedNodeIDs returns the IDs of every Node with a non-NULL revoked_at.

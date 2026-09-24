@@ -131,10 +131,12 @@ func TestObserveRegistry_HeartbeatAndEverythingElsePublishNothing(t *testing.T) 
 		{"Upsert", func() error { _, err := reg.Upsert(registry.Report{NodeID: "node-2"}); return err }},
 		{"UpdateLastSeen", func() error { return reg.UpdateLastSeen("node-1", time.Now()) }},
 		{"SetRevoked", func() error { return reg.SetRevoked("node-1", time.Now()) }},
+		{"SetRevokedAll", func() error { _, err := reg.SetRevokedAll([]string{"node-1"}, time.Now()); return err }},
 		{"RecordEnrollment", func() error { return reg.RecordEnrollment("node-1", registry.Certificate{}, time.Now()) }},
 		{"RecordRenewal", func() error { return reg.RecordRenewal("node-1", registry.Certificate{}, time.Now()) }},
 		{"Get", func() error { _, _ = reg.Get("node-1"); return nil }},
 		{"List", func() error { _ = reg.List(); return nil }},
+		{"RevokedNodeIDs", func() error { _, err := reg.RevokedNodeIDs(); return err }},
 		{"Count", func() error { _, _, err := reg.Count(); return err }},
 	}
 

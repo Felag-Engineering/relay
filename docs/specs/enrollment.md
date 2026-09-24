@@ -234,6 +234,13 @@ None open.
 
 ## History
 
+- `2026-09-23` — The token-revocation cascade's registry writes are now chunked into one
+  transaction per chunk, the same boundary #563 gave the cascade's audit records, replacing one
+  autocommit `SetRevoked` UPDATE per Node; on a chunk failure it falls back to the per-Node
+  writes, so a store fault costs no more durable revocations than it did before. Ordering is
+  unchanged: a chunk's audit records commit before its Nodes are marked revoked, and the
+  in-memory denylist and the Tunnel teardown cover every Node regardless of a store failure
+  (#607). Spec unmigrated (`aspirational`); claims not updated.
 - `2026-09-21` — `RevokeToken` serialised per token ID; a single-Node revoke racing a cascade for
   the same Node now produces exactly one `node_revoke` record (#605). Spec unmigrated
   (`aspirational`); claims not updated.
