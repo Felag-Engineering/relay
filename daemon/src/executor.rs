@@ -11,6 +11,9 @@
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use rustix::process::{
+    kill_process_group, setrlimit, test_kill_process_group, Pid, Resource, Rlimit, Signal,
+};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::oneshot;
@@ -105,8 +108,9 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     // Copy into the closure (async-signal-safe capture).
     let limits = req.limits;
     // SAFETY: runs in the forked child before exec; performs only async-signal-safe
-    // work (stack-only libc::setrlimit syscalls, Copy capture, no heap/locks). A
-    // setrlimit failure returns Err, failing the spawn closed (never an unbounded child).
+    // work (stack-only prlimit64 syscalls issued by rustix::process::setrlimit, Copy
+    // capture, no heap/locks). A setrlimit failure returns Err, failing the spawn
+    // closed (never an unbounded child).
     unsafe {
         cmd.pre_exec(move || apply_rlimits(&limits));
     }
@@ -124,7 +128,8 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
     };
 
     // pgid == child pid because we used process_group(0).
-    let pgid = child.id().expect("spawned child has a pid") as i32;
+    let pgid = Pid::from_raw(child.id().expect("spawned child has a pid") as i32)
+        .expect("a spawned child's pid is never zero");
 
     // Spawn two concurrent drain tasks to read stdout/stderr to EOF. Running them
     // concurrently with child.wait() prevents the classic two-pipe deadlock where a
@@ -245,33 +250,31 @@ pub async fn execute(req: ExecRequest) -> TaskResult {
 /// recycled into a new group `pgid` in the microseconds between the emptiness check and
 /// the SIGKILL) is not closed here; it is astronomically unlikely on the privileged
 /// daemon's low process-spawn rate, and the prior code offered no protection at all.
-async fn kill_group_graceful(pgid: i32, child: &mut tokio::process::Child) {
-    signal_group(pgid, libc::SIGTERM);
+async fn kill_group_graceful(pgid: Pid, child: &mut tokio::process::Child) {
+    signal_group(pgid, Signal::TERM);
     let leader_reaped = tokio::time::timeout(TERM_GRACE, child.wait()).await.is_ok();
 
     if !leader_reaped {
         // Leader still holds pgid — unambiguous. SIGKILL the group, then reap.
-        signal_group(pgid, libc::SIGKILL);
+        signal_group(pgid, Signal::KILL);
         let _ = child.wait().await;
     } else if group_is_nonempty(pgid) {
         // Leader gone but a survivor keeps the group (and thus pgid) alive: it is
         // still ours, and it needs killing (issue #342). An empty group is skipped —
         // nothing to kill, and the one case where pgid could have been recycled.
-        signal_group(pgid, libc::SIGKILL);
+        signal_group(pgid, Signal::KILL);
     }
 }
 
 /// Returns whether process group `pgid` still has any member (including a zombie).
 ///
 /// `kill(-pgid, 0)` sends no signal but performs the same target lookup and permission
-/// check as a real signal: `Ok` (returns 0) means the group exists and has at least one
+/// check as a real signal: `Ok` means the group exists and has at least one
 /// member; `ESRCH` means it is empty/gone. The daemon runs privileged, so `EPERM` is not
-/// a concern here; any non-zero return is treated as "not clearly non-empty" and the
-/// caller conservatively skips the SIGKILL.
-fn group_is_nonempty(pgid: i32) -> bool {
-    // Safety: libc::kill with signal 0 accesses no memory; it is the standard
-    // existence probe. Return value only — no UB.
-    unsafe { libc::kill(-pgid, 0) == 0 }
+/// a concern here; any Err is treated as "not clearly non-empty" and the caller
+/// conservatively skips the SIGKILL.
+fn group_is_nonempty(pgid: Pid) -> bool {
+    test_kill_process_group(pgid).is_ok()
 }
 
 /// Resolves only on an explicit `send(())` from the paired sender.
@@ -327,73 +330,46 @@ where
 /// Sends `signal` to the entire process group led by `pgid`.
 ///
 /// The child was launched with `process_group(0)`, so `pgid == child pid` and
-/// `kill(-pgid, sig)` reaches the whole process tree (ADR-0013). ESRCH (group
-/// already exited) is a valid non-error return — the child may have raced to exit
-/// between the timeout firing and this call.
-fn signal_group(pgid: i32, signal: libc::c_int) {
-    // Safety: libc::kill is a raw POSIX syscall that takes two integers; no memory
-    // is accessed. ESRCH (group already exited) is a valid non-UB return value;
-    // we intentionally ignore the return value.
-    unsafe { libc::kill(-pgid, signal) };
+/// `kill_process_group(pgid, sig)` reaches the whole process tree (ADR-0013). ESRCH
+/// (group already exited) is a valid non-error return — the child may have raced to
+/// exit between the timeout firing and this call.
+fn signal_group(pgid: Pid, signal: Signal) {
+    let _ = kill_process_group(pgid, signal);
 }
 
-/// Applies `limits` to the calling process via `setrlimit`. Async-signal-safe: only
-/// stack `libc::rlimit` values and `setrlimit` syscalls; no heap, no locks. Returns
-/// `Err` on the first failure so the caller (the `pre_exec` closure in [`execute`])
-/// fails the spawn closed. `rlim_t` is `u64` on Linux (glibc and musl), so limit
-/// values need no cast; each `libc::RLIMIT_*` constant is passed directly to
-/// `setrlimit` so no target-specific resource-type cast is needed (portable across
-/// the glibc dev/CI build and the musl release build).
+/// Builds the soft==hard `Rlimit` this daemon always applies: both the current
+/// (soft) and maximum (hard) limit set to `v`. `None` in either field would mean
+/// RLIM_INFINITY, which is never what we want here — constructing it in one place
+/// makes a soft/hard mix-up unrepresentable at the five call sites (#670).
+#[inline]
+fn fixed_rlimit(v: u64) -> Rlimit {
+    Rlimit {
+        current: Some(v),
+        maximum: Some(v),
+    }
+}
+
+/// Applies `limits` to the calling process via `setrlimit`. Async-signal-safe: rustix
+/// issues `prlimit64` directly (linux_raw backend, no libc wrapper) over one stack
+/// `Rlimit` — no heap, no locks. Returns `Err` on the first failure so the caller (the
+/// `pre_exec` closure in [`execute`]) fails the spawn closed. `Resource` is a typed
+/// enum, so no target-specific resource cast is needed; `Rlimit` is `u64`-valued on
+/// every target, so the `ResourceLimits` values need no cast.
 fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
     if let Some(v) = limits.nproc {
-        let rl = libc::rlimit {
-            rlim_cur: v,
-            rlim_max: v,
-        };
-        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
-        if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &rl) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        setrlimit(Resource::Nproc, fixed_rlimit(v))?;
     }
     if let Some(v) = limits.data_bytes {
-        let rl = libc::rlimit {
-            rlim_cur: v,
-            rlim_max: v,
-        };
-        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
-        if unsafe { libc::setrlimit(libc::RLIMIT_DATA, &rl) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        setrlimit(Resource::Data, fixed_rlimit(v))?;
     }
     if let Some(v) = limits.nofile {
-        let rl = libc::rlimit {
-            rlim_cur: v,
-            rlim_max: v,
-        };
-        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
-        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &rl) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        setrlimit(Resource::Nofile, fixed_rlimit(v))?;
     }
     if let Some(v) = limits.cpu_seconds {
-        let rl = libc::rlimit {
-            rlim_cur: v,
-            rlim_max: v,
-        };
-        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
-        if unsafe { libc::setrlimit(libc::RLIMIT_CPU, &rl) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        setrlimit(Resource::Cpu, fixed_rlimit(v))?;
     }
     if let Some(v) = limits.fsize_bytes {
-        let rl = libc::rlimit {
-            rlim_cur: v,
-            rlim_max: v,
-        };
-        // SAFETY: setrlimit reads one stack rlimit; async-signal-safe syscall.
-        if unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &rl) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        setrlimit(Resource::Fsize, fixed_rlimit(v))?;
     }
     Ok(())
 }
@@ -419,6 +395,8 @@ mod tests {
     use super::{execute, ExecRequest, SAFE_CHILD_PATH};
     use crate::config::ResourceLimits;
     use crate::gen::Outcome;
+    use rustix::io::Errno;
+    use rustix::process::{test_kill_process, Pid};
     use std::time::{Duration, Instant};
 
     fn big_cap() -> usize {
@@ -534,10 +512,11 @@ mod tests {
 
         // Parse the PID of the backgrounded grandchild from stdout.
         let stdout_str = String::from_utf8_lossy(&result.stdout);
-        let grandchild_pid: libc::pid_t = stdout_str
+        let grandchild_pid: i32 = stdout_str
             .trim()
             .parse()
             .expect("stdout must contain the background sleep PID");
+        let probe = Pid::from_raw(grandchild_pid).expect("a shell-reported pid is non-zero");
 
         // Poll kill(pid, 0) until ESRCH: waits for PID 1 to reap the reparented
         // zombie. When the grandchild is killed by the group SIGKILL it becomes a
@@ -548,15 +527,12 @@ mod tests {
         // kernel has fully released it as an orphan.
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            let ret = unsafe { libc::kill(grandchild_pid, 0) };
-            if ret == -1 {
-                let err = std::io::Error::last_os_error();
-                assert_eq!(
-                    err.raw_os_error(),
-                    Some(libc::ESRCH),
-                    "grandchild (pid={grandchild_pid}) must be gone (ESRCH), not another error"
-                );
-                break; // grandchild fully reaped — no orphan
+            match test_kill_process(probe) {
+                Err(Errno::SRCH) => break, // fully reaped — no orphan
+                Err(e) => panic!(
+                    "grandchild (pid={grandchild_pid}) must be gone (ESRCH), not another error: {e}"
+                ),
+                Ok(()) => {} // still alive — fall through to the deadline check
             }
             assert!(
                 Instant::now() < deadline,
@@ -727,22 +703,20 @@ mod tests {
         // Parse the grandchild PID from stdout and verify it's reaped (ESRCH),
         // proving the whole group (not just the direct child) was killed.
         let stdout_str = String::from_utf8_lossy(&result.stdout);
-        let grandchild_pid: libc::pid_t = stdout_str
+        let grandchild_pid: i32 = stdout_str
             .trim()
             .parse()
             .expect("stdout must contain the background sleep PID");
+        let probe = Pid::from_raw(grandchild_pid).expect("a shell-reported pid is non-zero");
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            let ret = unsafe { libc::kill(grandchild_pid, 0) };
-            if ret == -1 {
-                let err = std::io::Error::last_os_error();
-                assert_eq!(
-                    err.raw_os_error(),
-                    Some(libc::ESRCH),
-                    "grandchild (pid={grandchild_pid}) must be gone (ESRCH), not another error"
-                );
-                break; // grandchild fully reaped — no orphan
+            match test_kill_process(probe) {
+                Err(Errno::SRCH) => break, // fully reaped — no orphan
+                Err(e) => panic!(
+                    "grandchild (pid={grandchild_pid}) must be gone (ESRCH), not another error: {e}"
+                ),
+                Ok(()) => {} // still alive — fall through to the deadline check
             }
             assert!(
                 Instant::now() < deadline,
@@ -785,25 +759,23 @@ mod tests {
         assert_eq!(result.outcome, Outcome::Timeout as i32);
 
         let stdout_str = String::from_utf8_lossy(&result.stdout);
-        let survivor_pid: libc::pid_t = stdout_str
+        let survivor_pid: i32 = stdout_str
             .trim()
             .parse()
             .expect("stdout must contain the SIGTERM-ignoring subshell PID");
+        let probe = Pid::from_raw(survivor_pid).expect("a shell-reported pid is non-zero");
 
         // The survivor must be gone (ESRCH) — SIGKILL swept the group even though the
         // leader had already exited. Deadline exceeds TERM_GRACE (5 s) so a correct
         // sweep, which happens right after the leader is reaped, has ample margin.
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
-            let ret = unsafe { libc::kill(survivor_pid, 0) };
-            if ret == -1 {
-                let err = std::io::Error::last_os_error();
-                assert_eq!(
-                    err.raw_os_error(),
-                    Some(libc::ESRCH),
-                    "survivor (pid={survivor_pid}) must be gone (ESRCH), not another error"
-                );
-                break;
+            match test_kill_process(probe) {
+                Err(Errno::SRCH) => break, // survivor reaped — no orphan left behind
+                Err(e) => panic!(
+                    "survivor (pid={survivor_pid}) must be gone (ESRCH), not another error: {e}"
+                ),
+                Ok(()) => {} // still alive — fall through to the deadline check
             }
             assert!(
                 Instant::now() < deadline,
@@ -938,18 +910,23 @@ mod tests {
     // Resource limits (issue #220)
     // -------------------------------------------------------------------------
 
+    /// Value-column indices in a /proc/self/limits line: Soft Limit, Hard Limit, Units.
+    const SOFT_LIMIT: usize = 0;
+    const HARD_LIMIT: usize = 1;
+
     /// Finds the `/proc/self/limits` line whose label matches `label` exactly
     /// (labels start at column 0, so no ambiguity with e.g. "Max cpu time" vs
-    /// "Max cpu time" prefixed variants) and returns its Soft Limit column.
-    fn soft_limit_value(limits_text: &str, label: &str) -> String {
+    /// "Max cpu time" prefixed variants) and returns its requested value column
+    /// (see `SOFT_LIMIT`/`HARD_LIMIT`).
+    fn limit_column(limits_text: &str, label: &str, column: usize) -> String {
         let line = limits_text
             .lines()
             .find(|l| l.starts_with(label))
             .unwrap_or_else(|| panic!("no line starting with {label:?} in:\n{limits_text}"));
         line[label.len()..]
             .split_whitespace()
-            .next()
-            .unwrap_or_else(|| panic!("no soft-limit column in line: {line:?}"))
+            .nth(column)
+            .unwrap_or_else(|| panic!("no column {column} in line: {line:?}"))
             .to_string()
     }
 
@@ -982,11 +959,37 @@ mod tests {
         assert_eq!(result.outcome, Outcome::Success as i32);
         let stdout = String::from_utf8_lossy(&result.stdout);
 
-        assert_eq!(soft_limit_value(&stdout, "Max processes"), "111");
-        assert_eq!(soft_limit_value(&stdout, "Max data size"), "200000000");
-        assert_eq!(soft_limit_value(&stdout, "Max open files"), "222");
-        assert_eq!(soft_limit_value(&stdout, "Max cpu time"), "333");
-        assert_eq!(soft_limit_value(&stdout, "Max file size"), "44000000");
+        assert_eq!(limit_column(&stdout, "Max processes", SOFT_LIMIT), "111");
+        assert_eq!(
+            limit_column(&stdout, "Max data size", SOFT_LIMIT),
+            "200000000"
+        );
+        assert_eq!(limit_column(&stdout, "Max open files", SOFT_LIMIT), "222");
+        assert_eq!(limit_column(&stdout, "Max cpu time", SOFT_LIMIT), "333");
+        assert_eq!(
+            limit_column(&stdout, "Max file size", SOFT_LIMIT),
+            "44000000"
+        );
+
+        // Guard against a soft/hard mix-up in the rustix `Rlimit` mapping (#670).
+        // In an unprivileged run, a `maximum: None` regression already trips earlier,
+        // at the `Outcome::Success` assertion above: raising a hard limit to
+        // RLIM_INFINITY is EPERM for a non-root process, so the spawn fails closed
+        // before execution ever reaches `/proc/self/limits`. Run as root, that EPERM
+        // path does not fire, so these five assertions are what catch it instead:
+        // `fixed_rlimit` sets `maximum: Some(v)` for every limit, so the Hard Limit
+        // column must equal the Soft Limit column here too.
+        assert_eq!(limit_column(&stdout, "Max processes", HARD_LIMIT), "111");
+        assert_eq!(
+            limit_column(&stdout, "Max data size", HARD_LIMIT),
+            "200000000"
+        );
+        assert_eq!(limit_column(&stdout, "Max open files", HARD_LIMIT), "222");
+        assert_eq!(limit_column(&stdout, "Max cpu time", HARD_LIMIT), "333");
+        assert_eq!(
+            limit_column(&stdout, "Max file size", HARD_LIMIT),
+            "44000000"
+        );
     }
 
     // 13. LIVE runaway-write containment: RLIMIT_FSIZE actually trips SIGXFSZ

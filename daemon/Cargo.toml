@@ -73,13 +73,28 @@ toml = { version = "0.8", default-features = false, features = ["parse"] }
 # direct dep makes the Raw Exec gate explicit without adding a new crate.
 regex = "1"
 # Safe geteuid() for the Policy-file owner check (uid must be 0 or daemon euid).
-# Already transitive (rustix 1.1.4); only the `process` feature is added here.
-# Using rustix instead of libc keeps the code safe (no `unsafe` block needed).
+# Also provides the Task executor's setrlimit and process-group kill (#670): on
+# Linux rustix selects its linux_raw backend and issues prlimit64 / kill directly,
+# with no libc wrapper and no allocation, which is what keeps the pre_exec closure
+# async-signal-safe. `use-libc` must never be enabled on rustix, by us or by any
+# dependency — Cargo unifies features crate-graph-wide, and rustix's build.rs flips
+# to the libc backend whenever `use-libc` is on, which would turn that `setrlimit`
+# back into a libc wrapper (on musl, `__synccall` — not async-signal-safe after
+# fork). This crate must keep EXACTLY `features = ["process"]`: besides
+# `use-libc`, the `fs` feature must never be enabled either — it is the only
+# thing that keeps `daemon/tests/policy_never_opened_for_write.rs`'s rustix
+# blind spot honest (see its header, ~:43-47: rustix exposes no filesystem-write
+# API here only because `fs` is off), a guard on invariant 2. Already transitive
+# (rustix 1.1.4); only the `process` feature is added here. Using rustix instead
+# of libc keeps the code safe (no `unsafe` block needed).
 rustix = { version = "1", features = ["process"] }
-# Process-group signalling for the Task executor: kill(-pgid, SIG..) to
-# SIGTERM/SIGKILL a Task's whole process tree (ADR-0013 killable groups).
-# Already present transitively via tokio -> signal-hook-registry, so this
-# adds zero new crates to the musl build.
+# Custom open(2) flags (O_NOFOLLOW/O_NONBLOCK on Policy/Template; O_NONBLOCK/
+# O_NOCTTY, deliberately NOT O_NOFOLLOW, on file_read — ADR-0018) and ELOOP
+# matching on the Policy/Template paths, getifaddrs for system facts (no
+# rustix equivalent exists), and libc's test-only uses: the mkfifo and
+# SIGTERM fixtures, plus policy_never_opened_for_write.rs's own scanner-test
+# fixture strings. Already present transitively via tokio ->
+# signal-hook-registry, so this adds zero new crates to the musl build.
 libc = "0.2"
 
 [dev-dependencies]
