@@ -83,6 +83,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: make test-codex-review
 
+      # scripts/proto-tools-check.sh, proved against stub tools and a stub `go` (#710). Shell
+      # only, no Go toolchain, no network — it belongs with the other gate self-tests rather
+      # than in a toolchain job. The docs job has no `Set up Go` step, which is exactly why
+      # the stub `go` is load-bearing here rather than a convenience.
+      - name: Proto-tools pin check self-test
+        if: ${{ !cancelled() }}
+        run: make test-proto-tools-check
+
   # ---- relay: Go format, build, lint, race-detector tests, the OpenAPI contract,
   # and the Go half of the strict-umask lane ----
   relay:
