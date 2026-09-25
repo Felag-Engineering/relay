@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
@@ -48,6 +49,7 @@ type fixtureSpec struct {
 	plane        nodePlane
 	controlPlane bool
 	configure    []func(*Config)
+	mcpOptions   []mcp.Option
 }
 
 // FixtureOption customizes a relay fixture.
@@ -73,6 +75,24 @@ func WithControlPlane() FixtureOption {
 // minimum daemon version).
 func WithConfig(f func(*Config)) FixtureOption {
 	return func(s *fixtureSpec) { s.configure = append(s.configure, f) }
+}
+
+// WithMCPServerOptions appends opts to the mcp.New options of the real MCP
+// surface when the control plane is mounted, via serverHooks (#721). It is
+// test-only: this is the one hook production code never populates (see
+// TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction), for options
+// the composition root does not itself pass. It has no effect without
+// WithControlPlane, and repeated uses accumulate.
+//
+// opts land AFTER mcpSurface.Mount's own production options (in the order
+// this option is applied), and mcp.New applies options in order — so an opt
+// that sets the same field as a production option (for example a second
+// mcp.WithToolCallObserver) wins for that test. This is deliberate: it is
+// what lets a test observe or replace a production collaborator without a
+// second wiring path, but it means a test relying on this override should say
+// so, since it is exercising a different option list than production ships.
+func WithMCPServerOptions(opts ...mcp.Option) FixtureOption {
+	return func(s *fixtureSpec) { s.mcpOptions = append(s.mcpOptions, opts...) }
 }
 
 // relayFixture is a running Relay plus the handles tests reach for.
@@ -119,7 +139,7 @@ func startRelay(t *testing.T, opts ...FixtureOption) *relayFixture {
 		f(&cfg)
 	}
 
-	srv, deps, err := newServer(cfg)
+	srv, deps, err := newServerWithHooks(cfg, serverHooks{testMCPOptions: spec.mcpOptions})
 	if err != nil {
 		t.Fatalf("newServer: %v", err)
 	}
