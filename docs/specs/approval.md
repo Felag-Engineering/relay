@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-24`.
+**Status:** designed, not built, as of `2026-09-25`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -743,6 +743,13 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-25` — **`DecideApproval` stops discarding the Request on a refusal it can name.** On
+  `ErrNotPending` or `ErrDuplicateDecider` it now returns the Request as it currently stands
+  (state, decisions, any bound Job ID) instead of the zero value — plumbing S4a's answered retry
+  needs to tell an already-bound Job from a lapsed request apart after a refusal. Every other
+  refusal is unchanged. The Control API's and Console's decision handlers were re-checked against
+  the new value and render every refusal exactly as before; no claim is promoted — AP-16, AP-17
+  and AP-19 are untouched. (#724)
 - `2026-09-25` — Decomposition of #646 surfaced two owner decisions. **AP-70** gains one
   exception: `approve_request`'s `approver` is now bounded by the same rule as an elicited
   responder, refused rather than truncated — today that field is unbounded and lands verbatim in

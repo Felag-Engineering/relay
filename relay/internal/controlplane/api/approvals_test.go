@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,7 +34,12 @@ type fakeApprovals struct {
 	lastPrincipal capability.Principal
 	lastDecision  capability.ApprovalDecision
 	decideErr     error
-	listErr       error
+	// decideReturn is what DecideApproval returns alongside decideErr. The
+	// capability layer returns the current Request, not the zero value, on
+	// ErrNotPending/ErrDuplicateDecider (#724); the default here is the zero
+	// value, so every existing test is unaffected.
+	decideReturn approval.Request
+	listErr      error
 }
 
 func (f *fakeApprovals) PendingApprovals(context.Context) ([]approval.Request, error) {
@@ -52,7 +58,7 @@ func (f *fakeApprovals) DecideApproval(_ context.Context, p capability.Principal
 	f.lastPrincipal = p
 	f.lastDecision = in
 	if f.decideErr != nil {
-		return approval.Request{}, f.decideErr
+		return f.decideReturn, f.decideErr
 	}
 	r, ok := f.byID[in.RequestID]
 	if !ok {
@@ -286,6 +292,52 @@ func TestDecideApproval_ErrorStatuses(t *testing.T) {
 			}
 			if p.Detail == "" {
 				t.Error("detail is empty; an approver who cannot tell why their answer bounced will stop answering")
+			}
+		})
+	}
+}
+
+// TestDecideApproval_RefusalRendersTheSameWhateverRequestComesBack (#724):
+// the capability layer now returns the current Request alongside
+// ErrNotPending and ErrDuplicateDecider, instead of the zero value. This
+// handler discards the value on every error (writeApprovalError takes no
+// Request), so the rendered problem must be byte-identical either way, and
+// must never leak a field only the non-zero Request carries.
+func TestDecideApproval_RefusalRendersTheSameWhateverRequestComesBack(t *testing.T) {
+	req := testApprovalRequest("req-1", jobs.Action{Kind: jobs.ActionOperation, RiskClass: jobs.RiskClassMutate})
+	sentinel := approval.Request{
+		ID: "req-1", State: approval.StateApproved, JobID: "job-sentinel-9",
+		Decisions: []approval.Decision{{AccountID: "acct-ana", Account: "ana", Approve: true}},
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"already terminal", approval.ErrNotPending},
+		{"duplicate decider", approval.ErrDuplicateDecider},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zero := do(t, newApprovalFixture(t, accounts.RoleOperator,
+				&fakeApprovals{byID: map[string]approval.Request{"req-1": req}, decideErr: tc.err}),
+				http.MethodPost, "/api/v1/approvals/req-1/decision",
+				decideApprovalRequest{Approve: true, PlanHash: req.PlanHash})
+			nonZero := do(t, newApprovalFixture(t, accounts.RoleOperator,
+				&fakeApprovals{byID: map[string]approval.Request{"req-1": req}, decideErr: tc.err, decideReturn: sentinel}),
+				http.MethodPost, "/api/v1/approvals/req-1/decision",
+				decideApprovalRequest{Approve: true, PlanHash: req.PlanHash})
+
+			if zero.Code != nonZero.Code {
+				t.Fatalf("status = %d with a zero Request, %d with a non-zero one; want equal", zero.Code, nonZero.Code)
+			}
+			if got, want := nonZero.Header().Get("Content-Type"), zero.Header().Get("Content-Type"); got != want {
+				t.Errorf("Content-Type = %q, want %q", got, want)
+			}
+			if zero.Body.String() != nonZero.Body.String() {
+				t.Errorf("body differs by what RecordDecision returned:\nzero:     %s\nnon-zero: %s", zero.Body.String(), nonZero.Body.String())
+			}
+			if strings.Contains(nonZero.Body.String(), "job-sentinel-9") {
+				t.Error("the refusal body leaked a field from the discarded Request")
 			}
 		})
 	}

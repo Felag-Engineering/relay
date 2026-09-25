@@ -41,10 +41,16 @@ func (m *memApprovals) ByPlanHash(_ context.Context, planHash string) (approval.
 }
 
 func (m *memApprovals) BindJob(_ context.Context, id, jobID string) error {
-	if _, ok := m.byID[id]; !ok {
+	r, ok := m.byID[id]
+	if !ok {
 		return approval.ErrNotFound
 	}
 	m.bound[id] = jobID
+	// Mirrors SQLite, where job_id is a column on the row: a caller reading
+	// the Request back (Get, or RecordDecision's refusal return) sees the
+	// bound Job, not just this fake's separate bound map.
+	r.JobID = jobID
+	m.byID[id] = r
 	return nil
 }
 
@@ -81,7 +87,10 @@ func (m *memApprovals) RecordDecision(_ context.Context, id string, d approval.D
 	}
 	updated, err := r.Decide(d, now)
 	if err != nil {
-		return approval.Request{}, err
+		// Mirrors the SQLite store: on a refusal, return r as read here rather
+		// than the zero value, so a caller never needs a second, potentially
+		// racing, lookup.
+		return r, err
 	}
 	m.byID[id] = updated
 	return updated, nil

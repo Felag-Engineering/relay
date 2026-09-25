@@ -623,6 +623,11 @@ type fakeDecider struct {
 	calls []decideCall
 	err   error
 	order *[]string
+	// onErr is what DecideApproval returns alongside err. The capability
+	// layer returns the current Request, not the zero value, on
+	// ErrNotPending/ErrDuplicateDecider (#724); the default here is the zero
+	// value, so every existing test is unaffected.
+	onErr approval.Request
 }
 
 func (f *fakeDecider) DecideApproval(_ context.Context, p capability.Principal, in capability.ApprovalDecision) (approval.Request, error) {
@@ -631,7 +636,7 @@ func (f *fakeDecider) DecideApproval(_ context.Context, p capability.Principal, 
 		*f.order = append(*f.order, "DecideApproval")
 	}
 	if f.err != nil {
-		return approval.Request{}, f.err
+		return f.onErr, f.err
 	}
 	return approval.Request{ID: in.RequestID, PlanHash: in.PlanHash}, nil
 }

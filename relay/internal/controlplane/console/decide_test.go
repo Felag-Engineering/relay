@@ -681,6 +681,71 @@ func TestDecide_AStalePlanHashSaysTheViewMoved(t *testing.T) {
 	}
 }
 
+// decideRefusalPost signs in, GETs the card to scrape a fresh CSRF token, and
+// POSTs the decide form, returning the recorded response — the shared shape
+// TestDecide_AStalePlanHashSaysTheViewMoved and its neighbours each inline.
+func decideRefusalPost(t *testing.T, f *loginFixture, id string) *httptest.ResponseRecorder {
+	t.Helper()
+	_, cookies := f.signIn(t, "mike", consolePassword)
+	session := cookieNamed(cookies, consoleauth.SessionCookieName)
+	cardRec := f.do(t, httptest.NewRequest(http.MethodGet, "/console/approvals/"+id, nil), session)
+
+	body := decideForm(cardRec.Body.String(), "approve", "", consolePassword)
+	postReq := httptest.NewRequest(http.MethodPost, decideApprovalAction(id), strings.NewReader(body.Encode()))
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	return f.do(t, postReq, session)
+}
+
+// TestDecide_ARefusalRendersTheSameWhateverRequestComesBack (#724): the
+// capability layer now returns the current Request alongside ErrNotPending
+// and ErrDuplicateDecider, instead of the zero value. This handler discards
+// the value on every error (`_, err := d.Decide.DecideApproval(...)`), so the
+// rendered refusal must be identical either way, and must never leak a field
+// only the non-zero Request carries. One fixture per variant: a fakeDecider
+// is built once with its final onErr already set, not mutated between POSTs,
+// because a fresh fixture per POST avoids sharing session and step-up
+// throttle state across variants.
+func TestDecide_ARefusalRendersTheSameWhateverRequestComesBack(t *testing.T) {
+	sentinel := approval.Request{
+		ID: "ap-1", State: approval.StateApproved, JobID: "job-sentinel-9",
+		Decisions: []approval.Decision{{AccountID: "acct-ana", Account: "ana", Approve: true}},
+	}
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"already terminal", approval.ErrNotPending},
+		{"duplicate decider", approval.ErrDuplicateDecider},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			zero, _ := decideLoginFixture(t, pendingApprovalRequest("ap-1"), &fakeDecider{err: tc.err})
+			nonZero, _ := decideLoginFixture(t, pendingApprovalRequest("ap-1"), &fakeDecider{err: tc.err, onErr: sentinel})
+
+			zeroRec := decideRefusalPost(t, zero, "ap-1")
+			nonZeroRec := decideRefusalPost(t, nonZero, "ap-1")
+
+			if zeroRec.Code != http.StatusConflict {
+				t.Fatalf("status = %d, want 409; body %s", zeroRec.Code, zeroRec.Body.String())
+			}
+			if nonZeroRec.Code != zeroRec.Code {
+				t.Fatalf("status = %d with a zero Request back, %d with a non-zero one; want equal", zeroRec.Code, nonZeroRec.Code)
+			}
+
+			wantHeading := "The Relay refused this decision: " + tc.err.Error() + "."
+			if !strings.Contains(zeroRec.Body.String(), wantHeading) {
+				t.Errorf("zero-Request body does not render %q: %s", wantHeading, zeroRec.Body.String())
+			}
+			if !strings.Contains(nonZeroRec.Body.String(), wantHeading) {
+				t.Errorf("non-zero-Request body does not render %q: %s", wantHeading, nonZeroRec.Body.String())
+			}
+			if strings.Contains(nonZeroRec.Body.String(), "job-sentinel-9") {
+				t.Error("the refusal body leaked a field from the discarded Request")
+			}
+		})
+	}
+}
+
 // TestDecide_TheDefaultErrorNeverClaimsNothingWasRecorded pins the wording a
 // security review (cycle 2) flagged: DecideApproval's default/unrecognised
 // error branch must NOT say "was not recorded", because that branch is also

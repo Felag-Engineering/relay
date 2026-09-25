@@ -157,6 +157,22 @@ func (s *Service) LastApprovedOfSameShape(ctx context.Context, r approval.Reques
 //
 // Nothing dispatches here. A satisfied Requirement means the next drive of the
 // same Plan proceeds; see this file's header.
+//
+// On ErrNotPending or ErrDuplicateDecider, the returned Request is the one as
+// it now stands, read atomically with the refusal (state, decisions, bound
+// JobID) — see requestOnRefusal and the rationale on Service.Approval. A
+// lapsed Request the sweeper has not retired yet comes back as StatePending
+// with ExpiresAt in the past; a caller asks Expired(now) or PastDeadline(now)
+// to tell it apart from one still genuinely open. Every other refusal returns
+// the zero value.
+//
+// On ErrNotPending specifically, this Request comes back whether or not p
+// would have been eligible to decide it: eligibility (requester exclusion,
+// machine self-decision, audience, channel strength) is checked after
+// Terminal/Expired inside the domain, so a caller who fails every eligibility
+// check still gets the terminal or lapsed Request here — it is a read of what
+// the Request now is, not proof p could have decided it. A surface that
+// exposes this value must narrow it to what that surface may already read.
 func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDecision) (approval.Request, error) {
 	if s.approvals == nil {
 		return approval.Request{}, ErrApprovalUnavailable
@@ -210,7 +226,7 @@ func (s *Service) DecideApproval(ctx context.Context, p Principal, in ApprovalDe
 		// surface maps it with errors.Is; only genuine store failures are
 		// wrapped as internal.
 		if isApprovalDomainError(err) {
-			return approval.Request{}, err
+			return requestOnRefusal(updated, err), err
 		}
 		return approval.Request{}, fmt.Errorf("capability: record approval decision: %w", err)
 	}
@@ -258,6 +274,32 @@ func isApprovalDomainError(err error) bool {
 		}
 	}
 	return false
+}
+
+// requestOnRefusal decides which refusals carry the Request back to the
+// caller. It is an explicit allow-list, like isApprovalDomainError, so a new
+// sentinel has to be classified deliberately rather than inheriting a value by
+// accident.
+//
+// Only ErrNotPending and ErrDuplicateDecider get r: those are exactly the
+// refusals where "what became of it" is the caller's next question — S4a's
+// answered retry branches on the bound Job, the resolved state, or the
+// still-open deadline. Every other refusal keeps the zero value it always
+// returned, because nothing downstream needs to distinguish, say, one
+// audience mismatch from another.
+//
+// r on ErrNotPending is not proof that the caller was eligible to decide it:
+// the domain checks Terminal/Expired before requester exclusion, machine
+// self-decision, audience, and channel strength, so an ineligible caller
+// hitting an already-terminal or lapsed Request gets the same r an eligible
+// one would. An adapter that exposes r must narrow it to what that surface
+// may already read (state, JobID, deadline — never raw Decisions to a caller
+// who could not otherwise see them).
+func requestOnRefusal(r approval.Request, err error) approval.Request {
+	if errors.Is(err, approval.ErrNotPending) || errors.Is(err, approval.ErrDuplicateDecider) {
+		return r
+	}
+	return approval.Request{}
 }
 
 // approvalAnswerOf maps a Decision's boolean Approve onto the structured

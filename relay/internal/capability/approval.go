@@ -52,6 +52,9 @@ type ApprovalStore interface {
 	// D10): the newest approved record of the same SHAPE. It releases nothing
 	// — see approval.Repository for why that separation is structural.
 	LastApprovedByShape(ctx context.Context, shapeKey, excludeID string) (approval.Request, error)
+	// RecordDecision returns the domain's usual (Request, error) pair. On a
+	// domain refusal, the Request is the one read inside the refusing
+	// transaction — see approval.Repository.
 	RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error)
 }
 

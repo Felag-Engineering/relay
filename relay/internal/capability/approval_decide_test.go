@@ -3,7 +3,9 @@ package capability
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +39,61 @@ func decideFixture(t *testing.T, count int, authorizer ApprovalAuthorizer) (*Ser
 	)
 	s.disp = &spyDispatcher{jobID: "job-1"}
 	return s, store, audit
+}
+
+// decideFixtureWithRequirement is decideFixture, parameterised on the gate's
+// Requirement instead of a fixed count, and on the store and the clock —
+// matching approvalFixture's shape (nodes, gate/req, store, now) rather than
+// inventing a third fixture shape — for tests that need to shape
+// audience/channel/requester rules, substitute a failing store, or move time.
+func decideFixtureWithRequirement(t *testing.T, req approval.Requirement, store ApprovalStore, authorizer ApprovalAuthorizer, now func() time.Time) (*Service, *spyAuditSink) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	gate, err := approval.NewGate([]approval.Rule{{Name: "t", Require: req}})
+	if err != nil {
+		t.Fatalf("NewGate: %v", err)
+	}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gate, store, authorizer),
+		WithClock(now),
+	)
+	s.disp = &spyDispatcher{jobID: "job-1"}
+	return s, audit
+}
+
+// failingApprovals wraps *memApprovals but fails RecordDecision with a
+// non-domain error, standing in for a genuine store outage — as opposed to a
+// domain refusal — on the "store failure" row of
+// TestDecideApproval_OtherRefusalsAreUnchanged.
+type failingApprovals struct {
+	*memApprovals
+	err error
+}
+
+func (f *failingApprovals) RecordDecision(context.Context, string, approval.Decision, time.Time) (approval.Request, error) {
+	return approval.Request{}, f.err
+}
+
+// countApprovalDecided counts the AuditKindApprovalDecided entries audit has
+// recorded so far, so a test can assert a refusal added none.
+func countApprovalDecided(audit *spyAuditSink) int {
+	n := 0
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindApprovalDecided {
+			n++
+		}
+	}
+	return n
 }
 
 // park drives one gated dispatch and returns the resulting ParkedError.
@@ -938,5 +995,361 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	}
 	if denyEntry.PlanHash != denyParked.PlanHash {
 		t.Errorf("deny entry PlanHash = %q, want %q", denyEntry.PlanHash, denyParked.PlanHash)
+	}
+}
+
+// --- #724: a refused decision reports what became of the request ----------
+
+// TestDecideApproval_NotPendingReturnsTheCurrentRequest is the issue's first
+// acceptance criterion: a decision refused because the Request is no longer
+// pending — already approved, already denied, or lapsed but not yet swept —
+// returns the Request as it now stands, not the zero value.
+func TestDecideApproval_NotPendingReturnsTheCurrentRequest(t *testing.T) {
+	t.Run("already approved with a bound Job", func(t *testing.T) {
+		s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+		parked := park(t, s, machineRequester)
+
+		if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+			Channel: approval.ChannelOutOfBand,
+		}); err != nil {
+			t.Fatalf("DecideApproval (approve): %v", err)
+		}
+		// The quorum is satisfied, so re-driving the same Plan dispatches and
+		// binds the Job the approval released.
+		if _, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct()); err != nil {
+			t.Fatalf("Run after approval: %v", err)
+		}
+
+		before := countApprovalDecided(audit)
+		got, err := s.DecideApproval(context.Background(), humanApprover("acct-bo", "bo"), ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+			Channel: approval.ChannelOutOfBand,
+		})
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("err = %v, want ErrNotPending", err)
+		}
+		if got.ID != parked.RequestID {
+			t.Errorf("ID = %q, want %q", got.ID, parked.RequestID)
+		}
+		if got.State != approval.StateApproved {
+			t.Errorf("State = %v, want approved", got.State)
+		}
+		if got.JobID != "job-1" {
+			t.Errorf("JobID = %q, want job-1 — the caller's next question after \"too late\" is what already ran", got.JobID)
+		}
+		if len(got.Decisions) != 1 {
+			t.Errorf("Decisions = %d, want 1", len(got.Decisions))
+		}
+		if countApprovalDecided(audit) != before {
+			t.Error("a refused decision must not add an audit entry")
+		}
+	})
+
+	t.Run("already denied", func(t *testing.T) {
+		s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+		parked := park(t, s, machineRequester)
+
+		if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: false,
+			Reason: "wrong window", Channel: approval.ChannelOutOfBand,
+		}); err != nil {
+			t.Fatalf("DecideApproval (deny): %v", err)
+		}
+
+		before := countApprovalDecided(audit)
+		got, err := s.DecideApproval(context.Background(), humanApprover("acct-bo", "bo"), ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+			Channel: approval.ChannelOutOfBand,
+		})
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("err = %v, want ErrNotPending", err)
+		}
+		if got.State != approval.StateDenied {
+			t.Errorf("State = %v, want denied", got.State)
+		}
+		if len(got.Decisions) != 1 || got.Decisions[0].Account != "ana" || got.Decisions[0].Approve {
+			t.Errorf("Decisions = %+v, want exactly ana's denial", got.Decisions)
+		}
+		if countApprovalDecided(audit) != before {
+			t.Error("a refused decision must not add an audit entry")
+		}
+	})
+
+	t.Run("lapsed but not swept", func(t *testing.T) {
+		clock := apNow
+		req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+		store := newMemApprovals()
+		s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return clock })
+		parked := park(t, s, machineRequester)
+
+		// Move the clock past the deadline without running any sweeper — the
+		// same technique TestPendingApprovalsHidesExpired uses.
+		clock = parked.ExpiresAt.Add(time.Minute)
+
+		before := countApprovalDecided(audit)
+		got, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+			Channel: approval.ChannelOutOfBand,
+		})
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("err = %v, want ErrNotPending", err)
+		}
+		if !strings.Contains(err.Error(), "expired at") {
+			t.Errorf("err = %q, want it to still carry \"expired at\" — the capability layer must not re-wrap the domain's error", err)
+		}
+		if got.ID != parked.RequestID {
+			t.Errorf("ID = %q, want %q", got.ID, parked.RequestID)
+		}
+		if got.State != approval.StatePending {
+			t.Errorf("State = %v, want StatePending — a lapsed Request the sweeper has not retired yet is stored as pending", got.State)
+		}
+		if !got.Expired(clock) {
+			t.Error("Expired(clock) = false, want true")
+		}
+		if len(got.Decisions) != 0 {
+			t.Errorf("Decisions = %d, want 0", len(got.Decisions))
+		}
+		if countApprovalDecided(audit) != before {
+			t.Error("a refused decision must not add an audit entry")
+		}
+		if len(store.byID[parked.RequestID].Decisions) != 0 {
+			t.Error("the store must still hold zero decisions after a refused decision")
+		}
+	})
+}
+
+// TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest is the issue's
+// second acceptance criterion: a decision refused because the same Account
+// already answered returns the Request as it now stands.
+func TestDecideApproval_DuplicateDeciderReturnsTheCurrentRequest(t *testing.T) {
+	s, store, audit := decideFixture(t, 2, &spyApprovalAuthorizer{})
+	parked := park(t, s, machineRequester)
+
+	if _, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+		RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+		Channel: approval.ChannelOutOfBand,
+	}); err != nil {
+		t.Fatalf("first decision: %v", err)
+	}
+
+	got, err := s.DecideApproval(context.Background(), humanApprover("acct-ana", "ana"), ApprovalDecision{
+		RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true,
+		Channel: approval.ChannelOutOfBand,
+	})
+	if !errors.Is(err, approval.ErrDuplicateDecider) {
+		t.Fatalf("err = %v, want ErrDuplicateDecider", err)
+	}
+	if got.State != approval.StatePending {
+		t.Errorf("State = %v, want it still pending (1 of 2)", got.State)
+	}
+	if len(got.Decisions) != 1 || got.Decisions[0].AccountID != "acct-ana" {
+		t.Errorf("Decisions = %+v, want exactly ana's first decision", got.Decisions)
+	}
+	if n := countApprovalDecided(audit); n != 1 {
+		t.Errorf("audited %d decisions, want exactly the first one — a rejected duplicate is not its own audit record", n)
+	}
+	if len(store.byID[parked.RequestID].Decisions) != 1 {
+		t.Errorf("stored %d decisions, want 1 — a rejected duplicate must not be persisted", len(store.byID[parked.RequestID].Decisions))
+	}
+}
+
+// TestDecideApproval_OtherRefusalsAreUnchanged is the issue's third
+// acceptance criterion: every refusal besides ErrNotPending and
+// ErrDuplicateDecider returns exactly what it always has — the zero value —
+// and records or audits nothing new.
+func TestDecideApproval_OtherRefusalsAreUnchanged(t *testing.T) {
+	errRoleFloorDenied := errors.New("authz: unauthorized")
+	errStoreFailure := errors.New("disk on fire")
+
+	cases := []struct {
+		name       string
+		wantErr    error  // checked with errors.Is when set
+		wantErrSub string // checked with strings.Contains when wantErr is nil
+		build      func(t *testing.T) (s *Service, p Principal, in ApprovalDecision, audit *spyAuditSink, checkStore func(t *testing.T))
+	}{
+		{
+			name:    "role floor",
+			wantErr: errRoleFloorDenied,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{err: errRoleFloorDenied})
+				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-viewer", "vi"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "requester excluded",
+			wantErr: approval.ErrRequesterExcluded,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				requester := humanApprover("acct-req", "requester")
+				req := approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				store := newMemApprovals()
+				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, requester)
+				return s, requester, ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "audience",
+			wantErr: approval.ErrNotInAudience,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				req := approval.Requirement{Count: 1, RequesterAllowed: true, Audience: []string{"bo"}, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				store := newMemApprovals()
+				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "machine self-decision",
+			wantErr: approval.ErrMachineSelfDecision,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				store := newMemApprovals()
+				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, machineRequester)
+				return s, machineRequester, ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "plan hash",
+			wantErr: approval.ErrPlanChanged,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				s, store, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: "some-other-plan", Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "weak channel",
+			wantErr: approval.ErrWeakChannel,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				// The rule demands ChannelOutOfBand explicitly — never
+				// simplify this to InBand, or the decision's own
+				// ChannelUnspecified would no longer be weaker than what is
+				// required and this row would stop exercising the refusal.
+				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				store := newMemApprovals()
+				s, audit := decideFixtureWithRequirement(t, req, store, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelUnspecified,
+					}, audit, func(t *testing.T) {
+						if got := store.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+		{
+			name:    "unavailable",
+			wantErr: ErrApprovalUnavailable,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				reg := registry.NewInMemory()
+				audit := &spyAuditSink{}
+				s := New(reg,
+					WithAuthorizer(&spyAuthorizer{}),
+					WithCapChecker(&spyCapChecker{}),
+					WithAuditSink(audit),
+					WithFreeze(&fakeFreezeStore{}),
+					WithClock(func() time.Time { return apNow }),
+				)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+					RequestID: "req-x", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
+				}, audit, func(t *testing.T) {}
+			},
+		},
+		{
+			name:       "missing ID",
+			wantErrSub: "request id is required",
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+					RequestID: "", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
+				}, audit, func(t *testing.T) {}
+			},
+		},
+		{
+			name:    "not found",
+			wantErr: approval.ErrNotFound,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				s, _, audit := decideFixture(t, 1, &spyApprovalAuthorizer{})
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+					RequestID: "req-nope", PlanHash: "hash", Approve: true, Channel: approval.ChannelOutOfBand,
+				}, audit, func(t *testing.T) {}
+			},
+		},
+		{
+			name:    "store failure",
+			wantErr: errStoreFailure,
+			build: func(t *testing.T) (*Service, Principal, ApprovalDecision, *spyAuditSink, func(t *testing.T)) {
+				inner := newMemApprovals()
+				failing := &failingApprovals{memApprovals: inner, err: errStoreFailure}
+				req := approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour}
+				s, audit := decideFixtureWithRequirement(t, req, failing, &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+				parked := park(t, s, machineRequester)
+				return s, humanApprover("acct-ana", "ana"), ApprovalDecision{
+						RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelOutOfBand,
+					}, audit, func(t *testing.T) {
+						if got := inner.byID[parked.RequestID]; len(got.Decisions) != 0 || got.State != approval.StatePending {
+							t.Errorf("stored record changed: %+v", got)
+						}
+					}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, p, in, audit, checkStore := tc.build(t)
+			before := countApprovalDecided(audit)
+
+			got, err := s.DecideApproval(context.Background(), p, in)
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("err = %v, want errors.Is(err, %v)", err, tc.wantErr)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantErrSub) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErrSub)
+			}
+			if !reflect.DeepEqual(got, approval.Request{}) {
+				t.Errorf("Request = %+v, want the zero value", got)
+			}
+			if countApprovalDecided(audit) != before {
+				t.Error("a refused decision must not add an audit entry")
+			}
+			checkStore(t)
+		})
 	}
 }
