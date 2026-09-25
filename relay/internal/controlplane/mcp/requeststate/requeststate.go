@@ -279,7 +279,7 @@ var (
 	}
 )
 
-const redactedKey = "requeststate.Sealer{key:REDACTED}"
+const redactedKey = "requeststate.Sealer{mac:REDACTED}"
 
 // Sealer seals and opens request states under one process-lifetime key.
 // Construct with New or Mint; callers hold only the returned *Sealer, never
@@ -287,36 +287,53 @@ const redactedKey = "requeststate.Sealer{key:REDACTED}"
 // Sealer is not usable: Seal and Open on it refuse with ErrInvalidKey rather
 // than operating under an empty key.
 //
-// The key is held behind a pointer (key *[KeyBytes]byte), not inline as
-// key []byte, precisely because that is what redacts: fmt and slog cannot
-// invoke a value's String, GoString or LogValue method through an
-// unexported struct field — reflect.Value.Interface panics on a value
-// reached that way, so fmt falls back to printing the field's raw
-// representation. For a []byte key that raw representation is the key
-// itself; for a *[KeyBytes]byte it is only a pointer's address. So a Sealer
-// value (or a *Sealer) sitting in an unexported field of some other struct —
-// exactly the shape reflection-based formatting cannot call methods
-// through — never renders the key, under %v, %+v, %#v or slog's
-// TextHandler and JSONHandler, whether or not that struct ever sees this
-// type's own String/GoString/LogValue.
+// The key is held only inside a closure (mac func([]byte) []byte, computing
+// the MAC over its argument under the key it closes over), never as a
+// byte-shaped field, because a closure is what redacts it under every fmt
+// verb — not only the ones this type's own String/GoString/LogValue
+// methods intercept.
+//
+// An earlier version held the key behind a single pointer
+// (key *[KeyBytes]byte), reasoning that fmt and slog cannot invoke a
+// value's String, GoString or LogValue method through an unexported struct
+// field (reflect.Value.Interface panics on a value reached that way), so
+// they fall back to printing the field's raw representation, and a
+// pointer's raw representation is only its address. That holds for %v, %+v
+// and %#v, but not for a verb a pointer doesn't support (%s, %q, %x, %d):
+// fmt's bad-verb path re-renders the offending value from scratch with %v
+// at depth 0 (see fmt's badVerb), which re-triggers the pointer-to-array
+// auto-dereference fmt normally reserves for a verb's own top-level
+// argument — printing the key as a decimal byte list even though the
+// pointer sat several levels deep inside an unexported field. A
+// double-indirected key (**[KeyBytes]byte) defeats that specific
+// depth-reset path too (the auto-dereference only fires when the pointer's
+// immediate element is an array, slice, struct or map, and *[KeyBytes]byte
+// is none of those), but it depends on fmt's internal, undocumented
+// behaviour rather than on a documented guarantee. A closure has no
+// byte-shaped representation for any fallback path to fall back to:
+// reflect cannot inspect a func value's closed-over variables under any
+// verb, at any depth, full stop — so the closure is the more structurally
+// robust of the two fixes, and the one this type uses.
 //
 // String, GoString and LogValue are declared on the value receiver too, so
 // that a Sealer or *Sealer formatted directly (not reached through another
 // struct's unexported field) also redacts explicitly rather than relying on
-// the pointer alone.
+// the closure alone.
 type Sealer struct {
-	key *[KeyBytes]byte
+	mac func(msg []byte) []byte
 }
 
 func (s Sealer) String() string       { return redactedKey }
 func (s Sealer) GoString() string     { return redactedKey }
 func (s Sealer) LogValue() slog.Value { return slog.StringValue(redactedKey) }
 
-// usable reports ErrInvalidKey unless s is non-nil and holds a key. Without
-// this guard, hmac.New accepts a nil or empty key, so a zero-value Sealer{}
-// would silently seal and open under an empty key rather than refusing.
+// usable reports ErrInvalidKey unless s is non-nil and holds a mac closure.
+// Without this guard, a zero-value Sealer{} has a nil mac and calling it
+// would panic rather than refuse; New is the only place a non-nil mac is
+// ever assigned, and only after validating the key it closes over, so a
+// usable Sealer's mac always closes over a real, non-empty key.
 func (s *Sealer) usable() error {
-	if s == nil || s.key == nil {
+	if s == nil || s.mac == nil {
 		return ErrInvalidKey
 	}
 	return nil
@@ -332,15 +349,18 @@ func NewKey() ([]byte, error) {
 }
 
 // New constructs a Sealer from an existing key, which must be exactly
-// KeyBytes long and not all zero. It stores a private copy of key, behind a
-// pointer — see Sealer's doc for why that indirection is what redacts.
+// KeyBytes long and not all zero. It stores a private copy of key, closed
+// over by the Sealer's mac func — see Sealer's doc for why a closure,
+// rather than a key-shaped field, is what redacts it.
 func New(key []byte) (*Sealer, error) {
 	if len(key) != KeyBytes || isAllZero(key) {
 		return nil, ErrInvalidKey
 	}
 	var owned [KeyBytes]byte
 	copy(owned[:], key)
-	return &Sealer{key: &owned}, nil
+	return &Sealer{mac: func(msg []byte) []byte {
+		return computeMAC(owned[:], msg)
+	}}, nil
 }
 
 // Mint generates a fresh key with NewKey and constructs a Sealer from it.
@@ -455,7 +475,7 @@ func (s *Sealer) Seal(st State) (string, error) {
 		return "", fmt.Errorf("requeststate: marshal payload: %w", err)
 	}
 
-	mac := computeMAC(s.key[:], append([]byte(macLabel+prefix), body...))
+	mac := s.mac(append([]byte(macLabel+prefix), body...))
 
 	encoded := make([]byte, 0, len(body)+len(mac))
 	encoded = append(encoded, body...)
@@ -511,7 +531,7 @@ func (s *Sealer) Open(state string, now time.Time) (State, error) {
 
 	body := decoded[:len(decoded)-macLen]
 	mac := decoded[len(decoded)-macLen:]
-	want := computeMAC(s.key[:], append([]byte(macLabel+prefix), body...))
+	want := s.mac(append([]byte(macLabel+prefix), body...))
 	if !equalMAC(mac, want) {
 		return State{}, ErrTampered
 	}

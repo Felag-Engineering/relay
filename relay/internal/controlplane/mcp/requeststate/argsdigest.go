@@ -36,10 +36,14 @@ const argsLabel = "relay-requeststate-args-v1\x00"
 // Canonicalisation happens at the JSON map level (map[string]any), not
 // against any Go struct: encoding/json's own decode into a typed struct
 // matches object keys case-insensitively when no exact match exists, so two
-// inputs that digest equal here — for example {"node":"a"} and
-// {"Node":"a"} — can decode to different fields, or the same field by a
-// different route, once a caller unmarshals the raw arguments into a typed
-// value. This digest is a binding check on the call's bytes, not a
+// inputs that digest equal here can decode differently once a caller
+// unmarshals the raw arguments into a typed value. For example,
+// {"node":"a","Node":"b"} and {"Node":"b","node":"a"} digest equal (both
+// decode to the same two-entry sorted map), but a typed struct with a
+// single "Node" field decodes them differently: encoding/json matches each
+// key independently as it scans the object in order, so whichever of the
+// pair's two keys comes last wins — "b" for the first ordering, "a" for the
+// second. This digest is a binding check on the call's bytes, not a
 // guarantee about what a later typed decode of those bytes produces;
 // execution safety rests on the plan hash re-derived from the call at
 // decision time, not on this digest matching a particular struct shape.

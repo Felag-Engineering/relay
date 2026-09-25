@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -54,6 +55,23 @@ func mustMint(t *testing.T) *Sealer {
 		t.Fatalf("Mint: %v", err)
 	}
 	return s
+}
+
+// mustNewWithKnownKey mints a Sealer the same way Mint does, but — unlike
+// Mint — also hands the test the raw key bytes it was built from. Sealer
+// holds the key only inside a closure, so this is the one way a test can
+// still get at the key it needs to check redaction against.
+func mustNewWithKnownKey(t *testing.T) ([]byte, *Sealer) {
+	t.Helper()
+	key, err := NewKey()
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
+	}
+	s, err := New(key)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return key, s
 }
 
 func mustDigest(t *testing.T, raw []byte) Digest {
@@ -318,7 +336,7 @@ func TestOpen_RefusesUnknownVersion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("json.Marshal: %v", err)
 		}
-		mac := computeMAC(sealer.key[:], append([]byte(macLabel+prefix), body...))
+		mac := sealer.mac(append([]byte(macLabel+prefix), body...))
 		encoded := append(append([]byte(nil), body...), mac...)
 		state := encodeSealed(encoded)
 
@@ -713,8 +731,7 @@ func TestSealer_ZeroValueRefuses(t *testing.T) {
 }
 
 func TestSealer_NeverRendersKey(t *testing.T) {
-	minted := mustMint(t)
-	key := append([]byte(nil), minted.key[:]...)
+	key, minted := mustNewWithKnownKey(t)
 
 	checkRendered := func(t *testing.T, label, rendered string) {
 		t.Helper()
@@ -745,19 +762,28 @@ func TestSealer_NeverRendersKey(t *testing.T) {
 	checkAllVerbs(t, "Sealer", *minted)
 }
 
-// TestSealer_UnexportedFieldNeverRendersKey reproduces the security review's
-// finding directly: fmt and slog cannot call a value's String, GoString or
-// LogValue method when that value was reached through an UNEXPORTED struct
-// field (reflect.Value.Interface panics on such a value, so fmt and slog
-// fall back to printing the field's raw representation instead of invoking
-// the method). Sealer.key is therefore held behind a pointer
-// (*[KeyBytes]byte): even when no method can be called, the raw
-// representation of a pointer field is only its address, never the key
-// bytes, in any of the raw decimal-list, hex or base64 forms an attacker
-// might look for.
-func TestSealer_UnexportedFieldNeverRendersKey(t *testing.T) {
-	minted := mustMint(t)
-	key := append([]byte(nil), minted.key[:]...)
+// keyLeakVerbs are every fmt verb TestSealer_UnexportedFieldNeverRendersKey
+// and its negative control check. %v, %+v and %#v are the verbs a struct
+// naturally supports; %s, %q, %x and %d are "bad" verbs for a struct that
+// doesn't implement Stringer — the ones N1 found unsafe, because fmt's
+// bad-verb path (badVerb) re-renders the offending field from scratch with
+// %v at depth 0, which can re-trigger the pointer-to-array auto-dereference
+// fmt normally reserves for a verb's own top-level argument.
+var keyLeakVerbs = []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%d"}
+
+// keyLeakFindings renders holder — typically a struct holding a Sealer or
+// Sealer-shaped value in an unexported field — through every verb in
+// keyLeakVerbs, through slog's Text and JSON handlers, and through
+// log.Printf (which, unlike testing's own output, is a realistic sink for
+// an accidentally-logged struct), and returns a description of every
+// rendering that contains key in its raw, hex-encoded, base64-encoded or
+// fmt-default-decimal-list form. An empty result means none of the sinks
+// leaked the key.
+//
+// TestSealer_UnexportedFieldNeverRendersKey and its negative control both
+// call this exact function: the negative control proves the checker itself
+// can fail, so the real test above it is not passing vacuously.
+func keyLeakFindings(key []byte, holder any) []string {
 	keyHex := hex.EncodeToString(key)
 	keyBase64 := base64.StdEncoding.EncodeToString(key)
 	decimalList := func(b []byte) string {
@@ -769,43 +795,86 @@ func TestSealer_UnexportedFieldNeverRendersKey(t *testing.T) {
 	}
 	keyDecimalList := decimalList(key) // fmt's default []byte %v shape, e.g. "[1 2 3]"
 
+	var findings []string
+	check := func(sink, rendered string) {
+		if strings.Contains(rendered, string(key)) {
+			findings = append(findings, fmt.Sprintf("%s = %q, contains the raw key bytes", sink, rendered))
+		}
+		if strings.Contains(rendered, keyHex) {
+			findings = append(findings, fmt.Sprintf("%s = %q, contains the hex-encoded key", sink, rendered))
+		}
+		if strings.Contains(rendered, keyBase64) {
+			findings = append(findings, fmt.Sprintf("%s = %q, contains the base64-encoded key", sink, rendered))
+		}
+		if strings.Contains(rendered, keyDecimalList) {
+			findings = append(findings, fmt.Sprintf("%s = %q, contains the key as a decimal byte list", sink, rendered))
+		}
+	}
+
+	for _, verb := range keyLeakVerbs {
+		check(verb, fmt.Sprintf(verb, holder))
+
+		var logBuf bytes.Buffer
+		log.New(&logBuf, "", 0).Printf(verb, holder)
+		check("log.Printf "+verb, logBuf.String())
+	}
+
+	var textBuf, jsonBuf bytes.Buffer
+	slog.New(slog.NewTextHandler(&textBuf, nil)).Info("holder", slog.Any("holder", holder))
+	check("slog text", textBuf.String())
+
+	slog.New(slog.NewJSONHandler(&jsonBuf, nil)).Info("holder", slog.Any("holder", holder))
+	check("slog json", jsonBuf.String())
+
+	return findings
+}
+
+// TestSealer_UnexportedFieldNeverRendersKey reproduces the security review's
+// finding directly: fmt and slog cannot call a value's String, GoString or
+// LogValue method when that value was reached through an UNEXPORTED struct
+// field (reflect.Value.Interface panics on such a value, so fmt and slog
+// fall back to printing the field's raw representation instead of invoking
+// the method). Sealer holds the key only inside a closure, which has no
+// byte-shaped raw representation for any fallback path — including a bad
+// verb's — to fall back to; see Sealer's doc for why that is what redacts
+// it where an earlier, pointer-based shape did not.
+func TestSealer_UnexportedFieldNeverRendersKey(t *testing.T) {
+	key, minted := mustNewWithKnownKey(t)
+
 	type holder struct {
 		value   Sealer
 		pointer *Sealer
 	}
 	h := holder{value: *minted, pointer: minted}
 
-	assertSafe := func(t *testing.T, label, rendered string) {
-		t.Helper()
-		if strings.Contains(rendered, string(key)) {
-			t.Errorf("%s = %q, contains the raw key bytes", label, rendered)
-		}
-		if strings.Contains(rendered, keyHex) {
-			t.Errorf("%s = %q, contains the hex-encoded key", label, rendered)
-		}
-		if strings.Contains(rendered, keyBase64) {
-			t.Errorf("%s = %q, contains the base64-encoded key", label, rendered)
-		}
-		if strings.Contains(rendered, keyDecimalList) {
-			t.Errorf("%s = %q, contains the key as a decimal byte list", label, rendered)
-		}
+	for _, f := range keyLeakFindings(key, h) {
+		t.Error(f)
 	}
+}
 
-	rendered := map[string]string{
-		"%v":  fmt.Sprintf("%v", h),
-		"%+v": fmt.Sprintf("%+v", h),
-		"%#v": fmt.Sprintf("%#v", h),
+// TestSealer_UnexportedFieldNeverRendersKey_NegativeControl proves
+// keyLeakFindings actually detects a leak: leakyHolder holds the key
+// exactly the way a pre-N1-fix Sealer held it (behind a single pointer,
+// *[KeyBytes]byte) in an unexported field, the shape the security review
+// found unsafe under a bad verb. If keyLeakFindings found nothing wrong
+// with this holder, the checker — and therefore the real test above — would
+// be vacuous.
+func TestSealer_UnexportedFieldNeverRendersKey_NegativeControl(t *testing.T) {
+	key, err := NewKey()
+	if err != nil {
+		t.Fatalf("NewKey: %v", err)
 	}
-	for verb, out := range rendered {
-		assertSafe(t, "holder "+verb, out)
+	var owned [KeyBytes]byte
+	copy(owned[:], key)
+
+	type leakyHolder struct {
+		key *[KeyBytes]byte
 	}
+	h := leakyHolder{key: &owned}
 
-	var textBuf, jsonBuf bytes.Buffer
-	slog.New(slog.NewTextHandler(&textBuf, nil)).Info("holder", slog.Any("holder", h))
-	assertSafe(t, "holder slog text", textBuf.String())
-
-	slog.New(slog.NewJSONHandler(&jsonBuf, nil)).Info("holder", slog.Any("holder", h))
-	assertSafe(t, "holder slog json", jsonBuf.String())
+	if findings := keyLeakFindings(key, h); len(findings) == 0 {
+		t.Fatal("keyLeakFindings found nothing wrong with a deliberately leaky holder — the checker is vacuous")
+	}
 }
 
 func TestArgsDigest_IsCanonical(t *testing.T) {
