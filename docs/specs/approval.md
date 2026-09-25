@@ -743,6 +743,15 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-25` — **The answered retry is wired into `run_operation` and `raw_exec`, behind the
+  same option, and not yet reachable.** The answer is decided first, through the exempt file's
+  helper, and only then is the whole dispatch pipeline re-entered once; a request whose decision
+  had already bound a Job re-attaches to it as an audited read rather than dispatching again, and
+  a denial is terminal — nothing runs. Every refusal renders as an ordinary tool result carrying
+  only the state, the Job ID and the deadline a refused decision reports, never the raw Decisions.
+  Still dark: the composition root does not pass the option, so none of this is reachable from
+  production. No claim is promoted — **AP-63, AP-66, AP-67, AP-68 and AP-70 stay Designed**;
+  #730 promotes them with their proof rows. (#727)
 - `2026-09-25` — **The answered-retry acceptance path is built, in the one exempt file, and not
   yet reachable.** A new helper opens and binds the retried call's sealed request state with
   the binding-checked open (never the unbound one), requires exactly one response keyed by the

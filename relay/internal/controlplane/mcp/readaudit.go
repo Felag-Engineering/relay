@@ -28,10 +28,12 @@ import (
 // #680 moved list_nodes, describe_node and list_operations onto the
 // capability read lane (ReadLane, mcp.go): the record and the read are now
 // the same call, made there rather than through this seam. This file's
-// ReadAuditor/auditRead now serve only get_job (tools_jobs.go) and the
-// Tasks read-back tools (tasks/get, tasks.go) — the tools that read back a
-// previously-dispatched Job's own Task rows rather than the registry or a
-// display-only cache.
+// ReadAuditor/auditRead now serve only get_job (tools_jobs.go), the Tasks
+// read-back tools (tasks/get, tasks.go), and — since #727 — an answered
+// retry's Job-bound re-attach (run_operation/raw_exec, tools_execution.go),
+// which reads back a previously-dispatched Job's Task rows exactly as
+// get_job does: the tools that read back a previously-dispatched Job's own
+// Task rows rather than the registry or a display-only cache.
 
 // ReadEvent is one non-dispatching read-tool call.
 //

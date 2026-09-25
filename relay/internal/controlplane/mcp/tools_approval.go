@@ -62,9 +62,12 @@ import (
 // file rather than by the AST scan (no_decision_test.go still enforces the
 // scan; this paragraph is the reviewer's map of what to read).
 //
-// Nothing calls acceptElicitedAnswer from a tool handler yet — wiring it
-// into run_operation/raw_exec's retry path is a separate change (S4a-2), so
-// the MRTR path stays unreachable from main until that change lands.
+// tools_execution.go's run_operation and raw_exec are the only callers of
+// acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
+// inputResponses is decided here first, and tools_execution.go's
+// answerThenDispatch then re-enters the whole dispatch pipeline once. The
+// path stays unreachable from main today because the composition root does
+// not pass WithApprovalElicitation (#727's dark scope; S4b flips it on).
 
 // ApprovalDecider records a decision against a parked approval Request.
 //
@@ -166,13 +169,16 @@ func withAssertedApprover(ctx context.Context, approver string) context.Context 
 	return capability.WithAssertions(ctx, asserted)
 }
 
-// ApprovalDecisionOutput is what the tool returns.
+// ApprovalDecisionOutput is what the tool returns. It is also reused,
+// unchanged, as the decision block an answered retry's response carries
+// (RunOrPlanOutput.Decision, #727) — the Channel and State descriptions below
+// are written to be true of both.
 type ApprovalDecisionOutput struct {
 	RequestID  string `json:"request_id" jsonschema:"The request that was answered."`
-	State      string `json:"state" jsonschema:"The request's state after this decision: pending (more approvals still required), approved, denied, or expired."`
+	State      string `json:"state" jsonschema:"The request's state: after this decision on approve_request, or at the moment this answer was evaluated on an answered retry's decision block — the dispatch that follows may have moved the request on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
 	Progress   string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
-	Channel    string `json:"channel" jsonschema:"Always 'in-band' for a decision made through this tool — the answer arrived over the same session that requested the action. Rules requiring out-of-band strength are not satisfied by it."`
-	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified."`
+	Channel    string `json:"channel" jsonschema:"'in-band' when this decision was recorded through this tool — the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. On an answered retry's decision block this is empty when THIS call's answer was not recorded (for example the request was already decided by someone else); approve_request always sets it, because it returns a tool error rather than this shape when nothing was recorded."`
+	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty exactly when channel is empty."`
 	NextStep   string `json:"next_step" jsonschema:"What to do next."`
 }
 
@@ -403,12 +409,14 @@ const (
 // dispatches nothing new.
 //
 // The contract for elicitedStillPending: the caller re-drives Service.Run
-// with the same call to observe the park (the existing run path reports the
-// still-pending Request and re-emits the elicitation). This type must never
-// be widened to carry the Request or its Decisions just to render progress —
-// Progress (a count string) is the only quorum detail a caller gets, and it
-// is set ONLY when Err is nil (a recorded decision); every refusal leaves it
-// empty.
+// with the same call to observe the park. The park it observes is not
+// askable (AP-62: a partial quorum is an OBSERVED park, not a created one),
+// so the caller renders pending_approval and asks no new question — it does
+// NOT "re-emit the elicitation", which does not happen for an observed park.
+// This type must never be widened to carry the Request or its Decisions just
+// to render progress — Progress (a count string) is the only quorum detail a
+// caller gets, and it is set ONLY when Err is nil (a recorded decision);
+// every refusal leaves it empty.
 type elicitedAnswerResult struct {
 	Outcome elicitedOutcome
 	// RequestID and PlanHash are read from the verified SEAL, never from the
@@ -419,6 +427,16 @@ type elicitedAnswerResult struct {
 	State     approval.State
 	JobID     string
 	ExpiresAt time.Time
+	// stateReported is true only where State/JobID/ExpiresAt were actually
+	// copied from capability's Request: classifyElicitedDecision's err == nil
+	// branch, and its ErrNotPending/ErrDuplicateDecider branch when req.ID !=
+	// "". approval.StatePending is the zero value, so a zero State does not
+	// by itself mean "unknown" — without this flag, a refusal made before the
+	// decider was even called (an unbound state, a malformed responder), or a
+	// non-domain failure, would render as state "pending", which may be
+	// untrue. A caller rendering a refusal (refusalOutput) must copy
+	// State/JobID/ExpiresAt only when this is true.
+	stateReported bool
 	// Progress is set only when Err is nil; empty on every refusal.
 	Progress string
 	// OnBehalfOf is the asserted responder identity handed to the decider.
@@ -465,8 +483,9 @@ type elicitedAnswer struct {
 // mcp.go. open is the questioner's binding-checked stateOpener (elicit.go,
 // questioner.opener) — never the Sealer itself: key custody stays in
 // elicit.go's newQuestioner, and this file can only open a state bound to
-// the call it is given, never unbound. Wiring this function into a tool
-// handler's retry path is a further, separate change (S4a-2).
+// the call it is given, never unbound. tools_execution.go's answerThenDispatch
+// wires this function into run_operation/raw_exec's retry path (#727,
+// S4a-2).
 //
 // The machine-self-decision refusal (errNoNamedApprover) must be rendered
 // AS-IS by the caller, never through renderApprovalError: AP-64 requires the
@@ -587,10 +606,11 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 func classifyElicitedDecision(req approval.Request, err error, approve bool, now time.Time) elicitedAnswerResult {
 	if err == nil {
 		out := elicitedAnswerResult{
-			State:     req.State,
-			JobID:     req.JobID,
-			ExpiresAt: req.ExpiresAt,
-			Progress:  req.Progress(),
+			State:         req.State,
+			JobID:         req.JobID,
+			ExpiresAt:     req.ExpiresAt,
+			Progress:      req.Progress(),
+			stateReported: true,
 		}
 		switch {
 		case req.State == approval.StateApproved && !approve:
@@ -635,7 +655,7 @@ func classifyElicitedDecision(req approval.Request, err error, approve bool, now
 			// capability.requestOnRefusal.
 			return elicitedAnswerResult{Outcome: elicitedRefused, Err: err}
 		}
-		out := elicitedAnswerResult{State: req.State, JobID: req.JobID, ExpiresAt: req.ExpiresAt, Err: err}
+		out := elicitedAnswerResult{State: req.State, JobID: req.JobID, ExpiresAt: req.ExpiresAt, Err: err, stateReported: true}
 		switch {
 		case req.State == approval.StateApproved && req.JobID != "":
 			// Re-attaching to an existing Job (AP-67) dispatches nothing new,
@@ -703,3 +723,274 @@ var (
 	// refuses rather than silently reading as elicitedRefused with Err nil.
 	errUnknownRequestState = errors.New("mcp: the decision was recorded but the request's resulting state is not recognised")
 )
+
+// -----------------------------------------------------------------------
+// Rendering an answered retry's outcome (#727). tools_execution.go calls
+// only these methods and answerStateRefusedOutput — it never builds a
+// decision or a refusal message of its own. See the file header, "The
+// second envelope", for why the rendering lives here.
+// -----------------------------------------------------------------------
+
+// The four "what happened to the call" texts decisionOutput's NextStep opens
+// with, chosen from (Outcome, what the dispatch actually returned) rather
+// than from Outcome alone (plan review suggestion 3): a partial quorum
+// completing concurrently, a rule changing mid-retry, or a re-park can each
+// make the Outcome alone contradict what this response actually carries.
+const (
+	nextStepDenialIsTerminal      = "a denial is terminal. Nothing ran; do not retry."
+	nextStepReattachedExistingJob = "the results shown are the Job this approval already released, re-attached. Nothing new was dispatched."
+	nextStepRanThePipeline        = "the call was re-entered through the full dispatch pipeline once in this response, and the Job shown ran. Do not re-issue it."
+	nextStepReParkedOnApproval    = "the call was re-entered once and is parked on approval (see pending_approval for what it waits on). Nothing ran in this response."
+	nextStepNothingWasDispatched  = "nothing was dispatched in this response."
+)
+
+// The two "what became of the answer" texts decisionOutput's NextStep ends
+// with. Chosen by r.Err rather than collapsed into one "not recorded" string
+// (plan review cycle 2, suggestion 2): ErrDuplicateDecider means THIS
+// Account already decided — the request need not be decided at all, quorum
+// may still be open — while every other non-nil r.Err reaching this function
+// (only ErrNotPending) means the request had already reached a resolution
+// before this answer arrived.
+const (
+	nextStepAnswerRecorded = "the answer was recorded (progress shown when the rule needs more)."
+
+	nextStepAnswerNotRecordedAlreadyDecided = "your answer was NOT recorded: the request had already been decided (state shown). " +
+		"In the job-bound case this is the decline-after-approval case the helper's doc names: another answer had approved the " +
+		"request and its Job had already dispatched. It must never read as if the person who declined had approved."
+
+	nextStepAnswerNotRecordedDuplicateDecider = "your answer was NOT recorded: this Account had already decided this request before " +
+		"this call arrived. Any progress or Job shown reflects other approvers' decisions, not this one."
+)
+
+// decisionOutput renders r as the decision block a successful branch of an
+// answered retry carries alongside "after" — the dispatch's own output on
+// the pipeline branch, the re-attached Job on the Job-bound branch, or a
+// zero value on the denied branch. Built only from r's own fields plus two
+// facts read from after: whether a Job id is present, and whether a park is
+// present. Never called for Outcome == elicitedRefused; see refusalOutput
+// for that branch.
+func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDecisionOutput {
+	out := &ApprovalDecisionOutput{
+		RequestID: r.RequestID,
+		State:     r.State.String(),
+		Progress:  r.Progress,
+	}
+	if r.Err == nil {
+		// Channel and OnBehalfOf name an IN-BAND DECISION. An answer that was
+		// not recorded made no in-band decision at all (plan review
+		// suggestion 4), so both stay empty whenever r.Err is non-nil.
+		out.Channel = approval.ChannelInBand.String()
+		out.OnBehalfOf = r.OnBehalfOf
+	}
+
+	var part1 string
+	switch {
+	case r.Outcome == elicitedDenied:
+		part1 = nextStepDenialIsTerminal
+	case r.Outcome == elicitedApprovedJobBound && after.JobID != "":
+		part1 = nextStepReattachedExistingJob
+	case after.JobID != "":
+		part1 = nextStepRanThePipeline
+	case after.PendingApproval != nil:
+		part1 = nextStepReParkedOnApproval
+	default:
+		part1 = nextStepNothingWasDispatched
+	}
+
+	var part2 string
+	switch {
+	case r.Err == nil:
+		part2 = nextStepAnswerRecorded
+	case errors.Is(r.Err, approval.ErrDuplicateDecider):
+		part2 = nextStepAnswerNotRecordedDuplicateDecider
+	default:
+		part2 = nextStepAnswerNotRecordedAlreadyDecided
+	}
+
+	out.NextStep = part1 + " " + part2
+	return out
+}
+
+// isKnownApprovalRefusal reports whether err is one of package approval's
+// eligibility sentinels or capability.ErrApprovalUnavailable — the refusals
+// renderApprovalError already has a specific, actionable message for.
+// Listed explicitly, in the style of capability.isApprovalDomainError, so a
+// new sentinel has to be classified deliberately rather than inheriting a
+// message by accident.
+func isKnownApprovalRefusal(err error) bool {
+	for _, sentinel := range []error{
+		approval.ErrNotFound,
+		approval.ErrWeakChannel,
+		approval.ErrRequesterExcluded,
+		approval.ErrMachineSelfDecision,
+		approval.ErrNotInAudience,
+		approval.ErrDuplicateDecider,
+		approval.ErrPlanChanged,
+		approval.ErrNotPending,
+		capability.ErrApprovalUnavailable,
+	} {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+	return false
+}
+
+// answerRefusalNextStepUnchanged is refusalOutput's NextStep for a refusal
+// made before the decider was ever reached (r.OnBehalfOf == ""): the request,
+// if one exists, is unchanged by this call.
+const answerRefusalNextStepUnchanged = "this call left the request (if any) unchanged. " +
+	"It can still be answered with approve_request or on the Control API endpoint."
+
+// answerRefusalNextStepDeclineNotRecorded is refusalOutput's NextStep when a
+// decline was refused with ErrNotPending or ErrDuplicateDecider because the
+// request already stands approved with no Job bound: the caller must never
+// read this as if the decline had won.
+const answerRefusalNextStepDeclineNotRecorded = "the decline was not recorded: the request stands approved. This call dispatched nothing."
+
+// answerRefusalNextStepDeclineRecordedButNotHonoured is refusalOutput's
+// NextStep for errDeclineNotHonoured — deliberately its own text rather than
+// answerRefusalNextStepDeclineNotRecorded's, because that text would
+// contradict errDeclineNotHonoured's own Reason (which says the decline WAS
+// recorded, just not honoured as an approval of this call) (security review
+// #727 finding 2 / code review suggestion 1).
+const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was recorded, but the request still reports approved and is not treated " +
+	"as an approval of this call. This call dispatched nothing."
+
+// answerRefusalNextStepMayAlreadyReflectAnswer is refusalOutput's NextStep
+// for the default arm below: the decider WAS reached (r.OnBehalfOf != "") and
+// something non-domain failed afterwards, so — unlike
+// answerRefusalNextStepUnchanged — this must never say the request is
+// unchanged or safe to answer again outright; the decision may already be
+// durable (security review #727 finding 1).
+const answerRefusalNextStepMayAlreadyReflectAnswer = "the request may already reflect this answer. Confirm its state with the Control " +
+	"API's approval read before answering again or re-issuing the call."
+
+// answerStateRefusedOutput builds the AnswerRefusalOutput for a call whose
+// arguments could not even be digested (tools_execution.go's callArgsDigest
+// failing before acceptElicitedAnswer is ever called) — the one refusal
+// shape tools_execution.go needs without writing refusal text of its own.
+// RequestID stays empty: the requestState was never opened, so which request
+// this call named is not known.
+func answerStateRefusedOutput() *AnswerRefusalOutput {
+	return &AnswerRefusalOutput{
+		Reason:   errAnswerStateRefused.Error(),
+		NextStep: answerRefusalNextStepUnchanged,
+	}
+}
+
+// refusalOutput renders r as the refusal block an answered retry carries
+// when Outcome == elicitedRefused. It exposes only RequestID, State, JobID
+// and ExpiresAt (#735 review; issue #727 comment 1) — never the raw
+// Decisions elicitedAnswerResult itself cannot even carry.
+func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
+	out := &AnswerRefusalOutput{RequestID: r.RequestID}
+	if r.stateReported {
+		out.State = r.State.String()
+		out.JobID = r.JobID
+		if !r.ExpiresAt.IsZero() {
+			out.ExpiresAt = r.ExpiresAt.UTC().Format(time.RFC3339)
+		}
+	}
+
+	out.NextStep = answerRefusalNextStepUnchanged
+	switch {
+	case errors.Is(r.Err, approval.ErrMachineSelfDecision):
+		// AP-64: byte-for-byte the same message approve_request gives a
+		// caller who names no approver, never renderApprovalError's "pass
+		// their identity in `approver`" wording, which an MRTR client has no
+		// argument to act on. This arm must come before the
+		// isKnownApprovalRefusal arm below, which would otherwise also match
+		// ErrMachineSelfDecision with renderApprovalError's text instead.
+		out.Reason = errNoNamedApprover.Error()
+	case errors.Is(r.Err, errAnswerStateRefused), errors.Is(r.Err, errAnswerShape):
+		// Both messages already point at approve_request and the Control API.
+		out.Reason = r.Err.Error()
+	case errors.Is(r.Err, audit.ErrAssertedFieldTooLong), errors.Is(r.Err, audit.ErrAssertedFieldInvalid):
+		// assertedApprover's malformed-responder refusal: never truncated,
+		// never trimmed-then-accepted (see assertedApprover's own doc).
+		out.Reason = r.Err.Error()
+	case errors.Is(r.Err, errDeclineNotHonoured):
+		// The Reason says the decline WAS recorded, just not honoured as an
+		// approval of this call, so this gets its own NextStep rather than
+		// answerRefusalNextStepDeclineNotRecorded's "was not recorded" text,
+		// which would contradict it (security review #727 finding 2 / code
+		// review suggestion 1).
+		out.Reason = r.Err.Error()
+		out.NextStep = answerRefusalNextStepDeclineRecordedButNotHonoured
+	case errors.Is(r.Err, errUnknownRequestState):
+		// classifyElicitedDecision's own fail-closed backstop; says the
+		// decision was recorded.
+		out.Reason = r.Err.Error()
+	case isKnownApprovalRefusal(r.Err):
+		out.Reason = renderApprovalError(r.Err).Error()
+		// The decline-not-recorded text applies only to the two sentinels
+		// that mean this request had already moved before this answer
+		// arrived (ErrNotPending, ErrDuplicateDecider), and only when it
+		// landed on a request that stands approved with no Job bound — any
+		// other known refusal keeps the generic "unchanged" text (security
+		// review #727 finding 2).
+		if (errors.Is(r.Err, approval.ErrNotPending) || errors.Is(r.Err, approval.ErrDuplicateDecider)) &&
+			r.stateReported && r.State == approval.StateApproved && r.JobID == "" {
+			out.NextStep = answerRefusalNextStepDeclineNotRecorded
+		}
+	case r.OnBehalfOf == "":
+		// The decider was never reached (see elicitedAnswerResult's doc on
+		// OnBehalfOf) — nothing could have been recorded, whatever the error.
+		out.Reason = fmt.Sprintf("this answer was not recorded: %v. The request, if any, can still be answered "+
+			"with approve_request or on the Control API.", r.Err)
+	default:
+		// A non-domain failure reaching us AFTER the decider was called: the
+		// decision may already be durable (e.g. an audit write that failed
+		// afterwards — capability.DecideApproval's own doc). This must never
+		// claim the answer was ignored (issue #727 comment 2, point 2), and
+		// the NextStep must not say the request is unchanged either
+		// (security review #727 finding 1).
+		//
+		// One case in this arm never actually recorded anything: an
+		// ApprovalAuthorizer refusal (capability.DecideApproval's
+		// AuthorizeApprovalDecision step, e.g. authz.RoleGate) fires before
+		// any decision is attempted. This file has no capability-level
+		// sentinel to distinguish that from a post-recording failure without
+		// coupling to a specific ApprovalAuthorizer implementation, so the
+		// text stays the safe over-approximation: telling a caller who was
+		// never recorded to confirm the request's state is redundant, never
+		// wrong — unlike the reverse (code review #727 finding 2).
+		out.Reason = fmt.Sprintf("the answer may have been recorded, but recording or auditing it failed: %v. "+
+			"Confirm the request's state with approve_request or the Control API's approval read before acting.", r.Err)
+		out.NextStep = answerRefusalNextStepMayAlreadyReflectAnswer
+	}
+
+	return out
+}
+
+// dispatchError wraps an error dispatch() returned AFTER this answer was
+// already taken (BLOCKING 2, plan review cycle 1). It is deliberately
+// neutral about whether anything ran: Service.Run can return per-Node
+// results together with an error (a failed dispatch audit write, or a
+// failed BindJob), and dispatch() also returns an error when renderJob fails
+// AFTER a successful Run — in both cases a Job may already exist, so the
+// text must never say nothing ran, nothing was dispatched, or that the
+// dispatch "was refused" as a fact.
+func (r elicitedAnswerResult) dispatchError(err error) error {
+	recorded := "no"
+	if r.Err == nil {
+		recorded = "yes"
+	}
+	return fmt.Errorf("the answer to approval request %s left it %s (answer recorded: %s). The call was then "+
+		"re-entered once, and that dispatch returned an error. It may have been refused before anything ran, "+
+		"or it may have run and then failed to record or read back its results. Do not assume either: check "+
+		"get_job and the audit trail before re-issuing the call: %w", r.RequestID, r.State.String(), recorded, err)
+}
+
+// reattachError wraps an error reading back the Job-bound branch's already-
+// released Job — either the read-audit write itself (BLOCKING 1, ADR-0025:
+// an unauditable read must fail closed rather than silently happen) or the
+// Job read-back that follows it. Either way the approval decision already
+// stands and nothing new was dispatched; this is an infrastructure read
+// failure, not a row of the decision table, so it must never say the Job
+// did not run.
+func (r elicitedAnswerResult) reattachError(err error) error {
+	return fmt.Errorf("approval request %s already released Job %s: the decision stands and nothing new was "+
+		"dispatched, but reading it back failed: %w; retry with get_job", r.RequestID, r.JobID, err)
+}

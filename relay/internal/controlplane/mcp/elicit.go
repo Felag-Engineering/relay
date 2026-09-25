@@ -59,9 +59,11 @@ const (
 // askable park (S2b, ADR-0029 decision 6; ADR-0028 amendment 2026-09-24).
 //
 // Off by default, and effective only together with WithApprovalDecider: Relay
-// never asks a question it cannot accept an answer to (the answer leg is a
-// separate step, not yet built). Dark until #646's composition-root step
-// passes it — cmd/relay/control_surfaces.go must not pass it before then, or
+// never asks a question it cannot accept an answer to. The answer leg is
+// built (#727: tools_execution.go's answered retry, ADR-0029 decision 6) but
+// still dark, because the composition root does not pass this option. Dark
+// until #646's composition-root step passes it — cmd/relay/control_surfaces.go
+// must not pass it before then, or
 // a human answering in-band would only send the dispatch back into an
 // unanswered re-park, over and over, until the client's own retry cap gives
 // up (eight dead prompts to a person).
@@ -128,7 +130,9 @@ func (q *questioner) opener() stateOpener {
 // clientCanBeAsked implements the emission predicate's conditions 2 (the
 // SDK's own MRTR judgment) and 3 (the per-request `_meta` agrees) — conditions
 // 1 (a questioner is wired) and 4 (the park is Askable) are the caller's,
-// question below.
+// question below. It also gates the answered retry (#727's isAnsweredRetry,
+// tools_execution.go): a client that cannot be asked never has its retry
+// fields — requestState, inputResponses — read at all.
 //
 // A nil req or a nil req.Session/req.Params fails closed.
 func clientCanBeAsked(req *sdkmcp.CallToolRequest) bool {

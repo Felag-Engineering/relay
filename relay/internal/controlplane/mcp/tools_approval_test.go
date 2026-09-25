@@ -30,8 +30,9 @@ import (
 // is: real fixtures, a real requeststate.Sealer, and a decider double that
 // records exactly what it was handed.
 //
-// Nothing here wires acceptElicitedAnswer into a tool handler — that is
-// S4a-2 (#725's follow-on). Every test calls it directly.
+// Nothing here wires acceptElicitedAnswer into a tool handler — every test
+// calls it directly. See tools_execution_retry_test.go for that wiring
+// (#727, S4a-2): run_operation and raw_exec's answered-retry path.
 
 // -----------------------------------------------------------------------
 // Fixtures shared by every test below
@@ -1275,6 +1276,13 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			if tc.wantOutcome == elicitedRefused && result.Progress != "" {
 				t.Errorf("Progress = %q, want empty on a refusal", result.Progress)
 			}
+			// stateReported must agree with checkState exactly: it is the flag
+			// a caller's refusalOutput uses to decide whether State/JobID/
+			// ExpiresAt are safe to copy (issue #727 comment 2, point 2 and
+			// plan review's decisionOutput/refusalOutput split).
+			if result.stateReported != tc.checkState {
+				t.Errorf("stateReported = %v, want %v", result.stateReported, tc.checkState)
+			}
 			if tc.checkState {
 				if result.State != tc.resp.State || result.JobID != tc.resp.JobID || !result.ExpiresAt.Equal(tc.resp.ExpiresAt) {
 					t.Errorf("State/JobID/ExpiresAt = %v/%q/%v, want %v/%q/%v",
@@ -1375,6 +1383,231 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 		if result.State != leaky.State || result.JobID != leaky.JobID || !result.ExpiresAt.Equal(leaky.ExpiresAt) {
 			t.Errorf("State/JobID/ExpiresAt = %v/%q/%v, want %v/%q/%v",
 				result.State, result.JobID, result.ExpiresAt, leaky.State, leaky.JobID, leaky.ExpiresAt)
+		}
+	})
+}
+
+// -----------------------------------------------------------------------
+// #727: decisionOutput's NextStep is chosen from Outcome AND what dispatch
+// actually returned, never Outcome alone; refusalOutput's Reason is chosen
+// by r.Err, in the fixed arm order AP-64 requires.
+// -----------------------------------------------------------------------
+
+func TestDecisionOutput_ChoosesNextStepFromOutcomeAndDispatchResult(t *testing.T) {
+	future := fixedNow.Add(time.Hour)
+
+	cases := []struct {
+		name           string
+		result         elicitedAnswerResult
+		after          RunOrPlanOutput
+		wantChannel    string
+		wantOnBehalfOf string
+		wantNextStep   string
+	}{
+		{
+			name:           "approved, recorded, dispatch ran and minted a Job",
+			result:         elicitedAnswerResult{Outcome: elicitedApproved, State: approval.StateApproved, OnBehalfOf: "alice"},
+			after:          RunOrPlanOutput{JobID: "job-1"},
+			wantChannel:    approval.ChannelInBand.String(),
+			wantOnBehalfOf: "alice",
+			wantNextStep:   nextStepRanThePipeline + " " + nextStepAnswerRecorded,
+		},
+		{
+			name:         "approved but ErrNotPending (already decided by someone else), dispatch still ran",
+			result:       elicitedAnswerResult{Outcome: elicitedApproved, State: approval.StateApproved, Err: approval.ErrNotPending},
+			after:        RunOrPlanOutput{JobID: "job-1"},
+			wantNextStep: nextStepRanThePipeline + " " + nextStepAnswerNotRecordedAlreadyDecided,
+		},
+		{
+			name:         "still pending, ErrDuplicateDecider, dispatch re-parked (observed, non-askable)",
+			result:       elicitedAnswerResult{Outcome: elicitedStillPending, State: approval.StatePending, Err: approval.ErrDuplicateDecider},
+			after:        RunOrPlanOutput{PendingApproval: &PendingApprovalOutput{}},
+			wantNextStep: nextStepReParkedOnApproval + " " + nextStepAnswerNotRecordedDuplicateDecider,
+		},
+		{
+			name:           "Job-bound re-attach, recorded",
+			result:         elicitedAnswerResult{Outcome: elicitedApprovedJobBound, State: approval.StateApproved, JobID: "job-1", OnBehalfOf: "alice"},
+			after:          RunOrPlanOutput{JobID: "job-1"},
+			wantChannel:    approval.ChannelInBand.String(),
+			wantOnBehalfOf: "alice",
+			wantNextStep:   nextStepReattachedExistingJob + " " + nextStepAnswerRecorded,
+		},
+		{
+			name:         "Job-bound re-attach, NOT recorded (this decline lost the race to an existing approval)",
+			result:       elicitedAnswerResult{Outcome: elicitedApprovedJobBound, State: approval.StateApproved, JobID: "job-1", Err: approval.ErrNotPending},
+			after:        RunOrPlanOutput{JobID: "job-1"},
+			wantNextStep: nextStepReattachedExistingJob + " " + nextStepAnswerNotRecordedAlreadyDecided,
+		},
+		{
+			name:           "denied, terminal",
+			result:         elicitedAnswerResult{Outcome: elicitedDenied, State: approval.StateDenied, OnBehalfOf: "bob"},
+			after:          RunOrPlanOutput{},
+			wantChannel:    approval.ChannelInBand.String(),
+			wantOnBehalfOf: "bob",
+			wantNextStep:   nextStepDenialIsTerminal + " " + nextStepAnswerRecorded,
+		},
+		{
+			name:           "lapsed, recorded, nothing dispatched",
+			result:         elicitedAnswerResult{Outcome: elicitedLapsed, State: approval.StateExpired, ExpiresAt: future, OnBehalfOf: "alice"},
+			after:          RunOrPlanOutput{},
+			wantChannel:    approval.ChannelInBand.String(),
+			wantOnBehalfOf: "alice",
+			wantNextStep:   nextStepNothingWasDispatched + " " + nextStepAnswerRecorded,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := tc.result.decisionOutput(tc.after)
+			if out.Channel != tc.wantChannel {
+				t.Errorf("Channel = %q, want %q", out.Channel, tc.wantChannel)
+			}
+			if out.OnBehalfOf != tc.wantOnBehalfOf {
+				t.Errorf("OnBehalfOf = %q, want %q", out.OnBehalfOf, tc.wantOnBehalfOf)
+			}
+			if out.NextStep != tc.wantNextStep {
+				t.Errorf("NextStep = %q, want %q", out.NextStep, tc.wantNextStep)
+			}
+			if out.RequestID != tc.result.RequestID {
+				t.Errorf("RequestID = %q, want %q", out.RequestID, tc.result.RequestID)
+			}
+			if out.State != tc.result.State.String() {
+				t.Errorf("State = %q, want %q", out.State, tc.result.State.String())
+			}
+		})
+	}
+}
+
+func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
+	wantMachineText := machineSelfDecisionErrorText(t)
+
+	cases := []struct {
+		name         string
+		result       elicitedAnswerResult
+		wantReason   string
+		wantNextStep string
+	}{
+		{
+			name:         "arm 1: ErrMachineSelfDecision renders AP-64's text, never renderApprovalError's",
+			result:       elicitedAnswerResult{Err: approval.ErrMachineSelfDecision, OnBehalfOf: "someone"},
+			wantReason:   wantMachineText,
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 1 ordering: ErrMachineSelfDecision wins even though it is also in isKnownApprovalRefusal's list",
+			result:       elicitedAnswerResult{Err: fmt.Errorf("wrapped: %w", approval.ErrMachineSelfDecision), OnBehalfOf: "someone"},
+			wantReason:   wantMachineText,
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 2: errAnswerStateRefused",
+			result:       elicitedAnswerResult{Err: errAnswerStateRefused},
+			wantReason:   errAnswerStateRefused.Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 2: errAnswerShape",
+			result:       elicitedAnswerResult{Err: errAnswerShape},
+			wantReason:   errAnswerShape.Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 3: a malformed responder (too long) is never truncated silently",
+			result:       elicitedAnswerResult{Err: fmt.Errorf("bound: %w", audit.ErrAssertedFieldTooLong), OnBehalfOf: ""},
+			wantReason:   fmt.Errorf("bound: %w", audit.ErrAssertedFieldTooLong).Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 4: errDeclineNotHonoured gets its own non-contradictory NextStep",
+			result:       elicitedAnswerResult{Err: errDeclineNotHonoured, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved},
+			wantReason:   errDeclineNotHonoured.Error(),
+			wantNextStep: answerRefusalNextStepDeclineRecordedButNotHonoured,
+		},
+		{
+			name: "arm 5: ErrNotPending on a decline-after-approval renders the decline-not-recorded NextStep",
+			result: elicitedAnswerResult{
+				Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved, JobID: "",
+			},
+			wantReason:   renderApprovalError(approval.ErrNotPending).Error(),
+			wantNextStep: answerRefusalNextStepDeclineNotRecorded,
+		},
+		{
+			name: "arm 5: ErrNotPending on any other state keeps the generic unchanged NextStep",
+			result: elicitedAnswerResult{
+				Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied,
+			},
+			wantReason:   renderApprovalError(approval.ErrNotPending).Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 5: a known domain refusal renders renderApprovalError's text",
+			result:       elicitedAnswerResult{Err: approval.ErrRequesterExcluded, OnBehalfOf: "alice"},
+			wantReason:   renderApprovalError(approval.ErrRequesterExcluded).Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "arm 5: capability.ErrApprovalUnavailable (decider never wired) still renders via renderApprovalError",
+			result:       elicitedAnswerResult{Err: capability.ErrApprovalUnavailable},
+			wantReason:   renderApprovalError(capability.ErrApprovalUnavailable).Error(),
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "the OnBehalfOf-empty catch-all: the decider was never reached, so nothing to say was recorded",
+			result:       elicitedAnswerResult{Err: errors.New("some new sentinel"), OnBehalfOf: ""},
+			wantNextStep: answerRefusalNextStepUnchanged,
+		},
+		{
+			name:         "the default catch-all: a non-domain failure AFTER the decider ran must never claim the request is unchanged",
+			result:       elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice"},
+			wantNextStep: answerRefusalNextStepMayAlreadyReflectAnswer,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := tc.result.refusalOutput()
+			if tc.wantReason != "" && out.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", out.Reason, tc.wantReason)
+			}
+			if out.NextStep != tc.wantNextStep {
+				t.Errorf("NextStep = %q, want %q", out.NextStep, tc.wantNextStep)
+			}
+		})
+	}
+
+	t.Run("the OnBehalfOf-empty catch-all never claims the answer was recorded", func(t *testing.T) {
+		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: ""}.refusalOutput()
+		if strings.Contains(out.Reason, "may have been recorded") {
+			t.Errorf("Reason = %q, must not say the answer may have been recorded when the decider was never reached", out.Reason)
+		}
+	})
+
+	t.Run("the default catch-all never claims nothing was recorded, or that the request is unchanged", func(t *testing.T) {
+		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice"}.refusalOutput()
+		if !strings.Contains(out.Reason, "may have been recorded") {
+			t.Errorf("Reason = %q, must say the answer may have been recorded", out.Reason)
+		}
+		if out.NextStep != answerRefusalNextStepMayAlreadyReflectAnswer {
+			t.Errorf("NextStep = %q, want %q", out.NextStep, answerRefusalNextStepMayAlreadyReflectAnswer)
+		}
+		if strings.Contains(out.NextStep, "unchanged") {
+			t.Errorf("NextStep = %q, must not claim the request is unchanged: the decider ran and the audit write may still have landed "+
+				"(security review #727 finding 1)", out.NextStep)
+		}
+	})
+
+	t.Run("refusalOutput copies State/JobID/ExpiresAt only when stateReported", func(t *testing.T) {
+		unreported := elicitedAnswerResult{Err: errAnswerStateRefused, State: approval.StateApproved, JobID: "job-leak", stateReported: false}.refusalOutput()
+		if unreported.State != "" || unreported.JobID != "" || unreported.ExpiresAt != "" {
+			t.Errorf("refusalOutput copied State/JobID/ExpiresAt with stateReported false: %+v", unreported)
+		}
+
+		expiresAt := fixedNow.Add(time.Hour)
+		reported := elicitedAnswerResult{
+			Err: errDeclineNotHonoured, State: approval.StateApproved, JobID: "job-1", ExpiresAt: expiresAt, stateReported: true,
+		}.refusalOutput()
+		if reported.State != approval.StateApproved.String() || reported.JobID != "job-1" || reported.ExpiresAt != expiresAt.UTC().Format(time.RFC3339) {
+			t.Errorf("refusalOutput = %+v, want State/JobID/ExpiresAt copied verbatim", reported)
 		}
 	})
 }

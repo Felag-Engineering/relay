@@ -355,6 +355,51 @@ type RunOrPlanOutput struct {
 	// (ADR-0027) instead of running. When it is present, job_id is absent and
 	// results is empty — nothing was dispatched and no Job exists.
 	PendingApproval *PendingApprovalOutput `json:"pending_approval,omitempty"`
+
+	// Decision is present only on an answered retry (#727: an MRTR
+	// elicitation answer to a parked approval, ADR-0029 decision 6): what was
+	// decided, alongside whatever ran. Absent on every ordinary call — a
+	// question result cannot carry it either, because the SDK forbids
+	// structured content alongside InputRequests (see answerThenDispatch,
+	// tools_execution.go).
+	Decision *ApprovalDecisionOutput `json:"decision,omitempty"`
+
+	// AnswerRefused is present only when an answered retry's answer was
+	// refused. Nothing was dispatched. Whether the request, if it exists, is
+	// unchanged by this call depends on WHEN the refusal happened: NextStep
+	// says so precisely (tools_approval.go's refusalOutput) — a refusal
+	// raised before the decider was ever reached leaves the request
+	// unchanged and answerable again, but a non-domain failure reaching this
+	// call AFTER the decider ran (for example an audit write failing once
+	// the decision was already durable) may mean the request already
+	// reflects this very answer, and NextStep tells the caller to confirm
+	// its state rather than assuming either way (security review #727
+	// finding 1).
+	AnswerRefused *AnswerRefusalOutput `json:"answer_refused,omitempty"`
+}
+
+// AnswerRefusalOutput is what an answered retry (#727) renders when its
+// answer was refused before or instead of reaching a decision: a tampered or
+// unbound requestState, a malformed responder assertion, a machine
+// self-decision, or a request the domain refuses for a reason
+// renderApprovalError already has a message for. See the NextStep field:
+// what to do about the refusal depends on whether the decider was ever
+// reached, and its text says so rather than always claiming the request is
+// unchanged.
+//
+// It holds only the state, the Job ID and the deadline from a refused
+// decision, never the Decisions (#735 review; issue #727 comment 1): a
+// refused decision's Request may carry OTHER approvers' identities and
+// reasons, and this type is deliberately too narrow to reach any of that —
+// see elicitedAnswerResult (tools_approval.go), which is what it is built
+// from.
+type AnswerRefusalOutput struct {
+	RequestID string `json:"request_id,omitempty" jsonschema:"The request this answer aimed at, from the verified seal. Empty when the requestState never opened at all."`
+	Reason    string `json:"reason" jsonschema:"Why the answer was refused, and what to do about it."`
+	State     string `json:"state,omitempty" jsonschema:"The request's state at the moment this answer was refused, when known."`
+	JobID     string `json:"job_id,omitempty" jsonschema:"Set only when the request had already released a Job before this answer arrived."`
+	ExpiresAt string `json:"expires_at,omitempty" jsonschema:"When the request lapses (RFC 3339), when known."`
+	NextStep  string `json:"next_step" jsonschema:"What to do next."`
 }
 
 // PendingApprovalOutput is the Relay-authored description of a dispatch that
