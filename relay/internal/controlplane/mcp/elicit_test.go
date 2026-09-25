@@ -3,12 +3,14 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -613,4 +615,167 @@ func scanElicitKeySurface(t *testing.T) []string {
 	}, fset)
 
 	return findings
+}
+
+// -----------------------------------------------------------------------
+// Key custody, closing the gap #737's conflict resolution named (issue #727
+// comment 3): acceptElicitedAnswer no longer takes the Sealer, only a
+// stateOpener built by questioner.opener() in elicit.go, and it must stay
+// that way. TestElicit_SealKeyIsPerProcessAndNotConfiguration's
+// scanElicitKeySurface only checks TOP-LEVEL FUNCTION PARAMETERS, so it would
+// not catch a direct read of questioner.sealer, or a Seal/Open/OpenFor call,
+// from any file but elicit.go.
+// -----------------------------------------------------------------------
+
+// TestElicit_SealerIsReachedOnlyInElicitGo asserts scanElicitCustody finds
+// nothing in package mcp's real, shipped source.
+func TestElicit_SealerIsReachedOnlyInElicitGo(t *testing.T) {
+	for _, finding := range scanElicitCustody(t, mcpPackageDir(t)) {
+		t.Error(finding)
+	}
+}
+
+// scanElicitCustody returns one file:line finding per way dir's non-test Go
+// files, other than elicit.go, could reach the requeststate seal key outside
+// elicit.go's own newQuestioner/opener:
+//
+//   - a selector named exactly "sealer" (questioner's own field);
+//   - a selector on the requeststate import — resolved by its PATH, so an
+//     alias cannot evade the check — naming Mint, New, NewKey or Sealer;
+//   - a call to Seal, Open or OpenFor (Sealer's method names), UNLESS its
+//     receiver is an *ast.Ident naming one of the file's own imports (by the
+//     import's explicit name, or the last element of its path when unnamed):
+//     a package-qualified call such as os.Open or sql.Open is not a sealer,
+//     but a method call on a value (x.Open) still is;
+//   - a composite literal field keyed "sealer".
+func scanElicitCustody(t *testing.T, dir string) []string {
+	t.Helper()
+	var findings []string
+	fset := token.NewFileSet()
+
+	forEachNonTestGoFile(t, dir, func(name string, file *ast.File) {
+		if name == "elicit.go" {
+			return
+		}
+
+		// The file's own imports, by local name (the explicit alias, or the
+		// last element of the path when unnamed) -> full import path. Used
+		// both to resolve the requeststate import by path (form b) and to
+		// recognise a package-qualified call (form c's exclusion).
+		imports := map[string]string{}
+		for _, imp := range file.Imports {
+			p, err := strconv.Unquote(imp.Path.Value)
+			if err != nil {
+				continue
+			}
+			localName := path.Base(p)
+			if imp.Name != nil {
+				localName = imp.Name.Name
+			}
+			imports[localName] = p
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.SelectorExpr:
+				if node.Sel.Name == "sealer" {
+					findings = append(findings, fmt.Sprintf("%s:%d: references a selector named \"sealer\" outside elicit.go",
+						name, fset.Position(node.Pos()).Line))
+					return true
+				}
+				if ident, ok := node.X.(*ast.Ident); ok && imports[ident.Name] == requeststateImportPath {
+					switch node.Sel.Name {
+					case "Mint", "New", "NewKey", "Sealer":
+						findings = append(findings, fmt.Sprintf("%s:%d: references requeststate.%s outside elicit.go",
+							name, fset.Position(node.Pos()).Line, node.Sel.Name))
+					}
+					return true
+				}
+				switch node.Sel.Name {
+				case "Seal", "Open", "OpenFor":
+					if ident, ok := node.X.(*ast.Ident); ok {
+						if _, isImport := imports[ident.Name]; isImport {
+							// Package-qualified, e.g. os.Open or sql.Open — not a
+							// sealer method call.
+							return true
+						}
+					}
+					findings = append(findings, fmt.Sprintf("%s:%d: calls .%s outside elicit.go",
+						name, fset.Position(node.Pos()).Line, node.Sel.Name))
+				}
+			case *ast.KeyValueExpr:
+				if ident, ok := node.Key.(*ast.Ident); ok && ident.Name == "sealer" {
+					findings = append(findings, fmt.Sprintf("%s:%d: constructs a composite literal with a \"sealer:\" key outside elicit.go",
+						name, fset.Position(node.Pos()).Line))
+				}
+			}
+			return true
+		})
+	}, fset)
+
+	return findings
+}
+
+// TestElicitCustodyGuardActuallyFires plants each forbidden form in a
+// throwaway package and asserts scanElicitCustody catches it, following
+// no_decision_test.go's TestNoDecisionGuardActuallyFires.
+func TestElicitCustodyGuardActuallyFires(t *testing.T) {
+	cases := map[string]string{
+		"a bare sealer field access": `package planted
+type questioner struct{ sealer *int }
+func f(q *questioner) any { return q.sealer }`,
+
+		"requeststate.Mint through an aliased import": fmt.Sprintf(`package planted
+import rs %q
+func f() { rs.Mint() }`, requeststateImportPath),
+
+		"a value-receiver OpenFor call": `package planted
+type opener struct{}
+func (opener) OpenFor(s string) {}
+func f(o opener) { o.OpenFor("x") }`,
+
+		"a sealer key in a composite literal": `package planted
+type questioner struct{ sealer *int }
+func f() questioner { return questioner{sealer: nil} }`,
+	}
+
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "planted.go"), []byte(src), 0o600); err != nil {
+				t.Fatalf("write planted source: %v", err)
+			}
+			if findings := scanElicitCustody(t, dir); len(findings) == 0 {
+				t.Errorf("the guard did not catch a planted custody violation:\n%s", src)
+			}
+		})
+	}
+}
+
+// TestElicitCustodyGuardDoesNotFireOnPackageQualifiedOpen proves form c's
+// exclusion is real rather than assumed: os.Open, and the identical call
+// through an aliased import of package os, must not be mistaken for a
+// sealer method call.
+func TestElicitCustodyGuardDoesNotFireOnPackageQualifiedOpen(t *testing.T) {
+	cases := map[string]string{
+		"unaliased import": `package planted
+import "os"
+func f() { os.Open("/tmp/x") } //nolint:errcheck`,
+
+		"aliased import": `package planted
+import osalias "os"
+func f() { osalias.Open("/tmp/x") } //nolint:errcheck`,
+	}
+
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "planted.go"), []byte(src), 0o600); err != nil {
+				t.Fatalf("write planted source: %v", err)
+			}
+			if findings := scanElicitCustody(t, dir); len(findings) != 0 {
+				t.Errorf("the guard flagged a package-qualified os.Open call: %v", findings)
+			}
+		})
+	}
 }

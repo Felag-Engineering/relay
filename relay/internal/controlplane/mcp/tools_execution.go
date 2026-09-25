@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -34,6 +35,18 @@ import (
 // isolated to #154 (owner DECISION 1). All acceptance for #118 is proven
 // in-package against a test-wired execution capability (mcp_test.go/
 // mcp_exec_test.go).
+//
+// #727 (ADR-0029 decision 6): run_operation and raw_exec are the answered
+// retry's only callers. This file reaches exactly ONE decision-side function
+// in tools_approval.go, the one file ADR-0029 decision 5 exempts —
+// acceptElicitedAnswer — and renders whatever it returns through that same
+// file's methods (decisionOutput, refusalOutput, dispatchError,
+// reattachError, answerStateRefusedOutput); it never names DecideApproval,
+// ApprovalDecision, Channel* or RecordDecision. The Job-bound branch
+// (elicitedApprovedJobBound) is an AUDITED read (ADR-0025), exactly like
+// get_job's own read-back: a bound Job's captured output may belong to
+// another Account's dispatch, so it is read only after auditRead succeeds,
+// and fails closed otherwise.
 
 // Executor is the narrow capability-layer entry point the execution tools
 // dispatch through — Service.Run and Service.CancelJob's exact shape,
@@ -549,6 +562,123 @@ const (
 	toolRawExec      = "raw_exec"
 )
 
+// isAnsweredRetry reports whether req is a retried tool call carrying an
+// answer to a parked approval (#727) — the one condition under which
+// run_operation/raw_exec call answerThenDispatch instead of dispatching
+// directly. True only when ALL of:
+//
+//   - ask is non-nil (nil exactly when the option is off, mcp.go:280 — a
+//     server that never asks a question also never accepts an answer);
+//   - clientCanBeAsked(req) is true (elicit.go): a client that could never
+//     have been asked could never have received a question, so any
+//     requestState/inputResponses it sends are stray, and the call is
+//     treated exactly as today's call (AP-70, read literally) — its fields
+//     are ignored rather than fed to the decision path;
+//   - the call actually carries a requestState, or at least one answered
+//     input request.
+//
+// This only NARROWS which calls are treated as an answered retry (invariant
+// 10): it can never turn an ordinary call into one, only the reverse.
+func isAnsweredRetry(ask *questioner, req *sdkmcp.CallToolRequest) bool {
+	if ask == nil || !clientCanBeAsked(req) {
+		return false
+	}
+	return req.Params.RequestState != "" || len(req.Params.InputResponses) > 0
+}
+
+// answerThenDispatch is the ONE function run_operation and raw_exec both call
+// for an answered retry (#727), so the branch cannot drift between them: it
+// decides the answer FIRST, then re-enters the whole dispatch pipeline at
+// most once. See the issue's decision table for the outcome-by-outcome
+// contract; every branch here returns a tool RESULT carrying a decision or a
+// refusal block, never a tool error, EXCEPT a dispatch error after the
+// answer was taken (an ordinary dispatch failure, the accepted judgement
+// call) and the Job-bound branch's unauditable-read failure.
+//
+// tool is the calling tool's registered name (toolRunOperation/toolRawExec)
+// and in is its own typed input value — the SAME value passed to
+// dispatch/ask.question, so the digest acceptElicitedAnswer checks can never
+// drift from what emission sealed (issue #727 comment 2, point 1: there is
+// no second digest function).
+//
+// From the decision side this names ONLY acceptElicitedAnswer, its result
+// type, the elicitedOutcome constants, answerStateRefusedOutput and the
+// result's own rendering methods (decisionOutput, refusalOutput,
+// dispatchError, reattachError) — never DecideApproval, ApprovalDecision,
+// Channel* or RecordDecision (ADR-0029 decision 5; no_decision_test.go).
+func answerThenDispatch(
+	ctx context.Context, req *sdkmcp.CallToolRequest, p capability.Principal,
+	exec Executor, results JobResultReader, reads ReadAuditor, decider ApprovalDecider,
+	ask *questioner, now func() time.Time, tool string, in any, sel capability.Selector, act jobs.Action,
+) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
+	digest, err := callArgsDigest(in)
+	if err != nil {
+		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, AnswerRefused: answerStateRefusedOutput()}, nil
+	}
+
+	r := acceptElicitedAnswer(ctx, decider, ask.opener(), now(), p, elicitedAnswer{
+		RequestState:   req.Params.RequestState,
+		InputResponses: req.Params.InputResponses,
+		CallMeta:       req.Params.GetMeta(),
+		Tool:           tool,
+		ArgsDigest:     digest,
+	})
+	slog.Debug("mcp: answered retry", "tool", tool, "request_id", r.RequestID, "outcome", r.Outcome)
+
+	switch r.Outcome {
+	case elicitedApproved, elicitedLapsed, elicitedStillPending:
+		// #713 (deferred by the owner, out of scope here): approval.Request's
+		// Satisfied check does not pin JobID == "", so two approving retries
+		// racing each other between this decision and BindJob below — or a
+		// plain re-drive carrying no request state at all — can still mint
+		// two Jobs for the same Request. This PR does not close that window.
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
+		if err != nil {
+			return nil, RunOrPlanOutput{}, r.dispatchError(err)
+		}
+		if parked != nil {
+			// Whether a question replaces pending_approval is the capability
+			// layer's created/observed askability call (AP-62), not this
+			// function's: a partial quorum's park is OBSERVED and renders
+			// pending_approval, while a fleet change or a lapse creates a
+			// fresh, askable park. A question result cannot carry the
+			// decision block either way — the SDK forbids structured content
+			// alongside InputRequests — but the decision it answers is still
+			// audited and readable on the Control API.
+			if q, ok := ask.question(req, p, parked, tool, in); ok {
+				return q, RunOrPlanOutput{}, nil
+			}
+		}
+		out.Decision = r.decisionOutput(out)
+		// If the caller advertises Tasks and this result is a
+		// pending_approval, taskshim.go's confident rewrite replaces it with
+		// a task result and the decision block above does not survive that
+		// rewrite (plan review, ADOPTED as a comment). The decision stays
+		// audited and readable on the Control API either way.
+		return nil, out, nil
+
+	case elicitedApprovedJobBound:
+		if err := auditRead(ctx, reads, tool, ReadEvent{JobID: r.JobID}); err != nil {
+			return nil, RunOrPlanOutput{}, r.reattachError(err)
+		}
+		job, err := renderJob(ctx, results, r.JobID)
+		if err != nil {
+			return nil, RunOrPlanOutput{}, r.reattachError(err)
+		}
+		out := RunOrPlanOutput{JobID: job.JobID, Results: job.Results}
+		out.Decision = r.decisionOutput(out)
+		return nil, out, nil
+
+	case elicitedDenied:
+		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Decision: r.decisionOutput(RunOrPlanOutput{})}, nil
+
+	default:
+		// elicitedRefused, and (fail closed) any Outcome this switch does not
+		// recognise.
+		return nil, RunOrPlanOutput{Results: []PerNodeResult{}, AnswerRefused: r.refusalOutput()}, nil
+	}
+}
+
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build
 // the Action -> requirePrincipal -> branch on plan -> render. Neither
@@ -565,7 +695,15 @@ const (
 //
 // ask (elicit.go, S2b) is nil-receiver safe: a nil *questioner never asks, so
 // a park always renders pending_approval exactly as before it existed.
-func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner) {
+// isAnsweredRetry gates the same nil-receiver-safe path (#727): an answered
+// retry can only exist where a question could have been asked in the first
+// place.
+//
+// reads is used only by the Job-bound re-attach branch (auditRead, ADR-0025:
+// the re-attached Job's captured output may belong to another Account's
+// dispatch, exactly get_job's case); decider and now are acceptElicitedAnswer's
+// own parameters, threaded straight through from mcp.New's cfg.
+func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner, reads ReadAuditor, decider ApprovalDecider, now func() time.Time) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
 		Name: "run_operation", // keep in sync with toolRunOperation (PF-1, see the const doc above)
 		Description: "The default way to act on Nodes. Run a structured Operation (ADR-0001's typed, " +
@@ -604,6 +742,16 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			// JobID stays absent (a Plan creates no Job) and Results stays an
 			// empty array, never null — #207/#253, see RunOrPlanOutput.
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
+		}
+
+		// An answered retry (#727) decides before anything dispatches, then
+		// re-enters the pipeline below at most once itself — it never falls
+		// through to the plain dispatch() call that follows. A plan=true
+		// call never reaches here (it returned above), so a retry carrying
+		// plan=true is handled exactly like today's call regardless of this
+		// check (AP-70: "a call that did not park").
+		if isAnsweredRetry(ask, req) {
+			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRunOperation, in, sel, act)
 		}
 
 		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
@@ -671,6 +819,11 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			// JobID stays absent (a Plan creates no Job) and Results stays an
 			// empty array, never null — #207/#253, see RunOrPlanOutput.
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
+		}
+
+		// See run_operation's identical branch above.
+		if isAnsweredRetry(ask, req) {
+			return answerThenDispatch(ctx, req, p, exec, results, reads, decider, ask, now, toolRawExec, in, sel, act)
 		}
 
 		out, parked, err := dispatch(ctx, exec, results, p, sel, act)

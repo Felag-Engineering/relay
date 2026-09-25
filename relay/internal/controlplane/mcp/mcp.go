@@ -227,7 +227,10 @@ type serverOptions struct {
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
-// (production default: time.Now().UTC()).
+// (production default: time.Now().UTC()). Since #727 cfg.now is also the
+// clock an answered retry opens its sealed request state against (seal
+// expiry) and passes to acceptElicitedAnswer for its PastDeadline judgement —
+// still a test seam, never configuration (invariant 11).
 func WithClock(now func() time.Time) Option {
 	return func(o *serverOptions) { o.now = now }
 }
@@ -268,13 +271,16 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
-	// ask is the in-band MRTR question path (elicit.go, S2b). It is wired
-	// only when the caller both turned the option on AND wired a decider —
-	// an unwired decider leaves ask nil, so the emission path is absent
-	// rather than a disabled branch, and no question could ever be answered
-	// anyway. The seal key it mints (requeststate.Mint, crypto/rand) is
-	// process-lifetime and never configuration (invariant 11 by
-	// construction) — minted here, once per New, once per process in
+	// ask is the in-band MRTR question path (elicit.go, S2b), and — since
+	// #727 — the same nil check that gates emission also gates the
+	// answered-retry path (isAnsweredRetry, tools_execution.go): a nil ask
+	// means no question was ever asked, so no retry could ever be answering
+	// one either. It is wired only when the caller both turned the option on
+	// AND wired a decider — an unwired decider leaves ask nil, so the
+	// emission path is absent rather than a disabled branch, and no question
+	// could ever be answered anyway. The seal key it mints (requeststate.Mint,
+	// crypto/rand) is process-lifetime and never configuration (invariant 11
+	// by construction) — minted here, once per New, once per process in
 	// production; the restart/replica cost that follows is recorded as
 	// threat-model R27 and docs/specs/approval-assurance.md.
 	var ask *questioner
@@ -284,7 +290,7 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 
 	registerNodeTools(srv, lane)
 	registerOperationTools(srv, ops, lane)
-	registerExecutionTools(srv, exec, results, ops, ask)
+	registerExecutionTools(srv, exec, results, ops, ask, reads, cfg.approvals, cfg.now)
 	registerJobTools(srv, exec, results, reads)
 	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers
 	// nothing, which is a Relay without the Tasks extension: parked dispatches
