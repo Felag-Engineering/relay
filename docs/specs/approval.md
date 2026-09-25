@@ -743,6 +743,19 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-25` — **The answered-retry acceptance path is built, in the one exempt file, and not
+  yet reachable.** A new helper opens and binds the retried call's sealed request state with
+  the binding-checked open (never the unbound one), requires exactly one response keyed by the
+  sealed request ID, requires a `permission`-gated `io.gleipnir/responder` assertion (no
+  responder, `gate: "information"`, a `io.gleipnir/replayed-from` response, `action: "cancel"`,
+  and a blank username all refuse as the same machine-self-decision `approve_request` gives
+  with no approver), and then calls the capability layer's decision entry point with the sealed
+  request ID and plan hash and the in-band channel, classifying every outcome without
+  re-deciding anything. `approve_request`'s `approver` is now bound by the same rule (refused,
+  not truncated, at most 256 bytes, no control characters) — owner decision 2, AP-70 as
+  amended. No tool handler calls the new helper yet (S4a-2 wires the execution tools' retry
+  path into it), so **AP-63, AP-64, AP-65 and AP-70's amendment stay Designed** at v0.7.0;
+  #730 promotes them with their proof rows. (#726)
 - `2026-09-25` — **`DecideApproval` stops discarding the Request on a refusal it can name.** On
   `ErrNotPending` or `ErrDuplicateDecider` it now returns the Request as it currently stands
   (state, decisions, any bound Job ID) instead of the zero value — plumbing S4a's answered retry

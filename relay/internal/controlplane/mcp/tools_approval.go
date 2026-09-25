@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
 )
 
 // tools_approval.go is THE ONE FILE in this package permitted to name a
@@ -46,6 +49,22 @@ import (
 // columns. `approved_by` stays the verified Account; `on_behalf_of` carries
 // the claim. An auditor can always tell the two apart, which is the entire
 // point of recording them separately (ADR-0029 decision 2).
+//
+// # The second envelope (ADR-0029 decision 6)
+//
+// acceptElicitedAnswer, below, is the MRTR answer path: a retried tool call
+// carrying an elicitation response to a parked approval. It lives here, in
+// the one exempt file, by the same choice that put approve_request here —
+// the seal check (package requeststate), the responder-assertion rule, and
+// the classification of what capability.Service.DecideApproval returned are
+// ALL written in this file, so a reviewer can audit the whole of this hole
+// by opening one file, and that promise is kept by what is written in the
+// file rather than by the AST scan (no_decision_test.go still enforces the
+// scan; this paragraph is the reviewer's map of what to read).
+//
+// Nothing calls acceptElicitedAnswer from a tool handler yet — wiring it
+// into run_operation/raw_exec's retry path is a separate change (S4a-2), so
+// the MRTR path stays unreachable from main until that change lands.
 
 // ApprovalDecider records a decision against a parked approval Request.
 //
@@ -76,8 +95,75 @@ type approveRequestInput struct {
 	RequestID string `json:"request_id" jsonschema:"The parked approval request to answer, exactly as reported in a pending_approval result's request_id."`
 	PlanHash  string `json:"plan_hash" jsonschema:"The plan_hash from the same pending_approval result. A decision binds to the Plan it was shown; if the fleet changed since, this is refused rather than silently approving a different set of Nodes."`
 	Approve   bool   `json:"approve" jsonschema:"true approves, false denies. A denial is terminal — it cannot be reversed by approving afterwards."`
-	Approver  string `json:"approver" jsonschema:"Who actually made this decision — the human you asked, not you. Recorded as an ASSERTED identity: Relay cannot verify it, and the audit trail marks it as a claim rather than as a verified approver. Required: an in-band approval with nobody named is a machine approving its own request."`
+	Approver  string `json:"approver" jsonschema:"Who actually made this decision — the human you asked, not you. Recorded as an ASSERTED identity: Relay cannot verify it, and the audit trail marks it as a claim rather than as a verified approver. Required: an in-band approval with nobody named is a machine approving its own request. At most 256 bytes, no control characters; a longer or malformed value is refused, never truncated."`
 	Reason    string `json:"reason,omitempty" jsonschema:"Optional note from the decider, recorded in the audit trail."`
+}
+
+// noNamedApproverError is the "no named human" refusal shared, byte-for-byte,
+// by approve_request (an empty or whitespace-only `approver`) and
+// acceptElicitedAnswer (a machine self-decision on the answered retry) —
+// AP-64: "refused exactly as an approve_request carrying no approver is
+// refused (AP-48)". Sharing one type, rather than two error literals with the
+// same string, is what keeps the message identical by construction as either
+// side is edited.
+//
+// Unwrap returns approval.ErrMachineSelfDecision so a caller — and the
+// domain's own eligibility rule, see Decision.relaysAnAssertedHuman — can
+// recognise this refusal with errors.Is regardless of which surface produced
+// it.
+type noNamedApproverError struct{}
+
+func (noNamedApproverError) Error() string {
+	return "approver is required: an in-band approval must name the human who made the decision, " +
+		"because this call is authenticated as the requesting session and cannot prove one was asked"
+}
+
+func (noNamedApproverError) Unwrap() error { return approval.ErrMachineSelfDecision }
+
+var errNoNamedApprover error = noNamedApproverError{}
+
+// assertedApprover validates and trims a caller-asserted approver identity —
+// the bound shared by approve_request's `approver` argument and the answered
+// retry's responder username (owner decision 2, AP-70 as amended).
+//
+// Order is load-bearing:
+//
+//  1. Blank after trimming (including a lone tab, CR, or nothing at all) is
+//     read as NO assertion — a machine self-decision — not a malformed value.
+//  2. Everything else is validated on the UNTRIMMED raw value against
+//     audit.ValidateAsserted's rule (at most audit.MaxAssertedFieldBytes
+//     bytes, no control characters), reusing that rule rather than
+//     reimplementing it. This is deliberate: strings.TrimSpace strips
+//     leading/trailing tab, LF, VT, FF, CR and U+0085, which are themselves
+//     control characters, so validating the TRIMMED value would silently
+//     remove them — truncation by another name. Validating raw refuses
+//     "alice\r\n", "alice"+U+0085, and "\talice" outright. The 256-byte bound
+//     also applies to the raw value as received: a value whose raw length
+//     exceeds the bound is refused even if trimming would bring it under.
+//  3. The value RETURNED is trimmed: surrounding ASCII spaces (not control
+//     characters) still pass validation and are trimmed from what gets
+//     recorded, preserving approve_request's existing "  alice  " -> "alice"
+//     behaviour.
+func assertedApprover(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", errNoNamedApprover
+	}
+	if err := audit.ValidateAsserted(audit.Asserted{OnBehalfOf: raw}); err != nil {
+		return "", fmt.Errorf("the asserted approver is refused, not truncated: it must be at most %d bytes "+
+			"and contain no control characters: %w", audit.MaxAssertedFieldBytes, err)
+	}
+	return trimmed, nil
+}
+
+// withAssertedApprover attaches approver to ctx's asserted attribution —
+// the same lane approve_request has always used — without discarding
+// whatever else the caller already asserted (a traceparent or session_ref
+// already on ctx survives).
+func withAssertedApprover(ctx context.Context, approver string) context.Context {
+	asserted := capability.AssertionsFromContext(ctx)
+	asserted.OnBehalfOf = approver
+	return capability.WithAssertions(ctx, asserted)
 }
 
 // ApprovalDecisionOutput is what the tool returns.
@@ -119,20 +205,16 @@ func registerApprovalTools(srv *sdkmcp.Server, decider ApprovalDecider) {
 		// message naming the argument. The domain refuses it too, on the
 		// stricter reading that a machine relaying nobody is a machine
 		// deciding — see Decision.relaysAnAssertedHuman.
-		approver := strings.TrimSpace(in.Approver)
-		if approver == "" {
-			return nil, ApprovalDecisionOutput{}, fmt.Errorf(
-				"approver is required: an in-band approval must name the human who made the decision, " +
-					"because this call is authenticated as the requesting session and cannot prove one was asked")
+		approver, err := assertedApprover(in.Approver)
+		if err != nil {
+			return nil, ApprovalDecisionOutput{}, err
 		}
 
 		// The asserted approver joins the caller's existing attribution rather
 		// than replacing it: a traceparent or session_ref already on the
 		// context is attribution too, and dropping it here would lose the
 		// thread between the request and its answer.
-		asserted := capability.AssertionsFromContext(ctx)
-		asserted.OnBehalfOf = approver
-		ctx = capability.WithAssertions(ctx, asserted)
+		ctx = withAssertedApprover(ctx, approver)
 
 		updated, err := decider.DecideApproval(ctx, p, capability.ApprovalDecision{
 			RequestID: strings.TrimSpace(in.RequestID),
@@ -190,3 +272,428 @@ func renderApprovalError(err error) error {
 	}
 	return fmt.Errorf("mcp: approval decision failed: %w", err)
 }
+
+// -----------------------------------------------------------------------
+// The answered retry (ADR-0029 decision 6). See the file header, "The
+// second envelope", for why this lives here rather than in tools_execution.go.
+// -----------------------------------------------------------------------
+
+// responderMetaKey is the one recognised form of a responder assertion
+// today: an object carrying "gate" and "username", read from an
+// sdkmcp.ElicitResult's _meta. A general assertion with one recognised form,
+// so a standard key later is additive rather than a breaking change to this
+// file's shape.
+const responderMetaKey = "io.gleipnir/responder"
+
+// replayedFromMetaKey marks a response as a client-side replay of an earlier
+// answer rather than a fresh one — present on either the elicitation
+// response's own _meta or the retried call's params._meta, checked in both
+// places (fail closed on either).
+const replayedFromMetaKey = "io.gleipnir/replayed-from"
+
+// responderGatePermission is the one gate value that makes a responder
+// assertion count as a decision. "information" (or any other gate) is a
+// client answering a question that was never a permission grant.
+const responderGatePermission = "permission"
+
+// responderAssertion is a recognised io.gleipnir/responder object.
+type responderAssertion struct {
+	Gate     string
+	Username string
+}
+
+// recognisedResponder reads meta[responderMetaKey] as a responderAssertion,
+// or reports ok=false if it is absent, not an object, or missing either
+// field as a string.
+//
+// Deliberately exact-key map lookups with .(string) assertions rather than a
+// JSON round-trip into a tagged struct: encoding/json matches field names
+// CASE-INSENSITIVELY when no exact match exists, so an object keyed "Gate",
+// or one carrying both "gate":"information" and "GATE":"permission", would
+// be ambiguous on a security gate. Only the exact lowercase keys "gate" and
+// "username" count; a case-variant key is unrecognised, not merely
+// differently-cased.
+func recognisedResponder(meta sdkmcp.Meta) (responderAssertion, bool) {
+	v, ok := meta[responderMetaKey]
+	if !ok {
+		return responderAssertion{}, false
+	}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return responderAssertion{}, false
+	}
+	gate, ok := obj["gate"].(string)
+	if !ok {
+		return responderAssertion{}, false
+	}
+	username, ok := obj["username"].(string)
+	if !ok {
+		return responderAssertion{}, false
+	}
+	return responderAssertion{Gate: gate, Username: username}, true
+}
+
+// elicitedOutcome classifies what acceptElicitedAnswer's caller (S4a-2)
+// should do about an answered retry, without it having to re-decide
+// anything itself.
+type elicitedOutcome int
+
+const (
+	// elicitedRefused is the zero value: a forgotten assignment fails closed
+	// rather than silently reading as an approval. Err is always set when the
+	// outcome is this.
+	elicitedRefused elicitedOutcome = iota
+	// elicitedApproved is a satisfied Requirement with no Job bound yet — the
+	// caller re-issues the original call once to dispatch it.
+	elicitedApproved
+	// elicitedApprovedJobBound is a satisfied Requirement whose Job already
+	// exists — the caller re-attaches to it (AP-67) rather than dispatching
+	// again.
+	elicitedApprovedJobBound
+	// elicitedDenied is terminal (AP-68): one denial ends the Request.
+	elicitedDenied
+	// elicitedStillPending is a partial quorum: more distinct approvals are
+	// required than this one answer supplied.
+	elicitedStillPending
+	// elicitedLapsed is a Request that is expired, or that is no longer
+	// dispatchable because its deadline passed before a Job was bound.
+	elicitedLapsed
+)
+
+// elicitedAnswerResult is acceptElicitedAnswer's return value.
+//
+// It holds NO approval.Request and NO approval.Decision, deliberately: a
+// refused decision's Request can carry OTHER approvers' identities and
+// reasons (capability.DecideApproval returns it whatever the caller's
+// eligibility turned out to be — see requestOnRefusal), so from a refusal
+// only State, JobID and ExpiresAt are copied here, and nothing that renders
+// this type can reach Decisions, RequestedBy, Summary or Require (#735
+// review).
+//
+// Err nil means this answer was recorded AND audited. A non-nil Err does NOT
+// by itself mean nothing was recorded: a non-domain error — the audit write
+// failing after the decision was already made durable — can follow a
+// recorded decision. Such an Err is still classified elicitedRefused with no
+// state copied, and a caller rendering it must not claim the answer was
+// ignored; it must say the decision may have been recorded and point at
+// approve_request or the Control API to confirm. Every refusal THIS FILE
+// makes before the decider is even called (an unbound state, a malformed
+// responder, a machine self-decision) records nothing, full stop.
+//
+// A decline never yields elicitedApproved. A human's "no" that capability
+// refuses because the Request was already approved out of band (a different
+// approver, a different channel) is classified elicitedRefused with Err kept
+// and State/JobID/ExpiresAt copied, so a caller can say "your decline was
+// not recorded; the request was already approved" without dispatching on the
+// decliner's behalf. The one exception is an approved Request with a Job
+// already bound: that stays elicitedApprovedJobBound for EITHER answer,
+// because re-attaching to an existing Job (AP-67) dispatches nothing new.
+//
+// Callers branch on Outcome alone, never on whether Err is nil: Err is not a
+// "did this fail" flag. elicitedApproved and elicitedApprovedJobBound can
+// both carry a non-nil Err (ErrNotPending or ErrDuplicateDecider, the
+// requestOnRefusal shape above) when the Request had already moved before
+// this answer landed — that is a recorded decision, not a failure, and the
+// Outcome says so. elicitedApprovedJobBound returned for a DECLINE means
+// THIS decline was never recorded: a Job was already bound by another
+// approver's answer before this one arrived. A caller must render that as
+// "your decline was not recorded; the request was already approved and
+// dispatched" — never as if the decliner had approved it — even though
+// re-attaching to the existing Job (AP-67) is still safe, because it
+// dispatches nothing new.
+//
+// The contract for elicitedStillPending: the caller re-drives Service.Run
+// with the same call to observe the park (the existing run path reports the
+// still-pending Request and re-emits the elicitation). This type must never
+// be widened to carry the Request or its Decisions just to render progress —
+// Progress (a count string) is the only quorum detail a caller gets, and it
+// is set ONLY when Err is nil (a recorded decision); every refusal leaves it
+// empty.
+type elicitedAnswerResult struct {
+	Outcome elicitedOutcome
+	// RequestID and PlanHash are read from the verified SEAL, never from the
+	// Request capability returns — a refused decision's Request may not even
+	// be the one this call asked about (a zero Request on some refusals).
+	RequestID string
+	PlanHash  string
+	State     approval.State
+	JobID     string
+	ExpiresAt time.Time
+	// Progress is set only when Err is nil; empty on every refusal.
+	Progress string
+	// OnBehalfOf is the asserted responder identity handed to the decider.
+	// Empty if the call never reached the decider (any refusal before step 6
+	// of acceptElicitedAnswer).
+	OnBehalfOf string
+	Err        error
+}
+
+// elicitedAnswer is what a retried tool call carries into acceptElicitedAnswer.
+type elicitedAnswer struct {
+	// RequestState is the MRTR requestState the client echoed back.
+	RequestState string
+	// InputResponses is the retry's answered elicitations.
+	InputResponses sdkmcp.InputResponseMap
+	// CallMeta is the retried call's params._meta — checked for a replay
+	// marker alongside the elicitation response's own _meta (may be nil).
+	CallMeta sdkmcp.Meta
+	// Tool is the retried call's params.name.
+	Tool string
+	// ArgsDigest must be computed EXACTLY as emission computes it:
+	// requeststate.DigestArgs(json.Marshal(the handler's TYPED input value —
+	// runOperationInput or rawExecInput)), the same computation elicit.go's
+	// callArgsDigest performs when the tool handler parks the dispatch and
+	// seals the state (#725). NEVER over the raw wire bytes of
+	// params.arguments: a retry's arguments can reorder keys, add
+	// whitespace, or otherwise differ byte-for-byte from what was
+	// originally sent while still decoding to an identical typed value, and
+	// only digesting the re-marshalled typed value survives that. Supplying
+	// this digest on the retried call is the caller wiring's job (#727 /
+	// S4a-2), not this function's — a caller that digests a different
+	// representation (e.g. the raw bytes) makes every answer refuse (fail
+	// closed, but a functional bug, not a security one). This function never
+	// digests arguments itself.
+	ArgsDigest requeststate.Digest
+}
+
+// acceptElicitedAnswer verifies and records one MRTR answer to a parked
+// approval, returning a classification the caller can render without
+// re-deciding anything.
+//
+// sealer and now are parameters rather than server fields so this function
+// stays testable in isolation and so this issue does not have to touch
+// mcp.go: the sealer is minted there by #725 (the execution-tool emission
+// leg that parks a dispatch and seals its state); wiring this function into
+// a tool handler's retry path is a further, separate change (S4a-2).
+//
+// The machine-self-decision refusal (errNoNamedApprover) must be rendered
+// AS-IS by the caller, never through renderApprovalError: AP-64 requires the
+// identical message an approve_request carrying no approver returns (AP-48),
+// and renderApprovalError's ErrMachineSelfDecision text tells the caller to
+// pass an "approver" argument that an MRTR client does not have.
+//
+// Every failure before step 6 (calling the decider) returns elicitedRefused
+// with Err set and the decider NOT called — nothing is recorded.
+func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, sealer *requeststate.Sealer, now time.Time, p capability.Principal, in elicitedAnswer) elicitedAnswerResult {
+	if decider == nil {
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: capability.ErrApprovalUnavailable}
+	}
+	if p.AccountID == "" {
+		// A Principal with no stored Account never has a state sealed for it
+		// (requeststate.Sealer.Seal refuses an empty AccountID).
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: errAnswerStateRefused}
+	}
+	var zeroDigest requeststate.Digest
+	if in.ArgsDigest == zeroDigest {
+		// Seal never seals a zero digest either, so a zero here means the
+		// caller skipped digesting — explicit rather than relying on the
+		// binding mismatch it would otherwise produce.
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: errAnswerStateRefused}
+	}
+
+	// Exactly one response, keyed by the request it answers.
+	if len(in.InputResponses) != 1 {
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: errAnswerShape}
+	}
+	var requestID string
+	for k := range in.InputResponses {
+		requestID = k
+	}
+
+	// The seal, bound to this caller/request/tool/arguments in one call
+	// (OpenFor, never Open — a bare Open does not check the binding, and a
+	// response keyed by any ID but the sealed request ID fails Bind with
+	// ErrBindingMismatch here rather than needing a separate comparison).
+	st, err := sealer.OpenFor(in.RequestState, now, requeststate.Call{
+		AccountID:  p.AccountID,
+		RequestID:  requestID,
+		Tool:       in.Tool,
+		ArgsDigest: in.ArgsDigest,
+	})
+	if err != nil {
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: fmt.Errorf("%w: %w", errAnswerStateRefused, err)}
+	}
+
+	// From here on, RequestID and PlanHash are always read from the SEAL, so
+	// every remaining refusal still tells the caller which request it was
+	// about.
+	refused := func(err error) elicitedAnswerResult {
+		return elicitedAnswerResult{Outcome: elicitedRefused, RequestID: st.RequestID, PlanHash: st.PlanHash, Err: err}
+	}
+
+	result, ok := in.InputResponses[requestID].(*sdkmcp.ElicitResult)
+	if !ok || result == nil {
+		return refused(errAnswerShape)
+	}
+
+	// Machine self-decision: any of these collapses into the same refusal as
+	// approve_request with no approver (AP-64).
+	if result.Action != "accept" && result.Action != "decline" {
+		return refused(errNoNamedApprover)
+	}
+	if _, replayed := result.Meta[replayedFromMetaKey]; replayed {
+		return refused(errNoNamedApprover)
+	}
+	if _, replayed := in.CallMeta[replayedFromMetaKey]; replayed {
+		return refused(errNoNamedApprover)
+	}
+	responder, recognised := recognisedResponder(result.Meta)
+	if !recognised || responder.Gate != responderGatePermission {
+		return refused(errNoNamedApprover)
+	}
+	// assertedApprover itself returns errNoNamedApprover for a blank (or
+	// whitespace-only) username, and the bound audit error — never
+	// truncated, never trimmed-then-accepted — for anything malformed.
+	username, err := assertedApprover(responder.Username)
+	if err != nil {
+		return refused(err)
+	}
+
+	approve := result.Action == "accept"
+	ctx = withAssertedApprover(ctx, username)
+	updated, err := decider.DecideApproval(ctx, p, capability.ApprovalDecision{
+		RequestID: st.RequestID,
+		PlanHash:  st.PlanHash,
+		Approve:   approve,
+		// Reason is empty: nothing on the answered-retry envelope carries a
+		// free-text note today.
+		Channel: approval.ChannelInBand,
+	})
+
+	out := classifyElicitedDecision(updated, err, approve, now)
+	out.RequestID = st.RequestID
+	out.PlanHash = st.PlanHash
+	out.OnBehalfOf = username
+	return out
+}
+
+// classifyElicitedDecision turns what capability.Service.DecideApproval
+// returned into an elicitedOutcome, deciding nothing itself: it only reads
+// the state the domain already decided.
+//
+// req is the Request DecideApproval returned; err is its error, or nil. On
+// ErrNotPending or ErrDuplicateDecider capability returns the Request as it
+// now stands (requestOnRefusal); on every other domain refusal, and on a
+// non-domain (store/audit) failure, req is the zero value. approve is the
+// answer THAT WAS SENT (Action == "accept"), passed in rather than read off
+// req so the decline rule below is decided in exactly one place and directly
+// testable.
+func classifyElicitedDecision(req approval.Request, err error, approve bool, now time.Time) elicitedAnswerResult {
+	if err == nil {
+		out := elicitedAnswerResult{
+			State:     req.State,
+			JobID:     req.JobID,
+			ExpiresAt: req.ExpiresAt,
+			Progress:  req.Progress(),
+		}
+		switch {
+		case req.State == approval.StateApproved && !approve:
+			// A recorded decline that capability reports as an approval is
+			// not a state this function can explain — unreachable while a
+			// denial is terminal (approval.Request.Decide), and fail closed
+			// if that ever changes. Ordered ABOVE the JobID-bound case so a
+			// (currently impossible) recorded-decline-reporting-approved-
+			// with-Job can never read as elicitedApprovedJobBound with Err
+			// nil — that would present the decliner's answer as an approval.
+			out.Outcome = elicitedRefused
+			out.Err = errDeclineNotHonoured
+			out.Progress = ""
+		case req.State == approval.StateApproved && req.JobID != "":
+			out.Outcome = elicitedApprovedJobBound
+		case req.State == approval.StateApproved:
+			out.Outcome = elicitedApproved
+		case req.State == approval.StateDenied:
+			out.Outcome = elicitedDenied
+		case req.State == approval.StatePending:
+			out.Outcome = elicitedStillPending
+		case req.State == approval.StateExpired:
+			out.Outcome = elicitedLapsed
+		default:
+			// Fail closed: an approval.State this switch does not recognise
+			// must never fall through to elicitedRefused's zero value with
+			// Err left nil — that would read as "nothing happened" rather
+			// than "refused", contradicting the doc on elicitedAnswerResult.
+			out.Outcome = elicitedRefused
+			out.Progress = ""
+			out.Err = errUnknownRequestState
+		}
+		return out
+	}
+
+	if errors.Is(err, approval.ErrNotPending) || errors.Is(err, approval.ErrDuplicateDecider) {
+		if req.ID == "" {
+			// Eligibility (requester exclusion, machine self-decision,
+			// audience, channel strength) is checked AFTER Terminal/Expired
+			// inside the domain, so these two sentinels can also fire with no
+			// Request read at all (capability.Approval itself failed). See
+			// capability.requestOnRefusal.
+			return elicitedAnswerResult{Outcome: elicitedRefused, Err: err}
+		}
+		out := elicitedAnswerResult{State: req.State, JobID: req.JobID, ExpiresAt: req.ExpiresAt, Err: err}
+		switch {
+		case req.State == approval.StateApproved && req.JobID != "":
+			// Re-attaching to an existing Job (AP-67) dispatches nothing new,
+			// for either answer.
+			out.Outcome = elicitedApprovedJobBound
+		case req.State == approval.StateApproved && !approve:
+			// The human said no. Another approver's out-of-band approval must
+			// never be turned into "call Run" on the decliner's answer.
+			out.Outcome = elicitedRefused
+		case req.State == approval.StateApproved && approve && req.PastDeadline(now):
+			// Approved, but its Job was never bound before its deadline: not
+			// dispatchable, so this is not a "call Run" outcome.
+			out.Outcome = elicitedLapsed
+		case req.State == approval.StateApproved && approve:
+			out.Outcome = elicitedApproved
+		case req.State == approval.StateDenied:
+			out.Outcome = elicitedDenied
+		case req.State == approval.StateExpired:
+			out.Outcome = elicitedLapsed
+		case req.State == approval.StatePending && errors.Is(err, approval.ErrNotPending):
+			// capability refuses a Pending Request as not pending ONLY
+			// because its own clock found the deadline passed — so a Pending
+			// Request that is not yet past the deadline by THIS clock is
+			// clock skew between the two reads, and the Request is lapsed
+			// either way.
+			out.Outcome = elicitedLapsed
+		case req.State == approval.StatePending && errors.Is(err, approval.ErrDuplicateDecider):
+			if req.PastDeadline(now) {
+				out.Outcome = elicitedLapsed
+			} else {
+				out.Outcome = elicitedStillPending
+			}
+		}
+		return out
+	}
+
+	// Every other domain sentinel (ErrRequesterExcluded, ErrNotInAudience,
+	// ErrMachineSelfDecision, ErrWeakChannel, ErrPlanChanged, ErrNotFound),
+	// capability.ErrApprovalUnavailable, and any non-domain error (including
+	// the audit-write failure, where capability still returns the updated
+	// Request — see capability.DecideApproval) all land here: refused, no
+	// state copied.
+	return elicitedAnswerResult{Outcome: elicitedRefused, Err: err}
+}
+
+var (
+	// errAnswerStateRefused is returned when the retried call's requestState
+	// fails to open or fails to bind to this caller, request, tool or
+	// arguments.
+	errAnswerStateRefused = errors.New("mcp: the retried call's request state is not valid for this caller, request and call — " +
+		"it may be tampered, expired, sealed for another request or call, or the elicitation response is keyed to a different request than the one sealed; " +
+		"the request can still be answered with approve_request or on the Control API")
+
+	// errAnswerShape is returned when the retry does not carry exactly one
+	// elicitation response keyed by the sealed request ID.
+	errAnswerShape = errors.New("mcp: an answered retry must carry exactly one elicitation response, keyed by the request it answers")
+
+	// errDeclineNotHonoured is classifyElicitedDecision's fail-closed
+	// backstop for a state approval.Request.Decide should never produce.
+	errDeclineNotHonoured = errors.New("mcp: the decline was recorded but the request reports approved; it is not treated as an approval of this call")
+
+	// errUnknownRequestState is classifyElicitedDecision's fail-closed
+	// backstop when err is nil but req.State is none of approval.State's
+	// known values — never reachable today, kept so an unrecognised state
+	// refuses rather than silently reading as elicitedRefused with Err nil.
+	errUnknownRequestState = errors.New("mcp: the decision was recorded but the request's resulting state is not recognised")
+)
