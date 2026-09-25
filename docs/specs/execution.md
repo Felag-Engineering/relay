@@ -395,7 +395,7 @@ also need `make test-integration`; changes to the daemon-facing contract need th
 | The layer imports nothing but registry and jobs | `TestCapabilityImportsOnlyRegistryAndJobs` | compile-time |
 | Plan and apply agree on an unchanged fleet | `TestMCP_Plan_PlanVsRealRunParity` | MCP |
 | A fan-out returns one result per Node | `TestMCP_RunOperation_PerNodeResults` | MCP |
-| A park is a result, not an error | `TestDispatchAndRender_ParkIsAResultNotAnError` | MCP |
+| A park is a result, not an error | `TestDispatch_ParkIsAResultNotAnError` | MCP |
 
 Claims above with **no row**, and so nothing checking them:
 
@@ -493,6 +493,10 @@ whether to split this spec was answered: it stays one file.
 
 ## History
 
+- `2026-09-25` — the proof row for "a park is a result, not an error" is updated to cite
+  `TestDispatch_ParkIsAResultNotAnError`: the `dispatchAndRender` wrapper it tested was removed
+  and the test renamed onto `dispatch`, which asserts the same property (#725). Citation-only;
+  no claim, behaviour or code changed. Spec is still `aspirational`.
 - `2026-09-22` — the Console Agents stream now shows a running Job on its newest page from the
   Job row's recorded requester, marked running until it resolves, with the existing Cancel
   control where the role can reach the capability-layer cancel; the running Jobs come from the

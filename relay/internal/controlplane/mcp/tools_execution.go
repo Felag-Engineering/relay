@@ -187,10 +187,10 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 }
 
 // planAndRender runs act against sel through exec.Plan and renders the
-// result — plan=true's counterpart to dispatchAndRender. err from exec.Plan
-// is ONLY an authz-refusal or infra failure (renderRunError's existing
-// cases): cap/Freeze/no-Nodes-matched are reported INSIDE pr, never as an
-// error (ADR-0011).
+// result — plan=true's counterpart to dispatch. err from exec.Plan is ONLY
+// an authz-refusal or infra failure (renderRunError's existing cases):
+// cap/Freeze/no-Nodes-matched are reported INSIDE pr, never as an error
+// (ADR-0011).
 func planAndRender(ctx context.Context, exec Executor, p capability.Principal, sel capability.Selector, act jobs.Action) (PlanOutput, error) {
 	pr, err := exec.Plan(ctx, p, sel, act)
 	if err != nil {
@@ -427,22 +427,25 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 	return s
 }
 
-// dispatchAndRender runs act against sel through exec, then renders the
-// full per-Node result set — the shared body of run_operation and raw_exec
-// once each has built its own jobs.Action. A zero-match dispatch is refused
-// by the capability layer as no_nodes_matched and comes back as a tool error
-// via renderRunError.
+// dispatch runs act against sel through exec, then renders the full per-Node
+// result set — the shared body of run_operation and raw_exec once each has
+// built its own jobs.Action. A zero-match dispatch is refused by the
+// capability layer as no_nodes_matched and comes back as a tool error via
+// renderRunError.
 //
 // A PARKED dispatch (ADR-0027) is the one non-nil error from Run that is not a
 // refusal, and it is rendered as a successful result carrying
 // pending_approval — see PendingApprovalOutput for why reporting it as a tool
-// error would actively mislead the agent that receives it.
+// error would actively mislead the agent that receives it. The parked value
+// is ALSO returned directly (nil otherwise), so a caller can decide whether
+// to render a question instead (elicit.go) without re-deriving it from the
+// rendered output.
 //
 // It returns the whole RunOrPlanOutput rather than an ExecutionOutput so both
 // execution tools share one construction of the result shape; having each call
 // site assemble its own is how the park branch would get added to one tool and
 // forgotten in the other.
-func dispatchAndRender(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (RunOrPlanOutput, error) {
+func dispatch(ctx context.Context, exec Executor, results JobResultReader, p capability.Principal, sel capability.Selector, act jobs.Action) (RunOrPlanOutput, *capability.ParkedError, error) {
 	nodeResults, err := exec.Run(ctx, p, sel, act)
 	if err != nil {
 		var parked *capability.ParkedError
@@ -450,22 +453,22 @@ func dispatchAndRender(ctx context.Context, exec Executor, results JobResultRead
 			return RunOrPlanOutput{
 				Results:         []PerNodeResult{},
 				PendingApproval: renderParked(parked),
-			}, nil
+			}, parked, nil
 		}
-		return RunOrPlanOutput{}, renderRunError(err)
+		return RunOrPlanOutput{}, nil, renderRunError(err)
 	}
 	// *capability.Service can never return a zero-length nodeResults with a
 	// nil error (a zero-match Selector is refused as no_nodes_matched before
 	// this call returns). This branch exists only so an out-of-contract
 	// Executor can't index an empty slice below.
 	if len(nodeResults) == 0 {
-		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil
+		return RunOrPlanOutput{Results: []PerNodeResult{}}, nil, nil
 	}
 	out, err := renderJob(ctx, results, nodeResults[0].JobID)
 	if err != nil {
-		return RunOrPlanOutput{}, err
+		return RunOrPlanOutput{}, nil, err
 	}
-	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil
+	return RunOrPlanOutput{JobID: out.JobID, Results: out.Results}, nil, nil
 }
 
 // renderParked projects a capability.ParkedError into the agent-facing
@@ -527,6 +530,25 @@ const resultShapeClause = "Result shape: per-Node exit_code is present only when
 	"absent job_id always means nothing was dispatched. A Selector that matches no Nodes is refused as " +
 	"no_nodes_matched and creates no Job; with plan=true it is reported as would_be_rejected no_nodes_matched."
 
+// toolRunOperation and toolRawExec are the two execution tools' registered
+// Names, for elicit.go's question() call (and its own tests) to pass the
+// same value sealed into a question's requestState as what is actually
+// registered below.
+//
+// The sdkmcp.Tool{Name: ...} literals below MUST stay literal STRINGS,
+// duplicating these constants' values, rather than referencing them:
+// preflight_surface_test.go's PF-1 guard (security review cycle 2, SR1)
+// AST-walks every &sdkmcp.Tool{Name: "..."} registration and fails closed —
+// a t.Errorf naming the file and line, never a silent skip — on a Name that
+// does not resolve to a string literal, specifically so a tool registered
+// under a package-level name constant cannot evade the preflight-detector
+// scan. Keep the two in sync; TestNoPreflightToolOrMethodIsRegistered's
+// exact-set assertion catches a drift immediately.
+const (
+	toolRunOperation = "run_operation"
+	toolRawExec      = "raw_exec"
+)
+
 // registerExecutionTools registers run_operation and raw_exec on srv — the
 // two ADR-0003 execution meta-tools. Both are thin: ParseSelector -> build
 // the Action -> requirePrincipal -> branch on plan -> render. Neither
@@ -540,9 +562,12 @@ const resultShapeClause = "Result shape: per-Node exit_code is present only when
 // the DEFAULT and raw_exec as the ESCAPE HATCH, both cross-reference plan
 // mode via the identical planModeClause, and run_operation's steers a
 // denied_by_policy result toward describe_node rather than blind retries.
-func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister) {
+//
+// ask (elicit.go, S2b) is nil-receiver safe: a nil *questioner never asks, so
+// a park always renders pending_approval exactly as before it existed.
+func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResultReader, ops OperationLister, ask *questioner) {
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
-		Name: "run_operation",
+		Name: "run_operation", // keep in sync with toolRunOperation (PF-1, see the const doc above)
 		Description: "The default way to act on Nodes. Run a structured Operation (ADR-0001's typed, " +
 			"native-argv path — never a shell) against a Selector's matched Nodes through the capability " +
 			"layer (Selector -> authz -> blast-cap -> dispatch -> audit). Prefer run_operation over raw_exec " +
@@ -554,7 +579,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"matched Node's Task reaches a terminal outcome and returns per-Node results plus the Job id; " +
 			"get_job re-reads the same Job later. " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[runOperationInput](),
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in runOperationInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "run_operation")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
@@ -581,15 +606,29 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
-		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
+		}
+		// A question replaces pending_approval outright: the returned
+		// CallToolResult carries InputRequests and no structuredContent, so
+		// the SEP-2663 task shim — which keys off
+		// structuredContent.pending_approval — passes it through untouched
+		// and mints no task envelope (AP-71; ADR-0028 amendment 2026-09-24).
+		// Service.Run may still have minted an orphan task handle above
+		// (parked.TaskID) — expected and harmless, because nothing ever reads
+		// it once the question is rendered instead; do NOT add a conditional
+		// to Service.Run to suppress it.
+		if parked != nil {
+			if q, ok := ask.question(req, p, parked, toolRunOperation, in); ok {
+				return q, RunOrPlanOutput{}, nil
+			}
 		}
 		return nil, out, nil
 	})
 
 	sdkmcp.AddTool(srv, &sdkmcp.Tool{
-		Name: "raw_exec",
+		Name: "raw_exec", // keep in sync with toolRawExec (PF-1, see the const doc above)
 		Description: "The escape hatch — use only when no structured Operation expresses the task. Run an " +
 			"arbitrary argv (ADR-0001's regex-gated escape hatch) against a Selector's matched Nodes. Prefer " +
 			"run_operation's typed path first: call list_operations to check whether a structured Operation " +
@@ -599,7 +638,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			"daemon's Policy regex decides per Node whether it is allowed (a per-Node refusal renders " +
 			"outcome=denied_by_policy). " + planModeClause + " " + resultShapeClause,
 		InputSchema: tightenExecInputSchema[rawExecInput](),
-	}, func(ctx context.Context, _ *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
+	}, func(ctx context.Context, req *sdkmcp.CallToolRequest, in rawExecInput) (*sdkmcp.CallToolResult, RunOrPlanOutput, error) {
 		logPrincipal(ctx, "raw_exec")
 		p, err := requirePrincipal(ctx)
 		if err != nil {
@@ -634,9 +673,17 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{Results: []PerNodeResult{}, Plan: &plan}, nil
 		}
 
-		out, err := dispatchAndRender(ctx, exec, results, p, sel, act)
+		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
+		}
+		// See run_operation's identical branch above for why this replaces
+		// pending_approval outright and emits no task envelope (AP-71;
+		// ADR-0028 amendment 2026-09-24).
+		if parked != nil {
+			if q, ok := ask.question(req, p, parked, toolRawExec, in); ok {
+				return q, RunOrPlanOutput{}, nil
+			}
 		}
 		return nil, out, nil
 	})

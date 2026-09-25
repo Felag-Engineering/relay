@@ -31,11 +31,14 @@ import (
 // `tasks/update` — the method by which a client answers an `inputRequests`
 // elicitation. That is an approval decision travelling over the AI's own
 // session, and whether an in-band answer can ever count is the open rung-2
-// question on #272. Relay emits no `inputRequests`, so no client has anything
-// to answer, and no handler exists to receive it. ADR-0028 states this as a
-// boundary rather than an omission precisely because the failure mode is
-// somebody later "completing the extension"; no_decision_test.go guards this
-// file like every other in the package.
+// question on #272. Since S2b (ADR-0028 amendment 2026-09-24), an askable
+// park CAN carry `inputRequests` (elicit.go) — but precedence means it never
+// also carries a task handle: a question replaces `pending_approval`
+// outright, so there is no Tasks-extension envelope for `tasks/update` to
+// answer even then. ADR-0028 states this as a boundary rather than an
+// omission precisely because the failure mode is somebody later "completing
+// the extension"; no_decision_test.go guards this file like every other in
+// the package.
 //
 // # Why cancelling a parked task cannot touch the approval
 //
