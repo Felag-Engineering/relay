@@ -81,7 +81,8 @@ Two properties fall out, and they are the whole point:
      the only one that is a *guarantee* rather than a delivery convenience.
      *(Amended 2026-09-24 by ADR-0040: still true of the authenticated decision endpoint's
      **availability**, and no longer a description of where an agent-originated approval is
-     expected to arrive — that is the requesting MCP client.)*
+     expected to arrive — that is the requesting MCP client. As amended 2026-09-25: the
+     endpoint still decides any request, including an agent's, and is not relied on.)*
 
    The Tasks extension is still stabilizing (retry and expiry lifecycle gaps), so it is an
    optimization we adopt, never a dependency we assume. **A deployment with no
@@ -526,6 +527,14 @@ and unmigrated, so it adopts this amendment at its migration rather than now. `a
 AP-56, AP-57 and AP-58.
 
 ## Amendment (2026-09-24): one answer path per origin — this ADR is amended by ADR-0040
+
+> **Withdrawn in part, 2026-09-25.** ADR-0040's own amendment of that date withdrew strict
+> separation before any of it was built. **This ADR's two paths stay side by side**, and both decide
+> any parked request, whichever surface created it. What survives from the section below: MCP is
+> the *approved* pathway for agent-originated approval and the Relay surfaces are not relied on;
+> decision 2's endpoint is the guarantee of availability and — now — the working rescue; and
+> decision 4's second-person-out-of-band default stays unused, because no shipped or seeded rule
+> sets a second-person rung. The sequencing paragraph at the end no longer applies.
 
 [ADR-0040](0040-the-surface-that-created-a-request-answers-it.md) narrows this ADR's posture that
 a decision reaches Relay by two paths existing **side by side because they reach different

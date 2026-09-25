@@ -112,6 +112,10 @@ same channel semantics. One decision model, two delivery envelopes — not two m
   its default both stand wherever a rule sets one; no shipped or seeded rule does, so for
   agent-originated work the client-integrity assumption is no longer one posture among several —
   it is the posture. Explicitly interim, pending the permissions rework.)*
+  *(Corrected 2026-09-25: ADR-0040's amendment of that date withdrew the answered-over-MCP
+  separation. The client-integrity assumption is the **relied-on** posture for agent-originated
+  work — MCP is the approved pathway — but not the only one reachable: the Console and the
+  Control API still decide any request, not relied on.)*
 - Gleipnir's HIL router becomes load-bearing for in-band rules: ADR-0027's requirement that
   it be *"a deterministic path to the assigned human"* is no longer advice.
 - The audit trail gains a class of record whose approver is asserted. Queries that need
