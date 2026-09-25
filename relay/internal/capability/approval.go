@@ -179,6 +179,42 @@ type ParkedError struct {
 	// from the wrong one would tell a client to keep polling something that has
 	// already been swept.
 	TaskExpiresAt time.Time
+
+	// Askable reports whether THIS park can be asked about in-band by THIS
+	// caller, on THIS call — the fact an MCP surface needs to decide whether to
+	// render an actual question or the opaque `pending_approval` result (S2b;
+	// docs/specs/approval.md AP-61, AP-62, AP-69).
+	//
+	// It is decided here, in checkApproval, because the capability layer is the
+	// one place the merged Requirement and the calling Principal are held
+	// together (invariant 10): a surface reads this field and never
+	// recomputes any of its terms.
+	//
+	// All four of these hold, or the park is not askable:
+	//  1. the rule's channel is satisfiable in-band;
+	//  2. the rule does not exclude the requester (RequesterAllowed) — an
+	//     in-band answer is authenticated as the requesting session's own
+	//     Account, so a requester-excluded rule refuses it unconditionally;
+	//  3. the rule's audience admits that Account (an empty audience admits
+	//     it; a malformed one admits no one);
+	//  4. this call CREATED the park, rather than observing one already
+	//     pending — the same created/observed distinction that gates
+	//     NotifyParked and AP-41's audit.
+	//
+	// There is deliberately no role-floor term: the caller already passed
+	// Authorize for this Action, and the decision floor
+	// (ApprovalAuthorizer.AuthorizeApprovalDecision) is the same floor that
+	// Action needed to be REQUESTED — see TestRoleFloorCannotRefuseAnAskablePark.
+	//
+	// A re-drive after a DENIAL parks a brand-new Request (checkApproval's
+	// ByPlanHash lookup only ever finds a satisfied or still-pending row, never
+	// a terminal one), so that park is askable exactly like any other freshly
+	// created one.
+	//
+	// The zero value (false) is the safe direction: a literal-built
+	// ParkedError, an observed re-drive, and every non-askable park all render
+	// as today's opaque pending_approval.
+	Askable bool
 }
 
 func (e *ParkedError) Error() string {
@@ -302,6 +338,11 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		// Request for the same Plan: two Requests for one Plan would let a
 		// requester farm a second opinion after the first approver said no
 		// yet, and would double every notification.
+		//
+		// An OBSERVED park is never askable (AP-62; the same created/observed
+		// distinction that gates NotifyParked and AP-41's audit):
+		// parkedErrorFor leaves Askable at its zero value, false, and nothing
+		// below sets it for this branch.
 		return approvalDecision{parked: parkedErrorFor(existing)}, nil
 	case err != nil && err != approval.ErrNotFound:
 		return approvalDecision{}, fmt.Errorf("capability: read approval for plan: %w", err)
@@ -329,7 +370,50 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	if err := s.approvals.Create(ctx, r); err != nil {
 		return approvalDecision{}, fmt.Errorf("capability: park dispatch for approval: %w", err)
 	}
-	return approvalDecision{parked: parkedErrorFor(r), created: &r}, nil
+	// This call CREATED r (as opposed to the "already waiting" branch above,
+	// which observed one), so — and only so — Askable is computed against it.
+	// r.Require is the normalized Requirement s.gate.Evaluate returned, already
+	// merged across every matching rule for a real *approval.Gate
+	// (mergeStricter): the boolean below is read from that merge, never from
+	// one rule.
+	pe := parkedErrorFor(r)
+	pe.Askable = askableBy(r, p)
+	return approvalDecision{parked: pe, created: &r}, nil
+}
+
+// askableBy decides ParkedError.Askable's non-channel, non-created terms: does
+// r's Requirement admit p as an in-band decider? It mirrors
+// approval.Request.inAudience's own reading of an audience exactly —
+// TestAskableAudienceReadsAsDecideDoes pins the two together — rather than
+// exporting inAudience out of package approval, which is out of this issue's
+// scope.
+func askableBy(r approval.Request, p Principal) bool {
+	// Equality, not "at least in-band": the stored Requirement is normalized
+	// (approval.Requirement.normalized), so ChannelUnspecified cannot occur
+	// here, and if it somehow did it must fail closed rather than read as
+	// satisfiable.
+	if r.Require.Channel != approval.ChannelInBand {
+		return false
+	}
+	// An in-band answer is authenticated as the requesting session's own
+	// Account, and on a created park that Account is always
+	// r.RequestedByID == p.AccountID — so a requester-excluded rule refuses it
+	// unconditionally (ErrRequesterExcluded, AP-43).
+	if !r.Require.RequesterAllowed {
+		return false
+	}
+	if r.Require.AudienceMalformed() {
+		return false
+	}
+	if len(r.Require.Audience) == 0 {
+		return true
+	}
+	for _, a := range r.Require.Audience {
+		if strings.EqualFold(a, p.Account) {
+			return true
+		}
+	}
+	return false
 }
 
 // noticeFor projects a parked Request into the value an ApprovalNotifier is
