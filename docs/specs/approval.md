@@ -545,13 +545,13 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-61 | A question is emitted only where an answer from that caller could be **accepted**: the rule's channel is in-band, the rule does not exclude the requester, and its audience admits the calling Account. Otherwise the park renders as today's `pending_approval`. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-62 | A question is emitted only for a park this call **created**; a re-drive that bounces off a request already pending re-pages nobody (AP-41). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-63 | An answer carried on the retried call records **the same Decision** as `approve_request`, into the same two lanes (AP-39): the in-band channel, the verified Account whose credential made the call, the responder identity recorded as an assertion, and the same refusals (AP-42 … AP-49). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-64 | An answer is accepted as a decision only when it carries a **responder assertion**; an answer without one is machine-originated and is refused exactly as an `approve_request` carrying no approver is refused (AP-48). | v0.7.0 — Admin Console: Administration & Execution |
+| AP-64 | An answer is accepted as a decision only when it carries a **responder assertion** whose gate is `permission`; an answer without one is machine-originated and is refused exactly as an `approve_request` carrying no approver is refused (AP-48). The recognised form today is `io.gleipnir/responder` — one form of a general responder assertion, so a standard key later is additive. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-65 | The state a client echoes back is **sealed and bound** to the caller, the request, the plan and the call; a tampered, cross-request, cross-account, wrong-call or expired one is refused. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-66 | An approving retry **re-enters the whole dispatch pipeline** — Freeze, resolution, authorization, the cap and the plan-hash match — and a changed Node set re-parks and asks again rather than running against a set nobody approved (AP-21). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-67 | A retry whose decision has already released a Job **re-attaches** to that Job and mints no second one. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-68 | A denial on the retry is **terminal and audited**, and nothing is dispatched (AP-27). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-69 | An `out-of-band` rule yields **no answerable question**, on any client: the envelope a park is rendered in never weakens the channel the rule demands (AP-13). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-70 | A client that cannot be asked sees **no change**: `pending_approval`, `approve_request` and the Control API decision endpoint all behave exactly as before. | v0.7.0 — Admin Console: Administration & Execution |
+| AP-70 | A client that cannot be asked sees **no change**: `pending_approval`, `approve_request` and the Control API decision endpoint all behave exactly as before, with one exception — `approve_request`'s `approver` is bounded by the same rule as an elicited responder (at most 256 bytes, no control characters), and an approver outside it is refused, never truncated. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-71 | A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment 2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
@@ -630,6 +630,14 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   auto-answers its own question is indistinguishable from one that asked a person. An operator who
   needs evidence sets the rule to `out-of-band`. Accepted by the owner on `2026-09-18` (threat
   model R21) and extended to the responder assertion on `2026-09-24`.
+- **The MRTR in-band path is Gleipnir-only in practice.** AP-64's one recognised responder form
+  is a vendor-namespaced key, so any other MRTR client's answer is refused as a machine
+  self-decision. That is the fail-closed direction, and it matches ADR-0040 as amended, which
+  makes the MCP client the approved pathway for AI-agent approval — but it is a coupling to one
+  consumer, and the `permission` gate is a self-report of the same strength as
+  `approve_request`'s `approver`: interoperability discipline, not verification. Accepted by the
+  owner on `2026-09-25`; a standard responder key would be additive, and the question of which
+  clients may answer at all belongs to the permissions rework (#716).
 - **A released approval can dispatch again on any later re-drive (#713).** An approval is not
   used up when it releases a Job: until it expires, any later call matching the approved plan
   passes the gate and mints a second Job, overwriting the audit join. **The ordinary trigger is
@@ -735,6 +743,12 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-25` — Decomposition of #646 surfaced two owner decisions. **AP-70** gains one
+  exception: `approve_request`'s `approver` is now bounded by the same rule as an elicited
+  responder, refused rather than truncated — today that field is unbounded and lands verbatim in
+  the audit trail's asserted column, so this is hardening, not a regression. **AP-64** now names
+  the `permission` gate and its one recognised form, and the Gleipnir-only coupling is recorded
+  under *Accepted residual risk*. Both claims remain Designed at v0.7.0. (#646)
 - `2026-09-25` — **Strict separation withdrawn; AP-74, AP-75 and AP-76 retired unbuilt.**
   Owner decision, one day after ADR-0040, in their words: *"The more we talk about it the more
   I doubt removing the console as approver. We don't want to rely on it though — we should
