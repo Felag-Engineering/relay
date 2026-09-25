@@ -756,6 +756,13 @@ no longer open either: the amendment is drafted in this change.
   amended. No tool handler calls the new helper yet (S4a-2 wires the execution tools' retry
   path into it), so **AP-63, AP-64, AP-65 and AP-70's amendment stay Designed** at v0.7.0;
   #730 promotes them with their proof rows. (#726)
+- `2026-09-25` — **The MRTR elicitation emission path lands, dark.** `mcp` gained the enabling
+  option (off by default), the per-process seal key minted by `crypto/rand`, the emission
+  predicate, the input-required `CallToolResult`, and precedence over the MCP task shim — but the
+  composition root does not pass the option, so no caller sees any change: an askable park from
+  an MRTR-capable client still renders today's `pending_approval`, pinned by an e2e test through
+  the real composition root. No claim is promoted and no proof row is added — **AP-60, AP-61,
+  AP-62, AP-69 and AP-71 remain Designed**, unreachable code proves nothing. (#725)
 - `2026-09-25` — **`DecideApproval` stops discarding the Request on a refusal it can name.** On
   `ErrNotPending` or `ErrDuplicateDecider` it now returns the Request as it currently stands
   (state, decisions, any bound Job ID) instead of the zero value — plumbing S4a's answered retry

@@ -313,8 +313,11 @@ func TestMCPTasks_AnUnresolvableHandleDoesNotKillTheSession(t *testing.T) {
 
 // TestMCPTasks_UpdateIsNotServed is ADR-0028's boundary as a test rather than a
 // paragraph: `tasks/update` is how a client answers an elicitation, which would
-// be an approval decision arriving over the AI's own session. Relay emits no
-// inputRequests, so nothing answers — and nothing listens.
+// be an approval decision arriving over the AI's own session. Since S2b
+// (ADR-0028 amendment 2026-09-24), an askable park CAN carry `inputRequests`
+// — but it never also carries a task handle (a question replaces
+// pending_approval outright), so there is no task handle for `tasks/update`
+// to answer either way — and nothing listens.
 func TestMCPTasks_UpdateIsNotServed(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutates)
 	session := relaytest.ConnectWith(t, f.ControlBase, f.ClientFor(f.Credential), func(c *sdkmcp.Client) {

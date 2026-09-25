@@ -210,17 +210,20 @@ const serverVersion = "0.1.0"
 // fixture exercising only the execution tools; a stray read-tool call
 // through a nil lane panics rather than failing legibly, mirroring the
 // pre-existing nil ReadAuditor.
-// Option configures a server built by New. The only one today is WithClock;
-// it exists because the Tasks surface renders wall-clock values (SEP-2663's
-// ttlMs, createdAt, lastUpdatedAt) and a golden wire test cannot assert exact
-// JSON against time.Now. It mirrors capability.WithClock rather than inventing
-// a second convention.
+// Option configures a server built by New — WithClock overrides the Tasks
+// surface's clock, WithApprovalDecider wires the in-band approval tool,
+// WithApprovalElicitation turns on the in-band MRTR question path, and
+// WithToolCallObserver attaches the tool-call event publisher.
 type Option func(*serverOptions)
 
 type serverOptions struct {
 	now       func() time.Time
 	approvals ApprovalDecider
 	toolCalls ToolCallObserver
+	// elicitApprovals is WithApprovalElicitation's flag (elicit.go). It has
+	// effect only when approvals is also wired: Relay never asks a question
+	// it cannot accept an answer to.
+	elicitApprovals bool
 }
 
 // WithClock overrides the clock the Tasks surface renders timestamps from
@@ -265,9 +268,23 @@ func New(lane ReadLane, ops OperationLister, exec Executor, results JobResultRea
 		srv.AddReceivingMiddleware(toolCallMiddleware(cfg.toolCalls))
 	}
 
+	// ask is the in-band MRTR question path (elicit.go, S2b). It is wired
+	// only when the caller both turned the option on AND wired a decider —
+	// an unwired decider leaves ask nil, so the emission path is absent
+	// rather than a disabled branch, and no question could ever be answered
+	// anyway. The seal key it mints (requeststate.Mint, crypto/rand) is
+	// process-lifetime and never configuration (invariant 11 by
+	// construction) — minted here, once per New, once per process in
+	// production; the restart/replica cost that follows is recorded as
+	// threat-model R27 and docs/specs/approval-assurance.md.
+	var ask *questioner
+	if cfg.elicitApprovals && cfg.approvals != nil {
+		ask = newQuestioner()
+	}
+
 	registerNodeTools(srv, lane)
 	registerOperationTools(srv, ops, lane)
-	registerExecutionTools(srv, exec, results, ops)
+	registerExecutionTools(srv, exec, results, ops, ask)
 	registerJobTools(srv, exec, results, reads)
 	// tasks/get and tasks/cancel (#374, SEP-2663). A nil resolver registers
 	// nothing, which is a Relay without the Tasks extension: parked dispatches

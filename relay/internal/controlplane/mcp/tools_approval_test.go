@@ -63,24 +63,24 @@ func digestOf(t *testing.T, raw string) requeststate.Digest {
 	return d
 }
 
-// emissionArgsDigest mirrors elicit.go's callArgsDigest (#725, PR #736,
-// unmerged): both digest requeststate.DigestArgs over json.Marshal of the
-// handler's TYPED input value (runOperationInput or rawExecInput), never the
-// raw wire bytes of params.arguments. This is a test-local copy that exists
-// only to pin the contract from this side of the seam — see
-// elicitedAnswer.ArgsDigest's doc — not a production helper; production
-// emission is #725's, and this file must not create one.
-func emissionArgsDigest(t *testing.T, in any) requeststate.Digest {
+// mustCallArgsDigest is elicit.go's production callArgsDigest — the one
+// digest source emission seals with (#727) — failing the test on an error.
+// It is not a copy: the tests pin the production pairing.
+func mustCallArgsDigest(t *testing.T, in any) requeststate.Digest {
 	t.Helper()
-	raw, err := json.Marshal(in)
+	d, err := callArgsDigest(in)
 	if err != nil {
-		t.Fatalf("json.Marshal(%#v): %v", in, err)
-	}
-	d, err := requeststate.DigestArgs(raw)
-	if err != nil {
-		t.Fatalf("DigestArgs(%s): %v", raw, err)
+		t.Fatalf("callArgsDigest(%#v): %v", in, err)
 	}
 	return d
+}
+
+// openerOf builds the answer path's binding-checked stateOpener from a test
+// Sealer through the SAME constructor production uses (questioner.opener in
+// elicit.go), so the tests drive exactly the capability tools_approval.go is
+// handed and never a hand-rolled one. A nil sealer yields a nil opener.
+func openerOf(sealer *requeststate.Sealer) stateOpener {
+	return (&questioner{sealer: sealer}).opener()
 }
 
 // sealState returns the baseline requeststate.State the answer-path tests
@@ -296,7 +296,7 @@ func TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest(t *testing.T) {
 
 	recB := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 	ctx := capability.WithAssertions(context.Background(), capability.Assertions{Traceparent: "tp-1", SessionRef: "sess-1"})
-	result := acceptElicitedAnswer(ctx, recB, sealer, fixedNow, principal, elicitedAnswer{
+	result := acceptElicitedAnswer(ctx, recB, openerOf(sealer), fixedNow, principal, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("accept", permissionResponder("alice")),
 		Tool:           answerTool,
@@ -340,7 +340,7 @@ func TestElicitedAnswer_DeclineRecordsADenial(t *testing.T) {
 	sealed := sealWith(t, sealer, base, nil)
 
 	rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
-	result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("decline", permissionResponder("bob")),
 		Tool:           answerTool,
@@ -456,7 +456,7 @@ func TestElicitedAnswer_RefusesAnUnboundOrTamperedState(t *testing.T) {
 			wantSentinel: requeststate.ErrUnknownVersion,
 		},
 		{
-			name: "a nil sealer",
+			name: "a nil sealer (no opener)",
 			build: func(t *testing.T) (string, *requeststate.Sealer, string, requeststate.Digest, time.Time) {
 				return sealWith(t, sealer, base, nil), nil, answerTool, base.ArgsDigest, fixedNow
 			},
@@ -482,7 +482,7 @@ func TestElicitedAnswer_RefusesAnUnboundOrTamperedState(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			state, useSealer, tool, digest, now := tc.build(t)
 			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-			result := acceptElicitedAnswer(context.Background(), rec, useSealer, now, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(useSealer), now, p, elicitedAnswer{
 				RequestState:   state,
 				InputResponses: elicit("accept", permissionResponder("alice")),
 				Tool:           tool,
@@ -567,7 +567,7 @@ func TestElicitedAnswer_RequiresExactlyOneResponseForTheSealedRequest(t *testing
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recordingDecider{}
-			result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: tc.responses,
 				Tool:           answerTool,
@@ -613,7 +613,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			RequestID:  answerRequestID,
 			PlanHash:   answerPlanHash,
 			Tool:       answerTool,
-			ArgsDigest: emissionArgsDigest(t, typedIn),
+			ArgsDigest: mustCallArgsDigest(t, typedIn),
 			ExpiresAt:  fixedNow.Add(time.Hour),
 		}
 		sealed := sealWith(t, sealer, base, nil)
@@ -624,10 +624,10 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			if err := json.Unmarshal(retriedRaw, &retried); err != nil {
 				t.Fatalf("Unmarshal: %v", err)
 			}
-			digest := emissionArgsDigest(t, retried)
+			digest := mustCallArgsDigest(t, retried)
 
 			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-			result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", permissionResponder("alice")),
 				Tool:           answerTool,
@@ -646,7 +646,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			digest := digestOf(t, retriedRaw) // over the raw bytes, NOT decoded/re-marshalled through the typed struct
 
 			rec := &recordingDecider{}
-			result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", permissionResponder("alice")),
 				Tool:           answerTool,
@@ -676,7 +676,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 			RequestID:  answerRequestID,
 			PlanHash:   answerPlanHash,
 			Tool:       rawExecTool,
-			ArgsDigest: emissionArgsDigest(t, typedIn),
+			ArgsDigest: mustCallArgsDigest(t, typedIn),
 			ExpiresAt:  fixedNow.Add(time.Hour),
 		}
 		sealed := sealWith(t, sealer, base, nil)
@@ -690,7 +690,7 @@ func TestElicitedAnswer_ArgsDigestMatchesEmissionOverTheTypedInput(t *testing.T)
 		digest := digestOf(t, retriedRaw)
 
 		rec := &recordingDecider{}
-		result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
 			Tool:           rawExecTool,
@@ -722,7 +722,7 @@ func TestElicitedAnswer_RefusesUpFrontWithoutADeciderOrAStoredAccount(t *testing
 	sealed := sealWith(t, sealer, base, nil)
 
 	t.Run("nil decider", func(t *testing.T) {
-		result := acceptElicitedAnswer(context.Background(), nil, sealer, fixedNow, p, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), nil, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
 			Tool:           answerTool,
@@ -743,7 +743,7 @@ func TestElicitedAnswer_RefusesUpFrontWithoutADeciderOrAStoredAccount(t *testing
 		noAccount := p
 		noAccount.AccountID = ""
 		rec := &recordingDecider{}
-		result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, noAccount, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, noAccount, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
 			Tool:           answerTool,
@@ -804,7 +804,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &recordingDecider{}
-			result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit(tc.action, tc.meta),
 				Tool:           answerTool,
@@ -827,7 +827,7 @@ func TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision(t *tes
 
 	t.Run("a valid permission responder with replayed-from in CallMeta only", func(t *testing.T) {
 		rec := &recordingDecider{}
-		result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder("alice")),
 			CallMeta:       sdkmcp.Meta{replayedFromMetaKey: "req-earlier"},
@@ -858,7 +858,7 @@ func TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder(t *testing
 	call := func(t *testing.T, username string) (elicitedAnswerResult, *recordingDecider) {
 		t.Helper()
 		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-		result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("accept", permissionResponder(username)),
 			Tool:           answerTool,
@@ -1256,7 +1256,7 @@ func TestElicitedAnswer_ClassifiesEveryOutcome(t *testing.T) {
 			if tc.decline {
 				action = "decline"
 			}
-			result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit(action, permissionResponder("alice")),
 				Tool:           answerTool,
@@ -1356,7 +1356,7 @@ func TestElicitedAnswer_ARefusedDecisionExposesOnlyStateJobAndDeadline(t *testin
 		}
 		rec := scriptedDecider{resp: leaky, err: approval.ErrNotPending}
 
-		result := acceptElicitedAnswer(context.Background(), rec, sealer, fixedNow, p, elicitedAnswer{
+		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
 			InputResponses: elicit("decline", permissionResponder("alice")),
 			Tool:           answerTool,

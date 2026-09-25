@@ -460,11 +460,13 @@ type elicitedAnswer struct {
 // approval, returning a classification the caller can render without
 // re-deciding anything.
 //
-// sealer and now are parameters rather than server fields so this function
+// open and now are parameters rather than server fields so this function
 // stays testable in isolation and so this issue does not have to touch
-// mcp.go: the sealer is minted there by #725 (the execution-tool emission
-// leg that parks a dispatch and seals its state); wiring this function into
-// a tool handler's retry path is a further, separate change (S4a-2).
+// mcp.go. open is the questioner's binding-checked stateOpener (elicit.go,
+// questioner.opener) — never the Sealer itself: key custody stays in
+// elicit.go's newQuestioner, and this file can only open a state bound to
+// the call it is given, never unbound. Wiring this function into a tool
+// handler's retry path is a further, separate change (S4a-2).
 //
 // The machine-self-decision refusal (errNoNamedApprover) must be rendered
 // AS-IS by the caller, never through renderApprovalError: AP-64 requires the
@@ -474,7 +476,7 @@ type elicitedAnswer struct {
 //
 // Every failure before step 6 (calling the decider) returns elicitedRefused
 // with Err set and the decider NOT called — nothing is recorded.
-func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, sealer *requeststate.Sealer, now time.Time, p capability.Principal, in elicitedAnswer) elicitedAnswerResult {
+func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open stateOpener, now time.Time, p capability.Principal, in elicitedAnswer) elicitedAnswerResult {
 	if decider == nil {
 		return elicitedAnswerResult{Outcome: elicitedRefused, Err: capability.ErrApprovalUnavailable}
 	}
@@ -501,10 +503,14 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, sealer *
 	}
 
 	// The seal, bound to this caller/request/tool/arguments in one call
-	// (OpenFor, never Open — a bare Open does not check the binding, and a
-	// response keyed by any ID but the sealed request ID fails Bind with
-	// ErrBindingMismatch here rather than needing a separate comparison).
-	st, err := sealer.OpenFor(in.RequestState, now, requeststate.Call{
+	// (open is requeststate's OpenFor, never Open — a bare Open does not
+	// check the binding, and a response keyed by any ID but the sealed
+	// request ID fails Bind with ErrBindingMismatch here rather than needing
+	// a separate comparison). No opener means no key: refuse, fail closed.
+	if open == nil {
+		return elicitedAnswerResult{Outcome: elicitedRefused, Err: fmt.Errorf("%w: %w", errAnswerStateRefused, requeststate.ErrInvalidKey)}
+	}
+	st, err := open(in.RequestState, now, requeststate.Call{
 		AccountID:  p.AccountID,
 		RequestID:  requestID,
 		Tool:       in.Tool,
