@@ -100,6 +100,28 @@ type surfaceDeps struct {
 	// to every surface below — MCP, the Control API, and the Console all
 	// resolve `state:` against the SAME window (invariant 11).
 	certExpiringWithin time.Duration
+
+	// testMCPOptions are appended AFTER the production mcp.New options below,
+	// so a test can construct the real MCP surface with an option the
+	// composition root does not itself pass (the MRTR answer path, until
+	// #646's S4b). See serverHooks, below: this field is populated only
+	// through newServerWithHooks (main.go), and only a test ever supplies it
+	// a non-empty serverHooks.
+	testMCPOptions []mcp.Option
+}
+
+// serverHooks are seams into newServer that ONLY tests populate. The zero
+// value is production: the production entry point reaches
+// newServerWithHooks only through newServer, which passes an empty
+// serverHooks. Never a Config field, env var or flag (#721) — invariant 11
+// keeps what bounds acceptance operator-set on the host.
+// TestControlSurfaces_TestOnlyMCPOptionHookIsEmptyInProduction pins that.
+type serverHooks struct {
+	// testMCPOptions are appended AFTER the production mcp.New options of
+	// mcpSurface, so a test can construct the real MCP surface with an
+	// option the composition root does not pass (the MRTR answer path,
+	// until #646's S4b).
+	testMCPOptions []mcp.Option
 }
 
 // controlSurface is a self-mounting control-plane surface: it knows how to
@@ -123,9 +145,13 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// resolve or evaluate anything — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.capability resolves against the same
 	// root-owned window every other surface uses (invariant 11).
-	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.capability}, d.ops, d.capability,
-		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
-		readAuditor{sink: d.auditSink}, d.capability,
+	// opts holds exactly the two production options, in their existing order,
+	// with d.testMCPOptions appended after them — test-only (serverHooks),
+	// empty in production. mcp.New applies options in order, so a later
+	// option setting the same field wins: a test option can override a
+	// production one (e.g. to observe or replace WithToolCallObserver), but
+	// the production list itself is unchanged.
+	opts := []mcp.Option{
 		// The in-band approval rung (#391, ADR-0029): the SAME
 		// *capability.Service the API's decision endpoint uses. One decision
 		// model, two delivery envelopes — a decision made through the tool is
@@ -141,7 +167,13 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// The tool-call event publisher (#416, D9) — every tools/call
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.
-		mcp.WithToolCallObserver(toolCallObserver{bus: d.events})))
+		mcp.WithToolCallObserver(toolCallObserver{bus: d.events}),
+	}
+	opts = append(opts, d.testMCPOptions...)
+
+	mux.Handle("/mcp", mcp.New(mcpReadLane{svc: d.capability}, d.ops, d.capability,
+		jobResultReader{jobsRepo: d.jobs, tasksRepo: d.tasks},
+		readAuditor{sink: d.auditSink}, d.capability, opts...))
 }
 
 // apiSurface mounts the /api/v1 Control API slice (#116) onto the same mux —

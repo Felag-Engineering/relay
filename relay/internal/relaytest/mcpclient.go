@@ -11,6 +11,11 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// callToolTimeout covers a real daemon's live Task execution (run_operation
+// blocks on the Tunnel round trip), longer than a purely read-only tool call
+// needs.
+const callToolTimeout = 30 * time.Second
+
 // Connect opens an authenticated MCP client session against base+"/mcp",
 // using client for the transport (carry any required auth on client, e.g. a
 // BearerRoundTripper). session.Close is registered as a t.Cleanup.
@@ -30,7 +35,7 @@ func Connect(t *testing.T, base string, client *http.Client) *sdkmcp.ClientSessi
 // dispatch table on either side.
 func ConnectWith(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) *sdkmcp.ClientSession {
 	t.Helper()
-	session, err := tryConnect(t, base, client, setup)
+	session, err := tryConnect(t, base, client, ConnectOptions{Setup: setup})
 	if err != nil {
 		t.Fatalf("client.Connect: %v", err)
 	}
@@ -42,21 +47,84 @@ func ConnectWith(t *testing.T, base string, client *http.Client, setup func(*sdk
 // endpoint (a revoked token, a disabled Account, a non-credential).
 func TryConnect(t *testing.T, base string, client *http.Client) (*sdkmcp.ClientSession, error) {
 	t.Helper()
-	return tryConnect(t, base, client, nil)
+	return tryConnect(t, base, client, ConnectOptions{})
 }
 
-func tryConnect(t *testing.T, base string, client *http.Client, setup func(*sdkmcp.Client)) (*sdkmcp.ClientSession, error) {
+// ConnectOptions configures ConnectWithOptions. Every field is optional; the
+// zero value is exactly Connect.
+type ConnectOptions struct {
+	// Client is passed to sdkmcp.NewClient. This is the only way to reach
+	// options the SDK reads INSIDE NewClient itself — most notably
+	// MultiRoundTrip, which installs the client's automatic input-fulfilment
+	// middleware in NewClient's body, before any post-construction hook could
+	// switch it off.
+	Client *sdkmcp.ClientOptions
+	// Session is passed to the Connect call. ProtocolVersion lets a test build
+	// a client that negotiates an older protocol than 2026-07-28 (SEP-2322),
+	// which does not support multi-round-trip on the wire at all — useful for
+	// an AP-70 "cannot be asked" client. An empty value negotiates the latest.
+	//
+	// Such a client is NOT the same as one with MultiRoundTrip.Disabled: on an
+	// old protocol version the SDK server transparently fulfills an
+	// input-required result itself (serverMultiRoundTripMiddleware), sending
+	// elicitation/create straight to the client regardless of the client's own
+	// MultiRoundTrip setting — a client built this way must still be prepared
+	// to answer it (e.g. via ElicitationHandler) or the call will hang.
+	Session *sdkmcp.ClientSessionOptions
+	// Setup runs on the constructed client after NewClient and before Connect
+	// — the seam ConnectWith exists for (registering a custom sending method).
+	Setup func(*sdkmcp.Client)
+}
+
+// ConnectWithOptions is Connect/ConnectWith generalized to every ClientOptions
+// and ClientSessionOptions a test may need — for example ElicitingClientOptions
+// combined with a Setup that also registers the Tasks extension methods.
+func ConnectWithOptions(t *testing.T, base string, client *http.Client, o ConnectOptions) *sdkmcp.ClientSession {
+	t.Helper()
+	session, err := tryConnect(t, base, client, o)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	return session
+}
+
+// TryConnectWithOptions is ConnectWithOptions without the fatal: it returns
+// the connection error instead.
+func TryConnectWithOptions(t *testing.T, base string, client *http.Client, o ConnectOptions) (*sdkmcp.ClientSession, error) {
+	t.Helper()
+	return tryConnect(t, base, client, o)
+}
+
+// ElicitingClientOptions returns ClientOptions for a client that CAN be asked
+// (advertises form elicitation) but answers nothing by itself (the SDK's
+// automatic multi-round-trip middleware is off), so an input-required result
+// reaches the test verbatim instead of being consumed by the client. Returns a
+// fresh value per call, so callers may mutate it freely (for example to add
+// URL elicitation or an ElicitationHandler) without affecting another test.
+//
+// A non-nil Capabilities also drops the SDK's default "roots" capability
+// advertisement — harmless here, since Relay never reads roots.
+func ElicitingClientOptions() *sdkmcp.ClientOptions {
+	return &sdkmcp.ClientOptions{
+		Capabilities: &sdkmcp.ClientCapabilities{
+			Elicitation: &sdkmcp.ElicitationCapabilities{Form: &sdkmcp.FormElicitationCapabilities{}},
+		},
+		MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true},
+	}
+}
+
+func tryConnect(t *testing.T, base string, client *http.Client, o ConnectOptions) (*sdkmcp.ClientSession, error) {
 	t.Helper()
 
-	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "relaytest-client", Version: "0.0.1"}, nil)
-	if setup != nil {
-		setup(c)
+	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "relaytest-client", Version: "0.0.1"}, o.Client)
+	if o.Setup != nil {
+		o.Setup(c)
 	}
 	transport := &sdkmcp.StreamableClientTransport{Endpoint: base + "/mcp", HTTPClient: client}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	session, err := c.Connect(ctx, transport, nil)
+	session, err := c.Connect(ctx, transport, o.Session)
 	if err != nil {
 		return nil, err
 	}
@@ -65,18 +133,51 @@ func tryConnect(t *testing.T, base string, client *http.Client, setup func(*sdkm
 }
 
 // CallTool calls name with args, failing the test on a protocol-level error
-// (not a tool error — callers assert IsError explicitly). The 30s timeout
-// covers a real daemon's live Task execution (run_operation blocks on the
-// Tunnel round trip), longer than a purely read-only tool call needs.
+// (not a tool error — callers assert IsError explicitly).
 func CallTool(t *testing.T, session *sdkmcp.ClientSession, name string, args map[string]any) *sdkmcp.CallToolResult {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	res, err := session.CallTool(ctx, &sdkmcp.CallToolParams{Name: name, Arguments: args})
+	return CallToolWith(t, session, &sdkmcp.CallToolParams{Name: name, Arguments: args})
+}
+
+// CallToolWith is TryCallToolWith that fails the test on a protocol-level
+// error only. Use it for the MRTR happy path, where a well-formed retry is
+// expected to succeed at the protocol level even if it (today) reports the
+// same result as before.
+func CallToolWith(t *testing.T, session *sdkmcp.ClientSession, params *sdkmcp.CallToolParams) *sdkmcp.CallToolResult {
+	t.Helper()
+	res, err := TryCallToolWith(t, session, params)
 	if err != nil {
-		t.Fatalf("CallTool(%s): protocol error: %v", name, err)
+		t.Fatalf("CallTool(%s): protocol error: %v", params.Name, err)
 	}
 	return res
+}
+
+// TryCallToolWith sends params as-is and returns the raw result and error. An
+// input-required result (res.NeedsInput()) is a normal return, never an
+// error — this is how a caller drives the MRTR happy path and its refusals
+// alike, without this package interpreting IsError or NeedsInput itself.
+//
+// The SDK fills a nil Arguments with an empty map and may copy params to
+// inject _meta (client.go's injectRequestMeta), so callers must not rely on
+// params being left untouched after the call.
+func TryCallToolWith(t *testing.T, session *sdkmcp.ClientSession, params *sdkmcp.CallToolParams) (*sdkmcp.CallToolResult, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), callToolTimeout)
+	defer cancel()
+	return session.CallTool(ctx, params)
+}
+
+// RetryTool is the MRTR retry (SEP-2322): the same call, echoing requestState
+// and carrying responses to the input requests the previous result asked for.
+// It fails the test on a protocol-level error only — see CallToolWith.
+func RetryTool(t *testing.T, session *sdkmcp.ClientSession, name string, args map[string]any, requestState string, responses sdkmcp.InputResponseMap) *sdkmcp.CallToolResult {
+	t.Helper()
+	return CallToolWith(t, session, &sdkmcp.CallToolParams{
+		Name:           name,
+		Arguments:      args,
+		RequestState:   requestState,
+		InputResponses: responses,
+	})
 }
 
 // DecodeToolJSON unmarshals a successful CallToolResult's text content into

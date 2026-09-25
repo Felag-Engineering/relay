@@ -220,6 +220,11 @@ type appDeps struct {
 	// attempts. Exposed so integration tests can Subscribe without a route
 	// (the SSE route itself is #422).
 	events *events.Bus
+	// hooks is what newServer threaded into the surfaces as serverHooks
+	// (#721) — recorded so a test can assert the production entry point
+	// (newServer) leaves it empty, while a test calling newServerWithHooks
+	// directly can prove its own hooks reached surfaceDeps.
+	hooks serverHooks
 }
 
 // opvocabLister adapts opvocab.Operations (a package-level func) to the
@@ -475,7 +480,15 @@ func serverCertObserver(listener string, l metrics.ServerCertListener, m *metric
 // refusing to start, because a detector must never be a gate.
 const declinedScanBudget = 30 * time.Second
 
+// newServer is the one production entry point: it builds the composition
+// root with an empty serverHooks, so no test-only seam is ever populated on
+// the path main takes. See newServerWithHooks and serverHooks
+// (control_surfaces.go, #721).
 func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
+	return newServerWithHooks(cfg, serverHooks{})
+}
+
+func newServerWithHooks(cfg Config, hooks serverHooks) (*grpc.Server, *appDeps, error) {
 	relayCA, err := ca.Open(cfg.CADir)
 	if err != nil {
 		return nil, nil, fmt.Errorf("open CA: %w", err)
@@ -1025,6 +1038,10 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 			// state:cert-expiring's warning window (#414, ADR-0034), the same
 			// value every other surface below was handed.
 			certExpiringWithin: certExpiringWithin,
+			// Test-only (#721, serverHooks): empty on the production path,
+			// since newServer always calls newServerWithHooks with an empty
+			// serverHooks. See mcpSurface.Mount.
+			testMCPOptions: hooks.testMCPOptions,
 		}
 		surfaces := defaultControlSurfaces()
 		if cfg.ConsoleEnabled {
@@ -1075,6 +1092,7 @@ func newServer(cfg Config) (*grpc.Server, *appDeps, error) {
 		dispatch:   dispatchRouter,
 		metrics:    appMetrics,
 		events:     eventBus,
+		hooks:      hooks,
 	}
 	return srv, deps, nil
 }
