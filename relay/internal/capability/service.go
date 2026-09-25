@@ -577,6 +577,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		if auditErr := s.audit.Record(ctx, entry); auditErr != nil {
 			// An unaudited park is a dispatch nobody can account for. Surface
 			// the write failure alongside the park rather than swallowing it.
+			//
+			// Askable is cleared here too: a surface must never render a
+			// question about a park that was never durably audited — and,
+			// below, never notified either, since NotifyParked is skipped on
+			// this same error path.
+			ap.parked.Askable = false
 			return nil, errors.Join(ap.parked, fmt.Errorf("capability: record audit entry: %w", auditErr))
 		}
 		// Notify only on a park this call CREATED, and only after it is durably
