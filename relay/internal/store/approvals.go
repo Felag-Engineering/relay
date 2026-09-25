@@ -269,6 +269,13 @@ func (a *sqliteApprovals) listWith(ctx context.Context, q querier, query string,
 // reaches StateApproved — or, with a different interleaving, one that reaches
 // it while a decision row is lost. Quorum arithmetic done outside a
 // transaction is quorum theatre.
+//
+// On a domain eligibility refusal (ErrNotPending, ErrRequesterExcluded,
+// ErrNotInAudience, ErrDuplicateDecider, ErrPlanChanged, ErrMachineSelfDecision,
+// ErrWeakChannel) the returned Request is cur — the one read inside this
+// transaction, unchanged, with nothing persisted — so a caller never needs a
+// second lookup that could race the refusal it was judged against. On
+// ErrNotFound or a store failure it is the zero value.
 func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error) {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -284,9 +291,13 @@ func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d appro
 	// The domain type owns every eligibility rule; the store only persists the
 	// result. Duplicating the checks here would be a second implementation of
 	// the security-relevant logic, which is exactly how the two drift.
+	//
+	// On refusal, return cur rather than updated: it makes explicit that
+	// nothing changed, and it is the state the refusal was judged against,
+	// read in this transaction.
 	updated, err := cur.Decide(d, now)
 	if err != nil {
-		return approval.Request{}, err
+		return cur, err
 	}
 
 	if _, err := tx.ExecContext(ctx, `

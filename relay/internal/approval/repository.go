@@ -66,8 +66,14 @@ type Repository interface {
 	// must never be recorded without its state change (or vice versa).
 	//
 	// It returns the updated Request, or one of ErrNotFound, ErrNotPending,
-	// ErrRequesterExcluded, ErrNotInAudience, ErrDuplicateDecider, or
-	// ErrPlanChanged.
+	// ErrRequesterExcluded, ErrNotInAudience, ErrDuplicateDecider,
+	// ErrPlanChanged, ErrMachineSelfDecision, or ErrWeakChannel.
+	//
+	// On a domain eligibility refusal (every error above but ErrNotFound), the
+	// returned Request is the one read inside the transaction, unchanged, with
+	// nothing persisted — the state the refusal was judged against, not a
+	// second, potentially racing, lookup. On ErrNotFound or a store failure it
+	// is the zero value.
 	RecordDecision(ctx context.Context, id string, d Decision, now time.Time) (Request, error)
 
 	// BindJob records the Job ID created for an approved Request, so the

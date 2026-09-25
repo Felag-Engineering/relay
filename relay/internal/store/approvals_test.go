@@ -150,6 +150,107 @@ func TestRecordDecisionRejectsDuplicateDecider(t *testing.T) {
 	}
 }
 
+// TestRecordDecisionReturnsTheCurrentRequestOnRefusal (#724) proves the
+// in-transaction read carries job_id and decisions for real, where the
+// capability layer's fake only mirrors it (capability.memApprovals).
+func TestRecordDecisionReturnsTheCurrentRequestOnRefusal(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("already approved with a bound Job", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
+		if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(time.Minute)); err != nil {
+			t.Fatalf("first decision: %v", err)
+		}
+		if err := repo.BindJob(ctx, "req-1", "job-7"); err != nil {
+			t.Fatalf("BindJob: %v", err)
+		}
+
+		bo := approval.Decision{AccountID: "acct-bo", Account: "bo", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(2 * time.Minute)}
+		got, err := repo.RecordDecision(ctx, "req-1", bo, storeNow.Add(2*time.Minute))
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("err = %v, want ErrNotPending", err)
+		}
+		if got.State != approval.StateApproved {
+			t.Errorf("State = %v, want approved", got.State)
+		}
+		if got.JobID != "job-7" {
+			t.Errorf("JobID = %q, want job-7", got.JobID)
+		}
+		if len(got.Decisions) != 1 {
+			t.Errorf("Decisions = %d, want 1", len(got.Decisions))
+		}
+
+		reread, err := repo.Get(ctx, "req-1")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(reread.Decisions) != 1 {
+			t.Errorf("a refused decision must not have persisted anything new: %+v", reread)
+		}
+	})
+
+	t.Run("duplicate decider", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-2", "hash-b", 2, time.Hour)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-b", At: storeNow.Add(time.Minute)}
+		if _, err := repo.RecordDecision(ctx, "req-2", d, storeNow.Add(time.Minute)); err != nil {
+			t.Fatalf("first decision: %v", err)
+		}
+
+		got, err := repo.RecordDecision(ctx, "req-2", d, storeNow.Add(2*time.Minute))
+		if !errors.Is(err, approval.ErrDuplicateDecider) {
+			t.Fatalf("err = %v, want ErrDuplicateDecider", err)
+		}
+		if got.State != approval.StatePending {
+			t.Errorf("State = %v, want it still pending (1 of 2)", got.State)
+		}
+		if len(got.Decisions) != 1 {
+			t.Errorf("Decisions = %d, want 1", len(got.Decisions))
+		}
+
+		reread, err := repo.Get(ctx, "req-2")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(reread.Decisions) != 1 {
+			t.Errorf("a rejected duplicate must not have persisted anything new: %+v", reread)
+		}
+	})
+
+	t.Run("lapsed but not swept", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-3", "hash-c", 1, time.Minute)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+
+		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-c", At: storeNow.Add(time.Hour)}
+		got, err := repo.RecordDecision(ctx, "req-3", d, storeNow.Add(time.Hour))
+		if !errors.Is(err, approval.ErrNotPending) {
+			t.Fatalf("err = %v, want ErrNotPending", err)
+		}
+		if got.State != approval.StatePending {
+			t.Errorf("State = %v, want StatePending — no sweeper has run", got.State)
+		}
+		if len(got.Decisions) != 0 {
+			t.Errorf("Decisions = %d, want 0", len(got.Decisions))
+		}
+
+		reread, err := repo.Get(ctx, "req-3")
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if len(reread.Decisions) != 0 {
+			t.Errorf("a refused decision must not have persisted anything new: %+v", reread)
+		}
+	})
+}
+
 // TestExpirePendingRetiresOnlyLapsedRequests is the sweeper's contract.
 func TestExpirePendingRetiresOnlyLapsedRequests(t *testing.T) {
 	ctx := context.Background()
