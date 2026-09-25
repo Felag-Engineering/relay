@@ -63,10 +63,9 @@ const (
 // built (#727: tools_execution.go's answered retry, ADR-0029 decision 6) but
 // still dark, because the composition root does not pass this option. Dark
 // until #646's composition-root step passes it — cmd/relay/control_surfaces.go
-// must not pass it before then, or
-// a human answering in-band would only send the dispatch back into an
-// unanswered re-park, over and over, until the client's own retry cap gives
-// up (eight dead prompts to a person).
+// must not pass it before then, or a human answering in-band would only send
+// the dispatch back into an unanswered re-park, over and over, until the
+// client's own retry cap gives up (eight dead prompts to a person).
 //
 // The seal key this enables is minted inside mcp.New itself, from
 // crypto/rand, never from an Option, a config key, a flag, an environment

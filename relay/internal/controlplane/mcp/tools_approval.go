@@ -754,9 +754,11 @@ const (
 const (
 	nextStepAnswerRecorded = "the answer was recorded (progress shown when the rule needs more)."
 
-	nextStepAnswerNotRecordedAlreadyDecided = "your answer was NOT recorded: the request had already been decided (state shown). " +
-		"In the job-bound case this is the decline-after-approval case the helper's doc names: another answer had approved the " +
-		"request and its Job had already dispatched. It must never read as if the person who declined had approved."
+	// nextStepAnswerNotRecordedAlreadyDecided must never read as if the
+	// person who declined had approved — the state shown is the request's
+	// actual outcome, not this call's answer.
+	nextStepAnswerNotRecordedAlreadyDecided = "your answer was NOT recorded: the request had already reached a resolution " +
+		"(decided, or lapsed) before this call arrived (state shown)."
 
 	nextStepAnswerNotRecordedDuplicateDecider = "your answer was NOT recorded: this Account had already decided this request before " +
 		"this call arrived. Any progress or Job shown reflects other approvers' decisions, not this one."
@@ -837,10 +839,70 @@ func isKnownApprovalRefusal(err error) bool {
 }
 
 // answerRefusalNextStepUnchanged is refusalOutput's NextStep for a refusal
-// made before the decider was ever reached (r.OnBehalfOf == ""): the request,
-// if one exists, is unchanged by this call.
+// made before the decider was ever reached (r.OnBehalfOf == ""), and for
+// approval.ErrPlanChanged: in both cases the request, if one exists, is
+// still open and still answerable exactly as this text says — re-reading the
+// queue for the current plan_hash is what ErrPlanChanged itself asks for.
 const answerRefusalNextStepUnchanged = "this call left the request (if any) unchanged. " +
 	"It can still be answered with approve_request or on the Control API endpoint."
+
+// answerRefusalNextStepCannotAnswerHere is refusalOutput's NextStep for
+// approval.ErrWeakChannel: the rule requires an out-of-band decision, so —
+// unlike every other refusal isKnownApprovalRefusal recognises — no in-band
+// tool, approve_request included, can ever satisfy it. Sharing
+// answerRefusalNextStepUnchanged's "it can still be answered with
+// approve_request" here would contradict this refusal's own Reason (PR #738
+// follow-up review, finding 1).
+const answerRefusalNextStepCannotAnswerHere = "no in-band tool — approve_request included — can decide this one. " +
+	"A human must decide it on the Control API's decision endpoint, with their own out-of-band credential."
+
+// answerRefusalNextStepIneligibleAccount is refusalOutput's NextStep for
+// approval.ErrNotInAudience: THIS Account is not in the request's named
+// audience, so saying "it can still be answered" without naming who by would
+// read as an invitation to retry with the same Account — but a different,
+// eligible Account can still answer it in-band, so approve_request stays
+// on the table (unlike approval.ErrRequesterExcluded, which never can: see
+// answerRefusalNextStepRequesterExcluded).
+const answerRefusalNextStepIneligibleAccount = "this Account is not in the request's audience. An Account in the " +
+	"audience must decide it, with approve_request from that Account's own session or on the Control API."
+
+// answerRefusalNextStepRequesterExcluded is refusalOutput's NextStep for
+// approval.ErrRequesterExcluded: this call runs in the requesting Account's
+// own MCP session, and approve_request is the in-band channel — so unlike
+// answerRefusalNextStepIneligibleAccount, no Account reachable from this
+// session can ever decide the request. Only the Control API's decision
+// endpoint, exercised by a different human with their own credential, can.
+const answerRefusalNextStepRequesterExcluded = "the Account that asked cannot decide it. A different human must " +
+	"decide it out-of-band, on the Control API's decision endpoint with their own credential."
+
+// answerRefusalNextStepNoSuchRequest is refusalOutput's NextStep for
+// approval.ErrNotFound: there is no request at this id to answer at all, so
+// nothing is "still answerable" until the caller finds the right one.
+const answerRefusalNextStepNoSuchRequest = "there is no request to answer at this request_id — it may never have " +
+	"existed, or have expired and been swept. Check request_id."
+
+// answerRefusalNextStepRequestClosed is refusalOutput's NextStep for
+// approval.ErrNotPending outside the approved-with-no-Job decline (which gets
+// answerRefusalNextStepDeclineNotRecorded instead): the request has already
+// reached a resolution, so nobody can decide it again.
+const answerRefusalNextStepRequestClosed = "this request is no longer open (already decided, or expired); " +
+	"it cannot be decided again."
+
+// answerRefusalNextStepAlreadyDecidedByThisAccount is refusalOutput's
+// NextStep for approval.ErrDuplicateDecider outside the approved-with-no-Job
+// decline: only THIS Account's answer is redundant — unlike
+// answerRefusalNextStepRequestClosed, the request itself may still need more
+// approvals from someone else.
+const answerRefusalNextStepAlreadyDecidedByThisAccount = "this Account already decided this request; answering again " +
+	"from the same Account changes nothing. If the rule still needs more approvals, a different Account must supply " +
+	"them, with approve_request or the Control API."
+
+// answerRefusalNextStepApprovalsUnavailable is refusalOutput's NextStep for
+// capability.ErrApprovalUnavailable: no decider is configured on this Relay
+// at all, so there is no endpoint — in-band or on the Control API — that can
+// decide the request.
+const answerRefusalNextStepApprovalsUnavailable = "approvals are not configured on this Relay: there is no endpoint, " +
+	"in-band or on the Control API, that can decide this request."
 
 // answerRefusalNextStepDeclineNotRecorded is refusalOutput's NextStep when a
 // decline was refused with ErrNotPending or ErrDuplicateDecider because the
@@ -865,6 +927,51 @@ const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was reco
 // durable (security review #727 finding 1).
 const answerRefusalNextStepMayAlreadyReflectAnswer = "the request may already reflect this answer. Confirm its state with the Control " +
 	"API's approval read before answering again or re-issuing the call."
+
+// knownRefusalNextStep picks refusalOutput's NextStep for a refusal
+// isKnownApprovalRefusal recognises. Chosen per sentinel rather than the one
+// generic "can still be answered with approve_request" text every sentinel
+// used to share: that text is true of exactly one of these
+// (approval.ErrPlanChanged) and false, in a different way, of the rest — see
+// each NextStep constant's own doc for which way (PR #738 follow-up review,
+// finding 1). Called only once r.Err is known to satisfy
+// isKnownApprovalRefusal; every branch below assumes that.
+func (r elicitedAnswerResult) knownRefusalNextStep() string {
+	switch {
+	case errors.Is(r.Err, approval.ErrNotFound):
+		return answerRefusalNextStepNoSuchRequest
+	case errors.Is(r.Err, approval.ErrWeakChannel):
+		return answerRefusalNextStepCannotAnswerHere
+	case errors.Is(r.Err, approval.ErrRequesterExcluded):
+		return answerRefusalNextStepRequesterExcluded
+	case errors.Is(r.Err, approval.ErrNotInAudience):
+		return answerRefusalNextStepIneligibleAccount
+	case errors.Is(r.Err, approval.ErrNotPending), errors.Is(r.Err, approval.ErrDuplicateDecider):
+		// The decline-not-recorded text applies only when this landed on a
+		// request that stands approved with no Job bound — a decline that
+		// lost the race to an out-of-band approval (security review #727
+		// finding 2). Otherwise ErrNotPending means the REQUEST is closed to
+		// everyone, while ErrDuplicateDecider means only THIS Account's say
+		// in it is spent — the request itself may still need more approvals
+		// from someone else, so the two get different text.
+		switch {
+		case r.stateReported && r.State == approval.StateApproved && r.JobID == "":
+			return answerRefusalNextStepDeclineNotRecorded
+		case errors.Is(r.Err, approval.ErrDuplicateDecider):
+			return answerRefusalNextStepAlreadyDecidedByThisAccount
+		default:
+			return answerRefusalNextStepRequestClosed
+		}
+	case errors.Is(r.Err, approval.ErrPlanChanged):
+		return answerRefusalNextStepUnchanged
+	default:
+		// capability.ErrApprovalUnavailable is the only sentinel left in
+		// isKnownApprovalRefusal's list that reaches here:
+		// approval.ErrMachineSelfDecision is intercepted by refusalOutput's
+		// earlier arm, before isKnownApprovalRefusal is even consulted.
+		return answerRefusalNextStepApprovalsUnavailable
+	}
+}
 
 // answerStateRefusedOutput builds the AnswerRefusalOutput for a call whose
 // arguments could not even be digested (tools_execution.go's callArgsDigest
@@ -920,20 +1027,13 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		out.NextStep = answerRefusalNextStepDeclineRecordedButNotHonoured
 	case errors.Is(r.Err, errUnknownRequestState):
 		// classifyElicitedDecision's own fail-closed backstop; says the
-		// decision was recorded.
+		// decision was recorded, so the default arm's "left the request
+		// unchanged" text would contradict that Reason.
 		out.Reason = r.Err.Error()
+		out.NextStep = answerRefusalNextStepMayAlreadyReflectAnswer
 	case isKnownApprovalRefusal(r.Err):
 		out.Reason = renderApprovalError(r.Err).Error()
-		// The decline-not-recorded text applies only to the two sentinels
-		// that mean this request had already moved before this answer
-		// arrived (ErrNotPending, ErrDuplicateDecider), and only when it
-		// landed on a request that stands approved with no Job bound — any
-		// other known refusal keeps the generic "unchanged" text (security
-		// review #727 finding 2).
-		if (errors.Is(r.Err, approval.ErrNotPending) || errors.Is(r.Err, approval.ErrDuplicateDecider)) &&
-			r.stateReported && r.State == approval.StateApproved && r.JobID == "" {
-			out.NextStep = answerRefusalNextStepDeclineNotRecorded
-		}
+		out.NextStep = r.knownRefusalNextStep()
 	case r.OnBehalfOf == "":
 		// The decider was never reached (see elicitedAnswerResult's doc on
 		// OnBehalfOf) — nothing could have been recorded, whatever the error.
@@ -957,7 +1057,8 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 		// never recorded to confirm the request's state is redundant, never
 		// wrong — unlike the reverse (code review #727 finding 2).
 		out.Reason = fmt.Sprintf("the answer may have been recorded, but recording or auditing it failed: %v. "+
-			"Confirm the request's state with approve_request or the Control API's approval read before acting.", r.Err)
+			"Confirm the request's state by reading it back — GET /api/v1/approvals/{id} on the Control API — "+
+			"before acting; approve_request records a new decision, it does not read one back.", r.Err)
 		out.NextStep = answerRefusalNextStepMayAlreadyReflectAnswer
 	}
 

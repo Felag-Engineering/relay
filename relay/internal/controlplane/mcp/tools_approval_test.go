@@ -1532,24 +1532,24 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 			wantNextStep: answerRefusalNextStepDeclineNotRecorded,
 		},
 		{
-			name: "arm 5: ErrNotPending on any other state keeps the generic unchanged NextStep",
+			name: "arm 5: ErrNotPending on any other state says the request is closed, not that it can still be answered",
 			result: elicitedAnswerResult{
 				Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied,
 			},
 			wantReason:   renderApprovalError(approval.ErrNotPending).Error(),
-			wantNextStep: answerRefusalNextStepUnchanged,
+			wantNextStep: answerRefusalNextStepRequestClosed,
 		},
 		{
-			name:         "arm 5: a known domain refusal renders renderApprovalError's text",
+			name:         "arm 5: ErrRequesterExcluded says a different human must decide out-of-band, not that it can still be answered",
 			result:       elicitedAnswerResult{Err: approval.ErrRequesterExcluded, OnBehalfOf: "alice"},
 			wantReason:   renderApprovalError(approval.ErrRequesterExcluded).Error(),
-			wantNextStep: answerRefusalNextStepUnchanged,
+			wantNextStep: answerRefusalNextStepRequesterExcluded,
 		},
 		{
-			name:         "arm 5: capability.ErrApprovalUnavailable (decider never wired) still renders via renderApprovalError",
+			name:         "arm 5: capability.ErrApprovalUnavailable (decider never wired) says no endpoint can decide it",
 			result:       elicitedAnswerResult{Err: capability.ErrApprovalUnavailable},
 			wantReason:   renderApprovalError(capability.ErrApprovalUnavailable).Error(),
-			wantNextStep: answerRefusalNextStepUnchanged,
+			wantNextStep: answerRefusalNextStepApprovalsUnavailable,
 		},
 		{
 			name:         "the OnBehalfOf-empty catch-all: the decider was never reached, so nothing to say was recorded",
@@ -1596,6 +1596,18 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 		}
 	})
 
+	t.Run("the default catch-all points the caller at the Control API's approval READ, never at approve_request", func(t *testing.T) {
+		// approve_request records a NEW decision; it is not a way to read the
+		// request's current state back (PR #738 follow-up review, finding 2).
+		out := elicitedAnswerResult{Err: errors.New("boom"), OnBehalfOf: "alice"}.refusalOutput()
+		if !strings.Contains(out.Reason, "GET /api/v1/approvals/{id}") {
+			t.Errorf("Reason = %q, want it to name the Control API's approval-read route", out.Reason)
+		}
+		if strings.Contains(out.Reason, "Confirm the request's state with approve_request") {
+			t.Errorf("Reason = %q, must not suggest approve_request as a way to confirm state — it records a decision, not a read", out.Reason)
+		}
+	})
+
 	t.Run("refusalOutput copies State/JobID/ExpiresAt only when stateReported", func(t *testing.T) {
 		unreported := elicitedAnswerResult{Err: errAnswerStateRefused, State: approval.StateApproved, JobID: "job-leak", stateReported: false}.refusalOutput()
 		if unreported.State != "" || unreported.JobID != "" || unreported.ExpiresAt != "" {
@@ -1610,4 +1622,221 @@ func TestRefusalOutput_ReasonArmsAndOrdering(t *testing.T) {
 			t.Errorf("refusalOutput = %+v, want State/JobID/ExpiresAt copied verbatim", reported)
 		}
 	})
+}
+
+// TestRefusalOutput_NextStepNeverContradictsReason is a table over EVERY
+// refusal shape refusalOutput can render (acceptElicitedAnswer's own
+// refusals and classifyElicitedDecision's Outcome == elicitedRefused
+// branches), asserting the NextStep never contradicts its own Reason (PR #738
+// follow-up review, finding 1): a single "it can still be answered with
+// approve_request or on the Control API endpoint" text used to be given to
+// every known refusal alike, which was true of exactly one of them
+// (ErrPlanChanged) and false of the rest, in different ways.
+func TestRefusalOutput_NextStepNeverContradictsReason(t *testing.T) {
+	const stillAnswerable = "It can still be answered with approve_request or on the Control API endpoint."
+
+	cases := []struct {
+		name    string
+		result  elicitedAnswerResult
+		forbid  []string // substrings the NextStep must NOT contain
+		require []string // substrings the NextStep MUST contain
+	}{
+		{
+			name:   "ErrNotFound: there is no request to answer at all",
+			result: elicitedAnswerResult{Err: approval.ErrNotFound, OnBehalfOf: "alice"},
+			forbid: []string{stillAnswerable, "can still be answered"},
+		},
+		{
+			name:    "ErrWeakChannel: no in-band tool, approve_request included, can ever satisfy this rule",
+			result:  elicitedAnswerResult{Err: approval.ErrWeakChannel, OnBehalfOf: "alice"},
+			forbid:  []string{stillAnswerable, "can still be answered"},
+			require: []string{"Control API's decision endpoint"},
+		},
+		{
+			name:    "ErrRequesterExcluded: this call runs in the requesting Account's own session, so no in-band answer can ever decide it",
+			result:  elicitedAnswerResult{Err: approval.ErrRequesterExcluded, OnBehalfOf: "alice"},
+			forbid:  []string{stillAnswerable, "approve_request"},
+			require: []string{"out-of-band"},
+		},
+		{
+			name:    "ErrNotInAudience: this Account is not in the named audience",
+			result:  elicitedAnswerResult{Err: approval.ErrNotInAudience, OnBehalfOf: "alice"},
+			forbid:  []string{stillAnswerable, "can still be answered"},
+			require: []string{"not in the request's audience"},
+		},
+		{
+			name:   "ErrNotPending, no Request read at all (stateReported false)",
+			result: elicitedAnswerResult{Err: approval.ErrNotPending, OnBehalfOf: "alice"},
+			forbid: []string{stillAnswerable, "can still be answered"},
+		},
+		{
+			name:   "ErrDuplicateDecider, no Request read at all (stateReported false)",
+			result: elicitedAnswerResult{Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice"},
+			forbid: []string{stillAnswerable},
+		},
+		{
+			// classifyElicitedDecision never produces ErrNotPending with a
+			// terminal (denied) Request read back — Decide's denial is
+			// terminal, so a denied Request is never re-decided into
+			// ErrNotPending by this path. This row is a unit check of
+			// refusalOutput's own branching, not a reachable outcome.
+			name:   "ErrNotPending, Request read back terminal (denied): closed to everyone",
+			result: elicitedAnswerResult{Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied},
+			forbid: []string{stillAnswerable, "can still be answered"},
+		},
+		{
+			// Likewise unreachable from classifyElicitedDecision (a
+			// duplicate decider on an already-denied Request is classified
+			// elicitedDenied there, never routed through this refusal
+			// shape) — a unit check of refusalOutput alone.
+			name:   "ErrDuplicateDecider, Request read back terminal (denied): this Account's say is spent, not necessarily the request",
+			result: elicitedAnswerResult{Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice", stateReported: true, State: approval.StateDenied},
+			forbid: []string{stillAnswerable},
+		},
+		{
+			name: "ErrNotPending, approved with no Job bound: a decline that lost the race, not recorded",
+			result: elicitedAnswerResult{
+				Err: approval.ErrNotPending, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved, JobID: "",
+			},
+			require: []string{"decline was not recorded"},
+			forbid:  []string{stillAnswerable},
+		},
+		{
+			name: "ErrDuplicateDecider, approved with no Job bound: a decline that lost the race, not recorded",
+			result: elicitedAnswerResult{
+				Err: approval.ErrDuplicateDecider, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved, JobID: "",
+			},
+			require: []string{"decline was not recorded"},
+			forbid:  []string{stillAnswerable},
+		},
+		{
+			name:    "ErrPlanChanged: re-reading the current plan_hash and answering it IS what this Reason asks for",
+			result:  elicitedAnswerResult{Err: approval.ErrPlanChanged, OnBehalfOf: "alice"},
+			require: []string{"can still be answered"},
+		},
+		{
+			name:   "capability.ErrApprovalUnavailable: no decider is configured, so no endpoint exists at all",
+			result: elicitedAnswerResult{Err: capability.ErrApprovalUnavailable},
+			forbid: []string{stillAnswerable, "can still be answered"},
+		},
+		{
+			name:   "ErrMachineSelfDecision: AP-64's own text, not renderApprovalError's — a later call CAN still name an approver",
+			result: elicitedAnswerResult{Err: approval.ErrMachineSelfDecision, OnBehalfOf: "someone"},
+			// This one legitimately keeps the generic text: nothing about
+			// this Account or channel is refused, only THIS call named no
+			// human.
+			require: []string{"can still be answered"},
+		},
+		{
+			name:   "errDeclineNotHonoured: the decline WAS recorded, so must never say it was not",
+			result: elicitedAnswerResult{Err: errDeclineNotHonoured, OnBehalfOf: "alice", stateReported: true, State: approval.StateApproved},
+			forbid: []string{"was not recorded", stillAnswerable},
+		},
+		{
+			// classifyElicitedDecision's own fail-closed backstop: err is nil
+			// but req.State is unrecognised, so the decision WAS recorded —
+			// "unchanged" or "can still be answered" would contradict that.
+			name:    "errUnknownRequestState: the decision was recorded, only the resulting state is unrecognised",
+			result:  elicitedAnswerResult{Err: errUnknownRequestState, OnBehalfOf: "alice", stateReported: true},
+			forbid:  []string{"unchanged", "can still be answered"},
+			require: []string{"Control API"},
+		},
+		{
+			// The bare form: acceptElicitedAnswer's own refusal before the
+			// decider is ever reached (OnBehalfOf empty, no decision made).
+			name:    "errAnswerStateRefused: the requestState never opened",
+			result:  elicitedAnswerResult{Err: errAnswerStateRefused},
+			require: []string{"can still be answered"},
+		},
+		{
+			// The wrapped form acceptElicitedAnswer actually returns when the
+			// seal opens but its binding to this call fails — errors.Is must
+			// still recognise it through the %w wrapping.
+			name:    "errAnswerStateRefused: wrapped, as acceptElicitedAnswer's binding-mismatch path returns it",
+			result:  elicitedAnswerResult{Err: fmt.Errorf("%w: %w", errAnswerStateRefused, requeststate.ErrBindingMismatch)},
+			require: []string{"can still be answered"},
+		},
+		{
+			// The retry did not carry exactly one elicitation response keyed
+			// by the sealed request ID — nothing was recorded.
+			name:    "errAnswerShape: the retry's InputResponses do not match the sealed request",
+			result:  elicitedAnswerResult{Err: errAnswerShape},
+			require: []string{"can still be answered"},
+		},
+		{
+			// assertedApprover's malformed-responder refusal (too long):
+			// refused before the decider is ever called, so nothing was
+			// recorded and re-answering is still on the table.
+			name:    "audit.ErrAssertedFieldTooLong: the responder assertion is malformed",
+			result:  elicitedAnswerResult{Err: fmt.Errorf("the asserted approver is refused: %w", audit.ErrAssertedFieldTooLong)},
+			require: []string{"can still be answered"},
+		},
+		{
+			// assertedApprover's malformed-responder refusal (control
+			// characters): same as above, different sentinel.
+			name:    "audit.ErrAssertedFieldInvalid: the responder assertion is malformed",
+			result:  elicitedAnswerResult{Err: fmt.Errorf("the asserted approver is refused: %w", audit.ErrAssertedFieldInvalid)},
+			require: []string{"can still be answered"},
+		},
+		{
+			name:    "the OnBehalfOf-empty catch-all: the decider was never reached, approve_request itself is still untried",
+			result:  elicitedAnswerResult{Err: errors.New("some new sentinel"), OnBehalfOf: ""},
+			require: []string{"can still be answered"},
+		},
+		{
+			name:   "the default catch-all: a non-domain failure after the decider ran must never claim the request is unchanged",
+			result: elicitedAnswerResult{Err: errors.New("capability: record audit entry: disk full"), OnBehalfOf: "alice"},
+			forbid: []string{"unchanged", stillAnswerable},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out := tc.result.refusalOutput()
+			for _, s := range tc.forbid {
+				if strings.Contains(out.NextStep, s) {
+					t.Errorf("NextStep = %q, must not contain %q — contradicts Reason %q", out.NextStep, s, out.Reason)
+				}
+			}
+			for _, s := range tc.require {
+				if !strings.Contains(out.NextStep, s) {
+					t.Errorf("NextStep = %q, want it to contain %q", out.NextStep, s)
+				}
+			}
+		})
+	}
+}
+
+// TestNextStepConstants_CarryNoReviewerReferences guards every model-facing
+// NextStep constant against the class of leak a prior follow-up pass fixed:
+// a PR or code-review citation belongs in a Go comment, never in text an
+// AI-agent reads back as instructions.
+func TestNextStepConstants_CarryNoReviewerReferences(t *testing.T) {
+	nextSteps := map[string]string{
+		"nextStepAnswerRecorded":                             nextStepAnswerRecorded,
+		"nextStepAnswerNotRecordedAlreadyDecided":            nextStepAnswerNotRecordedAlreadyDecided,
+		"nextStepAnswerNotRecordedDuplicateDecider":          nextStepAnswerNotRecordedDuplicateDecider,
+		"approveRequestNextStep":                             approveRequestNextStep,
+		"answerRefusalNextStepUnchanged":                     answerRefusalNextStepUnchanged,
+		"answerRefusalNextStepCannotAnswerHere":              answerRefusalNextStepCannotAnswerHere,
+		"answerRefusalNextStepIneligibleAccount":             answerRefusalNextStepIneligibleAccount,
+		"answerRefusalNextStepRequesterExcluded":             answerRefusalNextStepRequesterExcluded,
+		"answerRefusalNextStepNoSuchRequest":                 answerRefusalNextStepNoSuchRequest,
+		"answerRefusalNextStepRequestClosed":                 answerRefusalNextStepRequestClosed,
+		"answerRefusalNextStepAlreadyDecidedByThisAccount":   answerRefusalNextStepAlreadyDecidedByThisAccount,
+		"answerRefusalNextStepApprovalsUnavailable":          answerRefusalNextStepApprovalsUnavailable,
+		"answerRefusalNextStepDeclineNotRecorded":            answerRefusalNextStepDeclineNotRecorded,
+		"answerRefusalNextStepDeclineRecordedButNotHonoured": answerRefusalNextStepDeclineRecordedButNotHonoured,
+		"answerRefusalNextStepMayAlreadyReflectAnswer":       answerRefusalNextStepMayAlreadyReflectAnswer,
+	}
+
+	for name, text := range nextSteps {
+		if strings.Contains(text, "PR #") {
+			t.Errorf("%s = %q, must not carry a PR reference — an AI-agent reads this back as instructions", name, text)
+		}
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "review") || strings.Contains(lower, "finding") {
+			t.Errorf("%s = %q, must not carry a reviewer reference — an AI-agent reads this back as instructions", name, text)
+		}
+	}
 }

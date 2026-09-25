@@ -361,6 +361,15 @@ func TestAnsweredRetry_AuditWriteFailureIsNotRenderedAsNothingRecorded(t *testin
 			t.Errorf("Reason = %q, must not claim the answer was not recorded or ignored", out.AnswerRefused.Reason)
 		}
 	}
+	if !strings.Contains(out.AnswerRefused.Reason, "GET /api/v1/approvals/{id}") {
+		t.Errorf("Reason = %q, want it to point at the Control API's approval-read route", out.AnswerRefused.Reason)
+	}
+	if strings.Contains(out.AnswerRefused.Reason, "Confirm the request's state with approve_request") {
+		t.Errorf("Reason = %q, must not suggest approve_request as a way to confirm state — it records a decision, not a read", out.AnswerRefused.Reason)
+	}
+	if out.AnswerRefused.NextStep != answerRefusalNextStepMayAlreadyReflectAnswer {
+		t.Errorf("NextStep = %q, want %q", out.AnswerRefused.NextStep, answerRefusalNextStepMayAlreadyReflectAnswer)
+	}
 	if n := exec.runCount(); n != 1 {
 		t.Errorf("Run called %d times, want 1 (no extra dispatch)", n)
 	}
