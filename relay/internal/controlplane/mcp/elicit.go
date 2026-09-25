@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -98,6 +99,30 @@ func newQuestioner() *questioner {
 		return nil
 	}
 	return &questioner{sealer: sealer}
+}
+
+// stateOpener is the ONLY way a sealed request state is opened outside this
+// file: a narrow, binding-checked capability over the questioner's Sealer.
+// It runs requeststate's OpenFor — the seal check AND the binding to the
+// caller, request, tool and argument digest, in one call — and nothing else.
+// The unbound Open, Seal, and the Sealer itself are unreachable through it:
+// the Sealer lives only in this closure, so tools_approval.go (the one file
+// permitted to accept a decision) can verify an answer without ever holding
+// or passing the key's custodian (TestElicit_SealKeyIsPerProcessAndNotConfiguration).
+type stateOpener func(state string, now time.Time, call requeststate.Call) (requeststate.State, error)
+
+// opener returns q's binding-checked stateOpener, or nil when q (or its
+// sealer) is absent — "never ask" also means "never accept an answer", and
+// the answer path refuses a nil opener rather than calling it. Nil-receiver
+// safe, like every method on questioner.
+func (q *questioner) opener() stateOpener {
+	if q == nil || q.sealer == nil {
+		return nil
+	}
+	sealer := q.sealer
+	return func(state string, now time.Time, call requeststate.Call) (requeststate.State, error) {
+		return sealer.OpenFor(state, now, call)
+	}
 }
 
 // clientCanBeAsked implements the emission predicate's conditions 2 (the
