@@ -340,18 +340,21 @@ func testParkedError() *capability.ParkedError {
 	}
 }
 
-// TestDispatchAndRender_ParkIsAResultNotAnError is the behaviour that matters
-// most here, and it is a legibility guarantee rather than a cosmetic one
+// TestDispatch_ParkIsAResultNotAnError is the behaviour that matters most
+// here, and it is a legibility guarantee rather than a cosmetic one
 // (ADR-0001/0003): a park is neither a failure nor a completion, and an
 // AI-agent told "dispatch failed" learns the wrong lesson twice — it may retry
 // against a gate that will park it every time, and it may report a fleet
 // action as broken when a human is merely being asked.
-func TestDispatchAndRender_ParkIsAResultNotAnError(t *testing.T) {
-	out, err := dispatchAndRender(context.Background(),
+func TestDispatch_ParkIsAResultNotAnError(t *testing.T) {
+	out, parked, err := dispatch(context.Background(),
 		parkingExecutor{parked: testParkedError()}, nil,
 		capability.Principal{Account: "gleipnir-prod"}, capability.Selector{}, jobs.Action{Kind: jobs.ActionOperation})
 	if err != nil {
-		t.Fatalf("dispatchAndRender returned an error for a park: %v — a park must render as a RESULT", err)
+		t.Fatalf("dispatch returned an error for a park: %v — a park must render as a RESULT", err)
+	}
+	if parked == nil {
+		t.Fatal("dispatch returned a nil *capability.ParkedError for a park")
 	}
 
 	if out.PendingApproval == nil {

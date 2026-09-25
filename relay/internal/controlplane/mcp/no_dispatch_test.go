@@ -124,6 +124,14 @@ var execFiles = map[string]bool{
 	// gate must never become a second path to a Node, and this is what makes
 	// that structural rather than a matter of review.
 	"tools_approval.go": true,
+	// elicit.go (S2b of #646, ADR-0029 decision 6) renders an askable park as
+	// an MRTR question. It spells capability.ParkedError/Principal to read
+	// what the capability layer already decided, so it classifies relaxed —
+	// but it names no decision identifier at all (no_decision_test.go needs
+	// no new exemption for it) and remains bound by every unconditional rule,
+	// including the one that matters most: it may never reach
+	// capability.Service or newDispatch.
+	"elicit.go": true,
 }
 
 // classifyFile reports whether name is a strict read file (strict=true) or a
