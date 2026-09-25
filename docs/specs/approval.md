@@ -162,11 +162,18 @@ credential the AI-agent session does not hold.
 ### Two decision paths
 
 A decision reaches Relay by one of two paths, and they exist side by side because they reach
-different people. **This is current behaviour and ADR-0040 narrows it**: the surface that created
-a request becomes the surface that answers it, so a request created over MCP is answerable only
-over MCP. That is AP-74 … AP-76, Designed at v0.7.0 and blocked by #646 — until the MRTR round
-trip exists, closing the Console to an MCP-originated request would leave it no answer path at
-all. Both paths are open today.
+different people.
+
+**MCP is the approved pathway** for agent-originated approval (ADR-0040, as amended
+`2026-09-25`): the tool text, the runbook and operator guidance name it, and Gleipnir is where the
+human is expected to answer. The out-of-band path — the Console and the Control API decision
+endpoint — works, decides any parked request whichever surface created it, and is **not relied
+on**. It is the rescue, not the route: nothing Relay ships should direct a human there for
+agent-originated work, and nothing refuses a human who arrives there anyway. **Today the product
+does not yet say so**: the MCP park result's decision path, its schema text and the webhook
+payload all still name the Relay decision endpoint. Bringing them in line is open work — see *Open
+questions* — and until it lands, the approved pathway is the owner's posture and ADR-0040's, not
+yet the product's own text.
 
 - **AP-15** **In-band, through the requesting client.** Relay authors the question; the client puts
   it in front of a human and returns the answer over its own session. `approve_request` is that
@@ -370,15 +377,15 @@ most MCP approvals will be the second kind, and the trail will say so.
 
 ## Governing ADRs and invariants
 
-- **ADR-0040** — the surface that created a request is the surface that answers it, and
-  out-of-band as a rule *requirement* is shelved. **Explicitly interim**, pending the permissions
-  rework: for now Gleipnir owns the permission model for agent-originated work, and the Console
-  and Control API keep an approval capability only for work they themselves originated. It amends
-  ADR-0027's two-paths-side-by-side posture to one path per origin (AP-74 … AP-76), and it may not
-  be enforced before #646 — a constraint on promotion, not an aside. What it gives up — a
-  Relay-verified approver in the default path for agent-originated work — is stated in *Accepted
-  residual
-  risk* and in threat model R21; what it shelves is `approval-assurance.md`.
+- **ADR-0040, as amended `2026-09-25`** — MCP is the approved pathway for agent-originated
+  approval, and out-of-band as a rule *requirement* is shelved. **Explicitly interim**,
+  pending the permissions rework (#716). Its original strict separation — the surface that
+  created a request is the surface that answers it — was **withdrawn before any of it was
+  built**, for the availability cost it had not named, and its three claims are retired. The
+  Console and the Control API keep deciding any parked request and are not relied on. What the
+  relied-on path gives up — a Relay-verified approver for agent-originated work — is stated in
+  *Accepted residual risk* and in threat model R21 and R26; what is shelved is
+  `approval-assurance.md`.
 - **ADR-0027, as amended 2026-08-14 through 2026-09-24.** The callout, the ladder, channel
   strength, plan-hash binding, expiry, quorum, the attribution triple, and approval grants remain
   its decisions. Several of its amendments are recorded intent that the code does not yet carry,
@@ -546,9 +553,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-69 | An `out-of-band` rule yields **no answerable question**, on any client: the envelope a park is rendered in never weakens the channel the rule demands (AP-13). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-70 | A client that cannot be asked sees **no change**: `pending_approval`, `approve_request` and the Control API decision endpoint all behave exactly as before. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-71 | A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment 2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-74 | The surface that created a request is the surface that answers it: a request created over MCP is answerable only over MCP, and one created on the Admin Console or the Control API is answerable only on the surface that originated it. Blocked by #646 — see ADR-0040's sequencing constraint. (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-75 | A Console or Control API decision on a request that surface did not originate is **refused**, whatever the decider's role, audience membership or step-up state — the origin check is not a role gate and no role clears it. (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-76 | The refusal names **where the answer belongs**: it says the request was created on another surface and which one, so a human who reached the wrong surface is told the right one rather than left to read the gate rules. A refusal that did not say so would be indistinguishable from "you may not approve this". (ADR-0040.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
@@ -597,22 +601,25 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   client. The trail records the approver as asserted, never verified (AP-39), and an operator who
   needs evidence raises the rule to second-person or out-of-band. Stated to the owner and accepted
   on `2026-09-14`. Threat model **R21**.
-- **Every approval of agent-originated work is an assertion, and there is no verified
-  alternative.** Before ADR-0040 an operator who wanted evidence raised the rule to
-  `out-of-band` and got an approver Relay authenticated. That option is still in the code and is
-  no longer in the shipped posture: no shipped or seeded rule demands a channel, and an
-  MCP-originated request is answered by the client that made it (AP-74 … AP-76). So for the whole
-  of agent-originated work the audit trail answers *"a client told us a human approved this"* and
-  cannot answer *"a human authenticated to Relay approved this"*. Accepted by the owner on
-  `2026-09-24` as **interim**, pending the permissions rework, on four grounds ADR-0040 records:
-  the client is where the human already is, behind a firewall Relay sits the far side of; Gleipnir
-  enforces its own approver role check server-side and stamps the responder from an authenticated
-  session, so the assertion is backed by an authentication *somebody* performed; the alternative
-  in practice was an approval nobody answered; and one permission model is a prerequisite for a
-  good one. Bounded by everything an approval never was: Relay-side authorization on who may
-  request, the blast cap, the plan-hash binding, drift re-parking, and Node Policy, which no
-  approval has ever been able to lower. Threat model **R21** and **R26**; what is shelved, and
-  what would bring it back, is `approval-assurance.md`.
+- **The relied-on path for agent-originated work records an assertion, never a verified
+  approver.** Before ADR-0040 an operator who wanted evidence raised the rule to `out-of-band`
+  and got an approver Relay authenticated. That option is still in the code and is no longer
+  in the shipped posture: no shipped or seeded rule demands a channel, and MCP is the approved
+  pathway, so the approval Relay is *designed around* for agent-originated work is the
+  client's. For that path the audit trail answers *"a client told us a human approved this"*
+  and cannot answer *"a human authenticated to Relay approved this"*. A verified approver is
+  still **reachable** — the Console and the Control API decide any request, as amended
+  `2026-09-25` — but nothing directs a human there, so it is the rescue rather than a control.
+  Accepted by the owner on `2026-09-24` as **interim**, pending the permissions rework, on
+  four grounds ADR-0040 records: the client is where the human already is, behind a firewall
+  Relay sits the far side of; Gleipnir enforces its own approver role check server-side and
+  stamps the responder from an authenticated session, so the assertion is backed by an
+  authentication *somebody* performed; the alternative in practice was an approval nobody
+  answered; and one permission model is a prerequisite for a good one. Bounded by everything
+  an approval never was: Relay-side authorization on who may request, the blast cap, the
+  plan-hash binding, drift re-parking, and Node Policy, which no approval has ever been able
+  to lower. Threat model **R21** and **R26**; what is shelved, and what would bring it back,
+  is `approval-assurance.md`.
 - **An in-band approval is only as honest as the client's path to the human.** Behind a firewall,
   in-band is expected to be the everyday path, so for `in-band` rules the guarantee that a human
   decided rests on the client — Gleipnir's HIL router, or an operator's harness — keeping
@@ -623,15 +630,18 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   auto-answers its own question is indistinguishable from one that asked a person. An operator who
   needs evidence sets the rule to `out-of-band`. Accepted by the owner on `2026-09-18` (threat
   model R21) and extended to the responder assertion on `2026-09-24`.
-- **Two concurrent retries could each dispatch.** In the window between a decision being recorded
-  and the Job being bound to it, two retries of the same approved request can both pass the gate
-  and each mint a Job. AP-67's re-attach branch closes the ordinary case; the race is not closed,
-  and closing it fully needs a claim taken inside the decision transaction. This is a restatement
-  of a pre-existing defect, filed as **#713** — a second re-drive of an approved plan already
-  mints a second Job and overwrites the audit join, with or without MRTR. The window is narrow,
-  and the daemon's Task-ID dedup — the actual subject of invariant 4 — is untouched, so the
-  fleet still executes each Task at most once. Accepted by the owner on `2026-09-24` pending #713;
-  threat model **R24**.
+- **A released approval can dispatch again on any later re-drive (#713).** An approval is not
+  used up when it releases a Job: until it expires, any later call matching the approved plan
+  passes the gate and mints a second Job, overwriting the audit join. **The ordinary trigger is
+  not a race:** an approved Job slower than the client's per-call timeout, after which the model
+  re-drives the same call with no request state. AP-67's re-attach covers only a retry carrying
+  sealed request state, so it does not close that trigger; two concurrent retries in the gap
+  between decision and binding are the narrow case of the same defect. The daemon's Task-ID
+  dedup — the actual subject of invariant 4 — is untouched, so no Node executes the same Task
+  twice, but the fleet can see one approved plan run twice. Accepted by the owner on
+  `2026-09-24`; on `2026-09-25` deferred until after #646, with the likelihood corrected by the
+  v0.7.0 design review. Until it is fixed, demo commands should finish well inside the per-call
+  timeout. Threat model **R24**.
 - **Bulk approve can rubber-stamp (AP-59).** Approving many requests in one act, Raw Exec
   included, is the approval-fatigue pattern this capability's Purpose names, and one step-up
   covers the whole act: a hijacked human Console session plus that Account's password could
@@ -652,6 +662,18 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 
 Wanted, deliberately not in the first pass. Named so each is neither re-litigated nor lost;
 none is a commitment to an order.
+
+- **Removing Console approval, so that MCP is the only approval path.** The owner's stated
+  intent on `2026-09-25` — *"I eventually want to potentially remove the entire console
+  approve thing"* — recorded in ADR-0040's amendment of that date as where the
+  approved-pathway posture is heading. **An intent, not a decision**: nothing is removed, and
+  no claim below is retired or reworded for it. If taken, it would retire **AP-16**'s Console
+  half and **AP-19**, both built, and **AP-59** (bulk decisions), which is Designed at v0.7.0
+  and would then never be built or would be retired soon after. The intent names the Console;
+  whether the Control API decision endpoint — AP-16's other half — goes with it is not stated
+  and would have to be decided. It **waits on #646 being proven in use**, and on the restart
+  risk (`approval-assurance.md`; threat model R27) being closed first, because the Console is
+  today the only thing that makes a stranded request decidable. Taking it is its own ADR.
 
 - **Multi-step Plan routes, and everything that follows from them** — `plan.md`, which states that
   none of it exists in code. A Plan whose hash covers an ordered route rather than a single
@@ -699,10 +721,47 @@ none is a commitment to an order.
   emitted-question case deliberately, so the remainder is settled when `execution.md` migrates or
   when #644 is picked up.
 
+- **What the product's own text should say about where to answer.** ADR-0040 as amended makes
+  MCP the approved pathway and names "the tool text, the runbook and operator guidance" as where
+  that is said. Today three things say the opposite: the MCP park result's decision path, the
+  schema text describing it, and the webhook payload, all of which point a human at the Relay
+  decision endpoint. Whether each should name the client instead, name both with the client
+  first, or be left as the rescue's address is not decided, and none of it has an issue. What would
+  force it: the demo's approval beat, which is expected to happen in Gleipnir's UI while the
+  webhook sends the human to the Console.
+
 Deciding from the Console (#435) is in scope, not open. ADR-0028's stale `tasks/update` premise is
 no longer open either: the amendment is drafted in this change.
 
 ## History
+
+- `2026-09-25` — **Strict separation withdrawn; AP-74, AP-75 and AP-76 retired unbuilt.**
+  Owner decision, one day after ADR-0040, in their words: *"The more we talk about it the more
+  I doubt removing the console as approver. We don't want to rely on it though — we should
+  have everything run through the MCP as that is the approved pathway. And the console
+  approving / API is a complicating factor that shouldn't be used."* Asked to be precise, they
+  chose: **the Console and the Control API keep working exactly as today — not enforced, not
+  relied on.** The reason is the cost the original decision did not name, **availability**: an
+  adversarial review of the v0.7.0 design plan found that under separation every path that
+  used to end with "a human answers in the Console" ends with "wait for the TTL" — any rule
+  stricter than self-confirmation in-band makes an MCP-originated request undecidable by any
+  surface, because the askable predicate correctly declines to ask and the Console was closed;
+  the demo gate fixture hits three such rules at once; the park result, its schema text and
+  the webhook all point humans at a route that would have refused them; and the Console
+  originates nothing until #438. **Nothing was built**, so there is no code to remove. The
+  three IDs are retired and never reused; they are not reworded into something else, because
+  "MCP is the approved pathway" is a posture — prose and ADR — and not a claim a test can be
+  pointed at. **AP-70 stays**, and the contradiction it had with AP-75 — one saying the
+  Control API decision endpoint behaves exactly as before for a client that cannot be asked,
+  the other refusing that endpoint for the same request — is gone with AP-75. AP-16, AP-17 and
+  AP-19 were true throughout and are untouched. One paragraph added where the two decision
+  paths are introduced; the ADR-0040 bullet in *Governing ADRs* and the assertion entry in
+  *Accepted residual risk* re-premised; every reference to the sequencing constraint removed
+  from normative text. Two owner rulings of the same day are **recorded, not solved**, in
+  `approval-assurance.md`: restarts strand an in-flight MRTR answer, and whether "answered
+  over MCP" means any MCP Account or the exact client that asked. Threat model: R26
+  re-premised, R23's narrowing undone, and a row added for the restart risk. ADR-0040 carries
+  a dated amendment.
 
 - `2026-09-24` — **Direction change, owner, same day: one answer path per origin, and out-of-band
   as a rule requirement is shelved.** Recorded as **ADR-0040**, explicitly interim pending a
@@ -731,8 +790,10 @@ no longer open either: the amendment is drafted in this change.
   agent-originated work is", **R23** loses a human deciding in the Console from its compensating
   controls for those requests, and **R26** is added for the separation itself. The demo runbook
   (`docs/operations/demo-fleet.md`) has its approval beat move from the Console to Gleipnir's UI;
-  it is named as a consumer and left for whoever next walks it.
-
+  it is named as a consumer and left for whoever next walks it. *Superseded in part the next day
+  by the `2026-09-25` entry above: strict separation is withdrawn, AP-74 … AP-76 are retired
+  unbuilt, and the sequencing constraint and the R23 narrowing no longer apply. AP-58's move to
+  the stub, AP-69, the channel claims and the ladder sentence all stand.*
 - `2026-09-24` — **The shipped default is seeded into the store, not shipped as a file.** The
   migration draft made AP-55 a root-owned default gate file; ADR-0027's amendment of `2026-09-16`
   had already decided the opposite and explicitly declined a file that seeds the store, as two
