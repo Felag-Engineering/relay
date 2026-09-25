@@ -106,6 +106,12 @@ same channel semantics. One decision model, two delivery envelopes — not two m
 - **The guarantee for `in-band` rules is now explicitly a client-integrity assumption.** A
   compromised or naive client can approve rung-2 requests. This is stated rather than
   implied, and it is why rung 3 exists and why `out-of-band` remains the default for it.
+  *(Note, 2026-09-24: no decision in this ADR changes, but the scope of this consequence does.
+  [ADR-0040](0040-the-surface-that-created-a-request-answers-it.md) shelves out-of-band as a rule
+  requirement for now and settles that an MCP-originated request is answered over MCP. Rung 3 and
+  its default both stand wherever a rule sets one; no shipped or seeded rule does, so for
+  agent-originated work the client-integrity assumption is no longer one posture among several —
+  it is the posture. Explicitly interim, pending the permissions rework.)*
 - Gleipnir's HIL router becomes load-bearing for in-band rules: ADR-0027's requirement that
   it be *"a deterministic path to the assigned human"* is no longer advice.
 - The audit trail gains a class of record whose approver is asserted. Queries that need

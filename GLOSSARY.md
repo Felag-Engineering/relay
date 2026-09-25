@@ -357,9 +357,12 @@ a value.
 _Avoid_: plan hash (that is the fan-out-bearing one), fingerprint, similarity hash, group key
 
 **Approval**:
-A human decision that a specific parked Job may proceed, recorded against its Plan hash.
-The Job waits in **`pending-approval`** until the Gate rule's requirement is satisfied or
-its TTL expires. Relay authors what the approver sees, so the requesting AI-agent can
+A human decision that a specific parked **Request** may proceed, recorded against its Plan
+hash. **Parking creates no Job** — the gate sits before the dispatcher, so what waits is the
+Request, and a Job is minted only if a decision releases one, or never (ADR-0027 decision 1
+as amended 2026-09-24; ADR-0028 §Amendment 2026-08-17). The Request waits in
+**`pending-approval`** until the Gate rule's requirement is satisfied or its TTL expires.
+Relay authors what the approver sees, so the requesting AI-agent can
 neither truncate nor spin it. The decision arrives by one of two paths: **out-of-band**, on
 an authenticated Relay surface (Console or Control API) where the approver is verified; or
 **in-band**, through the requesting client's MCP session (`approve_request`, or an MRTR
@@ -370,8 +373,8 @@ Node's Policy allows.
 _Avoid_: authorization, permission, sign-off, confirmation (unqualified — name the rung)
 
 **Decision**:
-One recorded answer to a parked Job — who decided, when, over which **channel**, against
-which Plan hash, and whether a human decided. An Approval is *satisfied* by a set of
+One recorded answer to a parked **Request** (never to a Job — parking mints none) — who
+decided, when, over which **channel**, against which Plan hash, and whether a human decided. An Approval is *satisfied* by a set of
 Decisions from **distinct** Accounts (quorum means distinct deciders); one denying Decision
 is terminal, mirroring Policy's deny-beats-allow. Every Decision is its own audit record,
 including a denial and including the first of two, so partial quorum is never an absence in
@@ -396,6 +399,42 @@ the caller, and checked as a floor: a stronger channel satisfies a weaker requir
 never the reverse (ADR-0027).
 _Avoid_: transport (reserved for the gRPC/mTLS node plane), delivery envelope (that is
 *how* an approver is reached, not how strongly their answer is trusted)
+
+**Confirmation ladder**:
+The three rungs a Gate rule selects between, named so that "confirmation" unqualified never
+has to be (ADR-0027 decision 5). **No gate** — below the rule's thresholds; the request runs
+immediately. **Self-confirmation** — the requester's own side confirms: a human reviewing what
+Relay rendered, or, for an MCP request, an in-band answer carrying an asserted approver. A
+machine Account can never reach this rung on its own authority; the one relaxation is
+ADR-0029's, and it records an assertion rather than a verified human. **Second-person** — the
+audience excludes the requester, so the decider is someone else. A rung says *who must answer*;
+the **Channel** says *how strongly the answer is trusted*, and the two are set independently.
+_Avoid_: confirmation (unqualified — name the rung), approval tier. In **new** prose name the
+rung rather than numbering it; ADR-0027 decision 5 numbers them and ADR-0028, ADR-0029 and
+`docs/operations/approval-gates.md` cite "rung 2", and that numbering stands wherever it is
+already written or quoted.
+
+**Responder assertion**:
+The claim a client attaches to an **MRTR elicitation** answer that a *human*, and not the
+model, produced it — the thing that distinguishes an answered question from a machine-composed
+one. Relay checks only that it is present and that the answer's sealed state is bound to this
+caller, request, plan and call; it cannot check that the claim is true, and an answer carrying
+none is refused exactly as an `approve_request` carrying no approver is. Recorded in the
+**asserted** lane, never the verified one (see *Attribution*), so an auditor reads it as "a
+client told us a human answered" and never as "a human authenticated to Relay". It is what the
+in-band honesty residual now rests on (`docs/specs/approval.md`; threat model R21).
+_Avoid_: human flag, responder flag, human-in-the-loop token
+
+**Sealed request state**:
+The opaque token Relay hands a client alongside an **MRTR elicitation** question and requires
+back on the retried call. It is sealed against tampering and **bound to four things** — the
+calling Account, the approval Request, the Plan hash and that call — so a state that was
+altered, replayed against another request, presented by another Account, carried on a
+different call, or held past its expiry is refused rather than honoured. It carries no
+authority of its own: it proves which question is being answered, never that the answer may be
+accepted, which stays the gate's decision (`docs/specs/approval.md`).
+_Avoid_: continuation token, resume handle, elicitation cookie ("nonce" keeps its ordinary
+OAuth and CSP sense elsewhere and is not reserved here)
 
 **Security floor**:
 The configuration that bounds *who may authenticate and how recently they proved it*:
@@ -430,15 +469,21 @@ decision 12's time-boxed narrowing grant (ADR-0027). Always written in full: an 
 **Grant** is the authorization rule above, and the two are unrelated mechanisms.
 
 Where an Approval binds to a **Plan hash**, an Approval grant binds to a **Scope** (the
-requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*; no Selector
-namespace since 2026-09-16, ADR-0027) plus a **window** and a **use limit**. Those walls are its entire
+requesting Account, risk class, an Operation allow-list, a fan-out *ceiling*, and today an
+explicit **Raw Exec opt-in**; no Selector namespace since 2026-09-16, ADR-0027) plus a
+**window** and a **use limit**. Today the opt-in is accepted and priced at the `admin` role
+floor and the window's hard maximum is 24 hours; designed to become a Scope that may not cover
+Raw Exec at all, under a 4-hour maximum (ADR-0027 §Amendment 2026-09-24;
+`docs/specs/approval.md`). Those walls are its entire
 security argument, so every one of them is mandatory and an unbounded Scope cannot be
 stored. It exists because fatigue is a security property: forty elicitations produce forty
 rubber stamps, and a rubber-stamped Approval is worse than none.
 
 Requesting one is *not* being granted one — it creates an ordinary Approval whose subject
-is a Scope, answered on the same channel with the same quorum, audience, requester
-exclusion, and channel floor. What it costs to approve is derived from the Gate rules at
+is a Scope. Today it is answered on the same channel with the same quorum, audience, requester
+exclusion and channel floor as any other request; designed to become a floor rather than an
+equality, so that a grant is issued only by **second-person, out-of-band** approval however
+lenient the Gate rules are (ADR-0027 §Amendment 2026-09-24). What it costs to approve is derived from the Gate rules at
 the Scope's widest admissible dispatch, so it is never a cheaper path than the work it
 replaces. Every dispatch it releases audits to the same approval ID. **The ask is its own
 audit record**, separate from a single dispatch parking for approval (#546): the two are
@@ -463,9 +508,12 @@ outstanding `tools/call`, which the client polls via `tasks/get`. It is a *deliv
 envelope* for an Approval, never an execution unit. Always written in full; "task" alone
 means a Relay **Task**.
 
-Relay mints **one handle per parked dispatch**, not per Job — a parked dispatch creates no
-Job at all, and the Job arrives later if an approval releases it, or never. A handle is
-owner-only and expires; one that is not yours reads exactly like one that never existed.
+Relay mints **at most one handle per parked dispatch**, and never per Job — a parked dispatch
+creates no Job at all, and the Job arrives later if an approval releases it, or never. *At
+most*, because a park that emits an answerable **MRTR elicitation** question emits no task
+envelope: elicitation wins, so no client ever holds a handle and a question for the same park
+(ADR-0028 §Amendment 2026-09-24). A handle is owner-only and expires; one that is not yours
+reads exactly like one that never existed.
 
 Two things a handle deliberately is not. It is not a decision channel: no `tasks/*`
 method accepts an approval, and `tasks/cancel` ends the *client's* interest while leaving a still-
