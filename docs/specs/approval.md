@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-25`.
+**Status:** designed, not built, as of `2026-09-27`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -209,6 +209,41 @@ whose approver Relay verifies.
   a request before deciding it — the approver decides exactly what was asked or nothing — and
   nothing is dispatched from it:
   a release proceeds as any other release does (*Deciding*).
+
+- **AP-60** A gated dispatch that parks under an in-band rule, from a client that can be asked, is
+  answered with an approval **question** carrying the Relay-authored summary, the request ID and
+  the plan hash — and leaves no Job and no Tasks behind, exactly as a park does today (AP-2).
+- **AP-61** A question is emitted only where an answer from that caller could be **accepted**: the
+  rule's channel is in-band, the rule does not exclude the requester, and its audience admits the
+  calling Account. Otherwise the park renders as today's `pending_approval`.
+- **AP-62** A question is emitted only for a park this call **created**; a re-drive that bounces
+  off a request already pending re-pages nobody (AP-41).
+- **AP-63** An answer carried on the retried call records **the same Decision** as
+  `approve_request`, into the same two lanes (AP-39): the in-band channel, the verified Account
+  whose credential made the call, the responder identity recorded as an assertion, and the same
+  refusals (AP-42 … AP-49).
+- **AP-64** An answer is accepted as a decision only when it carries a **responder assertion**
+  whose gate is `permission`; an answer without one is machine-originated and is refused exactly
+  as an `approve_request` carrying no approver is refused (AP-48). The recognised form today is
+  `io.gleipnir/responder` — one form of a general responder assertion, so a standard key later is
+  additive.
+- **AP-65** The state a client echoes back is **sealed and bound** to the caller, the request, the
+  plan and the call; a tampered, cross-request, cross-account, wrong-call or expired one is
+  refused.
+- **AP-66** An approving retry **re-enters the whole dispatch pipeline** — Freeze, resolution,
+  authorization, the cap and the plan-hash match — and a changed Node set re-parks and asks again
+  rather than running against a set nobody approved (AP-21).
+- **AP-67** A retry whose decision has already released a Job **re-attaches** to that Job and
+  mints no second one.
+- **AP-68** A denial on the retry is **terminal and audited**, and nothing is dispatched (AP-27).
+- **AP-69** An `out-of-band` rule yields **no answerable question**, on any client: the envelope a
+  park is rendered in never weakens the channel the rule demands (AP-13).
+- **AP-70** A client that cannot be asked sees **no change**: `pending_approval`, `approve_request`
+  and the Control API decision endpoint all behave exactly as before, with one exception —
+  `approve_request`'s `approver` is bounded by the same rule as an elicited responder (at most 256
+  bytes, no control characters), and an approver outside it is refused, never truncated.
+- **AP-71** A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment
+  2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.)
 
 ### What an approval commits to
 
@@ -483,6 +518,18 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-51 | `TestRequestGrantRefusesUnboundedScopes`, `TestEveryScopeBoundIsRequired` | capability, approval |
 | AP-52 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
 | AP-54 | `TestLoadFailsClosed` | approval |
+| AP-60 | `TestCompositionRoot_EnablesElicitation`, `TestMCPElicitation_ApproveRunsTheJobAndReturnsResults`, `TestElicit_AskableParkFromMRTRClientGetsAQuestion` | e2e |
+| AP-61 | `TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk`, `TestMCPElicitation_OutOfBandRuleNeverAsks` | e2e |
+| AP-62 | `TestMCPElicitation_RedriveOfAPendingRequestAsksNobody` | e2e |
+| AP-63 | `TestMCPElicitation_DecisionIsInBandVerifiedRequesterAssertedApprover`, `TestMCPElicitation_ApproveRunsTheJobAndReturnsResults`, `TestElicitedAnswer_RecordsTheSameDecisionAsApproveRequest`, `TestAnsweredRetry_DomainRefusalsAreResultsNotErrors`, `TestElicitedAnswer_ClassifiesEveryOutcome` | e2e, MCP |
+| AP-64 | `TestMCPElicitation_AnswerWithoutAResponderIsAMachineSelfDecision`, `TestElicitedAnswer_WithoutAPermissionResponderIsAMachineSelfDecision` | e2e, MCP |
+| AP-65 | `TestMCPElicitation_TamperedStateIsRefused`, `TestMCPElicitation_CrossRequestStateIsRefused`, `TestMCPElicitation_CrossAccountStateIsRefused`, `TestMCPElicitation_WrongCallStateIsRefused`, `TestMCPElicitation_ExpiredStateIsRefused`, `TestBinding_RefusesCrossAccountCrossRequestWrongToolWrongArgs` | e2e, MCP |
+| AP-66 | `TestMCPElicitation_FleetChangedRetryReParks`, `TestAnsweredRetry_FleetChangedReParksAndAsksAfresh`, `TestAnsweredRetry_ApproveAtTheHandlerSeamRunsOnceAndCarriesTheDecision`, `TestAnsweredRetry_NextStepFollowsWhatTheDispatchReturned` | e2e, MCP |
+| AP-67 | `TestMCPElicitation_DuplicateRetryReAttaches`, `TestAnsweredRetry_BoundJobReAttaches` | e2e |
+| AP-68 | `TestMCPElicitation_DeclineIsTerminalAndAudited`, `TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing` | e2e |
+| AP-69 | `TestMCPElicitation_OutOfBandRuleNeverAsks`, `TestElicit_OutOfBandParkNeverAsks` | e2e |
+| AP-70 | `TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange`, `TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange`, `TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields`, `TestApproveRequest_RefusesRatherThanTruncatesAMalformedApprover`, `TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder` | e2e, MCP |
+| AP-71 | `TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope`, `TestElicit_ElicitedParkEmitsNoTaskEnvelope` | e2e, MCP |
 
 Claims with **no row**, and so nothing checking them:
 
@@ -541,18 +588,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-56 | An approval grant never covers Raw Exec: every Raw Exec needs its own decision, alone or within a bulk act, and a Scope naming Raw Exec is refused. Retires AP-30. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-60 | A gated dispatch that parks under an in-band rule, from a client that can be asked, is answered with an approval **question** carrying the Relay-authored summary, the request ID and the plan hash — and leaves no Job and no Tasks behind, exactly as a park does today (AP-2). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-61 | A question is emitted only where an answer from that caller could be **accepted**: the rule's channel is in-band, the rule does not exclude the requester, and its audience admits the calling Account. Otherwise the park renders as today's `pending_approval`. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-62 | A question is emitted only for a park this call **created**; a re-drive that bounces off a request already pending re-pages nobody (AP-41). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-63 | An answer carried on the retried call records **the same Decision** as `approve_request`, into the same two lanes (AP-39): the in-band channel, the verified Account whose credential made the call, the responder identity recorded as an assertion, and the same refusals (AP-42 … AP-49). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-64 | An answer is accepted as a decision only when it carries a **responder assertion** whose gate is `permission`; an answer without one is machine-originated and is refused exactly as an `approve_request` carrying no approver is refused (AP-48). The recognised form today is `io.gleipnir/responder` — one form of a general responder assertion, so a standard key later is additive. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-65 | The state a client echoes back is **sealed and bound** to the caller, the request, the plan and the call; a tampered, cross-request, cross-account, wrong-call or expired one is refused. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-66 | An approving retry **re-enters the whole dispatch pipeline** — Freeze, resolution, authorization, the cap and the plan-hash match — and a changed Node set re-parks and asks again rather than running against a set nobody approved (AP-21). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-67 | A retry whose decision has already released a Job **re-attaches** to that Job and mints no second one. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-68 | A denial on the retry is **terminal and audited**, and nothing is dispatched (AP-27). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-69 | An `out-of-band` rule yields **no answerable question**, on any client: the envelope a park is rendered in never weakens the channel the rule demands (AP-13). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-70 | A client that cannot be asked sees **no change**: `pending_approval`, `approve_request` and the Control API decision endpoint all behave exactly as before, with one exception — `approve_request`'s `approver` is bounded by the same rule as an elicited responder (at most 256 bytes, no control characters), and an approver outside it is refused, never truncated. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-71 | A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment 2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
@@ -743,6 +778,13 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-27` — **The composition root passes the MRTR option; AP-60 … AP-71 promoted.** The
+  MCP mount now passes the elicitation option beside the in-band decider, so an askable in-band park
+  from an MRTR-capable client is answered with an approval question and an accepting retry runs
+  the Job; a client that cannot be asked sees no change. Proven through the real composition root
+  with no test hook (`TestCompositionRoot_EnablesElicitation`,
+  `TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange`). AP-60 … AP-71 move verbatim to
+  Behaviour with proof rows; AP-55, AP-56, AP-57, AP-59 and AP-72 stay Designed. (#730)
 - `2026-09-25` — **The answered retry is wired into `run_operation` and `raw_exec`, behind the
   same option, and not yet reachable.** The answer is decided first, through the exempt file's
   helper, and only then is the whole dispatch pipeline re-entered once; a request whose decision
