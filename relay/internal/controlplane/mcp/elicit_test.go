@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,6 +66,29 @@ func (askableParker) CancelJob(context.Context, capability.Principal, string) er
 
 func (askableParker) Plan(context.Context, capability.Principal, capability.Selector, jobs.Action) (capability.PlanResult, error) {
 	return capability.PlanResult{}, nil
+}
+
+// countingAskableParker wraps askableParker and counts every Run/Plan call,
+// so TestPlanPreflightNeverEmitsAQuestion (mcp seam) can assert on the counts
+// rather than on the fixture's own state.
+type countingAskableParker struct {
+	askableParker
+	runs  *atomic.Int32
+	plans *atomic.Int32
+}
+
+func (p countingAskableParker) Run(ctx context.Context, principal capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
+	p.runs.Add(1)
+	return p.askableParker.Run(ctx, principal, sel, act)
+}
+
+func (p countingAskableParker) Plan(context.Context, capability.Principal, capability.Selector, jobs.Action) (capability.PlanResult, error) {
+	p.plans.Add(1)
+	return capability.PlanResult{}, nil
+}
+
+func (p countingAskableParker) CancelJob(ctx context.Context, principal capability.Principal, jobID string) error {
+	return p.askableParker.CancelJob(ctx, principal, jobID)
 }
 
 // stubDecider implements mcp.ApprovalDecider and fails the test if ever
@@ -375,6 +399,102 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 	}
 	if taskResp.Result.Status != "working" {
 		t.Errorf("status = %q, want working", taskResp.Result.Status)
+	}
+}
+
+// TestPlanPreflightNeverEmitsAQuestion is PF-23's guard at the mcp seam,
+// where the question path is actually wired: a plan=true call against an
+// askable park — even one carrying a stray requestState/inputResponses —
+// never reaches the question (or the decider) at all. run_operation and
+// raw_exec both return from their plan=true branch (planAndRender, calling
+// exec.Plan) before isAnsweredRetry is ever consulted (tools_execution.go),
+// which is why a plan call's stray answer fields change nothing: AP-70 read
+// literally, "a call that did not park". The armed control shows the SAME
+// fixture's non-plan call really does ask, so the zero runs above means
+// "never dispatched", not "never wired for a question at all".
+func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
+	var runs, plans atomic.Int32
+	parker := countingAskableParker{askableParker: askableParker{askable: true}, runs: &runs, plans: &plans}
+	srv := elicitServer(t, parker, goldenTasks{},
+		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
+
+	runOpPlanBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
+		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
+		`"io.modelcontextprotocol/clientInfo":{"name":"elicit-client","version":"0.0.1"},` +
+		`"io.modelcontextprotocol/clientCapabilities":` + elicitCaps + `},` +
+		`"name":"run_operation","arguments":{"operation":"service.restart","args":{"unit":"nginx"},"plan":true}}}`
+
+	rawExecPlanBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
+		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
+		`"io.modelcontextprotocol/clientInfo":{"name":"elicit-client","version":"0.0.1"},` +
+		`"io.modelcontextprotocol/clientCapabilities":` + elicitCaps + `},` +
+		`"name":"raw_exec","arguments":{"argv":["systemctl","restart","nginx"],"plan":true}}}`
+
+	strayAnswerBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
+		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
+		`"io.modelcontextprotocol/clientInfo":{"name":"elicit-client","version":"0.0.1"},` +
+		`"io.modelcontextprotocol/clientCapabilities":` + elicitCaps + `},` +
+		`"name":"run_operation","arguments":{"operation":"service.restart","args":{"unit":"nginx"},"plan":true},` +
+		`"requestState":"not-a-state",` +
+		`"inputResponses":{"` + askableElicitRequestID + `":{"action":"accept","_meta":{"io.gleipnir/responder":{"gate":"permission","username":"alice"}}}}}}`
+
+	cases := []struct {
+		name string
+		tool string
+		body string
+	}{
+		{"run_operation plan", "run_operation", runOpPlanBody},
+		{"raw_exec plan", "raw_exec", rawExecPlanBody},
+		{"plan carrying stray answer fields", "run_operation", strayAnswerBody},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			wantPlans := int32(i + 1)
+			status, body, _ := postJSONRPC(t, srv, "tools/call", tc.tool, tc.body)
+			if status != 200 {
+				t.Fatalf("status = %d; body = %s", status, body)
+			}
+			res := decodeElicitResult(t, body)
+			if res.IsError {
+				t.Fatalf("isError = true, want false: %s", body)
+			}
+			if res.ResultType == "input_required" {
+				t.Fatalf("resultType = input_required, want a plan result: %s", body)
+			}
+			if !isEmptyJSON(res.InputRequests) {
+				t.Errorf("inputRequests = %s, want absent/empty", res.InputRequests)
+			}
+			if res.RequestState != "" {
+				t.Errorf("requestState = %q, want empty", res.RequestState)
+			}
+			if !strings.Contains(string(res.StructuredContent), `"plan"`) {
+				t.Errorf("structuredContent = %s, want it to carry the plan key", res.StructuredContent)
+			}
+			if strings.Contains(string(res.StructuredContent), "pending_approval") || strings.Contains(string(res.StructuredContent), "answer_refused") {
+				t.Errorf("structuredContent = %s, want neither pending_approval nor answer_refused", res.StructuredContent)
+			}
+			if got := runs.Load(); got != 0 {
+				t.Errorf("runs = %d, want 0 — a plan=true call must never reach Run", got)
+			}
+			if got := plans.Load(); got != wantPlans {
+				t.Errorf("plans = %d, want %d", got, wantPlans)
+			}
+		})
+	}
+
+	// ARMED CONTROL (once): the same run_operation body WITHOUT plan, on the
+	// same server, really does ask.
+	status, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
+	if status != 200 {
+		t.Fatalf("status = %d; body = %s", status, body)
+	}
+	res := decodeElicitResult(t, body)
+	if res.ResultType != "input_required" {
+		t.Errorf("resultType = %q, want input_required (armed control)", res.ResultType)
+	}
+	if got := runs.Load(); got != 1 {
+		t.Errorf("runs after the armed control = %d, want 1", got)
 	}
 }
 

@@ -67,18 +67,30 @@ func sshdRestartArgs() map[string]any {
 	}
 }
 
-// startElicitingRelay boots a gated, askable-in-band Relay with the #721 hook
-// on, and mints the machine Account ("gleipnir-prod", admin) that plays
-// Gleipnir in every test below.
-func startElicitingRelay(t *testing.T) (f *relayFixture, token string, accountID string) {
+// startElicitingRelayWith is startElicitingRelay generalized with extra
+// FixtureOptions appended after the #721 hook — the seam a test needs for a
+// second gate, a Console, or a skewed clock (mcp.WithClock) without
+// re-declaring the Gleipnir machine-Account setup. WithMCPServerOptions
+// accumulates (relayfixture_test.go), so a caller's own
+// WithMCPServerOptions(mcp.WithClock(...)) composes with the elicitation
+// option rather than replacing it.
+func startElicitingRelayWith(t *testing.T, rules string, extra ...FixtureOption) (f *relayFixture, token string, accountID string) {
 	t.Helper()
-	f = startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
+	f = startGatedRelay(t, rules, append([]FixtureOption{WithMCPServerOptions(mcp.WithApprovalElicitation())}, extra...)...)
 	token = mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
 	acct, err := f.Deps.store.Accounts().GetByName(context.Background(), elicitRequesterName)
 	if err != nil {
 		t.Fatalf("GetByName(%s): %v", elicitRequesterName, err)
 	}
 	return f, token, acct.ID
+}
+
+// startElicitingRelay boots a gated, askable-in-band Relay with the #721 hook
+// on, and mints the machine Account ("gleipnir-prod", admin) that plays
+// Gleipnir in every test below.
+func startElicitingRelay(t *testing.T) (f *relayFixture, token string, accountID string) {
+	t.Helper()
+	return startElicitingRelayWith(t, gateAllMutatesInBandAskable)
 }
 
 // connectEliciting opens an MRTR-capable session for token: 2026-07-28, form

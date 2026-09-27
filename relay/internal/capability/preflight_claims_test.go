@@ -131,6 +131,94 @@ func TestPreflightNeverConsultsTheApprovalGate(t *testing.T) {
 	}
 }
 
+// TestPlanPreflightNeverEmitsAQuestion is PF-23's guard against S2b's askable
+// park (docs/specs/approval.md AP-61/AP-62/AP-69): a preflight of an Action a
+// gate rule would park ASKABLY is still answered like any other preflight —
+// it consults the gate zero times and writes nothing to the approval store —
+// exactly as TestPreflightNeverConsultsTheApprovalGate proves for a plain
+// gate, but against a rule askable_test.go's helpers build to be askable
+// (in-band, requester allowed, unrestricted audience), so a regression that
+// let Plan render or seal a question would be caught here rather than only
+// at the mcp seam.
+func TestPlanPreflightNeverEmitsAQuestion(t *testing.T) {
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}.WithNodeLabels(map[string]string{"role": "web"})); err != nil {
+			t.Fatalf("Upsert(%s): %v", id, err)
+		}
+	}
+
+	var log []string
+	conduit := newFakeConduit(&log)
+	conduit.connected["node-a"] = true
+	conduit.connected["node-b"] = true
+	conduit.verdicts["node-a"] = jobs.Verdict{Allowed: true}
+	conduit.verdicts["node-b"] = jobs.Verdict{Allowed: false, DecidingRule: "deny-rule"}
+
+	jobsRepo, tasksRepo := testEngineStore(t)
+	store := newMemApprovals()
+	gate := &countingApprovalGate{inner: ruleGate(t, inBandRule("askable"))}
+
+	svc := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+		WithExecution(jobsRepo, tasksRepo, conduit),
+	)
+
+	sel := webSelector()
+	act := mutateAct()
+
+	pr, err := svc.Plan(context.Background(), askCaller, sel, act)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(pr.Verdicts) != 2 {
+		t.Fatalf("PlanResult.Verdicts = %+v, want 2 entries", pr.Verdicts)
+	}
+	if gate.calls != 0 {
+		t.Errorf("gate.calls = %d, want 0 — a preflight must never consult an approval-gate rule, askable or not", gate.calls)
+	}
+	if len(store.byID) != 0 || len(store.byHash) != 0 || len(store.bound) != 0 {
+		t.Errorf("store = {byID: %+v, byHash: %+v, bound: %+v}, want all empty — a preflight must park nothing", store.byID, store.byHash, store.bound)
+	}
+
+	// ARMED CONTROL, the load-bearing half: the SAME Service, Principal,
+	// Selector and Action driven through Run really would have rendered an
+	// askable question (Askable true) — proving the zero-calls assertion
+	// above means "never consulted", not "never wired for a question at
+	// all".
+	_, runErr := svc.Run(context.Background(), askCaller, sel, act)
+	var parked *ParkedError
+	if !errors.As(runErr, &parked) {
+		t.Fatalf("Run() error = %v, want errors.As to find a *ParkedError", runErr)
+	}
+	if !parked.Askable {
+		t.Errorf("parked.Askable = false, want true — this rule must actually be askable for the zero-calls assertion above to mean anything")
+	}
+	if gate.calls != 1 {
+		t.Errorf("gate.calls = %d, want 1 after Run parked", gate.calls)
+	}
+	if len(store.byID) != 1 {
+		t.Errorf("store.byID = %+v, want exactly 1 entry after Run parked", store.byID)
+	}
+
+	// A second Plan against the now-parked Action still never consults the
+	// gate or touches the store.
+	if _, err := svc.Plan(context.Background(), askCaller, sel, act); err != nil {
+		t.Fatalf("Plan (second): %v", err)
+	}
+	if gate.calls != 1 {
+		t.Errorf("gate.calls after the second Plan = %d, want still 1", gate.calls)
+	}
+	if len(store.byID) != 1 {
+		t.Errorf("store.byID after the second Plan = %+v, want still exactly 1 entry", store.byID)
+	}
+}
+
 // assertExactStructFieldSet fails t if typ's field-name set is not exactly
 // want. expectedAddition names, in the failure message, the one addition
 // this set is already known to anticipate — so a future implementer who
