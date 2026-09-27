@@ -66,8 +66,8 @@ import (
 // acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
 // inputResponses is decided here first, and tools_execution.go's
 // answerThenDispatch then re-enters the whole dispatch pipeline once. The
-// path stays unreachable from main today because the composition root does
-// not pass WithApprovalElicitation (#727's dark scope; S4b flips it on).
+// composition root passes WithApprovalElicitation, so this path is reachable
+// from main (#730).
 
 // ApprovalDecider records a decision against a parked approval Request.
 //

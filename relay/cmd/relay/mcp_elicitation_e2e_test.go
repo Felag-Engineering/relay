@@ -8,11 +8,9 @@
 // _meta["io.gleipnir/responder"] = {"username", "user_id", "gate":
 // "permission"}.
 //
-// The answer path is enabled only by the #721 hook
-// (WithMCPServerOptions(mcp.WithApprovalElicitation())); the composition root
-// itself still does not pass it (TestCompositionRoot_DoesNotYetEnableElicitation,
-// elicit_e2e_test.go, is untouched and must keep passing). This step merges
-// dark.
+// The answer path is reached here via the #721 hook
+// (WithMCPServerOptions(mcp.WithApprovalElicitation())) — redundant since
+// #730 (the composition root now passes the option itself) but harmless.
 //
 // answered_retry_e2e_test.go (#727) is the per-branch proof for the same
 // answer path, driven by a human founding admin and a minimal responder.

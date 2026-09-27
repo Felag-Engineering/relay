@@ -1,14 +1,11 @@
 // Package main: answered_retry_e2e_test.go is #727's e2e proof — through the
-// REAL composition root, with the option passed only through
-// WithMCPServerOptions(mcp.WithApprovalElicitation()) (the #721 hook, exactly
-// as elicit_e2e_test.go uses it). The real composition root wires the real
-// readAuditor (control_surfaces.go), so an answered retry's Job-bound
-// re-attach writes a genuine KindRead record, exactly as get_job's own reads
-// do.
-//
-// This step merges dark: TestCompositionRoot_DoesNotYetEnableElicitation
-// (elicit_e2e_test.go) is left unmodified and still passes, because nothing
-// here touches cmd/relay/control_surfaces.go.
+// REAL composition root. Most tests here still reach the answer path only
+// through WithMCPServerOptions(mcp.WithApprovalElicitation()) (the #721
+// hook, exactly as elicit_e2e_test.go uses it) — redundant since #730 (the
+// composition root now passes the option itself) but harmless. The real
+// composition root wires the real readAuditor (control_surfaces.go), so an
+// answered retry's Job-bound re-attach writes a genuine KindRead record,
+// exactly as get_job's own reads do.
 package main
 
 import (
@@ -23,6 +20,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
@@ -437,15 +435,27 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	}
 }
 
-// TestAnsweredRetry_OptionOffIgnoresRetryFields (AP-70, e2e half): with NO
-// WithMCPServerOptions hook — exactly what a real deployment gets today — a
-// call carrying a garbage requestState and inputResponses renders today's
-// pending_approval, with no answered-retry block at all.
-// TestCompositionRoot_DoesNotYetEnableElicitation (elicit_e2e_test.go) is
-// left unmodified and must still pass.
-func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // no WithMCPServerOptions hook
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+// TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields (AP-70, e2e
+// half): with NO WithMCPServerOptions hook — exactly what a real deployment
+// gets now that control_surfaces.go passes mcp.WithApprovalElicitation()
+// itself — a client that cannot be asked (no elicitation capability) still
+// gets today's pending_approval for a call carrying a garbage requestState
+// and inputResponses, with no answered-retry block at all: clientCanBeAsked
+// gates isAnsweredRetry (tools_execution.go), so such a client's retry
+// fields are never even read. Renamed from
+// TestAnsweredRetry_OptionOffIgnoresRetryFields, whose premise (an
+// "option off" composition root) the flip (#730) retires — there is no
+// removing Option, and the #721 hook may only add one. Option-off itself
+// stays proven at the handler seam by the unit
+// TestAnsweredRetry_OptionOffIgnoresRetryFields
+// (internal/controlplane/mcp/tools_execution_retry_test.go) and
+// TestElicit_OptionOffChangesNothing (internal/controlplane/mcp/elicit_test.go),
+// both unchanged.
+func TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
+		Client: &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+	})
 
 	res := relaytest.RetryTool(t, session, "run_operation", restartNginxArgs(), "garbage-request-state",
 		sdkmcp.InputResponseMap{"garbage-id": &sdkmcp.ElicitResult{
@@ -453,7 +463,7 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 			Meta:   sdkmcp.Meta{"io.gleipnir/responder": map[string]any{"gate": "permission", "username": "alice"}},
 		}})
 	if res.NeedsInput() {
-		t.Fatal("NeedsInput() = true — the composition root must not pass WithApprovalElicitation yet")
+		t.Fatal("NeedsInput() = true — a client that cannot be asked must never be asked")
 	}
 	if res.IsError {
 		t.Fatalf("IsError = true, want false: content=%+v", res.Content)
@@ -464,6 +474,18 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		t.Fatalf("run_operation did not park: %+v", out)
 	}
 	if out.AnswerRefused != nil || out.Decision != nil {
-		t.Errorf("out = %+v, want no answered-retry block with the option off", out)
+		t.Errorf("out = %+v, want no answered-retry block for a client that cannot be asked", out)
 	}
+
+	// Control: an eliciting client sending the SAME garbage retry over the
+	// SAME production wiring must be decided and refused instead — proving
+	// the assertions above are not vacuously true of every client.
+	auditBefore := auditLen(t, f)
+	eliciting := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	elicitingRes := relaytest.RetryTool(t, eliciting, "run_operation", restartNginxArgs(), "garbage-request-state",
+		sdkmcp.InputResponseMap{"garbage-id": &sdkmcp.ElicitResult{
+			Action: "accept",
+			Meta:   sdkmcp.Meta{"io.gleipnir/responder": map[string]any{"gate": "permission", "username": "alice"}},
+		}})
+	assertStateRefusedNothingRecorded(t, f, elicitingRes, requeststate.ErrUnknownVersion.Error(), auditBefore)
 }

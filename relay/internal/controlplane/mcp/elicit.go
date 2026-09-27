@@ -60,12 +60,9 @@ const (
 //
 // Off by default, and effective only together with WithApprovalDecider: Relay
 // never asks a question it cannot accept an answer to. The answer leg is
-// built (#727: tools_execution.go's answered retry, ADR-0029 decision 6) but
-// still dark, because the composition root does not pass this option. Dark
-// until #646's composition-root step passes it — cmd/relay/control_surfaces.go
-// must not pass it before then, or a human answering in-band would only send
-// the dispatch back into an unanswered re-park, over and over, until the
-// client's own retry cap gives up (eight dead prompts to a person).
+// built (#727: tools_execution.go's answered retry, ADR-0029 decision 6) and
+// passed by the composition root (cmd/relay/control_surfaces.go) since #730
+// (S4b of #646).
 //
 // The seal key this enables is minted inside mcp.New itself, from
 // crypto/rand, never from an Option, a config key, a flag, an environment

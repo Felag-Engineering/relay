@@ -103,10 +103,9 @@ type surfaceDeps struct {
 
 	// testMCPOptions are appended AFTER the production mcp.New options below,
 	// so a test can construct the real MCP surface with an option the
-	// composition root does not itself pass (the MRTR answer path, until
-	// #646's S4b). See serverHooks, below: this field is populated only
-	// through newServerWithHooks (main.go), and only a test ever supplies it
-	// a non-empty serverHooks.
+	// composition root does not itself pass. See serverHooks, below: this
+	// field is populated only through newServerWithHooks (main.go), and only
+	// a test ever supplies it a non-empty serverHooks.
 	testMCPOptions []mcp.Option
 }
 
@@ -119,8 +118,7 @@ type surfaceDeps struct {
 type serverHooks struct {
 	// testMCPOptions are appended AFTER the production mcp.New options of
 	// mcpSurface, so a test can construct the real MCP surface with an
-	// option the composition root does not pass (the MRTR answer path,
-	// until #646's S4b).
+	// option the composition root does not itself pass.
 	testMCPOptions []mcp.Option
 }
 
@@ -145,12 +143,12 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 	// resolve or evaluate anything — state: Labels arrive already evaluated
 	// on the lane's StateEval, which d.capability resolves against the same
 	// root-owned window every other surface uses (invariant 11).
-	// opts holds exactly the two production options, in their existing order,
-	// with d.testMCPOptions appended after them — test-only (serverHooks),
-	// empty in production. mcp.New applies options in order, so a later
-	// option setting the same field wins: a test option can override a
-	// production one (e.g. to observe or replace WithToolCallObserver), but
-	// the production list itself is unchanged.
+	// opts holds exactly the three production options, in this order, with
+	// d.testMCPOptions appended after them — test-only
+	// (serverHooks), empty in production. mcp.New applies options in order,
+	// so a later option setting the same field wins: a test option can
+	// override a production one (e.g. to observe or replace
+	// WithToolCallObserver), but the production list itself is unchanged.
 	opts := []mcp.Option{
 		// The in-band approval rung (#391, ADR-0029): the SAME
 		// *capability.Service the API's decision endpoint uses. One decision
@@ -164,6 +162,16 @@ func (mcpSurface) Mount(mux *http.ServeMux, d surfaceDeps) {
 		// changes nothing in code: leave its gate rules `out-of-band` and
 		// ErrWeakChannel refuses every tool-delivered answer.
 		mcp.WithApprovalDecider(d.capability),
+		// The MRTR envelope over the same decision seam (#730, ADR-0029
+		// decision 6; ADR-0028 as amended 2026-09-24): an askable in-band
+		// park from a client that can be asked is answered with an approval
+		// question instead of today's pending_approval result; a client
+		// that cannot be asked still gets pending_approval (AP-70).
+		// Effective only alongside WithApprovalDecider, above. No Config
+		// field, flag or env var controls it — the seal key mcp.New mints
+		// for it comes from crypto/rand inside the call, never from
+		// configuration (invariant 11).
+		mcp.WithApprovalElicitation(),
 		// The tool-call event publisher (#416, D9) — every tools/call
 		// invocation, read and execution alike, feeds the Console's live
 		// view via toolCallObserver below.

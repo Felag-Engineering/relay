@@ -436,7 +436,7 @@ type PendingApprovalOutput struct {
 
 	// DecisionPath names the Control API route an approver uses. See the type
 	// doc: a pointer, never a capability of this session.
-	DecisionPath string `json:"decision_path" jsonschema:"The Control API route where an authorized human answers this request. Decisions are never accepted over MCP by design — do not attempt to approve this yourself, and do not ask the model to; surface it to a human."`
+	DecisionPath string `json:"decision_path" jsonschema:"The Control API route where an authorized human can answer this request. Do not approve this yourself; surface it to a human."`
 
 	// NextStep is plain-language guidance for the agent holding this result.
 	NextStep string `json:"next_step" jsonschema:"What to do next."`
