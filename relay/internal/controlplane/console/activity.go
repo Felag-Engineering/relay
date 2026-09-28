@@ -64,6 +64,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -424,7 +425,7 @@ func parseActivityFilter(r *http.Request, now time.Time) (activityFilter, string
 	// into a page that says which value was too long, which is the same
 	// courtesy the time range gets below.
 	if len(f.OnBehalfOf) > maxOnBehalfOfChars {
-		notes = append(notes, "on_behalf_of is longer than the "+itoa(maxOnBehalfOfChars)+
+		notes = append(notes, "on_behalf_of is longer than the "+strconv.Itoa(maxOnBehalfOfChars)+
 			" bytes an asserted identity can be recorded as, so it was ignored")
 		f.OnBehalfOf = ""
 	}
@@ -1205,7 +1206,7 @@ func writeActivityCSV(ctx context.Context, w http.ResponseWriter, lane *auditLat
 	// page's prose is not.
 	note := "# this export holds every row this Relay returned for the filter"
 	if capped {
-		note = "# THIS EXPORT IS INCOMPLETE: it stopped after " + itoa(exportPages) +
+		note = "# THIS EXPORT IS INCOMPLETE: it stopped after " + strconv.Itoa(exportPages) +
 			" pages per lane. Narrow the filter or follow the range."
 	}
 	_ = cw.Write([]string{note})
@@ -1219,12 +1220,12 @@ func activityCSVRecord(row activityRow) []string {
 	}
 	var outcomes []string
 	for _, seg := range row.Outcomes.Segments {
-		outcomes = append(outcomes, seg.Label+"="+itoa(seg.Count))
+		outcomes = append(outcomes, seg.Label+"="+strconv.Itoa(seg.Count))
 	}
 	fields := []string{
 		row.When, string(row.Kind), row.EventKind, row.Principal, verified, row.OnBehalfOf,
 		row.Selector, row.NodeID, row.Operation, row.Args, row.Risk,
-		row.JobID, itoa(row.FanOut), itoa(row.InFlight), strings.Join(outcomes, " "),
+		row.JobID, strconv.Itoa(row.FanOut), strconv.Itoa(row.InFlight), strings.Join(outcomes, " "),
 		row.ApprovalID, row.GrantID,
 		row.ApprovalAnswer, row.DecisionChannel, row.PlanHash, row.Reason,
 	}

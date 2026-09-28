@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1078,7 +1079,7 @@ func (q *scriptedQueries) pageIndex(cursor string) int {
 	return n
 }
 
-func (q *scriptedQueries) cursorFor(i int) string { return "p" + itoa(i) }
+func (q *scriptedQueries) cursorFor(i int) string { return "p" + strconv.Itoa(i) }
 
 func (q *scriptedQueries) QueryJobs(_ context.Context, _ capability.Principal, _ capability.JobFilter, page capability.PageRequest) (capability.JobPage, error) {
 	q.jobCursors = append(q.jobCursors, page.Cursor)

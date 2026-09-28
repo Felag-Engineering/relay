@@ -50,6 +50,7 @@
 package nodestate
 
 import (
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -472,13 +473,13 @@ func Since(t, now time.Time) string {
 	case d < 0:
 		return "just now"
 	case d < time.Minute:
-		return itoa(int(d.Seconds())) + "s"
+		return strconv.Itoa(int(d.Seconds())) + "s"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m"
+		return strconv.Itoa(int(d.Minutes())) + "m"
 	case d < 24*time.Hour:
-		return itoa(int(d.Hours())) + "h"
+		return strconv.Itoa(int(d.Hours())) + "h"
 	default:
-		return itoa(int(d.Hours()/24)) + "d"
+		return strconv.Itoa(int(d.Hours()/24)) + "d"
 	}
 }
 
@@ -497,19 +498,4 @@ func Until(t, now time.Time) string {
 		return "expired " + Since(t, now) + " ago"
 	}
 	return "in " + Since(now.Add(-t.Sub(now)), now)
-}
-
-// itoa avoids pulling strconv in for one call site.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
 }

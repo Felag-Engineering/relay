@@ -28,9 +28,12 @@ package console
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -708,22 +711,13 @@ func stateChips(ls []nodestate.Label) []Label {
 // that a tag never renders with the security lane.
 func declaredChips(n registry.Node) []Label {
 	var out []Label
-	for _, k := range sortedKeys(n.NodeLabels) {
+	for _, k := range slices.Sorted(maps.Keys(n.NodeLabels)) {
 		out = append(out, Label{Namespace: NamespaceNode, Key: k, Value: n.NodeLabels[k]})
 	}
-	for _, k := range sortedKeys(n.RelayLabels) {
+	for _, k := range slices.Sorted(maps.Keys(n.RelayLabels)) {
 		out = append(out, Label{Namespace: NamespaceRelay, Key: k, Value: n.RelayLabels[k]})
 	}
 	return out
-}
-
-func sortedKeys(m map[string]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Strings(ks)
-	return ks
 }
 
 // parseFleetFilter runs the filter through the real Selector parser, refusing
@@ -971,7 +965,7 @@ func countOf(n int, one, many string) string {
 	if n == 1 {
 		return "1 " + one
 	}
-	return itoa(n) + " " + many
+	return strconv.Itoa(n) + " " + many
 }
 
 // modalValue returns the most common non-empty value of f across nodes, or ""
@@ -1318,28 +1312,6 @@ func facetFrom(title string, counts map[string]int, link linkContext, render fun
 	}
 	sortFacet(&f)
 	return f
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
 }
 
 var fleetTmpl = newScreen("fleet", `
