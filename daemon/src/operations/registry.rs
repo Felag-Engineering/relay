@@ -160,13 +160,11 @@ pub struct OpRegistration {
 pub trait ResolvedOp: Send + Sync {
     /// The wire/Policy name. Part of the resolved contract; consumed by the
     /// per-Node vocabulary discovery and classification (issue #291).
-    #[allow(dead_code)]
     fn name(&self) -> &str;
     /// ADR-0012 risk class — the third element of `name → (handler, arg-shape,
     /// risk class)`. Consumed by the per-Node scheduler classification
     /// (`scheduler::Scheduler::classify`) and by discovery; native dispatch
     /// reads the concrete `OpRegistration::risk` field directly.
-    #[allow(dead_code)]
     fn risk(&self) -> RiskClass;
     /// Named-args → positional vector, in the entry's declared order. MUST be
     /// the exact vector Policy evaluates (ADR-0011: no drift between "would

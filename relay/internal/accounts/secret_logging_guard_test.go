@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
 )
 
 // secret_logging_guard_test.go is a cross-package structural guard (#674)
@@ -23,8 +25,8 @@ import (
 // tokens_test.go already walks the module root from this directory
 // (TestPlaintext_RevealCallSitesAreEnumerated). protoconv/ingress_guard_test.go
 // is the precedent for a cross-package guard living in one package. It shares
-// no code with no_dispatch_test.go beyond localImportAlias, which is copied
-// (not imported — it is test-local in package api).
+// no code with the no_dispatch guards beyond astguard.LocalImportAlias
+// (internal/relaytest/astguard).
 //
 // Two halves, because either alone leaves a leak shape open:
 //   - TestSecretTypesDeclareRedaction proves the redaction EXISTS: every
@@ -309,24 +311,6 @@ func secretTypes(files []parsedFile) map[typeKey]*secretType {
 	return result
 }
 
-// localImportAlias resolves the local identifier file uses for importPath,
-// copied from api/no_dispatch_test.go (it is test-local there, not exported).
-// See that file's doc comment for why resolving by import PATH rather than an
-// assumed package name matters.
-func localImportAlias(file *ast.File, importPath string) (alias string, ok bool) {
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || path != importPath {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name, true
-		}
-		return path[strings.LastIndex(path, "/")+1:], true
-	}
-	return "", false
-}
-
 // importNames is the set of every local identifier file's imports bind to
 // (alias, or the default last path segment). Used to recognize a package-
 // qualified call (http.Error, status.Error) so it is excluded from the
@@ -412,7 +396,7 @@ func logCallViolations(fset *token.FileSet, fileName string, file *ast.File) ([]
 	var violations []string
 	var stats logCallStats
 
-	slogAlias, slogImported := localImportAlias(file, "log/slog")
+	slogAlias, slogImported := astguard.LocalImportAlias(file, "log/slog")
 	imports := importNames(file)
 
 	ast.Inspect(file, func(n ast.Node) bool {
@@ -584,7 +568,7 @@ func TestNoSecretUnwrappedIntoLogCall(t *testing.T) {
 	var total logCallStats
 	filesWithSlog := 0
 	for _, pf := range files {
-		if _, ok := localImportAlias(pf.file, "log/slog"); ok {
+		if _, ok := astguard.LocalImportAlias(pf.file, "log/slog"); ok {
 			filesWithSlog++
 		}
 		violations, stats := logCallViolations(fset, pf.rel, pf.file)

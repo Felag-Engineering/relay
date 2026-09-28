@@ -1,10 +1,11 @@
 # Local dev fleet (`docker compose`)
 
 A one-command, laptop-scale fleet: one **Relay** container plus three
-**relay-daemon** containers by default (nine under the optional `demo` compose
-profile — see [The demo profile](#the-demo-profile)) that auto-enroll over
+**relay-daemon** containers that auto-enroll over
 CA-pinned mTLS and are drivable through the control plane (MCP + `/api/v1`).
-It exists to demo and dogfood the real control path end to end.
+It exists to demo and dogfood the real control path end to end. The nine-Node `demo`
+compose profile built on top of it has its own runbook — see
+[The demo profile](#the-demo-profile).
 
 > **DEV-ONLY — no production posture.** This environment ships committed
 > credentials and a fixture Policy for convenience, runs everything on one host,
@@ -18,14 +19,6 @@ It exists to demo and dogfood the real control path end to end.
 > execution for anyone on your network. For the hardened production posture, see
 > `daemon/packaging/relay-daemon.service` and
 > [docs/operations/daemon-privilege-posture.md](operations/daemon-privilege-posture.md).
-> The `demo` compose profile ([below](#the-demo-profile)) is **more** exposed, not
-> less: it puts three times the Nodes behind the very same committed dev
-> credential and the same loopback-only control plane, so everything in this
-> banner applies to it with more force. Its reset (`make demo-reset`,
-> [below](operations/demo-fleet.md#the-fault-and-resetting-between-takes)) is guarded to refuse
-> anything but its own `relay-demo` compose project on a local Docker engine —
-> that guards against pointing it at the wrong fleet, not a claim that any of
-> this is production-safe.
 
 ## Prerequisites
 
@@ -48,7 +41,7 @@ never invokes it.
 | `console-admin` | A one-shot helper that creates the `admin` **human** Account the Admin Console signs in. Then it exits. |
 | `console-password` | A one-shot helper that sets that Account's Console password with `relay console-password`. Separate from `console-admin` because the two acts carry different authorities — see [The Admin Console](#the-admin-console) below. Then it exits. |
 | `daemon-1..3` | Three relay-daemons (Rust, musl static binary). Each has a baked, root-owned Policy fixture and a private state volume, enrolls on first start, and reports health once it has a persisted identity. The two `role=web` Nodes (`daemon-1`, `daemon-2`) also run the dev-fleet demo service; `daemon-3` (`role=db`) loads a different Policy fixture and runs no demo service. |
-| `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`, that scale the fleet to nine Nodes with varied `node:role`/`node:env` labels and a third Policy fixture (`policy.bastion.toml`, the narrowest of the three). See [The demo profile](#the-demo-profile). |
+| `daemon-4..9` (`demo` profile) | Six more relay-daemons, started only with `--profile demo`. See [The demo profile](#the-demo-profile). |
 
 Security-relevant choices, made explicit:
 
@@ -150,9 +143,7 @@ $ docker compose up --build -d
 ```
 
 The Relay starts and creates its CA; `bootstrap` waits for the control API, mints
-the token, and exports the CA cert; then the daemons enroll and go healthy —
-three by default, or nine under `--profile demo`
-([The demo profile](#the-demo-profile)).
+the token, and exports the CA cert; then the daemons enroll and go healthy.
 
 ```console
 $ docker compose ps
@@ -160,7 +151,7 @@ $ docker compose ps
 
 Wait until `daemon-1`, `daemon-2`, and `daemon-3` are `healthy` (each becomes
 healthy only after it has persisted its identity, i.e. after a successful
-enrollment) — plus `daemon-4..9` under `--profile demo`.
+enrollment).
 
 > **Troubleshooting.** The Relay healthcheck probes its control port with busybox
 > `nc -w1`. If your busybox build ships an `nc` without the `-w` (timeout) flag,
@@ -175,20 +166,20 @@ enrollment) — plus `daemon-4..9` under `--profile demo`.
 $ docker compose logs relay
 ```
 
-You should see three Nodes join (nine under `--profile demo`), each stamped
+You should see three Nodes join, each stamped
 `relay:env=dev` / `relay:fleet=dev`.
 
 **Richer check — list the fleet registry over MCP.** The `list_nodes` tool
 returns each Node's `node_labels`, `relay_labels`, and reported
 `policy_fingerprint` — the full registry view the quick log check doesn't show.
-Use the MCP client setup from [Drive the fleet over MCP](#drive-the-fleet-over-mcp)
-below (which needs the exported CA cert; see the next step), then call:
+Use the MCP client setup from [Connecting Claude Code](#connecting-claude-code)
+below (it exports the CA cert and credentials first), then call:
 
 ```
 list_nodes()
 ```
 
-The result is a `nodes` array with three entries (nine under `--profile demo`),
+The result is a `nodes` array with three entries,
 each carrying its `node_id`, `node_labels`, `relay_labels` (including
 `relay:env=dev` / `relay:fleet=dev`), and `policy_fingerprint`. `node:` and
 `relay:` labels come back as separate maps
@@ -196,33 +187,23 @@ each carrying its `node_id`, `node_labels`, `relay_labels` (including
 (ADR-0006). Pass an optional `selector` to filter, e.g.
 `list_nodes(selector="relay:env=dev")`.
 
-Export the CA cert and both control-plane credentials to the gitignored
-`./.dev-fleet/`, so you can talk to the control plane (MCP and `/api/v1`) over
-verified TLS from the host:
-
-```console
-$ make dev-fleet-creds
-```
-
-The Relay's server certificate SAN is `relay` (the in-fleet DNS name), not
-`localhost` — so dial `https://relay:9443` with `127.0.0.1 relay` in `/etc/hosts`
-and verification succeeds against `.dev-fleet/ca-cert.pem`. See
-[Connecting Claude Code](#connecting-claude-code) for the one-time setup.
-
 ## Drive the fleet over MCP
 
 ### Connecting Claude Code
 
-The control plane's server certificate has a single SAN: `relay`, the in-fleet DNS name.
-So dial it by that name and TLS verifies against the fleet's own CA with no `-k` and no
-disabled verification. Map the name to loopback once:
+The control plane's server certificate has a single SAN: `relay`, the in-fleet DNS name,
+not `localhost`. So dial it by that name and TLS verifies against the fleet's own CA
+(`.dev-fleet/ca-cert.pem`) with no `-k` and no disabled verification. Map the name to
+loopback once:
 
 ```console
 $ grep -q 'relay$' /etc/hosts || echo '127.0.0.1 relay' | sudo tee -a /etc/hosts
 ```
 
-Export the credentials, then add the server. `NODE_EXTRA_CA_CERTS` is what makes Claude
-Code's Node TLS stack trust the fleet's private CA:
+`make dev-fleet-creds` exports the CA cert and both control-plane credentials (founding
+admin and `dev-approver`) to the gitignored `./.dev-fleet/`, for MCP and `/api/v1` alike.
+Run it, then add the server. `NODE_EXTRA_CA_CERTS` is what makes Claude Code's Node TLS
+stack trust the fleet's private CA:
 
 ```console
 $ make dev-fleet-creds
@@ -302,16 +283,10 @@ Two rules:
 
 The fan-out threshold is deliberate: it leaves **both** paths reachable in one fleet. A
 mutate that resolves to a single Node runs straight through; the same mutate aimed
-fleet-wide parks. In the **default** (three-Node) fleet, `node:role=db` is one Node and
-runs straight through, while `relay:env=dev` (three) waits for a human.
-
-**This changes under `--profile demo` — read this before presenting.** At nine Nodes,
-`node:role=db` is **two** Nodes, and `min_fan_out: 2` is a floor, so that Selector now
-parks too. The straight-through beat survives only through Selectors that stay at
-fan-out 1: `node:role=bastion` (exactly one Node) and `node:role=db, node:env=prod`
-(exactly one Node, because `daemon-3` carries no `env` label at all). See
-[The demo profile](#the-demo-profile) for the full cardinality table and the exact
-commands.
+fleet-wide parks. In this three-Node fleet, `node:role=db` is one Node and runs straight
+through, while `relay:env=dev` (three) waits for a human. The counts differ under the
+`demo` profile, where `node:role=db` parks too; read its runbook before presenting (see
+[The demo profile](#the-demo-profile)).
 
 Security-relevant choices, made explicit:
 
@@ -333,13 +308,8 @@ Security-relevant choices, made explicit:
 
 ### Approving a parked dispatch
 
-Export both credentials to the gitignored `./.dev-fleet/` first:
-
-```console
-$ make dev-fleet-creds
-```
-
-A gated call comes back as a `pending_approval` **result** (not an error) carrying a
+With both credentials exported by `make dev-fleet-creds` (see
+[Connecting Claude Code](#connecting-claude-code)), a gated call comes back as a `pending_approval` **result** (not an error) carrying a
 `request_id`, a `plan_hash`, and a Relay-authored `summary`. Decide it as the approver:
 
 ```console
@@ -380,8 +350,7 @@ audience.
 
 `busybox httpd` serves a real docroot on `127.0.0.1:8080`
 (`/srv/dev-fleet-service/www/index.html`), started by `docker/daemon-entrypoint.sh` on the
-Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`, and — under `--profile demo` —
-`daemon-4`, `daemon-5`, `daemon-6`, `daemon-9`), and managed by the root-owned
+Nodes labelled `node:role=web` (`daemon-1`, `daemon-2`), and managed by the root-owned
 `/usr/local/bin/dev-fleet-service`. It has three subcommands and no more — there is
 deliberately no `stop` (see [Why `start|restart|status` and not `stop`](#why-startrestartstatus-and-not-stop)
 below):
@@ -414,8 +383,7 @@ Preflight without dispatching:
 raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","status"], plan=true)
 ```
 
-returns per-Node verdicts allow/allow/deny in the default fleet — 6 allow / 3 deny
-under `--profile demo` — no parking, no execution.
+returns per-Node verdicts allow/allow/deny — no parking, no execution.
 
 The repair:
 
@@ -425,19 +393,11 @@ raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","res
 
 returns a `pending_approval` result (every Raw Exec parks under
 `dev-raw-exec-always-needs-a-human`) carrying `request_id` and `plan_hash`. Approve it as
-`dev-approver`:
-
-```console
-$ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/decision \
-    '{"approve":true,"plan_hash":"<plan_hash>","reason":"repair the dev-fleet demo service"}'
-```
-
-then **re-issue the same `raw_exec` call unchanged** — approving releases a Plan, it does
-not itself dispatch. Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
-`outcome=denied_by_policy` in the default fleet — or **6 × `success, exit_code: 0`**
-and **3 × `denied_by_policy`** (`daemon-3`, `daemon-7`, `daemon-8`) under
-`--profile demo` (predicted; see [The demo profile](#the-demo-profile) for what is
-tested versus predicted). The verdict is the daemon's, never the Relay's (ADR-0002 /
+`dev-approver` with the decision call in
+[Approving a parked dispatch](#approving-a-parked-dispatch) (a `reason` such as
+`"repair the dev-fleet demo service"`), then **re-issue the same `raw_exec` call
+unchanged**. Expect **two Nodes** `outcome=success, exit_code: 0` and **daemon-3**
+`outcome=denied_by_policy`. The verdict is the daemon's, never the Relay's (ADR-0002 /
 ADR-0011).
 
 The independent read — proof that a mutate really happened, taken through a different
@@ -453,8 +413,8 @@ never had.
 ### Why `start|restart|status` and not `stop`
 
 The agent must be able to repair the fleet and never to break it; the fault is injected out
-of band (see [The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes),
-under [The demo profile](#the-demo-profile)). The script has no `stop` subcommand and the
+of band (see [The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)
+in the demo runbook). The script has no `stop` subcommand and the
 Policy has no allow for one, so both layers say the same thing.
 
 ### The template pack — loaded and enforced, not yet dispatchable
@@ -471,9 +431,8 @@ Template callable is tracked in
 [issue #626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626).
 
 After the rebuild, `list_nodes()` shows **two distinct `policy_fingerprint` values** across
-the default fleet, because `daemon-3` now loads a different Policy file — the registry's
-drift signal, visible for real. Under `--profile demo` there are **three**, one per Policy
-fixture (see [The demo profile](#the-demo-profile)).
+the fleet, because `daemon-3` now loads a different Policy file — the registry's
+drift signal, visible for real.
 
 ## Driving the MCP Tasks extension (`scripts/dev-fleet-mcp.sh`)
 
@@ -509,19 +468,6 @@ $ docker compose down
 $ docker compose up -d
 ```
 
-**Under the `demo` profile, use `make demo-down` / `make demo-up` instead**
-— never a bare `docker compose --profile demo down` / `up`, which names its
-project after the checkout directory rather than `relay-demo` (see
-[The demo profile](#the-demo-profile)). `make demo-down` stops the demo fleet
-without touching its volumes; `make demo-up` is the matching plain restart —
-also no `-v`, no build — and brings back all nine daemons every time, because
-the fixed project and profile are baked into the script rather than typed at
-the command line. (It is not "no credential mint": see
-[The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)
-for what `up` does and does not do to the mint one-shots.) `make demo-reset`
-(below) is a different thing: the wipe-and-recreate between takes, not a
-plain restart.
-
 The CA and the SQLite store persist on `relay-data`, and each daemon's identity
 persists on its private `daemonN-state` volume, so the Nodes come back with the
 **same** `node_id`s and do not re-enroll (enrollment is idempotent — a daemon
@@ -533,9 +479,6 @@ To wipe everything (CA, identities, store) and start clean:
 ```console
 $ docker compose down -v
 ```
-
-or, under the `demo` profile, `make demo-reset` (see
-[The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)).
 
 ## Where to read the audit trail
 
@@ -559,9 +502,13 @@ exist yet — it is future work. For now the logs and the store are the trail.
 
 The nine-Node `demo` compose profile — its roster, the four beats, the injected fault and
 `make demo-reset`, and resource usage — has a runbook of its own:
-[docs/operations/demo-fleet.md](operations/demo-fleet.md). It is purely additive to the fleet
-above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`, enforces this), and
-everything in this document's DEV-ONLY banner applies to it with more force, not less. That
+[docs/operations/demo-fleet.md](operations/demo-fleet.md). It runs as its own fixed
+`relay-demo` compose project, so start, stop, reset and clean it up with that runbook's
+`make demo-*` targets and commands — never a bare `docker compose --profile demo …`, which
+names its project after the checkout directory rather than `relay-demo`. It is purely
+additive to the fleet above (`demo_profile_is_additive`, `daemon/tests/dev_fleet_fixtures.rs`,
+enforces this), and everything in this document's DEV-ONLY banner applies to it with more
+force, not less: three times the Nodes sit behind the same committed dev credential. That
 runbook's [Presenter runbook](operations/demo-fleet.md#presenter-runbook) section is what a
 presenter who has never run this fleet follows from cold to on stage, including
 [minting Gleipnir's credentials](operations/demo-fleet.md#credentials-for-gleipnir-copy-paste)
@@ -593,16 +540,5 @@ $ docker compose down -v
 $ rm -rf ./.dev-fleet
 ```
 
-**Under the `demo` profile, use `docker compose -p relay-demo --profile demo
-down -v` directly** — never a bare `docker compose --profile demo down -v`,
-which names its project after the checkout directory, not `relay-demo`, and
-leaves that project's volumes behind uncleaned. `make demo-reset` also wipes
-`relay-demo`, but brings the fleet straight back up afterward — it is the
-between-takes reset (see
-[The fault, and resetting between takes](operations/demo-fleet.md#the-fault-and-resetting-between-takes)),
-not a "stop and leave it down" cleanup.
-
-```console
-$ docker compose -p relay-demo --profile demo down -v
-$ rm -rf ./.dev-fleet
-```
+This cleans up the three-Node fleet only; the demo fleet's cleanup is in its runbook's
+[Start from a clean registry](operations/demo-fleet.md#start-from-a-clean-registry).

@@ -36,6 +36,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::gen::{task_request, RiskClass, TaskRequest};
 use crate::operations;
+use crate::operations::registry::ResolvedOp;
 use crate::templates::TemplateSet;
 
 /// Fixed upper bound on concurrent read Tasks per Node.

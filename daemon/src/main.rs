@@ -15,6 +15,7 @@ mod enroll;
 mod executor;
 mod hardened_open;
 mod identity;
+mod not_executed;
 mod operations;
 mod policy;
 mod policy_check;

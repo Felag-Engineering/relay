@@ -73,7 +73,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
-use crate::gen::{Operation, Outcome, RiskClass, TaskResult};
+use crate::gen::{Operation, Outcome, RiskClass};
+use crate::not_executed::not_executed;
 
 use super::registry::{OpCtx, OpFuture, ResolvedOp};
 
@@ -284,16 +285,6 @@ pub struct TemplateOp {
 }
 
 impl TemplateOp {
-    /// The Operation name (enters the Policy vocabulary).
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// The declared risk class (ADR-0012).
-    pub fn risk(&self) -> RiskClass {
-        self.risk
-    }
-
     /// The positions of `path`-typed slots, in positional (Policy) order.
     ///
     /// Consumed by the dispatch gate (issue #293) to apply ADR-0018's
@@ -438,15 +429,7 @@ impl ResolvedOp for TemplateOp {
                     // `cancel` is moved into ExecRequest only on the Ok arm; on
                     // this no-spawn path it is simply dropped here — never a
                     // spurious cancel.
-                    TaskResult {
-                        task_id,
-                        outcome: Outcome::Failure as i32,
-                        exit_code: -1,
-                        stdout: Vec::new(),
-                        stderr: e.to_string().into_bytes(),
-                        truncated: false,
-                        duration_millis: 0,
-                    }
+                    not_executed(task_id, Outcome::Failure, e.to_string())
                 }
             }
         })
