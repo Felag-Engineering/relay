@@ -752,3 +752,99 @@ func TestMergeStricterPreservesAMalformedAudience(t *testing.T) {
 		t.Errorf("mergeStricter(unrestricted, malformed).Audience = %v, want it to stay malformed", merged.Audience)
 	}
 }
+
+// --- AP-77: an approval releases one execution ---
+
+// TestRequest_ReleaseBindsOnce pins the release claim itself: the first
+// Release wins, returns a copy rather than mutating the receiver, and a
+// second attempt always learns the winner's Job ID rather than a stale
+// "not satisfiable" answer.
+func TestRequest_ReleaseBindsOnce(t *testing.T) {
+	r := newTestRequest(t, req(1, true)) // TTL 1h
+	r, err := r.Decide(approveBy("acct-ana", "ana"), t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if !r.Satisfied(t0.Add(2 * time.Minute)) {
+		t.Fatal("want a Satisfied Request before exercising Release")
+	}
+	if r.Released() {
+		t.Fatal("a freshly satisfied Request must not already be Released")
+	}
+
+	bound, err := r.Release("job-1", t0.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if bound.JobID != "job-1" {
+		t.Errorf("JobID = %q, want job-1", bound.JobID)
+	}
+	if !bound.Released() {
+		t.Error("Released() = false on the bound copy, want true")
+	}
+	if r.Released() {
+		t.Error("Released() = true on the original, want false — Release must return a copy, not mutate the receiver")
+	}
+
+	// A second Release — even past the deadline — must still report
+	// ErrAlreadyReleased and the FIRST Job ID: Released is checked before
+	// Satisfied, so a caller who lost a concurrent claim always learns the
+	// winner's Job ID rather than a stale "not satisfiable" answer.
+	late := t0.Add(2 * time.Hour)
+	again, err := bound.Release("job-2", late)
+	if !errors.Is(err, ErrAlreadyReleased) {
+		t.Fatalf("second Release: err = %v, want ErrAlreadyReleased", err)
+	}
+	if again.JobID != "job-1" {
+		t.Errorf("JobID after a refused second Release = %q, want the original job-1", again.JobID)
+	}
+
+	if _, err := r.Release("", t0.Add(2*time.Minute)); !errors.Is(err, ErrNotReleasable) {
+		t.Fatalf("Release(\"\"): err = %v, want ErrNotReleasable", err)
+	}
+}
+
+// TestRequest_ReleaseRefusesAnUnsatisfiedRequest is the other half: Release
+// must never bind a Job to a Request that is not Satisfied — pending,
+// denied, or approved but past its deadline — and must leave it unchanged.
+func TestRequest_ReleaseRefusesAnUnsatisfiedRequest(t *testing.T) {
+	pending := newTestRequest(t, req(1, true))
+
+	denied := newTestRequest(t, req(1, true))
+	deny := approveBy("acct-ana", "ana")
+	deny.Approve = false
+	denied, err := denied.Decide(deny, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide (deny): %v", err)
+	}
+
+	pastDeadline := newTestRequest(t, req(1, true))
+	pastDeadline, err = pastDeadline.Decide(approveBy("acct-ana", "ana"), t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("Decide (approve): %v", err)
+	}
+
+	tests := []struct {
+		name string
+		r    Request
+		now  time.Time
+	}{
+		{name: "pending", r: pending, now: t0.Add(time.Minute)},
+		{name: "denied", r: denied, now: t0.Add(2 * time.Minute)},
+		{name: "approved but past its deadline", r: pastDeadline, now: t0.Add(2 * time.Hour)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.r.Release("job-1", tc.now)
+			if !errors.Is(err, ErrNotReleasable) {
+				t.Fatalf("Release: err = %v, want ErrNotReleasable", err)
+			}
+			if got.Released() {
+				t.Error("Released() = true after a refused Release, want false")
+			}
+			if got.JobID != tc.r.JobID {
+				t.Errorf("JobID = %q, want unchanged %q", got.JobID, tc.r.JobID)
+			}
+		})
+	}
+}

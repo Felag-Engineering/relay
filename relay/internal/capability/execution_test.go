@@ -192,6 +192,157 @@ func TestEngineOneTaskPerNodePersistedBeforeDispatch(t *testing.T) {
 	}
 }
 
+// TestJobEngine_RunUsesTheReservedJobID is AP-77's dispatch-side contract
+// (#713): a dispatch carrying a jobID already reserved (and bound to a
+// releasing approval) uses that SAME id, rather than minting a fresh one —
+// the join a re-attach depends on. A dispatch with no reserved id still
+// mints its own, exactly as before this issue.
+func TestJobEngine_RunUsesTheReservedJobID(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.connected["node-2"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+	conduit.results["node-2"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	e := &jobEngine{
+		jobsRepo:  jobsRepo,
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+	}
+
+	nodes := []registry.Node{testNode("node-1"), testNode("node-2")}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
+	d.jobID = "job-reserved"
+
+	dr, err := e.run(context.Background(), d)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if dr.jobID != "job-reserved" {
+		t.Fatalf("dispatchResult.jobID = %q, want the reserved job-reserved", dr.jobID)
+	}
+	if _, err := jobsRepo.GetJob(context.Background(), "job-reserved"); err != nil {
+		t.Fatalf("GetJob(job-reserved): %v — the reserved id must be the Job actually created", err)
+	}
+	if _, err := jobsRepo.GetJob(context.Background(), "job-id-1"); err == nil {
+		t.Fatal("a freshly minted job-id-1 also exists — run must not mint an id when one was reserved")
+	}
+
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-reserved")
+	if err != nil {
+		t.Fatalf("ByJob(job-reserved): %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("ByJob(job-reserved) returned %d Tasks, want 2", len(tasks))
+	}
+	for _, task := range tasks {
+		if task.JobID != "job-reserved" {
+			t.Errorf("Task %q JobID = %q, want job-reserved", task.ID, task.JobID)
+		}
+	}
+	for _, r := range dr.results {
+		if r.JobID != "job-reserved" {
+			t.Errorf("result %+v: JobID = %q, want job-reserved", r, r.JobID)
+		}
+	}
+
+	// A dispatch with NO reserved id still mints its own, unchanged.
+	d2 := newDispatch(Principal{Account: "alice"}, Selector{}, []registry.Node{testNode("node-1")}, act)
+	dr2, err := e.run(context.Background(), d2)
+	if err != nil {
+		t.Fatalf("run (unreserved): %v", err)
+	}
+	if dr2.jobID == "" || dr2.jobID == "job-reserved" {
+		t.Errorf("dispatchResult.jobID = %q, want a freshly minted, different id", dr2.jobID)
+	}
+}
+
+// cancelAfterCreateJobRepo wraps a jobs.JobRepository and cancels a
+// caller-supplied context.CancelFunc the instant CreateJob RETURNS,
+// mirroring a client per-call timeout (or a dropped connection) firing in the
+// narrow window right after the Job row commits — the moment Codex's #713
+// "final diff" review (CX-1) found unprotected: AddStage, every CreateTask,
+// and dispatch all ran AFTER this point, still on the caller's own ctx.
+// Every other method is promoted straight through the embedded interface.
+type cancelAfterCreateJobRepo struct {
+	jobs.JobRepository
+	cancel context.CancelFunc
+}
+
+func (w *cancelAfterCreateJobRepo) CreateJob(ctx context.Context, j jobs.Job) error {
+	err := w.JobRepository.CreateJob(ctx, j)
+	w.cancel()
+	return err
+}
+
+// TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob is CX-1
+// (#713 Codex "final diff" review): the release claim for a RESERVED Job ID
+// already committed before run was ever called, and there is no un-claim
+// path (store/approvals.go). An earlier fix pass only detached CreateJob
+// itself from the request ctx's cancellation, leaving AddStage, every
+// CreateTask, and dispatch resuming on a ctx the caller could cancel the
+// instant CreateJob returned — stranding the approval on a Job with no
+// Stage/Tasks that every re-drive would re-attach to without the approved
+// work ever running. Cancelling the request ctx here fires at exactly that
+// point, and the WHOLE rest of run must still complete: the Job gets its
+// Stage, its Task, and a real dispatched-and-resolved result — nothing
+// downstream of CreateJob may see a cancelled ctx for a reserved id.
+func TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob(t *testing.T) {
+	jobsRepo, tasksRepo := testEngineStore(t)
+	conduit := newFakeConduit(nil)
+	conduit.connected["node-1"] = true
+	conduit.results["node-1"] = jobs.Result{Outcome: jobs.OutcomeSuccess}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &jobEngine{
+		jobsRepo:  &cancelAfterCreateJobRepo{JobRepository: jobsRepo, cancel: cancel},
+		tasksRepo: tasksRepo,
+		conduit:   conduit,
+		newID:     sequentialIDs("id-"),
+		now:       func() time.Time { return time.Date(2026, 7, 8, 0, 0, 0, 0, time.UTC) },
+	}
+
+	nodes := []registry.Node{testNode("node-1")}
+	act := jobs.Action{Kind: jobs.ActionOperation, OperationName: "system.facts", RiskClass: jobs.RiskClassRead}
+	d := newDispatch(Principal{Account: "alice"}, Selector{}, nodes, act)
+	d.jobID = "job-reserved" // approval-claimed (AP-77): the claim already committed.
+
+	dr, err := e.run(ctx, d)
+	if err != nil {
+		t.Fatalf("run: %v — a cancellation landing right after CreateJob must not abandon the rest of the reserved run", err)
+	}
+	if dr.jobID != "job-reserved" {
+		t.Fatalf("dispatchResult.jobID = %q, want job-reserved", dr.jobID)
+	}
+
+	job, err := jobsRepo.GetJob(context.Background(), "job-reserved")
+	if err != nil {
+		t.Fatalf("GetJob(job-reserved): %v — the reserved Job must exist", err)
+	}
+	stages, err := jobsRepo.Stages(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("Stages(job-reserved): %v", err)
+	}
+	if len(stages) != 1 {
+		t.Fatalf("Stages(job-reserved) = %d, want 1 — a re-drive must not re-attach to a Job with no Stage", len(stages))
+	}
+
+	tasks, err := tasksRepo.ByJob(context.Background(), "job-reserved")
+	if err != nil {
+		t.Fatalf("ByJob(job-reserved): %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("ByJob(job-reserved) = %d, want 1 — a re-drive must not re-attach to a Job with no Task", len(tasks))
+	}
+	if tasks[0].State != jobs.DispatchStateResolved || tasks[0].Outcome != jobs.OutcomeSuccess {
+		t.Fatalf("task state/outcome = %v/%v, want Resolved/Success — the approved work must actually run to completion, not stall mid-dispatch", tasks[0].State, tasks[0].Outcome)
+	}
+}
+
 // TestEngineRecordsRequesterOnJob (#616, AC1) proves the requester is
 // written in the SAME CreateJob call that creates the Job: after run
 // returns, GetJob echoes the acting Principal's AccountID, name and Kind.

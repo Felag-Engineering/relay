@@ -88,6 +88,17 @@ var (
 	// deny would let a compromised harness terminate work it could not
 	// authorize.
 	ErrWeakChannel = errors.New("approval: decision channel is weaker than the requirement demands")
+
+	// ErrAlreadyReleased is returned when Release is called on a Request that
+	// already has a Job bound. AP-77: an approval releases one execution. The
+	// caller re-attaches to r.JobID and never dispatches.
+	ErrAlreadyReleased = errors.New("approval: request has already released a Job")
+
+	// ErrNotReleasable is returned when Release is called on a Request that is
+	// not Satisfied — pending, denied, expired, past its deadline, or short of
+	// quorum — or with an empty Job ID. A refusal here means the caller must
+	// not dispatch: the release claim failed, so nothing may run.
+	ErrNotReleasable = errors.New("approval: request is not satisfied, so it cannot release a Job")
 )
 
 // Channel is how strongly a decision's delivery path is trusted (ADR-0027).
@@ -438,8 +449,9 @@ type Request struct {
 // There is deliberately no Job ID: a gated dispatch parks BEFORE the Job engine
 // runs, so no Job exists yet. Creating one at park time would leave Pending
 // Tasks in the store for work that may never be approved — rows a restart
-// reconciler could mistake for interrupted work. The Job ID is bound later, on
-// approval, via Repository.BindJob.
+// reconciler could mistake for interrupted work. The Job ID is bound once, by
+// the release claim, before the Job is dispatched (AP-77) — see Release and
+// Repository.BindJob.
 func NewRequest(id, planHash, requestedByID, requestedBy string, act jobs.Action, nodeIDs []string, sel SelectorShape, rules []string, req Requirement, now time.Time) Request {
 	req = req.normalized()
 	return Request{
@@ -510,6 +522,40 @@ func (r Request) Satisfied(now time.Time) bool {
 		return false
 	}
 	return len(r.Approvals()) >= r.Require.Count
+}
+
+// Released reports whether r has already bound a Job. AP-77: an approval
+// releases one execution, so a Released Request must never dispatch again —
+// every later dispatch that matches its plan hash re-attaches to r.JobID
+// instead.
+func (r Request) Released() bool {
+	return r.JobID != ""
+}
+
+// Release claims r's one execution for jobID, returning the updated Request.
+//
+// This is the release claim itself (AP-77), not a record of one already
+// decided: the store's BindJob calls this inside the transaction that makes
+// the claim atomic, and jobID becomes the sole Job this approval ever binds.
+//
+// The checks run in a deliberate order. jobID == "" is refused first — a
+// defensive check, since no real caller passes one — because binding an empty
+// ID would read back as unbound and defeat the whole claim. Released is
+// checked NEXT, before Satisfied, so a caller that lost a concurrent claim
+// always learns the winner's Job ID even if the deadline has passed in the
+// meantime.
+func (r Request) Release(jobID string, now time.Time) (Request, error) {
+	if jobID == "" {
+		return r, ErrNotReleasable
+	}
+	if r.Released() {
+		return r, ErrAlreadyReleased
+	}
+	if !r.Satisfied(now) {
+		return r, ErrNotReleasable
+	}
+	r.JobID = jobID
+	return r, nil
 }
 
 // Decide records d against r, returning the updated Request.

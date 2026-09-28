@@ -1158,7 +1158,9 @@ func TestMCPElicitation_FleetChangedRetryReParks(t *testing.T) {
 // TestMCPElicitation_DuplicateRetryReAttaches is AP-67's e2e proof: a
 // duplicate approving retry against an already-bound Job re-attaches — no
 // second Job, no second Task — recording the audited re-attach and mint no
-// second decision. #713 (the plain re-drive race) stays out of scope.
+// second decision. The plain re-drive race this comment used to carve out as
+// #713 is now closed too (AP-77, approval_release_once_e2e_test.go): the
+// capability layer's claim backstops this adapter-level path as well.
 func TestMCPElicitation_DuplicateRetryReAttaches(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 	session := connectEliciting(t, f, token)
