@@ -1167,12 +1167,18 @@ deny = ["secret"]
         use crate::dedup::DedupStore;
         use crate::gen::{task_request, Outcome, RawExec as GenRawExec, TaskRequest};
         use crate::scheduler::Scheduler;
+        use crate::services::Services;
         use crate::templates::TemplateSet;
 
         let policy = matrix_policy();
         let state_dir = TempDir::new("parity");
         let dedup = DedupStore::open(state_dir.path()).expect("open dedup");
-        let scheduler = Scheduler::new();
+        let services = Services {
+            policy,
+            templates: TemplateSet::empty(),
+            dedup,
+            scheduler: Scheduler::new(),
+        };
 
         // L1 (issue #127): a per-case action so an OPERATION case (arg-key
         // path: `unit=sshd` -> operation_positional_args -> evaluate) can be
@@ -1244,7 +1250,8 @@ deny = ["secret"]
             let parsed = parse_args(&full_args).expect("must parse");
             let would_allow = parsed.would_allow.expect("must have a would_allow spec");
             let query = build_query(&would_allow);
-            let verdict = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
+            let verdict =
+                evaluate_policy_query(&query, &services.policy, TemplateSet::empty_static());
 
             // Actual dispatch of the equivalent TaskRequest.
             let task = TaskRequest {
@@ -1252,16 +1259,9 @@ deny = ["secret"]
                 timeout_seconds: 5,
                 action: Some(task_action),
             };
-            let result = crate::dispatch::dispatch(
-                &task,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                tokio::time::Instant::now(),
-                None,
-            )
-            .await;
+            let result =
+                crate::dispatch::dispatch(&task, &services, tokio::time::Instant::now(), None)
+                    .await;
             let exec_allowed = result.outcome != Outcome::DeniedByPolicy as i32;
 
             assert_eq!(

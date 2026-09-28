@@ -22,6 +22,7 @@ mod raw_exec;
 mod renew;
 mod scheduler;
 mod selfref;
+mod services;
 mod shutdown;
 mod templates;
 mod tunnel;
@@ -30,6 +31,7 @@ mod version;
 use cancel::CancelRegistry;
 use config::Config;
 use scheduler::Scheduler;
+use services::Services;
 use shutdown::{Inflight, Shutdown, ShutdownContext};
 use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
@@ -232,19 +234,15 @@ const MAX_INFLIGHT_TASKS: usize = 1024;
 ///   no executor — structurally incapable of recording a marker or spawning a process.
 /// - Other message types: silently ignored for forward-compatibility.
 ///
-/// Policy, DedupStore, and Scheduler are passed as `Arc` so spawned per-Task tasks
-/// are `'static`.
-#[allow(clippy::too_many_arguments)]
+/// `services` is passed as an `Arc` so spawned per-Task tasks are `'static`;
+/// it is the process-lifetime [`Services`], never rebuilt per connection.
 async fn run_tunnel(
     channel: Channel,
     identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
     interval: Duration,
-    policy: Arc<policy::Policy>,
-    templates: Arc<templates::TemplateSet>,
-    dedup: Arc<dedup::DedupStore>,
-    scheduler: Arc<Scheduler>,
+    services: Arc<Services>,
     ctx: &ShutdownContext,
 ) -> TunnelExit {
     let mut client = TunnelClient::new(channel);
@@ -265,12 +263,12 @@ async fn run_tunnel(
                 daemon_version: version::version().to_string(),
                 facts: Some(facts),
                 labels: enroll::node_labels_to_proto(&node_labels),
-                policy_fingerprint: policy.fingerprint().to_string(),
+                policy_fingerprint: services.policy.fingerprint().to_string(),
                 // Beside the Policy fingerprint, from the same live set the
                 // dispatch path resolves against (ADR-0021): the Relay's
                 // fleet-wide template-drift signal. Report-only — templates are
                 // locally rooted and never settable over the wire (ADR-0002).
-                template_set_fingerprint: templates.fingerprint().to_string(),
+                template_set_fingerprint: services.templates.fingerprint().to_string(),
             })),
         })
         .await
@@ -284,7 +282,9 @@ async fn run_tunnel(
     // is a summary; this is the full snapshot, from the same live `policy`.
     if tx
         .send(DaemonMessage {
-            body: Some(daemon_message::Body::Policy(policy_snapshot(&policy))),
+            body: Some(daemon_message::Body::Policy(policy_snapshot(
+                &services.policy,
+            ))),
         })
         .await
         .is_err()
@@ -298,7 +298,9 @@ async fn run_tunnel(
     // against, refreshed on every (re)connect exactly like the Policy view.
     if tx
         .send(DaemonMessage {
-            body: Some(daemon_message::Body::Templates(templates.snapshot())),
+            body: Some(daemon_message::Body::Templates(
+                services.templates.snapshot(),
+            )),
         })
         .await
         .is_err()
@@ -437,10 +439,7 @@ async fn run_tunnel(
                         // enqueued" signal for the graceful-shutdown drain
                         // (issue #177).
                         let guard = ctx.inflight.enter();
-                        let policy = Arc::clone(&policy);
-                        let templates = Arc::clone(&templates);
-                        let dedup = Arc::clone(&dedup);
-                        let scheduler = Arc::clone(&scheduler);
+                        let services = Arc::clone(&services);
                         let registry = registry.clone();
                         let tx = tx.clone();
                         tokio::spawn(async move {
@@ -449,16 +448,9 @@ async fn run_tunnel(
                             // timeout/cancel) → Policy → execute. The scheduler gate is
                             // held across execution; the inbound loop never touches it,
                             // so TaskCancel delivery is never blocked.
-                            let result = dispatch::dispatch(
-                                &task_req,
-                                &policy,
-                                &templates,
-                                &dedup,
-                                &scheduler,
-                                received_at,
-                                cancel_rx,
-                            )
-                            .await;
+                            let result =
+                                dispatch::dispatch(&task_req, &services, received_at, cancel_rx)
+                                    .await;
                             // Deregister before sending the result so a subsequent
                             // TaskCancel for this id is a clean no-op — but ONLY if
                             // this lifecycle owns the registration. A redelivered
@@ -490,8 +482,11 @@ async fn run_tunnel(
                     }
                     Some(relay_message::Body::PolicyQuery(query)) => {
                         // Read-only Policy evaluation (ADR-0011): no dedup, no executor.
-                        // `policy` is an Arc<Policy> here; &policy deref-coerces to &Policy.
-                        let verdict = dispatch::evaluate_policy_query(&query, &policy, &templates);
+                        let verdict = dispatch::evaluate_policy_query(
+                            &query,
+                            &services.policy,
+                            &services.templates,
+                        );
                         if tx
                             .send(DaemonMessage {
                                 body: Some(daemon_message::Body::PolicyVerdict(verdict)),
@@ -557,10 +552,11 @@ async fn run_tunnel(
 /// connect"), falling back to `startup_identity` if the reload finds nothing
 /// or errors; this NEVER re-enrolls.
 ///
-/// `policy`, `templates`, `dedup`, and `scheduler` are constructed once by the
-/// caller and shared by `Arc` across every reconnect within this process's
-/// lifetime, so the at-most-once dedup state survives reconnects (ADR-0004) and
-/// the reported Policy/template fingerprints are stable across a reconnect.
+/// `services` ([`Services`]: Policy, templates, dedup, scheduler) is constructed
+/// once by the caller and shared by `Arc` across every reconnect within this
+/// process's lifetime, so the at-most-once dedup state survives reconnects
+/// (ADR-0004) and the reported Policy/template fingerprints are stable across a
+/// reconnect.
 ///
 /// The cert-renewal background task is rebound to the fresh channel and
 /// freshly-reloaded identity on every successful connect: tonic's `Channel`
@@ -586,14 +582,10 @@ async fn run_tunnel(
 /// so the daemon never blocks past the grace period waiting on an unreachable
 /// Relay. Neither path can violate at-most-once (ADR-0004): both fire only
 /// before any Task could have been accepted.
-#[allow(clippy::too_many_arguments)]
 async fn reconnect_loop(
     config: &Config,
     startup_identity: identity::Identity,
-    policy: Arc<policy::Policy>,
-    templates: Arc<templates::TemplateSet>,
-    dedup: Arc<dedup::DedupStore>,
-    scheduler: Arc<Scheduler>,
+    services: Arc<Services>,
     interval: Duration,
     ctx: ShutdownContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -650,10 +642,7 @@ async fn reconnect_loop(
                     config.facts.clone(),
                     config.node_labels.clone(),
                     interval,
-                    Arc::clone(&policy),
-                    Arc::clone(&templates),
-                    Arc::clone(&dedup),
-                    Arc::clone(&scheduler),
+                    Arc::clone(&services),
                     &ctx,
                 )
                 .await
@@ -770,13 +759,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(relay = %config.relay_addr, node_id = %identity.node_id, "relay-daemon starting");
 
     // Open the dedup store before connecting (fail closed: must be writable).
-    let dedup = Arc::new(dedup::DedupStore::open(&config.state_dir)?);
+    let dedup = dedup::DedupStore::open(&config.state_dir)?;
 
     // Load Policy from the configured path (fail closed on any error).
     // If the file is absent or unreadable, fall back to a deny-all Policy
     // with a warning rather than refusing to start. A daemon with no policy
     // file denies every Task, which is the most restrictive safe default.
-    let policy = Arc::new(match policy::load_policy(&config.policy_path) {
+    let policy = match policy::load_policy(&config.policy_path) {
         Ok(p) => {
             info!(path = %config.policy_path.display(), fingerprint = %p.fingerprint(), "policy loaded");
             p
@@ -791,7 +780,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // rules → every evaluate call returns Deny{rule: None}.
             policy::from_toml_str("").expect("empty TOML must produce deny-all Policy")
         }
-    });
+    };
 
     // Load this Node's Template Operations from the local root-owned template
     // root (ADR-0021, issue #291) — the same trust root as Policy, never the
@@ -799,9 +788,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // failure leaves the Node with NO Template Operations and an `unloadable`
     // fingerprint, so a broken set is visible fleet-wide instead of silently
     // serving a partial vocabulary (fail closed).
-    let templates = Arc::new(templates::TemplateSet::load_or_fail_closed(
-        &config.template_dir,
-    ));
+    let templates = templates::TemplateSet::load_or_fail_closed(&config.template_dir);
 
     // Per-Node concurrency scheduler (issue #91, ADR-0012):
     // mutate Tasks are strictly serial (Semaphore(1));
@@ -810,11 +797,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // never blocked by a running or queued Task.
     let scheduler = Scheduler::new();
 
-    // dedup/policy/scheduler are constructed ONCE here and shared by Arc across
-    // every reconnect inside reconnect_loop, so at-most-once dedup state
+    // dedup/policy/templates/scheduler are constructed ONCE here, bundled as
+    // the process-lifetime `Services`, and shared by Arc across every
+    // reconnect inside reconnect_loop, so at-most-once dedup state
     // (ADR-0004) survives reconnects within this process's lifetime. The renew
     // task is no longer spawned here — reconnect_loop rebinds it to the fresh
     // channel + identity on every successful connect (ADR-0006 Amendment 3).
+    let services = Arc::new(Services {
+        policy,
+        templates,
+        dedup,
+        scheduler,
+    });
     let interval = heartbeat_interval();
 
     // Graceful shutdown (issue #177): a signal listener triggers `shutdown`
@@ -831,10 +825,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         registry: CancelRegistry::new(),
     };
 
-    reconnect_loop(
-        &config, identity, policy, templates, dedup, scheduler, interval, ctx,
-    )
-    .await?;
+    reconnect_loop(&config, identity, services, interval, ctx).await?;
 
     Ok(())
 }
