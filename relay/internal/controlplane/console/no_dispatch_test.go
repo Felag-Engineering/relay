@@ -7,9 +7,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/astguard"
 )
 
 // no_dispatch_test.go is the Console's structural half of invariant 10,
@@ -55,7 +56,6 @@ const (
 	registryImportPath   = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	policyviewImportPath = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	nodevocabImportPath  = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
-	contextImportPath    = "context"
 	eventsImportPath     = "github.com/Felag-Engineering/gleipnir-relay/relay/internal/events"
 
 	// authzImportPath is cancel.go's own import (#595); decide.go (#453),
@@ -83,34 +83,16 @@ const (
 	approvalDecideFile = "decide.go"
 )
 
-// localImportAlias resolves the local identifier file uses for importPath: the
-// explicit alias when the import has one, otherwise the last path segment.
-// Resolving by import PATH rather than an assumed package name is what stops an
-// aliased import (`import c2 ".../capability"`) from dodging the check.
-func localImportAlias(file *ast.File, importPath string) (alias string, ok bool) {
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil || path != importPath {
-			continue
-		}
-		if imp.Name != nil {
-			return imp.Name.Name, true
-		}
-		return path[strings.LastIndex(path, "/")+1:], true
-	}
-	return "", false
-}
-
 // dispatchViolations AST-inspects file and returns one message per rule caught.
 func dispatchViolations(fileName string, file *ast.File) []string {
 	var violations []string
 
-	capAlias, capImported := localImportAlias(file, capabilityImportPath)
-	regAlias, regImported := localImportAlias(file, registryImportPath)
-	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
-	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
-	evAlias, evImported := localImportAlias(file, eventsImportPath)
-	authzAlias, authzImported := localImportAlias(file, authzImportPath)
+	capAlias, capImported := astguard.LocalImportAlias(file, capabilityImportPath)
+	regAlias, regImported := astguard.LocalImportAlias(file, registryImportPath)
+	pvAlias, pvImported := astguard.LocalImportAlias(file, policyviewImportPath)
+	nvAlias, nvImported := astguard.LocalImportAlias(file, nodevocabImportPath)
+	evAlias, evImported := astguard.LocalImportAlias(file, eventsImportPath)
+	authzAlias, authzImported := astguard.LocalImportAlias(file, authzImportPath)
 
 	// A dot-import of any banned package erases the qualifier every check
 	// below matches on: `import . ".../events"` turns the recovery into
@@ -474,7 +456,7 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		case *ast.TypeAssertExpr:
 			checkRecoveredWriteSurface(v.Type)
 		case *ast.InterfaceType:
-			violations = append(violations, seamHandsBackUnauditedRead(fileName, v, file)...)
+			violations = append(violations, astguard.SeamHandsBackUnauditedRead(fileName, v, file)...)
 		case *ast.CaseClause:
 			for _, expr := range v.List {
 				checkRecoveredWriteSurface(expr)
@@ -482,105 +464,6 @@ func dispatchViolations(fileName string, file *ast.File) []string {
 		}
 		return true
 	})
-	return violations
-}
-
-// seamHandsBackUnauditedRead is G2 (#680): an interface method declared in a
-// non-test file whose RESULTS name registry.Node, policyview.Snapshot or
-// nodevocab.Snapshot (bare, pointer, or slice) and whose PARAMETERS contain
-// no context.Context is a violation — it declares a seam that hands back a
-// Node or a display-only snapshot with no context, which is a read no lane
-// could have recorded or attributed (invariant 10, ADR-0025). Phrased as a
-// property, not a type denylist: it fires on the deleted FleetReader/
-// PolicyReader shapes and does not fire on QueryReader, whose DescribeNode
-// takes a context.Context. Mirrors mcp/no_dispatch_test.go's and
-// api/no_dispatch_test.go's identically-formulated rule.
-//
-// This closes the obvious door, not every door (security review, cycle 2):
-// MapType/ChanType below catch a map or channel of one of the three banned
-// types, but a local type alias for one of them, a generic type parameter
-// shaped like one, or an anonymous struct embedding one would not be. The
-// real bar is the composition-root guard
-// (TestSurfaceDeps_NoSurfaceIsHandedTheRegistryOrACache,
-// cmd/relay/control_surfaces_test.go) plus no surface being handed a
-// registry or cache at all.
-func seamHandsBackUnauditedRead(fileName string, iface *ast.InterfaceType, file *ast.File) []string {
-	if iface.Methods == nil {
-		return nil
-	}
-	regAlias, regImported := localImportAlias(file, registryImportPath)
-	pvAlias, pvImported := localImportAlias(file, policyviewImportPath)
-	nvAlias, nvImported := localImportAlias(file, nodevocabImportPath)
-	ctxAlias, ctxImported := localImportAlias(file, contextImportPath)
-
-	var namesBannedType func(expr ast.Expr) bool
-	namesBannedType = func(expr ast.Expr) bool {
-		switch t := expr.(type) {
-		case *ast.StarExpr:
-			return namesBannedType(t.X)
-		case *ast.ArrayType:
-			return namesBannedType(t.Elt)
-		case *ast.MapType:
-			return namesBannedType(t.Key) || namesBannedType(t.Value)
-		case *ast.ChanType:
-			return namesBannedType(t.Value)
-		case *ast.SelectorExpr:
-			pkg, ok := t.X.(*ast.Ident)
-			if !ok {
-				return false
-			}
-			switch {
-			case regImported && pkg.Name == regAlias && t.Sel.Name == "Node":
-				return true
-			case pvImported && pkg.Name == pvAlias && t.Sel.Name == "Snapshot":
-				return true
-			case nvImported && pkg.Name == nvAlias && t.Sel.Name == "Snapshot":
-				return true
-			}
-		}
-		return false
-	}
-
-	hasContextParam := func(ft *ast.FuncType) bool {
-		if !ctxImported || ft.Params == nil {
-			return false
-		}
-		for _, p := range ft.Params.List {
-			sel, ok := p.Type.(*ast.SelectorExpr)
-			if !ok {
-				continue
-			}
-			if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == ctxAlias && sel.Sel.Name == "Context" {
-				return true
-			}
-		}
-		return false
-	}
-
-	var violations []string
-	for _, m := range iface.Methods.List {
-		ft, ok := m.Type.(*ast.FuncType)
-		if !ok || ft.Results == nil {
-			continue
-		}
-		bannedResult := false
-		for _, r := range ft.Results.List {
-			if namesBannedType(r.Type) {
-				bannedResult = true
-				break
-			}
-		}
-		if !bannedResult || hasContextParam(ft) {
-			continue
-		}
-		methodName := "<unnamed>"
-		if len(m.Names) > 0 {
-			methodName = m.Names[0].Name
-		}
-		violations = append(violations, fmt.Sprintf(
-			"%s: interface method %s declares a seam that hands back a Node or a display-only snapshot with no context — a read no lane could have recorded or attributed (invariant 10, ADR-0025); read through the capability read lane",
-			fileName, methodName))
-	}
 	return violations
 }
 
