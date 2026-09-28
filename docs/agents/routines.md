@@ -26,9 +26,10 @@ per thread. Questions and anything that would change a spec claim are escalated 
 are reviewing and twice a day otherwise; it exits in seconds when there is nothing to respond
 to.
 
-Both need the Codex CLI, and now node too, on the environment for the second reviewer. Without
-either, every review gate runs single-vendor and the PR body says so — degraded, and stated,
-never silent. `RELAY_CODEX_MODEL` overrides the default model (`gpt-5.6-terra`) per run.
+Both need the Codex CLI and node on the environment for the second reviewer (see
+[Environment](#environment) for what a missing node does to `make verify`). Where Codex sits,
+which model it runs, and how its absence is recorded are in
+[workflow.md § Reviewers](workflow.md#reviewers).
 
 ## Environment
 

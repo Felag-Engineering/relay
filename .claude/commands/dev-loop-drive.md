@@ -62,8 +62,10 @@ the pileup entirely, which is why it's the recommended invocation.
 ## Flags
 
 Parse `$ARGUMENTS`:
-- optional milestone name (else infer from the top unchecked milestone in `ROADMAP.md`,
-  or fall back to "all open `loop:ready` issues").
+- optional milestone name (else the open GitHub milestone due soonest that still has open
+  `loop:ready` issues — `gh api 'repos/{owner}/{repo}/milestones?state=open&sort=due_on'` —
+  or fall back to "all open `loop:ready` issues"). GitHub milestones are the authority on
+  what is in flight; never infer the target from a file.
 - `--serial` — never parallelize; one issue at a time in dependency order.
 - `--max-parallel N` — cap concurrent issues within a wave (default 3). `--serial` ==
   `--max-parallel 1`.
