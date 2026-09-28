@@ -25,7 +25,10 @@ permissions:
 # per job and per ISO week, restored everywhere, and SAVED ONLY FROM main — so PRs
 # never spend upload time or cache quota, and a week's staleness bounds how much
 # recompiling a PR does. Pinned tool binaries are cached on the `go install` lines
-# in the Makefile, so bumping a pin rebuilds them.
+# in the Makefile, so bumping a pin rebuilds them. The cache steps live once, as local
+# composite actions under .github/actions/; a composite action has no post step, so
+# each build cache is a restore action early in the job and a save action at its end,
+# and the save's `if:` — the save policy — stays here in the job.
 #
 # GOFLAGS=-count=1: the restored Go build cache also holds test RESULTS, which do
 # not key on everything a test depends on (the umask, for one — see the Makefile's
@@ -107,43 +110,14 @@ jobs:
           go-version-file: relay/go.mod
           cache: false # its built-in cache looks for go.sum at the repo root; cached below
 
-      # The `tools` key expression is duplicated in the proto job; keep them identical,
-      # or the two jobs save the same binaries under different keys.
-      - name: Cache keys
-        id: keys
-        run: |
-          echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-          echo "tools=$( { grep -E '^(go|toolchain) ' relay/go.mod; grep -hE '^\s+go install ' Makefile; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
       - name: Restore Go build and module cache
         id: go-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/go-cache-restore
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ github.job }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-${{ steps.keys.outputs.week }}
-          restore-keys: |
-            go-${{ github.job }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-
-            go-${{ github.job }}-
+          prefix: go-${{ github.job }}
 
-      - name: Restore Go tools
-        id: tools-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: ~/go/bin
-          key: go-tools-${{ steps.keys.outputs.tools }}
-
-      - name: Install Go tools (pinned in the Makefile)
-        if: steps.tools-cache.outputs.cache-hit != 'true'
-        run: make tools
-
-      - name: Save Go tools
-        if: steps.tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: ~/go/bin
-          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Go tools (pinned in the Makefile)
+        uses: ./.github/actions/go-tools
 
       - run: make build-relay
       - run: make lint-relay
@@ -182,11 +156,8 @@ jobs:
 
       - name: Save Go build and module cache
         if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/go-cache-save
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
 
   # ---- daemon: Rust build, fmt + clippy, tests, the Rust half of the strict-umask
@@ -205,25 +176,12 @@ jobs:
         with:
           components: rustfmt,clippy
 
-      - name: Cache keys
-        id: keys
-        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-
-      # Keyed on the rustc version: a new stable invalidates every artifact, so a
-      # cache from the previous toolchain is never worth restoring.
       - name: Restore Cargo registry and build cache
         id: cargo-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
-          key: cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-${{ steps.keys.outputs.week }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-
-            cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-
+          prefix: cargo-${{ github.job }}
+          rust-cachekey: ${{ steps.toolchain.outputs.cachekey }}
 
       - run: make build-daemon
       - run: make lint-daemon # includes cargo fmt --check
@@ -243,19 +201,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: make opschema-check
 
-      - name: Prune daemon/target for the cache
-        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
-        run: bash scripts/ci-prune-cargo-target.sh
-
       - name: Save Cargo registry and build cache
         if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # ---- proto: /proto is the source of truth (ADR-0007) and additive-only past the
@@ -277,29 +226,8 @@ jobs:
           go-version-file: relay/go.mod
           cache: false
 
-      # Same `tools` key expression as the relay job; keep them identical.
-      - name: Cache keys
-        id: keys
-        run: |
-          echo "tools=$( { grep -E '^(go|toolchain) ' relay/go.mod; grep -hE '^\s+go install ' Makefile; } | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Go tools
-        id: tools-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: ~/go/bin
-          key: go-tools-${{ steps.keys.outputs.tools }}
-
-      - name: Install Go tools (pinned in the Makefile)
-        if: steps.tools-cache.outputs.cache-hit != 'true'
-        run: make tools
-
-      - name: Save Go tools
-        if: steps.tools-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
-        with:
-          path: ~/go/bin
-          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Go tools (pinned in the Makefile)
+        uses: ./.github/actions/go-tools
 
       - name: Proto drift
         run: make proto-check
@@ -333,35 +261,18 @@ jobs:
         id: toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
 
-      - name: Cache keys
-        id: keys
-        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-
       - name: Restore Go build and module cache
         id: go-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/go-cache-restore
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
-          key: go-${{ github.job }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-${{ steps.keys.outputs.week }}
-          restore-keys: |
-            go-${{ github.job }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-
-            go-${{ github.job }}-
+          prefix: go-${{ github.job }}
 
       - name: Restore Cargo registry and build cache
         id: cargo-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
-          key: cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-${{ steps.keys.outputs.week }}
-          restore-keys: |
-            cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-
-            cargo-${{ github.job }}-${{ steps.toolchain.outputs.cachekey }}-
+          prefix: cargo-${{ github.job }}
+          rust-cachekey: ${{ steps.toolchain.outputs.cachekey }}
 
       - run: make test-integration
 
@@ -377,26 +288,14 @@ jobs:
 
       - name: Save Go build and module cache
         if: github.ref == 'refs/heads/main' && steps.go-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/go-cache-save
         with:
-          path: |
-            ~/.cache/go-build
-            ~/go/pkg/mod
           key: ${{ steps.go-cache.outputs.cache-primary-key }}
-
-      - name: Prune daemon/target for the cache
-        if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
-        run: bash scripts/ci-prune-cargo-target.sh
 
       - name: Save Cargo registry and build cache
         if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
   # ---- release-build: compile-check the musl static binary (main only) ----
@@ -416,37 +315,18 @@ jobs:
       - name: Install musl linker
         run: sudo apt-get install -y musl-tools
 
-      - name: Cache keys
-        id: keys
-        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-
       - name: Restore Cargo registry and build cache
         id: cargo-cache
-        uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-restore
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
-          key: cargo-musl-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-${{ steps.keys.outputs.week }}
-          restore-keys: |
-            cargo-musl-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('daemon/Cargo.lock') }}-
-            cargo-musl-${{ steps.toolchain.outputs.cachekey }}-
+          prefix: cargo-musl
+          rust-cachekey: ${{ steps.toolchain.outputs.cachekey }}
 
       - run: make build-daemon-release
 
-      - name: Prune daemon/target for the cache
-        if: steps.cargo-cache.outputs.cache-hit != 'true'
-        run: bash scripts/ci-prune-cargo-target.sh
-
+      # The job itself runs only on main, so this saves on every miss.
       - name: Save Cargo registry and build cache
         if: steps.cargo-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+        uses: ./.github/actions/cargo-cache-save
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            daemon/target
           key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

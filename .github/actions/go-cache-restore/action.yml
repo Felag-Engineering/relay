@@ -1,0 +1,38 @@
+name: Restore Go build and module cache
+description: >-
+  Restore ~/.cache/go-build and ~/go/pkg/mod, keyed per job and per ISO week. Pair it
+  with go-cache-save at the end of the job: a composite action has no post step, so the
+  save is a separate step that the caller places and gates (main only, on a miss).
+inputs:
+  prefix:
+    description: >-
+      Key prefix, evaluated by the caller. ci.yml passes `go-<job id>` so that each job
+      keeps its own entry.
+    required: true
+outputs:
+  cache-hit:
+    description: actions/cache/restore's cache-hit (an exact primary-key match).
+    value: ${{ steps.restore.outputs.cache-hit }}
+  cache-primary-key:
+    description: The primary key, to hand to go-cache-save.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+runs:
+  using: composite
+  steps:
+    - name: Cache week
+      id: keys
+      shell: bash
+      run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+    # hashFiles() resolves against $GITHUB_WORKSPACE, not the action's directory.
+    - name: Restore Go build and module cache
+      id: restore
+      uses: actions/cache/restore@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-${{ steps.keys.outputs.week }}
+        restore-keys: |
+          ${{ inputs.prefix }}-${{ hashFiles('relay/go.mod', 'relay/go.sum') }}-
+          ${{ inputs.prefix }}-

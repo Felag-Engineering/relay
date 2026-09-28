@@ -130,36 +130,18 @@ at process start; nothing sets or raises them via an API.
 
 ## Repository layout
 
-```
-/proto/            shared protobuf contract — source of truth for the wire + Operation vocabulary
-/relay/            the Relay (Go): gRPC server, MCP server, Job engine, CA, registry, store
-/relay/packaging/  the Relay's hardened systemd unit and example EnvironmentFile
-/daemon/           the relay-daemon (Rust): connection, Policy engine, Operation executors
-/docs/adr/         architecture decision records — the *why*
-/docs/agents/      per-repo configuration agent skills read (tracker, labels, domain rules)
-/docs/api/         Control API reference and OpenAPI surface
-/docs/design/      console/ is the Console's live per-screen specification; the rest is pre-ADR design
-/docs/operations/  operator-facing runbooks (install, enrollment, packaging, recovery)
-/docs/security/    threat model — maps all fourteen invariants to the boundaries they defend
-/docs/specs/       capability specifications — what each capability does today, every surface
-/scripts/          CI gates and repo tooling (docs checks, spec coverage, security-surface list)
-GLOSSARY.md    the domain glossary — read this before touching anything
-AGENTS.md      instructions for AI agents working in this repo, and the invariants
-CLAUDE.md      Claude Code's entry point — a one-line import of AGENTS.md
-```
+The annotated layout lives in one place: [AGENTS.md § Repository layout](AGENTS.md#repository-layout).
 
 ## Status
 
 Pre-release, and **not yet licensed for use** — publishing a `LICENSE` (source-available under
 the BSL) is still open (#123) and its parameters are undecided.
 
-**The GitHub milestones are the authority on what is in progress**; read them with `gh` rather
-than inferring the target from any file. The latest tag is `v0.0.9`. Milestones were
-deliberately built out of order — the Template engine and shipped catalog, Accounts and access,
-the Control API, approval callout, and the MCP Tasks extension have all shipped ahead of a
-real-hardware proof. The Admin Console (monitoring, then administration and execution) is in
-flight, and the next milestone in line is the install path — **v0.6.5: `relay init`, the join
-string, and packages** (ADR-0030 through ADR-0033).
+**The GitHub milestones are the authority on what is in progress**, and the GitHub releases on
+what has shipped; read them with `gh` rather than inferring either from any file. Milestones
+were deliberately built out of order — the Template engine and shipped catalog, Accounts and
+access, the Control API, approval callout, and the MCP Tasks extension shipped ahead of a
+real-hardware proof.
 
 ## Documentation
 

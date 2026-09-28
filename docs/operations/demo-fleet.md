@@ -494,7 +494,23 @@ into the (persisted) volume — it just does not copy them out to
 `.dev-fleet/`; run `make demo-creds` after `demo-up` for that (see
 [The fault, and resetting between takes](#the-fault-and-resetting-between-takes)
 for what `demo-creds` does and does not do). There is no `down` you need to
-remember to run before `make demo-reset`: it wipes first.
+remember to run before `make demo-reset`: it wipes first. Never substitute a bare
+`docker compose --profile demo down` / `up` for these targets: it names its project after
+the checkout directory rather than `relay-demo`. `make demo-up` brings back all nine
+daemons every time precisely because the fixed project and profile are baked into the
+script rather than typed at the command line.
+
+**Cleanup — stop it and leave it down.** `make demo-reset` also wipes `relay-demo`, but
+brings the fleet straight back up; it is the between-takes reset, not a cleanup. To stop
+the demo fleet and wipe its volumes, run `docker compose -p relay-demo --profile demo
+down -v` directly — never a bare `docker compose --profile demo down -v`, which names its
+project after the checkout directory, not `relay-demo`, and leaves the demo fleet's
+volumes behind uncleaned:
+
+```console
+$ docker compose -p relay-demo --profile demo down -v
+$ rm -rf ./.dev-fleet
+```
 
 ### The nine-Node roster
 
@@ -642,7 +658,8 @@ same as the first command above *(predicted)* — and refused by the Node:
 crosses it and parks — that is the correct lesson to draw, not a bug: raising the
 threshold to keep a straight-through beat at n=9 would mean a four-Node mutate running
 with no human, which is strictly weaker and teaches the audience the opposite of the
-point. The straight-through path stays reachable through the two fan-out-1 Selectors
+point. In particular `node:role=db`, which runs straight through in the three-Node default
+fleet, is **two** Nodes here and parks — `min_fan_out: 2` is a floor. The straight-through path stays reachable through the two fan-out-1 Selectors
 in beat (d) above. Every Raw Exec parks at any fan-out under a separate rule
 (`dev-raw-exec-always-needs-a-human`), and that rule is not retuned either.
 
@@ -715,7 +732,7 @@ matches `daemon-4` (faulted) and `daemon-5` (healthy); swap `env=prod` for
 `env=staging` to reach `daemon-6` (faulted) and `daemon-9` (healthy) instead.
 Every Raw Exec parks under `dev-raw-exec-always-needs-a-human` regardless of
 fan-out; approve it as `dev-approver` exactly as in
-[The Raw Exec beat](../dev-fleet.md#the-raw-exec-beat), then re-issue the same call unchanged.
+[Approving a parked dispatch](../dev-fleet.md#approving-a-parked-dispatch), then re-issue the same call unchanged.
 `svc.status` and `svc.restart` become the natural read/mutate pair for this
 once #626 makes the Template pack dispatchable.
 
