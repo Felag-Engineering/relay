@@ -175,46 +175,13 @@ fn read_failure(task_id: &str, path: &str, e: &std::io::Error) -> TaskResult {
 mod tests {
     use super::*;
 
-    // -----------------------------------------------------------------------
-    // TempFile helper — same pattern as policy.rs's TempFile.
-    //
     // PERMISSION-BIT CAVEAT (carried forward from policy.rs):
     //   If a permission-denied test is added later it must use
-    //   `std::fs::set_permissions` (not `OpenOptions::mode`) because
-    //   `OpenOptions::mode` is masked by the process umask, and must be
+    //   `TempFile::with_forced_mode` (chmod, not `OpenOptions::mode`, because
+    //   `OpenOptions::mode` is masked by the process umask), and must be
     //   skipped when `rustix::process::geteuid().is_root()` because root
     //   bypasses DAC read permissions.
-    // -----------------------------------------------------------------------
-
-    struct TempFile(std::path::PathBuf);
-
-    impl TempFile {
-        fn new(label: &str, content: &[u8]) -> Self {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-file-read-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            std::fs::write(&path, content).unwrap();
-            TempFile(path)
-        }
-
-        fn path(&self) -> &std::path::Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
+    use crate::test_support::TempFile;
 
     // -----------------------------------------------------------------------
     // read_capped: exact content, no truncation

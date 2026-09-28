@@ -290,50 +290,9 @@ mod tests {
     use std::sync::Arc;
 
     use crate::enroll::EnrollError;
+    use crate::identity::test_ca::self_signed_identity;
     use crate::identity::{load_identity, persist_identity, IdentityError};
-
-    /// A temp dir that removes itself on drop, for test isolation.
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-renew-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Build a well-formed self-signed Identity for tests.
-    fn make_test_identity(node_id: &str) -> crate::identity::Identity {
-        let kp = rcgen::KeyPair::generate().expect("keygen");
-        let cert_pem = rcgen::CertificateParams::new(vec![])
-            .expect("params")
-            .self_signed(&kp)
-            .expect("self_signed")
-            .pem();
-        crate::identity::Identity {
-            node_id: node_id.to_string(),
-            key_pem: kp.serialize_pem(),
-            cert_pem: cert_pem.clone(),
-            ca_bundle_pem: cert_pem,
-        }
-    }
+    use crate::test_support::TempDir;
 
     /// Build a self-signed cert with rcgen that has a specific NotBefore/NotAfter,
     /// specified as Unix timestamps in seconds.
@@ -465,7 +424,7 @@ mod tests {
     #[tokio::test]
     async fn perform_renewal_happy_path() {
         let dir = TempDir::new("renew-happy");
-        let current = make_test_identity("node-abc-001");
+        let current = self_signed_identity("node-abc-001");
 
         // Pre-seed the state dir with the current identity so load_identity can verify.
         persist_identity(dir.path(), &current).expect("persist current identity");
@@ -522,7 +481,7 @@ mod tests {
     #[tokio::test]
     async fn perform_renewal_pubkey_mismatch_refuses_persist() {
         let dir = TempDir::new("renew-pubkey-mismatch");
-        let current = make_test_identity("node-pubkey-check");
+        let current = self_signed_identity("node-pubkey-check");
         persist_identity(dir.path(), &current).expect("persist current identity");
         let original_cert = current.cert_pem.clone();
 
@@ -579,7 +538,7 @@ mod tests {
     #[tokio::test]
     async fn perform_renewal_node_id_mismatch_refuses_persist() {
         let dir = TempDir::new("renew-mismatch");
-        let current = make_test_identity("node-abc-001");
+        let current = self_signed_identity("node-abc-001");
         persist_identity(dir.path(), &current).expect("persist current identity");
 
         // Capture the original cert PEM so we can verify the file is untouched.

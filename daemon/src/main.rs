@@ -998,3 +998,162 @@ mod tests {
         assert_eq!(policy_snapshot(&p).policy_fingerprint, p.fingerprint());
     }
 }
+
+/// Test fixtures shared by the daemon's unit-test modules: self-removing temp
+/// directories and files, and the `&[&str]` -> `Vec<String>` argv builder.
+///
+/// Inline here on purpose, never a `test_support.rs` file:
+/// `tests/policy_never_opened_for_write.rs` strips a bare `#[cfg(test)]` item
+/// from its write-site scan, but walks every file under `src/` as production
+/// however its `mod` line is gated — a separate file holding these
+/// `OpenOptions::write` calls would read as a new production writer.
+///
+/// The file constructors differ in how they set the mode, and tests depend on
+/// the difference: pick by what the test asserts, never by convenience.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A fresh path under the system temp dir,
+    /// `relay-test-<label>-<pid>-<nanos>-<seq>`. Nothing is created there. The
+    /// per-process sequence number keeps two calls in the same nanosecond
+    /// (parallel tests, same label) distinct.
+    pub(crate) fn unique_temp_path(label: &str) -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "relay-test-{label}-{}-{nanos}-{seq}",
+            std::process::id()
+        ))
+    }
+
+    /// Creates or truncates `path` holding `content` at EXACTLY `mode`.
+    ///
+    /// `OpenOptions::mode` is masked by the process umask, so on a runner with
+    /// umask 022 a requested 0o664 lands as 0o644 and a group/world-writable
+    /// rejection test would spuriously pass the file. chmod is not
+    /// umask-masked, so the exact mode is forced afterwards.
+    pub(crate) fn write_forced_mode(path: &Path, content: &[u8], mode: u32) {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(path)
+            .unwrap();
+        f.write_all(content).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Builds an argv (or argument list) from string literals.
+    pub(crate) fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A temp directory that removes itself, recursively, on drop.
+    pub(crate) struct TempDir(PathBuf);
+
+    impl TempDir {
+        /// Names a fresh directory WITHOUT creating it — for code under test
+        /// that creates its own state dir (identity, enrollment, dedup).
+        pub(crate) fn new(label: &str) -> Self {
+            TempDir(unique_temp_path(label))
+        }
+
+        /// Names a fresh directory and creates it.
+        pub(crate) fn created(label: &str) -> Self {
+            let path = unique_temp_path(label);
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            TempDir(path)
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+
+        pub(crate) fn path_str(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+
+        /// Writes a file into this directory at a FORCED 0o600, for use as a
+        /// Template root. `std::fs::write` is umask-masked, the hardened read
+        /// refuses any file with `mode & 0o022 != 0` (`hardened_open`), and
+        /// chmod is NOT umask-masked, so the mode is set explicitly.
+        pub(crate) fn write(&self, name: &str, content: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, content).expect("write template file");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("set template file mode");
+            path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A temp file that removes itself on drop. One constructor per mode
+    /// behaviour a test can depend on.
+    pub(crate) struct TempFile(PathBuf);
+
+    impl TempFile {
+        /// Create-or-truncate at the default 0o666 masked by the umask — for
+        /// fixtures whose mode no test looks at.
+        pub(crate) fn new(label: &str, content: impl AsRef<[u8]>) -> Self {
+            let path = unique_temp_path(label);
+            std::fs::write(&path, content).expect("create temp file");
+            TempFile(path)
+        }
+
+        /// `create_new` at a REQUESTED `mode` — a ceiling the umask may
+        /// tighten, not a forced one. For fixtures that are inputs to a read
+        /// and assert no exact mode: there is no reason to chmod past the
+        /// operator's umask, and doing it in a shape copied into production
+        /// code is how that pattern spread in the first place (ADR-0036). A
+        /// tighter umask simply yields a tighter fixture, which the test
+        /// still reads as its own owner.
+        pub(crate) fn with_requested_mode(label: &str, content: &[u8], mode: u32) -> Self {
+            let path = unique_temp_path(label);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(mode)
+                .open(&path)
+                .expect("create temp file");
+            f.write_all(content).expect("write temp file");
+            TempFile(path)
+        }
+
+        /// Create-or-truncate at EXACTLY `mode` (see [`write_forced_mode`]) —
+        /// for tests whose verdict depends on the mode bits.
+        pub(crate) fn with_forced_mode(label: &str, content: &[u8], mode: u32) -> Self {
+            let path = unique_temp_path(label);
+            write_forced_mode(&path, content, mode);
+            TempFile(path)
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+
+        pub(crate) fn path_str(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+}

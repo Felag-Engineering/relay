@@ -360,6 +360,23 @@ pub(crate) mod test_ca {
     use rustls_pki_types::CertificateSigningRequestDer;
     use x509_parser::prelude::FromDer;
 
+    /// A well-formed self-signed `Identity` for `node_id` (its own CA bundle),
+    /// so that `load_identity`'s PEM validation passes.
+    pub(crate) fn self_signed_identity(node_id: &str) -> super::Identity {
+        let kp = rcgen::KeyPair::generate().expect("keygen");
+        let cert_pem = rcgen::CertificateParams::new(vec![])
+            .expect("params")
+            .self_signed(&kp)
+            .expect("self_signed")
+            .pem();
+        super::Identity {
+            node_id: node_id.to_string(),
+            key_pem: kp.serialize_pem(),
+            cert_pem: cert_pem.clone(),
+            ca_bundle_pem: cert_pem,
+        }
+    }
+
     /// A CSR's SubjectPublicKeyInfo, adapted to rcgen's signing API.
     struct CsrPublicKey(Vec<u8>);
 
@@ -444,54 +461,12 @@ pub(crate) mod test_ca {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use crate::test_support::TempDir;
 
     // Compile-time Send+Sync assertion for IdentityError.
     fn _assert_identity_error_send_sync() {
         fn _assert<T: Send + Sync>() {}
         _assert::<IdentityError>();
-    }
-
-    // A temp dir that removes itself on drop, for test isolation.
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Build a well-formed self-signed Identity using rcgen, so that
-    /// `load_identity`'s PEM validation passes.
-    fn make_test_identity() -> Result<Identity> {
-        let kp = rcgen::KeyPair::generate()?;
-        let cert_pem = rcgen::CertificateParams::new(vec![])?
-            .self_signed(&kp)?
-            .pem();
-        Ok(Identity {
-            node_id: "node-test-aabbccdd".to_string(),
-            key_pem: kp.serialize_pem(),
-            cert_pem: cert_pem.clone(),
-            ca_bundle_pem: cert_pem,
-        })
     }
 
     // -----------------------------------------------------------------------
@@ -579,7 +554,7 @@ mod tests {
     #[test]
     fn persist_and_load_round_trip() {
         let dir = TempDir::new("persist");
-        let id = make_test_identity().expect("make_test_identity");
+        let id = test_ca::self_signed_identity("node-test-aabbccdd");
 
         persist_identity(dir.path(), &id).expect("persist_identity");
 
@@ -633,7 +608,7 @@ mod tests {
     #[test]
     fn persist_fsyncs_without_error_and_reloads() {
         let dir = TempDir::new("persist-durable");
-        let id = make_test_identity().expect("make_test_identity");
+        let id = test_ca::self_signed_identity("node-test-aabbccdd");
 
         // persist_identity creates the directory, so it must run before
         // fsync_dir can be exercised on it (TempDir::new only computes a path).
