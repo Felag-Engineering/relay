@@ -93,15 +93,23 @@ services:
       # would notice if it regressed.
       RELAY_CONSOLE_ENABLED: "true"
     ports:
-      # Distinct published host ports: node plane vs control plane. Bound to
-      # 127.0.0.1 (loopback) by default: the control plane is an execution
-      # surface, so publishing on 0.0.0.0 makes it network-reachable RCE —
-      # anyone who obtained a credential or the Console password could drive
-      # it. RELAY_PUBLISH_ADDR=0.0.0.0 opts in to that, for a fleet deliberately
-      # reached from other hosts; set a real CONSOLE_ADMIN_PASSWORD first.
+      # Distinct published host ports: node plane vs control plane, each bound
+      # to 127.0.0.1 (loopback) by default and each opted out of it separately.
       # Nothing inside the fleet uses these host ports; daemons and bootstrap
       # dial the compose DNS name `relay` over the private network.
-      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
+      #
+      # RELAY_PUBLISH_ADDR publishes the CONTROL plane (MCP, /api/v1, the
+      # Console) — what a client on another host needs. It is an execution
+      # surface, so anything but loopback makes it network-reachable RCE for
+      # whoever holds a credential or the Console password. The
+      # console-password service refuses to set the committed default password
+      # when this is not loopback, so an exposed fleet needs a real
+      # CONSOLE_ADMIN_PASSWORD or its Console cannot be signed in to.
+      #
+      # RELAY_NODE_PUBLISH_ADDR publishes the NODE plane, needed only by a
+      # relay-daemon running outside this compose project. Leave it on loopback
+      # unless you have one.
+      - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
       - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
     volumes:
       # CA state (ca-cert.pem + ca-key.pem) and the SQLite store persist here, so
@@ -229,6 +237,9 @@ services:
     environment:
       CONSOLE_ADMIN_NAME: "${CONSOLE_ADMIN_NAME:-admin}"
       CONSOLE_ADMIN_PASSWORD: "${CONSOLE_ADMIN_PASSWORD:-admin1234567}"
+      # So the script can refuse the committed default password once the
+      # control plane is published beyond loopback (docker/console-password.sh).
+      RELAY_PUBLISH_ADDR: "${RELAY_PUBLISH_ADDR:-127.0.0.1}"
     entrypoint: ["sh", "/console-password.sh"]
     volumes:
       - ./docker/console-password.sh:/console-password.sh:ro
