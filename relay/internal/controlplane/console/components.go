@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"html/template"
 	"sort"
-	"strings"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -96,27 +95,6 @@ func (l Label) String() string {
 // though the Relay derives it, because it is computed partly from what the
 // Node itself reports in Hello.
 func (l Label) SecurityLane() bool { return l.Namespace == NamespaceRelay }
-
-// ParseLabel reads a label in Selector syntax. An unrecognised namespace
-// yields ok=false rather than a chip in some default style: a chip whose
-// namespace the Console does not understand would be rendered with authority
-// it has not earned.
-func ParseLabel(term string) (Label, bool) {
-	ns, rest, found := strings.Cut(term, ":")
-	if !found {
-		return Label{}, false
-	}
-	switch Namespace(ns) {
-	case NamespaceNode, NamespaceTag, NamespaceRelay, NamespaceState:
-	default:
-		return Label{}, false
-	}
-	key, value, _ := strings.Cut(rest, "=")
-	if key == "" {
-		return Label{}, false
-	}
-	return Label{Namespace: Namespace(ns), Key: key, Value: value}, true
-}
 
 // --- Trust chips ------------------------------------------------------------
 

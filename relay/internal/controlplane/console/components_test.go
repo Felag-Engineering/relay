@@ -231,30 +231,19 @@ func TestLabelChip_OnlyTheSecurityLaneIsMarked(t *testing.T) {
 	}
 }
 
-func TestParseLabel_RefusesAnUnknownNamespace(t *testing.T) {
+// TestLabel_String_RendersSelectorSyntax pins the chip text: a label renders
+// exactly as a Selector term would name it, in all four namespaces.
+func TestLabel_String_RendersSelectorSyntax(t *testing.T) {
 	// Named fields, not positional: Label gained a severity channel and every
-	// one of these literals broke at once. A parser test should not have to be
-	// edited because a rendering concern was added to the type it parses into.
-	good := map[string]Label{
+	// one of these literals broke at once.
+	for want, l := range map[string]Label{
 		"node:env=prod":                    {Namespace: NamespaceNode, Key: "env", Value: "prod"},
 		"tag:migration-a":                  {Namespace: NamespaceTag, Key: "migration-a"},
 		"relay:quarantine":                 {Namespace: NamespaceRelay, Key: "quarantine"},
 		"state:policy-fingerprint=4b18c02": {Namespace: NamespaceState, Key: "policy-fingerprint", Value: "4b18c02"},
-	}
-	for term, want := range good {
-		got, ok := ParseLabel(term)
-		if !ok || got != want {
-			t.Errorf("ParseLabel(%q) = %+v, %v; want %+v", term, got, ok, want)
-		}
-		if got.String() != term {
-			t.Errorf("round trip: %q -> %q", term, got.String())
-		}
-	}
-	// A chip whose namespace the Console does not understand would be
-	// rendered with authority it has not earned.
-	for _, bad := range []string{"", "env=prod", "custom:thing", "NODE:env=prod", "node:", ":x"} {
-		if _, ok := ParseLabel(bad); ok {
-			t.Errorf("ParseLabel(%q) accepted an unrecognised label", bad)
+	} {
+		if got := l.String(); got != want {
+			t.Errorf("%+v renders as %q, want %q", l, got, want)
 		}
 	}
 }
