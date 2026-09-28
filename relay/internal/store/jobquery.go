@@ -254,7 +254,7 @@ func buildJobWhere(filter jobs.JobQuery) (conds []string, args []any) {
 	}
 	if filter.RiskClass != nil {
 		conds = append(conds, `t.risk_class = ?`)
-		args = append(args, riskClassToString(*filter.RiskClass))
+		args = append(args, jobs.RiskClassName(*filter.RiskClass))
 	}
 	if !filter.Since.IsZero() {
 		conds = append(conds, `j.created_at >= ?`)

@@ -39,7 +39,7 @@ func (t *sqliteTasks) CreateTask(ctx context.Context, task jobs.Task) error {
 			outcome, exit_code, stdout, stderr, created_at, dispatched_at, resolved_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, NULL, NULL, ?, NULL, NULL)`,
 		task.ID, task.JobID, task.StageID, task.NodeID, kindStr, nullIfEmpty(task.Action.OperationName),
-		argsJSON, argvJSON, riskClassToString(task.Action.RiskClass), task.TimeoutSeconds,
+		argsJSON, argvJSON, jobs.RiskClassName(task.Action.RiskClass), task.TimeoutSeconds,
 		formatTime(roundTripTime(task.CreatedAt)),
 	)
 	if err != nil {
@@ -297,17 +297,6 @@ func actionKindFromString(s string) (jobs.ActionKind, error) {
 		return jobs.ActionRawExec, nil
 	default:
 		return jobs.ActionUnspecified, fmt.Errorf("store: unrecognized action_kind %q", s)
-	}
-}
-
-func riskClassToString(rc jobs.RiskClass) string {
-	switch rc {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
 	}
 }
 

@@ -25,6 +25,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // screenFuncs are the template helpers every screen may use.
@@ -42,8 +43,8 @@ var screenFuncs = template.FuncMap{
 	// asserted name has told the operator the Relay checked something it did
 	// not, which is the one confusion the attribution model exists to prevent.
 	"trust":   func(text string, verified bool) Trust { return Trust{Text: text, Verified: verified} },
-	"risk":    RiskLabel,
-	"outcome": OutcomeLabel,
+	"risk":    jobs.RiskClassName,
+	"outcome": jobs.OutcomeName,
 
 	// short truncates a fingerprint to something an eye can compare. Full
 	// values stay in the title attribute — the point of a fingerprint on a

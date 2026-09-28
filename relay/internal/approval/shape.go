@@ -150,7 +150,7 @@ func HashPlanShape(act jobs.Action, sel SelectorShape) string {
 	writeField(h, "shape", ShapeKeyVersion)
 	writeField(h, "domain", "plan")
 	writeField(h, "kind", ActionKindName(act.Kind))
-	writeField(h, "risk", RiskClassName(act.RiskClass))
+	writeField(h, "risk", jobs.RiskClassName(act.RiskClass))
 	writeField(h, "op", act.OperationName)
 
 	// Only an Operation Action has arguments to classify. ShapeArgs is the ONE
@@ -259,7 +259,7 @@ func hashGrantShape(s Scope, legacyNamespacePin string) string {
 
 	writeField(h, "shape", ShapeKeyVersion)
 	writeField(h, "domain", "grant")
-	writeField(h, "risk", RiskClassName(s.RiskClass))
+	writeField(h, "risk", jobs.RiskClassName(s.RiskClass))
 	writeField(h, "account", strings.ToLower(s.Account))
 	writeField(h, "namespace", legacyNamespacePin)
 	fmt.Fprintf(h, "raw_exec=%t\n", s.RawExec)

@@ -245,7 +245,7 @@ func NewOutcomeBar(counts []OutcomeCount) OutcomeBar {
 		bar.Segments = append(bar.Segments, Segment{
 			Outcome: c.Outcome,
 			Count:   c.Count,
-			Label:   OutcomeLabel(c.Outcome),
+			Label:   jobs.OutcomeName(c.Outcome),
 			Percent: share * 100,
 			Width:   width,
 			// Round up, never down, and never to zero: a segment that exists
@@ -275,36 +275,6 @@ func growWeight(widthPercent float64) int {
 		return growSteps
 	}
 	return w
-}
-
-// OutcomeLabel renders an outcome as its wire name.
-//
-// All EIGHT of them. The brief named six, and three of the eight are different
-// kinds of "it did not run" that must not be collapsed: `unsupported` means
-// Policy was never asked, `unreachable` means the Task never left the Relay,
-// and `version_refused` means it was refused at dispatch. An operator who
-// cannot tell those apart cannot tell a Policy problem from a fleet problem.
-func OutcomeLabel(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
 }
 
 // --- The deny block ---------------------------------------------------------
@@ -513,18 +483,6 @@ func (p Plan) countVerdicts(allowed bool) int {
 	return n
 }
 
-// RiskLabel renders the risk class as the wire name.
-func RiskLabel(r jobs.RiskClass) string {
-	switch r {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
-}
-
 // --- The step-up modal ------------------------------------------------------
 
 // StepUp is a re-authentication prompt.
@@ -664,7 +622,7 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 	// precomputed onto Plan so the template reads as the contract does:
 	// every Operation declares a risk class (ADR-0012), and the class is what
 	// chooses the cap.
-	"risk": RiskLabel,
+	"risk": jobs.RiskClassName,
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 

@@ -215,7 +215,7 @@ func TestJob_AllEightOutcomesRender(t *testing.T) {
 	}
 	var tasks []capability.TaskRow
 	for _, o := range all {
-		tasks = append(tasks, mutateTask("node-"+OutcomeLabel(o), o, ""))
+		tasks = append(tasks, mutateTask("node-"+jobs.OutcomeName(o), o, ""))
 	}
 	q := &fakeQueries{jobs: []capability.JobSummary{oneJob(tasks, jobs.RiskClassMutate)}, tasks: tasks}
 	body := jobBody(t, jobDeps(q), jobPath(""))
@@ -224,8 +224,8 @@ func TestJob_AllEightOutcomesRender(t *testing.T) {
 		t.Errorf("the page rendered %d outcome groups, want 8", n)
 	}
 	for _, o := range all {
-		if !strings.Contains(body, fmt.Sprintf(`data-outcome="%s"`, OutcomeLabel(o))) {
-			t.Errorf("outcome %s has no group of its own", OutcomeLabel(o))
+		if !strings.Contains(body, fmt.Sprintf(`data-outcome="%s"`, jobs.OutcomeName(o))) {
+			t.Errorf("outcome %s has no group of its own", jobs.OutcomeName(o))
 		}
 	}
 	// Ordering is by interest, not alphabetical: a page that opens with nine
@@ -449,7 +449,7 @@ func TestJob_SentinelExitCodesAreNotRenderedAsProcessResults(t *testing.T) {
 	for _, c := range cases {
 		if got := hasRealExitStatus(c.outcome, c.code); got != c.want {
 			t.Errorf("%s with code %d: has real exit status = %v, want %v",
-				OutcomeLabel(c.outcome), c.code, got, c.want)
+				jobs.OutcomeName(c.outcome), c.code, got, c.want)
 		}
 	}
 

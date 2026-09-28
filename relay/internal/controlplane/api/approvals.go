@@ -8,6 +8,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // approvals.go is the OUT-OF-BAND DECISION CHANNEL (#270, ADR-0027) — the
@@ -153,7 +154,7 @@ func renderApproval(r approval.Request) approvalResponse {
 		PlanHash:         r.PlanHash,
 		Summary:          r.Summary,
 		ActionKind:       approval.ActionKindName(r.ActionKind),
-		RiskClass:        approval.RiskClassName(r.RiskClass),
+		RiskClass:        jobs.RiskClassName(r.RiskClass),
 		RequestedBy:      r.RequestedBy,
 		RequestedByID:    r.RequestedByID,
 		MatchedRules:     rules,

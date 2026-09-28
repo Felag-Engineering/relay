@@ -569,7 +569,7 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		// name-list inference. A Template Operation the Console has never
 		// heard of is still classified by the catalog that dispatched it.
 		RiskClass:      sum.RiskClass,
-		Risk:           RiskLabel(sum.RiskClass),
+		Risk:           jobs.RiskClassName(sum.RiskClass),
 		ReadClass:      sum.RiskClass == jobs.RiskClassRead,
 		Principal:      sum.Requester,
 		Verified:       sum.RequesterAccountID != "",
@@ -730,7 +730,7 @@ func jobGroups(ctx context.Context, d Deps, caller capability.Principal, sum cap
 	readClass := sum.RiskClass != jobs.RiskClassMutate
 	groups := make([]outcomeGroup, 0, len(outcomes))
 	for _, o := range outcomes {
-		label := OutcomeLabel(o)
+		label := jobs.OutcomeName(o)
 		expanded := show == label
 		g := outcomeGroup{
 			Outcome: o,

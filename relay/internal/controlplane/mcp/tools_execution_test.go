@@ -156,16 +156,6 @@ func TestRunOrPlanOutput_PlanFieldOmittedWhenNil(t *testing.T) {
 	}
 }
 
-// TestOutcomeString_VersionRefused is ADR-0014's dispatch-level gate render:
-// jobs.OutcomeVersionRefused must render as the distinct "version_refused"
-// string, never "denied_by_policy" (a Policy verdict, not a Relay-side gate)
-// or "unreachable" (a connectivity conclusion).
-func TestOutcomeString_VersionRefused(t *testing.T) {
-	if got := outcomeString(jobs.OutcomeVersionRefused); got != "version_refused" {
-		t.Errorf("outcomeString(OutcomeVersionRefused) = %q, want %q", got, "version_refused")
-	}
-}
-
 // TestRenderPlan_CarriesOutdatedIntoPerNodeVerdict is ADR-0014's plan-mode
 // wire contract: renderPlan copies capability.NodeVerdict.Outdated onto
 // PerNodeVerdict.Outdated verbatim, for both an outdated and a current Node.

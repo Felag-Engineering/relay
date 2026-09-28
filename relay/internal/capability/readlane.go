@@ -449,7 +449,7 @@ func (f JobFilter) summary() string {
 	field("on_behalf_of", f.OnBehalfOf)
 	field("op", f.Operation)
 	if f.RiskClass != nil {
-		field("risk_class", riskClassLabel(*f.RiskClass))
+		field("risk_class", jobs.RiskClassName(*f.RiskClass))
 	}
 	if !f.Since.IsZero() {
 		field("since", f.Since.UTC().Format(time.RFC3339))
@@ -477,57 +477,16 @@ func (f TaskFilter) summary() string {
 	var s filterSummary
 	s.field("job", f.JobID)
 	if f.Outcome != nil {
-		s.field("outcome", outcomeLabel(*f.Outcome))
+		s.field("outcome", jobs.OutcomeName(*f.Outcome))
 	}
 	return s.String()
 }
 
-// jobStateLabel and riskClassLabel render their jobs.* enums as the fixed,
-// low-cardinality strings JobFilter.summary uses — mirroring auditsink.go's
-// outcomeLabel, which is why outcomeLabel below follows the same shape for
-// jobs.Outcome.
+// jobStateLabel renders a jobs.JobState as the fixed, low-cardinality string
+// JobFilter.summary uses, alongside jobs.RiskClassName and jobs.OutcomeName.
 func jobStateLabel(st jobs.JobState) string {
 	if st == jobs.JobStateRunning {
 		return "running"
 	}
 	return "complete"
-}
-
-func riskClassLabel(rc jobs.RiskClass) string {
-	switch rc {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
-}
-
-// outcomeLabel renders a jobs.Outcome as a fixed-vocabulary string, for
-// TaskFilter.summary. A local copy of auditsink.go's outcomeLabel: capability
-// may not import internal/auditsink (it would be a cycle — auditsink already
-// imports capability), and the mapping is small enough that duplicating it
-// here is cheaper than a third package to share it from.
-func outcomeLabel(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
 }

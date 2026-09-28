@@ -57,6 +57,39 @@ const (
 	OutcomeUnsupported
 )
 
+// OutcomeName renders o as its lowercase wire name. It is the one rendering
+// every surface, sink and metric uses, so the same Task reads the same through
+// every door. All eight outcomes keep their own name: three are different kinds
+// of "it did not run" that must not be collapsed — `unsupported` means Policy
+// was never asked, `unreachable` means the Task never left the Relay, and
+// `version_refused` means it was refused at dispatch. Anything else, including
+// the zero value and any out-of-range Outcome, is "unspecified".
+//
+// A plain function rather than a String method, so %v and slog keep rendering
+// the underlying value wherever an Outcome is logged.
+func OutcomeName(o Outcome) string {
+	switch o {
+	case OutcomeSuccess:
+		return "success"
+	case OutcomeFailure:
+		return "failure"
+	case OutcomeTimeout:
+		return "timeout"
+	case OutcomeDeniedByPolicy:
+		return "denied_by_policy"
+	case OutcomeCancelled:
+		return "cancelled"
+	case OutcomeUnreachable:
+		return "unreachable"
+	case OutcomeVersionRefused:
+		return "version_refused"
+	case OutcomeUnsupported:
+		return "unsupported"
+	default:
+		return "unspecified"
+	}
+}
+
 // VersionRefusedMessage is the legible, per-Node reason recorded as a
 // version-refused Task's Stderr (mirrors how a daemon denial explains itself,
 // and matches the FrozenError quality bar: explain, cite the ADR, say what to
@@ -191,6 +224,22 @@ const (
 	RiskClassRead
 	RiskClassMutate
 )
+
+// RiskClassName renders r as its lowercase wire name, "read" or "mutate".
+// The string is persisted and hashed (internal/store, internal/approval), so it
+// is contract, not presentation. RiskClassUnspecified — and any out-of-range
+// value — renders as "unspecified" rather than panicking; it should never
+// appear in practice (ADR-0012).
+func RiskClassName(r RiskClass) string {
+	switch r {
+	case RiskClassRead:
+		return "read"
+	case RiskClassMutate:
+		return "mutate"
+	default:
+		return "unspecified"
+	}
+}
 
 // DispatchState is a Task's position in the at-most-once execution lifecycle:
 // Pending (created, not yet sent) -> Dispatched (sent to the daemon, no

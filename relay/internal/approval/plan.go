@@ -76,7 +76,7 @@ func HashPlan(act jobs.Action, nodeIDs []string) string {
 	h := sha256.New()
 
 	writeField(h, "kind", ActionKindName(act.Kind))
-	writeField(h, "risk", RiskClassName(act.RiskClass))
+	writeField(h, "risk", jobs.RiskClassName(act.RiskClass))
 
 	switch act.Kind {
 	case jobs.ActionOperation:
@@ -201,7 +201,7 @@ func Summarize(act jobs.Action, nodeIDs []string) PlanSummary {
 
 	return PlanSummary{
 		Action:      describeAction(act),
-		RiskClass:   RiskClassName(act.RiskClass),
+		RiskClass:   jobs.RiskClassName(act.RiskClass),
 		NodeCount:   len(nodeIDs),
 		SampleNodes: sample,
 		PlanHash:    HashPlan(act, nodeIDs),

@@ -138,7 +138,7 @@ func templateVocabularyOutput(snap nodevocab.Snapshot, reported bool) TemplateVo
 		}
 		templates = append(templates, TemplateOperationOutput{
 			Name:      t.Name,
-			RiskClass: riskClassString(jobs.RiskClass(t.RiskClass)),
+			RiskClass: jobs.RiskClassName(jobs.RiskClass(t.RiskClass)),
 			Slots:     slots,
 		})
 	}

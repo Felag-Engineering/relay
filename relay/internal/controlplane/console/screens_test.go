@@ -687,7 +687,7 @@ func TestVocab_RiskClassInference(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := riskOf(factsOfRecord(c.rec)); got != c.want {
-			t.Errorf("%s: riskOf = %s, want %s", c.name, RiskLabel(got), RiskLabel(c.want))
+			t.Errorf("%s: riskOf = %s, want %s", c.name, jobs.RiskClassName(got), jobs.RiskClassName(c.want))
 		}
 	}
 }
@@ -892,7 +892,7 @@ func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
 	}
 	chipped := 0
 	for _, c := range calls {
-		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
+		if c.Risk == jobs.RiskClassName(jobs.RiskClassMutate) {
 			chipped += c.Calls
 		}
 	}
@@ -3192,7 +3192,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	// still a mutate: what the agent asked for is the signal, and the outcome
 	// chip is what says it did not run.
 	for _, c := range calls {
-		if c.Risk != RiskLabel(jobs.RiskClassMutate) {
+		if c.Risk != jobs.RiskClassName(jobs.RiskClassMutate) {
 			t.Errorf("a planned mutate chips risk %q — a Plan that never ran is still a "+
 				"mutate-class ask, and Raw Exec always takes the mutate cap", c.Risk)
 		}
