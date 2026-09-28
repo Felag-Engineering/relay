@@ -240,7 +240,7 @@ func (a *Authenticator) contextWith(ctx context.Context, res authResult) context
 // Console and for nothing else on this listener. The token lanes carry no such
 // bound: an API Token is a control-plane credential by construction.
 func (a *Authenticator) authenticateRequest(r *http.Request) (authResult, bool) {
-	source := sourceAddress(r)
+	source := SourceAddress(r)
 
 	if credential, ok := bearerToken(r); ok {
 		p, ok := a.authenticate(r.Context(), credential)
@@ -264,14 +264,14 @@ func (a *Authenticator) authenticateRequest(r *http.Request) (authResult, bool) 
 	return authResult{}, false
 }
 
-// sourceAddress is the peer address, port stripped, as read off the
+// SourceAddress is the peer address, port stripped, as read off the
 // connection.
 //
 // Never from X-Forwarded-For or any other header. A header is a claim, and the
 // verified attribution lane is not where claims go (audit.Verified.Source). A
 // deployment behind a proxy will see the proxy here, which is honest; the
 // alternative is an audit trail an attacker can write.
-func sourceAddress(r *http.Request) string {
+func SourceAddress(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr

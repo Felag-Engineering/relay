@@ -25,7 +25,7 @@ func (r *sqliteAPITokens) CreateToken(ctx context.Context, t accounts.APIToken) 
 		INSERT INTO api_tokens (id, account_id, name, secret_hash, created_at, expires_at, last_used_at, revoked_at)
 		VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)`,
 		t.ID, t.AccountID, t.Name, t.SecretHash,
-		formatTime(roundTripTime(t.CreatedAt)), nullableTime(t.ExpiresAt),
+		formatTime(roundTripTime(t.CreatedAt)), nullTime(t.ExpiresAt),
 	)
 	if err != nil {
 		return fmt.Errorf("insert api token: %w", err)
@@ -101,10 +101,7 @@ func (r *sqliteAPITokens) TouchTokenLastUsed(ctx context.Context, id string, at 
 	return nil
 }
 
-// scanner is satisfied by both *sql.Row and *sql.Rows.
-type scanner interface{ Scan(dest ...any) error }
-
-func scanToken(s scanner) (accounts.APIToken, error) {
+func scanToken(s rowScanner) (accounts.APIToken, error) {
 	var (
 		id, accountID, name              string
 		secretHash                       []byte
@@ -145,13 +142,4 @@ func scanToken(s scanner) (accounts.APIToken, error) {
 		LastUsedAt: lastUsed,
 		RevokedAt:  revoked,
 	}, nil
-}
-
-// nullableTime stores a zero time as SQL NULL, so "never expires" and "expired
-// at the zero instant" cannot be confused.
-func nullableTime(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return formatTime(roundTripTime(t))
 }

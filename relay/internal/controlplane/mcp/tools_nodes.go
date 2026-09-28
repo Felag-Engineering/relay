@@ -9,6 +9,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
@@ -46,12 +47,8 @@ func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
 		Connected:              n.Connected,
 		StateLabels:            stateLabels,
 	}
-	if !n.LastSeen.IsZero() {
-		item.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
-	}
-	if !n.RevokedAt.IsZero() {
-		item.RevokedAt = n.RevokedAt.UTC().Format(time.RFC3339)
-	}
+	item.LastSeen = controlplane.RFC3339(n.LastSeen)
+	item.RevokedAt = controlplane.RFC3339(n.RevokedAt)
 	return item
 }
 
@@ -71,12 +68,8 @@ func certificateFromNode(n registry.Node) CertificateOutput {
 		return out
 	}
 	out.NotAfter = n.CertNotAfter.UTC().Format(time.RFC3339)
-	if !n.EnrolledAt.IsZero() {
-		out.EnrolledAt = n.EnrolledAt.UTC().Format(time.RFC3339)
-	}
-	if !n.LastRenewedAt.IsZero() {
-		out.LastRenewedAt = n.LastRenewedAt.UTC().Format(time.RFC3339)
-	}
+	out.EnrolledAt = controlplane.RFC3339(n.EnrolledAt)
+	out.LastRenewedAt = controlplane.RFC3339(n.LastRenewedAt)
 	return out
 }
 

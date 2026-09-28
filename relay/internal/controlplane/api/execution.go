@@ -339,7 +339,7 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 				Summary:      parked.Summary,
 				MatchedRules: nonNil(parked.Rules),
 				Progress:     parked.Progress,
-				ExpiresAt:    rfc3339(parked.ExpiresAt),
+				ExpiresAt:    controlplane.RFC3339(parked.ExpiresAt),
 				DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
 			})
 			return

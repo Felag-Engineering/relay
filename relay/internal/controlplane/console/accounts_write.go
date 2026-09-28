@@ -242,7 +242,7 @@ func stepUpProved(d Deps, w http.ResponseWriter, r *http.Request, pg Page, undon
 		return false
 	}
 
-	err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), sourceAddress(r))
+	err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), controlplane.SourceAddress(r))
 	if err == nil {
 		return true
 	}

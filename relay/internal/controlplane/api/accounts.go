@@ -9,6 +9,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 )
 
 // -----------------------------------------------------------------------
@@ -35,8 +36,8 @@ func renderAccount(a accounts.Account) accountResponse {
 		Kind:       string(a.Kind),
 		Role:       string(a.Role),
 		Enabled:    a.Enabled,
-		CreatedAt:  rfc3339(a.CreatedAt),
-		LastSeenAt: rfc3339(a.LastSeenAt),
+		CreatedAt:  controlplane.RFC3339(a.CreatedAt),
+		LastSeenAt: controlplane.RFC3339(a.LastSeenAt),
 	}
 }
 
@@ -74,10 +75,10 @@ func renderAPIToken(t accounts.APIToken) apiTokenResponse {
 		ID:         t.ID,
 		AccountID:  t.AccountID,
 		Name:       t.Name,
-		CreatedAt:  rfc3339(t.CreatedAt),
-		ExpiresAt:  rfc3339(t.ExpiresAt),
-		LastUsedAt: rfc3339(t.LastUsedAt),
-		RevokedAt:  rfc3339(t.RevokedAt),
+		CreatedAt:  controlplane.RFC3339(t.CreatedAt),
+		ExpiresAt:  controlplane.RFC3339(t.ExpiresAt),
+		LastUsedAt: controlplane.RFC3339(t.LastUsedAt),
+		RevokedAt:  controlplane.RFC3339(t.RevokedAt),
 		Revoked:    t.Revoked(),
 	}
 }
@@ -111,15 +112,6 @@ type mintAPITokenResponse struct {
 // audit reasons and (later) the Console; an unbounded one lets a caller size
 // an audit record.
 const maxAPITokenNameLen = 128
-
-// rfc3339 renders t, or "" for the zero time so an "never happened" timestamp
-// is omitted from the response rather than rendered as year 1.
-func rfc3339(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.UTC().Format(time.RFC3339)
-}
 
 // -----------------------------------------------------------------------
 // Nil-seam guard

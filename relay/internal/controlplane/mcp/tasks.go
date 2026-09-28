@@ -10,6 +10,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/mcptask"
 )
 
@@ -205,9 +206,9 @@ func renderTask(ctx context.Context, view capability.TaskView, results JobResult
 	out := &TaskResult{
 		TaskID:         view.TaskID,
 		Status:         view.Status.String(),
-		CreatedAt:      rfc3339(view.CreatedAt),
-		LastUpdatedAt:  rfc3339(view.LastUpdatedAt),
-		TTLMs:          ttlMillis(view.ExpiresAt, now),
+		CreatedAt:      controlplane.RFC3339(view.CreatedAt),
+		LastUpdatedAt:  controlplane.RFC3339(view.LastUpdatedAt),
+		TTLMs:          mcptask.TTLMillis(view.ExpiresAt, now),
 		PollIntervalMs: defaultPollIntervalMs,
 		StatusMessage:  view.Summary,
 	}
@@ -290,21 +291,4 @@ func renderTaskError(method, taskID string, err error) error {
 			Message: fmt.Sprintf("mcp: %s %q: %v", method, taskID, err),
 		}
 	}
-}
-
-// ttlMillis renders remaining lifetime, floored at zero so a lapsed handle
-// never advertises a negative window a client would read as garbage.
-func ttlMillis(expiresAt, now time.Time) int64 {
-	remaining := expiresAt.Sub(now)
-	if remaining <= 0 {
-		return 0
-	}
-	return remaining.Milliseconds()
-}
-
-func rfc3339(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-	return t.UTC().Format(time.RFC3339)
 }

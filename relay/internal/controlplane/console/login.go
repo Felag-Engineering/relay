@@ -25,7 +25,6 @@ import (
 	"html/template"
 	"log/slog"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -380,7 +379,7 @@ func handleLoginSubmit(d Deps) http.HandlerFunc {
 		attempt := consoleauth.Attempt{
 			Name:     r.PostFormValue("username"),
 			Password: accounts.NewPassword(r.PostFormValue("password")),
-			Source:   sourceAddress(r),
+			Source:   controlplane.SourceAddress(r),
 		}
 		// Whatever identifier the browser already holds is handed over to be
 		// RETIRED, not reused. It may have been planted before the
@@ -497,7 +496,7 @@ func handleLogout(d Deps) http.HandlerFunc {
 			return
 		}
 		if ok && d.Auth != nil {
-			if err := d.Auth.Logout(r.Context(), cs.ID, sourceAddress(r)); err != nil {
+			if err := d.Auth.Logout(r.Context(), cs.ID, controlplane.SourceAddress(r)); err != nil {
 				http.Error(w, "the Relay could not record the sign-out", http.StatusInternalServerError)
 				return
 			}
@@ -598,15 +597,4 @@ func clearSessionCookie(w http.ResponseWriter) {
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
-}
-
-// sourceAddress is the peer address, port stripped, read off the connection.
-// Never from a header: a claimed source is an assertion, and the login trail's
-// source is in the verified lane.
-func sourceAddress(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

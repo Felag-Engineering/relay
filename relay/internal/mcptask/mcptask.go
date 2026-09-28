@@ -338,10 +338,11 @@ func (h Handle) Status(req approval.Request, now time.Time) Status {
 	return StatusWorking
 }
 
-// TTLMillis renders the remaining lifetime for SEP-2663's `ttlMs`, floored at
-// zero so an expired handle never advertises a negative window.
-func (h Handle) TTLMillis(now time.Time) int64 {
-	remaining := h.ExpiresAt.Sub(now)
+// TTLMillis renders the lifetime remaining until expiresAt for SEP-2663's
+// `ttlMs`, floored at zero so an expired handle never advertises a negative
+// window a client would read as garbage.
+func TTLMillis(expiresAt, now time.Time) int64 {
+	remaining := expiresAt.Sub(now)
 	if remaining <= 0 {
 		return 0
 	}

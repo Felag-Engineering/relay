@@ -353,9 +353,7 @@ func rewriteParkedResult(c *shimCapture, now time.Time) (body []byte, taskID str
 	// in mcptask, and the two would drift.
 	ttl := int64(0)
 	if expires, err := time.Parse(time.RFC3339, parked.TaskExpiresAt); err == nil {
-		if remaining := expires.Sub(now); remaining > 0 {
-			ttl = remaining.Milliseconds()
-		}
+		ttl = mcptask.TTLMillis(expires, now)
 	}
 
 	stamp := now.Format(time.RFC3339)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -159,15 +160,15 @@ func renderGrant(g approval.Grant, now time.Time) grantResponse {
 			RawExec:    g.Scope.RawExec,
 		},
 		Summary:      g.Summary,
-		StartsAt:     rfc3339(g.StartsAt),
-		ExpiresAt:    rfc3339(g.ExpiresAt),
+		StartsAt:     controlplane.RFC3339(g.StartsAt),
+		ExpiresAt:    controlplane.RFC3339(g.ExpiresAt),
 		MaxUses:      g.MaxUses,
 		Uses:         g.Uses,
 		Remaining:    g.Remaining(),
 		Progress:     g.Progress(),
 		Active:       g.Active(now),
-		CreatedAt:    rfc3339(g.CreatedAt),
-		RevokedAt:    rfc3339(g.RevokedAt),
+		CreatedAt:    controlplane.RFC3339(g.CreatedAt),
+		RevokedAt:    controlplane.RFC3339(g.RevokedAt),
 		RevokedBy:    g.RevokedBy,
 		RevokeReason: g.RevokeReason,
 	}

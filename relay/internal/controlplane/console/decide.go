@@ -304,7 +304,7 @@ func handleDecideApproval(d Deps) http.HandlerFunc {
 
 		// Step-up, last before the decision. On any non-nil error, return in
 		// every branch with NO call to d.Decide.
-		if err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), sourceAddress(r)); err != nil {
+		if err := d.Auth.StepUp(r.Context(), cs.ID, accounts.NewPassword(password), controlplane.SourceAddress(r)); err != nil {
 			switch {
 			case isThrottled(err):
 				wait, _ := consoleauth.Throttled(err)
