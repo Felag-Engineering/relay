@@ -261,7 +261,7 @@ type ListOperationsOutput struct {
 // well have executed; what happened is unknown) all read as plausible real
 // exit codes, which is exactly the ambiguity ADR-0001/0003's legibility
 // posture forbids. Present iff a process actually ran and exited with a
-// status (exitCodePtr, tools_execution.go); Outcome is always the
+// status (controlplane.ExitCode); Outcome is always the
 // authoritative did-it-run state.
 //
 // RefusalExplanation carries a second author on a denied_by_policy row: stderr

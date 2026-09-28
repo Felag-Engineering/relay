@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
@@ -60,11 +59,6 @@ type JobResultReader interface {
 	GetJob(ctx context.Context, id string) (jobs.Job, error)
 	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
 }
-
-// planAdvisory is the fixed point-in-time disclaimer every plan response
-// carries (ADR-0011): verdicts are a snapshot, not a guarantee — Policy may
-// change between the plan and a later real run.
-const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
 
 // ---------------------------------------------------------------------------
 // Request bodies
@@ -450,104 +444,41 @@ func writeExecError(w http.ResponseWriter, err error) {
 	writeProblem(w, http.StatusInternalServerError, "dispatch failed", err.Error())
 }
 
-// renderPlan renders a capability.PlanResult, verdicts sorted by NodeID for a
-// stable response. would_be_rejected reports pr.NoNodesMatched first (reason
-// "no_nodes_matched") — a zero match is reported first because Verdicts is
-// empty and nothing would dispatch even after a Freeze lifted, the same "the
-// reason nothing was asked" rule that already puts exceeds_cap ahead of
-// frozen; zero-match and over-cap cannot occur together under BlastCap, whose
-// caps are clamped positive. Absent that it reports the cap rejection in
-// preference to the Freeze when both apply: an over-cap Plan never ran its
-// verdict fan-out at all (Verdicts is empty), so it is the more informative
-// reason.
+// renderPlan maps controlplane.RenderPlan onto this surface's tagged types;
+// the ordering of would_be_rejected is documented there.
 func renderPlan(pr capability.PlanResult) planResponse {
-	verdicts := make([]perNodeVerdict, 0, len(pr.Verdicts))
-	for _, v := range pr.Verdicts {
-		verdicts = append(verdicts, perNodeVerdict{
-			NodeID:             v.NodeID,
-			Verdict:            controlplane.VerdictName(v.Status),
-			DecidingRule:       v.DecidingRule,
-			Reason:             v.Reason,
-			RefusalExplanation: capability.VerdictExplanation(v.Status),
-			Outdated:           v.Outdated,
-		})
+	rp := controlplane.RenderPlan(pr)
+	verdicts := make([]perNodeVerdict, 0, len(rp.Verdicts))
+	for _, v := range rp.Verdicts {
+		verdicts = append(verdicts, perNodeVerdict(v))
 	}
-	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
-
-	out := planResponse{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
-	switch {
-	case pr.NoNodesMatched:
-		out.WouldBeRejected = &wouldBeRejected{Reason: "no_nodes_matched"}
-	case pr.CapExceeded != nil:
-		out.WouldBeRejected = &wouldBeRejected{
-			Reason:  "exceeds_cap",
-			Matched: pr.CapExceeded.Matched,
-			Cap:     pr.CapExceeded.Cap,
-			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
-		}
-	case pr.Frozen:
-		out.WouldBeRejected = &wouldBeRejected{Reason: "frozen"}
+	out := planResponse{Matched: rp.Matched, Verdicts: verdicts, Advisory: rp.Advisory}
+	if rp.WouldBeRejected != nil {
+		r := wouldBeRejected(*rp.WouldBeRejected)
+		out.WouldBeRejected = &r
 	}
 	return out
 }
 
 // renderJob re-reads jobID and renders every one of its Tasks, sorted by
-// NodeID for a stable response.
+// NodeID for a stable response (controlplane.RenderJobResults).
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (executionResponse, error) {
-	if _, err := results.GetJob(ctx, jobID); err != nil {
-		return executionResponse{}, fmt.Errorf("get job %q: %w", jobID, err)
-	}
-	tasks, err := results.TasksByJob(ctx, jobID)
+	rendered, err := controlplane.RenderJobResults(ctx, results, jobID)
 	if err != nil {
-		return executionResponse{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
+		return executionResponse{}, err
 	}
-
-	items := make([]perNodeResult, 0, len(tasks))
-	for _, t := range tasks {
-		items = append(items, perNodeResultFromTask(t))
+	items := make([]perNodeResult, 0, len(rendered))
+	for _, r := range rendered {
+		items = append(items, perNodeResult(r))
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
-
 	return executionResponse{JobID: jobID, Results: items}, nil
 }
 
-// perNodeResultFromTask renders one jobs.Task. DurationMS is 0 when the Task
-// was never dispatched (an unreachable Node, or a Pending Task cancelled before
-// it was sent), never a fabricated value.
+// perNodeResultFromTask renders one jobs.Task (controlplane.RenderTaskResult).
+// ExitCode is nil whenever no real process exit status exists — see
+// perNodeResult.ExitCode for why the distinction is load-bearing.
 func perNodeResultFromTask(t jobs.Task) perNodeResult {
-	stdout, stdoutTruncated := controlplane.TruncateOutput(t.Stdout)
-	stderr, stderrTruncated := controlplane.TruncateOutput(t.Stderr)
-
-	var durationMS int64
-	if !t.DispatchedAt.IsZero() && !t.ResolvedAt.IsZero() {
-		durationMS = t.ResolvedAt.Sub(t.DispatchedAt).Milliseconds()
-	}
-
-	return perNodeResult{
-		NodeID:             t.NodeID,
-		Outcome:            jobs.OutcomeName(t.Outcome),
-		ExitCode:           exitCodePtr(t),
-		Stdout:             stdout,
-		Stderr:             stderr,
-		StdoutTruncated:    stdoutTruncated,
-		StderrTruncated:    stderrTruncated,
-		DurationMS:         durationMS,
-		RefusalExplanation: capability.RefusalExplanation(t.Outcome),
-	}
-}
-
-// exitCodePtr returns the exit_code to render, or nil when no real process
-// exit status exists — see perNodeResult.ExitCode for why the distinction is
-// load-bearing rather than cosmetic.
-func exitCodePtr(t jobs.Task) *int32 {
-	switch t.Outcome {
-	case jobs.OutcomeSuccess, jobs.OutcomeFailure:
-		if t.ExitCode >= 0 {
-			code := t.ExitCode
-			return &code
-		}
-	}
-	return nil
+	return perNodeResult(controlplane.RenderTaskResult(t))
 }
 
 // nonNil renders a nil slice as an empty JSON array rather than null, so a
