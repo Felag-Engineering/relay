@@ -13,6 +13,7 @@ mod dedup;
 mod dispatch;
 mod enroll;
 mod executor;
+mod hardened_open;
 mod identity;
 mod not_executed;
 mod operations;

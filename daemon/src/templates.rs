@@ -40,7 +40,8 @@
 //! # File hardening
 //!
 //! Each template file is opened and validated exactly like the Policy file
-//! (`policy::load_policy`, issue #216): a single descriptor, `O_NOFOLLOW`
+//! (`policy::load_policy`, issue #216), through the one shared open both
+//! loaders use (`hardened_open`): a single descriptor, `O_NOFOLLOW`
 //! (symlinks refused), `O_NONBLOCK` (a FIFO cannot stall the daemon at boot),
 //! `fstat` on that descriptor for regular-file/mode/owner checks, and the bytes
 //! read from the same descriptor — so the bytes validated are the bytes loaded.
@@ -51,12 +52,12 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::gen::{TemplateDescriptor, TemplateSlot, TemplateSnapshot};
+use crate::hardened_open::{open_hardened, HardenedRejection};
 use crate::operations::registry::{ResolvedOp, REGISTRY};
 use crate::operations::template::{compile, TemplateDef, TemplateError, TemplateOp};
 use crate::policy::{LintFinding, LintSeverity};
@@ -650,51 +651,26 @@ fn is_template_file(name: &str) -> bool {
 // Hardened read (the `policy::load_policy` checks, per file)
 // ---------------------------------------------------------------------------
 
-/// Open once with `O_NOFOLLOW | O_NONBLOCK`, validate the descriptor
-/// (regular file, not group/world-writable, owned by root or the daemon euid),
-/// and read the bytes from that same descriptor.
+/// Open once with `O_NOFOLLOW | O_NONBLOCK` and validate the descriptor
+/// (regular file, not group/world-writable, owned by root or the daemon euid)
+/// through the shared [`open_hardened`] — the same open `policy::load_policy`
+/// uses — then apply this loader's own size cap and read the bytes from that
+/// same descriptor.
 fn read_hardened(path: &Path) -> Result<Vec<u8>, TemplateLoadError> {
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|e| match e.raw_os_error() {
-            Some(libc::ELOOP) => TemplateLoadError::SymlinkEntry {
-                path: path.to_path_buf(),
-            },
-            _ => TemplateLoadError::Io {
-                path: path.to_path_buf(),
-                source: e,
-            },
-        })?;
-
-    let meta = file.metadata().map_err(|source| TemplateLoadError::Io {
-        path: path.to_path_buf(),
-        source,
+    let (mut file, meta) = open_hardened(path).map_err(|rejection| {
+        let path = path.to_path_buf();
+        match rejection {
+            HardenedRejection::Symlink => TemplateLoadError::SymlinkEntry { path },
+            HardenedRejection::NotRegularFile => TemplateLoadError::NotRegularFile { path },
+            HardenedRejection::InsecurePermissions { mode } => {
+                TemplateLoadError::InsecurePermissions { path, mode }
+            }
+            HardenedRejection::InsecureOwner { uid } => {
+                TemplateLoadError::InsecureOwner { path, uid }
+            }
+            HardenedRejection::Io(source) => TemplateLoadError::Io { path, source },
+        }
     })?;
-
-    if !meta.is_file() {
-        return Err(TemplateLoadError::NotRegularFile {
-            path: path.to_path_buf(),
-        });
-    }
-
-    let mode = meta.mode() & 0o777;
-    if mode & 0o022 != 0 {
-        return Err(TemplateLoadError::InsecurePermissions {
-            path: path.to_path_buf(),
-            mode,
-        });
-    }
-
-    let file_uid = meta.uid();
-    let daemon_euid = rustix::process::geteuid().as_raw();
-    if file_uid != 0 && file_uid != daemon_euid {
-        return Err(TemplateLoadError::InsecureOwner {
-            path: path.to_path_buf(),
-            uid: file_uid,
-        });
-    }
 
     if meta.len() > MAX_FILE_BYTES {
         return Err(TemplateLoadError::FileTooLarge {
@@ -766,7 +742,7 @@ fn fingerprint_files(files: &[(String, PathBuf, Vec<u8>)]) -> String {
 mod tests {
     use super::*;
     use crate::gen::RiskClass;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A self-cleaning temp directory (the daemon crate has no dev-dep on
@@ -1078,6 +1054,47 @@ body = "df -PT"
         let err = TemplateSet::load(&dir.path).expect_err("must refuse a symlinked pack");
         assert!(
             matches!(err, TemplateLoadError::SymlinkEntry { .. }),
+            "got {err:?}"
+        );
+    }
+
+    /// The open-time half of symlink refusal. `collect_files` refuses a
+    /// symlinked entry by its `lstat` type before it is ever opened, so
+    /// `TemplateSet::load` never reaches this path on a static tree; it exists
+    /// for a file swapped for a symlink between the directory walk and the
+    /// open, and `O_NOFOLLOW` must still refuse it there, as `SymlinkEntry`.
+    #[test]
+    fn read_hardened_refuses_a_symlink_at_open() {
+        let dir = TempDir::new("symlink-open");
+        let target = dir.write("real.toml", DISK);
+        assert!(read_hardened(&target).is_ok(), "target alone must read");
+        let link = dir.path.join("link.toml");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let err = read_hardened(&link).expect_err("must refuse a symlink at open");
+        assert!(
+            matches!(&err, TemplateLoadError::SymlinkEntry { path } if *path == link),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn third_party_owned_template_file_is_refused() {
+        // Only root can hand a file to a uid that is neither 0 nor its own
+        // euid; a non-root runner cannot build this fixture at all.
+        if !rustix::process::geteuid().is_root() {
+            eprintln!("skipped: needs root to chown a fixture to a third-party uid");
+            return;
+        }
+        let dir = TempDir::new("owner");
+        let path = dir.write("x.toml", DISK);
+        assert!(
+            TemplateSet::load(&dir.path).is_ok(),
+            "root-owned fixture must load"
+        );
+        std::os::unix::fs::chown(&path, Some(65534), None).expect("chown");
+        let err = TemplateSet::load(&dir.path).expect_err("must refuse a third-party owner");
+        assert!(
+            matches!(&err, TemplateLoadError::InsecureOwner { path: p, uid: 65534 } if *p == path),
             "got {err:?}"
         );
     }
