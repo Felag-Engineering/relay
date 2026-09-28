@@ -418,22 +418,17 @@ func renderParked(parked *capability.ParkedError) *PendingApprovalOutput {
 		rules = []string{}
 	}
 	return &PendingApprovalOutput{
-		Status:       statusPendingApproval,
-		RequestID:    parked.RequestID,
-		PlanHash:     parked.PlanHash,
-		Summary:      parked.Summary,
-		MatchedRules: rules,
-		Progress:     parked.Progress,
-		ExpiresAt:    parked.ExpiresAt.UTC().Format(time.RFC3339),
-		DecisionPath: "/api/v1/approvals/" + parked.RequestID + "/decision",
-		NextStep:     pendingApprovalNextStep,
-		TaskID:       parked.TaskID,
-		TaskExpiresAt: func() string {
-			if parked.TaskExpiresAt.IsZero() {
-				return ""
-			}
-			return parked.TaskExpiresAt.UTC().Format(time.RFC3339)
-		}(),
+		Status:        statusPendingApproval,
+		RequestID:     parked.RequestID,
+		PlanHash:      parked.PlanHash,
+		Summary:       parked.Summary,
+		MatchedRules:  rules,
+		Progress:      parked.Progress,
+		ExpiresAt:     parked.ExpiresAt.UTC().Format(time.RFC3339),
+		DecisionPath:  "/api/v1/approvals/" + parked.RequestID + "/decision",
+		NextStep:      pendingApprovalNextStep,
+		TaskID:        parked.TaskID,
+		TaskExpiresAt: controlplane.RFC3339(parked.TaskExpiresAt),
 	}
 }
 

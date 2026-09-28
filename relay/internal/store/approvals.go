@@ -39,7 +39,7 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 			require_count, require_audience, requester_allowed, require_channel, require_ttl_ns,
 			state, created_at, expires_at, resolved_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.ID, nullString(r.JobID), r.PlanHash, r.ShapeKey, r.RequestedByID, r.RequestedBy,
+		r.ID, nullIfEmpty(r.JobID), r.PlanHash, r.ShapeKey, r.RequestedByID, r.RequestedBy,
 		r.Summary, strings.Join(r.MatchedRules, ","),
 		approval.ActionKindName(r.ActionKind), jobs.RiskClassName(r.RiskClass),
 		r.Require.Count, strings.Join(r.Require.Audience, ","), boolToInt(r.Require.RequesterAllowed),
@@ -383,13 +383,6 @@ func (a *sqliteApprovals) ExpirePending(ctx context.Context, now time.Time) ([]a
 		return nil, fmt.Errorf("commit approval expiry: %w", err)
 	}
 	return out, nil
-}
-
-func nullString(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }
 
 // splitList is the inverse of strings.Join for every comma-separated list

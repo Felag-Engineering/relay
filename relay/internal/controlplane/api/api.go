@@ -382,24 +382,20 @@ func authorizeControl(w http.ResponseWriter, r *http.Request, d Deps, p capabili
 // constraint. A package-level var (rather than a Deps field) so it stays out
 // of the deliberately narrow Deps struct while still being overridable from
 // this package's own tests.
-var newAuditID = defaultAuditID
-
-// defaultAuditID and relay/internal/auditsink.defaultID are now the SAME
-// generator, audit.NewID — one implementation of the ordering property rather
-// than two copies of a shape (#656). The ids it mints are monotonic, so the
-// trail's (ts, audit_id) tie-break orders rows by when they were appended.
+//
+// Its default is the same generator relay/internal/auditsink uses,
+// audit.NewID — one implementation of the ordering property rather than two
+// copies of a shape (#656). The ids it mints are monotonic, so the trail's
+// (ts, audit_id) tie-break orders rows by when they were appended.
 //
 // That is what recordLifecycleAllErr's AppendAll cascade needs: a
 // mass-revocation writes its whole batch of Records at one clock reading, so
 // every row in the batch shares a ts and their order IS the id order. That
 // batch is exactly what an incident reviewer reads as a sequence.
-func defaultAuditID() (string, error) {
-	// Returned unwrapped: audit.NewID already says "audit: generate record
-	// id: ...", and a second wrap here only produced "api: generate audit
-	// record id: audit: generate record id: ..." — one failure announced
-	// twice.
-	return audit.NewID()
-}
+//
+// Used unwrapped: audit.NewID already says "audit: generate record id: ...",
+// and a wrap here would announce one failure twice.
+var newAuditID = audit.NewID
 
 // recordLifecycle appends one lifecycle audit.Record (token mint/revoke, or
 // a refusal of one — see authorizeControl) attributed to p. Freeze

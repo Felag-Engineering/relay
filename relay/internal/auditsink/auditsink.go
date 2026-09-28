@@ -56,22 +56,8 @@ import (
 )
 
 // idGen mints a new unique audit Record ID. A seam so tests can inject
-// deterministic IDs; the production default is defaultID.
+// deterministic IDs; the production default is audit.NewID.
 type idGen func() (string, error)
-
-// defaultID delegates to audit.NewID: "audit-" plus 16 hex digits of the
-// mint time in Unix nanoseconds and 16 hex digits of crypto/rand — the same
-// 38-character shape as the random ids written before #656, but MONOTONIC, so
-// the trail's (ts, audit_id) tie-break orders rows by when they were appended.
-// That matters most here: Record's dispatch fan-out copies one clock reading
-// onto every per-Node Record, so a whole fan-out shares a ts and its order IS
-// the id order. See audit.NewID for the properties and their bounds.
-func defaultID() (string, error) {
-	// Returned unwrapped: audit.NewID already says "audit: generate record
-	// id: ...", and a second wrap here only produced "auditsink: generate id:
-	// audit: generate record id: ..." — one failure announced twice.
-	return audit.NewID()
-}
 
 // Sink is the real capability.AuditSink, backed by an audit.Repository.
 type Sink struct {
@@ -86,7 +72,7 @@ var _ capability.AuditSink = (*Sink)(nil)
 // Option configures a Sink built by New.
 type Option func(*Sink)
 
-// WithNewID overrides the Sink's idGen seam (production default: defaultID).
+// WithNewID overrides the Sink's idGen seam (production default: audit.NewID).
 func WithNewID(f idGen) Option {
 	return func(s *Sink) { s.newID = f }
 }
@@ -111,9 +97,18 @@ func WithLogger(l *slog.Logger) Option {
 
 // New returns a Sink backed by repo.
 func New(repo audit.Repository, opts ...Option) *Sink {
+	// newID defaults to audit.NewID: "audit-" plus 16 hex digits of the mint
+	// time in Unix nanoseconds and 16 hex digits of crypto/rand — the same
+	// 38-character shape as the random ids written before #656, but MONOTONIC,
+	// so the trail's (ts, audit_id) tie-break orders rows by when they were
+	// appended. That matters most here: Record's dispatch fan-out copies one
+	// clock reading onto every per-Node Record, so a whole fan-out shares a ts
+	// and its order IS the id order. See audit.NewID for the properties and
+	// their bounds. Used unwrapped: audit.NewID already says "audit: generate
+	// record id: ...", and a wrap here would announce one failure twice.
 	s := &Sink{
 		repo:  repo,
-		newID: defaultID,
+		newID: audit.NewID,
 		now:   func() time.Time { return time.Now().UTC() },
 		log:   slog.Default(),
 	}

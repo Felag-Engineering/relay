@@ -225,10 +225,10 @@ func TestParseStatusRoundTrips(t *testing.T) {
 // zero, not a negative window a client would treat as garbage.
 func TestTTLMillisNeverGoesNegative(t *testing.T) {
 	h := mintedHandle()
-	if got := h.TTLMillis(now.Add(2 * time.Hour)); got != 0 {
+	if got := TTLMillis(h.ExpiresAt, now.Add(2*time.Hour)); got != 0 {
 		t.Errorf("TTLMillis on a lapsed handle = %d, want 0", got)
 	}
-	if got := h.TTLMillis(now); got <= 0 {
+	if got := TTLMillis(h.ExpiresAt, now); got <= 0 {
 		t.Errorf("TTLMillis on a live handle = %d, want positive", got)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -141,7 +142,7 @@ func renderApproval(r approval.Request) approvalResponse {
 			Reason:    d.Reason,
 			Channel:   d.Channel.String(),
 			Human:     d.DeciderHuman,
-			At:        rfc3339(d.At),
+			At:        controlplane.RFC3339(d.At),
 		})
 	}
 	rules := r.MatchedRules
@@ -165,9 +166,9 @@ func renderApproval(r approval.Request) approvalResponse {
 		Progress:         r.Progress(),
 		Decisions:        decisions,
 		JobID:            r.JobID,
-		CreatedAt:        rfc3339(r.CreatedAt),
-		ExpiresAt:        rfc3339(r.ExpiresAt),
-		ResolvedAt:       rfc3339(r.ResolvedAt),
+		CreatedAt:        controlplane.RFC3339(r.CreatedAt),
+		ExpiresAt:        controlplane.RFC3339(r.ExpiresAt),
+		ResolvedAt:       controlplane.RFC3339(r.ResolvedAt),
 	}
 }
 

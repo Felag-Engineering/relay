@@ -9,6 +9,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
@@ -300,20 +301,12 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 	if out.RelayLabels == nil {
 		out.RelayLabels = map[string]string{}
 	}
-	if !n.LastSeen.IsZero() {
-		out.LastSeen = n.LastSeen.UTC().Format(time.RFC3339)
-	}
-	if !n.RevokedAt.IsZero() {
-		out.RevokedAt = n.RevokedAt.UTC().Format(time.RFC3339)
-	}
+	out.LastSeen = controlplane.RFC3339(n.LastSeen)
+	out.RevokedAt = controlplane.RFC3339(n.RevokedAt)
 	if out.Certificate.Recorded {
 		out.Certificate.NotAfter = n.CertNotAfter.UTC().Format(time.RFC3339)
-		if !n.EnrolledAt.IsZero() {
-			out.Certificate.EnrolledAt = n.EnrolledAt.UTC().Format(time.RFC3339)
-		}
-		if !n.LastRenewedAt.IsZero() {
-			out.Certificate.LastRenewedAt = n.LastRenewedAt.UTC().Format(time.RFC3339)
-		}
+		out.Certificate.EnrolledAt = controlplane.RFC3339(n.EnrolledAt)
+		out.Certificate.LastRenewedAt = controlplane.RFC3339(n.LastRenewedAt)
 	}
 	return out
 }

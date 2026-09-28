@@ -8,6 +8,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
@@ -109,7 +110,7 @@ func handleGetJob(d Deps) http.HandlerFunc {
 
 		resp := jobResponse{JobID: out.JobID, Results: out.Results}
 		if job, err := d.Jobs.GetJob(r.Context(), jobID); err == nil {
-			resp.CreatedAt = rfc3339(job.CreatedAt)
+			resp.CreatedAt = controlplane.RFC3339(job.CreatedAt)
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}

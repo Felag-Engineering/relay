@@ -12,6 +12,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
 )
 
@@ -995,9 +996,7 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	if r.stateReported {
 		out.State = r.State.String()
 		out.JobID = r.JobID
-		if !r.ExpiresAt.IsZero() {
-			out.ExpiresAt = r.ExpiresAt.UTC().Format(time.RFC3339)
-		}
+		out.ExpiresAt = controlplane.RFC3339(r.ExpiresAt)
 	}
 
 	out.NextStep = answerRefusalNextStepUnchanged

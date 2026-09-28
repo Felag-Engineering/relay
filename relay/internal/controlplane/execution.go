@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 )
@@ -55,4 +56,15 @@ func TruncateOutput(b []byte) (string, bool) {
 		return string(b), false
 	}
 	return string(b[:MaxRenderedOutputBytes]), true
+}
+
+// RFC3339 renders t in UTC as RFC 3339, or "" for the zero time so a "never
+// happened" timestamp is omitted from a response rather than rendered as year
+// 1. Both execution surfaces render their timestamps through it, so the same
+// instant reads identically whichever door the caller used.
+func RFC3339(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
