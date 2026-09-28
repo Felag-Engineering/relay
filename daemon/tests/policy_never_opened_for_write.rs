@@ -20,7 +20,12 @@
 //!   that names the Policy path — subject to the limits below;
 //! * the Policy path is named only by three non-writing modules (`config.rs`,
 //!   `main.rs`, `selfref.rs`);
-//! * the loader's open call names no write flag.
+//! * the loader's open call names no write flag: the Policy loader
+//!   (`policy.rs`) and the Template Operation loader (`templates.rs`) open
+//!   their files only through the shared hardened open (`hardened_open.rs`),
+//!   whose single `OpenOptions` chain is `.read(true)` plus
+//!   `O_NOFOLLOW | O_NONBLOCK` and nothing else, and none of the three modules
+//!   has a write site at all.
 //!
 //! # It cannot see
 //!
@@ -866,14 +871,21 @@ fn daemon_src_files() -> Vec<FileView> {
 // ---------------------------------------------------------------------------
 
 /// The modules that open or name the Policy file must never write to the
-/// filesystem: `policy.rs` (`load_policy`, the Policy file's only opener,
-/// `.read(true)` plus `custom_flags(O_NOFOLLOW|O_NONBLOCK)`), `policy_check.rs`
-/// (reads the Policy file under check with `read_to_string`), and `config.rs`,
-/// `main.rs`, `selfref.rs` (the only modules that name the Policy path).
+/// filesystem: `policy.rs` (`load_policy`, the Policy file's loader),
+/// `hardened_open.rs` (`open_hardened`, the one open `load_policy` goes
+/// through — `.read(true)` plus `custom_flags(O_NOFOLLOW|O_NONBLOCK)`, pinned
+/// by [`trust_files_open_only_through_the_read_only_hardened_open`]),
+/// `templates.rs` (Template Operation files, the same locally-rooted trust
+/// root beside `policy.toml` and the other caller of that open),
+/// `policy_check.rs` (reads the Policy file under check with
+/// `read_to_string`), and `config.rs`, `main.rs`, `selfref.rs` (the only
+/// modules that name the Policy path).
 #[test]
 fn policy_modules_never_write() {
     let targets = [
         "policy.rs",
+        "hardened_open.rs",
+        "templates.rs",
         "policy_check.rs",
         "config.rs",
         "selfref.rs",
@@ -1028,6 +1040,95 @@ fn policy_path_reaches_only_the_read_only_loader() {
         "main.rs must still hand the Policy path to the read-only loader via \
          load_policy(&config.policy_path)"
     );
+}
+
+/// The Policy file and every Template Operation file are opened only through
+/// `hardened_open.rs`'s `open_hardened`, and that open names no write flag.
+///
+/// (i) `hardened_open.rs`'s production text has exactly one `OpenOptions`
+/// and exactly one `.open(` call, and they form exactly the chain
+/// `OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW |
+/// libc::O_NONBLOCK).open(path)` — so a write, append, create or truncate
+/// flag (or any other flag) cannot be added to the open without failing here,
+/// on top of [`policy_modules_never_write`] scanning the module for every
+/// write pattern.
+///
+/// (ii) `policy.rs` and `templates.rs` have no opener of their own in
+/// production (`OpenOptions`, `File::open`, `File::options`), `policy.rs` has
+/// no path-based `fs::read`/`fs::read_to_string` and `templates.rs` exactly
+/// one (its linter's), and each still hands its path to `open_hardened` — so
+/// the loaders cannot drift back to a private open that (i) does not see.
+#[test]
+fn trust_files_open_only_through_the_read_only_hardened_open() {
+    let views = daemon_src_files();
+    let view = |rel: &str| {
+        views
+            .iter()
+            .find(|v| v.rel == rel)
+            .unwrap_or_else(|| panic!("{rel} not found under daemon/src"))
+    };
+
+    let helper = &view("hardened_open.rs").prod_scrubbed;
+    let open_options = Regex::new(r"\bOpenOptions\b").unwrap();
+    let open_call = Regex::new(r"\.open\(").unwrap();
+    let chain = Regex::new(
+        r"\bOpenOptions::new\(\s*\)\s*\.read\(\s*true\s*\)\s*\.custom_flags\(\s*libc::O_NOFOLLOW\s*\|\s*libc::O_NONBLOCK\s*\)\s*\.open\(\s*path\s*\)",
+    )
+    .unwrap();
+    assert_eq!(
+        open_options.find_iter(helper).count(),
+        1,
+        "hardened_open.rs must name OpenOptions exactly once in production — the one \
+         read-only hardened open (invariant 2)"
+    );
+    assert_eq!(
+        open_call.find_iter(helper).count(),
+        1,
+        "hardened_open.rs must have exactly one .open( call in production"
+    );
+    assert!(
+        chain.is_match(helper),
+        "hardened_open.rs's open must be exactly OpenOptions::new().read(true)\
+         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path) — no write, append, \
+         create or truncate flag, and no other flag, on the Policy/template open (invariant 2)"
+    );
+
+    let private_open = Regex::new(r"\bOpenOptions\b|\bFile::(open|options)\b").unwrap();
+    let path_read = Regex::new(r"\bfs::read(_to_string)?\(").unwrap();
+    let delegates = Regex::new(r"\bopen_hardened\(\s*path\s*\)").unwrap();
+    // (file, how many `fs::read`/`fs::read_to_string` calls it may have):
+    // `templates.rs` has exactly one, `lint_dir`'s deliberately ungated read
+    // for the pre-deployment linter (`relay-daemon policy check`), which never
+    // feeds the runtime template set; a second one fails here for review.
+    for (rel, allowed_path_reads) in [("policy.rs", 0usize), ("templates.rs", 1usize)] {
+        let text = &view(rel).prod_scrubbed;
+        let hits: Vec<usize> = private_open
+            .find_iter(text)
+            .map(|m| line_of(text, m.start()))
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "{rel} opens a file itself in production (lines {hits:?}) — the Policy and \
+             template loaders must open only through hardened_open::open_hardened, the one \
+             read-only open this guard pins"
+        );
+        let reads: Vec<usize> = path_read
+            .find_iter(text)
+            .map(|m| line_of(text, m.start()))
+            .collect();
+        assert_eq!(
+            reads.len(),
+            allowed_path_reads,
+            "{rel} has {} path-based fs::read/fs::read_to_string call(s) in production (lines \
+             {reads:?}), want {allowed_path_reads} — a new ungated read beside the hardened \
+             loader needs review against invariant 2",
+            reads.len()
+        );
+        assert!(
+            delegates.is_match(text),
+            "{rel} must still hand its path to hardened_open::open_hardened(path)"
+        );
+    }
 }
 
 /// Runs `scrub`/`strip_test_items`/`mask`/`write_sites` over inline sources —

@@ -1145,7 +1145,7 @@ deny = ["secret"]
         }
         /// Writes a template file into this directory (used as a template root).
         /// `std::fs::write` is umask-masked, `TemplateSet::load`'s hardened read
-        /// refuses any template file with `mode & 0o022 != 0` (templates.rs:682-688),
+        /// refuses any template file with `mode & 0o022 != 0` (`hardened_open`),
         /// and chmod is NOT umask-masked, so the mode is forced explicitly here.
         fn write(&self, name: &str, content: &str) -> PathBuf {
             let path = self.0.join(name);

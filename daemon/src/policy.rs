@@ -25,15 +25,13 @@
 //! wiring lands in a later v0.0.3 issue.
 
 use std::fmt::Write as _;
-use std::fs;
 use std::io::Read;
-use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use regex::Regex;
 use serde::Deserialize;
 
+use crate::hardened_open::{open_hardened, HardenedRejection};
 use crate::operations;
 
 // ---------------------------------------------------------------------------
@@ -407,7 +405,9 @@ fn with_allow_regex_hint(err: PolicyError) -> PolicyError {
 /// descriptor. This closes the metadata/read TOCTOU race that a path-based
 /// check-then-read has — the bytes validated are always the bytes loaded.
 ///
-/// Fail-closed checks (ADR-0002), in order:
+/// Fail-closed checks (ADR-0002), in order, performed by the shared
+/// [`open_hardened`] (the same open Template Operation files use); each
+/// refusal is logged here and mapped to this loader's own [`PolicyError`]:
 /// 1. Refuses to load if the final path component is a symlink. Enforced via
 ///    `O_NOFOLLOW` at `open()` (an `ELOOP` open error, not an `lstat`
 ///    afterward — re-checking the path after open would reopen the race).
@@ -432,67 +432,47 @@ fn with_allow_regex_hint(err: PolicyError) -> PolicyError {
 /// require validating the parent directory itself (e.g. `openat` from a
 /// validated directory descriptor), which is out of scope here.
 pub fn load_policy(path: &Path) -> Result<Policy, PolicyError> {
-    // Open once. O_NOFOLLOW: a symlink final component fails open() with
-    // ELOOP — the only race-free way to reject a symlink, since fstat on the
-    // already-opened fd can never see it (open() already resolved it).
-    // O_NONBLOCK: opening a FIFO O_RDONLY would otherwise block until a
-    // writer appears; with O_NONBLOCK the open returns immediately so the
-    // fstat below can reject it. Regular-file reads are unaffected.
-    let mut file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|e| match e.raw_os_error() {
-            Some(libc::ELOOP) => {
-                tracing::error!(
-                    path = %path.display(),
-                    "policy file path is a symlink; refusing to follow (fail closed)"
-                );
-                PolicyError::SymlinkPath
-            }
-            _ => PolicyError::Io(e),
-        })?;
-
-    // fstat the open descriptor (NOT the path) for every check below.
-    let meta = file.metadata()?;
-
-    // Reject non-regular files (FIFO, device, socket, directory): the fstat'd
-    // file type reflects exactly what open() returned a descriptor to.
-    if !meta.is_file() {
-        tracing::error!(
-            path = %path.display(),
-            "policy file is not a regular file; refusing to load (fail closed)"
-        );
-        return Err(PolicyError::NotRegularFile);
-    }
-
-    let mode = meta.mode() & 0o777;
-
-    // Permission floor: group- or world-write means the file can be modified
-    // by an attacker with group membership, which would let them escalate
-    // privileges through the Policy. Fail closed.
-    if mode & 0o022 != 0 {
-        tracing::error!(
-            path = %path.display(),
-            mode = format!("{mode:#o}"),
-            "policy file is group/world-writable; refusing to load (fail closed)"
-        );
-        return Err(PolicyError::InsecurePermissions { mode });
-    }
-
-    // Owner check: accept uid==0 (root) or uid==geteuid() (daemon's own euid).
-    // Allowing the daemon's euid lets non-root deployments and CI runners pass
-    // the check while still refusing files owned by arbitrary third parties.
-    let file_uid = meta.uid();
-    let daemon_euid = rustix::process::geteuid().as_raw();
-    if file_uid != 0 && file_uid != daemon_euid {
-        tracing::error!(
-            path = %path.display(),
-            uid = file_uid,
-            "policy file is not owned by root or the daemon euid; refusing to load (fail closed)"
-        );
-        return Err(PolicyError::InsecureOwner { uid: file_uid });
-    }
+    // Open once and validate the descriptor — checks 1-4 above, in that order —
+    // in the shared hardened open (`hardened_open`, the same one templates
+    // use): O_NOFOLLOW | O_NONBLOCK, no write flag, and every check an fstat
+    // on the opened fd, never on the path. Each refusal is mapped back to this
+    // loader's own error and logged here.
+    let (mut file, _meta) = open_hardened(path).map_err(|rejection| match rejection {
+        HardenedRejection::Symlink => {
+            tracing::error!(
+                path = %path.display(),
+                "policy file path is a symlink; refusing to follow (fail closed)"
+            );
+            PolicyError::SymlinkPath
+        }
+        HardenedRejection::NotRegularFile => {
+            tracing::error!(
+                path = %path.display(),
+                "policy file is not a regular file; refusing to load (fail closed)"
+            );
+            PolicyError::NotRegularFile
+        }
+        // Permission floor: group- or world-write means the file can be
+        // modified by an attacker with group membership, which would let them
+        // escalate privileges through the Policy. Fail closed.
+        HardenedRejection::InsecurePermissions { mode } => {
+            tracing::error!(
+                path = %path.display(),
+                mode = format!("{mode:#o}"),
+                "policy file is group/world-writable; refusing to load (fail closed)"
+            );
+            PolicyError::InsecurePermissions { mode }
+        }
+        HardenedRejection::InsecureOwner { uid } => {
+            tracing::error!(
+                path = %path.display(),
+                uid = uid,
+                "policy file is not owned by root or the daemon euid; refusing to load (fail closed)"
+            );
+            PolicyError::InsecureOwner { uid }
+        }
+        HardenedRejection::Io(e) => PolicyError::Io(e),
+    })?;
 
     // Read from the SAME descriptor that was validated above — this is the
     // line that closes the metadata/read TOCTOU race.
@@ -3889,6 +3869,7 @@ mod raw_exec_redteam {
 mod loader_hardening_tests {
     use super::*;
     use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     use std::os::unix::fs::PermissionsExt as _;
 
     // The fixture is the example policy file checked into the repo (mirrors
@@ -3996,6 +3977,35 @@ mod loader_hardening_tests {
         assert!(
             matches!(result, Err(PolicyError::NotRegularFile)),
             "a FIFO at the policy path must be rejected as not-a-regular-file; got {result:?}"
+        );
+    }
+
+    // -------------------------------------------------------------------
+    // loader_rejects_third_party_owner — the owner half of the gate: a
+    // file owned by neither root nor the daemon euid is refused.
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn loader_rejects_third_party_owner() {
+        // Only root can hand a file to a uid that is neither 0 nor its own
+        // euid; a non-root runner cannot build this fixture at all.
+        if !rustix::process::geteuid().is_root() {
+            eprintln!("skipped: needs root to chown a fixture to a third-party uid");
+            return;
+        }
+        let path = unique_temp_path("third-party-owner");
+        write_secure_policy(&path, FIXTURE.as_bytes(), 0o644);
+        let _cleanup = Cleanup(path.clone());
+        assert!(
+            load_policy(&path).is_ok(),
+            "the root-owned fixture must load, so the owner is the sole cause below"
+        );
+
+        std::os::unix::fs::chown(&path, Some(65534), None).expect("chown");
+        let result = load_policy(&path);
+        assert!(
+            matches!(result, Err(PolicyError::InsecureOwner { uid: 65534 })),
+            "a policy file owned by a third-party uid must be refused; got {result:?}"
         );
     }
 
