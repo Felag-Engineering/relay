@@ -635,6 +635,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// (TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan). Once the
 	// approval's deadline passes, Satisfied goes false, the released Request no
 	// longer shadows the Grant, and the Grant releases the dispatch normally.
+	reserved := false
 	if ap.grantID == "" && ap.requestID != "" {
 		jobID, err := s.disp.reserveJobID()
 		if err != nil {
@@ -644,6 +645,7 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 		switch {
 		case err == nil:
 			d.jobID = jobID
+			reserved = true
 		case errors.Is(err, approval.ErrAlreadyReleased) && claimed.JobID != "":
 			// Lost the claim to a concurrent dispatch of the same plan. Nothing
 			// is dispatched here (AP-77) — re-attach to the winner's Job.
@@ -661,11 +663,43 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 
 	res, dispatchErr := s.disp.run(ctx, d)
 
+	// acctCtx is the context every post-dispatch accounting write below uses.
+	// On the RESERVED path (reserved == true), the release claim above already
+	// committed before s.disp.run was ever called (AP-77) — exactly the
+	// condition jobEngine.run itself now detaches its own persist-then-dispatch
+	// pipeline for (execution.go's runCtx) — so a client timeout/drop/cancel
+	// landing during or right after dispatch must not be allowed to strand the
+	// accounting for a Job that has already run: bindTaskHandleJob and the
+	// KindDispatch audit record below are the last two writes this call still
+	// owes an approval that already released real work, and dropping them
+	// would leave that Job with no durable trail. Detached
+	// (context.WithoutCancel) for the same reason as runCtx, and additionally
+	// BOUNDED (context.WithTimeout) because, unlike runCtx, this ctx is never
+	// implicitly bounded by anything downstream — no daemon-side wall clock
+	// backs a local store write — so an unbounded detach here would trade "can
+	// be abandoned by the caller" for "can hang the calling goroutine forever
+	// on a wedged store". AssertionsFromContext reads through acctCtx rather
+	// than ctx directly below: context.WithoutCancel/WithTimeout both preserve
+	// Value() lookups, so the caller's asserted attribution (Assertions,
+	// assertions.go) is unaffected either way.
+	//
+	// Non-reserved dispatches (a Grant release, or no approval involved at
+	// all) keep using ctx unchanged: no Job was claimed ahead of them, so a
+	// cancel here can only ever abandon work that either never started or
+	// belongs to no prior commitment — the behaviour this package has always
+	// had.
+	acctCtx := ctx
+	if reserved {
+		var cancelAcct context.CancelFunc
+		acctCtx, cancelAcct = context.WithTimeout(context.WithoutCancel(ctx), reservedPostDispatchAccountingTimeout)
+		defer cancelAcct()
+	}
+
 	// And onto the MCP task handle that was waiting for it, so a poll after the
 	// release reports `completed` rather than `working` forever. Unlike the
 	// binding above this one covers grant-released dispatches too: a handle is
 	// per parked dispatch, so there is exactly one Job to record against it.
-	s.bindTaskHandleJob(ctx, ap.requestID, res.jobID)
+	s.bindTaskHandleJob(acctCtx, ap.requestID, res.jobID)
 
 	for _, r := range res.results {
 		s.metrics.IncDispatch(r.Outcome)
@@ -682,13 +716,34 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	// an Operation's arguments would land in the audit trail as-is. #102
 	// does not close this — it is flagged here so it is not mistaken for a
 	// gap in #102's redaction guarantee.
-	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(ctx)}
-	auditErr := s.audit.Record(ctx, entry)
+	entry := AuditEntry{Kind: AuditKindDispatch, Principal: p, Selector: sel, Action: act, JobID: res.jobID, Results: res.results, ApprovalID: ap.requestID, GrantID: ap.grantID, Asserted: AssertionsFromContext(acctCtx)}
+	auditErr := s.audit.Record(acctCtx, entry)
 	if auditErr != nil {
 		// The dispatch itself already happened; a failed audit write must
 		// not silently vanish, so it is surfaced as an error alongside the
 		// (still valid) results rather than swallowed.
 		auditErr = fmt.Errorf("capability: record audit entry: %w", auditErr)
+		if reserved {
+			// On the reserved path specifically, the caller this error is
+			// about to be returned to may already be gone (the same client
+			// drop acctCtx above was detached to survive) — an approved
+			// dispatch would then have run with an incomplete or missing
+			// dispatch audit record and nobody watching the return value to
+			// notice. "Incomplete", not just "missing": a timeout partway
+			// through a per-Node audit append (the #99 contract that lets a
+			// dispatch partially execute and still be audited) can leave a
+			// partial record rather than none at all. Put it somewhere an
+			// operator IS watching: the structured log, exactly like
+			// authorizeMachineCancel's job-requester-lookup failure above.
+			// Logged on acctCtx, not ctx: acctCtx is what is live at this
+			// point, and log/slog reads it only for its attached values
+			// (unaffected by WithoutCancel/WithTimeout), never for its own
+			// cancellation. result_count, not the results themselves: the
+			// results carry argv (#102's residual risk above), which never
+			// belongs in a log line.
+			slog.ErrorContext(acctCtx, "capability: reserved-path dispatch audit write failed; an approved dispatch has an incomplete or missing audit record",
+				"job_id", res.jobID, "approval_id", ap.requestID, "result_count", len(res.results), "error", auditErr)
+		}
 	}
 
 	if err := errors.Join(dispatchErr, auditErr); err != nil {
@@ -696,6 +751,16 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 	return res.results, nil
 }
+
+// reservedPostDispatchAccountingTimeout bounds the detached context Run uses
+// for post-dispatch accounting (bindTaskHandleJob, the KindDispatch audit
+// record) on the reserved-Job-ID path (AP-77 continuation): long enough that
+// a healthy local SQLite write never trips it — the same store calls
+// jobEngine.run's own runCtx already makes on this path, unbounded, backed
+// only by the driver's busy_timeout (store.go's busyTimeoutMillis) — and
+// short enough that a wedged store cannot hang the calling goroutine forever
+// once the client that started the call is long gone.
+const reservedPostDispatchAccountingTimeout = 30 * time.Second
 
 // recordRefusal audits a Freeze-engaged, authz-deny, no-Nodes-matched, or
 // cap-reject short-circuit — the dispatcher was never reached, so there is
