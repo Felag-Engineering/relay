@@ -9,6 +9,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/authz"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/opvocab"
 )
@@ -59,18 +60,6 @@ type JobResultReader interface {
 	GetJob(ctx context.Context, id string) (jobs.Job, error)
 	TasksByJob(ctx context.Context, jobID string) ([]jobs.Task, error)
 }
-
-// maxTimeoutSeconds bounds timeout_seconds on both execution routes: 24h.
-// Deliberately identical to the MCP execution tools' bound — the two surfaces
-// adapt one capability layer, so a caller must not discover a different
-// contract depending on which door it used. [3/7]'s OpenAPI spec publishes it.
-const maxTimeoutSeconds = 24 * 60 * 60
-
-// maxRenderedOutputBytes caps how much of a Task's stdout/stderr each per-Node
-// result carries inline; beyond it the matching *_truncated flag is set rather
-// than growing the response unbounded (a Raw Exec Task's output is otherwise
-// unconstrained). Mirrors the MCP tools' cap for the same parity reason.
-const maxRenderedOutputBytes = 4096
 
 // planAdvisory is the fixed point-in-time disclaimer every plan response
 // carries (ADR-0011): verdicts are a snapshot, not a guarantee — Policy may
@@ -290,7 +279,7 @@ func handleRawExec(d Deps) http.HandlerFunc {
 			return
 		}
 
-		timeout, err := resolveTimeoutSeconds(req.TimeoutSeconds)
+		timeout, err := controlplane.ResolveTimeoutSeconds(req.TimeoutSeconds)
 		if err != nil {
 			writeProblem(w, http.StatusBadRequest, "invalid timeout_seconds", err.Error())
 			return
@@ -392,7 +381,7 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 // come back as denied_by_policy on one surface and a clean 400 on the other
 // (#345).
 func buildOperationAction(name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
-	timeout, err := resolveTimeoutSeconds(timeoutSeconds)
+	timeout, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
 		return jobs.Action{}, err
 	}
@@ -412,19 +401,6 @@ func buildOperationAction(name string, args map[string]string, timeoutSeconds in
 		RiskClass:      d.Risk,
 		TimeoutSeconds: timeout,
 	}, nil
-}
-
-// resolveTimeoutSeconds validates timeout_seconds against [0, maxTimeoutSeconds]
-// (0 or omitted means "the daemon/engine default"). It never silently clamps an
-// out-of-range value on an execution surface.
-func resolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
-	if timeoutSeconds < 0 {
-		return 0, fmt.Errorf("timeout_seconds must be >= 0, got %d", timeoutSeconds)
-	}
-	if timeoutSeconds > maxTimeoutSeconds {
-		return 0, fmt.Errorf("timeout_seconds must be <= %d (24h), got %d", maxTimeoutSeconds, timeoutSeconds)
-	}
-	return timeoutSeconds, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -491,7 +467,7 @@ func renderPlan(pr capability.PlanResult) planResponse {
 	for _, v := range pr.Verdicts {
 		verdicts = append(verdicts, perNodeVerdict{
 			NodeID:             v.NodeID,
-			Verdict:            verdictString(v.Status),
+			Verdict:            controlplane.VerdictName(v.Status),
 			DecidingRule:       v.DecidingRule,
 			Reason:             v.Reason,
 			RefusalExplanation: capability.VerdictExplanation(v.Status),
@@ -509,7 +485,7 @@ func renderPlan(pr capability.PlanResult) planResponse {
 			Reason:  "exceeds_cap",
 			Matched: pr.CapExceeded.Matched,
 			Cap:     pr.CapExceeded.Cap,
-			Class:   riskClassString(pr.CapExceeded.Class),
+			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
 		}
 	case pr.Frozen:
 		out.WouldBeRejected = &wouldBeRejected{Reason: "frozen"}
@@ -541,8 +517,8 @@ func renderJob(ctx context.Context, results JobResultReader, jobID string) (exec
 // was never dispatched (an unreachable Node, or a Pending Task cancelled before
 // it was sent), never a fabricated value.
 func perNodeResultFromTask(t jobs.Task) perNodeResult {
-	stdout, stdoutTruncated := truncateOutput(t.Stdout)
-	stderr, stderrTruncated := truncateOutput(t.Stderr)
+	stdout, stdoutTruncated := controlplane.TruncateOutput(t.Stdout)
+	stderr, stderrTruncated := controlplane.TruncateOutput(t.Stderr)
 
 	var durationMS int64
 	if !t.DispatchedAt.IsZero() && !t.ResolvedAt.IsZero() {
@@ -551,7 +527,7 @@ func perNodeResultFromTask(t jobs.Task) perNodeResult {
 
 	return perNodeResult{
 		NodeID:             t.NodeID,
-		Outcome:            outcomeString(t.Outcome),
+		Outcome:            jobs.OutcomeName(t.Outcome),
 		ExitCode:           exitCodePtr(t),
 		Stdout:             stdout,
 		Stderr:             stderr,
@@ -576,55 +552,6 @@ func exitCodePtr(t jobs.Task) *int32 {
 	return nil
 }
 
-// truncateOutput caps b at maxRenderedOutputBytes, reporting whether it did.
-func truncateOutput(b []byte) (string, bool) {
-	if len(b) <= maxRenderedOutputBytes {
-		return string(b), false
-	}
-	return string(b[:maxRenderedOutputBytes]), true
-}
-
-// outcomeString renders a jobs.Outcome as the lowercase wire string. It must
-// stay identical to the MCP surface's rendering: the same Task read through
-// either door has to report the same outcome.
-func outcomeString(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
-}
-
-// verdictString renders a capability.VerdictStatus as the lowercase wire
-// string, mirroring the MCP surface for the same parity reason.
-func verdictString(v capability.VerdictStatus) string {
-	switch v {
-	case capability.VerdictAllow:
-		return "allow"
-	case capability.VerdictDeny:
-		return "deny"
-	case capability.VerdictUnsupported:
-		return "unsupported"
-	default:
-		return "unknown"
-	}
-}
-
 // nonNil renders a nil slice as an empty JSON array rather than null, so a
 // client never has to distinguish "no rules" from "the field was absent".
 func nonNil(s []string) []string {
@@ -632,16 +559,4 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-// riskClassString renders a jobs.RiskClass for the would_be_rejected report.
-func riskClassString(c jobs.RiskClass) string {
-	switch c {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
 }

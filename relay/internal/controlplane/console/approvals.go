@@ -60,6 +60,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -333,7 +334,7 @@ func buildApprovalRows(reqs []approval.Request, grants map[string]approval.Grant
 			Href:              "/console/approvals/" + req.ID,
 			Summary:           req.Summary,
 			Operation:         approvalOperation(req),
-			Risk:              RiskLabel(req.RiskClass),
+			Risk:              jobs.RiskClassName(req.RiskClass),
 			Requester:         req.RequestedBy,
 			Verified:          req.RequestedByID != "",
 			Signed:            countApprovals(req),
@@ -455,8 +456,8 @@ func grantRowLine(g approval.Grant) string {
 		"Grant",
 		what,
 		"any namespace",
-		"up to " + itoa(g.Scope.MaxFanOut) + " Nodes per dispatch",
-		itoa(g.MaxUses) + " dispatches",
+		"up to " + strconv.Itoa(g.Scope.MaxFanOut) + " Nodes per dispatch",
+		strconv.Itoa(g.MaxUses) + " dispatches",
 		"until " + g.ExpiresAt.UTC().Format("2006-01-02 15:04Z"),
 	}, " · ")
 }
@@ -1124,7 +1125,7 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 		ID:                req.ID,
 		Summary:           req.Summary,
 		Operation:         approvalOperation(req),
-		Risk:              RiskLabel(req.RiskClass),
+		Risk:              jobs.RiskClassName(req.RiskClass),
 		PlanHash:          req.PlanHash,
 		Requester:         req.RequestedBy,
 		Verified:          req.RequestedByID != "",
@@ -1266,7 +1267,7 @@ func buildGrantCard(ctx context.Context, d Deps, caller capability.Principal, g 
 	c := grantCard{
 		Present:            true,
 		Account:            g.Scope.Account,
-		Risk:               RiskLabel(g.Scope.RiskClass),
+		Risk:               jobs.RiskClassName(g.Scope.RiskClass),
 		Operations:         ops,
 		RawExec:            g.Scope.RawExec,
 		Namespace:          namespace,
@@ -1510,8 +1511,8 @@ func grantChanges(prior, current approval.Grant) []diffChange {
 	if prior.Scope.MaxFanOut != current.Scope.MaxFanOut {
 		changes = append(changes, diffChange{
 			Field: "fan-out ceiling",
-			From:  itoa(prior.Scope.MaxFanOut) + " Nodes",
-			To:    itoa(current.Scope.MaxFanOut) + " Nodes",
+			From:  strconv.Itoa(prior.Scope.MaxFanOut) + " Nodes",
+			To:    strconv.Itoa(current.Scope.MaxFanOut) + " Nodes",
 		})
 	}
 	if priorSpan, span := prior.ExpiresAt.Sub(prior.StartsAt), current.ExpiresAt.Sub(current.StartsAt); priorSpan != span {
@@ -1520,8 +1521,8 @@ func grantChanges(prior, current approval.Grant) []diffChange {
 	if prior.MaxUses != current.MaxUses {
 		changes = append(changes, diffChange{
 			Field: "use limit",
-			From:  itoa(prior.MaxUses) + " dispatches",
-			To:    itoa(current.MaxUses) + " dispatches",
+			From:  strconv.Itoa(prior.MaxUses) + " dispatches",
+			To:    strconv.Itoa(current.MaxUses) + " dispatches",
 		})
 	}
 	return changes
@@ -1599,9 +1600,9 @@ func renderSpan(d time.Duration) string {
 	case d <= 0:
 		return "none"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m"
+		return strconv.Itoa(int(d.Minutes())) + "m"
 	default:
-		return itoa(int(d.Hours())) + "h"
+		return strconv.Itoa(int(d.Hours())) + "h"
 	}
 }
 
@@ -1651,12 +1652,12 @@ func renderTTL(d time.Duration) string {
 		return "expired"
 	}
 	if d < time.Minute {
-		return itoa(int(d.Seconds())) + "s left"
+		return strconv.Itoa(int(d.Seconds())) + "s left"
 	}
 	if d < time.Hour {
-		return itoa(int(d.Minutes())) + "m left"
+		return strconv.Itoa(int(d.Minutes())) + "m left"
 	}
-	return itoa(int(d.Hours())) + "h left"
+	return strconv.Itoa(int(d.Hours())) + "h left"
 }
 
 var approvalsTmpl = newScreen("approvals", `

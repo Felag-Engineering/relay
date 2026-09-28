@@ -21,24 +21,6 @@ func TestRequirePrincipal_NoPrincipalInContextIsALegibleError(t *testing.T) {
 	}
 }
 
-// TestResolveTimeoutSeconds_RejectsOutOfRange is RB6's concrete bound
-// (plan review): timeout_seconds outside [0, maxTimeoutSeconds] is a
-// legible rejection, never a silent clamp/overflow on an RCE surface.
-func TestResolveTimeoutSeconds_RejectsOutOfRange(t *testing.T) {
-	if _, err := resolveTimeoutSeconds(-1); err == nil {
-		t.Error("resolveTimeoutSeconds(-1) = nil error, want a rejection")
-	}
-	if _, err := resolveTimeoutSeconds(maxTimeoutSeconds + 1); err == nil {
-		t.Error("resolveTimeoutSeconds(max+1) = nil error, want a rejection")
-	}
-	if got, err := resolveTimeoutSeconds(0); err != nil || got != 0 {
-		t.Errorf("resolveTimeoutSeconds(0) = (%d, %v), want (0, nil)", got, err)
-	}
-	if got, err := resolveTimeoutSeconds(maxTimeoutSeconds); err != nil || got != maxTimeoutSeconds {
-		t.Errorf("resolveTimeoutSeconds(max) = (%d, %v), want (%d, nil)", got, err, maxTimeoutSeconds)
-	}
-}
-
 // TestRunOrPlanOutput_NoJobOmitsJobID is #207/#253's job_id contract
 // (deliberately superseding #119's byte-identical-to-#118 freeze, which
 // pinned {"job_id":"","results":[]} here): the test pins how an output with
@@ -153,16 +135,6 @@ func TestRunOrPlanOutput_PlanFieldOmittedWhenNil(t *testing.T) {
 	}
 	if _, ok := raw["plan"]; ok {
 		t.Errorf("marshaled output %s contains a \"plan\" key, want it omitted when Plan is nil", b)
-	}
-}
-
-// TestOutcomeString_VersionRefused is ADR-0014's dispatch-level gate render:
-// jobs.OutcomeVersionRefused must render as the distinct "version_refused"
-// string, never "denied_by_policy" (a Policy verdict, not a Relay-side gate)
-// or "unreachable" (a connectivity conclusion).
-func TestOutcomeString_VersionRefused(t *testing.T) {
-	if got := outcomeString(jobs.OutcomeVersionRefused); got != "version_refused" {
-		t.Errorf("outcomeString(OutcomeVersionRefused) = %q, want %q", got, "version_refused")
 	}
 }
 

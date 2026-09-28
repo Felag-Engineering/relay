@@ -532,7 +532,7 @@ func (s *Sink) logDecision(kind string, e capability.AuditEntry, matched int, co
 
 // outcomeOrder is outcomeCounts' fixed rendering order, so a decision line
 // is deterministic across runs. It is self-contained to this package (not a
-// reuse of internal/metrics's unexported outcomeLabel): OutcomeVersionRefused
+// reuse of internal/metrics's unexported jobs.OutcomeName): OutcomeVersionRefused
 // gets its own bucket here rather than folding into "unspecified".
 var outcomeOrder = []jobs.Outcome{
 	jobs.OutcomeSuccess,
@@ -544,32 +544,6 @@ var outcomeOrder = []jobs.Outcome{
 	jobs.OutcomeVersionRefused,
 	jobs.OutcomeUnsupported,
 	jobs.OutcomeUnspecified,
-}
-
-// outcomeLabel renders a jobs.Outcome as the fixed-vocabulary string
-// outcomeCounts uses. Every named Outcome gets its own value; anything else
-// (including any future/out-of-range Outcome) is "unspecified".
-func outcomeLabel(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
 }
 
 // outcomeCounts renders the aggregate per-Outcome tally across results as a
@@ -589,7 +563,7 @@ func outcomeCounts(results []capability.NodeResult) string {
 		if b.Len() > 0 {
 			b.WriteByte(',')
 		}
-		fmt.Fprintf(&b, "%s=%d", outcomeLabel(o), n)
+		fmt.Fprintf(&b, "%s=%d", jobs.OutcomeName(o), n)
 	}
 	return b.String()
 }

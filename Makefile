@@ -170,7 +170,7 @@ build: build-relay build-daemon
 
 test: test-relay test-daemon
 
-lint: lint-relay lint-daemon
+lint: fmt-relay lint-relay lint-daemon
 
 ## --- proto codegen ---
 # Go types are generated (via buf) into relay/internal/relay/v1/ and committed.
@@ -290,29 +290,22 @@ test-relay:
 test-relay-race:
 	cd relay && go test -race ./...
 
-# gofmt is invoked out of the running toolchain's GOROOT here and in fmt-relay,
-# not off PATH (#667): the GOTOOLCHAIN export at the top re-execs `go` only, so
-# a bare `gofmt` would be whatever the host happens to ship, and formatting the
-# tree with one toolchain while compiling it with another is the skew #667 is
-# about. The lookup is guarded before the path is built, because an absent or
-# half-installed `go` makes `$(go env GOROOT)/bin/gofmt` collapse to the absolute
-# `/bin/gofmt` — which on a Debian-style host exists and is some other Go's
-# formatter, i.e. exactly that skew, passing silently. `gofmt -l` only LISTS
-# drift — it exits 0 either way, so this target does not fail on unformatted
-# files; fmt-relay below is the gate that does.
+# Formatting is fmt-relay's job, not this target's: CI runs it as a separate,
+# last step so a formatting slip never hides lint and test results.
 lint-relay:
-	@root="$$(go env GOROOT)" || { echo "lint-relay: go env GOROOT failed — is go on PATH?" >&2; exit 1; }; \
-	test -n "$$root" || { echo "lint-relay: go env GOROOT is empty — is go on PATH?" >&2; exit 1; }; \
-	gofmt="$$root/bin/gofmt"; \
-	test -x "$$gofmt" || { echo "lint-relay: no gofmt at $$gofmt" >&2; exit 1; }; \
-	cd relay && "$$gofmt" -l . && go vet ./... && golangci-lint run
+	cd relay && go vet ./... && golangci-lint run
 
 ## --- format-only targets (no compile; fmt-relay is the relay CI job's gofmt step) ---
 # fmt-relay fails loudly if any file is unformatted: gofmt -l alone exits 0 even on drift.
-# Same guarded lookup as lint-relay — an empty GOROOT, or a GOROOT with no
-# executable gofmt in it, fails here instead of formatting with whatever
-# `/bin/gofmt` the host ships. Resolving once also keeps `test -z` from reading
-# a failed formatter's empty output as a clean tree.
+# gofmt is invoked out of the running toolchain's GOROOT, not off PATH (#667): the
+# GOTOOLCHAIN export at the top re-execs `go` only, so a bare `gofmt` would be
+# whatever the host happens to ship, and formatting the tree with one toolchain
+# while compiling it with another is the skew #667 is about. The lookup is guarded
+# before the path is built, because an absent or half-installed `go` makes
+# `$(go env GOROOT)/bin/gofmt` collapse to the absolute `/bin/gofmt` — which on a
+# Debian-style host exists and is some other Go's formatter, i.e. exactly that
+# skew, passing silently. Resolving once also keeps `test -z` from reading a
+# failed formatter's empty output as a clean tree.
 fmt-relay:
 	@root="$$(go env GOROOT)" || { echo "fmt-relay: go env GOROOT failed — is go on PATH?" >&2; exit 1; }; \
 	test -n "$$root" || { echo "fmt-relay: go env GOROOT is empty — is go on PATH?" >&2; exit 1; }; \
@@ -392,8 +385,10 @@ test-integration: build
 	bash scripts/smoke-test.sh
 	cd relay && RELAY_DAEMON_BIN=$(CURDIR)/daemon/target/debug/relay-daemon go test -tags integration ./cmd/relay/...
 
-lint-daemon:
-	cd daemon && cargo fmt --check && cargo clippy --all-targets -- -D warnings
+# Depends on fmt-daemon rather than repeating it, so `verify` (which also pulls in
+# fmt) checks Rust formatting once. CI's daemon job relies on this target for it.
+lint-daemon: fmt-daemon
+	cd daemon && cargo clippy --all-targets -- -D warnings
 
 ## --- opschema golden (ADR-0015: daemon is the single source of truth for what
 ## it enforces) ---

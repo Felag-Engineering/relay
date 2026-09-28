@@ -52,10 +52,12 @@ package console
 // rail once its dispatch is recorded.
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -355,7 +357,7 @@ func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) strin
 	case scrolled:
 		clause = "These are NOT the most recent calls — this page was reached by following Older."
 	case older:
-		clause = "Showing the most recent " + itoa(pageSize) + " calls. There are older calls."
+		clause = "Showing the most recent " + strconv.Itoa(pageSize) + " calls. There are older calls."
 	}
 	if foldedRows > 0 {
 		collapse := countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
@@ -639,7 +641,7 @@ func buildRunning(js []capability.JobSummary, account string, onPage map[string]
 		// a call with no verified or asserted principal, so ?account=
 		// unattributed scopes to a running Job with no recorded requester
 		// exactly as it scopes to an unattributed call.
-		principal := firstNonEmpty(sum.Requester, "unattributed")
+		principal := cmp.Or(sum.Requester, "unattributed")
 		if account != "" && account != principal {
 			continue
 		}
@@ -648,7 +650,7 @@ func buildRunning(js []capability.JobSummary, account string, onPage map[string]
 			Principal: principal,
 			Verified:  sum.RequesterAccountID != "",
 			Tool:      runningToolName(sum),
-			Risk:      RiskLabel(sum.RiskClass),
+			Risk:      jobs.RiskClassName(sum.RiskClass),
 			State:     jobStateText(sum.State),
 			Resolved:  sum.Total - sum.Unresolved,
 			Total:     sum.Total,
@@ -1059,7 +1061,7 @@ func agentCallFrom(f trailFacts) agentCall {
 		Selector:   f.Selector,
 		Args:       argsText(f),
 		NodeID:     f.NodeID,
-		Outcome:    OutcomeLabel(f.Outcome),
+		Outcome:    jobs.OutcomeName(f.Outcome),
 		JobID:      f.JobID,
 		ReadClass:  f.Kind == audit.KindRead,
 		Dispatch:   kindOf(f.Kind) == rowDispatch,
@@ -1071,7 +1073,7 @@ func agentCallFrom(f trailFacts) agentCall {
 	// mutate and a parked raw_exec as a read — the second of which is the most
 	// misleading thing this Console could say, since Raw Exec always takes the
 	// mutate cap without exception.
-	c.Risk = RiskLabel(riskOf(f))
+	c.Risk = jobs.RiskClassName(riskOf(f))
 	if f.NodeID != "" {
 		c.NodeHref = "/console/nodes/" + f.NodeID
 	}
@@ -1151,7 +1153,7 @@ func agentCallFrom(f trailFacts) agentCall {
 		// to, so the chip does not have to carry it.
 		//
 		// The word is "requested", and the obvious alternative is the trap.
-		// "cancelled" is a TASK outcome word (OutcomeLabel) and, on a row that
+		// "cancelled" is a TASK outcome word (jobs.OutcomeName) and, on a row that
 		// names a Job, it claims that Job's fate. Cancellation is best-effort
 		// and honest: a Task that already finished reports its real outcome
 		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a
@@ -1294,11 +1296,11 @@ func timeSince(t, now time.Time) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m ago"
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
 	case d < 24*time.Hour:
-		return itoa(int(d.Hours())) + "h ago"
+		return strconv.Itoa(int(d.Hours())) + "h ago"
 	default:
-		return itoa(int(d.Hours()/24)) + "d ago"
+		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 	}
 }
 

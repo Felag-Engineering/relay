@@ -109,51 +109,10 @@ func requirePrincipal(ctx context.Context) (capability.Principal, error) {
 	return p, nil
 }
 
-// maxRenderedOutputBytes caps how much of a Task's Stdout/Stderr the
-// execution tools render inline, per the plan's per-Node result shape:
-// beyond this, the *Truncated flag is set rather than growing the response
-// unbounded (a Raw Exec Task's output size is otherwise unconstrained).
-const maxRenderedOutputBytes = 4096
-
-// maxTimeoutSeconds is the sane upper bound run_operation/raw_exec enforce
-// on timeout_seconds (RB6, plan review, owner DECISION 3): 24h. Flagged
-// explicitly in the PR alongside DECISIONS 1/2 — a missing bound on an RCE
-// surface must read as deliberate, not an oversight.
-const maxTimeoutSeconds = 24 * 60 * 60
-
-// resolveTimeoutSeconds validates an incoming timeout_seconds value (0 or
-// omitted means "no explicit timeout" — today's default, unchanged) against
-// [0, maxTimeoutSeconds], returning a legible error otherwise. It never
-// silently clamps or ignores an out-of-range value on an RCE surface.
-func resolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
-	if timeoutSeconds < 0 {
-		return 0, fmt.Errorf("timeout_seconds must be >= 0, got %d", timeoutSeconds)
-	}
-	if timeoutSeconds > maxTimeoutSeconds {
-		return 0, fmt.Errorf("timeout_seconds must be <= %d (24h), got %d", maxTimeoutSeconds, timeoutSeconds)
-	}
-	return timeoutSeconds, nil
-}
-
 // planAdvisory is the fixed point-in-time disclaimer every PlanOutput
 // carries (ADR-0011): a Plan's verdicts are a snapshot, not a guarantee —
 // Policy may change between the Plan and a later real run.
 const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
-
-// verdictString renders a capability.VerdictStatus as the lowercase string
-// the execution tools emit, mirroring outcomeString's style.
-func verdictString(v capability.VerdictStatus) string {
-	switch v {
-	case capability.VerdictAllow:
-		return "allow"
-	case capability.VerdictDeny:
-		return "deny"
-	case capability.VerdictUnsupported:
-		return "unsupported"
-	default:
-		return "unknown"
-	}
-}
 
 // renderPlan renders a capability.PlanResult as the tool's PlanOutput:
 // verdicts sorted by NodeID for a stable response (mirrors renderJob), and
@@ -173,7 +132,7 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 	for _, v := range pr.Verdicts {
 		verdicts = append(verdicts, PerNodeVerdict{
 			NodeID:             v.NodeID,
-			Verdict:            verdictString(v.Status),
+			Verdict:            controlplane.VerdictName(v.Status),
 			DecidingRule:       v.DecidingRule,
 			Reason:             v.Reason,
 			RefusalExplanation: capability.VerdictExplanation(v.Status),
@@ -191,7 +150,7 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 			Reason:  "exceeds_cap",
 			Matched: pr.CapExceeded.Matched,
 			Cap:     pr.CapExceeded.Cap,
-			Class:   riskClassString(pr.CapExceeded.Class),
+			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
 		}
 	case pr.Frozen:
 		out.WouldBeRejected = &WouldBeRejected{Reason: "frozen"}
@@ -210,40 +169,6 @@ func planAndRender(ctx context.Context, exec Executor, p capability.Principal, s
 		return PlanOutput{}, renderRunError(err)
 	}
 	return renderPlan(pr), nil
-}
-
-// outcomeString renders a jobs.Outcome as the lowercase string the
-// execution tools emit, mirroring tools_operations.go's riskClassString
-// style ("read"/"mutate" there, "success"/"failure"/... here).
-func outcomeString(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
-}
-
-// truncateOutput caps b at maxRenderedOutputBytes, reporting whether it did.
-func truncateOutput(b []byte) (string, bool) {
-	if len(b) <= maxRenderedOutputBytes {
-		return string(b), false
-	}
-	return string(b[:maxRenderedOutputBytes]), true
 }
 
 // exitCodePtr returns the exit_code to render for task, or nil when no real
@@ -276,8 +201,8 @@ func exitCodePtr(task jobs.Task) *int32 {
 // ExitCode is omitted whenever no real process exit status exists — see
 // exitCodePtr.
 func perNodeResultFromTask(task jobs.Task) PerNodeResult {
-	stdout, stdoutTruncated := truncateOutput(task.Stdout)
-	stderr, stderrTruncated := truncateOutput(task.Stderr)
+	stdout, stdoutTruncated := controlplane.TruncateOutput(task.Stdout)
+	stderr, stderrTruncated := controlplane.TruncateOutput(task.Stderr)
 
 	var durationMS int64
 	if !task.DispatchedAt.IsZero() && !task.ResolvedAt.IsZero() {
@@ -286,7 +211,7 @@ func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 
 	return PerNodeResult{
 		NodeID:             task.NodeID,
-		Outcome:            outcomeString(task.Outcome),
+		Outcome:            jobs.OutcomeName(task.Outcome),
 		ExitCode:           exitCodePtr(task),
 		Stdout:             stdout,
 		Stderr:             stderr,
@@ -367,7 +292,7 @@ func renderRunError(err error) error {
 // ArgConstraints convention it reads, so this surface and the Control API's
 // execution routes share ONE definition and cannot reopen #345 independently.
 func buildOperationAction(ops OperationLister, name string, args map[string]string, timeoutSeconds int32) (jobs.Action, error) {
-	timeoutSeconds, err := resolveTimeoutSeconds(timeoutSeconds)
+	timeoutSeconds, err := controlplane.ResolveTimeoutSeconds(timeoutSeconds)
 	if err != nil {
 		return jobs.Action{}, err
 	}
@@ -397,7 +322,7 @@ type runOperationInput struct {
 	Operation string            `json:"operation" jsonschema:"Operation name, e.g. 'system.facts' (see list_operations for the full vocabulary and each Operation's risk class)."`
 	Args      map[string]string `json:"args,omitempty" jsonschema:"Operation arguments, validated against the Operation's own constraints (never a shell) — see list_operations for each Operation's argument names, types, and constraints."`
 	// TimeoutSeconds omitted or 0 keeps today's default (the daemon/engine
-	// default); [0, maxTimeoutSeconds] is enforced (RB6).
+	// default); [0, controlplane.MaxTimeoutSeconds] is enforced (RB6).
 	TimeoutSeconds int32 `json:"timeout_seconds,omitempty" jsonschema:"Optional per-Task timeout in seconds. 0 or omitted uses the daemon/engine default; max 86400 (24h)."`
 	// Plan: see the type doc comment above.
 	Plan bool `json:"plan,omitempty" jsonschema:"If true, resolve/authorize/check exactly as a real run would but execute nothing — return per-Node Policy verdicts (allow/deny(rule)/unknown(offline)) plus would_be_rejected instead of dispatching (ADR-0011). Advisory and point-in-time: Policy may change before a real run."`
@@ -420,8 +345,8 @@ type rawExecInput struct {
 // reflect defaults on the two fields the reflected schema gets wrong for this
 // RCE surface: argv (required, so drop the spurious "null" variant a
 // []string picks up) and timeout_seconds (advertise the real
-// [0, maxTimeoutSeconds] bound instead of int32 min/max). Pure tightening:
-// the handler still unmarshals into In and resolveTimeoutSeconds stays as
+// [0, controlplane.MaxTimeoutSeconds] bound instead of int32 min/max). Pure tightening:
+// the handler still unmarshals into In and controlplane.ResolveTimeoutSeconds stays as
 // defense-in-depth. Invariant 10: this only narrows advertised inputs, it
 // does not add a control path.
 func tightenExecInputSchema[In any]() *schema.Schema {
@@ -435,7 +360,7 @@ func tightenExecInputSchema[In any]() *schema.Schema {
 	}
 	if p := s.Properties["timeout_seconds"]; p != nil {
 		p.Minimum = schema.Ptr(float64(0))
-		p.Maximum = schema.Ptr(float64(maxTimeoutSeconds)) // 86400
+		p.Maximum = schema.Ptr(float64(controlplane.MaxTimeoutSeconds)) // 86400
 	}
 	return s
 }
@@ -811,7 +736,7 @@ func registerExecutionTools(srv *sdkmcp.Server, exec Executor, results JobResult
 			return nil, RunOrPlanOutput{}, fmt.Errorf("invalid selector: %w", err)
 		}
 
-		timeoutSeconds, err := resolveTimeoutSeconds(in.TimeoutSeconds)
+		timeoutSeconds, err := controlplane.ResolveTimeoutSeconds(in.TimeoutSeconds)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, err
 		}

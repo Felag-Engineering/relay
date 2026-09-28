@@ -341,7 +341,7 @@ func SummarizeScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string 
 
 	return fmt.Sprintf(
 		"%s [%s] requested by %s, %s, up to %d node(s) per dispatch, at most %d dispatch(es), from %s until %s",
-		what, RiskClassName(s.RiskClass), s.Account, where, s.MaxFanOut, maxUses,
+		what, jobs.RiskClassName(s.RiskClass), s.Account, where, s.MaxFanOut, maxUses,
 		startsAt.UTC().Format(time.RFC3339), expiresAt.UTC().Format(time.RFC3339),
 	)
 }
@@ -364,7 +364,7 @@ func HashScope(s Scope, startsAt, expiresAt time.Time, maxUses int) string {
 
 	writeField(h, "kind", "grant")
 	writeField(h, "account", s.Account)
-	writeField(h, "risk", RiskClassName(s.RiskClass))
+	writeField(h, "risk", jobs.RiskClassName(s.RiskClass))
 	// Retained as an always-empty field so the digest of every unpinned Scope
 	// (the only kind that can now exist) is byte-identical to what
 	// approval_requests.plan_hash already stores (#482).

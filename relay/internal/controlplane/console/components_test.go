@@ -166,40 +166,6 @@ func TestOutcomeBar_SegmentOrderIsStable(t *testing.T) {
 	}
 }
 
-// TestOutcomeLabel_CoversAllEight pins the vocabulary at eight. The brief named
-// six, and three of the eight are different kinds of "it did not run" that must
-// not be collapsed: an operator who cannot tell them apart cannot tell a Policy
-// problem from a fleet problem.
-func TestOutcomeLabel_CoversAllEight(t *testing.T) {
-	want := map[jobs.Outcome]string{
-		jobs.OutcomeSuccess:        "success",
-		jobs.OutcomeFailure:        "failure",
-		jobs.OutcomeTimeout:        "timeout",
-		jobs.OutcomeDeniedByPolicy: "denied_by_policy",
-		jobs.OutcomeCancelled:      "cancelled",
-		jobs.OutcomeUnreachable:    "unreachable",
-		jobs.OutcomeVersionRefused: "version_refused",
-		jobs.OutcomeUnsupported:    "unsupported",
-	}
-	if len(want) != 8 {
-		t.Fatalf("the vocabulary under test has %d entries, want 8", len(want))
-	}
-	seen := map[string]bool{}
-	for outcome, label := range want {
-		got := OutcomeLabel(outcome)
-		if got != label {
-			t.Errorf("OutcomeLabel(%d) = %q, want %q", outcome, got, label)
-		}
-		if seen[got] {
-			t.Errorf("%q is produced by more than one outcome: two states have been collapsed", got)
-		}
-		seen[got] = true
-	}
-	if got := OutcomeLabel(jobs.OutcomeUnspecified); got != "unspecified" {
-		t.Errorf("the zero value renders as %q", got)
-	}
-}
-
 // --- The two chip grammars --------------------------------------------------
 
 // TestChipGrammars_OccupyDifferentVisualChannels is the property the spec is
@@ -265,30 +231,19 @@ func TestLabelChip_OnlyTheSecurityLaneIsMarked(t *testing.T) {
 	}
 }
 
-func TestParseLabel_RefusesAnUnknownNamespace(t *testing.T) {
+// TestLabel_String_RendersSelectorSyntax pins the chip text: a label renders
+// exactly as a Selector term would name it, in all four namespaces.
+func TestLabel_String_RendersSelectorSyntax(t *testing.T) {
 	// Named fields, not positional: Label gained a severity channel and every
-	// one of these literals broke at once. A parser test should not have to be
-	// edited because a rendering concern was added to the type it parses into.
-	good := map[string]Label{
+	// one of these literals broke at once.
+	for want, l := range map[string]Label{
 		"node:env=prod":                    {Namespace: NamespaceNode, Key: "env", Value: "prod"},
 		"tag:migration-a":                  {Namespace: NamespaceTag, Key: "migration-a"},
 		"relay:quarantine":                 {Namespace: NamespaceRelay, Key: "quarantine"},
 		"state:policy-fingerprint=4b18c02": {Namespace: NamespaceState, Key: "policy-fingerprint", Value: "4b18c02"},
-	}
-	for term, want := range good {
-		got, ok := ParseLabel(term)
-		if !ok || got != want {
-			t.Errorf("ParseLabel(%q) = %+v, %v; want %+v", term, got, ok, want)
-		}
-		if got.String() != term {
-			t.Errorf("round trip: %q -> %q", term, got.String())
-		}
-	}
-	// A chip whose namespace the Console does not understand would be
-	// rendered with authority it has not earned.
-	for _, bad := range []string{"", "env=prod", "custom:thing", "NODE:env=prod", "node:", ":x"} {
-		if _, ok := ParseLabel(bad); ok {
-			t.Errorf("ParseLabel(%q) accepted an unrecognised label", bad)
+	} {
+		if got := l.String(); got != want {
+			t.Errorf("%+v renders as %q, want %q", l, got, want)
 		}
 	}
 }

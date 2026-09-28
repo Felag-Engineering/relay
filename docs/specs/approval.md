@@ -590,7 +590,9 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-77 | **An approval releases one execution.** A released request is bound to exactly one Job, and the binding is made once and survives the requesting call ending — a client timeout, a dropped connection or a cancelled request cannot leave a dispatched Job unbound. Any later dispatch whose plan hash matches a released request — a re-drive on any surface, answered or not, sequential or concurrent — re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs. Generalises AP-67 beyond an answered retry, and closes #713 (owner decision 2026-09-27, answering #387). | v0.7.0 — Admin Console: Administration & Execution |
+| AP-77 | **An approval releases one execution.** A released request is bound to exactly one Job, and the binding is made once and survives the requesting call ending — a client timeout, a dropped connection or a cancelled request cannot leave a dispatched Job unbound. While the approval is in force — before its deadline — any later dispatch whose plan hash matches a released request, a re-drive on any surface, answered or not, sequential or concurrent, re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs. Re-attaching takes precedence over a covering approval grant, so a re-drive never spends a grant use to repeat released work. Once the deadline passes, the same plan parks afresh and needs a new approval: an expired approval authorises nothing, including a resurrection of its old Job. Re-attaching is not scoped to the requesting Account — the dispatch role floor is checked first, and a Job is already readable by any caller who clears it, so nothing is disclosed that was not already readable; scoping an unbound release to its requester is tracked for the permissions rework (#716). Generalises AP-67 beyond an answered retry, and closes #713 (owner decision 2026-09-27, answering #387). | v0.7.0 — Admin Console: Administration & Execution |
+| AP-78 | A question is emitted only to a client whose answer Relay recognises, by the client name it declares with the call: `gleipnir` or `claude-code` today. Any other client — including one that advertises elicitation — gets today's `pending_approval` and asks nobody. The declared name only decides whether to ask; acceptance still turns on AP-64 and AP-79, so spoofing it can earn a question but never an accepted answer. Narrows AP-61 and closes #743. | v0.7.0 — Admin Console: Administration & Execution |
+| AP-79 | An `accept` from a client declaring itself `claude-code`, carrying no responder assertion, is accepted as an **unnamed confirmation**: recorded in-band, with the verified requester, and with the asserted lane stating that the approver was unnamed rather than naming anyone. A `decline` from it is a denial. It satisfies only what AP-64's named form satisfies, never more. Owner decision 2026-09-27, interim until the permissions rework (#716). | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
@@ -667,14 +669,21 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   auto-answers its own question is indistinguishable from one that asked a person. An operator who
   needs evidence sets the rule to `out-of-band`. Accepted by the owner on `2026-09-18` (threat
   model R21) and extended to the responder assertion on `2026-09-24`.
-- **The MRTR in-band path is Gleipnir-only in practice.** AP-64's one recognised responder form
-  is a vendor-namespaced key, so any other MRTR client's answer is refused as a machine
-  self-decision. That is the fail-closed direction, and it matches ADR-0040 as amended, which
-  makes the MCP client the approved pathway for AI-agent approval — but it is a coupling to one
-  consumer, and the `permission` gate is a self-report of the same strength as
-  `approve_request`'s `approver`: interoperability discipline, not verification. Accepted by the
-  owner on `2026-09-25`; a standard responder key would be additive, and the question of which
-  clients may answer at all belongs to the permissions rework (#716).
+- **Claude Code answers name nobody (AP-79).** Claude Code supports the MRTR round trip by
+  default but sends no responder assertion, so its answer is recorded as an unnamed
+  confirmation: Relay knows a client accepted, not who. Two things make that weaker than
+  Gleipnir's form, and the owner accepted both on `2026-09-27` as interim: a configured Claude
+  Code **hook** can answer an elicitation with no human present, indistinguishably; and whether
+  Claude Code speaks the MRTR protocol at all is governed by a remote feature flag, so it can
+  revert to `pending_approval` without any change here. The declared client name that selects
+  this form (AP-78) is self-reported, which is safe only because it decides whether to ask,
+  never whether to accept. The intended fix is identity rather than trust: the person using
+  Claude Code signs in to Relay over OAuth when adding it as an MCP server, so the answering
+  session is a verified human (#716, #351).
+- **Gleipnir's form is a vendor key (AP-64).** Its one recognised responder form is
+  `io.gleipnir/responder`, a self-report of the same strength as `approve_request`'s `approver`:
+  interoperability discipline, not verification. Accepted by the owner on `2026-09-25`; a standard
+  responder key would be additive.
 - **A released approval used to dispatch again on any later re-drive; now fixed in code, pending
   AP-77's promotion (#713).** The release is now a transactional claim, made before dispatch with
   a reserved Job ID: a re-drive on any surface re-attaches to the released Job rather than minting
@@ -788,6 +797,12 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-28` — **AP-77 qualified before promotion (owner, 2026-09-28).** Three reviews of
+  #713's fix (PR #752) found the claim's "any later dispatch" unconditional while the code
+  re-attaches only while the approval is in force. The owner chose the in-force reading: after
+  the deadline a plan parks afresh. Also decided: re-attaching takes precedence over a covering
+  approval grant, and is not scoped to the requesting Account for now, with that scoping
+  recorded for #716. (#713)
 - `2026-09-28` — **The release claim is now transactional and precedes dispatch; AP-77 stays
   Designed pending a wording check (#713).** `BindJob` is now a conditional, transactional claim
   on a reserved Job ID, made before any Task exists: a re-drive on any surface re-attaches to the
@@ -798,6 +813,14 @@ no longer open either: the amendment is drafted in this change.
   unconditionally ("Any later dispatch … re-attaches"), so the claim needs its owner to add that
   qualifier before it can move to Behaviour. `docs/security/threat-model.md` R24 records the fix
   and its residuals. (#713, #387)
+- `2026-09-27` — **AP-78 and AP-79 added (Designed, v0.7.0).** Research found Claude Code
+  2.1.283 supports the MRTR input-required round trip by default, so since the flip (#741) Relay
+  asked it a question and then refused its answer for want of a responder assertion — AP-61
+  untrue for any non-Gleipnir MRTR client (#743). The owner decided: ask only a client Relay
+  recognises by declared name (AP-78), and accept a Claude Code answer as an unnamed
+  confirmation for now (AP-79), with verified identity via OAuth as the direction (#716). The
+  Gleipnir-only coupling entry under *Accepted residual risk* is replaced by one entry per form.
+  (#743)
 - `2026-09-27` — **AP-77 added (Designed, v0.7.0): an approval releases one execution.** The
   owner answered #387 — a single approval is not redeemable until its TTL — and scheduled #713's
   fix before the live rehearsal. Found at the flip (#730, PR #741): a Codex review rated HIGH

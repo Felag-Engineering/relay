@@ -171,7 +171,7 @@ func TestVocab_NativeReadsFollowOpvocab(t *testing.T) {
 	for _, d := range opvocab.Operations() {
 		want := d.Risk == jobs.RiskClassRead
 		if got := isReadOperation(d.Name); got != want {
-			t.Errorf("isReadOperation(%q) = %v, want %v (opvocab declares %s)", d.Name, got, want, RiskLabel(d.Risk))
+			t.Errorf("isReadOperation(%q) = %v, want %v (opvocab declares %s)", d.Name, got, want, jobs.RiskClassName(d.Risk))
 		}
 	}
 }

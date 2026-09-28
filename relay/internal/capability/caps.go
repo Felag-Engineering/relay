@@ -29,7 +29,7 @@ func (e *CapExceededError) Error() string {
 	return fmt.Sprintf(
 		"capability: blast-radius cap exceeded: selector matched %d nodes, exceeds the %s of %d (risk class %s); "+
 			"narrow the Selector to at most %d Nodes (or split the Job into batches)",
-		e.Matched, capName(e.Class), e.Cap, className(e.Class), e.Cap,
+		e.Matched, capName(e.Class), e.Cap, jobs.RiskClassName(e.Class), e.Cap,
 	)
 }
 
@@ -41,20 +41,6 @@ func capName(class jobs.RiskClass) string {
 		return "read-cap"
 	}
 	return "mutate-cap"
-}
-
-// className renders class for the error message, mirroring
-// store/tasks.go's riskClassToString. Kept local rather than promoted to a
-// jobs.RiskClass.String() method to stay in scope for this issue.
-func className(class jobs.RiskClass) string {
-	switch class {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
 }
 
 // BlastCap is the real CapChecker (ADR-0004): it enforces two file-configured

@@ -123,32 +123,6 @@ type BuildInfo struct {
 	BuildDate string
 }
 
-// outcomeLabel maps o to its Prometheus label value. Every named jobs.Outcome
-// gets its own value; anything else (including the zero value,
-// OutcomeUnspecified, and any future/out-of-range Outcome) is "unspecified".
-func outcomeLabel(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
-}
-
 // outcomeOrder is the rendering order of the relay_dispatches_total series —
 // unspecified last, since it is the fallback bucket rather than a real
 // resolution.
@@ -399,7 +373,7 @@ func appendDispatches(buf []byte, dispatches *[nOutcomes]atomic.Int64) []byte {
 	buf = appendHelp(buf, "relay_dispatches_total", "Total Task dispatch outcomes, by outcome.")
 	buf = appendType(buf, "relay_dispatches_total", "counter")
 	for _, o := range outcomeOrder {
-		buf = fmt.Appendf(buf, "relay_dispatches_total{outcome=%q} %d\n", outcomeLabel(o), dispatches[int(o)].Load())
+		buf = fmt.Appendf(buf, "relay_dispatches_total{outcome=%q} %d\n", jobs.OutcomeName(o), dispatches[int(o)].Load())
 	}
 	return buf
 }

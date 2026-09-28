@@ -64,6 +64,9 @@ empty and Behaviour was checked against the code on that date; `designed, not bu
 `aspirational` and `stub`, mark a spec that has not been migrated: it is intent only, and the
 loop treats it as context rather than as a requirement. The establishing phase ends per spec,
 when its status leaves those two states, and ends for the repo when none remain.
+`scripts/spec-coverage.sh --summary` prints the numbers that track it (legacy specs, proof
+rows); without the flag it also lists code surfaces no spec names — each is either a missing
+claim or dead weight, for a human to decide. It reports and never fails.
 
 ## Authority
 

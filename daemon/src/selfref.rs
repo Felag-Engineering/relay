@@ -51,7 +51,7 @@ use std::path::PathBuf;
 
 use crate::config;
 use crate::enroll::state_dir_from_env;
-use crate::operations::{self, FILE_READ};
+use crate::operations::FILE_READ;
 use crate::policy::{Decision, LintFinding, LintSeverity, Policy};
 
 /// One protected target: a path inside the daemon's own trust root, and what it
@@ -220,13 +220,6 @@ pub fn lint(policy: &Policy, path_slot_ops: &[String]) -> Vec<LintFinding> {
     }
 
     findings
-}
-
-/// `true` when `name` is a Native Operation — used by the CLI to describe a
-/// finding's origin. Kept here so the lint module owns its own vocabulary view.
-#[allow(dead_code)]
-pub fn is_native(name: &str) -> bool {
-    operations::risk_class(name).is_some()
 }
 
 // ---------------------------------------------------------------------------

@@ -672,16 +672,3 @@ func (r Request) inAudience(account string) bool {
 func (r Request) Progress() string {
 	return fmt.Sprintf("%d of %d", len(r.Approvals()), r.Require.Count)
 }
-
-// RiskClassName renders a jobs.RiskClass for hashing and rule matching without
-// importing the proto enum's String().
-func RiskClassName(c jobs.RiskClass) string {
-	switch c {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
-}

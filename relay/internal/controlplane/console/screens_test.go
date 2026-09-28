@@ -581,7 +581,7 @@ func TestFleet_SmallHealthyFleetStillShowsItsNodes(t *testing.T) {
 func TestFleet_LargeHealthyGroupStillCompresses(t *testing.T) {
 	var nodes []registry.Node
 	for i := 0; i < legibleGroup+10; i++ {
-		id := "node-" + itoa(i)
+		id := "node-" + strconv.Itoa(i)
 		nodes = append(nodes, registry.Node{
 			NodeID: id, NodeLabels: map[string]string{"role": "web"}, PolicyFingerprint: "same", Connected: true,
 		})
@@ -687,7 +687,7 @@ func TestVocab_RiskClassInference(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := riskOf(factsOfRecord(c.rec)); got != c.want {
-			t.Errorf("%s: riskOf = %s, want %s", c.name, RiskLabel(got), RiskLabel(c.want))
+			t.Errorf("%s: riskOf = %s, want %s", c.name, jobs.RiskClassName(got), jobs.RiskClassName(c.want))
 		}
 	}
 }
@@ -848,7 +848,7 @@ func TestAgents_RailRendersTheMutateCount(t *testing.T) {
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String()
 
 	rail, _, _ := buildAgents(agentMutateFixture(), "", testNow)
-	want := itoa(rail[0].Mutates) + " mutate"
+	want := strconv.Itoa(rail[0].Mutates) + " mutate"
 	if !strings.Contains(body, want) {
 		t.Errorf("the Accounts rail does not render %q; spec 03 lists the mutate count among "+
 			"the fields the rail shows, and a computed-and-discarded field is not a rendered one", want)
@@ -892,7 +892,7 @@ func TestAgents_RailMutateCountAgreesWithTheRowRiskChips(t *testing.T) {
 	}
 	chipped := 0
 	for _, c := range calls {
-		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
+		if c.Risk == jobs.RiskClassName(jobs.RiskClassMutate) {
 			chipped += c.Calls
 		}
 	}
@@ -1131,10 +1131,10 @@ func TestFleet_RevokedNodeIsVisibleAndDistinctFromOffline(t *testing.T) {
 func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 	var nodes []registry.Node
 	for i := 0; i < 8; i++ { // offline: the majority
-		nodes = append(nodes, registry.Node{NodeID: "off-" + itoa(i), NodeLabels: map[string]string{"role": "web"}})
+		nodes = append(nodes, registry.Node{NodeID: "off-" + strconv.Itoa(i), NodeLabels: map[string]string{"role": "web"}})
 	}
 	for i := 0; i < 2; i++ { // healthy: the minority
-		id := "ok-" + itoa(i)
+		id := "ok-" + strconv.Itoa(i)
 		nodes = append(nodes, registry.Node{NodeID: id, NodeLabels: map[string]string{"role": "web"}, Connected: true})
 	}
 	d := renderableDeps()
@@ -1164,10 +1164,10 @@ func TestFleet_DeviatingRowsLeadEvenWhenTheyAreTheMajority(t *testing.T) {
 func TestFleet_HighCardinalityGroupingDoesNotRebuildTheList(t *testing.T) {
 	var nodes []registry.Node
 	for i := 0; i < 600; i++ {
-		id := "node-" + itoa(i)
+		id := "node-" + strconv.Itoa(i)
 		// One distinct group value per three Nodes: 200 groups.
 		nodes = append(nodes, registry.Node{
-			NodeID: id, NodeLabels: map[string]string{"shard": "s" + itoa(i/3)},
+			NodeID: id, NodeLabels: map[string]string{"shard": "s" + strconv.Itoa(i/3)},
 			PolicyFingerprint: "same",
 			Connected:         true,
 		})
@@ -3192,7 +3192,7 @@ func TestAgents_PlanModeRendersAsACallNamingTheToolItPlanned(t *testing.T) {
 	// still a mutate: what the agent asked for is the signal, and the outcome
 	// chip is what says it did not run.
 	for _, c := range calls {
-		if c.Risk != RiskLabel(jobs.RiskClassMutate) {
+		if c.Risk != jobs.RiskClassName(jobs.RiskClassMutate) {
 			t.Errorf("a planned mutate chips risk %q — a Plan that never ran is still a "+
 				"mutate-class ask, and Raw Exec always takes the mutate cap", c.Risk)
 		}
@@ -4154,10 +4154,10 @@ func TestApproval_ReleasedJobsAreListedOnTheCard(t *testing.T) {
 	// first page however large the page is. A fixture that fits in one page
 	// cannot tell a walk from a single read.
 	for i := 0; i < 520; i++ {
-		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-a", NodeID: "node-" + itoa(i)})
+		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-a", NodeID: "node-" + strconv.Itoa(i)})
 	}
 	for i := 0; i < 80; i++ {
-		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-b", NodeID: "node-" + itoa(i)})
+		rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-1", JobID: "job-b", NodeID: "node-" + strconv.Itoa(i)})
 	}
 	rows = append(rows, capability.AuditRow{Kind: audit.KindDispatch, GrantID: "grant-other", JobID: "job-elsewhere", NodeID: "node-x"})
 

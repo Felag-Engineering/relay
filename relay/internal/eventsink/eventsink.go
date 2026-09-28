@@ -23,22 +23,6 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
-// riskClassString renders a jobs.RiskClass as the "read"/"mutate" string,
-// mirroring controlplane/mcp/tools_operations.go's identically-named
-// unexported helper (jobs.RiskClass has no String()/JSON helper of its own —
-// see that file's doc comment for why this small local mapping exists
-// rather than an ad hoc improvisation per caller).
-func riskClassString(r jobs.RiskClass) string {
-	switch r {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
-}
-
 // jobEventSink adapts capability.JobEventSink onto events.Bus.
 type jobEventSink struct {
 	bus *events.Bus
@@ -79,7 +63,7 @@ func (s jobEventSink) RecordJob(e capability.JobEvent) {
 		AccountID:  e.Principal.AccountID,
 		Selector:   e.Selector.String(),
 		Operation:  operation,
-		RiskClass:  riskClassString(e.Action.RiskClass),
+		RiskClass:  jobs.RiskClassName(e.Action.RiskClass),
 		Nodes:      e.Nodes,
 	}
 	for outcome, count := range e.Outcomes {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // sqliteGrants implements approval.GrantRepository against the approval_grants
@@ -62,7 +63,7 @@ func (g *sqliteGrants) CreateGrant(ctx context.Context, gr approval.Grant) error
 			revoked_at, revoked_by, revoke_reason
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		gr.ID, gr.RequestID,
-		gr.Scope.Account, approval.RiskClassName(gr.Scope.RiskClass), gr.Scope.MaxFanOut,
+		gr.Scope.Account, jobs.RiskClassName(gr.Scope.RiskClass), gr.Scope.MaxFanOut,
 		strings.Join(gr.Scope.Operations, ","), boolToInt(gr.Scope.RawExec),
 		// Always empty: no Grant created after #482 is pinned. Validate refuses
 		// LegacyNamespacePin, and this literal means no field can reintroduce a
@@ -187,7 +188,7 @@ func (g *sqliteGrants) ClaimGrant(ctx context.Context, d approval.Dispatch, now 
 		                     AND r.state = ?
 		              )
 		              ORDER BY expires_at ASC, grant_id ASC`,
-		d.Account, approval.RiskClassName(d.RiskClass), int(approval.StateApproved))
+		d.Account, jobs.RiskClassName(d.RiskClass), int(approval.StateApproved))
 	if err != nil {
 		return approval.Grant{}, false, fmt.Errorf("select candidate grants: %w", err)
 	}
