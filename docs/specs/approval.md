@@ -589,6 +589,7 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
+| AP-77 | **An approval releases one execution.** A released request is bound to exactly one Job, and the binding is made once and survives the requesting call ending — a client timeout, a dropped connection or a cancelled request cannot leave a dispatched Job unbound. Any later dispatch whose plan hash matches a released request — a re-drive on any surface, answered or not, sequential or concurrent — re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs. Generalises AP-67 beyond an answered retry, and closes #713 (owner decision 2026-09-27, answering #387). | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
@@ -778,6 +779,13 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-27` — **AP-77 added (Designed, v0.7.0): an approval releases one execution.** The
+  owner answered #387 — a single approval is not redeemable until its TTL — and scheduled #713's
+  fix before the live rehearsal. Found at the flip (#730, PR #741): a Codex review rated HIGH
+  that two concurrent accepting retries can each dispatch before either binds, and a Claude
+  review found the binding runs on the request context, so a client-side timeout can leave a
+  dispatched Job unbound and let the model's re-drive start a second. AP-77 covers every
+  re-drive on every surface; AP-67 stays true as the answered-retry case of it. (#713, #387)
 - `2026-09-27` — **The composition root passes the MRTR option; AP-60 … AP-71 promoted.** The
   MCP mount now passes the elicitation option beside the in-band decider, so an askable in-band park
   from an MRTR-capable client is answered with an approval question and an accepting retry runs
