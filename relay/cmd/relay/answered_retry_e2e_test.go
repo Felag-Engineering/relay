@@ -105,7 +105,7 @@ func askQuestionE2E(t *testing.T, session *sdkmcp.ClientSession) *sdkmcp.CallToo
 // and carries the decision alongside the results.
 func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -184,7 +184,7 @@ func TestAnsweredRetry_ApproveRunsTheJobOnce(t *testing.T) {
 // plan the human was actually shown, stays approved.
 func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -228,7 +228,7 @@ func TestAnsweredRetry_FleetChangedReParksAndAsksAfresh(t *testing.T) {
 // re-attach is an audited KindRead record naming that Job and run_operation.
 func TestAnsweredRetry_BoundJobReAttaches(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -277,7 +277,7 @@ func TestAnsweredRetry_BoundJobReAttaches(t *testing.T) {
 // denial is audited both as a decision record and on the Control API.
 func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -330,7 +330,7 @@ func TestAnsweredRetry_DeclineIsTerminalAndDispatchesNothing(t *testing.T) {
 // nothing, and asks no new question.
 func TestAnsweredRetry_PartialQuorumStaysPending(t *testing.T) {
 	f := startGatedRelay(t, gateCountTwoInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -363,7 +363,7 @@ func TestAnsweredRetry_PartialQuorumStaysPending(t *testing.T) {
 // Control API — proving both rescues on one request.
 func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 	f := startGatedRelay(t, gateCountTwoInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
-	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 
 	q := askQuestionE2E(t, session)
 	requestID, _ := q.Meta["relay/request_id"].(string)
@@ -454,7 +454,8 @@ func TestAnsweredRetry_RefusedStateStaysDecidableByTheRescue(t *testing.T) {
 func TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
 	session := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		Client:     &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		ClientName: relaytest.GleipnirClientName,
 	})
 
 	res := relaytest.RetryTool(t, session, "run_operation", restartNginxArgs(), "garbage-request-state",
@@ -481,7 +482,7 @@ func TestAnsweredRetry_ClientThatCannotBeAskedIgnoresRetryFields(t *testing.T) {
 	// SAME production wiring must be decided and refused instead — proving
 	// the assertions above are not vacuously true of every client.
 	auditBefore := auditLen(t, f)
-	eliciting := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	eliciting := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions(), ClientName: relaytest.GleipnirClientName})
 	elicitingRes := relaytest.RetryTool(t, eliciting, "run_operation", restartNginxArgs(), "garbage-request-state",
 		sdkmcp.InputResponseMap{"garbage-id": &sdkmcp.ElicitResult{
 			Action: "accept",

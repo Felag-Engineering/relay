@@ -56,12 +56,25 @@ import (
 // acceptElicitedAnswer, below, is the MRTR answer path: a retried tool call
 // carrying an elicitation response to a parked approval. It lives here, in
 // the one exempt file, by the same choice that put approve_request here —
-// the seal check (package requeststate), the responder-assertion rule, and
-// the classification of what capability.Service.DecideApproval returned are
-// ALL written in this file, so a reviewer can audit the whole of this hole
-// by opening one file, and that promise is kept by what is written in the
-// file rather than by the AST scan (no_decision_test.go still enforces the
-// scan; this paragraph is the reviewer's map of what to read).
+// the seal check (package requeststate), the responder-assertion rule, the
+// unnamed-confirmation rule (AP-79, below), and the classification of what
+// capability.Service.DecideApproval returned are ALL written in this file, so
+// a reviewer can audit the whole of this hole by opening one file, and that
+// promise is kept by what is written in the file rather than by the AST scan
+// (no_decision_test.go still enforces the scan; this paragraph is the
+// reviewer's map of what to read).
+//
+// A retry that declares client name "claude-code" (elicit.go's
+// clientNameClaudeCode) and carries no responder assertion is recorded as an
+// unnamed confirmation (AP-79) rather than refused as a machine self-decision
+// — see unnamedConfirmationApprover below. A present responder assertion
+// always takes the named path first, whatever the declared name: the unnamed
+// form only fills the gap the named form leaves, never rescues an answer the
+// named form refused. The declared name is read from the RETRIED call's own
+// `_meta` (elicitedAnswer.CallMeta), never from the ElicitResult's own `_meta`
+// and never from the sealed state — so a call first asked under one
+// recognised name and retried declaring "claude-code" is judged, on the
+// retry, by the retry's own declared name.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
 // acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
@@ -292,6 +305,25 @@ func renderApprovalError(err error) error {
 // file's shape.
 const responderMetaKey = "io.gleipnir/responder"
 
+// unnamedConfirmationApprover is the asserted-lane value AP-79 records for a
+// Claude Code accept/decline that carries no responder assertion: an unnamed
+// confirmation. It is explicit and non-empty, so approval.Decision's in-band
+// machine carve-out (relaysAnAssertedHuman — a non-blank OnBehalfOf on an
+// in-band decision) admits it exactly as it admits a named answer, with no
+// change to package approval. It names the FORM (the client), never a
+// person, and must never be read as a person's name. It passes
+// audit.ValidateAsserted (35 bytes, no control characters), so the audit
+// write and the read lane's field-length filter both accept it as-is.
+//
+// This value is NOT reserved: like every in-band OnBehalfOf, it is an
+// assertion, never verified, and a caller can already assert the identical
+// string through approve_request's `approver` argument or a responder's
+// `username` — exactly as it can assert any other string. Refusing that
+// collision here would add a second approve_request refusal and make AP-70's
+// "exactly as before, with one exception" untrue, so it is recorded as-is on
+// every path that reaches assertedApprover.
+const unnamedConfirmationApprover = "(unnamed: claude-code confirmation)"
+
 // replayedFromMetaKey marks a response as a client-side replay of an earlier
 // answer rather than a fresh one — present on either the elicitation
 // response's own _meta or the retried call's params._meta, checked in both
@@ -440,9 +472,10 @@ type elicitedAnswerResult struct {
 	stateReported bool
 	// Progress is set only when Err is nil; empty on every refusal.
 	Progress string
-	// OnBehalfOf is the asserted responder identity handed to the decider.
-	// Empty if the call never reached the decider (any refusal before step 6
-	// of acceptElicitedAnswer).
+	// OnBehalfOf is the asserted approver value (a responder's username, or
+	// the unnamed-confirmation value) handed to the decider. Empty if the
+	// call never reached the decider (any refusal before step 6 of
+	// acceptElicitedAnswer).
 	OnBehalfOf string
 	Err        error
 }
@@ -455,6 +488,8 @@ type elicitedAnswer struct {
 	InputResponses sdkmcp.InputResponseMap
 	// CallMeta is the retried call's params._meta — checked for a replay
 	// marker alongside the elicitation response's own _meta (may be nil).
+	// It is also where the retried call's declared client name is read
+	// (AP-79).
 	CallMeta sdkmcp.Meta
 	// Tool is the retried call's params.name.
 	Tool string
@@ -478,6 +513,10 @@ type elicitedAnswer struct {
 // acceptElicitedAnswer verifies and records one MRTR answer to a parked
 // approval, returning a classification the caller can render without
 // re-deciding anything.
+//
+// AP-79 governs which approver gets recorded: a present responder assertion
+// always takes the named path, never downgraded; only absent that does a
+// retry declaring claude-code fall back to AP-79's unnamed confirmation.
 //
 // open and now are parameters rather than server fields so this function
 // stays testable in isolation and so this issue does not have to touch
@@ -563,16 +602,43 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	if _, replayed := in.CallMeta[replayedFromMetaKey]; replayed {
 		return refused(errNoNamedApprover)
 	}
-	responder, recognised := recognisedResponder(result.Meta)
-	if !recognised || responder.Gate != responderGatePermission {
+	// AP-64/AP-79: a three-way choice between the named form, the unnamed
+	// confirmation, and refusal. Order is load-bearing — a present responder
+	// key ALWAYS takes the named path first, whatever the declared client
+	// name: the unnamed form only fills the gap the named form leaves, and it
+	// can never rescue an answer the named form refused. Only when no
+	// responder key is present at all does the declared client name — read
+	// from the RETRIED call's own CallMeta, never the ElicitResult's own
+	// `_meta`, and never the sealed state — get a say.
+	declaredName, named := declaredClientName(in.CallMeta)
+	isClaudeCodeCaller := named && declaredName == clientNameClaudeCode
+	_, hasResponder := result.Meta[responderMetaKey]
+
+	var username string
+	switch {
+	case hasResponder:
+		// The named form (AP-64). A responder that is present but malformed
+		// (recognisedResponder not ok) or not gate "permission" is refused
+		// with errNoNamedApprover and NEVER downgraded to the unnamed form
+		// below.
+		responder, recognised := recognisedResponder(result.Meta)
+		if !recognised || responder.Gate != responderGatePermission {
+			return refused(errNoNamedApprover)
+		}
+		// assertedApprover itself returns errNoNamedApprover for a blank (or
+		// whitespace-only) username, and the bound audit error — never
+		// truncated, never trimmed-then-accepted — for anything malformed.
+		u, err := assertedApprover(responder.Username)
+		if err != nil {
+			return refused(err)
+		}
+		username = u
+	case isClaudeCodeCaller:
+		// The unnamed confirmation (AP-79): an accept/decline from a client
+		// declaring "claude-code" with no responder assertion at all.
+		username = unnamedConfirmationApprover
+	default:
 		return refused(errNoNamedApprover)
-	}
-	// assertedApprover itself returns errNoNamedApprover for a blank (or
-	// whitespace-only) username, and the bound audit error — never
-	// truncated, never trimmed-then-accepted — for anything malformed.
-	username, err := assertedApprover(responder.Username)
-	if err != nil {
-		return refused(err)
 	}
 
 	approve := result.Action == "accept"

@@ -97,7 +97,8 @@ func startElicitingRelay(t *testing.T) (f *relayFixture, token string, accountID
 func connectEliciting(t *testing.T, f *relayFixture, token string) *sdkmcp.ClientSession {
 	t.Helper()
 	return relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(token), relaytest.ConnectOptions{
-		Client: relaytest.ElicitingClientOptions(),
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: relaytest.GleipnirClientName,
 	})
 }
 
@@ -654,7 +655,8 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	// (caps.Elicitation == nil), so Relay renders today's pending_approval
 	// and never builds an input-required result.
 	clientA := relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(token), relaytest.ConnectOptions{
-		Client: &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		Client:     &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		ClientName: relaytest.GleipnirClientName,
 	})
 	resA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
 	if resA.NeedsInput() || resA.IsError {
@@ -710,7 +712,8 @@ func TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 				return &sdkmcp.ElicitResult{Action: "decline"}, nil
 			},
 		},
-		Session: &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		Session:    &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		ClientName: relaytest.GleipnirClientName,
 	})
 	resB := relaytest.CallTool(t, clientB, "run_operation", restartNginxArgs())
 	var outB mcp.RunOrPlanOutput

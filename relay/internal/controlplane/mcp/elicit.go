@@ -53,6 +53,18 @@ const (
 	// second vocabulary to learn.
 	metaKeyRequestID = "relay/request_id"
 	metaKeyPlanHash  = "relay/plan_hash"
+
+	// clientNameGleipnir and clientNameClaudeCode are the declared client
+	// names (io.modelcontextprotocol/clientInfo.name) Relay recognises for
+	// AP-78: the emission predicate asks a question only to one of these two.
+	// The name decides WHETHER to ask; for claude-code it also selects
+	// AP-79's unnamed form in acceptElicitedAnswer's admission (tools_approval.go),
+	// which is admitted only where a named answer would be — the same domain
+	// checks apply, and a present responder assertion always takes the named
+	// path. These identifiers name an external consumer's wire value, exactly
+	// as responderMetaKey already does, so they do not conflict with ADR-0016.
+	clientNameGleipnir   = "gleipnir"
+	clientNameClaudeCode = "claude-code"
 )
 
 // WithApprovalElicitation turns on the in-band MRTR question path for an
@@ -123,12 +135,58 @@ func (q *questioner) opener() stateOpener {
 	}
 }
 
+// declaredClientName reads the client's declared name from meta's raw
+// io.modelcontextprotocol/clientInfo entry — AP-78's input.
+//
+// It reads the RAW value rather than req.ClientInfo(): a wire request always
+// decodes clientInfo into the map[string]any shape below, and only the exact
+// lowercase key "name", asserted with .(string), counts — an object keyed
+// "Name" is unrecognised, not merely differently cased, for the same
+// case-insensitive-remarshal reason recognisedResponder documents
+// (tools_approval.go). An in-process caller (this package's own tests) may
+// instead place the typed *sdkmcp.Implementation or Implementation value
+// directly in meta, which is also read. Anything else — clientInfo absent,
+// nil, not a string-keyed name, or some other type — reports ("", false); no
+// trimming and no case folding are applied either way.
+func declaredClientName(meta sdkmcp.Meta) (string, bool) {
+	v, present := meta[sdkmcp.MetaKeyClientInfo]
+	if !present || v == nil {
+		return "", false
+	}
+	switch info := v.(type) {
+	case map[string]any:
+		name, ok := info["name"].(string)
+		return name, ok
+	case *sdkmcp.Implementation:
+		if info == nil {
+			return "", false
+		}
+		return info.Name, true
+	case sdkmcp.Implementation:
+		return info.Name, true
+	default:
+		return "", false
+	}
+}
+
+// recognisedClientName reports whether name is one of the declared client
+// names AP-78 recognises: exactly clientNameGleipnir or clientNameClaudeCode,
+// case-sensitively. "Claude-Code", " gleipnir" and "gleipnir-agent" are all
+// unrecognised — this only narrows who is asked, and narrowing on an exact
+// match fails closed rather than guessing at a near match.
+func recognisedClientName(name string) bool {
+	return name == clientNameGleipnir || name == clientNameClaudeCode
+}
+
 // clientCanBeAsked implements the emission predicate's conditions 2 (the
-// SDK's own MRTR judgment) and 3 (the per-request `_meta` agrees) — conditions
-// 1 (a questioner is wired) and 4 (the park is Askable) are the caller's,
-// question below. It also gates the answered retry (#727's isAnsweredRetry,
-// tools_execution.go): a client that cannot be asked never has its retry
-// fields — requestState, inputResponses — read at all.
+// SDK's own MRTR judgment), 3 (the per-request `_meta` agrees) and 5 (the
+// declared client name is recognised, AP-78) — conditions 1 (a questioner is
+// wired) and 4 (the park is Askable) are the caller's, question below. It
+// also gates the answered retry (#727's isAnsweredRetry, tools_execution.go):
+// a client that cannot be asked never has its retry fields — requestState,
+// inputResponses — read at all, so an unrecognised name's stray answer fields
+// are ignored exactly as AP-70 already ignores them for any other client that
+// cannot be asked.
 //
 // A nil req or a nil req.Session/req.Params fails closed.
 func clientCanBeAsked(req *sdkmcp.CallToolRequest) bool {
@@ -187,7 +245,19 @@ func clientCanBeAsked(req *sdkmcp.CallToolRequest) bool {
 	// always a form elicitation, so a client that advertises URL-only
 	// elicitation is treated as unable to be asked rather than sent a prompt
 	// it cannot render. This only narrows who gets asked.
-	return caps.Elicitation.Form != nil || caps.Elicitation.URL == nil
+	if caps.Elicitation.Form == nil && caps.Elicitation.URL != nil {
+		return false
+	}
+
+	// Condition 5 (AP-78) — the declared client name, read from the SAME raw
+	// `_meta` map condition 3 already reads, so the first call and a retry are
+	// each judged by their OWN request's declared name. This narrows who gets
+	// asked; for claude-code the same declared name also selects AP-79's
+	// unnamed form in acceptElicitedAnswer (tools_approval.go), admitted only
+	// where a named answer would be, and a present responder assertion always
+	// takes the named path.
+	name, ok := declaredClientName(meta)
+	return ok && recognisedClientName(name)
 }
 
 // callArgsDigest digests the TYPED, re-marshalled tool input (runOperationInput
@@ -216,8 +286,9 @@ func elicitRequestedSchema() map[string]any {
 
 // question renders parked as an input-required CallToolResult if and only if
 // ALL of: q (and its sealer) is wired, parked is Askable, and req's client
-// can be asked (clientCanBeAsked). Any other outcome — including a sealing
-// failure — returns (nil, false), telling the caller to fall back to
+// can be asked (clientCanBeAsked — MRTR-capable, elicitation-capable, and
+// declaring a recognised client name, AP-78). Any other outcome — including a
+// sealing failure — returns (nil, false), telling the caller to fall back to
 // rendering today's pending_approval.
 //
 // tool is the literal registered tool name (toolRunOperation/toolRawExec) and

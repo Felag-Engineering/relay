@@ -197,7 +197,10 @@ func retryServer(t *testing.T, exec Executor, reads ReadAuditor, results JobResu
 // by the test rather than the SDK's automatic middleware.
 func retrySession(t *testing.T, srv *httptest.Server) *sdkmcp.ClientSession {
 	t.Helper()
-	return relaytest.ConnectWithOptions(t, srv.URL, answerClient(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+	return relaytest.ConnectWithOptions(t, srv.URL, answerClient(), relaytest.ConnectOptions{
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: relaytest.GleipnirClientName,
+	})
 }
 
 // askQuestion drives tool's first (parking) call and asserts it renders the
@@ -880,7 +883,10 @@ func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 		srv := httptest.NewServer(controlplane.NewAuthenticator(answerTestVerifier{}).Middleware(mux))
 		t.Cleanup(srv.Close)
 
-		session := relaytest.ConnectWithOptions(t, srv.URL, answerClient(), relaytest.ConnectOptions{Client: relaytest.ElicitingClientOptions()})
+		session := relaytest.ConnectWithOptions(t, srv.URL, answerClient(), relaytest.ConnectOptions{
+			Client:     relaytest.ElicitingClientOptions(),
+			ClientName: relaytest.GleipnirClientName,
+		})
 
 		baseline := relaytest.CallTool(t, session, toolRunOperation, retryOperationArgs())
 		var baselineOut RunOrPlanOutput

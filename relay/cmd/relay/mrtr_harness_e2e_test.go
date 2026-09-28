@@ -61,7 +61,8 @@ func TestRelaytest_ElicitationClientSeesTodaysPendingApproval(t *testing.T) {
 	// unaskable regardless (AP-61): the FIRST call still parks exactly as
 	// before.
 	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: relaytest.ElicitingClientOptions(),
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: relaytest.GleipnirClientName,
 	})
 	plain := relaytest.Connect(t, f.ControlBase, f.Client())
 

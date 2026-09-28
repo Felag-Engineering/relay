@@ -16,6 +16,20 @@ import (
 // needs.
 const callToolTimeout = 30 * time.Second
 
+// defaultClientName is what ConnectOptions.ClientName defaults to: a name
+// AP-78 does not recognise, so a test that wants the emission predicate to
+// ask a question must opt in with GleipnirClientName or ClaudeCodeClientName.
+const defaultClientName = "relaytest-client"
+
+// GleipnirClientName and ClaudeCodeClientName are the declared client names
+// AP-78 recognises (elicit.go's clientNameGleipnir/clientNameClaudeCode),
+// exported so a test can set ConnectOptions.ClientName without repeating the
+// literal.
+const (
+	GleipnirClientName   = "gleipnir"
+	ClaudeCodeClientName = "claude-code"
+)
+
 // Connect opens an authenticated MCP client session against base+"/mcp",
 // using client for the transport (carry any required auth on client, e.g. a
 // BearerRoundTripper). session.Close is registered as a t.Cleanup.
@@ -59,6 +73,12 @@ type ConnectOptions struct {
 	// middleware in NewClient's body, before any post-construction hook could
 	// switch it off.
 	Client *sdkmcp.ClientOptions
+	// ClientName is the MCP client's declared name: it travels in every
+	// 2026-07-28 request's `_meta` clientInfo, and Relay's emission predicate
+	// asks a question only when it declares a recognised name (AP-78,
+	// GleipnirClientName or ClaudeCodeClientName). Empty means
+	// "relaytest-client", which is deliberately unrecognised.
+	ClientName string
 	// Session is passed to the Connect call. ProtocolVersion lets a test build
 	// a client that negotiates an older protocol than 2026-07-28 (SEP-2322),
 	// which does not support multi-round-trip on the wire at all — useful for
@@ -116,7 +136,11 @@ func ElicitingClientOptions() *sdkmcp.ClientOptions {
 func tryConnect(t *testing.T, base string, client *http.Client, o ConnectOptions) (*sdkmcp.ClientSession, error) {
 	t.Helper()
 
-	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "relaytest-client", Version: "0.0.1"}, o.Client)
+	name := o.ClientName
+	if name == "" {
+		name = defaultClientName
+	}
+	c := sdkmcp.NewClient(&sdkmcp.Implementation{Name: name, Version: "0.0.1"}, o.Client)
 	if o.Setup != nil {
 		o.Setup(c)
 	}

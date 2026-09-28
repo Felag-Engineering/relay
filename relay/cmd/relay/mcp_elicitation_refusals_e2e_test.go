@@ -787,7 +787,7 @@ func TestMCPElicitation_RequesterExcludedAndAudienceRestrictedNeverAsk(t *testin
 // exercise directly, never proof that condition 2 alone did the refusing.
 func TestMCPElicitation_LegacyHeaderWithModernMetaDoesNotAsk(t *testing.T) {
 	elicitCapsBody := map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}
-	clientInfo := map[string]any{"name": "legacy-meta-client", "version": "0.0.1"}
+	clientInfo := map[string]any{"name": "gleipnir", "version": "0.0.1"}
 
 	metaWith := func(pv string) map[string]any {
 		m := map[string]any{
@@ -999,7 +999,7 @@ func TestMCPElicitation_ElicitedParkEmitsNoTaskEnvelope(t *testing.T) {
 
 	meta := map[string]any{
 		"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "elicit-tasks-client", "version": "0.0.1"},
+		"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "gleipnir", "version": "0.0.1"},
 		"io.modelcontextprotocol/clientCapabilities": map[string]any{
 			"elicitation": map[string]any{"form": map[string]any{}},
 			"extensions":  map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}},
