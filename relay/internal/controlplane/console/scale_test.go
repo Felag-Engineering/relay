@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -43,8 +44,8 @@ func tenThousandNodes(labelKey string, distinctValues int, offline func(i int) b
 	nodes := make([]registry.Node, 0, 10000)
 	for i := 0; i < 10000; i++ {
 		nodes = append(nodes, registry.Node{
-			NodeID:            "node-" + itoa(i),
-			NodeLabels:        map[string]string{labelKey: labelKey + "-" + itoa(i%distinctValues)},
+			NodeID:            "node-" + strconv.Itoa(i),
+			NodeLabels:        map[string]string{labelKey: labelKey + "-" + strconv.Itoa(i%distinctValues)},
 			PolicyFingerprint: "aaaa111122223333",
 			DaemonVersion:     "0.6.0",
 			LastSeen:          testNow.Add(-4 * time.Second),

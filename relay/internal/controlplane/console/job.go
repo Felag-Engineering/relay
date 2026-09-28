@@ -88,6 +88,7 @@ package console
 // the approval need not be the Account that dispatched.
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"sort"
@@ -486,7 +487,7 @@ func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequ
 		})
 	}
 
-	a.ParkedBy = firstNonEmpty(req.RequestedBy, "unattributed")
+	a.ParkedBy = cmp.Or(req.RequestedBy, "unattributed")
 	a.ParkedByVerified = req.RequestedByID != ""
 	// Compare by Account ID whenever either side has one; only when BOTH are
 	// unverified does the comparison fall back to the name, so two different
@@ -618,9 +619,9 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		// Account renders blank rather than "unattributed" unless the trail's
 		// own principal string is used as the fallback, exactly as
 		// principalText does on every other screen.
-		v.Principal = firstNonEmpty(v.Principal, row.Principal, "unattributed")
+		v.Principal = cmp.Or(v.Principal, row.Principal, "unattributed")
 	} else {
-		v.Principal = firstNonEmpty(v.Principal, "unattributed")
+		v.Principal = cmp.Or(v.Principal, "unattributed")
 	}
 	if v.ApprovalID != "" {
 		v.ApprovalHref = "/console/approvals/" + v.ApprovalID
@@ -658,7 +659,7 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 				v.Plan.Hash = req.PlanHash
 				v.PlanHashKnown = true
 			}
-			v.Approval = newJobApproval(req, v.GrantID != "", sum.RequesterAccountID, firstNonEmpty(sum.Requester, dispatchPrincipal))
+			v.Approval = newJobApproval(req, v.GrantID != "", sum.RequesterAccountID, cmp.Or(sum.Requester, dispatchPrincipal))
 		}
 	}
 
@@ -1058,15 +1059,6 @@ func jobOperationText(name string, kind jobs.ActionKind) string {
 	}
 	if kind == jobs.ActionRawExec {
 		return rawExecActionKind
-	}
-	return ""
-}
-
-func firstNonEmpty(vs ...string) string {
-	for _, v := range vs {
-		if v != "" {
-			return v
-		}
 	}
 	return ""
 }

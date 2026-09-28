@@ -52,10 +52,12 @@ package console
 // rail once its dispatch is recorded.
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
@@ -355,7 +357,7 @@ func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) strin
 	case scrolled:
 		clause = "These are NOT the most recent calls — this page was reached by following Older."
 	case older:
-		clause = "Showing the most recent " + itoa(pageSize) + " calls. There are older calls."
+		clause = "Showing the most recent " + strconv.Itoa(pageSize) + " calls. There are older calls."
 	}
 	if foldedRows > 0 {
 		collapse := countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
@@ -639,7 +641,7 @@ func buildRunning(js []capability.JobSummary, account string, onPage map[string]
 		// a call with no verified or asserted principal, so ?account=
 		// unattributed scopes to a running Job with no recorded requester
 		// exactly as it scopes to an unattributed call.
-		principal := firstNonEmpty(sum.Requester, "unattributed")
+		principal := cmp.Or(sum.Requester, "unattributed")
 		if account != "" && account != principal {
 			continue
 		}
@@ -1294,11 +1296,11 @@ func timeSince(t, now time.Time) string {
 	case d < time.Minute:
 		return "just now"
 	case d < time.Hour:
-		return itoa(int(d.Minutes())) + "m ago"
+		return strconv.Itoa(int(d.Minutes())) + "m ago"
 	case d < 24*time.Hour:
-		return itoa(int(d.Hours())) + "h ago"
+		return strconv.Itoa(int(d.Hours())) + "h ago"
 	default:
-		return itoa(int(d.Hours()/24)) + "d ago"
+		return strconv.Itoa(int(d.Hours()/24)) + "d ago"
 	}
 }
 
