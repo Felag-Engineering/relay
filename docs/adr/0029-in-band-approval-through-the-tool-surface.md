@@ -141,3 +141,32 @@ call to serve one rung. Rejected.
 **Treat an in-band answer as a fully verified human decision.** Simpler, and rejected: the
 audit trail would answer "who approved this?" identically whether a human really did or a
 client merely said so.
+
+## Amendment (2026-09-28): an MRTR answer on a human's own OAuth session is that human's verified decision
+
+An owner decision of 2026-09-28, recorded here as a note; decisions 2 and 3 keep their text.
+Decision 2 records every in-band answer as a verified *relaying* Account beside an *asserted*
+approver, and decision 3 relaxes the machine self-decision refusal only where an approver is
+asserted. Both assume the Account that made the call is not the human who answered. One designed
+case breaks that assumption, and for it the owner decided:
+
+**An in-band MRTR answer arriving on an OAuth session of a human Account is that human's own
+verified decision.** The verified lane holds the human as the approver, no asserted approver is
+needed, and none is written in its place. Today the one client this applies to is Claude Code
+(`docs/specs/approval.md` AP-78 and AP-79, designed and not built); on any other session — an API
+Token, or a machine Account — Claude Code is not asked at all. This is not the alternative
+rejected above: the answer is not verified because a client says a human gave it, but because the
+credential that carried it is the human's own, which Relay authenticated.
+
+It stands in tension with ADR-0027's statement that **MCP-originated calls are agent-grade
+regardless of whose OAuth identity authorizes the session**, and the owner resolved it this way:
+the *request* stays agent-grade — rung selection is unchanged — while the *answer*, given in the
+client's own UI which the model never sees, counts as the human's. The caveat is accepted, not
+solved: a configured Claude Code **hook** can answer an elicitation with no human present, so a
+verified approver here proves who owns the session, not that a human read this question. It
+replaces a decision of 2026-09-27, never built, to accept a Claude Code answer as an *unnamed
+confirmation* written into the asserted lane — which anyone could forge by typing the same string
+into `approve_request`. The owner also set a constraint: any unnamed form ever reintroduced is its
+own structural field in the decision and audit record, never an asserted string. OAuth has never
+run live (#351), so until it does nothing in the shipped posture reaches this case. See
+ADR-0027's note of the same date.

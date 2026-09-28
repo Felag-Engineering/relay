@@ -558,3 +558,17 @@ with it is kept in `docs/specs/approval-assurance.md`.
 **The decision is explicitly interim**, pending the permissions rework, and it must not be
 enforced before #646 lands: today a Gleipnir-parked request is answered by a human in the Console,
 and closing that before the MRTR round trip exists would leave no answer path at all.
+
+## Amendment (2026-09-28): the answer on a human's own OAuth session, cross-referenced from ADR-0029
+
+A note, not a change to any decision here. Decision 5 states that **MCP-originated calls are
+agent-grade regardless of whose OAuth identity authorizes the session**, and that still governs
+rung selection for every MCP *request*. The owner decided on 2026-09-28, recorded in ADR-0029's
+note of that date, that an in-band MRTR *answer* arriving on an OAuth session of a human Account
+counts as that human's own **verified** decision (`docs/specs/approval.md` AP-78 and AP-79,
+designed and not built; Claude Code is the one client it applies to today). The two are
+reconciled as the owner framed them: the request stays agent-grade; the answer, given in the
+client's own UI which the model never sees, counts as the human's. The caveat is accepted: a
+configured Claude Code hook can answer with no human present, so the verified approver proves who
+owns the session, not that a human read the question — the same limit decision 5's reasoning
+names for session authorization, now accepted for one answer path rather than argued away.
