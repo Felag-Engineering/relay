@@ -55,9 +55,4 @@ For everything outside that surface, normal engineering judgement applies.
 
 ## Writing an ADR
 
-Number sequentially in `docs/adr/`. This repo's ADRs are longer than the usual one-paragraph
-form because they encode security invariants that agents are expected to check themselves
-against — match the surrounding style rather than the minimal form.
-
-Write one when the decision is hard to reverse, surprising without context, and the result
-of a real trade-off. All three, not any one.
+When to write one, and the style to match: `AGENTS.md`, *How to work here*, step 7.
