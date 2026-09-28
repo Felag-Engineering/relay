@@ -3,20 +3,33 @@ package capability
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/store"
 )
 
 // memApprovals is an in-memory ApprovalStore for these tests. It is deliberately
 // simple: the store's own behaviour is tested in internal/store, and what
 // matters here is the capability layer's decision-making.
+//
+// mu guards every method (S5, #713 plan review): the concurrent-claim tests
+// (TestRun_ConcurrentReDrivesDispatchExactlyOneJob and friends) drive BindJob
+// from many goroutines at once, and this fake must serialise its own map
+// writes the way SetMaxOpenConns(1) serialises the real store's transactions
+// — otherwise it would race on its own bookkeeping rather than exercising the
+// domain's Release rule.
 type memApprovals struct {
+	mu     sync.Mutex
 	byID   map[string]approval.Request
 	byHash map[string]string // planHash -> id
 	bound  map[string]string // id -> jobID
@@ -27,12 +40,16 @@ func newMemApprovals() *memApprovals {
 }
 
 func (m *memApprovals) Create(_ context.Context, r approval.Request) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.byID[r.ID] = r
 	m.byHash[r.PlanHash] = r.ID
 	return nil
 }
 
 func (m *memApprovals) ByPlanHash(_ context.Context, planHash string) (approval.Request, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	id, ok := m.byHash[planHash]
 	if !ok {
 		return approval.Request{}, approval.ErrNotFound
@@ -40,21 +57,32 @@ func (m *memApprovals) ByPlanHash(_ context.Context, planHash string) (approval.
 	return m.byID[id], nil
 }
 
-func (m *memApprovals) BindJob(_ context.Context, id, jobID string) error {
+// BindJob mirrors the store's release claim (AP-77): it calls r.Release under
+// the lock, so two goroutines calling BindJob concurrently on the same
+// Request race the mutex, not the domain rule — exactly what
+// SetMaxOpenConns(1) plus a transaction gives the real store.
+func (m *memApprovals) BindJob(_ context.Context, id, jobID string, now time.Time) (approval.Request, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.byID[id]
 	if !ok {
-		return approval.ErrNotFound
+		return approval.Request{}, approval.ErrNotFound
+	}
+	updated, err := r.Release(jobID, now)
+	if err != nil {
+		// Mirrors the SQLite store: on refusal, return r as read here (which,
+		// for ErrAlreadyReleased, carries the previously bound JobID) rather
+		// than the zero value.
+		return r, err
 	}
 	m.bound[id] = jobID
-	// Mirrors SQLite, where job_id is a column on the row: a caller reading
-	// the Request back (Get, or RecordDecision's refusal return) sees the
-	// bound Job, not just this fake's separate bound map.
-	r.JobID = jobID
-	m.byID[id] = r
-	return nil
+	m.byID[id] = updated
+	return updated, nil
 }
 
 func (m *memApprovals) Get(_ context.Context, id string) (approval.Request, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.byID[id]
 	if !ok {
 		return approval.Request{}, approval.ErrNotFound
@@ -63,6 +91,8 @@ func (m *memApprovals) Get(_ context.Context, id string) (approval.Request, erro
 }
 
 func (m *memApprovals) Pending(_ context.Context) ([]approval.Request, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	ids := make([]string, 0, len(m.byID))
 	for id := range m.byID {
 		ids = append(ids, id)
@@ -81,6 +111,8 @@ func (m *memApprovals) Pending(_ context.Context) ([]approval.Request, error) {
 // eligibility rule and this only persists the result, so a test that passes
 // here is exercising the same decision logic production runs.
 func (m *memApprovals) RecordDecision(_ context.Context, id string, d approval.Decision, now time.Time) (approval.Request, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.byID[id]
 	if !ok {
 		return approval.Request{}, approval.ErrNotFound
@@ -104,6 +136,8 @@ func (m *memApprovals) LastApprovedByShape(_ context.Context, shapeKey, excludeI
 	if shapeKey == "" || approval.IsLegacyShapeKey(shapeKey) {
 		return approval.Request{}, approval.ErrNotFound
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var best approval.Request
 	var found bool
 	ids := make([]string, 0, len(m.byID))
@@ -145,6 +179,8 @@ func (s *spyApprovalAuthorizer) AuthorizeApprovalDecision(_ context.Context, _ P
 // approve drives a stored Request to approved, as the decision endpoint will.
 func (m *memApprovals) approve(t *testing.T, id, accountID, account string, at time.Time) {
 	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	r, ok := m.byID[id]
 	if !ok {
 		t.Fatalf("no such request %q", id)
@@ -157,6 +193,18 @@ func (m *memApprovals) approve(t *testing.T, id, accountID, account string, at t
 		t.Fatalf("approve %s: %v", id, err)
 	}
 	m.byID[id] = updated
+}
+
+// hasAuditKind reports whether entries contains at least one AuditEntry of
+// kind — used where a test only needs to know a refusal (or other kind) was
+// recorded somewhere in the sequence, not which one.
+func hasAuditKind(entries []AuditEntry, kind AuditKind) bool {
+	for _, e := range entries {
+		if e.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func gateEverything(t *testing.T, count int) ApprovalGate {
@@ -191,6 +239,31 @@ func approvalFixture(t *testing.T, nodes []string, gate ApprovalGate, store Appr
 	)
 	s.disp = disp
 	return s, disp
+}
+
+// approvalFixtureWithAudit is approvalFixture with the AuditSink handed back
+// too, for the AP-77 tests that need to inspect RecordRead calls
+// (toolApprovalReattach) or count AuditKindDispatch entries.
+func approvalFixtureWithAudit(t *testing.T, nodes []string, gate ApprovalGate, store ApprovalStore, now func() time.Time) (*Service, *spyDispatcher, *spyAuditSink) {
+	t.Helper()
+	reg := registry.NewInMemory()
+	for _, id := range nodes {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	disp := &spyDispatcher{jobID: "job-1"}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}),
+		WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit),
+		WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gate, store, &spyApprovalAuthorizer{}),
+		WithClock(now),
+	)
+	s.disp = disp
+	return s, disp, audit
 }
 
 var apNow = time.Date(2026, 8, 14, 9, 0, 0, 0, time.UTC)
@@ -347,6 +420,9 @@ func TestApprovedPlanDispatchesAndBindsTheJob(t *testing.T) {
 	}
 	if got := store.bound[parked.RequestID]; got != "job-1" {
 		t.Errorf("approval %s bound to job %q, want job-1 — audit must be able to join approval to execution", parked.RequestID, got)
+	}
+	if disp.ranWithJobID != "job-1" {
+		t.Errorf("dispatcher ran with jobID %q, want job-1 — the reserved, already-bound id (AP-77)", disp.ranWithJobID)
 	}
 }
 
@@ -631,5 +707,868 @@ func TestLastApprovedOfSameShape_Unwired(t *testing.T) {
 	s := New(registry.NewInMemory())
 	if _, err := s.LastApprovedOfSameShape(context.Background(), approval.Request{ShapeKey: "abc"}); !errors.Is(err, ErrApprovalUnavailable) {
 		t.Errorf("err = %v, want ErrApprovalUnavailable", err)
+	}
+}
+
+// --- AP-77: an approval releases one execution (#713) ----------------------
+
+// approveViaRecordDecision drives id to StateApproved through the real
+// approval.Repository interface, for the tests below that exercise a real
+// SQLite store rather than memApprovals.
+func approveViaRecordDecision(t *testing.T, repo approval.Repository, id, planHash string, at time.Time) {
+	t.Helper()
+	if _, err := repo.RecordDecision(context.Background(), id, approval.Decision{
+		AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand,
+		PlanHash: planHash, DeciderHuman: true, At: at,
+	}, at); err != nil {
+		t.Fatalf("approve %s: %v", id, err)
+	}
+}
+
+// TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing is AP-77's
+// core capability-layer proof: a sequential re-drive of an already-released
+// approval re-attaches to the Job it released, dispatches nothing, and
+// records an audited read rather than a second dispatch.
+func TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing(t *testing.T) {
+	store := newMemApprovals()
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a", "node-b"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("release Run: %v", err)
+	}
+	if !disp.called {
+		t.Fatal("dispatcher was not called on release")
+	}
+
+	// Reset the spy so the re-drive's behaviour is unambiguous.
+	disp.called = false
+	audit.entries = nil
+	audit.readCalls = nil
+
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("re-drive Run: %v", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was called on a re-drive of an already-released approval (AP-77)")
+	}
+	if len(res) != 2 {
+		t.Fatalf("results = %d, want 2 (one per approved Node)", len(res))
+	}
+	for _, r := range res {
+		if r.JobID != "job-1" {
+			t.Errorf("result %+v: JobID = %q, want job-1", r, r.JobID)
+		}
+	}
+
+	var dispatchEntries int
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindDispatch {
+			dispatchEntries++
+		}
+	}
+	if dispatchEntries != 0 {
+		t.Errorf("dispatch audit entries after the re-drive = %d, want 0", dispatchEntries)
+	}
+	if len(audit.readCalls) != 1 || audit.readCalls[0].Tool != toolApprovalReattach {
+		t.Fatalf("read calls = %+v, want exactly one approval_reattach read", audit.readCalls)
+	}
+	if audit.readCalls[0].JobID != "job-1" {
+		t.Errorf("reattach read JobID = %q, want job-1", audit.readCalls[0].JobID)
+	}
+	if got := store.bound[parked.RequestID]; got != "job-1" {
+		t.Errorf("store.bound = %q, want job-1 still", got)
+	}
+}
+
+// TestRun_DifferentRequesterReAttachesToTheReleasedJob: AP-77's re-attach is
+// requester-agnostic ("any later dispatch whose plan hash matches"). A
+// different Account re-driving the same plan re-attaches, sees the Job as an
+// audited read attributed to itself, and dispatches nothing — the original
+// Request's requester is unchanged.
+func TestRun_DifferentRequesterReAttachesToTheReleasedJob(t *testing.T) {
+	store := newMemApprovals()
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	accountA := Principal{AccountID: "acct-a", Account: "alice"}
+	accountB := Principal{AccountID: "acct-b", Account: "bob"}
+
+	_, err := s.Run(context.Background(), accountA, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), accountA, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("release Run: %v", err)
+	}
+	disp.called = false
+	audit.readCalls = nil
+
+	res, err := s.Run(context.Background(), accountB, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("account B Run: %v", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was called for a different Account's re-drive")
+	}
+	for _, r := range res {
+		if r.JobID != "job-1" {
+			t.Errorf("result JobID = %q, want job-1", r.JobID)
+		}
+	}
+	if len(audit.readCalls) != 1 || audit.readCalls[0].Principal != accountB {
+		t.Fatalf("read calls = %+v, want exactly 1 attributed to account B", audit.readCalls)
+	}
+
+	got, err := store.Get(context.Background(), parked.RequestID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.RequestedByID != "acct-a" {
+		t.Errorf("RequestedByID = %q, want acct-a — the original requester is unchanged", got.RequestedByID)
+	}
+}
+
+// failingReadAuditSink wraps spyAuditSink and, once armed, fails only
+// RecordRead — so a test can let a park and a release audit normally and then
+// make ONLY the reattach's read fail.
+type failingReadAuditSink struct {
+	*spyAuditSink
+	readErr error
+}
+
+func (f *failingReadAuditSink) RecordRead(ctx context.Context, p Principal, tool, selector, nodeID, jobID string) error {
+	if f.readErr != nil {
+		return f.readErr
+	}
+	return f.spyAuditSink.RecordRead(ctx, p, tool, selector, nodeID, jobID)
+}
+
+// TestRun_ReAttachThatCannotBeAuditedReturnsNothing: an unaudited re-attach
+// must not hand out a Job (ADR-0025), mirroring AP-67's precedent at the
+// adapter layer.
+func TestRun_ReAttachThatCannotBeAuditedReturnsNothing(t *testing.T) {
+	store := newMemApprovals()
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	disp := &spyDispatcher{jobID: "job-1"}
+	audit := &failingReadAuditSink{spyAuditSink: &spyAuditSink{}}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("release Run: %v", err)
+	}
+	disp.called = false
+	audit.readErr = errors.New("audit store down")
+
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if res != nil {
+		t.Errorf("results = %v, want nil on an unauditable re-attach", res)
+	}
+	if !errors.Is(err, ErrReadUnaudited) {
+		t.Fatalf("err = %v, want it to wrap ErrReadUnaudited", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was called on an unauditable re-attach")
+	}
+}
+
+// TestRun_ReleasedApprovalPastItsDeadlineParksAfresh: AP-77's re-attach window
+// is the approval's validity (Satisfied), not forever (AP-25, ADR-0027
+// decision 9). Past the deadline, a re-drive parks a brand-new Request rather
+// than re-attaching to the stale one.
+func TestRun_ReleasedApprovalPastItsDeadlineParksAfresh(t *testing.T) {
+	store := newMemApprovals()
+	clock := apNow
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return clock })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var first *ParkedError
+	if !errors.As(err, &first) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, first.RequestID, "acct-ana", "ana", clock.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("release Run: %v", err)
+	}
+	disp.called = false
+
+	// Past gateEverything's one-hour TTL.
+	clock = clock.Add(2 * time.Hour)
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	var second *ParkedError
+	if !errors.As(err, &second) {
+		t.Fatalf("err = %v, want a fresh park after the deadline", err)
+	}
+	if second.RequestID == first.RequestID {
+		t.Error("a released approval past its deadline must park a NEW Request, not re-attach forever")
+	}
+	if disp.called {
+		t.Error("dispatcher was called; a park must never dispatch")
+	}
+}
+
+// TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent: there is no un-bind
+// path (Key decisions). A claim that wins and then fails before a real Job is
+// created leaves the approval spent; a re-drive re-attaches to the reserved
+// id rather than claiming and dispatching again.
+func TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent(t *testing.T) {
+	store := newMemApprovals()
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	disp.failWithNoJobID = true
+	disp.err = errors.New("dispatch exploded before CreateJob returned")
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run: want an error from the failing dispatcher")
+	}
+	if disp.ranWithJobID == "" {
+		t.Fatal("dispatcher never ran — the claim did not even attempt a dispatch")
+	}
+	claimedID := disp.ranWithJobID
+
+	// A second Run re-attaches to the reserved id rather than claiming (and
+	// dispatching) again — the approval stays spent even though no real Job
+	// was ever created for it.
+	disp.called = false
+	disp.err = nil
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("second Run: %v", err)
+	}
+	if disp.called {
+		t.Error("dispatcher ran a second time — a claimed release must stay spent even after a failed dispatch")
+	}
+	for _, r := range res {
+		if r.JobID != claimedID {
+			t.Errorf("result JobID = %q, want the originally reserved %q", r.JobID, claimedID)
+		}
+	}
+}
+
+// TestRun_ReserveJobIDFailureRefusesWithoutDispatching: when the dispatcher
+// cannot even mint a reservation, the claim never starts, nothing runs, and
+// the refusal is audited exactly like any other internal refusal.
+func TestRun_ReserveJobIDFailureRefusesWithoutDispatching(t *testing.T) {
+	store := newMemApprovals()
+	s, disp := approvalFixture(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	disp.reserveErr = errors.New("dispatcher out of ids")
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run: want an error when reserveJobID fails")
+	}
+	if disp.called {
+		t.Error("dispatcher's run was called even though reserveJobID failed")
+	}
+	if got, getErr := store.Get(context.Background(), parked.RequestID); getErr != nil || got.JobID != "" {
+		t.Errorf("Get = %+v, %v — nothing must be bound when the reservation itself failed", got, getErr)
+	}
+}
+
+// TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan supersedes
+// cycle-1's TestRun_GrantTakesPrecedenceOverAReleasedApproval under the
+// plan-review ESCALATE (b) disposition: conform to AP-77's literal,
+// unconditional text ("any later dispatch ... re-attaches"), not to the
+// weaker reading that a covering Grant issued afterward may run the released
+// plan a second time. checkApproval's Satisfied-and-Released lookup now runs
+// BEFORE ClaimGrant, so a Grant that starts covering this exact plan AFTER a
+// single-Plan approval already released it does NOT authorize a second Job
+// while that approval is still in force: the re-drive re-attaches to the
+// released Job instead, dispatches nothing, and the Grant's own uses are left
+// untouched — a re-attach consumes no Grant use.
+func TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan(t *testing.T) {
+	store := newMemApprovals()
+	grants := &memGrants{}
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	disp := &spyDispatcher{jobID: "job-1"}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), store, &spyApprovalAuthorizer{}),
+		WithApprovalGrants(grants),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	if _, err := s.Run(context.Background(), p, Selector{}, mutateAct()); err != nil {
+		t.Fatalf("release Run: %v", err)
+	}
+	if got := store.bound[parked.RequestID]; got != "job-1" {
+		t.Fatalf("release did not bind job-1: %q", got)
+	}
+
+	// A Grant covering this exact dispatch is issued AFTER the approval
+	// already released it.
+	grants.grant = coveringGrant()
+	disp.called = false
+	disp.jobID = "job-2" // would be a genuinely new Job if the Grant ran it.
+
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("grant-covered re-drive: %v", err)
+	}
+	if disp.called {
+		t.Fatal("the covering Grant dispatched a second Job — the released approval must re-attach first")
+	}
+	for _, r := range res {
+		if r.JobID != "job-1" {
+			t.Errorf("result JobID = %q, want job-1 — a re-attach, not the Grant's job-2", r.JobID)
+		}
+	}
+	if got := store.bound[parked.RequestID]; got != "job-1" {
+		t.Errorf("the original approval's binding changed to %q", got)
+	}
+	if grants.claims != 0 {
+		t.Errorf("grant claims = %d, want 0 — a re-attach must never consume a Grant use", grants.claims)
+	}
+	if !hasAuditKind(audit.entries, AuditKindDispatch) {
+		t.Fatal("want the first release's own dispatch audit entry")
+	}
+	var dispatchEntries int
+	for _, e := range audit.entries {
+		if e.Kind == AuditKindDispatch {
+			dispatchEntries++
+		}
+	}
+	if dispatchEntries != 1 {
+		t.Errorf("dispatch audit entries = %d, want 1 — the grant-covered re-drive must not add a second", dispatchEntries)
+	}
+	if len(audit.readCalls) != 1 || audit.readCalls[0].Tool != toolApprovalReattach {
+		t.Fatalf("read calls = %+v, want exactly one approval_reattach read", audit.readCalls)
+	}
+}
+
+// errByPlanHashApprovalStore wraps an ApprovalStore and always fails
+// ByPlanHash with err, mirroring a store outage for exactly the read
+// checkApproval uses to find an already-released Request for this plan
+// (SEC-2/C2-S1, #713 security review).
+type errByPlanHashApprovalStore struct {
+	ApprovalStore
+	err error
+}
+
+func (w errByPlanHashApprovalStore) ByPlanHash(context.Context, string) (approval.Request, error) {
+	return approval.Request{}, w.err
+}
+
+// TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted is
+// SEC-2/C2-S1: a store failure reading whether THIS plan already has a
+// released Request must fail the dispatch closed BEFORE a covering Grant is
+// ever consulted. Shadowing the failed read with a Grant would let a Request
+// the Relay cannot currently read — possibly already released — be silently
+// overridden by a Grant running the plan a second time.
+func TestRun_StoreErrorReadingForAPlanIsRefusedBeforeAGrantIsConsulted(t *testing.T) {
+	grants := &memGrants{grant: coveringGrant()}
+	failing := errByPlanHashApprovalStore{ApprovalStore: newMemApprovals(), err: errors.New("approvals store unavailable")}
+	reg := registry.NewInMemory()
+	for _, id := range []string{"node-a", "node-b"} {
+		if _, err := reg.Upsert(registry.Report{NodeID: id}); err != nil {
+			t.Fatalf("seed registry: %v", err)
+		}
+	}
+	disp := &spyDispatcher{jobID: "job-1"}
+	audit := &spyAuditSink{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), failing, &spyApprovalAuthorizer{}),
+		WithApprovalGrants(grants),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+
+	_, err := s.Run(context.Background(), machineRequester, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run: want a refusal when the plan-hash read fails")
+	}
+	if disp.called {
+		t.Error("dispatcher ran despite a store failure reading for this plan")
+	}
+	if grants.claims != 0 {
+		t.Errorf("grant claims = %d, want 0 — a failed plan-hash read must refuse before a covering Grant is ever consulted", grants.claims)
+	}
+	if !hasAuditKind(audit.entries, AuditKindRefusal) {
+		t.Error("want a refusal audited")
+	}
+}
+
+// cancelMidRunDispatcher simulates a client per-call timeout firing while the
+// dispatcher is running: it cancels the caller's own context and returns
+// ctx.Err(), carrying the jobID it was asked to run with (mirroring
+// jobEngine's real CreateJob-then-persist-then-send shape, where the Job
+// already exists by the time dispatch can fail).
+type cancelMidRunDispatcher struct {
+	cancelFn  context.CancelFunc
+	runs      int32 // atomic
+	lastJobID atomic.Value
+}
+
+func (d *cancelMidRunDispatcher) run(ctx context.Context, disp dispatch) (dispatchResult, error) {
+	atomic.AddInt32(&d.runs, 1)
+	d.lastJobID.Store(disp.jobID)
+	d.cancelFn()
+	return dispatchResult{jobID: disp.jobID}, ctx.Err()
+}
+
+func (d *cancelMidRunDispatcher) cancel(context.Context, string) error { return nil }
+func (d *cancelMidRunDispatcher) query(context.Context, dispatch) (planResult, error) {
+	return planResult{}, nil
+}
+func (d *cancelMidRunDispatcher) reserveJobID() (string, error) { return "job-reserved", nil }
+
+// TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch is AP-77's
+// central claim-before-dispatch proof (#713, the "ordinary trigger" the owner
+// named): a client-side timeout firing after the claim commits but while the
+// dispatcher is still running must not leave the approval unbound. Real
+// SQLite, because the claim's atomicity is the store's contract, not
+// memApprovals' mirror of it.
+func TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	repo := st.Approvals()
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	disp := &cancelMidRunDispatcher{cancelFn: cancel}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), repo, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err = s.Run(ctx, p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	approveViaRecordDecision(t, repo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
+
+	// The second Run's context is the one the dispatcher cancels mid-dispatch.
+	_, err = s.Run(ctx, p, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run with a mid-dispatch cancellation: want an error")
+	}
+	if got := atomic.LoadInt32(&disp.runs); got != 1 {
+		t.Fatalf("dispatcher runs = %d, want 1", got)
+	}
+
+	got, err := repo.Get(context.Background(), parked.RequestID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.JobID == "" {
+		t.Fatal("Request has no bound Job — the claim was lost to the cancelled request ctx")
+	}
+	if lastJobID, _ := disp.lastJobID.Load().(string); got.JobID != lastJobID {
+		t.Errorf("bound JobID = %q, want the reserved id %q the dispatcher actually ran with", got.JobID, lastJobID)
+	}
+
+	// A fresh, LIVE context re-drives and re-attaches rather than dispatching
+	// again.
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("third Run (re-attach): %v", err)
+	}
+	if got2 := atomic.LoadInt32(&disp.runs); got2 != 1 {
+		t.Errorf("dispatcher runs after re-attach = %d, want still 1", got2)
+	}
+	for _, r := range res {
+		if r.JobID != got.JobID {
+			t.Errorf("result JobID = %q, want %q", r.JobID, got.JobID)
+		}
+	}
+}
+
+// claimCancelingApprovalStore wraps a real ApprovalStore and cancels the
+// caller's own context exactly when the release claim starts — modeling a
+// client per-call timeout that fires in the narrow window between the
+// plan-hash read (ByPlanHash, left untouched) and the transactional claim
+// (BindJob) itself (#713 plan-review cycle-2 B1). Every other method is
+// promoted straight through the embedded interface.
+type claimCancelingApprovalStore struct {
+	ApprovalStore
+	cancel context.CancelFunc
+}
+
+func (w *claimCancelingApprovalStore) BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error) {
+	w.cancel()
+	return w.ApprovalStore.BindJob(ctx, id, jobID, now)
+}
+
+// TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalReleasable
+// is #713 plan-review S3, retargeted in cycle 2 (B1): a ctx cancelled BEFORE
+// Run even starts fails at checkApproval's own ByPlanHash read and never
+// reaches BindJob at all, which proved nothing about the claim itself. Here
+// the ctx stays live through ByPlanHash — so checkApproval finds the Request
+// Satisfied and unbound, exactly the claim path — and is cancelled only when
+// the release claim (BindJob) starts, using the real SQLite store so the
+// failure is a genuine transaction failure, not a fake's shortcut. The claim
+// must fail outright, never touch the dispatcher, and leave the approval
+// releasable for the very next (live) re-drive.
+func TestRun_CallCancelledBeforeTheClaimDispatchesNothingAndLeavesTheApprovalReleasable(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	repo := st.Approvals()
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	disp := &spyDispatcher{jobID: "job-1"}
+	audit := &spyAuditSink{}
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	wrapped := &claimCancelingApprovalStore{ApprovalStore: repo, cancel: cancel}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(audit), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), wrapped, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	approveViaRecordDecision(t, repo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
+
+	_, err = s.Run(cancelCtx, p, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run whose ctx is cancelled inside the claim: want an error")
+	}
+	if disp.called {
+		t.Error("dispatcher was called even though the claim's transaction should never have committed")
+	}
+	if !hasAuditKind(audit.entries, AuditKindRefusal) {
+		t.Error("want a RefusalInternal refusal audited when the claim's ctx is cancelled")
+	}
+
+	got, err := repo.Get(context.Background(), parked.RequestID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.JobID != "" {
+		t.Fatalf("JobID = %q, want unbound — a cancelled claim must not spend the approval", got.JobID)
+	}
+
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("live Run: %v", err)
+	}
+	if !disp.called {
+		t.Fatal("dispatcher was never called on the live re-drive")
+	}
+	for _, r := range res {
+		if r.JobID != "job-1" {
+			t.Errorf("result JobID = %q, want job-1", r.JobID)
+		}
+	}
+}
+
+// laterNowOnBindJobApprovalStore wraps an ApprovalStore and substitutes now
+// for whatever "now" Service.Run's claim actually passed to BindJob — C2-S4's
+// simplification (#713 cycle-2 code review) of modeling "the deadline passed
+// between checkApproval's read and the claim" without coupling a test to how
+// many times Service happens to read its clock per Run. Every other method
+// (including ByPlanHash, which stays reading the UNCHANGED clock so
+// checkApproval still finds the Request Satisfied and commits to the claim
+// path) is promoted straight through the embedded interface.
+type laterNowOnBindJobApprovalStore struct {
+	ApprovalStore
+	now time.Time
+}
+
+func (w laterNowOnBindJobApprovalStore) BindJob(ctx context.Context, id, jobID string, _ time.Time) (approval.Request, error) {
+	return w.ApprovalStore.BindJob(ctx, id, jobID, w.now)
+}
+
+// TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing is #713
+// plan-review cycle-2 B1's other fail-closed branch: checkApproval's own read
+// finds the Request Satisfied (so it commits to the claim path, not a fresh
+// park), but by the time BindJob evaluates the release the clock has ticked
+// past ExpiresAt — a store-call boundary wide enough for a deadline to lapse
+// in between. The domain refuses with ErrNotReleasable, and the claim must
+// fail closed exactly like the cancelled-ctx case above: nothing dispatched,
+// nothing bound, and the refusal audited. Unlike a genuinely expired approval
+// (TestRun_ReleasedApprovalPastItsDeadlineParksAfresh), only the CLAIM's own
+// evaluation overshoots the deadline — every other read, including the third
+// Run's, still sees apNow, so the very next Run finds the same Request still
+// Satisfied and releases it normally.
+func TestRun_ClaimThatFindsTheDeadlinePassedDispatchesNothing(t *testing.T) {
+	store := newMemApprovals()
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	s.approvals = laterNowOnBindJobApprovalStore{ApprovalStore: store, now: apNow.Add(2 * time.Hour)}
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	if !errors.Is(err, approval.ErrNotReleasable) {
+		t.Fatalf("err = %v, want it to wrap ErrNotReleasable", err)
+	}
+	if disp.called {
+		t.Error("dispatcher was called even though the claim found the deadline had passed")
+	}
+	if !hasAuditKind(audit.entries, AuditKindRefusal) {
+		t.Error("want a RefusalInternal refusal audited when the claim finds the deadline passed")
+	}
+
+	got, err := store.Get(context.Background(), parked.RequestID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.JobID != "" {
+		t.Fatalf("JobID = %q, want unbound — a claim that finds the deadline passed must not spend the approval", got.JobID)
+	}
+
+	// Restore the plain store — the deadline-overshoot was only ever the
+	// PREVIOUS Run's claim, not a lasting change to what "now" means.
+	s.approvals = store
+	res, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err != nil {
+		t.Fatalf("live Run: %v", err)
+	}
+	if !disp.called {
+		t.Fatal("dispatcher was never called on the live re-drive")
+	}
+	for _, r := range res {
+		if r.JobID != "job-1" {
+			t.Errorf("result JobID = %q, want job-1", r.JobID)
+		}
+	}
+}
+
+// alwaysAlreadyReleasedNoJobIDApprovalStore forces BindJob to report
+// ErrAlreadyReleased with no bound JobID — the store's own `n == 0` backstop
+// (store/approvals.go), which BindJob's own belt-and-braces re-read makes
+// unreachable there, but Service.Run's own guard against it must still be
+// exercised directly (C2-S3, #713 code review): a loser must never re-attach
+// to an empty Job ID.
+type alwaysAlreadyReleasedNoJobIDApprovalStore struct {
+	ApprovalStore
+}
+
+func (alwaysAlreadyReleasedNoJobIDApprovalStore) BindJob(context.Context, string, string, time.Time) (approval.Request, error) {
+	return approval.Request{}, approval.ErrAlreadyReleased
+}
+
+// TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNothing
+// is C2-S3: Run's claim switch has a case for ErrAlreadyReleased that
+// reattaches to claimed.JobID, and a guard is needed for the case where that
+// JobID is empty — nothing to reattach to. Exercised here directly, since the
+// store itself can never produce it under SetMaxOpenConns(1).
+func TestRun_ClaimAlreadyReleasedWithNoJobIDIsRefusedRatherThanReattachingToNothing(t *testing.T) {
+	store := newMemApprovals()
+	s, disp, audit := approvalFixtureWithAudit(t, []string{"node-a"}, gateEverything(t, 1), store, func() time.Time { return apNow })
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err := s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	store.approve(t, parked.RequestID, "acct-ana", "ana", apNow.Add(time.Minute))
+
+	s.approvals = alwaysAlreadyReleasedNoJobIDApprovalStore{ApprovalStore: store}
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	if err == nil {
+		t.Fatal("Run: want a refusal when the claim reports ErrAlreadyReleased with no JobID to reattach to")
+	}
+	if disp.called {
+		t.Error("dispatcher ran despite an unreattachable claim result")
+	}
+	if !hasAuditKind(audit.entries, AuditKindRefusal) {
+		t.Error("want a refusal audited")
+	}
+}
+
+// reserveCountingDispatcher mints a unique reserved Job ID per call (an
+// atomic counter, mirroring jobEngine.reserveJobID's uniqueness) and counts
+// how many times run actually executes, sleeping briefly to widen the
+// concurrent window.
+type reserveCountingDispatcher struct {
+	reserveCounter int64 // atomic
+	runCount       int32 // atomic
+}
+
+func (d *reserveCountingDispatcher) reserveJobID() (string, error) {
+	n := atomic.AddInt64(&d.reserveCounter, 1)
+	return "job-r" + strconv.FormatInt(n, 10), nil
+}
+
+func (d *reserveCountingDispatcher) run(_ context.Context, disp dispatch) (dispatchResult, error) {
+	atomic.AddInt32(&d.runCount, 1)
+	time.Sleep(20 * time.Millisecond)
+	results := make([]NodeResult, 0, len(disp.nodes))
+	for _, n := range disp.nodes {
+		results = append(results, NodeResult{NodeID: n.NodeID, JobID: disp.jobID})
+	}
+	return dispatchResult{jobID: disp.jobID, results: results}, nil
+}
+
+func (d *reserveCountingDispatcher) cancel(context.Context, string) error { return nil }
+func (d *reserveCountingDispatcher) query(context.Context, dispatch) (planResult, error) {
+	return planResult{}, nil
+}
+
+// TestRun_ConcurrentReDrivesDispatchExactlyOneJob is AP-77's headline
+// concurrency proof (#713 plan review S3/Codex HIGH on PR #741): many
+// goroutines racing to run the SAME approved plan at once must produce
+// exactly one dispatch, and every goroutine — winner and losers alike — must
+// come back with the same JobID and no error. Real SQLite, because the
+// concurrency argument is SetMaxOpenConns(1) plus BindJob's transaction, not
+// anything memApprovals' mutex can stand in for. Run with -race.
+func TestRun_ConcurrentReDrivesDispatchExactlyOneJob(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("store.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	repo := st.Approvals()
+
+	reg := registry.NewInMemory()
+	if _, err := reg.Upsert(registry.Report{NodeID: "node-a"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	disp := &reserveCountingDispatcher{}
+	s := New(reg,
+		WithAuthorizer(&spyAuthorizer{}), WithCapChecker(&spyCapChecker{}),
+		WithAuditSink(&spyAuditSink{}), WithFreeze(&fakeFreezeStore{}),
+		WithApprovals(gateEverything(t, 1), repo, &spyApprovalAuthorizer{}),
+		WithClock(func() time.Time { return apNow }),
+	)
+	s.disp = disp
+	p := Principal{AccountID: "acct-g", Account: "gleipnir-prod"}
+
+	_, err = s.Run(context.Background(), p, Selector{}, mutateAct())
+	var parked *ParkedError
+	if !errors.As(err, &parked) {
+		t.Fatalf("first Run: err = %v, want a park", err)
+	}
+	approveViaRecordDecision(t, repo, parked.RequestID, parked.PlanHash, apNow.Add(time.Minute))
+
+	const n = 16
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make([][]NodeResult, n)
+	errs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			res, runErr := s.Run(context.Background(), p, Selector{}, mutateAct())
+			results[i] = res
+			errs[i] = runErr
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&disp.runCount); got != 1 {
+		t.Fatalf("dispatcher run count = %d, want exactly 1", got)
+	}
+
+	stored, err := repo.Get(context.Background(), parked.RequestID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.JobID == "" {
+		t.Fatal("the released approval never bound a Job")
+	}
+
+	for i, runErr := range errs {
+		if runErr != nil {
+			t.Errorf("goroutine %d: err = %v, want nil — a loser must re-attach, not fail", i, runErr)
+		}
+		for _, r := range results[i] {
+			if r.JobID != stored.JobID {
+				t.Errorf("goroutine %d: result JobID = %q, want %q", i, r.JobID, stored.JobID)
+			}
+		}
 	}
 }

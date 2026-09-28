@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -165,7 +167,7 @@ func TestRecordDecisionReturnsTheCurrentRequestOnRefusal(t *testing.T) {
 		if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(time.Minute)); err != nil {
 			t.Fatalf("first decision: %v", err)
 		}
-		if err := repo.BindJob(ctx, "req-1", "job-7"); err != nil {
+		if _, err := repo.BindJob(ctx, "req-1", "job-7", storeNow.Add(time.Minute)); err != nil {
 			t.Fatalf("BindJob: %v", err)
 		}
 
@@ -499,7 +501,13 @@ func TestBindJobJoinsApprovalToExecution(t *testing.T) {
 	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if err := repo.BindJob(ctx, "req-1", "job-42"); err != nil {
+	// BindJob is the release claim (AP-77): it only binds a Satisfied
+	// Request, so this must be approved before binding.
+	d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
+	if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(time.Minute)); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := repo.BindJob(ctx, "req-1", "job-42", storeNow.Add(2*time.Minute)); err != nil {
 		t.Fatalf("BindJob: %v", err)
 	}
 
@@ -510,8 +518,187 @@ func TestBindJobJoinsApprovalToExecution(t *testing.T) {
 	if got.ID != "req-1" {
 		t.Errorf("ByJob returned %q, want req-1", got.ID)
 	}
-	if err := repo.BindJob(ctx, "absent", "job-42"); !errors.Is(err, approval.ErrNotFound) {
+	if _, err := repo.BindJob(ctx, "absent", "job-42", storeNow.Add(2*time.Minute)); !errors.Is(err, approval.ErrNotFound) {
 		t.Errorf("BindJob(absent) = %v, want ErrNotFound", err)
+	}
+}
+
+// approveRequest drives id to StateApproved via one out-of-band decision,
+// mirroring memApprovals.approve for the tests in this file that need a
+// Satisfied Request before they can exercise BindJob's release claim.
+func approveRequest(t *testing.T, repo approval.Repository, id, planHash string, at time.Time) {
+	t.Helper()
+	d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: true, Channel: approval.ChannelOutOfBand, PlanHash: planHash, At: at}
+	if _, err := repo.RecordDecision(context.Background(), id, d, at); err != nil {
+		t.Fatalf("approve %s: %v", id, err)
+	}
+}
+
+// TestBindJob_BindsOnceAndReportsTheBoundJob is AP-77's core store contract:
+// the second BindJob on an already-released Request never overwrites the
+// first, and reports the Job the caller must re-attach to.
+func TestBindJob_BindsOnceAndReportsTheBoundJob(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(time.Minute))
+
+	first, err := repo.BindJob(ctx, "req-1", "job-1", storeNow.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("first BindJob: %v", err)
+	}
+	if first.JobID != "job-1" {
+		t.Errorf("first BindJob JobID = %q, want job-1", first.JobID)
+	}
+
+	second, err := repo.BindJob(ctx, "req-1", "job-2", storeNow.Add(3*time.Minute))
+	if !errors.Is(err, approval.ErrAlreadyReleased) {
+		t.Fatalf("second BindJob err = %v, want ErrAlreadyReleased", err)
+	}
+	if second.JobID != "job-1" {
+		t.Errorf("second BindJob returned JobID = %q, want the winner's job-1 — the caller must learn who won", second.JobID)
+	}
+
+	got, err := repo.Get(ctx, "req-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.JobID != "job-1" {
+		t.Errorf("stored JobID = %q, want job-1 — the overwrite must be impossible", got.JobID)
+	}
+	byJob, err := repo.ByJob(ctx, "job-1")
+	if err != nil {
+		t.Fatalf("ByJob(job-1): %v", err)
+	}
+	if byJob.ID != "req-1" {
+		t.Errorf("ByJob(job-1) = %q, want req-1", byJob.ID)
+	}
+	if _, err := repo.ByJob(ctx, "job-2"); !errors.Is(err, approval.ErrNotFound) {
+		t.Errorf("ByJob(job-2) = %v, want ErrNotFound — job-2 was never actually bound", err)
+	}
+}
+
+// TestBindJob_RefusesAnUnreleasableRequest covers every Request state
+// BindJob must refuse to claim: pending, past its deadline, and denied. An
+// absent Request ID is ErrNotFound, not ErrNotReleasable — that is a
+// different failure a caller must be able to tell apart.
+func TestBindJob_RefusesAnUnreleasableRequest(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("pending", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if _, err := repo.BindJob(ctx, "req-1", "job-1", storeNow); !errors.Is(err, approval.ErrNotReleasable) {
+			t.Errorf("err = %v, want ErrNotReleasable", err)
+		}
+		if got, err := repo.Get(ctx, "req-1"); err != nil || got.JobID != "" {
+			t.Errorf("Get = %+v, %v — nothing must be bound", got, err)
+		}
+	})
+
+	t.Run("past its deadline", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Minute)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(30*time.Second))
+		if _, err := repo.BindJob(ctx, "req-1", "job-1", storeNow.Add(time.Hour)); !errors.Is(err, approval.ErrNotReleasable) {
+			t.Errorf("err = %v, want ErrNotReleasable", err)
+		}
+	})
+
+	t.Run("denied", func(t *testing.T) {
+		repo := approvalStore(t)
+		if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		d := approval.Decision{AccountID: "acct-ana", Account: "ana", Approve: false, Channel: approval.ChannelOutOfBand, PlanHash: "hash-a", At: storeNow.Add(time.Minute)}
+		if _, err := repo.RecordDecision(ctx, "req-1", d, storeNow.Add(time.Minute)); err != nil {
+			t.Fatalf("deny: %v", err)
+		}
+		if _, err := repo.BindJob(ctx, "req-1", "job-1", storeNow.Add(2*time.Minute)); !errors.Is(err, approval.ErrNotReleasable) {
+			t.Errorf("err = %v, want ErrNotReleasable", err)
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		repo := approvalStore(t)
+		if _, err := repo.BindJob(ctx, "absent", "job-1", storeNow); !errors.Is(err, approval.ErrNotFound) {
+			t.Errorf("err = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+// TestBindJob_ConcurrentClaimsExactlyOneWins is AP-77's concurrency proof at
+// the store layer (#713 plan review S3/Codex HIGH): of many goroutines racing
+// to claim the same Satisfied Request's release, exactly one must win, and
+// every loser must learn the winner's Job ID rather than silently losing its
+// own claim or corrupting the stored row. store.Open's SetMaxOpenConns(1)
+// plus BindJob's transaction is the whole safety argument here — this test
+// is what falsifies it if either ever regresses.
+func TestBindJob_ConcurrentClaimsExactlyOneWins(t *testing.T) {
+	ctx := context.Background()
+	repo := approvalStore(t)
+	if err := repo.Create(ctx, pendingRequest("req-1", "hash-a", 1, time.Hour)); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	approveRequest(t, repo, "req-1", "hash-a", storeNow.Add(time.Minute))
+
+	const n = 32
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		wins     int
+		winJobID string
+		losers   []string
+	)
+	start := make(chan struct{})
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			jobID := fmt.Sprintf("job-%02d", i)
+			r, err := repo.BindJob(ctx, "req-1", jobID, storeNow.Add(2*time.Minute))
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				wins++
+				winJobID = jobID
+				return
+			}
+			if !errors.Is(err, approval.ErrAlreadyReleased) {
+				t.Errorf("goroutine %d: err = %v, want nil or ErrAlreadyReleased", i, err)
+				return
+			}
+			losers = append(losers, r.JobID)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if wins != 1 {
+		t.Fatalf("wins = %d, want exactly 1", wins)
+	}
+	if len(losers) != n-1 {
+		t.Fatalf("losers = %d, want %d", len(losers), n-1)
+	}
+	for _, got := range losers {
+		if got != winJobID {
+			t.Errorf("a loser saw JobID %q, want the winner's %q", got, winJobID)
+		}
+	}
+
+	stored, err := repo.Get(ctx, "req-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if stored.JobID != winJobID {
+		t.Errorf("stored JobID = %q, want the winner's %q", stored.JobID, winJobID)
 	}
 }
 

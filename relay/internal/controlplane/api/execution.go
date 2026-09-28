@@ -351,7 +351,9 @@ func dispatchOrPlan(w http.ResponseWriter, r *http.Request, d Deps, p capability
 
 	out, err := renderJob(ctx, d.Jobs, nodeResults[0].JobID)
 	if err != nil {
-		// The dispatch itself already happened; only the read-back failed.
+		// The Job already exists — either this call dispatched it, or it
+		// re-attached to one an approval had already released (AP-77) —
+		// only the read-back failed.
 		writeProblem(w, http.StatusInternalServerError, "read job results failed", err.Error())
 		return
 	}

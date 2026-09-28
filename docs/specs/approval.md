@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-27`.
+**Status:** designed, not built, as of `2026-09-28`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -297,6 +297,20 @@ exists in code. See *Future work*.
   count.
 - **AP-28** Deciding does not itself dispatch; a released request proceeds through the dispatch
   pipeline when it is re-driven.
+- **AP-77** **An approval releases one execution.** A released request is bound to exactly one
+  Job, and the binding is made once and survives the requesting call ending — a client timeout, a
+  dropped connection or a cancelled request cannot leave a dispatched Job unbound. While the
+  approval is in force — before its deadline — any later dispatch whose plan hash matches a
+  released request, a re-drive on any surface, answered or not, sequential or concurrent,
+  re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs.
+  Re-attaching takes precedence over a covering approval grant, so a re-drive never spends a grant
+  use to repeat released work. Once the deadline passes, the same plan parks afresh and needs a new
+  approval: an expired approval authorises nothing, including a resurrection of its old Job.
+  Re-attaching is not scoped to the requesting Account — the dispatch role floor is checked first,
+  and a Job is already readable by any caller who clears it, so nothing is disclosed that was not
+  already readable; scoping an unbound release to its requester is tracked for the permissions
+  rework (#716). Generalises AP-67 beyond an answered retry, and closes #713 (owner decision
+  2026-09-27, answering #387).
 
 ### Plans first; approval grants as the narrow exception
 
@@ -449,8 +463,9 @@ most MCP approvals will be the second kind, and the trail will say so.
 - **Invariant 3** (deny-beats-allow) — a denial is terminal and a stricter rule wins a merge
   (AP-27).
 - **Invariant 4** (at-most-once) — a released decision mints one Job; the re-attach branch of
-  AP-67 is the answer for a retried in-band approval, and the concurrent-retry window is an
-  accepted residual risk.
+  AP-67 is the answer for a retried in-band approval, and the concurrent-retry window is fixed
+  by #713's transactional claim, which AP-77 now states as the general rule for every re-drive
+  on every surface, while the approval is in force.
 - **Invariant 5** — a grant releases an approval requirement, never the blast cap (AP-37).
 - **Invariant 7** — the plan hash binds the resolved set by identity, which is what stops a Node
   forging its own `node:` labels from electing itself into approved work (AP-22).
@@ -498,6 +513,7 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-27 | `TestDenyIsTerminalAndBeatsApproval`, `TestDenialIsTerminalAndAudited` | approval |
 | AP-73 | `TestQuorumNeedsDistinctDeciders`, `TestRecordDecisionPersistsQuorumProgress`, `TestBlankAudienceEntryCannotPadPastQuorumCheck`, `TestDecide_PartialQuorumNamesWhoSigned` | approval, capability, Console |
 | AP-28 | `TestDecideApprovalDoesNotDispatch`, `TestApprovalCallout_ParkDecideRun` | capability, e2e |
+| AP-77 | `TestBindJob_BindsOnceAndReportsTheBoundJob`, `TestBindJob_ConcurrentClaimsExactlyOneWins`, `TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch`, `TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob`, `TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing`, `TestRun_ConcurrentReDrivesDispatchExactlyOneJob`, `TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan`, `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh`, `TestRun_DifferentRequesterReAttachesToTheReleasedJob`, `TestApprovalRelease_ReDriveOnAnySurfaceReAttaches`, `TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing`, `TestRunAuthorizeDeniedShortCircuits` | store, capability, e2e |
 | AP-29 | `TestGrantDoesNotCoverOutsideItsScope`, `TestRawExecIsASeparateOptIn` | approval |
 | AP-30 | `TestRawExecIsASeparateOptIn` | approval |
 | AP-33 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
@@ -589,7 +605,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-77 | **An approval releases one execution.** A released request is bound to exactly one Job, and the binding is made once and survives the requesting call ending — a client timeout, a dropped connection or a cancelled request cannot leave a dispatched Job unbound. While the approval is in force — before its deadline — any later dispatch whose plan hash matches a released request, a re-drive on any surface, answered or not, sequential or concurrent, re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs. Re-attaching takes precedence over a covering approval grant, so a re-drive never spends a grant use to repeat released work. Once the deadline passes, the same plan parks afresh and needs a new approval: an expired approval authorises nothing, including a resurrection of its old Job. Re-attaching is not scoped to the requesting Account — the dispatch role floor is checked first, and a Job is already readable by any caller who clears it, so nothing is disclosed that was not already readable; scoping an unbound release to its requester is tracked for the permissions rework (#716). Generalises AP-67 beyond an answered retry, and closes #713 (owner decision 2026-09-27, answering #387). | v0.7.0 — Admin Console: Administration & Execution |
 | AP-78 | A question is emitted only to a client whose answer Relay recognises, by the client name it declares with the call: `gleipnir` or `claude-code` today. Any other client — including one that advertises elicitation — gets today's `pending_approval` and asks nobody. The declared name only decides whether to ask; acceptance still turns on AP-64 and AP-79, so spoofing it can earn a question but never an accepted answer. Narrows AP-61 and closes #743. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-79 | An `accept` from a client declaring itself `claude-code`, carrying no responder assertion, is accepted as an **unnamed confirmation**: recorded in-band, with the verified requester, and with the asserted lane stating that the approver was unnamed rather than naming anyone. A `decline` from it is a denial. It satisfies only what AP-64's named form satisfies, never more. Owner decision 2026-09-27, interim until the permissions rework (#716). | v0.7.0 — Admin Console: Administration & Execution |
 
@@ -683,18 +698,26 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   `io.gleipnir/responder`, a self-report of the same strength as `approve_request`'s `approver`:
   interoperability discipline, not verification. Accepted by the owner on `2026-09-25`; a standard
   responder key would be additive.
-- **A released approval can dispatch again on any later re-drive (#713).** An approval is not
-  used up when it releases a Job: until it expires, any later call matching the approved plan
-  passes the gate and mints a second Job, overwriting the audit join. **The ordinary trigger is
-  not a race:** an approved Job slower than the client's per-call timeout, after which the model
-  re-drives the same call with no request state. AP-67's re-attach covers only a retry carrying
-  sealed request state, so it does not close that trigger; two concurrent retries in the gap
-  between decision and binding are the narrow case of the same defect. The daemon's Task-ID
-  dedup — the actual subject of invariant 4 — is untouched, so no Node executes the same Task
-  twice, but the fleet can see one approved plan run twice. Accepted by the owner on
-  `2026-09-24`; on `2026-09-25` deferred until after #646, with the likelihood corrected by the
-  v0.7.0 design review. Until it is fixed, demo commands should finish well inside the per-call
-  timeout. Threat model **R24**.
+- **A released approval used to dispatch again on any later re-drive; now fixed (AP-77,
+  promoted; #713).** The release is now a transactional claim, made before dispatch with
+  a reserved Job ID: a re-drive on any surface re-attaches to the released Job rather than minting
+  a second one, and of two concurrent re-drives racing the claim exactly one wins. Three residuals
+  remain, matching threat model R24's rewritten row: **(a)** a claim that wins and then fails
+  before its Job row is created now needs a genuine store failure of `CreateJob` itself — a
+  client timeout, a dropped connection or a cancelled request can no longer strand any part of
+  the approved work, because for a reserved Job ID the whole persist-then-dispatch pipeline
+  (`CreateJob`, `AddStage`, every Task's persistence, and dispatch itself) runs on a context
+  detached from the request (`context.WithoutCancel`), so the Job runs to completion once the
+  claim commits — and when `CreateJob` does fail outright (a store failure, not a client
+  cancellation), the approval record names a Job ID nothing ever created, and re-drives get an
+  ordinary "job not found" until the deadline, after which the plan parks afresh. **(b)** A
+  concurrent loser can re-attach in that same narrow window, before the winner's own `CreateJob`
+  has committed, and sees the same "job not found" error, fail-closed; its retry succeeds once the
+  winner's Job exists. **(c)** Release is still keyed by plan hash, not by requester (pre-existing,
+  unchanged by #713): a different Account's identical re-drive re-attaches and reads the Job, an
+  audited read with the same reach as `get_job`. Scoping release to the requester is tracked for
+  the permissions rework (#716). Accepted by the owner on `2026-09-24`; the fix landed in #713.
+  Threat model **R24**.
 - **Bulk approve can rubber-stamp (AP-59).** Approving many requests in one act, Raw Exec
   included, is the approval-fatigue pattern this capability's Purpose names, and one step-up
   covers the whole act: a hijacked human Console session plus that Account's password could
@@ -788,12 +811,31 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-28` — **AP-77 promoted to Behaviour.** With the deadline qualifier the owner added
+  (PR #753), every sentence of AP-77 is proven on the branch: `BindJob` binds exactly once and
+  survives a client timeout, a dropped connection or a cancelled request; a re-drive on any
+  surface — Control API or MCP, sequential or concurrent, by the requester or a different
+  Account — re-attaches to the released Job rather than dispatching again, ahead of a covering
+  approval grant; and past the deadline the same plan parks afresh. Proof rows added at the
+  store, capability and e2e seams. *Accepted residual risk*'s #713 entry now says the defect is
+  fixed rather than pending, and its residual (c) cites #716 as where requester scoping is
+  tracked; the Invariant 4 bullet is reworded the same way. (#713)
 - `2026-09-28` — **AP-77 qualified before promotion (owner, 2026-09-28).** Three reviews of
   #713's fix (PR #752) found the claim's "any later dispatch" unconditional while the code
   re-attaches only while the approval is in force. The owner chose the in-force reading: after
   the deadline a plan parks afresh. Also decided: re-attaching takes precedence over a covering
   approval grant, and is not scoped to the requesting Account for now, with that scoping
   recorded for #716. (#713)
+- `2026-09-28` — **The release claim is now transactional and precedes dispatch; AP-77 stays
+  Designed pending a wording check (#713).** `BindJob` is now a conditional, transactional claim
+  on a reserved Job ID, made before any Task exists: a re-drive on any surface re-attaches to the
+  released Job rather than minting a second one, and of two concurrent re-drives exactly one wins.
+  Not promoted: the built re-attach holds only while the release is still in force — before the
+  approval's own deadline (`TestRun_ReleasedApprovalPastItsDeadlineParksAfresh` — past it, a
+  matching re-drive parks a fresh request rather than re-attaching) — and AP-77's own words read
+  unconditionally ("Any later dispatch … re-attaches"), so the claim needs its owner to add that
+  qualifier before it can move to Behaviour. `docs/security/threat-model.md` R24 records the fix
+  and its residuals. (#713, #387)
 - `2026-09-27` — **AP-78 and AP-79 added (Designed, v0.7.0).** Research found Claude Code
   2.1.283 supports the MRTR input-required round trip by default, so since the flip (#741) Relay
   asked it a question and then refused its answer for want of a responder assertion — AP-61
