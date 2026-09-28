@@ -20,9 +20,13 @@ COPY relay/ ./relay/
 RUN cd relay && CGO_ENABLED=0 go build -trimpath -o /out/relay ./cmd/relay
 
 # ---- final stage: minimal runtime image ---------------------------------------
-# busybox:stable-musl is tiny but ships sh + nc, which the compose healthcheck
-# uses to probe the listeners. The static Go binary needs no libc.
-FROM busybox:stable-musl
+# alpine rather than busybox: the compose healthcheck completes a real TLS
+# handshake with each listener, and both listeners are TLS 1.3 only — busybox's
+# ssl_client stops at 1.2. openssl s_client does 1.3 and verifies the chain
+# against the Relay's own CA. The static Go binary needs no libc.
+FROM alpine:3.22
+
+RUN apk add --no-cache openssl
 
 COPY --from=build /out/relay /usr/local/bin/relay
 

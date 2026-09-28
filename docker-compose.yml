@@ -94,25 +94,34 @@ services:
       RELAY_CONSOLE_ENABLED: "true"
     ports:
       # Distinct published host ports: node plane vs control plane. Bound to
-      # 127.0.0.1 (loopback) ONLY: the control plane is an execution surface,
-      # so publishing on 0.0.0.0 would make it LAN-reachable RCE — anyone who
-      # obtained the dev credential could drive it. Nothing inside the
-      # fleet uses these host ports; daemons and bootstrap dial the compose DNS
-      # name `relay` over the private network.
-      - "127.0.0.1:7654:7654"
-      - "127.0.0.1:9443:9443"
+      # 127.0.0.1 (loopback) by default: the control plane is an execution
+      # surface, so publishing on 0.0.0.0 makes it network-reachable RCE —
+      # anyone who obtained a credential or the Console password could drive
+      # it. RELAY_PUBLISH_ADDR=0.0.0.0 opts in to that, for a fleet deliberately
+      # reached from other hosts; set a real CONSOLE_ADMIN_PASSWORD first.
+      # Nothing inside the fleet uses these host ports; daemons and bootstrap
+      # dial the compose DNS name `relay` over the private network.
+      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
+      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
     volumes:
       # CA state (ca-cert.pem + ca-key.pem) and the SQLite store persist here, so
       # `compose down` / `up` keeps the same Node identities and audit trail.
       - relay-data:/var/lib/relay
     healthcheck:
-      # busybox nc: a raw TCP connect proves each listener is accepting. This is
-      # a dev convenience, not a correctness check; -w1 bounds the probe.
+      # A full TLS 1.3 handshake with each listener, verified against the
+      # Relay's CA and the `relay` SAN, then a clean close. A raw TCP connect
+      # (the old nc probe) left a "TLS handshake error ... EOF" in the Relay log
+      # every interval. The node plane is gRPC, which requires ALPN h2.
       test:
         - "CMD"
         - "sh"
         - "-c"
-        - "nc -w1 127.0.0.1 7654 </dev/null && nc -w1 127.0.0.1 9443 </dev/null"
+        - >-
+          for p in 7654:h2 9443:http/1.1; do
+          openssl s_client -quiet -no_ign_eof -tls1_3
+          -connect 127.0.0.1:$${p%%:*} -servername relay -verify_hostname relay
+          -CAfile /var/lib/relay/ca/ca-cert.pem -verify_return_error
+          -alpn $${p#*:} </dev/null >/dev/null 2>&1 || exit 1; done
       interval: 3s
       timeout: 5s
       retries: 20
