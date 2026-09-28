@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	relayv1 "github.com/Felag-Engineering/gleipnir-relay/relay/internal/relay/v1"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest/protowalk"
 )
 
 // nestedPreviewFieldNameRegex is the sibling MCP/Control-API/proto files'
@@ -35,15 +36,16 @@ var nestedPreviewFieldNameRegex = regexp.MustCompile(`(?i)preflight|preview|dry.
 func TestTaskRequest_CarriesNoPreviewFlag(t *testing.T) {
 	md := (&relayv1.TaskRequest{}).ProtoReflect().Descriptor()
 
-	assertExactTopLevelFieldSet(t, md, map[string]bool{
+	protowalk.AssertExactTopLevelFieldSet(t, md, map[string]bool{
 		"task_id": true, "operation": true, "raw_exec": true, "timeout_seconds": true,
 	})
 
 	// Below the top level: a preview bit smuggled inside Operation or
 	// RawExec, rather than added as a new top-level field, would evade the
 	// assertion above but not this walk. This is a NARROWER guarantee than
-	// it might look, corrected on review (SR7): walkReachableMessageFields
-	// does not traverse enums at all, so a preview expressed as a new enum
+	// it might look, corrected on review (SR7):
+	// protowalk.WalkReachableMessageFields does not traverse enums at all,
+	// so a preview expressed as a new enum
 	// value (e.g. a RiskClass-shaped RISK_CLASS_PREVIEW) or as an overloaded
 	// sentinel on an existing scalar (e.g. timeout_seconds < 0 meaning
 	// "preview") is outside every guard in this file — that residual is
@@ -53,7 +55,7 @@ func TestTaskRequest_CarriesNoPreviewFlag(t *testing.T) {
 	// pins Operation's and RawExec's own exact field sets, so a same-named
 	// but differently-typed field addition is caught there too), is a new
 	// FIELD anywhere in the reachable message graph.
-	walkReachableMessageFields(md, func(fieldName string) {
+	protowalk.WalkReachableMessageFields(md, func(fieldName string) {
 		if nestedPreviewFieldNameRegex.MatchString(fieldName) {
 			t.Errorf("TaskRequest reaches a field named %q, which looks like a preview flag — "+
 				"the executing message must never carry one (PF-9): a preview is a separate message, "+
@@ -69,19 +71,19 @@ func TestTaskRequest_CarriesNoPreviewFlag(t *testing.T) {
 // can never claim it.
 //
 // Same residual as TestTaskRequest_CarriesNoPreviewFlag above (SR7):
-// walkReachableMessageFields does not traverse enums, so an unknown
+// protowalk.WalkReachableMessageFields does not traverse enums, so an unknown
 // expressed as a new enum value rather than a new field name would be
 // outside this walk too — worth stating, not worth a test against a wire
 // shape that does not exist today.
 func TestPolicyVerdict_CannotExpressUnknown(t *testing.T) {
 	md := (&relayv1.PolicyVerdict{}).ProtoReflect().Descriptor()
 
-	assertExactTopLevelFieldSet(t, md, map[string]bool{
+	protowalk.AssertExactTopLevelFieldSet(t, md, map[string]bool{
 		"query_id": true, "allowed": true, "deciding_rule": true, "unsupported": true,
 	})
 
 	unknownFieldName := regexp.MustCompile(`(?i)unknown|offline|unreachable`)
-	walkReachableMessageFields(md, func(fieldName string) {
+	protowalk.WalkReachableMessageFields(md, func(fieldName string) {
 		if unknownFieldName.MatchString(fieldName) {
 			t.Errorf("PolicyVerdict reaches a field named %q — a Node must never be able to assert "+
 				"\"I do not know\" on the wire; unknown is the Relay's own conclusion about its inability "+

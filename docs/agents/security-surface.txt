@@ -90,3 +90,9 @@ relay/go.mod
 relay/go.sum
 daemon/Cargo.toml
 daemon/Cargo.lock
+
+# The structural guards' shared helpers: no_dispatch G2 (invariant 10) and the wire's
+# no-caller-identity walk moved here from test files that are all on this list, so a
+# change to either must escalate exactly as it did before the move.
+relay/internal/relaytest/astguard/**
+relay/internal/relaytest/protowalk/**
