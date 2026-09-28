@@ -215,20 +215,30 @@ redefines one; if a task appears to require one, stop and flag it.
 ## Repository layout
 
 ```
-/proto/          protobuf contract — the spine. Edit here first for any wire/Operation change.
-/relay/          Go: gRPC server, MCP server, Job engine, CA, registry, store.   (cd relay)
-/daemon/         Rust: connection, Policy engine, Operation executors, exec.      (cd daemon)
-/docs/adr/       architecture decision records — the *why*.
-/docs/agents/    per-repo configuration agent skills read (tracker, labels, domain rules).
-/docs/api/       Control API reference and OpenAPI surface.
-/docs/design/    console/ is the Console's live per-screen specification, cited from source;
-                 the rest is pre-ADR design for work not yet decided.
-/docs/operations/  operator-facing runbooks (version stamping, packaging).
-/docs/security/  threat model — maps all fourteen invariants to the boundaries they defend.
-/docs/specs/     capability specifications — what each capability does today, every surface.
-/docs/deferred.md   work agreed in principle, not yet specified; ADR at pickup.
-/docs/dev-fleet.md  the local Docker fleet: how to run Relay + real daemons.
-GLOSSARY.md      the ubiquitous language.
+/proto/              protobuf contract — the spine. Edit here first for any wire/Operation change.
+/relay/              Go: gRPC server, MCP server, Job engine, CA, registry, store.   (cd relay)
+/relay/packaging/    the Relay's hardened systemd unit and example EnvironmentFile.
+/daemon/             Rust: connection, Policy engine, Operation executors, exec.      (cd daemon)
+/daemon/packaging/   relay-daemon systemd unit, example EnvironmentFile, shipped Template catalog.
+/daemon/fuzz/        cargo-fuzz targets and corpus for the daemon.
+/docker/             Dockerfiles, entrypoints, and fixtures for the local Docker fleet;
+                     docker-compose.yml at the root composes it.
+/scripts/            CI gates and repo tooling (docs checks, spec coverage, security surface).
+/docs/adr/           architecture decision records — the *why*.
+/docs/agents/        per-repo configuration agent skills read (tracker, labels, domain rules).
+/docs/api/           Control API reference and OpenAPI surface.
+/docs/design/        console/ is the Console's live per-screen specification, cited from source;
+                     the rest is pre-ADR design for work not yet decided.
+/docs/operations/    operator-facing runbooks: install, enrollment, upgrades, recovery, demo fleet.
+/docs/security/      threat model — maps all fourteen invariants to the boundaries they defend.
+/docs/specs/         capability specifications — what each capability does today, every surface.
+/docs/deferred.md    work agreed in principle, not yet specified; ADR at pickup.
+/docs/dev-fleet.md   the local Docker fleet: how to run Relay + real daemons.
+/.claude/            the workflow's commands and agents, committed so unattended routines have them.
+/.github/            CI workflows and the pull request template.
+Makefile             wraps both toolchains; `make verify` is the CI-equivalent gate.
+GLOSSARY.md          the ubiquitous language.
+AGENTS.md            this file; CLAUDE.md imports it for Claude Code.
 ```
 
 ## Toolchains & commands
