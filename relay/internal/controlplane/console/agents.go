@@ -648,7 +648,7 @@ func buildRunning(js []capability.JobSummary, account string, onPage map[string]
 			Principal: principal,
 			Verified:  sum.RequesterAccountID != "",
 			Tool:      runningToolName(sum),
-			Risk:      RiskLabel(sum.RiskClass),
+			Risk:      jobs.RiskClassName(sum.RiskClass),
 			State:     jobStateText(sum.State),
 			Resolved:  sum.Total - sum.Unresolved,
 			Total:     sum.Total,
@@ -1059,7 +1059,7 @@ func agentCallFrom(f trailFacts) agentCall {
 		Selector:   f.Selector,
 		Args:       argsText(f),
 		NodeID:     f.NodeID,
-		Outcome:    OutcomeLabel(f.Outcome),
+		Outcome:    jobs.OutcomeName(f.Outcome),
 		JobID:      f.JobID,
 		ReadClass:  f.Kind == audit.KindRead,
 		Dispatch:   kindOf(f.Kind) == rowDispatch,
@@ -1071,7 +1071,7 @@ func agentCallFrom(f trailFacts) agentCall {
 	// mutate and a parked raw_exec as a read — the second of which is the most
 	// misleading thing this Console could say, since Raw Exec always takes the
 	// mutate cap without exception.
-	c.Risk = RiskLabel(riskOf(f))
+	c.Risk = jobs.RiskClassName(riskOf(f))
 	if f.NodeID != "" {
 		c.NodeHref = "/console/nodes/" + f.NodeID
 	}
@@ -1151,7 +1151,7 @@ func agentCallFrom(f trailFacts) agentCall {
 		// to, so the chip does not have to carry it.
 		//
 		// The word is "requested", and the obvious alternative is the trap.
-		// "cancelled" is a TASK outcome word (OutcomeLabel) and, on a row that
+		// "cancelled" is a TASK outcome word (jobs.OutcomeName) and, on a row that
 		// names a Job, it claims that Job's fate. Cancellation is best-effort
 		// and honest: a Task that already finished reports its real outcome
 		// and is never retroactively cancelled (ADR-0013, GLOSSARY.md), so a

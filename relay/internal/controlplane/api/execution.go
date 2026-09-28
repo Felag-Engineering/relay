@@ -507,7 +507,7 @@ func renderPlan(pr capability.PlanResult) planResponse {
 			Reason:  "exceeds_cap",
 			Matched: pr.CapExceeded.Matched,
 			Cap:     pr.CapExceeded.Cap,
-			Class:   riskClassString(pr.CapExceeded.Class),
+			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
 		}
 	case pr.Frozen:
 		out.WouldBeRejected = &wouldBeRejected{Reason: "frozen"}
@@ -549,7 +549,7 @@ func perNodeResultFromTask(t jobs.Task) perNodeResult {
 
 	return perNodeResult{
 		NodeID:             t.NodeID,
-		Outcome:            outcomeString(t.Outcome),
+		Outcome:            jobs.OutcomeName(t.Outcome),
 		ExitCode:           exitCodePtr(t),
 		Stdout:             stdout,
 		Stderr:             stderr,
@@ -582,32 +582,6 @@ func truncateOutput(b []byte) (string, bool) {
 	return string(b[:maxRenderedOutputBytes]), true
 }
 
-// outcomeString renders a jobs.Outcome as the lowercase wire string. It must
-// stay identical to the MCP surface's rendering: the same Task read through
-// either door has to report the same outcome.
-func outcomeString(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
-}
-
 // verdictString renders a capability.VerdictStatus as the lowercase wire
 // string, mirroring the MCP surface for the same parity reason.
 func verdictString(v capability.VerdictStatus) string {
@@ -630,16 +604,4 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-// riskClassString renders a jobs.RiskClass for the would_be_rejected report.
-func riskClassString(c jobs.RiskClass) string {
-	switch c {
-	case jobs.RiskClassRead:
-		return "read"
-	case jobs.RiskClassMutate:
-		return "mutate"
-	default:
-		return "unspecified"
-	}
 }

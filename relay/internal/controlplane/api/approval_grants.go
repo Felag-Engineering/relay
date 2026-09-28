@@ -153,7 +153,7 @@ func renderGrant(g approval.Grant, now time.Time) grantResponse {
 		RequestID: g.RequestID,
 		Scope: grantScopeRequest{
 			Account:    g.Scope.Account,
-			RiskClass:  approval.RiskClassName(g.Scope.RiskClass),
+			RiskClass:  jobs.RiskClassName(g.Scope.RiskClass),
 			MaxFanOut:  g.Scope.MaxFanOut,
 			Operations: ops,
 			RawExec:    g.Scope.RawExec,

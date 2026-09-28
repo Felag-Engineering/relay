@@ -512,7 +512,7 @@ func nodeTaskFrom(rec audit.Record) (nodeTask, bool) {
 		When:      rec.Timestamp.UTC().Format("2006-01-02 15:04:05Z"),
 		Operation: operationText(f),
 		Args:      argsText(f),
-		Outcome:   OutcomeLabel(rec.Outcome),
+		Outcome:   jobs.OutcomeName(rec.Outcome),
 		JobID:     rec.JobID,
 		Principal: principalText(f),
 		Verified:  rec.Attribution.Verified.AccountID != "",

@@ -339,7 +339,7 @@ func TestAgents_TheRailAgreesPerAccountWhenAnAccountDropsOff(t *testing.T) {
 	// dropped sibling Account.
 	freshChipped := 0
 	for _, c := range calls {
-		if c.Principal == fresh && c.Risk == RiskLabel(jobs.RiskClassMutate) {
+		if c.Principal == fresh && c.Risk == jobs.RiskClassName(jobs.RiskClassMutate) {
 			freshChipped += c.Calls
 		}
 	}
@@ -354,7 +354,7 @@ func TestAgents_TheRailAgreesPerAccountWhenAnAccountDropsOff(t *testing.T) {
 	// rail that no longer lists it.
 	totalChipped := 0
 	for _, c := range calls {
-		if c.Risk == RiskLabel(jobs.RiskClassMutate) {
+		if c.Risk == jobs.RiskClassName(jobs.RiskClassMutate) {
 			totalChipped += c.Calls
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 )
 
 // sqliteApprovals implements approval.Repository against the
@@ -40,7 +41,7 @@ func (a *sqliteApprovals) Create(ctx context.Context, r approval.Request) error 
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.ID, nullString(r.JobID), r.PlanHash, r.ShapeKey, r.RequestedByID, r.RequestedBy,
 		r.Summary, strings.Join(r.MatchedRules, ","),
-		approval.ActionKindName(r.ActionKind), approval.RiskClassName(r.RiskClass),
+		approval.ActionKindName(r.ActionKind), jobs.RiskClassName(r.RiskClass),
 		r.Require.Count, strings.Join(r.Require.Audience, ","), boolToInt(r.Require.RequesterAllowed),
 		int(r.Require.Channel), int64(r.Require.TTL),
 		int(r.State), formatTime(roundTripTime(r.CreatedAt)), formatTime(roundTripTime(r.ExpiresAt)),

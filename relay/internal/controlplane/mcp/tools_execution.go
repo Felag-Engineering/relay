@@ -141,7 +141,7 @@ func resolveTimeoutSeconds(timeoutSeconds int32) (int32, error) {
 const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
 
 // verdictString renders a capability.VerdictStatus as the lowercase string
-// the execution tools emit, mirroring outcomeString's style.
+// the execution tools emit, mirroring jobs.OutcomeName's style.
 func verdictString(v capability.VerdictStatus) string {
 	switch v {
 	case capability.VerdictAllow:
@@ -191,7 +191,7 @@ func renderPlan(pr capability.PlanResult) PlanOutput {
 			Reason:  "exceeds_cap",
 			Matched: pr.CapExceeded.Matched,
 			Cap:     pr.CapExceeded.Cap,
-			Class:   riskClassString(pr.CapExceeded.Class),
+			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
 		}
 	case pr.Frozen:
 		out.WouldBeRejected = &WouldBeRejected{Reason: "frozen"}
@@ -210,32 +210,6 @@ func planAndRender(ctx context.Context, exec Executor, p capability.Principal, s
 		return PlanOutput{}, renderRunError(err)
 	}
 	return renderPlan(pr), nil
-}
-
-// outcomeString renders a jobs.Outcome as the lowercase string the
-// execution tools emit, mirroring tools_operations.go's riskClassString
-// style ("read"/"mutate" there, "success"/"failure"/... here).
-func outcomeString(o jobs.Outcome) string {
-	switch o {
-	case jobs.OutcomeSuccess:
-		return "success"
-	case jobs.OutcomeFailure:
-		return "failure"
-	case jobs.OutcomeTimeout:
-		return "timeout"
-	case jobs.OutcomeDeniedByPolicy:
-		return "denied_by_policy"
-	case jobs.OutcomeCancelled:
-		return "cancelled"
-	case jobs.OutcomeUnreachable:
-		return "unreachable"
-	case jobs.OutcomeVersionRefused:
-		return "version_refused"
-	case jobs.OutcomeUnsupported:
-		return "unsupported"
-	default:
-		return "unspecified"
-	}
 }
 
 // truncateOutput caps b at maxRenderedOutputBytes, reporting whether it did.
@@ -286,7 +260,7 @@ func perNodeResultFromTask(task jobs.Task) PerNodeResult {
 
 	return PerNodeResult{
 		NodeID:             task.NodeID,
-		Outcome:            outcomeString(task.Outcome),
+		Outcome:            jobs.OutcomeName(task.Outcome),
 		ExitCode:           exitCodePtr(task),
 		Stdout:             stdout,
 		Stderr:             stderr,

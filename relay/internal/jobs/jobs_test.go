@@ -89,3 +89,53 @@ func TestProtocolViolation_Violated(t *testing.T) {
 		t.Error("Violated() = false for ViolationUnresolvedOutcome")
 	}
 }
+
+// TestOutcomeName_CoversAllEight pins the vocabulary at eight distinct names.
+// Three of them are different kinds of "it did not run" that must not be
+// collapsed: an operator who cannot tell them apart cannot tell a Policy problem
+// from a fleet problem. In particular version_refused (ADR-0014's dispatch-level
+// gate) must never render as denied_by_policy or unreachable.
+func TestOutcomeName_CoversAllEight(t *testing.T) {
+	want := map[Outcome]string{
+		OutcomeSuccess:        "success",
+		OutcomeFailure:        "failure",
+		OutcomeTimeout:        "timeout",
+		OutcomeDeniedByPolicy: "denied_by_policy",
+		OutcomeCancelled:      "cancelled",
+		OutcomeUnreachable:    "unreachable",
+		OutcomeVersionRefused: "version_refused",
+		OutcomeUnsupported:    "unsupported",
+	}
+	if len(want) != 8 {
+		t.Fatalf("the vocabulary under test has %d entries, want 8", len(want))
+	}
+	seen := map[string]bool{}
+	for outcome, label := range want {
+		got := OutcomeName(outcome)
+		if got != label {
+			t.Errorf("OutcomeName(%d) = %q, want %q", outcome, got, label)
+		}
+		if seen[got] {
+			t.Errorf("%q is produced by more than one outcome: two states have been collapsed", got)
+		}
+		seen[got] = true
+	}
+	if got := OutcomeName(OutcomeUnspecified); got != "unspecified" {
+		t.Errorf("the zero value renders as %q", got)
+	}
+}
+
+// TestRiskClassName pins the risk-class wire names. They are persisted and
+// hashed into approval shapes, so changing one silently orphans stored rows.
+func TestRiskClassName(t *testing.T) {
+	for class, want := range map[RiskClass]string{
+		RiskClassRead:        "read",
+		RiskClassMutate:      "mutate",
+		RiskClassUnspecified: "unspecified",
+		RiskClass(99):        "unspecified",
+	} {
+		if got := RiskClassName(class); got != want {
+			t.Errorf("RiskClassName(%d) = %q, want %q", class, got, want)
+		}
+	}
+}

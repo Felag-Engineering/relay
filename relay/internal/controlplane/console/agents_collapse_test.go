@@ -110,11 +110,11 @@ func TestAgents_PollingCollapsesAndTheRawExecSurvives(t *testing.T) {
 	}
 
 	// (c) the raw_exec is the SECOND row — the trail was not reordered.
-	if calls[1].Risk != RiskLabel(jobs.RiskClassMutate) || calls[1].NodeID != "node-a" {
+	if calls[1].Risk != jobs.RiskClassName(jobs.RiskClassMutate) || calls[1].NodeID != "node-a" {
 		t.Fatalf("calls[1] is not the raw_exec row: %+v", calls[1])
 	}
 	for i, c := range calls {
-		if i != 1 && c.Risk == RiskLabel(jobs.RiskClassMutate) {
+		if i != 1 && c.Risk == jobs.RiskClassName(jobs.RiskClassMutate) {
 			t.Errorf("calls[%d] also carries risk mutate — the raw_exec is not alone: %+v", i, c)
 		}
 	}
@@ -243,7 +243,7 @@ func TestAgents_CollapseIsConsecutiveOnly(t *testing.T) {
 		t.Fatalf("got %d calls, want 3 — the two reads are identical apart from timestamp but are "+
 			"not ADJACENT and must not collapse across the raw_exec between them", len(calls))
 	}
-	if calls[1].Risk != RiskLabel(jobs.RiskClassMutate) {
+	if calls[1].Risk != jobs.RiskClassName(jobs.RiskClassMutate) {
 		t.Fatalf("calls[1] is not the raw_exec row: %+v", calls[1])
 	}
 }

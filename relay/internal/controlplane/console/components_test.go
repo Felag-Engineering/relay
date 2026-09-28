@@ -166,40 +166,6 @@ func TestOutcomeBar_SegmentOrderIsStable(t *testing.T) {
 	}
 }
 
-// TestOutcomeLabel_CoversAllEight pins the vocabulary at eight. The brief named
-// six, and three of the eight are different kinds of "it did not run" that must
-// not be collapsed: an operator who cannot tell them apart cannot tell a Policy
-// problem from a fleet problem.
-func TestOutcomeLabel_CoversAllEight(t *testing.T) {
-	want := map[jobs.Outcome]string{
-		jobs.OutcomeSuccess:        "success",
-		jobs.OutcomeFailure:        "failure",
-		jobs.OutcomeTimeout:        "timeout",
-		jobs.OutcomeDeniedByPolicy: "denied_by_policy",
-		jobs.OutcomeCancelled:      "cancelled",
-		jobs.OutcomeUnreachable:    "unreachable",
-		jobs.OutcomeVersionRefused: "version_refused",
-		jobs.OutcomeUnsupported:    "unsupported",
-	}
-	if len(want) != 8 {
-		t.Fatalf("the vocabulary under test has %d entries, want 8", len(want))
-	}
-	seen := map[string]bool{}
-	for outcome, label := range want {
-		got := OutcomeLabel(outcome)
-		if got != label {
-			t.Errorf("OutcomeLabel(%d) = %q, want %q", outcome, got, label)
-		}
-		if seen[got] {
-			t.Errorf("%q is produced by more than one outcome: two states have been collapsed", got)
-		}
-		seen[got] = true
-	}
-	if got := OutcomeLabel(jobs.OutcomeUnspecified); got != "unspecified" {
-		t.Errorf("the zero value renders as %q", got)
-	}
-}
-
 // --- The two chip grammars --------------------------------------------------
 
 // TestChipGrammars_OccupyDifferentVisualChannels is the property the spec is

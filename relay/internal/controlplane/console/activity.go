@@ -345,7 +345,7 @@ type activityFilter struct {
 	Account    string // the VERIFIED lane
 	OnBehalfOf string // the ASSERTED lane
 	Op         string
-	Outcome    string // an OutcomeLabel, or ""
+	Outcome    string // a jobs.OutcomeName, or ""
 
 	// Window is a relative range ("15m", "1h", "24h", "7d"); Since and Until
 	// are the resolved absolute bounds, whether they came from Window or from
@@ -486,7 +486,7 @@ func windowDuration(v string) (time.Duration, bool) {
 	return 0, false
 }
 
-// outcomeFromLabel is the inverse of OutcomeLabel over the eight outcomes a
+// outcomeFromLabel is the inverse of jobs.OutcomeName over the eight outcomes a
 // Task can report. nil means "not an outcome", never "any outcome".
 func outcomeFromLabel(label string) *jobs.Outcome {
 	for _, o := range []jobs.Outcome{
@@ -494,7 +494,7 @@ func outcomeFromLabel(label string) *jobs.Outcome {
 		jobs.OutcomeDeniedByPolicy, jobs.OutcomeCancelled, jobs.OutcomeUnreachable,
 		jobs.OutcomeVersionRefused, jobs.OutcomeUnsupported,
 	} {
-		if OutcomeLabel(o) == label {
+		if jobs.OutcomeName(o) == label {
 			outcome := o
 			return &outcome
 		}
@@ -862,7 +862,7 @@ func windowChoices(current string) []choice {
 	return out
 }
 
-// outcomeChoices renders the eight outcomes through OutcomeLabel, which is
+// outcomeChoices renders the eight outcomes through jobs.OutcomeName, which is
 // also what outcomeFromLabel inverts — one vocabulary, read in both
 // directions, so the select cannot offer a value the parser rejects.
 func outcomeChoices(current string) []choice {
@@ -873,7 +873,7 @@ func outcomeChoices(current string) []choice {
 	}
 	out := make([]choice, 0, len(all))
 	for _, o := range all {
-		label := OutcomeLabel(o)
+		label := jobs.OutcomeName(o)
 		out = append(out, choice{Value: label, Label: label, Selected: label == current})
 	}
 	return out
@@ -955,7 +955,7 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		GrantID:    sum.GrantID,
 	}
 	if sum.RiskClass != jobs.RiskClassUnspecified {
-		row.Risk = RiskLabel(sum.RiskClass)
+		row.Risk = jobs.RiskClassName(sum.RiskClass)
 	}
 	row.Summary = row.Operation
 	row.OpIsLink = row.Operation != ""
@@ -1011,7 +1011,7 @@ func eventRowFromTrail(f trailFacts) activityRow {
 	risk := riskOf(f)
 	switch row.Kind {
 	case rowDispatch, rowRead, rowRefusal, rowApproval:
-		row.Risk = RiskLabel(risk)
+		row.Risk = jobs.RiskClassName(risk)
 	}
 	row.ReadClass = risk == jobs.RiskClassRead
 	if f.NodeID != "" {
