@@ -14,7 +14,8 @@ use tokio::sync::oneshot;
 
 use crate::config::ResourceLimits;
 use crate::executor::{execute, ExecRequest};
-use crate::gen::{Outcome, RawExec, RiskClass, TaskResult};
+use crate::gen::{RawExec, TaskResult};
+use crate::not_executed::denied_by_policy_result;
 use crate::policy::{Decision, Policy};
 
 /// Raw Exec is always classified as `mutate` (ADR-0012).
@@ -23,10 +24,10 @@ use crate::policy::{Decision, Policy};
 /// mutate lane by definition — never conditional on the command content.
 ///
 /// Only referenced in tests (blast-radius classification); dispatch routes via
-/// Policy, not this constant. Suppressed individually rather than blanket so
-/// that future production uses lift the suppress as needed.
-#[allow(dead_code)]
-pub const RAW_EXEC_RISK_CLASS: RiskClass = RiskClass::Mutate;
+/// Policy, not this constant. Compiled only under test; a future production
+/// use lifts the `cfg`.
+#[cfg(test)]
+pub const RAW_EXEC_RISK_CLASS: crate::gen::RiskClass = crate::gen::RiskClass::Mutate;
 
 /// Evaluate and execute a Raw Exec task.
 ///
@@ -85,19 +86,6 @@ pub async fn run_raw_exec(
             })
             .await
         }
-    }
-}
-
-/// Synthesizes a `TaskResult` for a Policy denial — no process was spawned.
-fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
-    TaskResult {
-        task_id,
-        outcome: Outcome::DeniedByPolicy as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: reason.as_bytes().to_vec(),
-        truncated: false,
-        duration_millis: 0,
     }
 }
 

@@ -23,7 +23,7 @@ pub mod service_restart;
 pub mod system_facts;
 pub mod template;
 
-use crate::gen::{OperationDescriptor, RiskClass};
+use crate::gen::RiskClass;
 
 // ---------------------------------------------------------------------------
 // Name constants — single source of the vocabulary strings.
@@ -51,12 +51,12 @@ pub const PKG_INSTALL: &str = "pkg.install";
 /// name→class mapping; misclassification is security-relevant (ADR-0012).
 ///
 /// Only referenced in tests; the dispatch pipeline resolves entries from the
-/// same registry directly.
-#[allow(dead_code)]
-pub fn descriptors() -> Vec<OperationDescriptor> {
+/// same registry directly. Compiled only under test.
+#[cfg(test)]
+pub fn descriptors() -> Vec<crate::gen::OperationDescriptor> {
     registry::REGISTRY
         .iter()
-        .map(|e| OperationDescriptor {
+        .map(|e| crate::gen::OperationDescriptor {
             name: e.name.to_string(),
             risk_class: e.risk as i32,
         })

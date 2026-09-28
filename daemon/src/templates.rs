@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::gen::{TemplateDescriptor, TemplateSlot, TemplateSnapshot};
-use crate::operations::registry::REGISTRY;
+use crate::operations::registry::{ResolvedOp, REGISTRY};
 use crate::operations::template::{compile, TemplateDef, TemplateError, TemplateOp};
 use crate::policy::{LintFinding, LintSeverity};
 

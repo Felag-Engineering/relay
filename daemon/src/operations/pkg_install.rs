@@ -27,6 +27,7 @@ use tokio::sync::oneshot;
 use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
+use crate::not_executed::not_executed;
 
 /// The system package manager, detected by which binary is present on the Node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,32 +210,18 @@ where
 {
     let Some(mgr) = mgr else {
         // cancel drops naturally here — unsupported distro, no process spawned.
-        return TaskResult {
+        return not_executed(
             task_id,
-            outcome: Outcome::Failure as i32,
-            exit_code: -1,
-            stdout: vec![],
-            stderr: super::OperationError::UnsupportedPackageManager
-                .to_string()
-                .into_bytes(),
-            truncated: false,
-            duration_millis: 0,
-        };
+            Outcome::Failure,
+            super::OperationError::UnsupportedPackageManager.to_string(),
+        );
     };
 
     let argv = match install_argv(mgr, name, version) {
         Ok(v) => v,
         Err(e) => {
             // cancel drops naturally here — invalid name/version, no process spawned.
-            return TaskResult {
-                task_id,
-                outcome: Outcome::Failure as i32,
-                exit_code: -1,
-                stdout: vec![],
-                stderr: e.to_string().into_bytes(),
-                truncated: false,
-                duration_millis: 0,
-            };
+            return not_executed(task_id, Outcome::Failure, e.to_string());
         }
     };
 
