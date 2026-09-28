@@ -53,7 +53,7 @@ while IFS= read -r f; do
     *)                                        code=true ;;
   esac
   case "$f" in
-    proto/* | relay/internal/relay/v1/* | Makefile | .github/workflows/ci.yml | scripts/ci-changed-paths.sh)
+    proto/* | relay/internal/relay/v1/* | Makefile | .github/workflows/ci.yml | .github/actions/* | scripts/ci-changed-paths.sh)
       proto=true ;;
   esac
 done <<<"$files"

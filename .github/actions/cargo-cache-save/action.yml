@@ -1,0 +1,27 @@
+name: Save Cargo registry and build cache
+description: >-
+  Prune daemon/target (scripts/ci-prune-cargo-target.sh) and save the Cargo registry,
+  git db and daemon/target under the key cargo-cache-restore computed. The caller owns
+  the save policy through its `if:`.
+inputs:
+  key:
+    description: cargo-cache-restore's cache-primary-key output.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Prune daemon/target for the cache
+      shell: bash
+      run: bash scripts/ci-prune-cargo-target.sh
+
+    # The path list must stay byte-identical to cargo-cache-restore's: it is part of the
+    # cache version, so a mismatch saves an entry the restore never finds.
+    - name: Save Cargo registry and build cache
+      uses: actions/cache/save@1bd1e32a3bdc45362d1e726936510720a7c30a57 # v4.2.0
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+          daemon/target
+        key: ${{ inputs.key }}
