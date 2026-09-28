@@ -5,14 +5,11 @@
 // API keep deciding any parked request, including one an MCP client parked,
 // unchanged.
 //
-// The answer path is enabled only via the #721 hook
-// (WithMCPServerOptions(mcp.WithApprovalElicitation())); the composition root
-// itself still does not pass it — TestCompositionRoot_DoesNotYetEnableElicitation
-// (elicit_e2e_test.go) is untouched and must keep passing. This step merges
-// dark. Proof rows for the claims above move to S4b (#730): scripts/check-docs.sh
-// refuses a proof row citing a claim still under "Designed, not built", and
-// promoting them here would claim as true of main's behaviour something no
-// client can reach yet.
+// The answer path is reached here only via the #721 hook
+// (WithMCPServerOptions(mcp.WithApprovalElicitation())) — redundant since
+// #730 (the composition root now passes the option itself) but harmless.
+// Proof rows for the claims above are added in #730's own commit, alongside
+// its composition-root proof.
 //
 // No origin check is built here: AP-74..76 were retired by ADR-0040's
 // amendment. The Console and Control API decision paths are exercised, never
@@ -937,6 +934,12 @@ func TestMCPElicitation_RedriveOfAPendingRequestAsksNobody(t *testing.T) {
 		t.Helper()
 		if res.NeedsInput() {
 			t.Fatal("NeedsInput() = true, want false — an OBSERVED park is never askable")
+		}
+		if len(res.InputRequests) != 0 {
+			t.Errorf("InputRequests = %+v, want empty — an OBSERVED park asks nobody", res.InputRequests)
+		}
+		if res.RequestState != "" {
+			t.Errorf("RequestState = %q, want empty", res.RequestState)
 		}
 		var out mcp.RunOrPlanOutput
 		relaytest.DecodeToolJSON(t, res, &out)

@@ -28,9 +28,11 @@ import (
 // (answerRequestID and friends from tools_approval_test.go, isAnsweredRetry,
 // answerThenDispatch's field names on the decoded RunOrPlanOutput).
 //
-// This step is still dark: nothing here touches cmd/relay/control_surfaces.go.
-// See cmd/relay/answered_retry_e2e_test.go for the same claims through the
-// real composition root.
+// These tests exercise the handler seam directly, against a scripted
+// Executor/ApprovalDecider, independent of whether the composition root
+// wires mcp.WithApprovalElicitation() in. See
+// cmd/relay/answered_retry_e2e_test.go for the same claims through the real
+// composition root, where #730 turns this path on in production.
 
 // -----------------------------------------------------------------------
 // Fixtures
@@ -852,8 +854,13 @@ func TestAnsweredRetry_RawExecIsWiredToo(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------
-// AP-70: the dark guard, at the handler seam
+// AP-70: the option-off guard, at the handler seam
 // -----------------------------------------------------------------------
+//
+// The composition root passes WithApprovalElicitation() in production since
+// #730, but mcp.New itself still accepts a handler with the option off —
+// this is that configuration's own proof, at the seam where it is still
+// real, independent of what any composition root chooses to pass.
 
 func TestAnsweredRetry_OptionOffIgnoresRetryFields(t *testing.T) {
 	t.Run("option off: retry fields are ignored", func(t *testing.T) {

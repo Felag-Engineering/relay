@@ -1,10 +1,13 @@
 // Package main: elicit_e2e_test.go is S2b's (#646) e2e proof — through the
-// REAL composition root (cmd/relay/control_surfaces.go), which does NOT pass
-// mcp.WithApprovalElicitation() in production. Every test here that wants the
-// question path reaches it only via WithMCPServerOptions
-// (relayfixture_test.go's test-only hook, #721). The one exception is
-// TestCompositionRoot_DoesNotYetEnableElicitation, which passes NO hook at
-// all — that is the dark-state pin S4b inverts.
+// REAL composition root (cmd/relay/control_surfaces.go). Most tests here
+// still reach the question path via WithMCPServerOptions
+// (relayfixture_test.go's test-only hook, #721) — redundant since #730 (the
+// composition root now passes mcp.WithApprovalElicitation() itself) but
+// harmless, since the option only sets a bool. The two exceptions are
+// TestCompositionRoot_EnablesElicitation and
+// TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange, which pass NO
+// hook at all: they are what proves the flip itself, not only the feature
+// behind it.
 package main
 
 import (
@@ -19,6 +22,7 @@ import (
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
@@ -316,37 +320,206 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 	}
 }
 
-// TestCompositionRoot_DoesNotYetEnableElicitation is the dark-state pin: NO
-// WithMCPServerOptions hook, so this is exactly what a real deployment gets
-// today. An askable park from an MRTR-capable, elicitation-advertising
-// client's FIRST call (askable by construction) still renders today's
-// pending_approval result — no InputRequests, no RequestState, the
-// pending_approval structured output present. S4b (the composition-root
-// commit that passes mcp.WithApprovalElicitation() from
-// control_surfaces.go) inverts this test.
-func TestCompositionRoot_DoesNotYetEnableElicitation(t *testing.T) {
-	f := startGatedRelay(t, gateAllMutatesInBandAskable) // no WithMCPServerOptions hook
+// TestCompositionRoot_EnablesElicitation inverts
+// TestCompositionRoot_DoesNotYetEnableElicitation (#725, S2b's dark-state
+// pin, which said S4b would invert it — this is that commit, #730). NO
+// WithMCPServerOptions hook: this is exactly what a real deployment gets now
+// that control_surfaces.go passes mcp.WithApprovalElicitation() itself. It is
+// the only test in this issue proving the FLIP rather than the feature —
+// mcp_elicitation_e2e_test.go's TestMCPElicitation_ApproveRunsTheJobAndReturnsResults
+// (S5) proves the same round trip, but only through the #721 test-only hook.
+func TestCompositionRoot_EnablesElicitation(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
+	session := connectEliciting(t, f, token)
 
-	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: relaytest.ElicitingClientOptions(),
-	})
+	// The FIRST call creates the park (askable by construction, AP-60's full
+	// wire shape asserted inside askApproval), so it must render a question,
+	// not today's pending_approval.
+	q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
 
-	res := relaytest.CallToolWith(t, asked, &sdkmcp.CallToolParams{
-		Name:      "run_operation",
-		Arguments: restartNginxArgs(),
-	})
+	if got := fetchApproval(t, f, requestID); got.State != "pending" {
+		t.Errorf("approval state = %q, want pending — a question does not itself decide anything", got.State)
+	}
+	// No Job and no Tasks yet: Task rows are keyed by Job (QueryTasks takes a
+	// JobID), so an empty Job store means no Tasks can exist either — the
+	// same reasoning mcp_elicitation_e2e_test.go's S5 test uses.
+	if got := len(allJobs(t, f)); got != 0 {
+		t.Errorf("Jobs before the answer = %d, want 0", got)
+	}
+	if dispatchCount, _ := auditCounts(t, f); dispatchCount != 0 {
+		t.Errorf("KindDispatch records before the answer = %d, want 0 (AP-2 preserved)", dispatchCount)
+	}
+
+	// Complete the round trip through PRODUCTION wiring: accepting the
+	// question runs the Job and returns its results in the same response.
+	res := answerAsResponder(t, session, restartNginxArgs(), q, qid, "accept")
 	if res.NeedsInput() {
-		t.Fatal("NeedsInput() = true — the composition root must not pass WithApprovalElicitation yet (S4b inverts this test)")
+		t.Fatal("answered retry: NeedsInput() = true, want false — an accepted answer must not re-park")
 	}
-	if res.InputRequests != nil {
-		t.Errorf("InputRequests = %+v, want nil", res.InputRequests)
+	if res.IsError {
+		t.Fatalf("answered retry: IsError = true unexpectedly; content = %+v", res.Content)
 	}
-	if res.RequestState != "" {
-		t.Errorf("RequestState = %q, want empty", res.RequestState)
-	}
+
 	var out mcp.RunOrPlanOutput
 	relaytest.DecodeToolJSON(t, res, &out)
-	if out.PendingApproval == nil {
-		t.Fatalf("run_operation did not park: %+v", out)
+	if out.JobID == "" {
+		t.Fatal("job_id is empty, want a real Job — the production decider+option pair must be wired end to end")
+	}
+	if len(out.Results) != 1 || out.Results[0].NodeID != "node-e2e-1" {
+		t.Fatalf("results = %+v, want the one matched Node", out.Results)
+	}
+	if out.Decision == nil || out.Decision.State != "approved" || out.Decision.Channel != "in-band" {
+		t.Errorf("Decision = %+v, want approved/in-band", out.Decision)
+	}
+	if got := len(allJobs(t, f)); got != 1 {
+		t.Errorf("Jobs after the answer = %d, want exactly 1", got)
+	}
+}
+
+// TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange is AP-70's
+// composition-root proof: it mirrors
+// TestMCPElicitation_ClientThatCannotBeAskedSeesNoChange
+// (mcp_elicitation_e2e_test.go, S5) with NO WithMCPServerOptions hook, so a
+// client that cannot be asked sees today's pending_approval unchanged now
+// that the composition root passes the option itself — not only when a test
+// turns it on. A client advertising no elicitation capability, and one on a
+// legacy protocol version whose ElicitationHandler must never be called,
+// both still park exactly as before, and both requests are still decidable
+// by approve_request and by the Control API's decision endpoint.
+func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
+	f := startGatedRelay(t, gateAllMutatesInBandAskable) // NO WithMCPServerOptions hook
+	token := mintAccount(t, f, elicitRequesterName, accounts.KindMachine, accounts.RoleAdmin)
+
+	// Client A: 2026-07-28, but advertises no elicitation capability at all.
+	// clientCanBeAsked (elicit.go) returns false at its capability check
+	// (caps.Elicitation == nil), so Relay renders today's pending_approval
+	// and never builds an input-required result.
+	clientA := relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(token), relaytest.ConnectOptions{
+		Client: &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+	})
+	resA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
+	if resA.NeedsInput() || resA.IsError {
+		t.Fatalf("client A: NeedsInput=%v IsError=%v content=%+v", resA.NeedsInput(), resA.IsError, resA.Content)
+	}
+	if resA.InputRequests != nil {
+		t.Errorf("client A: InputRequests = %+v, want nil", resA.InputRequests)
+	}
+	if resA.RequestState != "" {
+		t.Errorf("client A: RequestState = %q, want empty", resA.RequestState)
+	}
+	var outA mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, resA, &outA)
+	if outA.PendingApproval == nil {
+		t.Fatalf("client A: did not park: %+v", outA)
+	}
+	if outA.PendingApproval.Status != "pending_approval" {
+		t.Errorf("client A: Status = %q, want pending_approval", outA.PendingApproval.Status)
+	}
+	if outA.Decision != nil {
+		t.Errorf("client A: Decision = %+v, want nil", outA.Decision)
+	}
+	if outA.AnswerRefused != nil {
+		t.Errorf("client A: AnswerRefused = %+v, want nil", outA.AnswerRefused)
+	}
+	requestIDA := outA.PendingApproval.RequestID
+	planHashA := outA.PendingApproval.PlanHash
+
+	// Client B: legacy protocol, never MRTR. The claim is about the
+	// FULFILMENT BRANCH, not about entering the middleware: go-sdk's
+	// serverMultiRoundTripMiddleware is installed unconditionally and runs
+	// on every call; on a non-MRTR session it would fulfil an
+	// input-required result itself with a server-initiated ss.Elicit. That
+	// branch is never reached here, because Relay never produces an
+	// input-required result for this session (clientCanBeAsked returns
+	// false for a legacy protocol version). The handler's call count is the
+	// only client-side observable of that branch.
+	var elicitCalls atomic.Int32
+	clientB := relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(token), relaytest.ConnectOptions{
+		Client: &sdkmcp.ClientOptions{
+			Capabilities: &sdkmcp.ClientCapabilities{
+				Elicitation: &sdkmcp.ElicitationCapabilities{Form: &sdkmcp.FormElicitationCapabilities{}},
+			},
+			ElicitationHandler: func(context.Context, *sdkmcp.ElicitRequest) (*sdkmcp.ElicitResult, error) {
+				elicitCalls.Add(1)
+				return &sdkmcp.ElicitResult{Action: "decline"}, nil
+			},
+		},
+		Session: &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+	})
+	resB := relaytest.CallTool(t, clientB, "run_operation", restartNginxArgs())
+	var outB mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, resB, &outB)
+	if outB.PendingApproval == nil {
+		t.Fatalf("client B: did not park: %+v", outB)
+	}
+	if calls := elicitCalls.Load(); calls != 0 {
+		t.Errorf("client B: ElicitationHandler was called %d times, want 0", calls)
+	}
+	requestIDB := outB.PendingApproval.RequestID
+	planHashB := outB.PendingApproval.PlanHash
+
+	if len(decisionRecordsFor(t, f, requestIDA)) != 0 {
+		t.Error("a KindApprovalDecided record exists for A's request before any rescue")
+	}
+	if len(decisionRecordsFor(t, f, requestIDB)) != 0 {
+		t.Error("a KindApprovalDecided record exists for B's request before any rescue")
+	}
+	if got := len(allJobs(t, f)); got != 0 {
+		t.Errorf("Jobs before any rescue = %d, want 0", got)
+	}
+
+	// Rescue A with approve_request, on A's own session.
+	approveRes := relaytest.CallTool(t, clientA, "approve_request", map[string]any{
+		"request_id": requestIDA,
+		"plan_hash":  planHashA,
+		"approve":    true,
+		"approver":   elicitResponderUsername,
+	})
+	if approveRes.IsError {
+		t.Fatalf("approve_request: IsError, content=%+v", approveRes.Content)
+	}
+	var decisionA mcp.ApprovalDecisionOutput
+	relaytest.DecodeToolJSON(t, approveRes, &decisionA)
+	if decisionA.State != "approved" || decisionA.Channel != "in-band" {
+		t.Errorf("A's decision = %+v, want approved/in-band", decisionA)
+	}
+
+	rerunA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
+	var rerunAOut mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, rerunA, &rerunAOut)
+	if rerunAOut.JobID == "" {
+		t.Fatal("A's re-drive did not mint a Job")
+	}
+
+	// Rescue B through the Control API's decision endpoint, decided by a
+	// human operator.
+	bianca := mintAccount(t, f, "bianca", accounts.KindHuman, accounts.RoleOperator)
+	decideResp := controlAPIRequest(t, f.ClientFor(bianca), http.MethodPost,
+		f.ControlBase+"/api/v1/approvals/"+requestIDB+"/decision", bianca,
+		map[string]any{"approve": true, "plan_hash": planHashB})
+	defer decideResp.Body.Close() //nolint:errcheck
+	if decideResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(decideResp.Body)
+		t.Fatalf("B's decision status = %d, want 200; body = %s", decideResp.StatusCode, body)
+	}
+
+	rerunB := relaytest.CallTool(t, clientB, "run_operation", restartNginxArgs())
+	var rerunBOut mcp.RunOrPlanOutput
+	relaytest.DecodeToolJSON(t, rerunB, &rerunBOut)
+	if rerunBOut.JobID == "" {
+		t.Fatal("B's re-drive did not mint a Job")
+	}
+	if calls := elicitCalls.Load(); calls != 0 {
+		t.Errorf("after B's re-drive, ElicitationHandler was called %d times, want still 0", calls)
+	}
+
+	jobList := allJobs(t, f)
+	if len(jobList) != 2 {
+		t.Fatalf("Jobs = %d, want exactly 2: %+v", len(jobList), jobList)
+	}
+	gotApprovalIDs := map[string]bool{jobList[0].ApprovalID: true, jobList[1].ApprovalID: true}
+	if !gotApprovalIDs[requestIDA] || !gotApprovalIDs[requestIDB] {
+		t.Errorf("Job ApprovalIDs = %v, want exactly {%q, %q}", gotApprovalIDs, requestIDA, requestIDB)
 	}
 }

@@ -1,11 +1,13 @@
 // Package main: mrtr_harness_e2e_test.go is the smoke test for #721 (S0 of
 // #646's MRTR slice) — it proves the new relaytest connect/call helpers work
 // end to end against the REAL composition root before any later step relies
-// on them, and it is also the first AP-70 guard: an elicitation-advertising
+// on them, and it is also the first AP-61 guard: an elicitation-advertising
 // client with the SDK's automatic multi-round-trip middleware disabled must
 // see today's ordinary pending_approval result, byte for byte the same as a
-// plain client sees, because nothing enables the MRTR answer path yet (S2
-// defines the enabling mcp.Option; S4b is the first production caller of it).
+// plain client sees, because gateAllMutatesInBand excludes the requester
+// (requester_allowed: false) — nobody is asked, whatever the composition
+// root does with mcp.WithApprovalElicitation() (#730 passes it in
+// production; this gate keeps this park unaskable regardless, AP-61).
 package main
 
 import (
@@ -15,15 +17,16 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/mcp/requeststate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // gateAllMutatesInBand is gateAllMutates (approval_e2e_test.go) with its
 // channel switched to "in-band" (internal/approval/config.go's parseChannel)
-// — the channel S4b's answer path will eventually deliver a decision over,
-// and the one #391/ADR-0029 already makes reachable via
-// mcp.WithApprovalDecider (control_surfaces.go). requester_allowed stays
-// false and ttl stays "1h", exactly as gateAllMutates.
+// — the channel the MRTR answer path (#730) delivers a decision over, and
+// the one #391/ADR-0029 already makes reachable via mcp.WithApprovalDecider
+// (control_surfaces.go). requester_allowed stays false and ttl stays "1h",
+// exactly as gateAllMutates.
 const gateAllMutatesInBand = `{
   "rules": [
     {
@@ -45,18 +48,18 @@ func restartNginxArgs() map[string]any {
 
 // TestRelaytest_ElicitationClientSeesTodaysPendingApproval is #721's smoke
 // test: relaytest.ConnectWithOptions/CallToolWith/TryCallToolWith/RetryTool
-// driven against the real cmd/relay composition root, with no MCP server
-// option enabling the answer path — the design plan's "dark until S4b" — so
-// this is also the first AP-70 guard: nothing changes for a client that CAN
-// be asked but is not yet answered.
+// driven against the real cmd/relay composition root — so this is also the
+// first AP-61 guard: nothing changes for a client that CAN be asked but
+// whose park is excluded from being asked (requester_allowed: false).
 func TestRelaytest_ElicitationClientSeesTodaysPendingApproval(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBand)
 
 	// asked CAN be asked (advertises form elicitation) but answers nothing by
-	// itself; plain is an ordinary client with none of that. No
-	// WithMCPServerOptions is passed to startGatedRelay: the enabling option
-	// (S2) does not exist yet, so neither session can reach the answer path
-	// even if it wanted to.
+	// itself; plain is an ordinary client with none of that. The composition
+	// root passes mcp.WithApprovalElicitation() itself (#730), but
+	// gateAllMutatesInBand's requester_allowed: false keeps this park
+	// unaskable regardless (AP-61): the FIRST call still parks exactly as
+	// before.
 	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
 		Client: relaytest.ElicitingClientOptions(),
 	})
@@ -67,7 +70,7 @@ func TestRelaytest_ElicitationClientSeesTodaysPendingApproval(t *testing.T) {
 		Arguments: restartNginxArgs(),
 	})
 	if res.NeedsInput() {
-		t.Fatalf("run_operation result NeedsInput() = true, want false — nothing enables the MRTR answer path yet (#721)")
+		t.Fatalf("run_operation result NeedsInput() = true, want false — the requester is excluded from being asked (AP-61), so nobody is asked")
 	}
 	if res.InputRequests != nil {
 		t.Errorf("run_operation result InputRequests = %+v, want nil", res.InputRequests)
@@ -135,23 +138,18 @@ func TestRelaytest_ElicitationClientSeesTodaysPendingApproval(t *testing.T) {
 	// server — plan review suggestion 1). RetryTool fails the test on a
 	// protocol-level error, which is fine here: the SDK sends the params as
 	// given (code review, cycle 1) rather than refusing the call client-side.
-	// Relay reads neither field today, so the SAME pending_approval must
-	// come back, unrequested — one more "nothing changed" point, and proof
-	// that the retry fields reach the wire without a client-side error.
+	//
+	// Since #730 the composition root passes mcp.WithApprovalElicitation()
+	// in production, so this session's own MRTR capability is what now makes
+	// this call an answered retry (isAnsweredRetry, tools_execution.go):
+	// clientCanBeAsked does not care whether THIS park was askable, only
+	// whether the CLIENT could be asked. A garbage RequestState is therefore
+	// decided and REFUSED rather than silently ignored — still proof that
+	// the retry fields reach the wire, just no longer proof that Relay
+	// ignores them (that claim moved to the AP-70 "client that cannot be
+	// asked" tests, elicit_e2e_test.go and mcp_elicitation_e2e_test.go).
+	auditBefore := auditLen(t, f)
 	retryRes := relaytest.RetryTool(t, asked, "run_operation", restartNginxArgs(), "not-a-state",
 		sdkmcp.InputResponseMap{"q1": &sdkmcp.ElicitResult{Action: "accept"}})
-	if retryRes.NeedsInput() {
-		t.Errorf("retry NeedsInput() = true, want false — Relay must ignore RequestState/InputResponses today")
-	}
-	if retryRes.RequestState != "" {
-		t.Errorf("retry RequestState = %q, want empty — Relay must ignore RequestState/InputResponses today", retryRes.RequestState)
-	}
-	var retryOut mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, retryRes, &retryOut)
-	if retryOut.PendingApproval == nil {
-		t.Fatalf("retry did not park: %+v", retryOut)
-	}
-	if retryOut.PendingApproval.Status != "pending_approval" {
-		t.Errorf("retry Status = %q, want %q — Relay must ignore RequestState/InputResponses today", retryOut.PendingApproval.Status, "pending_approval")
-	}
+	assertStateRefusedNothingRecorded(t, f, retryRes, requeststate.ErrUnknownVersion.Error(), auditBefore, askedOut.PendingApproval.RequestID)
 }

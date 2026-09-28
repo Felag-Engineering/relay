@@ -28,10 +28,10 @@ import (
 
 // elicit_test.go is S2b of #646's mcp-handler-seam proof (elicit.go): fixture
 // request -> asserted response, over the SDK's real HTTP transport, mirroring
-// taskgolden_test.go's fixtures rather than re-inventing them. This step
-// merges dark (the option is never passed from cmd/relay/control_surfaces.go)
-// — every test here reaches the option through mcp.WithApprovalElicitation
-// directly, package mcp_test's own seam onto mcp.New.
+// taskgolden_test.go's fixtures rather than re-inventing them. Every test
+// here reaches the option through mcp.WithApprovalElicitation directly,
+// package mcp_test's own seam onto mcp.New — the composition root passes it
+// too, since #730, but this file's seam is deliberately independent of that.
 
 // askableElicitRequestID/askableElicitPlanHash/askableElicitTaskID are the
 // fixed fields askableParker's park carries, mirroring goldenParker's shape
@@ -314,7 +314,7 @@ func TestElicit_OutOfBandParkNeverAsks_HandlerSeam(t *testing.T) {
 	}
 }
 
-// TestElicit_OptionOffChangesNothing is the AP-70 dark guard at the mcp
+// TestElicit_OptionOffChangesNothing is the AP-70 option-off guard at the mcp
 // handler seam: an askable park from an MRTR/elicitation-capable client
 // renders identically to today whenever the option is off, or a decider is
 // unwired — three servers, one canonical body.
