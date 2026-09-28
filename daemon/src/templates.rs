@@ -746,7 +746,8 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     /// A self-cleaning temp directory (the daemon crate has no dev-dep on
-    /// tempfile; policy.rs uses the same hand-rolled pattern).
+    /// tempfile). Kept local rather than `crate::test_support::TempDir`: it is
+    /// counter-named, clears any stale path first, and exposes `path` as a field.
     struct TempDir {
         path: PathBuf,
     }

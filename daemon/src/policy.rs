@@ -1390,9 +1390,7 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::fs::PermissionsExt;
+    use crate::test_support::{args, TempFile};
 
     // The fixture is the example policy file checked into the repo. Tests
     // use it directly so the documented examples stay honest.
@@ -1400,56 +1398,6 @@ mod tests {
 
     fn fixture_policy() -> Policy {
         from_toml_str(FIXTURE).expect("policy.example.toml must parse cleanly")
-    }
-
-    fn args(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
-
-    // -----------------------------------------------------------------------
-    // Temp file helper (mirrors identity.rs pattern)
-    // -----------------------------------------------------------------------
-
-    struct TempFile(std::path::PathBuf);
-
-    impl TempFile {
-        fn new(label: &str, content: &[u8], mode: u32) -> Self {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-policy-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(mode)
-                .open(&path)
-                .unwrap();
-            f.write_all(content).unwrap();
-            // OpenOptions::mode() is masked by the process umask, so on a
-            // runner with umask 022 a requested 0o664 lands as 0o644 and the
-            // group/world-writable rejection tests would spuriously pass the
-            // file. chmod is not umask-masked, so force the exact mode here.
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-            TempFile(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -2099,7 +2047,7 @@ deny = ["restart nginx"]
             (0o646_u32, "world-writable, group-write clear"),
             (0o666_u32, "both write bits"),
         ] {
-            let tmp = TempFile::new("writable", FIXTURE.as_bytes(), mode);
+            let tmp = TempFile::with_forced_mode("writable", FIXTURE.as_bytes(), mode);
             let result = load_policy(tmp.path());
             assert!(
                 matches!(
@@ -2117,7 +2065,7 @@ deny = ["restart nginx"]
         // Secure modes: no group- or world-write bit; owned by the test
         // runner's euid (exercises the uid == geteuid() branch in the loader).
         for mode in [0o600_u32, 0o644] {
-            let tmp = TempFile::new("secure", FIXTURE.as_bytes(), mode);
+            let tmp = TempFile::with_forced_mode("secure", FIXTURE.as_bytes(), mode);
             let result = load_policy(tmp.path());
             assert!(
                 result.is_ok(),
@@ -2204,7 +2152,7 @@ deny = []
         // Prove byte-identity: loading from a file produces the same fingerprint
         // as parsing the string directly. This is the seam the `policy check`
         // subcommand (#93) will rely on.
-        let tmp = TempFile::new("fingerprint-eq", FIXTURE.as_bytes(), 0o600);
+        let tmp = TempFile::with_forced_mode("fingerprint-eq", FIXTURE.as_bytes(), 0o600);
         let file_policy = load_policy(tmp.path()).expect("secure-mode fixture must load");
         let str_policy = from_toml_str(FIXTURE).expect("fixture must parse");
         assert_eq!(
@@ -2790,11 +2738,8 @@ deny = ["[invalid"]
 mod raw_exec_redteam {
     use super::*;
 
-    /// Build an argv `Vec<String>` from string-literal elements. Mirrors the
-    /// `args` helper in `mod tests`, renamed to Raw Exec vocabulary.
-    fn argv(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
+    // The shared `args` helper, renamed to Raw Exec vocabulary.
+    use crate::test_support::args as argv;
 
     /// Coarse red-team classification of a Raw Exec `Decision`: does the
     /// command run, is it denied by a specific rule, refused by the ADR-0019
@@ -3868,47 +3813,15 @@ mod raw_exec_redteam {
 #[cfg(test)]
 mod loader_hardening_tests {
     use super::*;
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    use std::os::unix::fs::PermissionsExt as _;
 
     // The fixture is the example policy file checked into the repo (mirrors
     // `mod tests::FIXTURE`).
     const FIXTURE: &str = include_str!("../policy.example.toml");
 
-    // -------------------------------------------------------------------
-    // Unique temp path + secure-mode writer, mirroring `mod tests::TempFile`
-    // (unique path via SystemTime nanos + pid; mode set via both
-    // OpenOptions::mode and a post-hoc chmod to defeat the process umask).
-    // -------------------------------------------------------------------
-
-    fn unique_temp_path(label: &str) -> std::path::PathBuf {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!(
-            "relay-policy-loader-test-{}-{}-{}",
-            label,
-            std::process::id(),
-            nanos
-        ))
-    }
-
-    fn write_secure_policy(path: &Path, content: &[u8], mode: u32) {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(mode)
-            .open(path)
-            .unwrap();
-        f.write_all(content).unwrap();
-        // chmod is not umask-masked, unlike OpenOptions::mode(); force the
-        // exact mode so a runner umask can't spuriously affect these tests.
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
+    // Unique temp path + forced-mode writer, shared with `mod tests::TempFile`
+    // (mode set via both OpenOptions::mode and a post-hoc chmod to defeat the
+    // process umask).
+    use crate::test_support::{unique_temp_path, write_forced_mode as write_secure_policy};
 
     /// RAII cleanup for a path this module created — covers a regular file,
     /// a symlink, or a FIFO, all removable via `remove_file`.
@@ -4404,9 +4317,7 @@ mod default_policy_tests {
         from_toml_str(DEFAULT).expect("policy.default.toml must parse with the fail-closed loader")
     }
 
-    fn args(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
+    use crate::test_support::args;
 
     #[test]
     fn default_file_parses_with_real_loader() {

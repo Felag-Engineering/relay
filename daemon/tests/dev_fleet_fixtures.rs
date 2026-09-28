@@ -36,42 +36,15 @@
 //! new package, and co-locating them keeps the compose <-> fixture <->
 //! Dockerfile triangle in one place.
 
+mod common;
+
+use common::TempDir;
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-/// A unique scratch directory that removes itself on drop. Copied from the
-/// pattern in `daemon/tests/shutdown_signal.rs` rather than pulling in a
-/// `tempfile` dependency the daemon crate does not have.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "relay-daemon-dev-fleet-fixtures-test-{label}-{}-{nanos}",
-            std::process::id()
-        ));
-        TempDir(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
 
 fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docker/fixtures")

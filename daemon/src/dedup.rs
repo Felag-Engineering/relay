@@ -561,9 +561,10 @@ mod tests {
     // Shared ceiling assertion (ADR-0036) — one helper for the whole daemon, so a
     // third mode-assertion shape is never invented.
     use crate::identity::mode_assert;
+    use crate::test_support::TempDir;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
+
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -571,32 +572,6 @@ mod tests {
     // -----------------------------------------------------------------------
     // Test helpers
     // -----------------------------------------------------------------------
-
-    /// A temp directory that removes itself on drop, for test isolation.
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-test-dedup-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
 
     /// A distinctive exec result (non-empty stdout) so tests can distinguish it from
     /// the benign already-processed result (which has empty stdout).

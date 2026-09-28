@@ -387,43 +387,8 @@ fn build_query(would_allow: &WouldAllow) -> PolicyQuery {
 mod tests {
     use super::*;
     use crate::templates::TemplateSet;
-    use std::io::Write;
+    use crate::test_support::{TempDir, TempFile};
     use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    /// Temp file that removes itself on drop (test isolation). No explicit
-    /// mode is set — `policy_check::run` never calls `load_policy`, so the
-    /// owner/group-write permission gate is irrelevant here.
-    struct TempFile(PathBuf);
-
-    impl TempFile {
-        fn new(label: &str, content: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-policy-check-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            let mut f = std::fs::File::create(&path).expect("create temp file");
-            f.write_all(content.as_bytes()).expect("write temp file");
-            TempFile(path)
-        }
-
-        fn path_str(&self) -> String {
-            self.0.to_string_lossy().into_owned()
-        }
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
 
     fn argv(file: &str, rest: &[&str]) -> Vec<String> {
         let mut v = vec![
@@ -502,7 +467,7 @@ allowed_args = []
         // With a template root supplied, the vocabulary is knowable and a name
         // in neither half is an error again — the pre-template behavior, now
         // earned rather than assumed.
-        let empty_root = TempDir::new("unknown-op-templates");
+        let empty_root = TempDir::created("unknown-op-templates");
         let code = run(&argv(
             &tmp.path_str(),
             &["--templates", &empty_root.path_str()],
@@ -526,7 +491,7 @@ body = "df -PT"
     #[test]
     fn templates_a_malformed_file_is_invalid() {
         let policy = TempFile::new("tmpl-bad-policy", "");
-        let root = TempDir::new("tmpl-bad");
+        let root = TempDir::created("tmpl-bad");
         // A placeholder glued to adjacent text can change command structure, so
         // the engine refuses to compile it (ADR-0021).
         root.write(
@@ -556,7 +521,7 @@ type = "path"
     #[test]
     fn templates_missing_risk_class_is_invalid() {
         let policy = TempFile::new("tmpl-norisk-policy", "");
-        let root = TempDir::new("tmpl-norisk");
+        let root = TempDir::created("tmpl-norisk");
         root.write(
             "x.toml",
             r#"
@@ -579,7 +544,7 @@ body = "df -PT"
     #[test]
     fn templates_shadowing_a_native_is_invalid() {
         let policy = TempFile::new("tmpl-shadow-policy", "");
-        let root = TempDir::new("tmpl-shadow");
+        let root = TempDir::created("tmpl-shadow");
         root.write(
             "x.toml",
             r#"
@@ -611,7 +576,7 @@ name = "disk.usage"
 allowed_args = []
 "#,
         );
-        let root = TempDir::new("tmpl-good");
+        let root = TempDir::created("tmpl-good");
         root.write("pack.toml", GOOD_TEMPLATE);
 
         let code = run(&argv(
@@ -654,7 +619,7 @@ allowed_args = []
     /// makes the observation deterministic under every umask.
     #[test]
     fn template_helper_writes_a_mode_the_loader_accepts() {
-        let root = TempDir::new("tmpl-mode-pin");
+        let root = TempDir::created("tmpl-mode-pin");
         let target = root.path().join("pin.toml");
 
         // Pre-seed the exact path group- and world-writable, forced by chmod so
@@ -1120,48 +1085,6 @@ deny = ["secret"]
     // CLI re-calls the same function.
     // -----------------------------------------------------------------------
 
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-policy-check-dir-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            std::fs::create_dir_all(&path).expect("create temp dir");
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-        fn path_str(&self) -> String {
-            self.0.to_string_lossy().into_owned()
-        }
-        /// Writes a template file into this directory (used as a template root).
-        /// `std::fs::write` is umask-masked, `TemplateSet::load`'s hardened read
-        /// refuses any template file with `mode & 0o022 != 0` (`hardened_open`),
-        /// and chmod is NOT umask-masked, so the mode is forced explicitly here.
-        fn write(&self, name: &str, content: &str) -> PathBuf {
-            let path = self.0.join(name);
-            std::fs::write(&path, content).expect("write template file");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-                .expect("set template file mode");
-            path
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-
     #[tokio::test]
     async fn would_allow_parity_with_actual_dispatch() {
         use crate::dedup::DedupStore;
@@ -1171,7 +1094,7 @@ deny = ["secret"]
         use crate::templates::TemplateSet;
 
         let policy = matrix_policy();
-        let state_dir = TempDir::new("parity");
+        let state_dir = TempDir::created("parity");
         let dedup = DedupStore::open(state_dir.path()).expect("open dedup");
         let services = Services {
             policy,
