@@ -92,17 +92,43 @@ pub fn open_hardened(path: &Path) -> Result<(File, Metadata), HardenedRejection>
     }
 
     let file_uid = meta.uid();
-    let daemon_euid = rustix::process::geteuid().as_raw();
-    if file_uid != 0 && file_uid != daemon_euid {
+    if !owner_is_trusted(file_uid, rustix::process::geteuid().as_raw()) {
         return Err(HardenedRejection::InsecureOwner { uid: file_uid });
     }
 
     Ok((file, meta))
 }
 
+/// Whether a trust file owned by `file_uid` may be read by a daemon running as
+/// `daemon_euid`: only root or the daemon's own effective uid. A pure function
+/// so the decision is unit-tested on any runner — the fixture tests that chown
+/// a real file to a third-party uid need root, and CI is not root.
+fn owner_is_trusted(file_uid: u32, daemon_euid: u32) -> bool {
+    file_uid == 0 || file_uid == daemon_euid
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner rule itself, independent of who runs the tests: root and the
+    /// daemon's euid are trusted, any other uid is refused — including root
+    /// daemons refusing a non-root owner.
+    #[test]
+    fn owner_rule_trusts_only_root_and_the_daemon() {
+        assert!(
+            owner_is_trusted(0, 1000),
+            "root-owned file, non-root daemon"
+        );
+        assert!(owner_is_trusted(1000, 1000), "daemon-owned file");
+        assert!(owner_is_trusted(0, 0), "root-owned file, root daemon");
+        assert!(
+            !owner_is_trusted(65534, 1000),
+            "third-party owner, non-root daemon"
+        );
+        assert!(!owner_is_trusted(1000, 0), "non-root owner, root daemon");
+        assert!(!owner_is_trusted(1001, 1000), "neighbouring uid");
+    }
     use std::io::Read;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
