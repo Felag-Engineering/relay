@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	schema "github.com/google/jsonschema-go/jsonschema"
@@ -109,51 +108,18 @@ func requirePrincipal(ctx context.Context) (capability.Principal, error) {
 	return p, nil
 }
 
-// planAdvisory is the fixed point-in-time disclaimer every PlanOutput
-// carries (ADR-0011): a Plan's verdicts are a snapshot, not a guarantee —
-// Policy may change between the Plan and a later real run.
-const planAdvisory = "point-in-time; Policy may change between plan and apply (ADR-0011)"
-
-// renderPlan renders a capability.PlanResult as the tool's PlanOutput:
-// verdicts sorted by NodeID for a stable response (mirrors renderJob), and
-// would_be_rejected derived from pr.NoNodesMatched (reason
-// "no_nodes_matched"), else pr.CapExceeded (reason "exceeds_cap"), else
-// pr.Frozen (reason "frozen"). A zero match is reported first because
-// Verdicts is empty and nothing would dispatch even after a Freeze lifted —
-// the same "the reason nothing was asked" rule that already puts
-// exceeds_cap ahead of frozen. Zero-match and over-cap cannot occur together
-// under BlastCap, whose caps are clamped positive. A Plan can otherwise be
-// both over-cap and Frozen at once (Service.Plan computes Frozen before the
-// cap check); the over-cap report takes priority there since it is the
-// reason the query fan-out never even ran (Verdicts is empty in that case
-// too).
+// renderPlan maps controlplane.RenderPlan onto the tool's PlanOutput; the
+// ordering of would_be_rejected is documented there.
 func renderPlan(pr capability.PlanResult) PlanOutput {
-	verdicts := make([]PerNodeVerdict, 0, len(pr.Verdicts))
-	for _, v := range pr.Verdicts {
-		verdicts = append(verdicts, PerNodeVerdict{
-			NodeID:             v.NodeID,
-			Verdict:            controlplane.VerdictName(v.Status),
-			DecidingRule:       v.DecidingRule,
-			Reason:             v.Reason,
-			RefusalExplanation: capability.VerdictExplanation(v.Status),
-			Outdated:           v.Outdated,
-		})
+	rp := controlplane.RenderPlan(pr)
+	verdicts := make([]PerNodeVerdict, 0, len(rp.Verdicts))
+	for _, v := range rp.Verdicts {
+		verdicts = append(verdicts, PerNodeVerdict(v))
 	}
-	sort.Slice(verdicts, func(i, j int) bool { return verdicts[i].NodeID < verdicts[j].NodeID })
-
-	out := PlanOutput{Matched: pr.Matched, Verdicts: verdicts, Advisory: planAdvisory}
-	switch {
-	case pr.NoNodesMatched:
-		out.WouldBeRejected = &WouldBeRejected{Reason: "no_nodes_matched"}
-	case pr.CapExceeded != nil:
-		out.WouldBeRejected = &WouldBeRejected{
-			Reason:  "exceeds_cap",
-			Matched: pr.CapExceeded.Matched,
-			Cap:     pr.CapExceeded.Cap,
-			Class:   jobs.RiskClassName(pr.CapExceeded.Class),
-		}
-	case pr.Frozen:
-		out.WouldBeRejected = &WouldBeRejected{Reason: "frozen"}
+	out := PlanOutput{Matched: rp.Matched, Verdicts: verdicts, Advisory: rp.Advisory}
+	if rp.WouldBeRejected != nil {
+		r := WouldBeRejected(*rp.WouldBeRejected)
+		out.WouldBeRejected = &r
 	}
 	return out
 }
@@ -171,77 +137,28 @@ func planAndRender(ctx context.Context, exec Executor, p capability.Principal, s
 	return renderPlan(pr), nil
 }
 
-// exitCodePtr returns the exit_code to render for task, or nil when no real
-// process exit status exists — the #207/#253 did-not-run disambiguation (see
-// PerNodeResult's doc comment). A real status exists only when the Task
-// actually resolved as success/failure AND the daemon reported a non-negative
-// code: the daemon's -1 "no exit status" sentinel (spawn failure, wait
-// failure, signal-kill, timeout/cancel kill, denied-before-spawn — a real
-// Unix exit status is always 0-255), the Relay's synthesized zero value
-// (unreachable, version_refused), and — since #632 — the Relay's own -1 on a
-// failure row whose daemon report the wire boundary refused as a protocol
-// violation (it may well have executed; what happened is unknown) all render
-// as no exit_code at all. This is pure presentation — the stored jobs.Task
-// and the wire contract (/proto) are untouched.
-func exitCodePtr(task jobs.Task) *int32 {
-	switch task.Outcome {
-	case jobs.OutcomeSuccess, jobs.OutcomeFailure:
-		if task.ExitCode >= 0 {
-			code := task.ExitCode
-			return &code
-		}
-	}
-	return nil
-}
-
-// perNodeResultFromTask renders one jobs.Task as a PerNodeResult.
-// DurationMS is 0 when the Task was never dispatched (DispatchedAt zero —
-// e.g. OutcomeUnreachable/an offline Node, or a Pending Task cancelled
-// before it was ever sent), never a fabricated negative/huge value.
-// ExitCode is omitted whenever no real process exit status exists — see
-// exitCodePtr.
+// perNodeResultFromTask renders one jobs.Task as a PerNodeResult
+// (controlplane.RenderTaskResult). ExitCode is omitted whenever no real
+// process exit status exists — see controlplane.ExitCode.
 func perNodeResultFromTask(task jobs.Task) PerNodeResult {
-	stdout, stdoutTruncated := controlplane.TruncateOutput(task.Stdout)
-	stderr, stderrTruncated := controlplane.TruncateOutput(task.Stderr)
-
-	var durationMS int64
-	if !task.DispatchedAt.IsZero() && !task.ResolvedAt.IsZero() {
-		durationMS = task.ResolvedAt.Sub(task.DispatchedAt).Milliseconds()
-	}
-
-	return PerNodeResult{
-		NodeID:             task.NodeID,
-		Outcome:            jobs.OutcomeName(task.Outcome),
-		ExitCode:           exitCodePtr(task),
-		Stdout:             stdout,
-		Stderr:             stderr,
-		StdoutTruncated:    stdoutTruncated,
-		StderrTruncated:    stderrTruncated,
-		DurationMS:         durationMS,
-		RefusalExplanation: capability.RefusalExplanation(task.Outcome),
-	}
+	return PerNodeResult(controlplane.RenderTaskResult(task))
 }
 
 // renderJob re-reads jobID via results (the injected JobResultReader) and
 // renders every one of its Tasks as a PerNodeResult, sorted by NodeID for a
-// stable response. It is the shared rendering path for run_operation/
-// raw_exec's own result (once exec.Run returns a non-empty NodeResult set)
-// and get_job's polling re-read of the same Job later.
+// stable response (controlplane.RenderJobResults). It is the shared rendering
+// path for run_operation/raw_exec's own result (once exec.Run returns a
+// non-empty NodeResult set) and get_job's polling re-read of the same Job
+// later.
 func renderJob(ctx context.Context, results JobResultReader, jobID string) (ExecutionOutput, error) {
-	if _, err := results.GetJob(ctx, jobID); err != nil {
-		return ExecutionOutput{}, fmt.Errorf("get job %q: %w", jobID, err)
-	}
-	tasks, err := results.TasksByJob(ctx, jobID)
+	rendered, err := controlplane.RenderJobResults(ctx, results, jobID)
 	if err != nil {
-		return ExecutionOutput{}, fmt.Errorf("list tasks for job %q: %w", jobID, err)
+		return ExecutionOutput{}, err
 	}
-
-	items := make([]PerNodeResult, 0, len(tasks))
-	for _, task := range tasks {
-		items = append(items, perNodeResultFromTask(task))
+	items := make([]PerNodeResult, 0, len(rendered))
+	for _, r := range rendered {
+		items = append(items, PerNodeResult(r))
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].NodeID < items[j].NodeID })
-
 	return ExecutionOutput{JobID: jobID, Results: items}, nil
 }
 
