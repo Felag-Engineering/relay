@@ -86,6 +86,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::gen::{Outcome, TaskResult};
+use crate::not_executed::not_executed;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -234,15 +235,11 @@ impl DedupStore {
         // Fail closed: if the durable record failed, do not execute. Without a
         // persisted marker, at-most-once cannot be guaranteed on a retry.
         if let Err(e) = record_result {
-            return TaskResult {
-                task_id: task_id.to_string(),
-                outcome: Outcome::Failure as i32,
-                exit_code: -1,
-                stdout: vec![],
-                stderr: format!("dedup: failed to record task id before execute: {e}").into_bytes(),
-                truncated: false,
-                duration_millis: 0,
-            };
+            return not_executed(
+                task_id.to_string(),
+                Outcome::Failure,
+                format!("dedup: failed to record task id before execute: {e}"),
+            );
         }
 
         // Lock released; exec runs with no lock held.

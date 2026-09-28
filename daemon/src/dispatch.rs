@@ -25,6 +25,7 @@ use crate::gen::{
     policy_query, task_request, Operation, Outcome, PolicyQuery, PolicyVerdict, TaskRequest,
     TaskResult,
 };
+use crate::not_executed::{denied_by_policy_result, not_executed, not_executed_after};
 #[cfg(test)]
 use crate::operations;
 use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, ResolvedOp};
@@ -77,7 +78,6 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 /// `cancel` is forwarded through scheduling into the executor so the in-flight
 /// cancel path (ADR-0013 honest-race) is intact for Tasks that make it past the
 /// queue.
-#[allow(clippy::too_many_arguments)]
 pub async fn dispatch(
     task: &TaskRequest,
     policy: &Policy,
@@ -390,7 +390,6 @@ where
 /// Production Operation path: [`handle_operation_in`] bound to the single
 /// vocabulary registry ([`registry::REGISTRY`]) plus this Node's loaded
 /// Template Operations.
-#[allow(clippy::too_many_arguments)]
 async fn handle_operation<R, Fut>(
     task_id: String,
     op: &Operation,
@@ -493,7 +492,6 @@ where
 /// has, or install the template pack here". Nothing executes either way, so the
 /// deny-by-default guarantee (ADR-0002, invariant #3) is untouched: an entry
 /// must exist AND Policy must allow before any handler runs.
-#[allow(clippy::too_many_arguments)]
 async fn gate_and_invoke<R, Fut>(
     entry: Option<&dyn ResolvedOp>,
     task_id: String,
@@ -596,15 +594,7 @@ fn effective_timeout(timeout_seconds: i32) -> Duration {
 /// `duration_millis` is measured from `received_at` (true receipt), covering
 /// both queue-wait time and the zero execution time.
 fn timeout_result(task_id: String, received_at: Instant) -> TaskResult {
-    TaskResult {
-        task_id,
-        outcome: Outcome::Timeout as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        truncated: false,
-        duration_millis: received_at.elapsed().as_millis() as i64,
-    }
+    not_executed_after(task_id, Outcome::Timeout, Vec::new(), received_at.elapsed())
 }
 
 /// Synthesizes an `OUTCOME_CANCELLED` [`TaskResult`] for a Task cancelled while queued.
@@ -612,28 +602,12 @@ fn timeout_result(task_id: String, received_at: Instant) -> TaskResult {
 /// `duration_millis` is measured from `received_at`, covering queue-wait time.
 /// The Task never executed — no process was spawned.
 fn cancelled_result(task_id: String, received_at: Instant) -> TaskResult {
-    TaskResult {
+    not_executed_after(
         task_id,
-        outcome: Outcome::Cancelled as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        truncated: false,
-        duration_millis: received_at.elapsed().as_millis() as i64,
-    }
-}
-
-/// Synthesizes a `OUTCOME_DENIED_BY_POLICY` [`TaskResult`] — no process spawned.
-fn denied_by_policy_result(task_id: String, reason: &str) -> TaskResult {
-    TaskResult {
-        task_id,
-        outcome: Outcome::DeniedByPolicy as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: reason.as_bytes().to_vec(),
-        truncated: false,
-        duration_millis: 0,
-    }
+        Outcome::Cancelled,
+        Vec::new(),
+        received_at.elapsed(),
+    )
 }
 
 /// The one reason string for an out-of-vocabulary Operation, shared by the
@@ -653,28 +627,12 @@ pub(crate) const UNSUPPORTED_REASON: &str =
 /// this Node's vocabulary, so nothing ran and Policy was never consulted
 /// (ADR-0021, issue #291).
 fn unsupported_result(task_id: String) -> TaskResult {
-    TaskResult {
-        task_id,
-        outcome: Outcome::Unsupported as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: UNSUPPORTED_REASON.as_bytes().to_vec(),
-        truncated: false,
-        duration_millis: 0,
-    }
+    not_executed(task_id, Outcome::Unsupported, UNSUPPORTED_REASON)
 }
 
 /// Synthesizes an `OUTCOME_FAILURE` result for protocol errors.
 fn failure_result(task_id: String, stderr: &[u8]) -> TaskResult {
-    TaskResult {
-        task_id,
-        outcome: Outcome::Failure as i32,
-        exit_code: -1,
-        stdout: Vec::new(),
-        stderr: stderr.to_vec(),
-        truncated: false,
-        duration_millis: 0,
-    }
+    not_executed(task_id, Outcome::Failure, stderr)
 }
 
 /// The stderr reason on an admission-rejected Task (issue #338).

@@ -17,6 +17,7 @@ use tokio::sync::oneshot;
 use crate::config::ResourceLimits;
 use crate::executor::ExecRequest;
 use crate::gen::{Outcome, TaskResult};
+use crate::not_executed::not_executed;
 
 /// Validates that `unit` is a safe systemd unit name.
 ///
@@ -84,15 +85,7 @@ where
         Ok(v) => v,
         Err(e) => {
             // cancel drops naturally here — invalid unit name, no process spawned.
-            return TaskResult {
-                task_id,
-                outcome: Outcome::Failure as i32,
-                exit_code: -1,
-                stdout: vec![],
-                stderr: e.to_string().into_bytes(),
-                truncated: false,
-                duration_millis: 0,
-            };
+            return not_executed(task_id, Outcome::Failure, e.to_string());
         }
     };
     let req = ExecRequest {

@@ -23,6 +23,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 
 use crate::gen::{Outcome, TaskResult};
+use crate::not_executed::{denied_by_policy_result, not_executed};
 
 /// Result of the layer-2 resolved-target Policy re-check (ADR-0018): after the
 /// executor opens the path and resolves the target it actually got, it asks
@@ -142,44 +143,28 @@ pub fn file_read(
     }
 }
 
-/// `OUTCOME_DENIED_BY_POLICY` result (mirrors dispatch's `denied_by_policy_result`).
+/// `OUTCOME_DENIED_BY_POLICY` result (the shared `denied_by_policy_result`).
 fn denied_by_policy(task_id: &str, reason: &str) -> TaskResult {
-    TaskResult {
-        task_id: task_id.to_string(),
-        outcome: Outcome::DeniedByPolicy as i32,
-        exit_code: -1,
-        stdout: vec![],
-        stderr: reason.as_bytes().to_vec(),
-        truncated: false,
-        duration_millis: 0,
-    }
+    denied_by_policy_result(task_id.to_string(), reason)
 }
 
 /// `OUTCOME_FAILURE` result for a path that opened but is not a regular file
 /// (FIFO, socket, device, directory). `file.read` serves regular files only.
 fn not_regular_file_failure(task_id: &str, path: &str) -> TaskResult {
-    TaskResult {
-        task_id: task_id.to_string(),
-        outcome: Outcome::Failure as i32,
-        exit_code: -1,
-        stdout: vec![],
-        stderr: format!("read {path}: not a regular file").into_bytes(),
-        truncated: false,
-        duration_millis: 0,
-    }
+    not_executed(
+        task_id.to_string(),
+        Outcome::Failure,
+        format!("read {path}: not a regular file"),
+    )
 }
 
 /// `OUTCOME_FAILURE` result for an I/O error, naming the requested `path`.
 fn read_failure(task_id: &str, path: &str, e: &std::io::Error) -> TaskResult {
-    TaskResult {
-        task_id: task_id.to_string(),
-        outcome: Outcome::Failure as i32,
-        exit_code: -1,
-        stdout: vec![],
-        stderr: format!("read {}: {}", path, crate::config::clean_io_error(e)).into_bytes(),
-        truncated: false,
-        duration_millis: 0,
-    }
+    not_executed(
+        task_id.to_string(),
+        Outcome::Failure,
+        format!("read {}: {}", path, crate::config::clean_io_error(e)),
+    )
 }
 
 // ---------------------------------------------------------------------------

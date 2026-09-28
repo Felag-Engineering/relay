@@ -20,6 +20,7 @@
 #![cfg(test)]
 
 use crate::gen::RiskClass;
+use crate::operations::registry::ResolvedOp;
 use crate::operations::template::{compile, TemplateDef};
 use crate::policy::{from_toml_str, path_is_canonical, Decision, Policy};
 

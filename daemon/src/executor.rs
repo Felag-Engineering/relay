@@ -20,6 +20,7 @@ use tokio::sync::oneshot;
 
 use crate::config::ResourceLimits;
 use crate::gen::{Outcome, TaskResult};
+use crate::not_executed::not_executed_after;
 
 /// Grace period between SIGTERM and SIGKILL when killing a Task's group.
 /// Fixed for v1 (privileged side, deterministic); a Policy-configurable value is future work.
@@ -379,15 +380,12 @@ fn apply_rlimits(limits: &ResourceLimits) -> std::io::Result<()> {
 /// `OUTCOME_ERROR` does not exist in proto; `OUTCOME_FAILURE` + `exit_code -1` +
 /// the OS error in `stderr` is the honest available mapping (documented in the plan).
 fn failure_result(task_id: &str, stderr: &[u8], started: Instant) -> TaskResult {
-    TaskResult {
-        task_id: task_id.to_string(),
-        outcome: Outcome::Failure as i32,
-        exit_code: -1,
-        stdout: vec![],
-        stderr: stderr.to_vec(),
-        truncated: false,
-        duration_millis: started.elapsed().as_millis() as i64,
-    }
+    not_executed_after(
+        task_id.to_string(),
+        Outcome::Failure,
+        stderr,
+        started.elapsed(),
+    )
 }
 
 #[cfg(test)]

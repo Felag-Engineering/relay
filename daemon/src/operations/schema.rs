@@ -84,8 +84,8 @@ pub struct CharsetSpec {
     /// already used in the validator doc comments and in `opvocab.go`.
     pub display: &'static str,
     // Only read by `contains()`, which is only exercised by the proof test
-    // (`#[cfg(test)]`) — `#[allow(dead_code)]` mirrors `descriptors()`'s
-    // "only referenced in tests" precedent above in this crate.
+    // (`#[cfg(test)]`). A struct field cannot be `#[cfg(test)]` without
+    // changing every constructor, so it carries `#[allow(dead_code)]` instead.
     #[allow(dead_code)]
     predicate: fn(char) -> bool,
 }
