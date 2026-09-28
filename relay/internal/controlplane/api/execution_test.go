@@ -492,7 +492,7 @@ func TestRunOperation_MalformedInputIsRejectedBeforeDispatch(t *testing.T) {
 		},
 		{
 			name:    "timeout past the 24h bound",
-			body:    runOperationRequest{Operation: "system.facts", TimeoutSeconds: maxTimeoutSeconds + 1},
+			body:    runOperationRequest{Operation: "system.facts", TimeoutSeconds: controlplane.MaxTimeoutSeconds + 1},
 			wantSub: "timeout_seconds",
 		},
 		{
@@ -701,7 +701,7 @@ func TestExecutionResponse_ResultsAreSortedByNodeID(t *testing.T) {
 // Output past the render cap is truncated with the flag set, so a Raw Exec
 // Task's unbounded output cannot inflate the response.
 func TestExecutionResponse_TruncatesLargeOutput(t *testing.T) {
-	big := strings.Repeat("x", maxRenderedOutputBytes+100)
+	big := strings.Repeat("x", controlplane.MaxRenderedOutputBytes+100)
 	exec := &fakeExecutor{runResults: []capability.NodeResult{{NodeID: "n1", JobID: "job-1"}}}
 	h := newExecFixture(t, accounts.RoleAdmin, exec, fakeJobs{
 		job:   jobs.Job{ID: "job-1"},
@@ -716,9 +716,9 @@ func TestExecutionResponse_TruncatesLargeOutput(t *testing.T) {
 	if len(body.Results) != 1 {
 		t.Fatalf("%d results, want 1", len(body.Results))
 	}
-	if len(body.Results[0].Stdout) != maxRenderedOutputBytes || !body.Results[0].StdoutTruncated {
+	if len(body.Results[0].Stdout) != controlplane.MaxRenderedOutputBytes || !body.Results[0].StdoutTruncated {
 		t.Errorf("stdout len = %d truncated = %v, want %d and true",
-			len(body.Results[0].Stdout), body.Results[0].StdoutTruncated, maxRenderedOutputBytes)
+			len(body.Results[0].Stdout), body.Results[0].StdoutTruncated, controlplane.MaxRenderedOutputBytes)
 	}
 }
 
