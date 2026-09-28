@@ -330,70 +330,14 @@ func parseConfig() Config {
 	cfg.StorePath = envOr("RELAY_STORE_PATH", *storePath)
 	cfg.Hostname = envOr("RELAY_HOSTNAME", *hostname)
 
-	cfg.EnrollIPRate = *enrollIPRate
-	if env := os.Getenv("RELAY_ENROLL_IP_RATE"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.EnrollIPRate = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_ENROLL_IP_RATE", "value", env)
-		}
-	}
-	cfg.EnrollIPBurst = *enrollIPBurst
-	if env := os.Getenv("RELAY_ENROLL_IP_BURST"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.EnrollIPBurst = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_ENROLL_IP_BURST", "value", env)
-		}
-	}
-	cfg.EnrollGlobalRate = *enrollGlobalRate
-	if env := os.Getenv("RELAY_ENROLL_GLOBAL_RATE"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.EnrollGlobalRate = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_ENROLL_GLOBAL_RATE", "value", env)
-		}
-	}
-	cfg.EnrollGlobalBurst = *enrollGlobalBurst
-	if env := os.Getenv("RELAY_ENROLL_GLOBAL_BURST"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.EnrollGlobalBurst = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_ENROLL_GLOBAL_BURST", "value", env)
-		}
-	}
-	cfg.EnrollMaxTrackedIPs = *enrollMaxTrackedIPs
-	if env := os.Getenv("RELAY_ENROLL_MAX_TRACKED_IPS"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.EnrollMaxTrackedIPs = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_ENROLL_MAX_TRACKED_IPS", "value", env)
-		}
-	}
-	cfg.MaxNodes = *maxNodes
-	if env := os.Getenv("RELAY_MAX_NODES"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.MaxNodes = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_MAX_NODES", "value", env)
-		}
-	}
-	cfg.ReadBlastCap = *readBlastCap
-	if env := os.Getenv("RELAY_READ_BLAST_CAP"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.ReadBlastCap = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_READ_BLAST_CAP", "value", env)
-		}
-	}
-	cfg.MutateBlastCap = *mutateBlastCap
-	if env := os.Getenv("RELAY_MUTATE_BLAST_CAP"); env != "" {
-		if v, err := strconv.Atoi(env); err == nil {
-			cfg.MutateBlastCap = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_MUTATE_BLAST_CAP", "value", env)
-		}
-	}
+	cfg.EnrollIPRate = intEnvOr("RELAY_ENROLL_IP_RATE", *enrollIPRate)
+	cfg.EnrollIPBurst = intEnvOr("RELAY_ENROLL_IP_BURST", *enrollIPBurst)
+	cfg.EnrollGlobalRate = intEnvOr("RELAY_ENROLL_GLOBAL_RATE", *enrollGlobalRate)
+	cfg.EnrollGlobalBurst = intEnvOr("RELAY_ENROLL_GLOBAL_BURST", *enrollGlobalBurst)
+	cfg.EnrollMaxTrackedIPs = intEnvOr("RELAY_ENROLL_MAX_TRACKED_IPS", *enrollMaxTrackedIPs)
+	cfg.MaxNodes = intEnvOr("RELAY_MAX_NODES", *maxNodes)
+	cfg.ReadBlastCap = intEnvOr("RELAY_READ_BLAST_CAP", *readBlastCap)
+	cfg.MutateBlastCap = intEnvOr("RELAY_MUTATE_BLAST_CAP", *mutateBlastCap)
 
 	cfg.MinDaemonVersion = envOr("RELAY_MIN_DAEMON_VERSION", *minDaemonVersion)
 	cfg.CertExpiringFraction = certExpiringFractionFromEnv(
@@ -401,33 +345,12 @@ func parseConfig() Config {
 	cfg.ApprovalGatePath = envOr("RELAY_APPROVAL_GATE_CONFIG", *approvalGatePath)
 	cfg.ApprovalWebhookURL = envOr("RELAY_APPROVAL_WEBHOOK_URL", *approvalWebhookURL)
 	cfg.ApprovalWebhookSecretPath = envOr("RELAY_APPROVAL_WEBHOOK_SECRET_FILE", *approvalWebhookSecret)
-	cfg.ApprovalWebhookTimeout = *approvalWebhookTimeout
-	if env := os.Getenv("RELAY_APPROVAL_WEBHOOK_TIMEOUT"); env != "" {
-		if d, err := time.ParseDuration(env); err == nil && d > 0 {
-			cfg.ApprovalWebhookTimeout = d
-		} else {
-			slog.Warn("ignoring invalid RELAY_APPROVAL_WEBHOOK_TIMEOUT", "value", env)
-		}
-	}
+	cfg.ApprovalWebhookTimeout = durationEnvOr("RELAY_APPROVAL_WEBHOOK_TIMEOUT", *approvalWebhookTimeout)
 
-	cfg.ControlEnabled = *controlEnabled
-	if env := os.Getenv("RELAY_CONTROL_ENABLED"); env != "" {
-		if v, err := strconv.ParseBool(env); err == nil {
-			cfg.ControlEnabled = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_CONTROL_ENABLED", "value", env)
-		}
-	}
+	cfg.ControlEnabled = boolEnvOr("RELAY_CONTROL_ENABLED", *controlEnabled)
 	cfg.ControlAddr = envOr("RELAY_CONTROL_ADDR", *controlAddr)
 
-	cfg.ConsoleEnabled = *consoleEnabled
-	if env := os.Getenv("RELAY_CONSOLE_ENABLED"); env != "" {
-		if v, err := strconv.ParseBool(env); err == nil {
-			cfg.ConsoleEnabled = v
-		} else {
-			slog.Warn("ignoring invalid RELAY_CONSOLE_ENABLED", "value", env)
-		}
-	}
+	cfg.ConsoleEnabled = boolEnvOr("RELAY_CONSOLE_ENABLED", *consoleEnabled)
 	cfg.ConsoleSessionMaxAge = durationEnvOr("RELAY_CONSOLE_SESSION_MAX_AGE", *consoleSessionMaxAge)
 	cfg.ConsoleSessionIdle = durationEnvOr("RELAY_CONSOLE_SESSION_IDLE", *consoleSessionIdle)
 	cfg.ConsoleStepUpWindow = durationEnvOr("RELAY_CONSOLE_STEP_UP_WINDOW", *consoleStepUpWindow)
@@ -1238,6 +1161,37 @@ func auditExpiry(ctx context.Context, deps *appDeps, r approval.Request) error {
 		Reason: fmt.Sprintf("approval request %s expired at %s without reaching %s (plan %s): %s",
 			r.ID, r.ExpiresAt.UTC().Format(time.RFC3339), r.Progress(), r.PlanHash, r.Summary),
 	})
+}
+
+// intEnvOr reads an integer from the environment, falling back to fallback
+// and warning on anything unparseable. It applies no bounds of its own:
+// range checks on these values live where the value is consumed.
+func intEnvOr(key string, fallback int) int {
+	env := os.Getenv(key)
+	if env == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(env)
+	if err != nil {
+		slog.Warn("ignoring invalid "+key, "value", env)
+		return fallback
+	}
+	return v
+}
+
+// boolEnvOr reads a boolean (as strconv.ParseBool accepts it) from the
+// environment, falling back to fallback and warning on anything unparseable.
+func boolEnvOr(key string, fallback bool) bool {
+	env := os.Getenv(key)
+	if env == "" {
+		return fallback
+	}
+	v, err := strconv.ParseBool(env)
+	if err != nil {
+		slog.Warn("ignoring invalid "+key, "value", env)
+		return fallback
+	}
+	return v
 }
 
 // durationEnvOr reads a positive duration from the environment, falling back
