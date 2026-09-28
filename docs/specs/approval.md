@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-27`.
+**Status:** designed, not built, as of `2026-09-28`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -122,12 +122,18 @@ interim; what it gives up, and what would bring it back, is `approval-assurance.
   Console, self-confirmation is the requester reviewing what Relay rendered and confirming; for an
   MCP request it is an **in-band** answer.
 - **AP-10** An MCP in-band answer carries the client's asserted approver identity, and Relay
-  records it as an **assertion** (ADR-0029) — never as something it verified.
+  records it as an **assertion** (ADR-0029) — never as something it verified. The one exception
+  is designed, not built: AP-79's answer, on a human Account's OAuth session, carries no asserted
+  identity, because the verified Account is itself the approver.
 
 Rung selection turns on a point ADR-0027 states outright: **MCP-originated calls are agent-grade
 regardless of whose OAuth identity authorizes the session.** Session authorization is not
 per-call human intent — the calls are still model-generated, and the session is steerable by
-prompt injection in content the model read.
+prompt injection in content the model read. That governs the *request*. AP-79, designed and not
+built, settles the *answer* differently for one client: a Claude Code answer, given in the
+client's own UI which the model never sees, on a human Account's OAuth session, counts as that
+human's own verified decision (owner decision `2026-09-28`; ADR-0027 and ADR-0029 amendment notes
+of that date).
 
 - **AP-11** A machine Account cannot decide its own request *on its own authority*. The one
   relaxation is ADR-0029's: an in-band answer carrying an asserted approver identity is accepted
@@ -185,7 +191,9 @@ yet the product's own text.
 - **AP-17** Both paths record into the same decision model, and the audit entry carries the answer
   and the channel. What differs is which lane carries the approver: out-of-band the deciding
   Account *is* the approver and is verified, while in-band the verified lane holds the Account that
-  relayed the answer and the human is an assertion beside it (AP-39). Either is a full approval
+  relayed the answer and the human is an assertion beside it (AP-39) — except under AP-79,
+  designed and not built, where the relaying Account is the human on their own OAuth session and
+  so is the verified approver. Either is a full approval
   path: a rule set to `in-band` is satisfied by either. They are not of equal **strength**: AP-13
   still holds, so a rule set to `out-of-band` is satisfied by the second path only.
 - **AP-18** A decision never arrives by any route but these two. **Relay integrates no chat or
@@ -220,11 +228,14 @@ whose approver Relay verifies.
   off a request already pending re-pages nobody (AP-41).
 - **AP-63** An answer carried on the retried call records **the same Decision** as
   `approve_request`, into the same two lanes (AP-39): the in-band channel, the verified Account
-  whose credential made the call, the responder identity recorded as an assertion, and the same
-  refusals (AP-42 … AP-49).
+  whose credential made the call, the responder identity — where the answer carries one —
+  recorded as an assertion, and the same refusals (AP-42 … AP-49). Under AP-79 it carries none,
+  and nothing is written to the asserted lane in its place.
 - **AP-64** An answer is accepted as a decision only when it carries a **responder assertion**
-  whose gate is `permission`; an answer without one is machine-originated and is refused exactly
-  as an `approve_request` carrying no approver is refused (AP-48). The recognised form today is
+  whose gate is `permission`, or when AP-79 (designed, not built) accepts it: a `claude-code`
+  answer on a human Account's OAuth session, where the verified human is the approver. Any other
+  answer without one is machine-originated and is refused exactly as an `approve_request`
+  carrying no approver is refused (AP-48). The recognised form today is
   `io.gleipnir/responder` — one form of a general responder assertion, so a standard key later is
   additive.
 - **AP-65** The state a client echoes back is **sealed and bound** to the caller, the request, the
@@ -386,7 +397,9 @@ relayed the answer, beside an assertion about who authored it. A jailbroken AI-a
 anything and forge nothing. An auditor can always separate *"a human authenticated to Relay and
 approved this"* from *"a client told us a human approved this"* — and collapsing that distinction
 would buy simplicity by making the trail claim more than Relay knows. Once AP-55 seeds its default,
-most MCP approvals will be the second kind, and the trail will say so.
+most MCP approvals will be the second kind, and the trail will say so. AP-79, designed and not
+built, is the one in-band form of the first kind: the Account on the verified lane is the human
+on their own OAuth session, nothing is asserted, and so nothing is blended.
 
 ## Refusals
 
@@ -590,8 +603,8 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
 | AP-77 | **An approval releases one execution.** A released request is bound to exactly one Job, and the binding is made once and survives the requesting call ending — a client timeout, a dropped connection or a cancelled request cannot leave a dispatched Job unbound. While the approval is in force — before its deadline — any later dispatch whose plan hash matches a released request, a re-drive on any surface, answered or not, sequential or concurrent, re-attaches to that Job and dispatches nothing; of two concurrent dispatches, exactly one runs. Re-attaching takes precedence over a covering approval grant, so a re-drive never spends a grant use to repeat released work. Once the deadline passes, the same plan parks afresh and needs a new approval: an expired approval authorises nothing, including a resurrection of its old Job. Re-attaching is not scoped to the requesting Account — the dispatch role floor is checked first, and a Job is already readable by any caller who clears it, so nothing is disclosed that was not already readable; scoping an unbound release to its requester is tracked for the permissions rework (#716). Generalises AP-67 beyond an answered retry, and closes #713 (owner decision 2026-09-27, answering #387). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-78 | A question is emitted only to a client whose answer Relay recognises, by the client name it declares with the call: `gleipnir` or `claude-code` today. Any other client — including one that advertises elicitation — gets today's `pending_approval` and asks nobody. The declared name only decides whether to ask; acceptance still turns on AP-64 and AP-79, so spoofing it can earn a question but never an accepted answer. Narrows AP-61 and closes #743. | v0.7.0 — Admin Console: Administration & Execution |
-| AP-79 | An `accept` from a client declaring itself `claude-code`, carrying no responder assertion, is accepted as an **unnamed confirmation**: recorded in-band, with the verified requester, and with the asserted lane stating that the approver was unnamed rather than naming anyone. A `decline` from it is a denial. It satisfies only what AP-64's named form satisfies, never more. Owner decision 2026-09-27, interim until the permissions rework (#716). | v0.7.0 — Admin Console: Administration & Execution |
+| AP-78 | A question is emitted only to a client Relay recognises by the client name it declares with the call. `gleipnir` is asked wherever AP-61 allows. `claude-code` is asked only where AP-61 allows **and** the call arrives on an **OAuth session** of a **human** Account (AP-79). Any other client — including one that advertises elicitation — and a client declaring `claude-code` on any other session, an API Token session or a machine Account among them, gets today's `pending_approval` and asks nobody. The declared name is self-reported and only decides whether to ask; the answer is still bound to the caller's own authenticated identity (AP-65) and accepted only under AP-64 or AP-79. Narrows AP-61 and closes #743. Rewritten before being built (owner decision 2026-09-28). | v0.7.0 — Admin Console: Administration & Execution |
+| AP-79 | An answer from a client declaring itself `claude-code` counts only when the calling Principal authenticated by **OAuth** and its Account is **human**. It is then that human's own **verified** decision: recorded in-band, with the deciding Account in the verified lane as the approver, no responder assertion required, and nothing written to the asserted lane in its place. An `accept` is an approval and a `decline` a denial, and it meets exactly the refusals any in-band decision by that Account meets (AP-42 … AP-49) — as the requester too, it never satisfies a rule that excludes the requester, and AP-13 keeps it from satisfying an `out-of-band` rule. On any other session the client is not asked (AP-78), so a Claude Code answer never reaches a path that accepts it without a verified human. The request stays agent-grade (ADR-0027); the answer, given in the client's own UI which the model never sees, counts as the human's. Owner decision 2026-09-28, replacing the unnamed confirmation of 2026-09-27 before it was built (#716, #351). | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
@@ -657,28 +670,36 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   an approval never was: Relay-side authorization on who may request, the blast cap, the
   plan-hash binding, drift re-parking, and Node Policy, which no approval has ever been able
   to lower. Threat model **R21** and **R26**; what is shelved, and what would bring it back,
-  is `approval-assurance.md`.
+  is `approval-assurance.md`. *(Qualified `2026-09-28`: AP-79, designed and not built, makes a
+  Claude Code answer on a human Account's OAuth session a verified decision. OAuth has never run
+  live (#351), so until it does nothing in the shipped posture produces a verified approver over
+  MCP, and this entry stands as written.)*
 - **An in-band approval is only as honest as the client's path to the human.** Behind a firewall,
   in-band is expected to be the everyday path, so for `in-band` rules the guarantee that a human
   decided rests on the client — Gleipnir's HIL router, or an operator's harness — keeping
-  ADR-0027's rule. Relay records such an approver as asserted and cannot detect an auto-answer.
+  ADR-0027's rule. Relay records such an approver as asserted and cannot detect an auto-answer;
+  AP-79's OAuth form, recorded as verified, has the same blind spot (the Claude Code entry below).
   **The same acceptance covers AP-64's responder assertion**: a responder assertion on an MRTR
   answer is a claim by the client that a human, and not the model, produced it. Relay checks that
   the assertion is present and bound (AP-65); it cannot check that it is true, and a client that
   auto-answers its own question is indistinguishable from one that asked a person. An operator who
   needs evidence sets the rule to `out-of-band`. Accepted by the owner on `2026-09-18` (threat
   model R21) and extended to the responder assertion on `2026-09-24`.
-- **Claude Code answers name nobody (AP-79).** Claude Code supports the MRTR round trip by
-  default but sends no responder assertion, so its answer is recorded as an unnamed
-  confirmation: Relay knows a client accepted, not who. Two things make that weaker than
-  Gleipnir's form, and the owner accepted both on `2026-09-27` as interim: a configured Claude
-  Code **hook** can answer an elicitation with no human present, indistinguishably; and whether
-  Claude Code speaks the MRTR protocol at all is governed by a remote feature flag, so it can
-  revert to `pending_approval` without any change here. The declared client name that selects
-  this form (AP-78) is self-reported, which is safe only because it decides whether to ask,
-  never whether to accept. The intended fix is identity rather than trust: the person using
-  Claude Code signs in to Relay over OAuth when adding it as an MCP server, so the answering
-  session is a verified human (#716, #351).
+- **A Claude Code answer proves who owns the session, not that a human read the question
+  (AP-78, AP-79).** A Claude Code answer counts only on a human Account's OAuth session, and is
+  then recorded as that human's verified decision. Verified means Relay authenticated whose
+  session answered; it does not mean that person read this question. A configured Claude Code
+  **hook** can answer an elicitation with no human present, and Relay cannot tell it from a
+  person, so the verified lane can hold a human who never saw the request. Whether Claude Code
+  speaks the MRTR protocol at all is governed by a remote feature flag, so it can revert to
+  `pending_approval` without any change here. The owner's framing, which ADR-0027 and ADR-0029
+  each record in a dated amendment: the *request* stays agent-grade, and the *answer*, given in
+  the client's own UI which the model never sees, counts as the human's. The declared client name is
+  self-reported, and decides only whether to ask: the answer is bound to the caller's own
+  credential (AP-65), and on an API Token session or a machine Account the client is not asked
+  at all. OAuth has never run live against a real identity provider (#351), so until it does
+  nothing in the shipped posture reaches this form. Accepted by the owner on `2026-09-28`,
+  replacing the unnamed-confirmation entry accepted on `2026-09-27`.
 - **Gleipnir's form is a vendor key (AP-64).** Its one recognised responder form is
   `io.gleipnir/responder`, a self-report of the same strength as `approve_request`'s `approver`:
   interoperability discipline, not verification. Accepted by the owner on `2026-09-25`; a standard
@@ -749,6 +770,13 @@ none is a commitment to an order.
   general requirement-versus-decisions shape precisely so richer matching lands as a config-language
   change with no data migration. What is future is the config language, and out-of-band
   requirements practical enough to become the default for agent-grade mutations.
+- **An unnamed confirmation, if ever reintroduced, is its own structural field.** A constraint
+  on any future design, set by the owner on `2026-09-28`: an answer accepted without naming an
+  approver is never recorded as an asserted-approver string, because `approve_request` lets
+  anyone type any string there and the trail could not tell the real form from a forgery. If
+  such a form returns, it is recorded as a distinct structural field in the decision and audit
+  record that no typed text can produce. Nothing needs it today: AP-79 was rewritten so a Claude
+  Code answer is a verified human decision, and no other client reaches an unnamed path.
 - **Retiring `approve_request`.** The owner's intent is that it may be retired once MRTR
   elicitation is usable from the clients Relay is driven by, which first requires those clients to
   negotiate the 2026-07-28 protocol. Not decided here: it needs an ADR-0029 amendment first
@@ -788,6 +816,24 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-28` — **AP-78 and AP-79 rewritten before being built (owner, 2026-09-28).**
+  Implementing them (#743, draft PR #765) exposed a flaw in the decision of `2026-09-27`: the
+  declared client name is self-reported, so any client, automated or model-driven,
+  could claim `claude-code` and have its own `accept` counted, and AP-78's sentence that
+  spoofing the name "can earn a question but never an accepted answer" was false under AP-79.
+  Separately, the unnamed-confirmation marker was to be written as an asserted-approver string,
+  which anyone can type through `approve_request`, so the trail could not tell a real one from a
+  forged one. The owner decided: **(1)** a Claude Code answer counts only on a human Account's
+  OAuth session, as that human's own verified decision, and on any other session the client is
+  not asked; **(2)** an unnamed confirmation, if ever reintroduced, is its own structural field,
+  never an asserted string — recorded under *Future work* as a constraint. Both claims are
+  rewritten in place, since neither was built; **PR #765 must be reworked** to match. AP-10,
+  AP-17, AP-63 and AP-64 gain the AP-79 exception; the *Accepted residual risk* entry for Claude
+  Code is rewritten around the hook caveat; ADR-0027 and ADR-0029 carry dated notes. **For the
+  implementer:** the OAuth resolver sets the Principal's authentication method to OAuth and
+  copies the Account's kind through without checking it — an OAuth session may resolve to a
+  machine Account — so AP-79's human-Account condition must be checked by the acceptance path
+  itself, not assumed from the method. (#743)
 - `2026-09-28` — **AP-77 qualified before promotion (owner, 2026-09-28).** Three reviews of
   #713's fix (PR #752) found the claim's "any later dispatch" unconditional while the code
   re-attaches only while the approval is in force. The owner chose the in-force reading: after
