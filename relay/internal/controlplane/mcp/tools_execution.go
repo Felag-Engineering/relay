@@ -627,11 +627,20 @@ func answerThenDispatch(
 
 	switch r.Outcome {
 	case elicitedApproved, elicitedLapsed, elicitedStillPending:
-		// #713 (deferred by the owner, out of scope here): approval.Request's
-		// Satisfied check does not pin JobID == "", so two approving retries
-		// racing each other between this decision and BindJob below — or a
-		// plain re-drive carrying no request state at all — can still mint
-		// two Jobs for the same Request. This PR does not close that window.
+		// A concurrent approving retry, or a plain re-drive carrying no
+		// request state at all, is now resolved in the capability layer
+		// (#713, AP-77): Service.Run claims a single-Plan approval's release
+		// exactly once, inside a store transaction, before it dispatches, and
+		// a loser re-attaches to the winner's Job instead of dispatching a
+		// second one. This branch therefore cannot mint a second Job.
+		//
+		// The elicitedApprovedJobBound branch below remains AP-67's narrower
+		// answered-retry re-attach, and the two differ in one respect worth
+		// keeping straight: that branch trusts the sealed request state and
+		// re-attaches without re-checking the approval's deadline, while this
+		// capability-layer claim is bounded by Satisfied(now) — a re-drive
+		// past the deadline parks afresh rather than re-attaching forever
+		// (AP-25).
 		out, parked, err := dispatch(ctx, exec, results, p, sel, act)
 		if err != nil {
 			return nil, RunOrPlanOutput{}, r.dispatchError(err)

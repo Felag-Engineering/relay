@@ -322,21 +322,67 @@ func (a *sqliteApprovals) RecordDecision(ctx context.Context, id string, d appro
 	return updated, nil
 }
 
-// BindJob records the Job created for an approved Request.
-func (a *sqliteApprovals) BindJob(ctx context.Context, id, jobID string) error {
-	res, err := a.db.ExecContext(ctx,
-		`UPDATE approval_requests SET job_id = ? WHERE request_id = ?`, jobID, id)
+// BindJob is the release claim (AP-77): it binds jobID to the Request only if
+// the Request is Satisfied at now AND has no Job already bound, atomically.
+//
+// The conditional "job_id IS NULL" in the UPDATE below is the store-level half
+// of AP-77 and is never relaxed. There is deliberately no un-bind path. An
+// approval, once claimed, stays spent.
+//
+// The whole read-check-write runs in one transaction, the same basis
+// RecordDecision and ClaimGrant stand on, plus store.Open's
+// SetMaxOpenConns(1): of two concurrent claims, exactly one commits before the
+// other's transaction can even begin, so RowsAffected == 0 below is
+// belt-and-braces rather than the load-bearing check.
+func (a *sqliteApprovals) BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error) {
+	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("bind job to approval request: %w", err)
+		return approval.Request{}, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	cur, err := a.getWith(ctx, tx, approvalSelect+` WHERE request_id = ?`, id)
+	if err != nil {
+		return approval.Request{}, err
+	}
+
+	// The domain type owns the release rule; the store only persists the
+	// result. On refusal, return cur — the Request read in this transaction,
+	// unchanged — mirroring RecordDecision's "refusal returns cur" contract.
+	updated, err := cur.Release(jobID, now)
+	if err != nil {
+		return cur, err
+	}
+
+	res, err := tx.ExecContext(ctx,
+		`UPDATE approval_requests SET job_id = ? WHERE request_id = ? AND job_id IS NULL`, jobID, id)
+	if err != nil {
+		return approval.Request{}, fmt.Errorf("bind job to approval request: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("bind job to approval request: rows affected: %w", err)
+		return approval.Request{}, fmt.Errorf("bind job to approval request: rows affected: %w", err)
 	}
 	if n == 0 {
-		return approval.ErrNotFound
+		// Unreachable under SetMaxOpenConns(1): any committed bind would
+		// already be visible to cur (read in this same tx), so cur.Released()
+		// would already be TRUE and cur.Release would have returned
+		// ErrAlreadyReleased above, never reaching this UPDATE. Kept as a
+		// fail-closed backstop against a future connection-pool change — and
+		// re-read the row rather than return cur as-is, because cur is the
+		// STALE pre-race read and its JobID is still empty: a caller
+		// re-attaching to cur.JobID would re-attach to nothing.
+		latest, rerr := a.getWith(ctx, tx, approvalSelect+` WHERE request_id = ?`, id)
+		if rerr != nil {
+			return approval.Request{}, fmt.Errorf("bind job to approval request: re-read after lost race: %w", rerr)
+		}
+		return latest, approval.ErrAlreadyReleased
 	}
-	return nil
+
+	if err := tx.Commit(); err != nil {
+		return approval.Request{}, fmt.Errorf("commit approval job bind: %w", err)
+	}
+	return updated, nil
 }
 
 // ExpirePending moves lapsed pending Requests to StateExpired.

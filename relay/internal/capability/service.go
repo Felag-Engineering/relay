@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
@@ -559,6 +560,12 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	if err != nil {
 		return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, err)
 	}
+	// The Request checkApproval found had ALREADY released a Job (AP-77): a
+	// sequential re-drive of an already-answered approval. Re-attach and
+	// dispatch nothing — see Service.reattach.
+	if ap.reattachJobID != "" {
+		return s.reattach(ctx, p, sel, nodes, ap.requestID, ap.reattachJobID)
+	}
 	if ap.parked != nil {
 		s.metrics.IncRefusal(RefusalPendingApproval)
 		// approval_requested means A REQUEST WAS CREATED (#379). A re-drive
@@ -603,24 +610,56 @@ func (s *Service) Run(ctx context.Context, p Principal, sel Selector, act jobs.A
 	}
 
 	d := newDispatch(p, sel, nodes, act)
-	res, dispatchErr := s.disp.run(ctx, d)
 
-	// Join the approval that released this dispatch to the Job it produced, so
-	// audit can answer "who approved what actually ran" rather than leaving the
-	// two records to be correlated by timestamp.
+	// A single-Plan approval's release is now CLAIMED before dispatch, not
+	// bound after it (AP-77). The join between the approval and the Job it
+	// releases is made by this claim, before any Job or Task exists — so a
+	// client timeout, a dropped connection, or a cancelled request after
+	// dispatch starts can never leave the Job unbound: there is nothing
+	// left to lose, because the bind already committed.
 	//
-	// ONLY for a single-Plan approval. A Request carries one job_id, which is
-	// right when one approval releases one Job — but a batch/window Grant
-	// (ADR-0027 decision 12) releases MANY, and binding each in turn would
-	// leave the authorizing Request pointing at whichever Job happened to run
-	// last, silently losing the rest. The grant-to-Jobs join is the audit
-	// trail's GrantID, which is why that field exists; a Grant deliberately
-	// does not reuse this one-to-one column.
-	if ap.grantID == "" && ap.requestID != "" && res.jobID != "" {
-		if err := s.approvals.BindJob(ctx, ap.requestID, res.jobID); err != nil {
-			dispatchErr = errors.Join(dispatchErr, fmt.Errorf("capability: bind job to approval: %w", err))
+	// Grant-released dispatches (ap.grantID non-empty) are never claimed here:
+	// a Request carries one job_id, which is right when one approval releases
+	// one Job, but a batch/window Grant (ADR-0027 decision 12) releases MANY,
+	// and binding each in turn would leave the authorizing Request pointing at
+	// whichever Job happened to run last, silently losing the rest. The
+	// grant-to-Jobs join is the audit trail's GrantID, which is why that field
+	// exists; a Grant deliberately does not reuse this one-to-one column.
+	//
+	// A Grant can never reach here for a plan an approval already released:
+	// checkApproval's re-attach lookup (Satisfied && Released) runs BEFORE it
+	// ever claims a Grant, so a Grant issued to cover a plan AFTER a
+	// single-Plan approval released it does NOT authorize a second Job while
+	// that approval is still in force — the re-drive re-attaches instead, and
+	// the Grant's own uses are untouched
+	// (TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan). Once the
+	// approval's deadline passes, Satisfied goes false, the released Request no
+	// longer shadows the Grant, and the Grant releases the dispatch normally.
+	if ap.grantID == "" && ap.requestID != "" {
+		jobID, err := s.disp.reserveJobID()
+		if err != nil {
+			return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: reserve job id for approval release: %w", err))
+		}
+		claimed, err := s.approvals.BindJob(ctx, ap.requestID, jobID, s.clock())
+		switch {
+		case err == nil:
+			d.jobID = jobID
+		case errors.Is(err, approval.ErrAlreadyReleased) && claimed.JobID != "":
+			// Lost the claim to a concurrent dispatch of the same plan. Nothing
+			// is dispatched here (AP-77) — re-attach to the winner's Job.
+			return s.reattach(ctx, p, sel, nodes, ap.requestID, claimed.JobID)
+		default:
+			// ErrNotReleasable (the deadline passed between read and claim),
+			// ErrNotFound, a store failure, or — defensively — ErrAlreadyReleased
+			// with no JobID to re-attach to (the store's belt-and-braces
+			// backstop should never produce this, but a re-attach to nothing
+			// must never be attempted). Fail closed: nothing is dispatched, and
+			// the next re-drive re-evaluates from scratch.
+			return nil, s.recordRefusal(ctx, p, sel, act, RefusalInternal, fmt.Errorf("capability: claim approval release: %w", err))
 		}
 	}
+
+	res, dispatchErr := s.disp.run(ctx, d)
 
 	// And onto the MCP task handle that was waiting for it, so a poll after the
 	// release reports `completed` rather than `working` forever. Unlike the

@@ -76,9 +76,21 @@ type Repository interface {
 	// is the zero value.
 	RecordDecision(ctx context.Context, id string, d Decision, now time.Time) (Request, error)
 
-	// BindJob records the Job ID created for an approved Request, so the
-	// approval and the execution it released can be joined in audit.
-	BindJob(ctx context.Context, id, jobID string) error
+	// BindJob is the release claim (AP-77): it binds jobID to the Request with
+	// ID id only if the Request is Satisfied at now AND has no Job already
+	// bound, atomically. Binding is what joins the approval and the execution
+	// it released for audit, and it happens at most once per Request.
+	//
+	// It returns the updated Request on success, or one of:
+	//   - ErrNotFound: no such Request.
+	//   - ErrAlreadyReleased: the Request already has a Job bound. The returned
+	//     Request is the one read inside the transaction, carrying the bound
+	//     JobID, so the caller can re-attach to it.
+	//   - ErrNotReleasable: the Request is not Satisfied (pending, denied,
+	//     expired, past its deadline, or short of quorum), or jobID is empty.
+	//     The returned Request is the one read inside the transaction,
+	//     unchanged, mirroring RecordDecision's "refusal returns cur" contract.
+	BindJob(ctx context.Context, id, jobID string, now time.Time) (Request, error)
 
 	// ExpirePending moves every pending Request whose deadline has passed to
 	// StateExpired, returning those it changed. Callers use the returned set to

@@ -1,6 +1,6 @@
 # Approval
 
-**Status:** designed, not built, as of `2026-09-27`.
+**Status:** designed, not built, as of `2026-09-28`.
 **Claim prefix:** `AP`
 
 ## Purpose
@@ -449,8 +449,9 @@ most MCP approvals will be the second kind, and the trail will say so.
 - **Invariant 3** (deny-beats-allow) — a denial is terminal and a stricter rule wins a merge
   (AP-27).
 - **Invariant 4** (at-most-once) — a released decision mints one Job; the re-attach branch of
-  AP-67 is the answer for a retried in-band approval, and the concurrent-retry window is an
-  accepted residual risk.
+  AP-67 is the answer for a retried in-band approval, and the concurrent-retry window is fixed
+  in code by #713's transactional claim, pending AP-77's promotion (its deadline-bounded
+  wording needs the human who owns the claim to confirm).
 - **Invariant 5** — a grant releases an approval requirement, never the blast cap (AP-37).
 - **Invariant 7** — the plan hash binds the resolved set by identity, which is what stops a Node
   forging its own `node:` labels from electing itself into approved work (AP-22).
@@ -674,18 +675,26 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
   `approve_request`'s `approver`: interoperability discipline, not verification. Accepted by the
   owner on `2026-09-25`; a standard responder key would be additive, and the question of which
   clients may answer at all belongs to the permissions rework (#716).
-- **A released approval can dispatch again on any later re-drive (#713).** An approval is not
-  used up when it releases a Job: until it expires, any later call matching the approved plan
-  passes the gate and mints a second Job, overwriting the audit join. **The ordinary trigger is
-  not a race:** an approved Job slower than the client's per-call timeout, after which the model
-  re-drives the same call with no request state. AP-67's re-attach covers only a retry carrying
-  sealed request state, so it does not close that trigger; two concurrent retries in the gap
-  between decision and binding are the narrow case of the same defect. The daemon's Task-ID
-  dedup — the actual subject of invariant 4 — is untouched, so no Node executes the same Task
-  twice, but the fleet can see one approved plan run twice. Accepted by the owner on
-  `2026-09-24`; on `2026-09-25` deferred until after #646, with the likelihood corrected by the
-  v0.7.0 design review. Until it is fixed, demo commands should finish well inside the per-call
-  timeout. Threat model **R24**.
+- **A released approval used to dispatch again on any later re-drive; now fixed in code, pending
+  AP-77's promotion (#713).** The release is now a transactional claim, made before dispatch with
+  a reserved Job ID: a re-drive on any surface re-attaches to the released Job rather than minting
+  a second one, and of two concurrent re-drives racing the claim exactly one wins. Three residuals
+  remain, matching threat model R24's rewritten row: **(a)** a claim that wins and then fails
+  before its Job row is created now needs a genuine store failure of `CreateJob` itself — a
+  client timeout, a dropped connection or a cancelled request can no longer strand any part of
+  the approved work, because for a reserved Job ID the whole persist-then-dispatch pipeline
+  (`CreateJob`, `AddStage`, every Task's persistence, and dispatch itself) runs on a context
+  detached from the request (`context.WithoutCancel`), so the Job runs to completion once the
+  claim commits — and when `CreateJob` does fail outright (a store failure, not a client
+  cancellation), the approval record names a Job ID nothing ever created, and re-drives get an
+  ordinary "job not found" until the deadline, after which the plan parks afresh. **(b)** A
+  concurrent loser can re-attach in that same narrow window, before the winner's own `CreateJob`
+  has committed, and sees the same "job not found" error, fail-closed; its retry succeeds once the
+  winner's Job exists. **(c)** Release is still keyed by plan hash, not by requester (pre-existing,
+  unchanged by #713): a different Account's identical re-drive re-attaches and reads the Job, an
+  audited read with the same reach as `get_job`. Scoping release to the requester has been
+  proposed as a follow-up; no issue is filed for it yet. Accepted by the owner on `2026-09-24`;
+  the fix landed in #713. Threat model **R24**.
 - **Bulk approve can rubber-stamp (AP-59).** Approving many requests in one act, Raw Exec
   included, is the approval-fatigue pattern this capability's Purpose names, and one step-up
   covers the whole act: a hijacked human Console session plus that Account's password could
@@ -779,6 +788,16 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-28` — **The release claim is now transactional and precedes dispatch; AP-77 stays
+  Designed pending a wording check (#713).** `BindJob` is now a conditional, transactional claim
+  on a reserved Job ID, made before any Task exists: a re-drive on any surface re-attaches to the
+  released Job rather than minting a second one, and of two concurrent re-drives exactly one wins.
+  Not promoted: the built re-attach holds only while the release is still in force — before the
+  approval's own deadline (`TestRun_ReleasedApprovalPastItsDeadlineParksAfresh` — past it, a
+  matching re-drive parks a fresh request rather than re-attaching) — and AP-77's own words read
+  unconditionally ("Any later dispatch … re-attaches"), so the claim needs its owner to add that
+  qualifier before it can move to Behaviour. `docs/security/threat-model.md` R24 records the fix
+  and its residuals. (#713, #387)
 - `2026-09-27` — **AP-77 added (Designed, v0.7.0): an approval releases one execution.** The
   owner answered #387 — a single approval is not redeemable until its TTL — and scheduled #713's
   fix before the live rehearsal. Found at the flip (#730, PR #741): a Codex review rated HIGH

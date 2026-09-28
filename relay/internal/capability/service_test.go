@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -12,7 +13,13 @@ import (
 )
 
 // spyAuthorizer records whether it was called and returns a fixed error.
+//
+// mu guards every field: the AP-77 concurrent-claim tests (#713) drive many
+// goroutines through Run at once, and Authorize/AuthorizeControl run BEFORE
+// the release claim's own serialisation kicks in, so this fake's bookkeeping
+// must not race itself.
 type spyAuthorizer struct {
+	mu     sync.Mutex
 	called bool
 	err    error
 
@@ -25,17 +32,24 @@ type spyAuthorizer struct {
 }
 
 func (s *spyAuthorizer) Authorize(context.Context, Principal, jobs.Action, Selector) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.called = true
 	return s.err
 }
 
 func (s *spyAuthorizer) AuthorizeControl(_ context.Context, _ Principal, act ControlAction) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.controlCalls = append(s.controlCalls, act)
 	return s.controlErr
 }
 
-// spyCapChecker records the arguments it was called with and returns a fixed error.
+// spyCapChecker records the arguments it was called with and returns a fixed
+// error. mu guards it for the same reason spyAuthorizer's does (AP-77
+// concurrent-claim tests, #713).
 type spyCapChecker struct {
+	mu         sync.Mutex
 	called     bool
 	gotClass   jobs.RiskClass
 	gotMatched int
@@ -43,6 +57,8 @@ type spyCapChecker struct {
 }
 
 func (s *spyCapChecker) Check(class jobs.RiskClass, matched int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.called = true
 	s.gotClass = class
 	s.gotMatched = matched
@@ -64,11 +80,49 @@ type spyDispatcher struct {
 	// failed cancel is reported rather than papered over.
 	cancelledJobID string
 	cancelErr      error
+
+	// ranWithJobID records the jobID a dispatch actually carried into run
+	// (AP-77): a reserved, already-bound ID when Service.Run claimed an
+	// approval's release, empty otherwise. Lets a test assert the dispatcher
+	// ran with the SAME id the claim bound, rather than minting its own.
+	ranWithJobID string
+
+	// reserveErr lets a test force reserveJobID to fail, exercising Run's
+	// RefusalInternal path when the dispatcher cannot mint a claim ID.
+	reserveErr error
+
+	// failWithNoJobID makes run report NO Job at all alongside err — the
+	// jobEngine CreateJob-failure shape (dispatchResult{}), distinct from a
+	// partial per-Task failure AFTER a Job was created (which still reports
+	// jobID and partial results). Used by
+	// TestRun_ClaimedReleaseThatFailsToDispatchStaysSpent to prove a claim
+	// that wins and then never gets a real Job stays spent (AP-77).
+	failWithNoJobID bool
 }
 
-func (s *spyDispatcher) run(context.Context, dispatch) (dispatchResult, error) {
+func (s *spyDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error) {
 	s.called = true
-	return dispatchResult{jobID: s.jobID, results: s.results}, s.err
+	s.ranWithJobID = d.jobID
+	if s.failWithNoJobID {
+		return dispatchResult{results: s.results}, s.err
+	}
+	jobID := s.jobID
+	if d.jobID != "" {
+		jobID = d.jobID
+	}
+	return dispatchResult{jobID: jobID, results: s.results}, s.err
+}
+
+// reserveJobID implements dispatcher (AP-77). Defaults to "job-1" so tests
+// that never set s.jobID still get a deterministic, non-empty reservation.
+func (s *spyDispatcher) reserveJobID() (string, error) {
+	if s.reserveErr != nil {
+		return "", s.reserveErr
+	}
+	if s.jobID != "" {
+		return s.jobID, nil
+	}
+	return "job-1", nil
 }
 
 // cancel satisfies the dispatcher interface's cancel method, recording the Job
@@ -88,7 +142,15 @@ func (s *spyDispatcher) query(context.Context, dispatch) (planResult, error) {
 }
 
 // spyAuditSink records the last AuditEntry/FreezeEvent it received.
+//
+// mu guards every recording method (AP-77, #713): the concurrent-claim tests
+// drive RecordRead/Record from many goroutines at once (losing re-attaches
+// racing the winning dispatch's audit write), and this fake's own slice
+// appends must not race each other the way an unsynchronised test fixture
+// would — the real AuditSink is backed by a single serialised SQLite
+// connection and has no such hazard.
 type spyAuditSink struct {
+	mu     sync.Mutex
 	called bool
 	entry  AuditEntry
 	// entries accumulates every recorded AuditEntry. entry (the last one) is
@@ -126,6 +188,8 @@ type readCall struct {
 }
 
 func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.called = true
 	s.entry = e
 	s.entries = append(s.entries, e)
@@ -133,21 +197,29 @@ func (s *spyAuditSink) Record(_ context.Context, e AuditEntry) error {
 }
 
 func (s *spyAuditSink) RecordFreeze(_ context.Context, e FreezeEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.freezeCalls = append(s.freezeCalls, e)
 	return s.err
 }
 
 func (s *spyAuditSink) RecordCancel(_ context.Context, p Principal, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.cancelCalls = append(s.cancelCalls, cancelCall{Principal: p, JobID: jobID})
 	return s.err
 }
 
 func (s *spyAuditSink) RecordRead(_ context.Context, p Principal, tool, selector, nodeID, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.readCalls = append(s.readCalls, readCall{Principal: p, Tool: tool, Selector: selector, NodeID: nodeID, JobID: jobID})
 	return s.err
 }
 
 func (s *spyAuditSink) RecordAccountAdmin(_ context.Context, p Principal, e AccountAdminEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.accountAdminCalls = append(s.accountAdminCalls, accountAdminCall{Principal: p, Event: e})
 	return s.err
 }
