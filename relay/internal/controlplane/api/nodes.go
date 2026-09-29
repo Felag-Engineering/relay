@@ -5,12 +5,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/audit"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/revocation"
 )
@@ -264,23 +262,11 @@ func handleGetNode(d Deps) http.HandlerFunc {
 }
 
 func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
-	states := nodestate.Labels(nodestate.Input{Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin})
-	stateLabels := make([]string, 0, len(states))
-	for _, l := range states {
-		stateLabels = append(stateLabels, l.String())
-	}
-
 	out := nodeResponse{
-		NodeID:      n.NodeID,
-		NodeLabels:  n.NodeLabels,
-		RelayLabels: n.RelayLabels,
-		Facts: nodeFacts{
-			Hostname:    n.Facts.Hostname,
-			OS:          n.Facts.OS,
-			Kernel:      n.Facts.Kernel,
-			Arch:        n.Facts.Arch,
-			IPAddresses: n.Facts.IPAddresses,
-		},
+		NodeID:                 n.NodeID,
+		NodeLabels:             n.NodeLabels,
+		RelayLabels:            n.RelayLabels,
+		Facts:                  nodeFacts(controlplane.RenderFacts(n)),
 		Connected:              n.Connected,
 		EnrollingTokenID:       n.EnrollingTokenID,
 		PolicyFingerprint:      n.PolicyFingerprint,
@@ -288,12 +274,8 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 		DaemonVersion:          n.DaemonVersion,
 		Outdated:               n.Outdated,
 		Revoked:                !n.RevokedAt.IsZero(),
-		Certificate: nodeCertificate{
-			Recorded:     n.CertProvenanceKnown(),
-			Fingerprint:  n.CertFingerprint,
-			RenewalCount: n.RenewalCount,
-		},
-		StateLabels: stateLabels,
+		Certificate:            nodeCertificate(controlplane.RenderCertificate(n)),
+		StateLabels:            controlplane.StateLabels(n, ev),
 	}
 	if out.NodeLabels == nil {
 		out.NodeLabels = map[string]string{}
@@ -303,10 +285,5 @@ func nodeResponseFrom(n registry.Node, ev capability.StateEval) nodeResponse {
 	}
 	out.LastSeen = controlplane.RFC3339(n.LastSeen)
 	out.RevokedAt = controlplane.RFC3339(n.RevokedAt)
-	if out.Certificate.Recorded {
-		out.Certificate.NotAfter = n.CertNotAfter.UTC().Format(time.RFC3339)
-		out.Certificate.EnrolledAt = controlplane.RFC3339(n.EnrolledAt)
-		out.Certificate.LastRenewedAt = controlplane.RFC3339(n.LastRenewedAt)
-	}
 	return out
 }
