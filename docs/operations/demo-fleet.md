@@ -12,7 +12,8 @@ Gleipnir is the AI-agent that drives the demo: a consumer of Relay, never a part
 ## Presenter runbook
 
 A presenter who has never run this fleet, from cold to on stage: bring-up, the credentials
-Gleipnir authenticates with, the human approver, the scripted bypass beat, the fault, and reset.
+Gleipnir authenticates with, the human approver, the scripted bypass beat, the fault, and reset — and, opt-in,
+[signing Claude Code in as a human over OAuth](#signing-in-as-a-human-over-oauth).
 
 ### Posture, stated once
 
@@ -508,6 +509,173 @@ Independent checks for the presenter, as literal commands:
 Back to back: run `make demo-reset` two or three times in a row. This has not been observed
 live — see [Verification honesty](#verification-honesty) below, which already says so; record
 the result there the first time someone runs it.
+
+### Signing in as a human over OAuth
+
+**Opt-in, and off unless you ask for it.** `make demo-reset` and `make demo-up` bring up exactly
+the fleet described everywhere else on this page. `make demo-reset-oauth` and
+`make demo-up-oauth` layer `docker-compose.oauth.yml` on top: a DEV-ONLY Keycloak identity
+provider, and the Relay's OAuth resource-server half turned on (ADR-0024;
+[Human sessions](control-plane-credential.md#human-sessions-oauth-21-through-your-idp)). With
+it, Claude Code signs in through a browser as the realm's one human user and reaches `/mcp` on
+that human's own Account, `demo-operator` (kind `human`, role `operator`), instead of on a shared
+API Token. That is the session on which an answer to an approval question, given in Claude
+Code's own UI, is recorded as that human's **verified** decision
+([approval.md](../specs/approval.md), AP-78 and AP-79). What it does and does not prove is at
+the end of this section — read it before saying anything about it on stage.
+
+Every name below is fixed in `docker-compose.oauth.yml` or its realm fixture,
+`docker/fixtures/keycloak/relay-demo-realm.json`:
+
+| What | Value |
+| --- | --- |
+| Issuer | `http://127.0.0.1:8180/realms/relay-demo` |
+| Audience (the MCP URL clients dial) | `https://relay:9443/mcp` |
+| Claim naming the Account | `preferred_username` |
+| Client for Claude Code | `relay-demo-claude-code` — public (no secret), PKCE `S256`, one redirect URI: `http://localhost:33418/callback` |
+| The human | `demo-operator`, password `dev-only-demo-operator` — **DEV-ONLY**, committed like every other credential in this fleet |
+| Lifetimes | access token 12h; sign-in session 12h idle, 24h maximum — a refresh cannot land mid-demo |
+| Keycloak's own admin console | `http://127.0.0.1:8180/admin/`, `admin` / `dev-only-keycloak-admin` (**DEV-ONLY**); no Relay Account, no meaning to the Relay |
+
+Three things differ from the plain fleet, each on purpose:
+
+- **No new `/etc/hosts` line.** The issuer must be one URL, byte for byte, for the browser, for
+  Claude Code on the host, and for the Relay inside the fleet. Claude Code 2.1.284 refuses to
+  send credentials to a plain-HTTP token endpoint unless the host is exactly `localhost`,
+  `127.0.0.1` or `::1` (read from its bundled MCP SDK, then confirmed by the sign-in below
+  succeeding), and any other name would also need a hosts entry — `idp.localhost` does not
+  resolve on a stock Debian host, nor in Node. So the issuer is `127.0.0.1:8180`, and the Relay
+  and Keycloak share one network namespace, owned by a container that does nothing else
+  (`relay-netns`), so that `127.0.0.1:8180` inside the Relay is Keycloak. `relay-netns` carries
+  the network alias `relay` and publishes `7654`, `9443` and `8180`, so every other service
+  still reaches the Relay exactly as before. The existing `127.0.0.1 relay` line is the only
+  hosts entry either mode needs.
+- **The Console is off.** With the Console mounted, the Relay answers every request that carries
+  no `Authorization` header — `/mcp` included — with a `303` to `/console/login` instead of the
+  `401` whose `WWW-Authenticate: Bearer resource_metadata="..."` is how a client discovers the
+  sign-in. Claude Code's first request carries no token, so with the Console on it follows the
+  redirect, gets HTML, and marks the server failed instead of offering to sign in (observed). The
+  overlay sets `RELAY_CONSOLE_ENABLED=false`. Nothing in this runbook decides through the Console
+  (see [The human approver](#the-human-approver)); the founding admin's, `dev-approver`'s and
+  Gleipnir's API Tokens work exactly as before. The `console-password` one-shot still runs and
+  still prints a Console URL, which does not serve in this mode.
+- **The Account claim is `preferred_username`, not the default `email`.** An Account name is
+  `[A-Za-z0-9._-]` only, so an email address can never name one. `preferred_username` is the
+  realm username, which the realm does not let a user edit.
+
+#### Bring-up
+
+1. **Prerequisites.** Everything in [From cold to ready](#from-cold-to-ready), including the
+   `127.0.0.1 relay` hosts line; host port `8180` free as well as `7654` and `9443`; and the
+   IdP image, which `make demo-build` does not fetch (it builds, it never pulls):
+
+   ```console
+   $ docker pull quay.io/keycloak/keycloak:26.7.4
+   ```
+
+   Without it, `make demo-reset-oauth` stops at its image precheck, before touching a volume,
+   naming the missing image.
+2. **`make demo-build`**, as for the plain fleet.
+3. **`make demo-reset-oauth`.** The Relay starts only once Keycloak is healthy — it fetches the
+   issuer's discovery document once, at boot, and would not start without it — and the
+   `oauth-account` one-shot then creates `demo-operator` through `/api/v1/accounts`, the way
+   `dev-approver` is created. Observed on 2026-09-29 (4 CPUs, 8 GB, images already present):
+   76s wall, the Relay booting first time with no restart. The closing output (observed):
+
+   ```
+   demo-fleet: reset complete — 9 Nodes healthy, 6 web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted.
+   demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
+   demo-fleet:   claude mcp remove relay
+   demo-fleet:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
+   demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem", run /mcp, pick relay, Authenticate, and sign in as demo-operator / dev-only-demo-operator (DEV-ONLY).
+   ```
+
+4. [Credentials for Gleipnir](#credentials-for-gleipnir-copy-paste) as usual — API Tokens are
+   untouched by the overlay.
+
+Keycloak costs about 490 MiB of memory at idle (one `docker stats` sample, same machine); the
+Relay and daemons are unchanged.
+
+#### Signing Claude Code in
+
+From the repo root:
+
+```console
+$ claude mcp remove relay     # only if a bearer-token `relay` is already registered
+$ claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
+$ NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem" claude
+```
+
+No `--client-secret` (the client is public) and no `--header`. `NODE_EXTRA_CA_CERTS` is for the
+Relay's CA only; the IdP is plain HTTP on loopback. Then, in Claude Code: `/mcp`, pick `relay`,
+choose to authenticate. A browser opens Keycloak's sign-in page at `127.0.0.1:8180`; sign in as
+`demo-operator` / `dev-only-demo-operator`; the page then reads "Authentication successful. You
+can close this tab and return to Claude Code.", and `/mcp` shows `relay` connected.
+
+Observed on 2026-09-29 with Claude Code 2.1.284 — driven without a person, through an isolated
+config directory, its `mcp_authenticate` control request, and headless Chrome for the login:
+the `401` led it to the metadata document and on to Keycloak; its authorization URL carried
+`client_id=relay-demo-claude-code`, `redirect_uri=http://localhost:33418/callback`,
+`resource=https://relay:9443/mcp` and no `scope`; after the login it exchanged the code at the
+plain-HTTP token endpoint, and its status for `relay` became `connected`; a `list_nodes` call
+it then made on that session is in the audit trail as `demo-operator`, method `oauth`. After a
+`make demo-reset-oauth` it dropped the dead token by itself and reported the server as needing
+authentication again, and signing in again reconnected it. The command above
+writes exactly the server entry that run used (also checked against an isolated config). **Not
+observed:** the interactive `/mcp` menu's wording, and the browser opening by itself rather than
+Claude Code printing the URL *(predicted)*.
+
+Independent checks, as literal commands from the repo root (both observed):
+
+```console
+$ curl -sS --cacert .dev-fleet/ca-cert.pem https://relay:9443/.well-known/oauth-protected-resource
+{"resource":"https://relay:9443/mcp","authorization_servers":["http://127.0.0.1:8180/realms/relay-demo"],"bearer_methods_supported":["header"],"resource_name":"Relay control plane"}
+$ curl -sS -o /dev/null -D - --cacert .dev-fleet/ca-cert.pem -X POST https://relay:9443/mcp | grep -i www-authenticate
+www-authenticate: Bearer resource_metadata="https://relay:9443/.well-known/oauth-protected-resource"
+```
+
+On the plain fleet the first returns `404` and the second is a `303` to the Console's sign-in —
+both correct there, and a quick way to tell which mode is up.
+
+#### Between takes
+
+- **`make demo-down`, then `make demo-up-oauth`**: Keycloak's database is on its own volume, so
+  its signing keys and sessions survive, and a signed-in Claude Code stays signed in — the same
+  access token was accepted after the round trip, and a fresh Claude Code on the same config
+  came up `connected` without signing in again (observed).
+- **`make demo-reset-oauth`** wipes that volume with every other: new signing keys, new sessions,
+  and a new Relay CA. Restart Claude Code with `NODE_EXTRA_CA_CERTS` and authenticate again from
+  `/mcp`: it discards the dead token itself and shows `relay` as needing authentication
+  (observed; the menu wording is *(predicted)*).
+- **Switching modes** needs `make demo-down` first: `make demo-up` refuses over a fleet brought
+  up with OAuth, and `make demo-up-oauth` over one brought up without. `make demo-reset` and
+  `make demo-reset-oauth` switch either way on their own. `make demo-down`, `make demo-creds` and
+  `make demo-fault` work in either mode.
+
+#### What an OAuth session proves, and what it does not
+
+- **It proves whose session made the call.** The Relay verified, offline against the IdP's keys,
+  a token issued by this issuer for this audience, naming an existing, enabled human Account. The
+  audit trail records it as that Account with method `oauth` and no API Token id — observed for
+  a `list_nodes` read on a token from a real authorization-code + PKCE sign-in:
+  `account_name=demo-operator`, `account_role=operator`, `auth_method=oauth`, `token_id` empty.
+  A real token for the same user from another client of the same realm, carrying no Relay
+  audience, was refused `401`; so was a real token for a realm user with no Account (both
+  observed).
+- **It does not prove a person read the question.** Anything holding `demo-operator`'s token
+  answers as `demo-operator`, and a configured Claude Code **hook** can answer an approval
+  question with nobody present — Relay cannot tell that from a person, so the verified lane can
+  name a human who never saw the request ([approval.md](../specs/approval.md), the
+  OAuth-session entry under accepted risks). A rule that needs evidence a person decided is an
+  `out-of-band` rule.
+- **The request is still the model's.** On this session `demo-operator` is also the requester of
+  whatever Claude Code runs: the calls are model-generated and stay agent-grade (ADR-0027). An
+  answer on it meets the same refusals as any in-band decision by `demo-operator`, so it never
+  satisfies a rule that excludes the requester, and never an `out-of-band` rule (AP-79, AP-13).
+- **So this fleet, as committed here, asks nothing in-band.** Both rules in
+  `docker/fixtures/approval-gates.json` are `out-of-band` and name only `dev-approver`. Seeing
+  Claude Code's approval dialog on this session needs gate rules that allow an in-band decision
+  by `demo-operator`, which this change does not add.
 
 ## The demo profile
 

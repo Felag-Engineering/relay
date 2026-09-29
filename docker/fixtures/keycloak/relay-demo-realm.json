@@ -1,0 +1,82 @@
+{
+  "realm": "relay-demo",
+  "displayName": "Relay demo fleet (DEV-ONLY identity provider)",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "editUsernameAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 43200,
+  "ssoSessionIdleTimeout": 43200,
+  "ssoSessionMaxLifespan": 86400,
+  "clientSessionIdleTimeout": 43200,
+  "clientSessionMaxLifespan": 86400,
+  "users": [
+    {
+      "username": "demo-operator",
+      "enabled": true,
+      "email": "demo-operator@relay-demo.invalid",
+      "emailVerified": true,
+      "firstName": "Demo",
+      "lastName": "Operator",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-demo-operator",
+          "temporary": false
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "relay-demo-claude-code",
+      "name": "Claude Code on the Relay demo fleet",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "fullScopeAllowed": false,
+      "redirectUris": [
+        "http://localhost:33418/callback"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "profile",
+        "email",
+        "acr"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ],
+      "protocolMappers": [
+        {
+          "name": "relay-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.custom.audience": "https://relay:9443/mcp",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true",
+            "lightweight.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

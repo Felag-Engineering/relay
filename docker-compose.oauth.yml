@@ -1,0 +1,179 @@
+# Relay dev fleet, OAuth overlay — DEV-ONLY (#351; docs/operations/demo-fleet.md,
+# "Signing in as a human over OAuth").
+#
+# Opt-in. Nothing reads this file unless it is named with a second `-f`.
+# scripts/demo-fleet.sh names it for `reset --oauth` / `up --oauth` (make
+# demo-reset-oauth / demo-up-oauth), and for `down` and `reset`'s wipe, so the
+# IdP stops with the fleet whichever way it came up. Without it, the dev fleet
+# and the demo fleet are exactly what docker-compose.yml describes. It layers
+# onto either:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.oauth.yml [--profile demo] ...
+#
+# What it adds: a real OpenID Connect identity provider (Keycloak, realm imported
+# from docker/fixtures/keycloak/relay-demo-realm.json) and turns on the Relay's
+# OAuth resource-server half (ADR-0024; "Human sessions" in
+# docs/operations/control-plane-credential.md), so an MCP client signed in as a
+# human reaches /mcp on that human's own Account rather than a shared API Token.
+# The Relay stays a protected resource only: it verifies the IdP's tokens and
+# never issues one.
+#
+# WHY THE ISSUER IS http://127.0.0.1:8180, AND WHY THE RELAY AND THE IdP SHARE
+# ONE NETWORK NAMESPACE. The issuer URL has to be the same string everywhere:
+# the Relay checks it byte for byte against every token's `iss` and against the
+# discovery document it fetches at boot, and the MCP client checks the same
+# string against the `authorization_servers` entry the Relay advertises. So the
+# browser, the MCP client on the host, and the Relay inside the fleet must all
+# reach the IdP at one URL. Two facts pick that URL:
+#   - Claude Code refuses to send credentials to a plain-http token endpoint
+#     unless the host is exactly `localhost`, `127.0.0.1` or `::1`. Any other
+#     name (`idp.localhost` included) would need TLS from a second private CA,
+#     trusted by the host, the browser and the Relay.
+#   - Any other name also needs a hosts-file entry on a host whose resolver does
+#     not special-case `.localhost` — which is most of them.
+# Loopback needs neither, provided `127.0.0.1:8180` inside the Relay's container
+# is the IdP. So the Relay and the IdP join one network namespace, owned by a
+# third container that does nothing else (`relay-netns`, the pattern a Kubernetes
+# pod uses). That container carries the network alias `relay`, so every other
+# service still reaches the Relay at `relay:7654` / `relay:9443` exactly as in
+# docker-compose.yml, and it publishes the ports — a container that shares
+# another's namespace cannot publish its own.
+#
+# Why a third container owns the namespace rather than one of the two: a
+# container that joins another's namespace loses its network when that one
+# restarts. The Relay restarts (`restart: unless-stopped`) whenever its boot
+# fails; the holder never has a reason to.
+#
+# SECURITY notes:
+#   - Every credential here is DEV-ONLY and committed on purpose, like the rest
+#     of this fleet's: the IdP's bootstrap admin, and the realm's one user
+#     (docker/fixtures/keycloak/relay-demo-realm.json). The IdP is published on
+#     host loopback only, whatever RELAY_PUBLISH_ADDR says.
+#   - Sharing a namespace puts the IdP on the Relay's address: any container on
+#     the fleet network that reaches `relay` also reaches Keycloak on 8180 and
+#     its management port 9000. That is the reach any IdP on this network would
+#     have; no port beyond 8180 is published to the host.
+#   - The issuer and audience are Relay CONFIGURATION (invariant 11), set here
+#     on the host and unreachable from any API.
+#   - An OAuth session proves whose session answered, not that a person was
+#     present — see the runbook section named above.
+
+services:
+  # Owns the network namespace the Relay and the IdP share. Does nothing else.
+  relay-netns:
+    image: curlimages/curl:8.11.1
+    restart: unless-stopped
+    # Sleep until stopped; `trap` makes `docker compose down` immediate rather
+    # than waiting out the stop timeout.
+    entrypoint: ["sh", "-c", "trap 'exit 0' TERM INT; while :; do sleep 3600 & wait $$!; done"]
+    networks:
+      default:
+        # The name every other service already dials the Relay by.
+        aliases: ["relay"]
+    ports:
+      # The Relay's two listeners, published exactly as docker-compose.yml
+      # publishes them on the `relay` service.
+      - "${RELAY_NODE_PUBLISH_ADDR:-127.0.0.1}:7654:7654"
+      - "${RELAY_PUBLISH_ADDR:-127.0.0.1}:9443:9443"
+      # The IdP, loopback only: the issuer URL names 127.0.0.1, so no other
+      # address could complete a sign-in anyway.
+      - "127.0.0.1:8180:8180"
+
+  # The OpenID Connect provider. Keycloak, pinned by digest.
+  idp:
+    image: quay.io/keycloak/keycloak:26.7.4@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+    restart: unless-stopped
+    network_mode: "service:relay-netns"
+    depends_on:
+      - relay-netns
+    # Dev mode: plain HTTP (loopback only, see the header), an embedded
+    # database, and the realm imported once from the fixture. An existing realm
+    # is left alone, so a fixture edit takes effect only after `demo-reset`.
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_HTTP_PORT: "8180"
+      # Fixes the issuer to this exact URL, whichever address a request
+      # arrived on. The Relay's RELAY_OAUTH_ISSUER below must match it.
+      KC_HOSTNAME: "http://127.0.0.1:8180"
+      KC_HEALTH_ENABLED: "true"
+      # DEV-ONLY bootstrap admin for Keycloak's own console
+      # (http://127.0.0.1:8180/admin/), for inspecting the realm. It has no
+      # Relay Account and no meaning to the Relay.
+      KC_BOOTSTRAP_ADMIN_USERNAME: "admin"
+      KC_BOOTSTRAP_ADMIN_PASSWORD: "dev-only-keycloak-admin"
+    volumes:
+      - ./docker/fixtures/keycloak/relay-demo-realm.json:/opt/keycloak/data/import/relay-demo-realm.json:ro
+      # Keycloak's embedded database: realm keys and sign-in sessions survive
+      # `demo-down` / `demo-up`, so a signed-in client stays signed in; `demo-reset`
+      # (down -v) wipes it along with every other volume.
+      - idp-data:/opt/keycloak/data
+    healthcheck:
+      # Healthy means the realm's discovery document is being served, which is
+      # the one thing the Relay fetches at boot. The image ships no curl; bash's
+      # /dev/tcp is enough for one GET.
+      test:
+        - "CMD"
+        - "bash"
+        - "-c"
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8180 &&
+          printf 'GET /realms/relay-demo/.well-known/openid-configuration HTTP/1.1\r\nHost: 127.0.0.1:8180\r\nConnection: close\r\n\r\n' >&3 &&
+          head -n 1 <&3 | grep -q ' 200 '
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 20s
+
+  relay:
+    network_mode: "service:relay-netns"
+    # Published by relay-netns instead; see the header.
+    ports: !reset []
+    depends_on:
+      # Discovery runs once, at boot, and an unreachable issuer stops the Relay
+      # from starting — so the Relay starts only once the IdP serves the realm.
+      idp:
+        condition: service_healthy
+    environment:
+      RELAY_OAUTH_ISSUER: "http://127.0.0.1:8180/realms/relay-demo"
+      # The MCP URL clients dial. Claude Code checks the advertised `resource`
+      # against it, and the realm's audience mapper puts it in every token's `aud`.
+      RELAY_OAUTH_AUDIENCE: "https://relay:9443/mcp"
+      RELAY_OAUTH_PUBLIC_URL: "https://relay:9443"
+      # Not the default `email`: an Account name is [A-Za-z0-9._-] only, so no
+      # email address can ever name one. Keycloak's `preferred_username` is the
+      # realm username, which the realm forbids users to edit.
+      RELAY_OAUTH_ACCOUNT_CLAIM: "preferred_username"
+      # The Console is OFF with this overlay, and has to be for an MCP client to
+      # discover the sign-in at all. With the Console mounted, the Relay answers
+      # EVERY request that carries no Authorization header — /mcp included —
+      # with a 303 to /console/login rather than the 401 whose
+      # `WWW-Authenticate: Bearer resource_metadata=...` is the whole discovery
+      # handshake (controlplane/auth.go, Authenticator.refuse). Claude Code's
+      # first request carries no token, follows the 303, gets HTML, and marks
+      # the server failed instead of offering to sign in (observed 2026-09-29,
+      # Claude Code 2.1.284). Nothing in this demo decides through the Console;
+      # see the runbook section named in the header.
+      RELAY_CONSOLE_ENABLED: "false"
+
+  # One-shot: creates the human Account the IdP's user signs in as. The Relay
+  # never creates an Account from a token (ADR-0024).
+  oauth-account:
+    image: curlimages/curl:8.11.1
+    user: "0:0"
+    restart: "no"
+    depends_on:
+      relay:
+        condition: service_healthy
+      credential:
+        condition: service_completed_successfully
+    environment:
+      # Must equal the realm user's username (the token's preferred_username).
+      OAUTH_ACCOUNT_NAME: "demo-operator"
+    entrypoint: ["sh", "/oauth-account.sh"]
+    volumes:
+      - ./docker/oauth-account.sh:/oauth-account.sh:ro
+      - relay-data:/relay-data:ro
+      - control-credential:/credential:ro
+
+volumes:
+  idp-data:
