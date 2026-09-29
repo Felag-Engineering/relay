@@ -15,7 +15,8 @@ package's own AST. That guard was correct for what it was written against — `t
 an answer arriving with no human anywhere in the path.
 
 The two positions were never reconciled. The result is a product that ships a
-two-person-only approval mechanism, an inert config value, and a ROADMAP promising an
+two-person-only approval mechanism, an inert config value, and a milestone plan (then in
+ROADMAP.md, retired 2026-09-12) promising an
 elicitation channel that cannot be emitted.
 
 ## Context that changed
@@ -120,7 +121,8 @@ same channel semantics. One decision model, two delivery envelopes — not two m
   it be *"a deterministic path to the assigned human"* is no longer advice.
 - The audit trail gains a class of record whose approver is asserted. Queries that need
   verified approvers must filter on channel.
-- ROADMAP v0.5.0's "elicitation is the primary, first-class channel" is retired; the primary
+- The v0.5.0 milestone plan's (then in ROADMAP.md, retired 2026-09-12) "elicitation is the
+  primary, first-class channel" is retired; the primary
   in-band channel is the tool surface.
 
 ## Alternatives considered

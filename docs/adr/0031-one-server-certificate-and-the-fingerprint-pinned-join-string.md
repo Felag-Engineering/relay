@@ -5,9 +5,9 @@
 Three facts about the Relay's TLS surface, each defensible alone, which together make
 enrollment harder than it needs to be:
 
-1. **Two server certificates.** `main.go:391` issues one for the Node plane, `main.go:575`
-   another for the control plane, both from the Relay CA, both
-   `[]string{cfg.Hostname}, nil`. The comment at `main.go:572` states the intent:
+1. **Two server certificates.** `newServer` in `relay/cmd/relay/main.go` issues one for the
+   Node plane (`serverCert`) and another for the control plane (`controlCert`), both from the
+   Relay CA, both `[]string{cfg.Hostname}, nil`. The comment above `controlCert` states the intent:
    *"separate listeners get separate certificates."*
 2. **One SAN each.** A mismatch between `RELAY_HOSTNAME` and what daemons dial is,
    by the sample config's own admission (`relay.env.example:35-37`), *"the single most
@@ -97,8 +97,8 @@ is today, and is inert afterward.
 **5. The server certificate rotates, through a `GetCertificate` callback.**
 
 Designing decision 1 surfaced a live defect. The server certificate is minted once at
-process start (`main.go:391`, `main.go:575`), held as a static `tls.Certificate`, and
-carries `LeafValidity` — `336 * time.Hour`, the constant documented as *"the lifetime
+process start (`serverCert` and `controlCert` in `newServer`), held as a static
+`tls.Certificate`, and carries `LeafValidity` — `336 * time.Hour`, the constant documented as *"the lifetime
 issued to Node identity certificates"*. Nothing renews it. **A Relay process running
 longer than fourteen days serves an expired certificate**, every daemon's chain
 verification fails, and the fleet fail-closes off. It has gone unseen because no Relay has
