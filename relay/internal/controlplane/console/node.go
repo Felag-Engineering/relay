@@ -574,7 +574,7 @@ var nodeTmpl = newScreen("node", `
   <span class="labelnote">
     <b>node:</b> set by the machine's config management, immutable to the Relay ·
     <b>tag:</b> set by operators through the control plane, immutable to the Node, and never a valid
-    security-lane target; this Relay cannot store tag: labels yet, so none appear here ·
+    security-lane target; this Relay cannot store tag: labels yet (#430), so none appear here ·
     <b>relay:</b> set by the Relay, immutable to the Node, and the only namespace the security lane may target ·
     <b>state:</b> derived from this record, set by nobody
   </span>
@@ -680,8 +680,9 @@ var nodeTmpl = newScreen("node", `
         on the machine and the Relay is not one of its writers.</p>
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
-        <p class="note">The Console shows nothing rather than an old answer. Operators check this
-        panel before deciding a Task is safe, so a view that might be stale is worse than none.</p>
+        <p class="note">The Console shows nothing rather than an answer remembered from before the
+        Relay last started. Operators check this panel before deciding a Task is safe, so a view that
+        might be out of date without saying so is worse than none.</p>
       {{end}}
     </section>
 

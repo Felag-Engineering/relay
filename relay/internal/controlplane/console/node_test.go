@@ -248,6 +248,10 @@ func TestNode_LabelRowNamesAllFourNamespaces(t *testing.T) {
 	if !strings.Contains(body, "cannot store tag: labels yet") {
 		t.Error("the explainer does not say tag: labels have no storage yet")
 	}
+	// And it points at the tracking issue, so an operator can trace the gap.
+	if !strings.Contains(body, "#430") {
+		t.Error("the explainer does not name the issue tracking tag: storage")
+	}
 }
 
 // TestNode_RunHereFollowsTheExecutionFlagAndTheRole covers both of spec 02's

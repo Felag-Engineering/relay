@@ -284,7 +284,8 @@ var dayOneTmpl = newScreen("dayone", `
     </dl>
     {{else}}
     <p class="dim">The CA and server-certificate fingerprints are not wired into this Console, so
-    this screen cannot show you what to compare. That is a setup problem in this Relay, not a missing certificate.</p>
+    this screen cannot show you what to compare. This is not a certificate problem, and it
+    is not something you can configure: it comes from how this Relay was built.</p>
     {{end}}
   </section>
 
