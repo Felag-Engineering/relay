@@ -490,28 +490,3 @@ none is a commitment to an order.
 None open. The four previously listed — secrets in arguments, #392's re-executable dispatch, the
 zero-match Job, and cancellation authorization — were settled with the owner on `2026-09-14`, and
 whether to split this spec was answered: it stays one file.
-
-## History
-
-- `2026-09-25` — Proof row for "a park is a result, not an error" re-pointed at
-  `TestDispatch_ParkIsAResultNotAnError` after a test rename; citation only. (#725)
-- `2026-09-22` — The Console Agents stream shows running Jobs from the recorded requester, with
-  Cancel where the role allows; legacy spec, proof not recorded. (#617)
-- `2026-09-22` — The Job row records its requester at creation; older rows read back as none;
-  legacy spec, proof not recorded. (#616)
-- `2026-09-17` — A zero-match dispatch refused as `no_nodes_matched` before any Job exists, on
-  every surface; legacy spec, proof not recorded. (#571)
-- `2026-09-17` — A machine Account may cancel only a Job it requested. (#614)
-- `2026-09-17` — Console Cancel control over the capability-layer cancel, `operator` or above;
-  legacy spec, proof not recorded. (#595)
-- `2026-09-14` — Worked through with the owner: sequential fan-out, halt-on-first-failure for
-  `mutate`, early Job handback with an idempotency key (#392), zero-match refusal, Template
-  exclusion before the cap, capability-layer cancel authorization.
-- `2026-09-12` — ADR-0038: out-of-scope names `policy-preflight.md` and `plan.md`; a Plan step
-  is an ordinary Job on this spec's dispatch path.
-- `2026-09-10` — A `read`'s output is not retained (ADR-0025); fan-out, lifecycle, cancellation,
-  zero-match, and the proof and performance tables added.
-- `2026-09-08` — *The three execution tiers* added, delegated to by invariant 1 (ADR-0001
-  amendment).
-- `2026-09-08` — First written; absorbs the retired roadmap's acceptance criteria that tests
-  cited.

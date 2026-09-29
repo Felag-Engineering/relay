@@ -23,7 +23,7 @@ dupes=$(find docs/adr -name '[0-9][0-9][0-9][0-9]-*.md' -printf '%f\n' | cut -c1
 for n in $dupes; do err "duplicate ADR number $n: $(ls docs/adr/"$n"-* | tr '\n' ' ')"; done
 
 required_sections=("Purpose" "Surfaces" "Behaviour" "Refusals" "Governing ADRs and invariants" \
-                   "Seams and proof" "Out of scope" "Open questions" "History")
+                   "Seams and proof" "Out of scope" "Open questions" "Retired")
 declare -A prefix_owner=()
 
 # Print the body of one "## Heading" section (up to the next "## ").
@@ -89,6 +89,18 @@ for spec in "$SPEC_DIR"/*.md; do
   else
     case "$status" in designed*) err "$name: Status is 'designed, not built' but Designed, not built has no rows";; esac
   fi
+
+  # 3h. IDs are never reused: every gap below the highest defined ID is listed under Retired,
+  # and nothing listed there is still defined.
+  retired_ids=$(section "$spec" Retired | grep -oE "\*\*$prefix-[0-9]+\*\*" | tr -d '*')
+  max=$(printf '%s\n' $current_ids $designed_ids | grep . | cut -d- -f2 | sort -n | tail -1)
+  for i in $(seq 1 "${max:-0}"); do
+    printf '%s\n' $current_ids $designed_ids $retired_ids | grep -qx "$prefix-$i" \
+      || err "$name: $prefix-$i is neither defined nor listed under ## Retired"
+  done
+  for id in $retired_ids; do
+    printf '%s\n' $current_ids $designed_ids | grep -qx "$id" && err "$name: $id is listed under ## Retired but still defined"
+  done
 
   # 3g. Every `<name>.md` mentioned resolves to a spec or a known root doc
   for ref in $(grep -oE '`[a-z0-9-]+\.md`' "$spec" | tr -d '`' | sort -u); do

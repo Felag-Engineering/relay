@@ -38,7 +38,7 @@ quietly edit the claim and it does not quietly proceed. That is the same rule as
 documents and the code disagree* in [`AGENTS.md`](../../AGENTS.md), applied one step earlier.
 
 The loop does maintain the parts of a spec that are *evidence* rather than intent: the proof
-rows, the Performance rows, the History lines and the Status line, and it promotes a claim from
+rows, the Performance rows and the Status line, and it promotes a claim from
 *Designed, not built* into Behaviour when the PR that makes it true lands — same ID, same words.
 The authority table in [`docs/agents/workflow.md`](../agents/workflow.md) is the full split.
 

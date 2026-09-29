@@ -255,21 +255,6 @@ view as current; see *Future work*), `audit-and-read-lane.md` (says MCP `describ
 peer counts; QRY-5). `selectors-and-labels.md` and `audit-and-read-lane.md` no longer disagree
 about Selector resolution or MCP read records: #680 made both statements true (QRY-28).
 
-## History
+## Retired
 
-- `2026-09-24` — Proof rows added for QRY-1, QRY-3's ordering half, QRY-5, QRY-12's body half,
-  QRY-14 and QRY-15's Control API and Console halves, each noting its residual; test-only, no
-  claim promoted. (#681)
-- `2026-09-23` — The claims QRY-26 … QRY-28 retire were removed: QRY-18 deleted; QRY-16, QRY-17,
-  QRY-21 and QRY-22 narrowed. (#680)
-- `2026-09-23` — QRY-26, QRY-27 and QRY-28 promoted from *Designed, not built*; QRY-17's Control
-  API half gained a proof row. QRY-25 remains Designed. (#680)
-- `2026-09-22` — QRY-26 and QRY-27 re-sequenced from v0.8.1 to v1.0.0 to land with QRY-28
-  (owner); QRY-25 stays v0.8.1. (#680)
-- `2026-09-21` — Migrated to the claim format (QRY-1 … QRY-28; 29 and 30 withdrawn before
-  commit, unused). QRY-25 … QRY-28 Designed; the surface-local registry readers ruled an
-  invariant-10 gap (#680); Template bodies on the wire moved to *Future work* pending ADR-0021.
-  (#583)
-- `2026-09-14` — Confirmed with the owner: whole-Policy view, Selector-scoped `list_operations`,
-  unknown Node IDs refused; Control API query routes moved to *Future work*.
-- `2026-09-13` — Proposed initial capability specification; no product behaviour changed.
+- **QRY-18** — `2026-09-23` — deleted; QRY-26 … QRY-28 replace it. (#680)

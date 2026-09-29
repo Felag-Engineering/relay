@@ -221,15 +221,3 @@ Claims above with **no row**, and so nothing checking them:
 ## Open questions
 
 None open. Revocation audit batching (#563) belongs to `enrollment.md`.
-
-## History
-
-- `2026-09-16` — Store change landed for the token-revocation cascade's per-Node audit inserts
-  (#563). Spec unmigrated (`aspirational`); claims not updated; the lines this makes stale are listed in #563's PR.
-- `2026-09-14` — Confirmed with the owner: a read is always recorded and its output never is;
-  aligned with zero-match refusals and new audit events; `viewer` reads all audit metadata in the
-  first pass; adapter-local read recording is a gap; scoping, retention/export, activity model and
-  tamper-evident audit moved to Future work; #563 moved to `enrollment.md`.
-
-- `2026-09-13` — Proposed draft written for human review; it describes current evidence and
-  leaves unbuilt or unsettled access, export, and performance behaviour explicit.

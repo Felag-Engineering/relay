@@ -159,7 +159,7 @@ security pass runs at Stage 6.7, added to its diff focus rather than as a separa
 
 If the plan's `Spec:` line names a spec: **use the `spec-proof-updater` agent** with the spec
 path, the issue, the claim IDs, and the diff. It adds proof rows, promotes only the named claims
-the diff tests (same ID, same words), appends History, moves Status, and runs `make docs-check`.
+the diff tests (same ID, same words), moves Status, and runs `make docs-check`.
 Its **Findings** go into the PR body. A claim it did not promote for lack of a test is a
 finding, not a failure — the human decides whether the PR is complete.
 

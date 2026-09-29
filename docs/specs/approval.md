@@ -457,8 +457,8 @@ on their own OAuth session, nothing is asserted, and so nothing is blended.
   and AP-57 — the third, grant issuance, is shelved by ADR-0040).
   The `2026-09-16` amendment is also what orders this spec to describe the file behaviour as
   current until AP-72 lands, which is why AP-4, AP-8 and AP-54 read as they do. It carries no
-  figure for pending-request expiry; the 1-hour default recorded in this spec's `2026-09-14`
-  History line was never built, and AP-25 states the 4 hours the code applies. Namespace pinning is
+  figure for pending-request expiry; the 1-hour default this spec recorded on `2026-09-14`
+  was never built, and AP-25 states the 4 hours the code applies. Namespace pinning is
   genuinely gone (AP-33). Its decision 8's word *Plan* is read through the `2026-09-20` amendment
   as the rendered preflight (AP-20), and decision 1's "a gated Job parks" through ADR-0028's
   `2026-08-17` amendment and the correction of `2026-09-24`: parking creates no Job (AP-2).
@@ -837,68 +837,9 @@ none is a commitment to an order.
 Deciding from the Console (#435) is in scope, not open. ADR-0028's stale `tasks/update` premise is
 no longer open either: ADR-0028's amendment of `2026-09-24` replaced it.
 
-## History
+## Retired
 
-- `2026-09-28` — AP-78 and AP-79 rewritten before being built (owner): a Claude Code answer
-  counts only on a human Account's OAuth session; an unnamed confirmation, if reintroduced, is a
-  structural field (*Future work*). AP-10, AP-17, AP-63 and AP-64 gain the AP-79 exception;
-  ADR-0027 and ADR-0029 carry dated notes. (#743, PR #765)
-- `2026-09-28` — AP-77 promoted to Behaviour with proof rows at the store, capability and e2e
-  seams; the #713 residual-risk entry now reads fixed, with requester scoping left to #716.
-  (#713, PR #753)
-- `2026-09-28` — AP-77 qualified before promotion (owner): re-attach holds only while the
-  approval is in force, precedes a covering approval grant, and is not yet requester-scoped
-  (#716). (#713, PR #752)
-- `2026-09-28` — The release claim made transactional and ahead of dispatch; AP-77 held in
-  Designed pending the qualifier above; threat model R24 records the fix. (#713, #387)
-- `2026-09-27` — AP-78 and AP-79 added (Designed, v0.7.0): ask only a client recognised by
-  declared name; accept a Claude Code answer as an unnamed confirmation for now. (#743)
-- `2026-09-27` — AP-77 added (Designed, v0.7.0): an approval releases one execution, per the
-  owner's answer on #387; AP-67 stays as its answered-retry case. (#713, #387)
-- `2026-09-27` — AP-60 … AP-71 promoted to Behaviour with proof rows once the composition root
-  enabled MRTR elicitation; AP-55, AP-56, AP-57, AP-59 and AP-72 stay Designed. (#730)
-- `2026-09-25` — Answered retry wired into `run_operation` and `raw_exec`, not yet reachable; no
-  claim promoted. (#727)
-- `2026-09-25` — Answered-retry acceptance path built, not yet reachable; `approve_request`'s
-  `approver` bounded per AP-70 as amended; no claim promoted. (#726)
-- `2026-09-25` — MRTR elicitation emission path landed, off by default; no claim promoted. (#725)
-- `2026-09-25` — A named decision refusal now returns the Request as it stands; AP-16, AP-17 and
-  AP-19 unchanged. (#724)
-- `2026-09-25` — AP-70 amended to bound `approve_request`'s `approver` like an elicited responder;
-  AP-64 names the `permission` gate; the Gleipnir-only coupling recorded under *Accepted residual
-  risk*. Both stay Designed at v0.7.0. (#646)
-- `2026-09-25` — Strict separation withdrawn (owner; ADR-0040 amendment): the Console and the
-  Control API keep working as today, not relied on, for availability. AP-74, AP-75 and AP-76
-  retired unbuilt; two open rulings recorded in `approval-assurance.md`; threat model R26
-  re-premised, R23's narrowing undone, a restart row added.
-- `2026-09-24` — ADR-0040 (interim): strict separation by origin, as AP-74 … AP-76 (Designed,
-  v0.7.0, blocked by #646); AP-58 moved to the `approval-assurance.md` stub; threat model R21 and
-  R23 re-premised, R26 added. Superseded in part by the `2026-09-25` entry above.
-- `2026-09-24` — AP-55 rewritten from a shipped file to a store seed and moved to v0.7.0 (#590),
-  per ADR-0027's `2026-09-16` amendment; AP-72 added for store-backed rules, retiring AP-4, AP-8
-  and AP-54.
-- `2026-09-24` — ADR-0027 amended to adopt the three grant bounds; AP-56, AP-57 and AP-58 cite
-  it and stay at v0.6.5.
-- `2026-09-24` — AP-39 corrected to ADR-0029's two attribution lanes; AP-40 and AP-63 follow;
-  the missing end-to-end proof recorded as a gap.
-- `2026-09-24` — ADR-0028's `2026-09-24` amendment gives AP-60 and AP-71 their premise; ADR-0027
-  decision 1 corrected to match AP-2 (#269).
-- `2026-09-24` — AP-73 (quorum) added with proof rows; AP-19, AP-20 and AP-53 corrected;
-  "Grant" replaced by "approval grant"; GLOSSARY and threat model (R21, R23–R25) updated.
-- `2026-09-24` — AP-25's pending-request expiry settled at 4 hours, operator-settable per rule
-  (owner), superseding the unbuilt 1-hour intent; no ADR owed.
-- `2026-09-24` — Migrated to the claim format (AP-1 … AP-71; AP-72 and AP-73 added the same day)
-  from the drift verdicts (45 built, 13 unbuilt, 1 unclear). AP-56 … AP-59 Designed; multi-step
-  Plan routes moved to *Future work*.
-- `2026-09-24` — AP-60 … AP-71 created as Designed at v0.7.0 for MRTR in-band approval, from the
-  merged design plan. (#646)
-- `2026-09-18` — Worked through with the owner: in-band and out-of-band decision paths; Console
-  bulk decisions; residual risks R21 and R22 accepted; held-call dispatch left open (#643).
-- `2026-09-17` — A blank audience entry refused wherever an audience is read or stored; legacy
-  spec, evidence not recorded. (#608)
-- `2026-09-16` — Namespace pinning removed from approval-grant Scope; legacy spec, evidence not
-  recorded. (#482)
-- `2026-09-14` — Worked through with the owner: shipped gate posture, narrowed approval grants,
-  Plans as the default for enumerable work.
-- `2026-09-12` — ADR-0038: the plan hash generalised to a route; no behaviour changed.
-- `2026-09-11` — First written, from ADR-0027 and ADR-0029. (#482)
+- **AP-58** — `2026-09-24` — moved to the `approval-assurance.md` stub when ADR-0040 shelved
+  second-person grant issuance.
+- **AP-74**, **AP-75**, **AP-76** — `2026-09-25` — retired unbuilt when ADR-0040's strict
+  separation by origin was withdrawn (ADR-0040 amendment).

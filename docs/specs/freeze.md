@@ -214,16 +214,3 @@ added to it.
 - **The local lever is a signal, which is a thin interface for an audited act.** `SIGUSR2` carries
   a reason today through a side channel rather than in the signal itself. It works, and it is the
   kind of thing that looks obvious in a post-incident review if the reason went missing.
-
-## History
-
-- `2026-09-14` — Confirmed with the owner: the built behaviour is the first pass. Console engage
-  and approvals-during-a-Freeze moved to Future work; a test for the human-Account engage rule is
-  wanted now.
-
-- `2026-09-12` — ADR-0038: the exemption is **Policy preflights**, not "Plans". Every advance of
-  an approved Plan is new dispatch and is stopped. Before the rename this section read as though
-  a Freeze did not stop approved routes, which was the opposite of the rule.
-- `2026-09-12` — First written. Closes the dangling reference from `execution.md`'s out-of-scope
-  section, and narrows from the originally proposed freeze-and-cancellation spec: cancellation
-  moved into `execution.md`, since it acts on a Job that capability creates.

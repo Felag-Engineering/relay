@@ -130,7 +130,3 @@ _Not yet written._
     gate rule — or does that make an advisory model load-bearing?
 12. Is **v1.1.0** still the right slot, or should the decision whether to build it at all be
     taken before the v1 freeze so the contracts do not need to anticipate it?
-
-## History
-
-- `2026-09-13` — stub created to name the capability.

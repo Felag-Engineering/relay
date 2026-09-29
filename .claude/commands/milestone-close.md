@@ -45,8 +45,7 @@ is drafted in `/spec-author`, not here.
 ## Stage 3 — The close PR
 
 Branch `close/<slug>`. Delete `docs/design/plans/<slug>.md`. If the spec's Designed section is
-now empty and its Status still says `designed`, set `current as of <today>` and add a History
-line `— milestone <title> closed`. Commit, push, open the PR with the verification results in
+now empty and its Status still says `designed`, set `current as of <today>`. Commit, push, open the PR with the verification results in
 the body, and end with the attribution lines the session requires.
 
 Close the GitHub milestone only after the human merges — say so, do not close it yourself.

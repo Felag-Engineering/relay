@@ -11,7 +11,7 @@ nothing checks. The first version of `execution.md` carried one and it disagreed
 body, in both directions, within two days.
 
 The prefix is two or three capital letters, unique across `docs/specs/`. Every claim in this
-file is `**XX-n**`; `n` is never reused, so a retired claim leaves a gap and a History line.
+file is `**XX-n**`; `n` is never reused, so a retired claim leaves a gap and a line under *Retired*.
 
 ## Purpose
 
@@ -138,9 +138,11 @@ has a sentence. When one is decided it moves up, gets an ID and a milestone, and
 Decisions not yet made, each with what would force the call. An open question named here is
 tracked; one left in a closed issue is lost.
 
-## History
+## Retired
 
-Dated one-liners: what changed about this capability, and the issue that changed it. Newest
-first. This is how a spec stays trustworthy — a reader can see when it was last true.
+Every claim ID that no longer exists, one line each: the ID, the date, why, and the issue.
+IDs are never reused, so this is what explains a gap; `make docs-check` fails on a gap that is
+not listed here. `None.` when nothing has been retired. Everything else about how the spec
+changed is in its git history — the Status line says when it was last true.
 
-- `<YYYY-MM-DD>` — <what changed> (#NNN)
+- **XX-n** — `<YYYY-MM-DD>` — <why it was retired> (#NNN)

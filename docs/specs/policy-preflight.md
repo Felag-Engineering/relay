@@ -279,17 +279,6 @@ cheap enough that a caller always does it.
   the `selectors-and-labels.md` and `execution.md` migrations; this spec then follows whatever
   dispatch does (PF-2).
 
-## History
+## Retired
 
-- `2026-09-24` — Proof rows added for PF-1, PF-7, PF-9's second half, PF-10's deciding-rule half,
-  PF-13's value half, PF-22 and PF-23, each noting its residual; PF-7 proven by a behavioural and
-  a structural guard since #680 made the import guard impossible. Test-only. (#678)
-- `2026-09-20` — Migrated to the claim format (PF-1 … PF-23). Owner decisions: a zero-match
-  Selector is reported, not refused (PF-5); `unsupported` is the daemon's answer (PF-11); PF-19
-  and PF-20 Designed at v0.8.1, PF-21 at v0.7.0; PF-17 moved to *Accepted residual risk*; PF-13
-  split names from values; PF-22 split from PF-10. (#583)
-- `2026-09-14` — Confirmed with the owner as matching intent; the `no_verdicts` guard moved to
-  *Future work*.
-- `2026-09-12` — Renamed from the plan-mode spec by ADR-0038, which reassigns **Plan** to the
-  approved-route capability; behaviour unchanged.
-- `2026-09-12` — First written.
+None.
