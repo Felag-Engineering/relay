@@ -258,11 +258,11 @@ func capturedPrincipal(t *testing.T) capability.Principal {
 	return calls[0].Principal
 }
 
-// oauthHumanPrincipal is capturedPrincipal with the session shape AP-78/AP-79
-// admit for a claude-code ask/accept: an OAuth session of a human Account.
-// It keeps the real AccountID capturedPrincipal captured (so sealing still
-// works exactly as it does for every other answer-path test) and only
-// overrides the two fields claudeCodeAnswerCounts reads.
+// oauthHumanPrincipal is capturedPrincipal with the session shape AP-79
+// admits for the verified form, whatever the client name: an OAuth session
+// of a human Account. It keeps the real AccountID capturedPrincipal captured
+// (so sealing still works exactly as it does for every other answer-path
+// test) and only overrides the two fields oauthHumanSession reads.
 func oauthHumanPrincipal(t *testing.T) capability.Principal {
 	t.Helper()
 	return principalAs(capturedPrincipal(t), capability.AuthMethodOAuth, capability.PrincipalKindHuman)
@@ -954,16 +954,16 @@ func TestElicitedAnswer_RefusesRatherThanTruncatesAMalformedResponder(t *testing
 }
 
 // -----------------------------------------------------------------------
-// AP-79: a Claude Code accept/decline with no responder assertion, on an
-// OAuth session of a human Account, is that human's own verified decision
+// AP-79: on a signed-in human session, an answered retry is that human's
+// own verified decision, whatever the declared client name
 // -----------------------------------------------------------------------
 
 // claudeCodeCallMeta is a retried call's `_meta` declaring the recognised
-// client name "claude-code" (AP-78/AP-79), shaped after the probe evidence
-// (spec Known limits): clientInfo, clientCapabilities, and the vendor keys
-// Claude Code's own retry actually carries. acceptElicitedAnswer reads only
-// the declared name out of this via elicitedAnswer.CallMeta; the rest is here
-// to prove the extra keys are simply ignored.
+// client name "claude-code" (AP-78), shaped after the probe evidence (spec
+// Known limits): clientInfo, clientCapabilities, and the vendor keys Claude
+// Code's own retry actually carries. acceptElicitedAnswer never reads the
+// declared name at all (AP-78); the rest is here to prove the name and the
+// extra keys are simply ignored.
 func claudeCodeCallMeta() sdkmcp.Meta {
 	return sdkmcp.Meta{
 		sdkmcp.MetaKeyClientInfo: map[string]any{
@@ -978,119 +978,162 @@ func claudeCodeCallMeta() sdkmcp.Meta {
 	}
 }
 
-// TestElicitedAnswer_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
-// is AP-79's headline proof: a claude-code accept with no responder
-// assertion, on a session that authenticated by OAuth with a human Account,
-// is recorded as that human's own decision — the verified Principal, nothing
-// written to the asserted lane, and any OTHER assertion already on ctx (a
-// stray X-Relay-On-Behalf-Of, a traceparent) is handled exactly as AP-79
-// requires: the asserted approver is explicitly cleared, everything else
-// survives.
-func TestElicitedAnswer_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision(t *testing.T) {
+// gleipnirCallMeta is a retried call's `_meta` declaring the recognised
+// client name "gleipnir" — used alongside claudeCodeCallMeta to prove that
+// acceptance turns on the session (oauthHumanSession), never on which
+// recognised name the retry declares (AP-78).
+func gleipnirCallMeta() sdkmcp.Meta {
+	return callMetaNamed(clientNameGleipnir)
+}
+
+// callMetaNamed builds a retried call's `_meta` declaring an arbitrary
+// client name, varying nothing else — the shape
+// TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName and
+// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts use to vary
+// only the name.
+func callMetaNamed(name string) sdkmcp.Meta {
+	return sdkmcp.Meta{sdkmcp.MetaKeyClientInfo: map[string]any{"name": name, "version": "1"}}
+}
+
+// TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision is
+// AP-79's headline proof: an accept with no asserted lane entry, on a
+// session that authenticated by OAuth with a human Account, is recorded as
+// that human's own decision — the verified Principal, nothing written to the
+// asserted lane, and any OTHER assertion already on ctx (a stray
+// X-Relay-On-Behalf-Of, a traceparent) is handled exactly as AP-79 requires:
+// the asserted approver is explicitly cleared, everything else survives. Run
+// once per recognised client name (claude-code, gleipnir): the session,
+// never the name, decides this (AP-78).
+func TestElicitedAnswer_OAuthHumanSessionAnswerIsTheHumansVerifiedDecision(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
 
-	const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	ctx := capability.WithAssertions(context.Background(), capability.Assertions{
-		OnBehalfOf:  "mallory",
-		Traceparent: traceparent,
-	})
+	cases := []struct {
+		name     string
+		callMeta sdkmcp.Meta
+	}{
+		{"claude-code session", claudeCodeCallMeta()},
+		{"gleipnir session", gleipnirCallMeta()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := sealState(t, p.AccountID)
+			sealed := sealWith(t, sealer, base, nil)
 
-	rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-verified-1"}}
-	result := acceptElicitedAnswer(ctx, rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-		RequestState:   sealed,
-		InputResponses: elicit("accept", nil),
-		CallMeta:       claudeCodeCallMeta(),
-		Tool:           answerTool,
-		ArgsDigest:     base.ArgsDigest,
-	})
-	if result.Err != nil {
-		t.Fatalf("Err = %v, want nil", result.Err)
-	}
-	if result.OnBehalfOf != "" {
-		t.Errorf("OnBehalfOf = %q, want empty — AP-79 writes nothing to the asserted lane", result.OnBehalfOf)
-	}
-	if !result.deciderReached {
-		t.Error("deciderReached = false, want true")
-	}
+			const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+			ctx := capability.WithAssertions(context.Background(), capability.Assertions{
+				OnBehalfOf:  "mallory",
+				Traceparent: traceparent,
+			})
 
-	calls := rec.calls()
-	if len(calls) != 1 {
-		t.Fatalf("decider called %d times, want 1", len(calls))
-	}
-	if !calls[0].Decision.Approve {
-		t.Error("Decision.Approve = false, want true (this was an accept)")
-	}
-	if calls[0].Decision.Channel != approval.ChannelInBand {
-		t.Errorf("Decision.Channel = %v, want ChannelInBand", calls[0].Decision.Channel)
-	}
-	if !reflect.DeepEqual(calls[0].Principal, p) {
-		t.Errorf("Principal = %+v, want the verified caller %+v", calls[0].Principal, p)
-	}
-	if calls[0].Assertions.OnBehalfOf != "" {
-		t.Errorf("Assertions.OnBehalfOf = %q, want empty — the explicit clear", calls[0].Assertions.OnBehalfOf)
-	}
-	if calls[0].Assertions.Traceparent != traceparent {
-		t.Errorf("Assertions.Traceparent = %q, want %q preserved", calls[0].Assertions.Traceparent, traceparent)
-	}
+			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash, JobID: "job-verified-1"}}
+			result := acceptElicitedAnswer(ctx, rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+				RequestState:   sealed,
+				InputResponses: elicit("accept", nil),
+				CallMeta:       tc.callMeta,
+				Tool:           answerTool,
+				ArgsDigest:     base.ArgsDigest,
+			})
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
+			}
+			if result.OnBehalfOf != "" {
+				t.Errorf("OnBehalfOf = %q, want empty — AP-79 writes nothing to the asserted lane", result.OnBehalfOf)
+			}
+			if !result.deciderReached {
+				t.Error("deciderReached = false, want true")
+			}
 
-	out := result.decisionOutput(RunOrPlanOutput{JobID: "job-verified-1"})
-	if out.Channel != approval.ChannelInBand.String() {
-		t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, approval.ChannelInBand.String())
-	}
-	if out.OnBehalfOf != "" {
-		t.Errorf("decisionOutput.OnBehalfOf = %q, want empty", out.OnBehalfOf)
+			calls := rec.calls()
+			if len(calls) != 1 {
+				t.Fatalf("decider called %d times, want 1", len(calls))
+			}
+			if !calls[0].Decision.Approve {
+				t.Error("Decision.Approve = false, want true (this was an accept)")
+			}
+			if calls[0].Decision.Channel != approval.ChannelInBand {
+				t.Errorf("Decision.Channel = %v, want ChannelInBand", calls[0].Decision.Channel)
+			}
+			if !reflect.DeepEqual(calls[0].Principal, p) {
+				t.Errorf("Principal = %+v, want the verified caller %+v", calls[0].Principal, p)
+			}
+			if calls[0].Assertions.OnBehalfOf != "" {
+				t.Errorf("Assertions.OnBehalfOf = %q, want empty — the explicit clear", calls[0].Assertions.OnBehalfOf)
+			}
+			if calls[0].Assertions.Traceparent != traceparent {
+				t.Errorf("Assertions.Traceparent = %q, want %q preserved", calls[0].Assertions.Traceparent, traceparent)
+			}
+
+			out := result.decisionOutput(RunOrPlanOutput{JobID: "job-verified-1"})
+			if out.Channel != approval.ChannelInBand.String() {
+				t.Errorf("decisionOutput.Channel = %q, want %q", out.Channel, approval.ChannelInBand.String())
+			}
+			if out.OnBehalfOf != "" {
+				t.Errorf("decisionOutput.OnBehalfOf = %q, want empty", out.OnBehalfOf)
+			}
+		})
 	}
 }
 
-// TestElicitedAnswer_ClaudeCodeDeclineIsADenial is AP-79's decline half: a
-// human's "no", recorded exactly as their "yes" would be attributed, still
-// terminal and still empty in the asserted lane.
-func TestElicitedAnswer_ClaudeCodeDeclineIsADenial(t *testing.T) {
+// TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial is AP-79's decline
+// half: a human's "no", recorded exactly as their "yes" would be attributed,
+// still terminal and still empty in the asserted lane — whatever the
+// declared client name.
+func TestElicitedAnswer_OAuthHumanSessionDeclineIsADenial(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
 
-	rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
-	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-		RequestState:   sealed,
-		InputResponses: elicit("decline", nil),
-		CallMeta:       claudeCodeCallMeta(),
-		Tool:           answerTool,
-		ArgsDigest:     base.ArgsDigest,
-	})
-	if result.Err != nil {
-		t.Fatalf("Err = %v, want nil", result.Err)
+	cases := []struct {
+		name     string
+		callMeta sdkmcp.Meta
+	}{
+		{"claude-code session", claudeCodeCallMeta()},
+		{"gleipnir session", gleipnirCallMeta()},
 	}
-	if result.Outcome != elicitedDenied {
-		t.Errorf("Outcome = %v, want elicitedDenied", result.Outcome)
-	}
-	calls := rec.calls()
-	if len(calls) != 1 {
-		t.Fatalf("decider called %d times, want 1", len(calls))
-	}
-	if calls[0].Decision.Approve {
-		t.Error("Decision.Approve = true, want false (this was a decline)")
-	}
-	if calls[0].Assertions.OnBehalfOf != "" {
-		t.Errorf("Assertions.OnBehalfOf = %q, want empty", calls[0].Assertions.OnBehalfOf)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := sealState(t, p.AccountID)
+			sealed := sealWith(t, sealer, base, nil)
+
+			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateDenied, PlanHash: answerPlanHash}}
+			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+				RequestState:   sealed,
+				InputResponses: elicit("decline", nil),
+				CallMeta:       tc.callMeta,
+				Tool:           answerTool,
+				ArgsDigest:     base.ArgsDigest,
+			})
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
+			}
+			if result.Outcome != elicitedDenied {
+				t.Errorf("Outcome = %v, want elicitedDenied", result.Outcome)
+			}
+			calls := rec.calls()
+			if len(calls) != 1 {
+				t.Fatalf("decider called %d times, want 1", len(calls))
+			}
+			if calls[0].Decision.Approve {
+				t.Error("Decision.Approve = true, want false (this was a decline)")
+			}
+			if calls[0].Assertions.OnBehalfOf != "" {
+				t.Errorf("Assertions.OnBehalfOf = %q, want empty", calls[0].Assertions.OnBehalfOf)
+			}
+		})
 	}
 }
 
-// TestElicitedAnswer_ClaudeCodeCancelIsRefusedAsToday: the action check comes
-// BEFORE the verified-form choice, so a Claude Code "cancel" (or any action
+// TestElicitedAnswer_OAuthHumanSessionCancelIsRefusedAsToday: the action
+// check comes BEFORE the verified-form choice, so a "cancel" (or any action
 // but accept/decline) keeps today's refusal untouched — nothing is recorded,
 // even on a qualifying OAuth human session.
-func TestElicitedAnswer_ClaudeCodeCancelIsRefusedAsToday(t *testing.T) {
+func TestElicitedAnswer_OAuthHumanSessionCancelIsRefusedAsToday(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
@@ -1118,110 +1161,86 @@ func TestElicitedAnswer_ClaudeCodeCancelIsRefusedAsToday(t *testing.T) {
 	}
 }
 
-// TestElicitedAnswer_ClaudeCodeWithAResponderTakesTheNamedPath: a present
-// responder assertion ALWAYS takes the named path first, whatever the
-// declared client name — the verified form only fills the gap the named form
-// leaves, and a malformed named responder is refused outright rather than
-// being downgraded to the verified form.
-func TestElicitedAnswer_ClaudeCodeWithAResponderTakesTheNamedPath(t *testing.T) {
+// TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored: on a
+// signed-in human session, a present io.gleipnir/responder — well-formed or
+// not — is ignored completely (AP-79): it is never parsed, and the answer is
+// still recorded as the human's own verified decision. Run against both
+// recognised client names, because acceptance never reads the name (AP-78).
+func TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
 
-	t.Run("a valid permission responder records the named approver, never the verified form", func(t *testing.T) {
-		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-			RequestState:   sealed,
-			InputResponses: elicit("accept", permissionResponder("alice")),
-			CallMeta:       claudeCodeCallMeta(),
-			Tool:           answerTool,
-			ArgsDigest:     base.ArgsDigest,
-		})
-		if result.Err != nil {
-			t.Fatalf("Err = %v, want nil", result.Err)
-		}
-		if result.OnBehalfOf != "alice" {
-			t.Errorf("OnBehalfOf = %q, want %q — a present responder always takes the named path", result.OnBehalfOf, "alice")
-		}
-	})
-
-	malformed := []struct {
+	responderShapes := []struct {
 		name string
 		meta sdkmcp.Meta
 	}{
+		{name: "a valid permission responder", meta: permissionResponder("alice")},
 		{name: `gate "information"`, meta: sdkmcp.Meta{responderMetaKey: map[string]any{"gate": "information", "username": "alice"}}},
 		{name: "responder not an object", meta: sdkmcp.Meta{responderMetaKey: "alice"}},
-		{name: "case-variant keys only", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"Gate": "permission", "Username": "alice"}}},
+		{name: "case-variant inner keys", meta: sdkmcp.Meta{responderMetaKey: map[string]any{"Gate": "permission", "Username": "alice"}}},
+		{name: "wrong-case outer key", meta: sdkmcp.Meta{"IO.Gleipnir/Responder": map[string]any{"gate": "permission", "username": "alice"}}},
 	}
-	for _, tc := range malformed {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := &recordingDecider{}
-			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-				RequestState:   sealed,
-				InputResponses: elicit("accept", tc.meta),
-				CallMeta:       claudeCodeCallMeta(),
-				Tool:           answerTool,
-				ArgsDigest:     base.ArgsDigest,
-			})
-			if result.Outcome != elicitedRefused {
-				t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
-			}
-			if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-				t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
-			}
-			if calls := rec.calls(); len(calls) != 0 {
-				t.Errorf("decider called %d times, want 0 — a malformed named responder must NEVER be "+
-					"downgraded to the verified form", len(calls))
-			}
-		})
+	callMetas := []struct {
+		name     string
+		callMeta sdkmcp.Meta
+	}{
+		{"claude-code session", claudeCodeCallMeta()},
+		{"gleipnir session", gleipnirCallMeta()},
 	}
 
-	// Plan review cycle 2, suggestion 2: a wrong-case OUTER key
-	// ("IO.Gleipnir/Responder" rather than the exact "io.gleipnir/responder")
-	// is not the recognised responder key at all — acceptElicitedAnswer's
-	// presence check never sees it — so from claude-code (on a qualifying
-	// session) this falls through to the SAME verified form as no responder
-	// at all. It grants nothing beyond what no responder already grants; this
-	// is a deliberate consequence of the exact-key reading, not a bypass.
-	t.Run("a wrong-case outer responder key grants nothing beyond no responder at all", func(t *testing.T) {
-		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
-		wrongCaseMeta := sdkmcp.Meta{"IO.Gleipnir/Responder": map[string]any{"gate": "permission", "username": "alice"}}
-		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-			RequestState:   sealed,
-			InputResponses: elicit("accept", wrongCaseMeta),
-			CallMeta:       claudeCodeCallMeta(),
-			Tool:           answerTool,
-			ArgsDigest:     base.ArgsDigest,
+	for _, cm := range callMetas {
+		t.Run(cm.name, func(t *testing.T) {
+			for _, rs := range responderShapes {
+				t.Run(rs.name, func(t *testing.T) {
+					base := sealState(t, p.AccountID)
+					sealed := sealWith(t, sealer, base, nil)
+
+					rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+					result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+						RequestState:   sealed,
+						InputResponses: elicit("accept", rs.meta),
+						CallMeta:       cm.callMeta,
+						Tool:           answerTool,
+						ArgsDigest:     base.ArgsDigest,
+					})
+					if result.Err != nil {
+						t.Fatalf("Err = %v, want nil", result.Err)
+					}
+					calls := rec.calls()
+					if len(calls) != 1 {
+						t.Fatalf("decider called %d times, want 1", len(calls))
+					}
+					if calls[0].Assertions.OnBehalfOf != "" {
+						t.Errorf("Assertions.OnBehalfOf = %q, want empty — \"alice\" must never reach the decider's assertions", calls[0].Assertions.OnBehalfOf)
+					}
+					if result.OnBehalfOf != "" {
+						t.Errorf("OnBehalfOf = %q, want empty", result.OnBehalfOf)
+					}
+					out := result.decisionOutput(RunOrPlanOutput{})
+					if out.OnBehalfOf != "" {
+						t.Errorf("decisionOutput().OnBehalfOf = %q, want empty", out.OnBehalfOf)
+					}
+				})
+			}
 		})
-		if result.Err != nil {
-			t.Fatalf("Err = %v, want nil", result.Err)
-		}
-		if result.OnBehalfOf != "" {
-			t.Errorf("OnBehalfOf = %q, want empty (never \"alice\" — the wrong-case key is not the named form)", result.OnBehalfOf)
-		}
-	})
+	}
 }
 
-// TestElicitedAnswer_VerifiedFormNeedsTheRetriedCallsDeclaredName pins where
-// AP-79 reads the name from: the RETRIED call's own CallMeta, exactly and
-// case-sensitively "claude-code" — never the ElicitResult's own `_meta`, and
-// never a near-miss name. The Principal is an OAuth human throughout, so the
-// declared name is the only thing that varies.
-func TestElicitedAnswer_VerifiedFormNeedsTheRetriedCallsDeclaredName(t *testing.T) {
+// TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName pins that AP-79's
+// verified form never reads the declared client name (AP-78): on a
+// signed-in human session, an answer is that human's own verified decision
+// whatever the retried call's CallMeta says — absent, a near-miss name, or a
+// name present only in the ElicitResult's own `_meta`. The Principal is an
+// OAuth human throughout, so the declared name is the only thing that
+// varies.
+func TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName(t *testing.T) {
 	p := oauthHumanPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
-	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
-
-	callMetaNamed := func(name string) sdkmcp.Meta {
-		return sdkmcp.Meta{sdkmcp.MetaKeyClientInfo: map[string]any{"name": name, "version": "1"}}
 	}
 
 	cases := []struct {
@@ -1236,7 +1255,10 @@ func TestElicitedAnswer_VerifiedFormNeedsTheRetriedCallsDeclaredName(t *testing.
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			rec := &recordingDecider{}
+			base := sealState(t, p.AccountID)
+			sealed := sealWith(t, sealer, base, nil)
+
+			rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 				RequestState:   sealed,
 				InputResponses: elicit("accept", nil),
@@ -1244,20 +1266,30 @@ func TestElicitedAnswer_VerifiedFormNeedsTheRetriedCallsDeclaredName(t *testing.
 				Tool:           answerTool,
 				ArgsDigest:     base.ArgsDigest,
 			})
-			if result.Outcome != elicitedRefused {
-				t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+			if result.Err != nil {
+				t.Fatalf("Err = %v, want nil", result.Err)
 			}
-			if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-				t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
+			calls := rec.calls()
+			if len(calls) != 1 {
+				t.Fatalf("decider called %d times, want 1", len(calls))
 			}
-			if calls := rec.calls(); len(calls) != 0 {
-				t.Errorf("decider called %d times, want 0", len(calls))
+			if !reflect.DeepEqual(calls[0].Principal, p) {
+				t.Errorf("Principal = %+v, want the verified caller %+v", calls[0].Principal, p)
+			}
+			if calls[0].Assertions.OnBehalfOf != "" {
+				t.Errorf("Assertions.OnBehalfOf = %q, want empty", calls[0].Assertions.OnBehalfOf)
+			}
+			if result.OnBehalfOf != "" {
+				t.Errorf("OnBehalfOf = %q, want empty", result.OnBehalfOf)
 			}
 		})
 	}
 
-	t.Run(`"claude-code" present only in the ElicitResult's own _meta is refused`, func(t *testing.T) {
-		rec := &recordingDecider{}
+	t.Run(`"claude-code" present only in the ElicitResult's own _meta is still verified`, func(t *testing.T) {
+		base := sealState(t, p.AccountID)
+		sealed := sealWith(t, sealer, base, nil)
+
+		rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
 		resultMeta := sdkmcp.Meta{sdkmcp.MetaKeyClientInfo: map[string]any{"name": "claude-code", "version": "1"}}
 		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 			RequestState:   sealed,
@@ -1266,57 +1298,74 @@ func TestElicitedAnswer_VerifiedFormNeedsTheRetriedCallsDeclaredName(t *testing.
 			Tool:           answerTool,
 			ArgsDigest:     base.ArgsDigest,
 		})
-		if result.Outcome != elicitedRefused {
-			t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+		if result.Err != nil {
+			t.Fatalf("Err = %v, want nil", result.Err)
 		}
-		if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-			t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
+		calls := rec.calls()
+		if len(calls) != 1 {
+			t.Fatalf("decider called %d times, want 1", len(calls))
 		}
-		if calls := rec.calls(); len(calls) != 0 {
-			t.Errorf("decider called %d times, want 0", len(calls))
+		if result.OnBehalfOf != "" {
+			t.Errorf("OnBehalfOf = %q, want empty", result.OnBehalfOf)
 		}
 	})
 
-	t.Run("claude-code with a replay marker is refused", func(t *testing.T) {
-		rec := &recordingDecider{}
-		callMeta := claudeCodeCallMeta()
-		callMeta[replayedFromMetaKey] = "req-earlier"
-		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-			RequestState:   sealed,
-			InputResponses: elicit("accept", nil),
-			CallMeta:       callMeta,
-			Tool:           answerTool,
-			ArgsDigest:     base.ArgsDigest,
-		})
-		if result.Outcome != elicitedRefused {
-			t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+	t.Run("a replay marker is refused", func(t *testing.T) {
+		base := sealState(t, p.AccountID)
+		sealed := sealWith(t, sealer, base, nil)
+
+		cases := []struct {
+			name     string
+			callMeta sdkmcp.Meta
+		}{
+			{"claude-code CallMeta", claudeCodeCallMeta()},
+			{"gleipnir CallMeta", gleipnirCallMeta()},
 		}
-		if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-			t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
-		}
-		if calls := rec.calls(); len(calls) != 0 {
-			t.Errorf("decider called %d times, want 0", len(calls))
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				rec := &recordingDecider{}
+				callMeta := tc.callMeta
+				callMeta[replayedFromMetaKey] = "req-earlier"
+				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+					RequestState:   sealed,
+					InputResponses: elicit("accept", nil),
+					CallMeta:       callMeta,
+					Tool:           answerTool,
+					ArgsDigest:     base.ArgsDigest,
+				})
+				if result.Outcome != elicitedRefused {
+					t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+				}
+				if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
+					t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
+				}
+				if calls := rec.calls(); len(calls) != 0 {
+					t.Errorf("decider called %d times, want 0", len(calls))
+				}
+			})
 		}
 	})
 }
 
-// TestElicitedAnswer_ClaudeCodeOffAnOAuthHumanSessionEarnsNothing is AP-78's
-// acceptance-side proof and the plan review's defence-in-depth fold-in
-// (finding 1): the acceptor checks "OAuth session of a human Account" itself,
-// independent of whatever gated the ask, for BOTH the no-responder shape and
-// a claude-code CallMeta that also carries a real, valid responder assertion
-// — the fold-in row that would otherwise reach the named path if a future
-// caller skipped isAnsweredRetry's own gate.
-func TestElicitedAnswer_ClaudeCodeOffAnOAuthHumanSessionEarnsNothing(t *testing.T) {
+// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts is
+// AP-79/AP-64's acceptance-seam proof that off a signed-in human session
+// only the named form counts, whatever the CallMeta says; the acceptor no
+// longer reads the declared name at all. The name gate that keeps a
+// claude-code retry off an OAuth human session from ever reaching
+// acceptElicitedAnswer lives in isAnsweredRetry (via clientCanBeAsked), and
+// its proof is TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall
+// (elicit_test.go, the handler seam, stubDecider fails if called) — with
+// TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing as its
+// e2e counterpart. This test deliberately calls acceptElicitedAnswer
+// directly, bypassing that gate.
+func TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts(t *testing.T) {
 	base0 := capturedPrincipal(t)
 	sealer, err := requeststate.Mint()
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	base := sealState(t, base0.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
 
-	cases := []struct {
+	principalCases := []struct {
 		name string
 		p    capability.Principal
 	}{
@@ -1328,68 +1377,92 @@ func TestElicitedAnswer_ClaudeCodeOffAnOAuthHumanSessionEarnsNothing(t *testing.
 		{"Console session + human", principalAs(base0, capability.AuthMethodConsoleSession, capability.PrincipalKindHuman)},
 		{"Unspecified + human", principalAs(base0, capability.AuthMethodUnspecified, capability.PrincipalKindHuman)},
 	}
-
-	assertRefused := func(t *testing.T, result elicitedAnswerResult, rec *recordingDecider) {
-		t.Helper()
-		if result.Outcome != elicitedRefused {
-			t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
-		}
-		if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
-			t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
-		}
-		if calls := rec.calls(); len(calls) != 0 {
-			t.Errorf("decider called %d times, want 0", len(calls))
-		}
-		if result.deciderReached {
-			t.Error("deciderReached = true, want false")
-		}
-		wantReason := errNoNamedApprover.Error()
-		if got := result.refusalOutput().Reason; got != wantReason {
-			t.Errorf("refusalOutput().Reason = %q, want %q", got, wantReason)
-		}
+	callMetaCases := []struct {
+		name     string
+		callMeta sdkmcp.Meta
+	}{
+		{"claude-code CallMeta", claudeCodeCallMeta()},
+		{"gleipnir CallMeta", gleipnirCallMeta()},
+		{"no CallMeta", nil},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name+", no responder", func(t *testing.T) {
-			rec := &recordingDecider{}
-			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, tc.p, elicitedAnswer{
-				RequestState:   sealed,
-				InputResponses: elicit("accept", nil),
-				CallMeta:       claudeCodeCallMeta(),
-				Tool:           answerTool,
-				ArgsDigest:     base.ArgsDigest,
-			})
-			assertRefused(t, result, rec)
-		})
-	}
+	for _, pc := range principalCases {
+		for _, cm := range callMetaCases {
+			t.Run(pc.name+", "+cm.name+", no responder", func(t *testing.T) {
+				base := sealState(t, base0.AccountID)
+				sealed := sealWith(t, sealer, base, nil)
 
-	// The fold-in: a claude-code CallMeta carrying a REAL, well-formed
-	// responder assertion on a disqualified session must still be refused,
-	// never elevated to the named path.
-	t.Run("API Token + human, with a valid responder", func(t *testing.T) {
-		rec := &recordingDecider{}
-		result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow,
-			principalAs(base0, capability.AuthMethodAPIToken, capability.PrincipalKindHuman), elicitedAnswer{
-				RequestState:   sealed,
-				InputResponses: elicit("accept", permissionResponder("alice")),
-				CallMeta:       claudeCodeCallMeta(),
-				Tool:           answerTool,
-				ArgsDigest:     base.ArgsDigest,
+				rec := &recordingDecider{}
+				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
+					RequestState:   sealed,
+					InputResponses: elicit("accept", nil),
+					CallMeta:       cm.callMeta,
+					Tool:           answerTool,
+					ArgsDigest:     base.ArgsDigest,
+				})
+				if result.Outcome != elicitedRefused {
+					t.Errorf("Outcome = %v, want elicitedRefused", result.Outcome)
+				}
+				if !errors.Is(result.Err, approval.ErrMachineSelfDecision) {
+					t.Errorf("Err = %v, want errors.Is(_, approval.ErrMachineSelfDecision)", result.Err)
+				}
+				if calls := rec.calls(); len(calls) != 0 {
+					t.Errorf("decider called %d times, want 0", len(calls))
+				}
+				if result.deciderReached {
+					t.Error("deciderReached = true, want false")
+				}
+				wantReason := errNoNamedApprover.Error()
+				if got := result.refusalOutput().Reason; got != wantReason {
+					t.Errorf("refusalOutput().Reason = %q, want %q", got, wantReason)
+				}
 			})
-		assertRefused(t, result, rec)
-	})
+
+			// The named path still counts on a disqualified session (AP-64):
+			// this inverts the old fold-in row, because AP-78 says acceptance
+			// never turns on the name.
+			t.Run(pc.name+", "+cm.name+", with a valid responder", func(t *testing.T) {
+				base := sealState(t, base0.AccountID)
+				sealed := sealWith(t, sealer, base, nil)
+
+				rec := &recordingDecider{resp: approval.Request{ID: answerRequestID, State: approval.StateApproved, PlanHash: answerPlanHash}}
+				result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, pc.p, elicitedAnswer{
+					RequestState:   sealed,
+					InputResponses: elicit("accept", permissionResponder("alice")),
+					CallMeta:       cm.callMeta,
+					Tool:           answerTool,
+					ArgsDigest:     base.ArgsDigest,
+				})
+				if result.Err != nil {
+					t.Fatalf("Err = %v, want nil", result.Err)
+				}
+				calls := rec.calls()
+				if len(calls) != 1 {
+					t.Fatalf("decider called %d times, want 1", len(calls))
+				}
+				if calls[0].Assertions.OnBehalfOf != "alice" {
+					t.Errorf("Assertions.OnBehalfOf = %q, want %q — the named path (AP-64)", calls[0].Assertions.OnBehalfOf, "alice")
+				}
+				if result.OnBehalfOf != "alice" {
+					t.Errorf("OnBehalfOf = %q, want %q", result.OnBehalfOf, "alice")
+				}
+			})
+		}
+	}
 }
 
 // TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals is AP-79's "same
 // refusals" claim, at the ADAPTER seam: acceptElicitedAnswer classifies a
-// verified claude-code answer's domain refusal identically to how it
-// classifies a named one — recordingDecider is scripted here, so this proves
+// verified answer's domain refusal identically to how it classifies a named
+// one — run against both recognised client names, because acceptance never
+// reads the name (AP-78). recordingDecider is scripted here, so this proves
 // the adapter's classification only; the real domain's side (requester
 // exclusion, machine self-decision) is item 7's capability-seam proof
-// (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified) and, for
-// requester exclusion specifically, is UNREACHABLE end to end at all (AP-61
-// never asks where the rule excludes the requester, and the seal binds an
-// answer to the asking Account) — see
+// (TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified). Its
+// ErrRequesterExcluded row is "requester exclusion still refuses" at this
+// seam; requester exclusion is UNREACHABLE end to end at all (AP-61 never
+// asks where the rule excludes the requester, and the seal binds an answer
+// to the asking Account) — see
 // TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals's doc.
 func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 	p := oauthHumanPrincipal(t)
@@ -1397,8 +1470,6 @@ func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	base := sealState(t, p.AccountID)
-	sealed := sealWith(t, sealer, base, nil)
 
 	cases := []struct {
 		name         string
@@ -1435,27 +1506,42 @@ func TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := &recordingDecider{resp: tc.resp, err: tc.err}
-			result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
-				RequestState:   sealed,
-				InputResponses: elicit(tc.action, nil),
-				CallMeta:       claudeCodeCallMeta(),
-				Tool:           answerTool,
-				ArgsDigest:     base.ArgsDigest,
-			})
-			if result.Outcome != tc.wantOutcome {
-				t.Errorf("Outcome = %v, want %v", result.Outcome, tc.wantOutcome)
-			}
-			if !errors.Is(result.Err, tc.err) {
-				t.Errorf("Err = %v, want errors.Is(_, %v)", result.Err, tc.err)
-			}
-			if calls := rec.calls(); len(calls) != 1 {
-				t.Fatalf("decider called %d times, want 1", len(calls))
-			}
-			if got := result.refusalOutput().NextStep; got != tc.wantNextStep {
-				t.Errorf("refusalOutput().NextStep = %q, want %q", got, tc.wantNextStep)
+	callMetaCases := []struct {
+		name     string
+		callMeta sdkmcp.Meta
+	}{
+		{"claude-code session", claudeCodeCallMeta()},
+		{"gleipnir session", gleipnirCallMeta()},
+	}
+
+	for _, cm := range callMetaCases {
+		t.Run(cm.name, func(t *testing.T) {
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					base := sealState(t, p.AccountID)
+					sealed := sealWith(t, sealer, base, nil)
+
+					rec := &recordingDecider{resp: tc.resp, err: tc.err}
+					result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
+						RequestState:   sealed,
+						InputResponses: elicit(tc.action, nil),
+						CallMeta:       cm.callMeta,
+						Tool:           answerTool,
+						ArgsDigest:     base.ArgsDigest,
+					})
+					if result.Outcome != tc.wantOutcome {
+						t.Errorf("Outcome = %v, want %v", result.Outcome, tc.wantOutcome)
+					}
+					if !errors.Is(result.Err, tc.err) {
+						t.Errorf("Err = %v, want errors.Is(_, %v)", result.Err, tc.err)
+					}
+					if calls := rec.calls(); len(calls) != 1 {
+						t.Fatalf("decider called %d times, want 1", len(calls))
+					}
+					if got := result.refusalOutput().NextStep; got != tc.wantNextStep {
+						t.Errorf("refusalOutput().NextStep = %q, want %q", got, tc.wantNextStep)
+					}
+				})
 			}
 		})
 	}
@@ -1481,7 +1567,7 @@ func TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded(t *test
 	result := acceptElicitedAnswer(context.Background(), rec, openerOf(sealer), fixedNow, p, elicitedAnswer{
 		RequestState:   sealed,
 		InputResponses: elicit("accept", nil),
-		CallMeta:       claudeCodeCallMeta(),
+		CallMeta:       gleipnirCallMeta(),
 		Tool:           answerTool,
 		ArgsDigest:     base.ArgsDigest,
 	})
@@ -1494,6 +1580,34 @@ func TestElicitedAnswer_FailureAfterAVerifiedDecisionMayHaveBeenRecorded(t *test
 	}
 	if !strings.HasPrefix(out.Reason, "the answer may have been recorded") {
 		t.Errorf("Reason = %q, want it to start with %q", out.Reason, "the answer may have been recorded")
+	}
+}
+
+// TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod is a direct
+// table on oauthHumanSession, using the same principal rows
+// TestElicit_WhoIsAskedByNameAndSession's session table uses: only an OAuth
+// session of a human Account returns true. The check is on the Account's
+// stored Kind, never inferred from AuthMethod alone.
+func TestOAuthHumanSession_ChecksTheAccountKindNotTheAuthMethod(t *testing.T) {
+	cases := []struct {
+		name string
+		p    capability.Principal
+		want bool
+	}{
+		{"OAuth + human", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: capability.PrincipalKindHuman}, true},
+		{"API Token + human", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: capability.PrincipalKindHuman}, false},
+		{"API Token + machine", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: "machine"}, false},
+		{"OAuth + machine", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: "machine"}, false},
+		{"OAuth + unset kind", capability.Principal{AuthMethod: capability.AuthMethodOAuth}, false},
+		{"Console session + human", capability.Principal{AuthMethod: capability.AuthMethodConsoleSession, Kind: capability.PrincipalKindHuman}, false},
+		{"Unspecified + human", capability.Principal{Kind: capability.PrincipalKindHuman}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := oauthHumanSession(tc.p); got != tc.want {
+				t.Errorf("oauthHumanSession(%+v) = %v, want %v", tc.p, got, tc.want)
+			}
+		})
 	}
 }
 

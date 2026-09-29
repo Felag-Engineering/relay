@@ -59,13 +59,11 @@ const (
 	// AP-78: gleipnir is asked wherever the emission predicate otherwise
 	// allows; claude-code is asked only on a session that authenticated by
 	// OAuth with a human Account (clientCanBeAsked calls
-	// tools_approval.go's claudeCodeAnswerCounts to check that). The same
-	// declared name also selects AP-79's verified-decision form in
-	// acceptElicitedAnswer's admission (tools_approval.go), admitted only on
-	// the same session shape — a present responder assertion always takes
-	// the named path first. These identifiers name an external consumer's
-	// wire value, exactly as responderMetaKey already does, so they do not
-	// conflict with ADR-0016.
+	// tools_approval.go's oauthHumanSession to check that). The declared name
+	// decides only whether to ask (AP-78). How an answer is accepted turns on
+	// the session, never on the name (tools_approval.go, acceptElicitedAnswer).
+	// These identifiers name an external consumer's wire value, exactly as
+	// responderMetaKey already does, so they do not conflict with ADR-0016.
 	clientNameGleipnir   = "gleipnir"
 	clientNameClaudeCode = "claude-code"
 )
@@ -183,7 +181,7 @@ func declaredClientName(meta sdkmcp.Meta) (string, bool) {
 // as AP-70 already ignores them for any other client that cannot be asked.
 //
 // p is the authenticated caller: gleipnir is asked on any session, but
-// claude-code is asked only where claudeCodeAnswerCounts (tools_approval.go)
+// claude-code is asked only where oauthHumanSession (tools_approval.go)
 // reports the session authenticated by OAuth with a human Account — checked
 // here, never inferred from anything about the request itself, since the
 // declared name is self-reported and only the session's own verified facts
@@ -254,10 +252,7 @@ func clientCanBeAsked(req *sdkmcp.CallToolRequest, p capability.Principal) bool 
 	// Condition 5 (AP-78) — the declared client name, read from the SAME raw
 	// `_meta` map condition 3 already reads, so the first call and a retry are
 	// each judged by their OWN request's declared name. This narrows who gets
-	// asked; for claude-code the same declared name also selects AP-79's
-	// verified-decision form in acceptElicitedAnswer (tools_approval.go),
-	// admitted only on the same session shape, and a present responder
-	// assertion always takes the named path.
+	// asked; it decides only whether to ask.
 	name, ok := declaredClientName(meta)
 	if !ok {
 		return false
@@ -266,7 +261,7 @@ func clientCanBeAsked(req *sdkmcp.CallToolRequest, p capability.Principal) bool 
 	case clientNameGleipnir:
 		return true
 	case clientNameClaudeCode:
-		return claudeCodeAnswerCounts(p)
+		return oauthHumanSession(p)
 	default:
 		return false
 	}

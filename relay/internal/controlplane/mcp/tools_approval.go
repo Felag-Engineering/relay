@@ -51,6 +51,11 @@ import (
 // the claim. An auditor can always tell the two apart, which is the entire
 // point of recording them separately (ADR-0029 decision 2).
 //
+// approve_request is always asserted this way, including on an OAuth human
+// session, because the tool is model-called: treating its approver as
+// verified would let a model approve its own request on a human's session.
+// The answered retry's AP-79 exception to this rule is described below.
+//
 // # The second envelope (ADR-0029 decision 6)
 //
 // acceptElicitedAnswer, below, is the MRTR answer path: a retried tool call
@@ -64,18 +69,16 @@ import (
 // (no_decision_test.go still enforces the scan; this paragraph is the
 // reviewer's map of what to read).
 //
-// A present responder assertion always takes the named path first, whatever
-// the declared client name (AP-64). Absent that, a retry that declares client
-// name "claude-code" (elicit.go's clientNameClaudeCode) on a session that
-// authenticated by OAuth with a human Account (claudeCodeAnswerCounts, below)
-// is that human's own verified in-band decision (AP-79): nothing is written
-// to the asserted lane. Every other retry — an unrecognised name, or
-// "claude-code" off that specific session shape — is refused as a machine
-// self-decision, exactly as approve_request with no approver is. The declared
-// name is read from the RETRIED call's own `_meta` (elicitedAnswer.CallMeta),
-// never from the ElicitResult's own `_meta` and never from the sealed state —
-// so a call first asked under one recognised name and retried declaring
-// "claude-code" is judged, on the retry, by the retry's own declared name.
+// On a signed-in human session (oauthHumanSession, below) any answered retry
+// is that human's own verified in-band decision, whatever the declared client
+// name and whether or not it carries a responder assertion: a present
+// responder is ignored, and nothing is written to the asserted lane (AP-79).
+// On every other session a responder assertion with gate permission is
+// required (AP-64), otherwise the retry is refused as a machine
+// self-decision, exactly as approve_request with no approver is. Acceptance
+// never reads the declared client name (AP-78) — the name only gates
+// whether a client is asked at all, in elicit.go's clientCanBeAsked, which
+// isAnsweredRetry also applies.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
 // acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
@@ -193,7 +196,7 @@ type ApprovalDecisionOutput struct {
 	State      string `json:"state" jsonschema:"The request's state: after this decision on approve_request, or at the moment this answer was evaluated on an answered retry's decision block — the dispatch that follows may have moved the request on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
 	Progress   string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
 	Channel    string `json:"channel" jsonschema:"'in-band' when this decision was recorded through this tool — the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. On an answered retry's decision block this is empty when THIS call's answer was not recorded (for example the request was already decided by someone else); approve_request always sets it, because it returns a tool error rather than this shape when nothing was recorded."`
-	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, and also when the decision was the calling human's own verified answer with no asserted approver (a Claude Code answer on that human's OAuth session)."`
+	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, and also when the decision was the calling human's own verified answer with no asserted approver (an answer given on that human's own OAuth session, whatever the client)."`
 	NextStep   string `json:"next_step" jsonschema:"What to do next."`
 }
 
@@ -306,11 +309,11 @@ func renderApprovalError(err error) error {
 // file's shape.
 const responderMetaKey = "io.gleipnir/responder"
 
-// claudeCodeAnswerCounts reports whether p is a session on which a
-// claude-code answer is the caller's own verified decision (AP-78, AP-79):
-// an OAuth session AND a human Account. Both elicit.go's asking predicate and
-// this file's acceptance path call this one definition, so the rule cannot
-// drift between "whether to ask" and "whether to accept".
+// oauthHumanSession reports whether p is a signed-in human session (AP-79):
+// an OAuth session AND a human Account. On such a session an answered retry
+// is the human's own verified decision whatever the declared client name
+// (acceptElicitedAnswer), and elicit.go asks claude-code only here (AP-78).
+// One definition, so asking and accepting cannot drift.
 //
 // The OAuth resolver copies the Account's Kind through unchecked
 // (controlplane/oauth.go), so "human" is checked here explicitly, never
@@ -318,7 +321,7 @@ const responderMetaKey = "io.gleipnir/responder"
 // any other auth method entirely (API Token, Console session, unspecified),
 // fails closed. p.Human() itself fails closed on an unset or unrecognised
 // Kind (capability.Principal.Human).
-func claudeCodeAnswerCounts(p capability.Principal) bool {
+func oauthHumanSession(p capability.Principal) bool {
 	return p.AuthMethod == capability.AuthMethodOAuth && p.Human()
 }
 
@@ -472,8 +475,8 @@ type elicitedAnswerResult struct {
 	Progress string
 	// OnBehalfOf is the asserted approver value (a responder's username)
 	// handed to the decider. EMPTY on an AP-79 verified decision — nothing is
-	// written to the asserted lane for a claude-code answer on its own
-	// human's OAuth session — and on every refusal before the decider was
+	// written to the asserted lane for an answer on its own human's OAuth
+	// session — and on every refusal before the decider was
 	// reached. See deciderReached for whether the decider was actually
 	// called; that, not this field, is the was-it-recorded signal.
 	OnBehalfOf string
@@ -497,8 +500,6 @@ type elicitedAnswer struct {
 	InputResponses sdkmcp.InputResponseMap
 	// CallMeta is the retried call's params._meta — checked for a replay
 	// marker alongside the elicitation response's own _meta (may be nil).
-	// It is also where the retried call's declared client name is read
-	// (AP-79).
 	CallMeta sdkmcp.Meta
 	// Tool is the retried call's params.name.
 	Tool string
@@ -523,11 +524,12 @@ type elicitedAnswer struct {
 // approval, returning a classification the caller can render without
 // re-deciding anything.
 //
-// AP-64/AP-79 govern which approver gets recorded: a present responder
-// assertion always takes the named path, never downgraded; only absent that
-// does a retry declaring claude-code, on a session claudeCodeAnswerCounts
-// admits, count as that human's own verified decision, with nothing written
-// to the asserted lane.
+// AP-64/AP-79 govern which approver gets recorded: on a signed-in human
+// session (oauthHumanSession) any answered retry is that human's own
+// verified decision, whatever the declared client name and whatever any
+// responder assertion says — a present one is ignored, and nothing is
+// written to the asserted lane. On every other session a responder assertion
+// with gate permission is required (AP-64).
 //
 // open and now are parameters rather than server fields so this function
 // stays testable in isolation and so this issue does not have to touch
@@ -613,36 +615,24 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	if _, replayed := in.CallMeta[replayedFromMetaKey]; replayed {
 		return refused(errNoNamedApprover)
 	}
-	// AP-64/AP-79: a two-way choice between the named form and this caller's
-	// own verified decision, or refusal. A present responder key ALWAYS takes
-	// the named path first, whatever the declared client name (AP-64): the
-	// verified form only fills the gap the named form leaves, and it can
-	// never rescue an answer the named form refused.
-	declaredName, named := declaredClientName(in.CallMeta)
-	isClaudeCodeCaller := named && declaredName == clientNameClaudeCode
-
-	// Defence in depth (plan review #765, finding 1): production only ever
-	// reaches this function for a claude-code retry on a session
-	// claudeCodeAnswerCounts admits — isAnsweredRetry gates it via
-	// clientCanBeAsked (tools_execution.go, elicit.go) before this file is
-	// even called. This file re-checks anyway, rather than trusting that
-	// gate: acceptElicitedAnswer is callable on its own, and a future caller
-	// that skipped the gate must not be able to turn a claude-code CallMeta
-	// carrying a real responder assertion into a named decision on a session
-	// AP-78 would never have asked in the first place.
-	if isClaudeCodeCaller && !claudeCodeAnswerCounts(p) {
-		return refused(errNoNamedApprover)
-	}
-
-	_, hasResponder := result.Meta[responderMetaKey]
-
 	var username string
-	switch {
-	case hasResponder:
-		// The named form (AP-64). A responder that is present but malformed
-		// (recognisedResponder not ok) or not gate "permission" is refused
-		// with errNoNamedApprover and NEVER downgraded to the verified form
-		// below.
+	if oauthHumanSession(p) {
+		// AP-79: the signed-in human's own verified decision, whatever the
+		// declared client name. A responder assertion, if present (well-formed
+		// or not), is ignored: it is not parsed and not recorded. username
+		// stays "" — nothing is written to the asserted lane — and the clear
+		// is explicit rather than merely skipping withAssertedApprover:
+		// controlplane/auth.go's Middleware puts X-Relay-On-Behalf-Of into ctx
+		// for every authenticated route including /mcp, so without this a
+		// stray header would otherwise write the asserted lane anyway.
+		// withAssertedApprover preserves the ctx's other assertions (a
+		// traceparent, session_ref).
+		ctx = withAssertedApprover(ctx, "")
+	} else {
+		// AP-64, exactly as before #743: a responder assertion with gate
+		// permission is required. A responder that is absent, malformed
+		// (recognisedResponder not ok), or not gate "permission" is refused
+		// with errNoNamedApprover.
 		responder, recognised := recognisedResponder(result.Meta)
 		if !recognised || responder.Gate != responderGatePermission {
 			return refused(errNoNamedApprover)
@@ -656,18 +646,6 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 		}
 		username = u
 		ctx = withAssertedApprover(ctx, username)
-	case isClaudeCodeCaller && claudeCodeAnswerCounts(p):
-		// AP-79: this caller's own verified decision. username stays "" —
-		// nothing is written to the asserted lane — and the clear is
-		// explicit rather than merely skipping withAssertedApprover:
-		// controlplane/auth.go's Middleware puts X-Relay-On-Behalf-Of into
-		// ctx for every authenticated route including /mcp, so without this
-		// a stray header would otherwise write the asserted lane anyway.
-		// withAssertedApprover preserves the ctx's other assertions (a
-		// traceparent, session_ref).
-		ctx = withAssertedApprover(ctx, "")
-	default:
-		return refused(errNoNamedApprover)
 	}
 
 	approve := result.Action == "accept"

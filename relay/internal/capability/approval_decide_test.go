@@ -1005,7 +1005,7 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 // DecideApproval — approval.Request.Decide's own carve-out
 // (relaysAnAssertedHuman) already reads `!d.DeciderHuman && ...`, so a human
 // decider never needs the asserted branch at all. The MCP acceptor
-// (tools_approval.go's claudeCodeAnswerCounts) is what restricts WHICH
+// (tools_approval.go's oauthHumanSession) is what restricts WHICH
 // sessions may reach this path; this test is the domain's side of "and once
 // there, it is treated exactly as a human's in-band self-confirmation always
 // has been".

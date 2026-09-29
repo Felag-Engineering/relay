@@ -383,9 +383,11 @@ func TestElicit_WhoIsAskedByNameAndSession(t *testing.T) {
 
 	// claude-code's OWN name row above is asked only because the Principal
 	// there is an OAuth human session (AP-78) — this table pins that the
-	// session shape, not just the name, decides it: every other shape is
-	// refused, checked by the acceptor itself (claudeCodeAnswerCounts) and
-	// never inferred from AuthMethod alone.
+	// session shape, not just the name, decides it: every other shape is not
+	// asked, decided by oauthHumanSession (tools_approval.go), the same
+	// function the acceptor uses for the verified form, and never inferred
+	// from AuthMethod alone. The assertions do not change, because asking
+	// does not change.
 	claudeCodeMeta := metaWith(map[string]any{"name": "claude-code", "version": "1"})
 	sessionCases := []struct {
 		name      string

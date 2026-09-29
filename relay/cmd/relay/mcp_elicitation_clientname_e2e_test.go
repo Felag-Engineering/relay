@@ -1,12 +1,14 @@
 // Package main: mcp_elicitation_clientname_e2e_test.go is #743's e2e proof —
 // through the REAL composition root — of AP-78 (Relay asks the approval
 // question only where the declared client name is recognised for the
-// calling Principal's own session) and AP-79 (a Claude Code accept/decline
-// with no responder assertion, on an OAuth session of a human Account, is
-// that human's own verified in-band decision). AP-78 and AP-79 as rewritten
-// 2026-09-28 (docs/specs/approval.md, PR #767): there is no unnamed form —
-// "claude-code" earns nothing beyond gleipnir's own path unless the calling
-// session itself authenticated by OAuth with a human Account.
+// calling Principal's own session) and AP-79 (on a signed-in human session —
+// an OAuth session of a human Account — an answered retry is that human's
+// own verified in-band decision, whatever the declared client name). The
+// signed-in identity decides, never the client's declared name (owner
+// decision 2026-09-29): a claude-code retry and a gleipnir retry on the same
+// qualifying session are accepted identically, and a present
+// io.gleipnir/responder on such a session is ignored rather than taking the
+// named path.
 //
 // Kept out of mcp_elicitation_e2e_test.go and mcp_elicitation_refusals_e2e_test.go,
 // both of which #752 (issue #713, AP-77) is concurrently editing.
@@ -15,7 +17,8 @@
 // new ones: startElicitingRelay/startElicitingRelayWith, startOAuthElicitingRelay
 // (oauth_idp_e2e_test.go), connectEliciting, askApproval, answerAsResponder,
 // decisionRecordsFor, fetchApproval, allJobs, postRawToolCall, restartNginxArgs,
-// sshdRestartArgs, askQuestionE2E.
+// sshdRestartArgs, askQuestionE2E, auditLen, assertMachineSelfDecisionRefused
+// (mcp_elicitation_refusals_e2e_test.go), mintAccount (approval_e2e_test.go).
 package main
 
 import (
@@ -49,12 +52,13 @@ func connectClaudeCode(t *testing.T, f *relayFixture, credential string) *sdkmcp
 	})
 }
 
-// answerAsClaudeCode retries the parked call with action and NO responder
-// assertion at all — Claude Code's own observed retry shape. Whether this
+// answerWithNoResponder retries the parked call with action and NO
+// responder assertion at all — Claude Code's own observed retry shape, also
+// used here for a gleipnir retry that carries no responder. Whether this
 // counts as a decision at all depends on the RETRY's own session
-// (claudeCodeAnswerCounts, tools_approval.go) — never on anything in this
-// ElicitResult.
-func answerAsClaudeCode(t *testing.T, session *sdkmcp.ClientSession, args map[string]any, q *sdkmcp.CallToolResult, questionID, action string) *sdkmcp.CallToolResult {
+// (oauthHumanSession, tools_approval.go), never on the client name and never
+// on anything else in this ElicitResult.
+func answerWithNoResponder(t *testing.T, session *sdkmcp.ClientSession, args map[string]any, q *sdkmcp.CallToolResult, questionID, action string) *sdkmcp.CallToolResult {
 	t.Helper()
 	return relaytest.RetryTool(t, session, "run_operation", args, q.RequestState,
 		sdkmcp.InputResponseMap{questionID: &sdkmcp.ElicitResult{Action: action}})
@@ -214,7 +218,7 @@ func TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted
 		q, qid, requestID, _ := askApproval(t, gleipnirSession, sshdRestartArgs())
 
 		ccSession := connectClaudeCode(t, f, token)
-		retry := answerAsClaudeCode(t, ccSession, sshdRestartArgs(), q, qid, "accept")
+		retry := answerWithNoResponder(t, ccSession, sshdRestartArgs(), q, qid, "accept")
 		assertNotAskedPendingApproval(t, retry)
 
 		if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
@@ -243,7 +247,7 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 		session := connectClaudeCode(t, f, token)
 
 		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-		res := answerAsClaudeCode(t, session, restartNginxArgs(), q, qid, "accept")
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
 		if res.NeedsInput() || res.IsError {
 			t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
 		}
@@ -293,7 +297,7 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 		session := connectClaudeCode(t, f, token)
 
 		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-		res := answerAsClaudeCode(t, session, restartNginxArgs(), q, qid, "decline")
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "decline")
 		if res.IsError {
 			t.Fatalf("decline: IsError = true, content=%+v", res.Content)
 		}
@@ -351,7 +355,7 @@ func TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecisi
 		})
 
 		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-		res := answerAsClaudeCode(t, session, restartNginxArgs(), q, qid, "accept")
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
 		if res.NeedsInput() || res.IsError {
 			t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
 		}
@@ -397,7 +401,7 @@ func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) 
 
 		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
 
-		first := answerAsClaudeCode(t, session, restartNginxArgs(), q, qid, "accept")
+		first := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
 		if first.NeedsInput() {
 			t.Fatalf("first answer: NeedsInput() = true, want false (a partial quorum's park is OBSERVED, not askable)")
 		}
@@ -413,7 +417,7 @@ func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) 
 			t.Errorf("JobID after the first answer = %q, want empty (still pending)", firstOut.JobID)
 		}
 
-		second := answerAsClaudeCode(t, session, restartNginxArgs(), q, qid, "accept")
+		second := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
 		var secondOut mcp.RunOrPlanOutput
 		relaytest.DecodeToolJSON(t, second, &secondOut)
 		assertDuplicateDeciderNotRecorded(t, "second (same human) answer", secondOut)
@@ -440,16 +444,19 @@ func TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals(t *testing.T) 
 // TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing is
 // AP-78/AP-79's anti-escalation proof: a gleipnir ask (a real sealed state,
 // on a machine Account's plain API Token session), retried by a claude-code
-// session on the SAME non-OAuth token, is treated as an ordinary call —
-// exactly what 77a497d's first-version "unnamed confirmation" would have
-// accepted, and AP-79 as rewritten does not.
+// session on the SAME non-OAuth token, is treated as an ordinary call — the
+// name gate in clientCanBeAsked (via isAnsweredRetry) keeps this retry from
+// ever reaching acceptElicitedAnswer, so it never gets the chance to prove
+// acceptance reads the name (it does not — see AP-78's Known-limits row and
+// TestElicitedAnswer_OffAnOAuthHumanSessionOnlyTheNamedFormCounts, the
+// direct acceptance-seam proof that bypasses this gate on purpose).
 func TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing(t *testing.T) {
 	f, token, _ := startElicitingRelay(t)
 	gleipnirSession := connectEliciting(t, f, token)
 	q, qid, requestID, _ := askApproval(t, gleipnirSession, restartNginxArgs())
 
 	ccSession := connectClaudeCode(t, f, token)
-	retry := answerAsClaudeCode(t, ccSession, restartNginxArgs(), q, qid, "accept")
+	retry := answerWithNoResponder(t, ccSession, restartNginxArgs(), q, qid, "accept")
 	assertNotAskedPendingApproval(t, retry)
 
 	if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
@@ -489,41 +496,258 @@ func assertDuplicateDeciderNotRecorded(t *testing.T, label string, out mcp.RunOr
 	}
 }
 
-// TestMCPElicitation_ClaudeCodeAnswerWithAResponderTakesTheNamedPath is
-// AP-79's ordering rule at the e2e seam: a claude-code client that DOES
-// carry a real io.gleipnir/responder assertion is recorded under that name,
-// never the calling human's own identity — a present responder always takes
-// the named path first, whatever the declared client name or session. Run
-// on an OAuth human session, since claude-code on an API Token session is no
-// longer asked at all.
-func TestMCPElicitation_ClaudeCodeAnswerWithAResponderTakesTheNamedPath(t *testing.T) {
-	f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
-	accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
-	token := idp.token(t, "hana")
-	session := connectClaudeCode(t, f, token)
+// TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored is AP-79's e2e
+// proof that a signed-in human session ignores a present
+// io.gleipnir/responder completely: the answer is recorded as the human's
+// own verified decision, never under the responder's name — whatever the
+// declared client name. Run once per recognised client name, each on a
+// FRESH fixture: a claude-code session (the one Gleipnir never sends a
+// responder from) and a gleipnir session (which normally would take the
+// named path off this session shape).
+func TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored(t *testing.T) {
+	connectors := []struct {
+		name    string
+		connect func(t *testing.T, f *relayFixture, token string) *sdkmcp.ClientSession
+	}{
+		{"claude-code session", func(t *testing.T, f *relayFixture, token string) *sdkmcp.ClientSession {
+			return connectClaudeCode(t, f, token)
+		}},
+		{"gleipnir session", connectEliciting},
+	}
 
+	for _, c := range connectors {
+		t.Run(c.name, func(t *testing.T) {
+			f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+			accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
+			token := idp.token(t, "hana")
+			session := c.connect(t, f, token)
+
+			q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+			res := answerAsResponder(t, session, restartNginxArgs(), q, qid, "accept")
+			if res.NeedsInput() || res.IsError {
+				t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+			}
+
+			var out mcp.RunOrPlanOutput
+			relaytest.DecodeToolJSON(t, res, &out)
+			if out.JobID == "" {
+				t.Fatal("job_id is empty, want a real Job — the human's verified accept dispatches")
+			}
+			if out.Decision == nil || out.Decision.OnBehalfOf != "" {
+				t.Errorf("Decision = %+v, want empty on_behalf_of — the responder is ignored on this session (AP-79)", out.Decision)
+			}
+
+			decisions := decisionRecordsFor(t, f, requestID)
+			if len(decisions) != 1 {
+				t.Fatalf("decision records = %d, want exactly 1: %+v", len(decisions), decisions)
+			}
+			if decisions[0].Attribution.Verified.AccountID != accountID {
+				t.Errorf("Verified.AccountID = %q, want %q — the human's own verified Account, never the responder's",
+					decisions[0].Attribution.Verified.AccountID, accountID)
+			}
+			if decisions[0].Attribution.Verified.TokenID != "" {
+				t.Errorf("Verified.TokenID = %q, want empty — this session is OAuth, not an API Token", decisions[0].Attribution.Verified.TokenID)
+			}
+			if decisions[0].Attribution.Asserted.OnBehalfOf != "" {
+				t.Errorf("Asserted.OnBehalfOf = %q, want empty — never %q, the ignored responder's identity",
+					decisions[0].Attribution.Asserted.OnBehalfOf, elicitResponderUsername)
+			}
+		})
+	}
+}
+
+// TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision
+// is the e2e proof that a client name other than claude-code counts as
+// verified too (AP-78/AP-79: the session decides, never the name) — and it
+// is FEASIBLE end to end: connectEliciting declares "gleipnir" and accepts
+// any credential, and gleipnir is asked on any session, so an OAuth human
+// token gets a real question. Mirrors
+// TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision's
+// assertions, with connectEliciting in place of connectClaudeCode and
+// answerWithNoResponder for the retry.
+//
+// An arbitrary unrecognised name such as "some-other-client" CANNOT be
+// driven e2e this way: it is never asked at all (AP-78), and retrying
+// another session's question with it is an ordinary call (clientCanBeAsked
+// gates isAnsweredRetry). Unrecognised names are proven only at the
+// acceptance seam (TestElicitedAnswer_VerifiedFormIgnoresTheDeclaredName).
+func TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision(t *testing.T) {
+	t.Run("accept dispatches, verified as the human, nothing asserted", func(t *testing.T) {
+		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
+		token := idp.token(t, "hana")
+		session := connectEliciting(t, f, token)
+
+		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+		if res.NeedsInput() || res.IsError {
+			t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+		}
+
+		var out mcp.RunOrPlanOutput
+		relaytest.DecodeToolJSON(t, res, &out)
+		if out.JobID == "" {
+			t.Fatal("job_id is empty, want a real Job — a verified decision dispatches exactly as a named answer would")
+		}
+		if out.Decision == nil {
+			t.Fatalf("Decision is nil: %+v", out)
+		}
+		if out.Decision.State != "approved" || out.Decision.Channel != "in-band" || out.Decision.OnBehalfOf != "" {
+			t.Errorf("Decision = %+v, want approved/in-band/empty on_behalf_of", out.Decision)
+		}
+
+		decisions := decisionRecordsFor(t, f, requestID)
+		if len(decisions) != 1 {
+			t.Fatalf("decision records = %d, want exactly 1: %+v", len(decisions), decisions)
+		}
+		d := decisions[0]
+		if d.DecisionChannel != "in-band" {
+			t.Errorf("DecisionChannel = %q, want in-band", d.DecisionChannel)
+		}
+		if d.ApprovalAnswer != audit.ApprovalAnswerApproved {
+			t.Errorf("ApprovalAnswer = %q, want %q", d.ApprovalAnswer, audit.ApprovalAnswerApproved)
+		}
+		if d.Attribution.Verified.AccountID != accountID {
+			t.Errorf("Verified.AccountID = %q, want %q — the human's own verified Account", d.Attribution.Verified.AccountID, accountID)
+		}
+		if d.Attribution.Verified.TokenID != "" {
+			t.Errorf("Verified.TokenID = %q, want empty — this session is OAuth, not an API Token", d.Attribution.Verified.TokenID)
+		}
+		if d.Attribution.Asserted.OnBehalfOf != "" {
+			t.Errorf("Asserted.OnBehalfOf = %q, want empty — nothing is written to the asserted lane", d.Attribution.Asserted.OnBehalfOf)
+		}
+
+		if got := fetchApproval(t, f, requestID); got.State != "approved" {
+			t.Errorf("approval state = %q, want approved", got.State)
+		}
+	})
+
+	t.Run("decline is a terminal denial, nothing asserted", func(t *testing.T) {
+		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		accountID := createAccount(t, f, "hana", accounts.KindHuman, accounts.RoleAdmin)
+		token := idp.token(t, "hana")
+		session := connectEliciting(t, f, token)
+
+		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "decline")
+		if res.IsError {
+			t.Fatalf("decline: IsError = true, content=%+v", res.Content)
+		}
+		if res.NeedsInput() {
+			t.Fatalf("decline: NeedsInput() = true, want false")
+		}
+
+		var out mcp.RunOrPlanOutput
+		relaytest.DecodeToolJSON(t, res, &out)
+		if out.Decision == nil {
+			t.Fatalf("Decision is nil: %+v", out)
+		}
+		if out.Decision.State != "denied" || out.Decision.Channel != "in-band" || out.Decision.OnBehalfOf != "" {
+			t.Errorf("Decision = %+v, want denied/in-band/empty on_behalf_of", out.Decision)
+		}
+		if out.JobID != "" {
+			t.Errorf("JobID = %q, want empty", out.JobID)
+		}
+
+		decisions := decisionRecordsFor(t, f, requestID)
+		if len(decisions) != 1 {
+			t.Fatalf("decision records = %d, want exactly 1: %+v", len(decisions), decisions)
+		}
+		d := decisions[0]
+		if d.ApprovalAnswer != audit.ApprovalAnswerDenied {
+			t.Errorf("ApprovalAnswer = %q, want %q", d.ApprovalAnswer, audit.ApprovalAnswerDenied)
+		}
+		if d.Attribution.Verified.AccountID != accountID {
+			t.Errorf("Verified.AccountID = %q, want %q", d.Attribution.Verified.AccountID, accountID)
+		}
+		if d.Attribution.Asserted.OnBehalfOf != "" {
+			t.Errorf("Asserted.OnBehalfOf = %q, want empty", d.Attribution.Asserted.OnBehalfOf)
+		}
+
+		if got := len(allJobs(t, f)); got != 0 {
+			t.Errorf("Jobs = %d, want 0", got)
+		}
+		if got := fetchApproval(t, f, requestID); got.State != "denied" {
+			t.Errorf("approval state = %q, want denied", got.State)
+		}
+	})
+}
+
+// TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath is
+// AP-79's negative e2e proof: an OAuth session of a MACHINE Account never
+// takes the verified path, whatever the declared client name — proving the
+// check is on the Account's kind, not merely on the auth method. The
+// gleipnir session is asked (gleipnir is asked on any session), so both
+// subtests reach acceptElicitedAnswer for real.
+func TestMCPElicitation_MachineOAuthSessionNeverTakesTheVerifiedPath(t *testing.T) {
+	t.Run("no responder is a machine self-decision", func(t *testing.T) {
+		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
+		token := idp.token(t, "bot")
+		session := connectEliciting(t, f, token)
+
+		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+		before := auditLen(t, f)
+		res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+		assertMachineSelfDecisionRefused(t, f, res, requestID, before)
+
+		if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
+			t.Errorf("decision records = %d, want 0", got)
+		}
+		if got := fetchApproval(t, f, requestID); got.State != "pending" {
+			t.Errorf("approval state = %q, want pending", got.State)
+		}
+		if got := len(allJobs(t, f)); got != 0 {
+			t.Errorf("Jobs = %d, want 0", got)
+		}
+	})
+
+	t.Run("a valid responder still takes the named path (AP-64 unchanged)", func(t *testing.T) {
+		f, idp := startOAuthElicitingRelay(t, gateAllMutatesInBandAskable)
+		accountID := createAccount(t, f, "bot", accounts.KindMachine, accounts.RoleAdmin)
+		token := idp.token(t, "bot")
+		session := connectEliciting(t, f, token)
+
+		q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
+		res := answerAsResponder(t, session, restartNginxArgs(), q, qid, "accept")
+		if res.NeedsInput() || res.IsError {
+			t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
+		}
+
+		decisions := decisionRecordsFor(t, f, requestID)
+		if len(decisions) != 1 {
+			t.Fatalf("decision records = %d, want exactly 1: %+v", len(decisions), decisions)
+		}
+		if decisions[0].Attribution.Asserted.OnBehalfOf != elicitResponderUsername {
+			t.Errorf("Asserted.OnBehalfOf = %q, want %q — the named path", decisions[0].Attribution.Asserted.OnBehalfOf, elicitResponderUsername)
+		}
+		if decisions[0].Attribution.Verified.AccountID != accountID {
+			t.Errorf("Verified.AccountID = %q, want %q", decisions[0].Attribution.Verified.AccountID, accountID)
+		}
+	})
+}
+
+// TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder is AP-79's
+// negative e2e proof that a human Account is not enough on its own: an API
+// Token session of a human Account still needs a named responder (AP-64
+// unchanged), proving the OAuth half of "OAuth session AND human Account" is
+// load-bearing too.
+func TestMCPElicitation_HumanAPITokenSessionStillNeedsAResponder(t *testing.T) {
+	f, _, _ := startElicitingRelay(t)
+	// RoleOperator, not RoleViewer: the least role that may run a structured
+	// Operation (accounts.go), so the mutate run_operation reaches the
+	// approval gate instead of being refused by role first.
+	token := mintAccount(t, f, "hana-api", accounts.KindHuman, accounts.RoleOperator)
+	session := connectEliciting(t, f, token)
+
+	// gateAllMutatesInBandAskable has requester_allowed true, so hana-api is
+	// asked about its own request.
 	q, qid, requestID, _ := askApproval(t, session, restartNginxArgs())
-	res := answerAsResponder(t, session, restartNginxArgs(), q, qid, "accept")
-	if res.NeedsInput() || res.IsError {
-		t.Fatalf("answered retry: NeedsInput=%v IsError=%v content=%+v", res.NeedsInput(), res.IsError, res.Content)
-	}
+	before := auditLen(t, f)
+	res := answerWithNoResponder(t, session, restartNginxArgs(), q, qid, "accept")
+	assertMachineSelfDecisionRefused(t, f, res, requestID, before)
 
-	var out mcp.RunOrPlanOutput
-	relaytest.DecodeToolJSON(t, res, &out)
-	if out.Decision == nil || out.Decision.OnBehalfOf != elicitResponderUsername {
-		t.Errorf("Decision = %+v, want OnBehalfOf %q — a present responder always takes the named path, even from claude-code",
-			out.Decision, elicitResponderUsername)
-	}
-
-	decisions := decisionRecordsFor(t, f, requestID)
-	if len(decisions) != 1 {
-		t.Fatalf("decision records = %d, want exactly 1: %+v", len(decisions), decisions)
-	}
-	if decisions[0].Attribution.Verified.AccountID != accountID {
-		t.Errorf("Verified.AccountID = %q, want %q — the human's own verified Account, regardless of the named responder",
-			decisions[0].Attribution.Verified.AccountID, accountID)
-	}
-	if decisions[0].Attribution.Asserted.OnBehalfOf != elicitResponderUsername {
-		t.Errorf("decision records = %+v, want exactly one asserting %q", decisions, elicitResponderUsername)
+	if got := len(decisionRecordsFor(t, f, requestID)); got != 0 {
+		t.Errorf("decision records = %d, want 0", got)
 	}
 }
