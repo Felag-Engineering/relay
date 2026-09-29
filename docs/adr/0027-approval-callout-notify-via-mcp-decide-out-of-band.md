@@ -1,12 +1,13 @@
 # Approval callout: notify via MCP, decide out-of-band
 
-**Status:** Accepted; amended by ADR-0038.
+**Status:** Accepted; amended by ADR-0010, ADR-0029, ADR-0038 and ADR-0040.
 
 Some dispatches should not run on an AI-agent's say-so. This ADR decides how a human is
 asked, how their answer gets back, and — the part that matters — why the answer is
 trustworthy even when the harness that requested the action is not.
 
-Grounding: `docs/research/mcp-approval-primitives.md` (what MCP does and does not give us)
+Grounding: the research note `mcp-approval-primitives.md` (what MCP does and does not give us;
+it lived under `docs/research/` and was removed in #496 — git history keeps it)
 and `docs/design/approval-and-attribution.md` (the identity and ladder model). Discharges
 the research half of epic #210; #208 is the closed-loop shape this serves.
 
@@ -299,8 +300,8 @@ Two smaller consequences worth naming: a park renders as **`202 Accepted`** with
 `status: pending_approval` on the Control API — not a `200` (nothing ran) and not an error
 (nothing was denied), per this ADR's "accepted, pending approval"; and the MCP surface's
 inability to accept a decision is a **build failure**, not a convention
-(`mcp/no_decision_test.go`), because "we just won't call it from here" is exactly the kind
-of rule that gets forgotten by whoever later wires an approval tool to close a loop.
+(`relay/internal/controlplane/mcp/no_decision_test.go`), because "we just won't call it from
+here" is exactly the kind of rule that gets forgotten by whoever later wires an approval tool to close a loop.
 
 ## Amendment, 2026-08-16 — what batch/window grants settled (#378)
 
@@ -457,7 +458,7 @@ Console must track several groups). The choice between them is future work in
 **Mitigation until then** is authoring: give a security-lane rule the widest match it needs, and do
 not let a broader rule with a different or empty audience overlap it.
 
-## Amendment (2026-09-20): amended by ADR-0038, and by ADR-0029
+## Amendment (2026-09-20): amended by ADR-0038 and ADR-0029
 
 Two amendments other ADRs made to this one were never recorded here.
 
@@ -465,7 +466,7 @@ Two amendments other ADRs made to this one were never recorded here.
   Where this ADR says a Plan hash binds an approval, the hash binds the *rendered preflight*
   of the request being approved, and the "three mechanisms that must render a Plan" bullet
   under Consequences now says *preflight*. The binding itself is unchanged.
-- **ADR-0029** (2026-07-28) overtook decision 2's "held elicitation" envelope: an in-band
+- **ADR-0029** (2026-08-18) overtook decision 2's "held elicitation" envelope: an in-band
   decision travels through the tool surface (`approve_request`, and MRTR elicitation once
   built), not a held call. Decision 2's text stands as written; this note is its amendment.
 

@@ -1,6 +1,6 @@
 # Asynchronous Job execution model with at-most-once Tasks and a blast-radius cap
 
-**Status:** Accepted.
+**Status:** Accepted; amended by ADR-0010.
 
 A `run_operation` or `raw_exec` call creates a **Job** composed of one **Task** per
 matched Node. Execution is asynchronous: the call returns a Job ID (optionally blocking

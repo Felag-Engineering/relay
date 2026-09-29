@@ -1,6 +1,6 @@
 # Node enrollment, identity, and label authority
 
-**Status:** Accepted; amended by ADR-0031 and ADR-0034.
+**Status:** Accepted; amended by ADR-0020, ADR-0031 and ADR-0034.
 
 A Node enrolls using a **reusable, scoped, expiring, revocable Enrollment Token**. On first
 boot the daemon presents the token over server-authenticated TLS (no client certificate yet)
