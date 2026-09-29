@@ -170,3 +170,24 @@ into `approve_request`. The owner also set a constraint: any unnamed form ever r
 own structural field in the decision and audit record, never an asserted string. OAuth has never
 run live (#351), so until it does nothing in the shipped posture reaches this case. See
 ADR-0027's note of the same date.
+
+## Amendment (2026-09-29): the signed-in identity decides, not the client's name; now built
+
+A further owner decision, recorded as a note; decisions 2 and 3 keep their text, and the note of
+2026-09-28 above stands as the record of that date. The case it describes is now **built**
+(`docs/specs/approval.md` AP-78 and AP-79, PR #765), and it is generalised in one respect:
+**on a signed-in human session, the signed-in identity decides, not the client's declared
+name.** Any in-band MRTR answer arriving on an OAuth session of a human Account is that human's
+own verified decision, whatever the client calls itself. If such an answer also carries an
+`io.gleipnir/responder` assertion, the verified human still wins and nothing is written to the
+asserted lane. The declared client name decides only whether Relay asks: `gleipnir` wherever the
+rule allows, `claude-code` only on such a session.
+
+Rework review of #765 found that tying the verified form to the `claude-code` name contradicted
+the spec twice — the name chose how an answer was recorded, and a `claude-code` answer carrying
+Gleipnir's responder key wrote an asserted approver. The trust was always the authenticated OAuth
+session's, never the self-reported name's, so tying acceptance to the session fixes both and
+weakens nothing. The
+caveats are unchanged: a Claude Code hook can answer with no human present, anything holding the
+human's OAuth token answers as that human, and OAuth has never run live against a real identity
+provider (#351). See ADR-0027's note of the same date.

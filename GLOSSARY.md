@@ -419,9 +419,10 @@ The claim a client attaches to an **MRTR elicitation** answer that a *human*, an
 model, produced it — the thing that distinguishes an answered question from a machine-composed
 one. Relay checks only that it is present and that the answer's sealed state is bound to this
 caller, request, plan and call; it cannot check that the claim is true. It is not the only way
-an in-band answer is accepted: a Claude Code answer on a human Account's **OAuth session** needs
-none, and is that human's verified decision (designed; `docs/specs/approval.md` AP-79). Any other
-answer carrying none is refused exactly as an `approve_request` carrying no approver is.
+an in-band answer is accepted: any answer on a human Account's **OAuth session** needs none, and
+is that human's verified decision whatever the client calls itself; on such a session a responder
+assertion, if sent, is ignored and not recorded (`docs/specs/approval.md` AP-79). Any other answer
+carrying none is refused exactly as an `approve_request` carrying no approver is.
 Recorded in the **asserted** lane, never the verified one (see *Attribution*), so an auditor
 reads it as "a client told us a human answered" and never as "a human authenticated to Relay".
 It is what the in-band honesty residual now rests on (`docs/specs/approval.md`; threat model R21).
@@ -594,8 +595,10 @@ A session's authority is its Account's role, exactly like an API Token's. Crucia
 OAuth session buys **attribution and revocation, not trust**: it proves a human authorized
 the *session*, not that a human intended each *call*, so MCP-originated calls stay
 agent-grade for approval gating whoever authorized them. The *answer* to an approval question is
-the one exception, designed and not built: a Claude Code answer on a human Account's OAuth
-session counts as that human's verified decision (`docs/specs/approval.md` AP-79).
+the one exception: any answer on a human Account's OAuth session counts as that human's verified
+decision, whatever the client calls itself — the signed-in identity decides, not the declared
+client name (`docs/specs/approval.md` AP-79). It proves who owns the session, not that a human
+read the question.
 _Avoid_: login, SSO session, user session (say OAuth session), "authenticated human"
 
 **Principal**:
