@@ -74,12 +74,13 @@ browser's reload button. The queue offers a **Refresh** control, under the rules
 once it is wired — the empty state above all, since that is the state someone watches while waiting
 for a request to arrive. It carries the current filter. Nothing reloads the queue on a timer.
 
-**Reloading the queue is not an audited read, and the screen says so.** Unlike the screens on the
-read lane, the queue reads the pending Requests and the live Grants through the capability layer's
-approval methods, which write no read record, so neither a page load nor a reload of this queue
-puts anything on the audit trail. The "About this screen" disclosure states that in one sentence
-rather than claiming a record that does not exist. Opening one request is audited: the approval
-object reads its park record through the read lane.
+**Reloading the queue is not an audited read — a known gap, tracked in #779 — and the screen says
+so.** Unlike the screens on the read lane, the queue reads the pending Requests and the live
+Approval grants through the capability layer's approval methods, which write no read record, so
+neither a page load nor a Refresh of this queue puts anything on the audit trail. Because that
+limits a security property, one plain sentence beside the Refresh control says it, citing #779;
+the fuller explanation sits in the "About this screen" disclosure. Opening one request is audited:
+the approval object reads its park record through the read lane.
 
 ## States
 

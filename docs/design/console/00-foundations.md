@@ -274,11 +274,12 @@ a **Refresh** control, so that what is new is one click away without the browser
 - **Where a screen offers a Refresh control, it reloads the page with the current query
   preserved.** It is a plain link to the same screen; it never splices rows into the page someone
   is reading (rule 6).
-- **A Refresh makes exactly the reads a page load makes, and is audited exactly as they are.**
-  Where a screen's reads go through the capability layer's audited read lane, each Refresh is an
-  audited read; where a screen's read writes no record, a Refresh writes none either. Each screen
-  that offers the control says which in one sentence in its "About this screen" disclosure, and
-  never claims a record the trail does not hold.
+- **A Refresh makes exactly the reads a page load makes.** Of the screens that offer a Refresh
+  control, every one's reads are audited except the Approvals queue's, which write no read record:
+  a known gap, tracked in #779, and not a rule for any other screen to follow. The queue says so
+  in one plain sentence beside its Refresh control; every screen that offers the control says in
+  its "About this screen" disclosure whether a Refresh is recorded, and none claims a record the
+  trail does not hold.
 - **A Refresh is a deliberate act by the operator.** The Console never reloads a screen on a
   timer: [README](README.md) records the owner decision "No scheduled or repeated reads. Every read
   is a deliberate, audited act."
