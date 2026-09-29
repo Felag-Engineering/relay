@@ -382,3 +382,14 @@ rather than decided here:
 - **`docs/operations/demo-fleet.md`** is still a consumer, differently: the approval beat is
   expected to happen in Gleipnir's UI because that is the approved pathway, and the Console step it
   describes today still works as a rescue. Named, not edited, as before.
+
+## Amendment (2026-09-29): #646 has landed
+
+A note, not a change to any decision here. This ADR says in several places that MRTR elicitation
+arrives "when #646 lands"; it has. The in-band decision path over MCP is now both
+`approve_request` and MRTR elicitation (`docs/specs/approval.md` AP-60 … AP-71), and the
+sequencing constraint's premise — an MCP answer path exists for agent work — is met. Nothing else
+changes: strict separation stays withdrawn (§Amendment 2026-09-25), MCP is the approved pathway,
+and the Console and the Control API still decide any parked request and are not relied on. Where
+the answer arrives on a human Account's OAuth session it is a verified decision (ADR-0029
+§Amendment 2026-09-29).

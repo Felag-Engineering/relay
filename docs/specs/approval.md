@@ -23,7 +23,7 @@ enumerated route a single approval releases — is meant to, once `plan.md` is b
 
 | Surface | How it is reached |
 |---|---|
-| **MCP** | **`approve_request`** — an ordinary tool call carrying the request ID, the plan hash being answered, the verdict, an asserted approver identity, and an optional reason. It is the in-band decision path today, and the one every MCP client has been able to make since 2024-11-05 (AP-15, ADR-0029). **MRTR elicitation** — a second envelope over the *same* single guarded decision seam (ADR-0029 decisions 5 and 6): the gated `tools/call` answers with an input-required result carrying a Relay-authored approval question, and the client retries the call carrying the answer. Designed, not built — AP-60 … AP-71. Which response a gated call receives when a client supports both MRTR and the MCP task handle is settled here by AP-71: a park that emitted a question emits no task envelope. |
+| **MCP** | **`approve_request`** — an ordinary tool call carrying the request ID, the plan hash being answered, the verdict, an asserted approver identity, and an optional reason. It is the in-band decision path today, and the one every MCP client has been able to make since 2024-11-05 (AP-15, ADR-0029). **MRTR elicitation** — a second envelope over the *same* single guarded decision seam (ADR-0029 decisions 5 and 6): the gated `tools/call` answers with an input-required result carrying a Relay-authored approval question, and the client retries the call carrying the answer (AP-60 … AP-71, #646). Which response a gated call receives when a client supports both MRTR and the MCP task handle is settled here by AP-71: a park that emitted a question emits no task envelope. |
 | **Control API** | `GET /api/v1/approvals`, `GET /api/v1/approvals/{id}`, `POST /api/v1/approvals/{id}/decision` — the out-of-band decision endpoint; grant management under `/api/v1/approval-grants`. |
 | **Admin Console** | The approval queue — triage, the request detail, the anti-fatigue diff against the last approval of the same shape, and deciding from the Console under step-up (#435, #629). Bulk decisions are AP-59, designed and not built. The approval UI is where a human records a Decision and nothing else (AP-19); the Console's execution surface is `execution.md` (ADR-0026). |
 
@@ -123,8 +123,10 @@ interim; what it gives up, and what would bring it back, is `approval-assurance.
   MCP request it is an **in-band** answer.
 - **AP-10** An MCP in-band answer carries the client's asserted approver identity, and Relay
   records it as an **assertion** (ADR-0029) — never as something it verified. The one exception
-  is AP-79: an answer arriving on a human Account's OAuth session records no asserted identity,
-  even when it carries one, because the verified Account is itself the approver.
+  is AP-79: an answer to an elicited approval question arriving on a human Account's OAuth
+  session records no asserted identity, even when it carries one, because the verified Account is
+  itself the approver. An `approve_request` call is not such an answer: its approver is an
+  assertion on every session, a human's OAuth session included.
 
 Rung selection turns on a point ADR-0027 states outright: **MCP-originated calls are agent-grade
 regardless of whose OAuth identity authorizes the session.** Session authorization is not
@@ -193,8 +195,9 @@ yet the product's own text.
   and the channel. What differs is which lane carries the approver: out-of-band the deciding
   Account *is* the approver and is verified, while in-band the verified lane holds the Account that
   relayed the answer and the human is an assertion beside it (AP-39) — except under AP-79,
-  where the answer arrives on a human Account's own OAuth session, so the relaying Account is the
-  human, is the verified approver, and nothing is asserted beside it. Either is a full approval
+  where an answer to an elicited question arrives on a human Account's own OAuth session, so the
+  relaying Account is the human, is the verified approver, and nothing is asserted beside it.
+  `approve_request` never takes that exception (AP-10). Either is a full approval
   path: a rule set to `in-band` is satisfied by either. They are not of equal **strength**: AP-13
   still holds, so a rule set to `out-of-band` is satisfied by the second path only.
 - **AP-18** A decision never arrives by any route but these two. **Relay integrates no chat or
@@ -539,13 +542,13 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-7 | `TestEmptyPathMeansNoGates`, `TestEmptyGateGatesNothing` | approval |
 | AP-8 | `TestLoadFailsClosed` | approval |
 | AP-9 | `TestApprovalCallout_ReadsAreNotGatedByAMutateRule`, `TestRequesterCannotApproveOwnRequest` | e2e, approval |
-| AP-10 | `TestMachineCannotConfirmItself`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored` | approval, MCP, e2e |
+| AP-10 | `TestMachineCannotConfirmItself`, `TestElicitedAnswer_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestMCPElicitation_ResponderOnAnOAuthHumanSessionIsIgnored`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion` | approval, MCP, e2e |
 | AP-11 | `TestApprovalCallout_MachineCannotSatisfyItsOwnGate`, `TestMachineCannotConfirmItself` | e2e, approval |
 | AP-12 | `TestDecideApproval_BodyCannotNameAChannel` | API |
 | AP-13 | `TestStrongChannelSatisfiesAWeakerRule`, `TestAssertedApproverDoesNotWeakenAnOutOfBandRule` | approval |
 | AP-14 | `TestUnstatedChannelDefaultsToOutOfBand` | approval |
 | AP-16 | `TestDecide_StepUpHappensBeforeTheDecision`, `TestApprovalCallout_ConsoleDecideRun` | Console, e2e |
-| AP-17 | `TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel`, `TestApprovalCallout_ConsoleDecideRun` | capability, e2e |
+| AP-17 | `TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel`, `TestApprovalCallout_ConsoleDecideRun`, `TestMCPElicitation_GleipnirOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion` | capability, MCP, e2e |
 | AP-19 | `TestApprovalCallout_ConsoleDecideRun` | e2e |
 | AP-20 | `TestApprovedPlanDispatchesAndBindsTheJob`, `TestDecisionMustCiteTheRequestsPlanHash` | capability |
 | AP-21 | `TestRegistryDriftReParksAnApprovedPlan` | capability |
