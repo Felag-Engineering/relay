@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,49 +89,6 @@ func (p countingAskableParker) Plan(context.Context, capability.Principal, capab
 
 func (p countingAskableParker) CancelJob(ctx context.Context, principal capability.Principal, jobID string) error {
 	return p.askableParker.CancelJob(ctx, principal, jobID)
-}
-
-// twoStageAskableParker is an Executor whose FIRST Run call parks exactly
-// like askableParker{askable: true}, and every call after that dispatches a
-// real, successful NodeResult instead — so a handler-seam test can drive a
-// real ask-then-retry round trip and observe a genuine accepted dispatch
-// (a Job ID) rather than another park.
-type twoStageAskableParker struct {
-	askableParker
-	runs atomic.Int32
-}
-
-func (p *twoStageAskableParker) Run(ctx context.Context, principal capability.Principal, sel capability.Selector, act jobs.Action) ([]capability.NodeResult, error) {
-	if p.runs.Add(1) == 1 {
-		return p.askableParker.Run(ctx, principal, sel, act)
-	}
-	return []capability.NodeResult{{NodeID: "node-a", Outcome: jobs.OutcomeSuccess, JobID: "job-elicit-1"}}, nil
-}
-
-// approvingDecider is an ApprovalDecider that always approves the sealed
-// request it is handed and records the asserted attribution of every call it
-// receives — this file's own recorder, since tools_approval_test.go's
-// recordingDecider lives in package mcp and is unreachable from package
-// mcp_test. Mutex-guarded for the same reason stubDecider documents: the SDK
-// invokes DecideApproval from its own handler goroutine, never the test's.
-type approvingDecider struct {
-	mu  sync.Mutex
-	got []capability.Assertions
-}
-
-func (d *approvingDecider) DecideApproval(ctx context.Context, _ capability.Principal, _ capability.ApprovalDecision) (approval.Request, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.got = append(d.got, capability.AssertionsFromContext(ctx))
-	return approval.Request{ID: askableElicitRequestID, State: approval.StateApproved, PlanHash: askableElicitPlanHash}, nil
-}
-
-func (d *approvingDecider) calls() []capability.Assertions {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	out := make([]capability.Assertions, len(d.got))
-	copy(out, d.got)
-	return out
 }
 
 // stubDecider implements mcp.ApprovalDecider and fails the test if ever
@@ -498,27 +454,32 @@ func TestElicit_UnrecognisedMRTRClientGetsPendingApproval(t *testing.T) {
 	}
 }
 
-// TestElicit_ClaudeCodeClientIsAsked is AP-78's other recognised name, with
-// Claude Code's OWN observed capability shape (roots listChanged, elicitation
-// advertising both form and url) rather than the minimal elicitCaps fixture —
-// so this also proves the Form-capable branch of the predicate still holds
-// when url is ALSO advertised.
-func TestElicit_ClaudeCodeClientIsAsked(t *testing.T) {
+// TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked is AP-78's other
+// recognised name, with Claude Code's OWN observed capability shape (roots
+// listChanged, elicitation advertising both form and url) rather than the
+// minimal elicitCaps fixture — so this also proves the Form-capable branch of
+// the predicate still holds when url is ALSO advertised. goldenVerifier's
+// Account is a HUMAN one, but its session is an API Token, not OAuth: AP-78
+// asks claude-code only on an OAuth session of a human Account, so an API
+// Token human is not enough, and this still gets today's pending_approval.
+func TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true}, goldenTasks{},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
 
 	const claudeCodeCaps = `{"roots":{"listChanged":true},"elicitation":{"form":{},"url":{}}}`
 	_, body, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("claude-code", claudeCodeCaps))
 	res := decodeElicitResult(t, body)
-	if res.ResultType != "input_required" {
-		t.Errorf("resultType = %q, want input_required (claude-code is a recognised client name, AP-78): %s", res.ResultType, body)
+	if res.ResultType == "input_required" {
+		t.Fatalf("resultType = input_required, want pending_approval (claude-code off an OAuth human session, AP-78): %s", body)
 	}
-	var reqs map[string]any
-	if err := json.Unmarshal(res.InputRequests, &reqs); err != nil {
-		t.Fatalf("decode inputRequests: %v; %s", err, res.InputRequests)
+	if len(res.InputRequests) != 0 {
+		t.Errorf("inputRequests present for claude-code on an API Token session: %s", body)
 	}
-	if len(reqs) != 1 {
-		t.Errorf("inputRequests has %d entries, want 1: %s", len(reqs), body)
+	if res.RequestState != "" {
+		t.Errorf("requestState = %q, want empty", res.RequestState)
+	}
+	if !strings.Contains(body, "pending_approval") {
+		t.Fatalf("body has no pending_approval: %s", body)
 	}
 }
 
@@ -573,75 +534,17 @@ func TestElicit_UnrecognisedClientsRetryFieldsAreIgnored(t *testing.T) {
 	}
 }
 
-// TestElicit_AskedAsClaudeCodeRetriedAsAnotherNameIsAnOrdinaryCall pins the
-// mixed-name reading from the OTHER side of AP-79's rule
-// (TestElicit_AskedAsGleipnirRetriedAsClaudeCodeIsUnnamed, below, covers the
-// side that IS accepted): a call first asked while declaring "claude-code",
-// retried with the echoed requestState and a real accept, but declaring an
-// unrecognised name on the RETRY — clientCanBeAsked is false for the retry,
-// so isAnsweredRetry treats it as an ordinary call (AP-70) rather than an
-// answer, and it parks again instead of being decided. stubDecider fails the
-// test if it is ever called.
-func TestElicit_AskedAsClaudeCodeRetriedAsAnotherNameIsAnOrdinaryCall(t *testing.T) {
+// TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall is the
+// handler-seam "spoofed name earns nothing" proof: a call asked while
+// declaring "gleipnir" (a real sealed state, on goldenVerifier's API Token
+// human session), retried with the echoed requestState and a real accept but
+// declaring "claude-code" on the RETRY — clientCanBeAsked is false for the
+// retry (claude-code off an OAuth human session), so isAnsweredRetry treats
+// it as an ordinary call (AP-70) rather than an answer, and it parks again
+// instead of being decided. stubDecider fails the test if it is ever called.
+func TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall(t *testing.T) {
 	srv := elicitServer(t, askableParker{askable: true}, goldenTasks{},
 		mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(stubDecider{t: t}))
-
-	_, firstBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequestAs("claude-code", elicitCaps))
-	first := decodeElicitResult(t, firstBody)
-	if first.ResultType != "input_required" {
-		t.Fatalf("first call: resultType = %q, want input_required: %s", first.ResultType, firstBody)
-	}
-	if first.RequestState == "" {
-		t.Fatalf("first call: requestState is empty")
-	}
-
-	retryBody := `{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"_meta":{` +
-		`"io.modelcontextprotocol/protocolVersion":"2026-07-28",` +
-		`"io.modelcontextprotocol/clientInfo":{"name":"some-other-client","version":"0.0.1"},` +
-		`"io.modelcontextprotocol/clientCapabilities":` + elicitCaps + `},` +
-		`"name":"run_operation","arguments":{"operation":"service.restart","args":{"unit":"nginx"}},` +
-		`"requestState":"` + first.RequestState + `",` +
-		`"inputResponses":{"` + askableElicitRequestID + `":{"action":"accept"}}}}`
-
-	status, retryBodyResp, _ := postJSONRPC(t, srv, "tools/call", "run_operation", retryBody)
-	if status != 200 {
-		t.Fatalf("status = %d; body = %s", status, retryBodyResp)
-	}
-	res := decodeElicitResult(t, retryBodyResp)
-	if res.ResultType == "input_required" {
-		t.Fatalf("retry: resultType = input_required, want an ordinary call's own park: %s", retryBodyResp)
-	}
-	if !strings.Contains(retryBodyResp, "pending_approval") {
-		t.Fatalf("retry body has no pending_approval — want the ordinary call's own park, not an answer outcome: %s", retryBodyResp)
-	}
-	if strings.Contains(retryBodyResp, "answer_refused") || strings.Contains(retryBodyResp, `"decision"`) {
-		t.Errorf("retry body carries an answered-retry block, want none (the retry must be treated as an ordinary call): %s", retryBodyResp)
-	}
-}
-
-// mcpUnnamedConfirmationApprover mirrors tools_approval.go's own unexported
-// unnamedConfirmationApprover — duplicated here for the same reason
-// mcpClientNameGleipnir is: this file is package mcp_test and cannot reach
-// the unexported original, and a drift between the two literals would fail
-// the assertion below immediately.
-const mcpUnnamedConfirmationApprover = "(unnamed: claude-code confirmation)"
-
-// TestElicit_AskedAsGleipnirRetriedAsClaudeCodeIsUnnamed is the ACCEPTED side
-// of AP-79's mixed-name rule, at the mcp handler seam rather than
-// acceptElicitedAnswer directly: a call first asked while declaring
-// "gleipnir", retried with the echoed requestState and a real accept but
-// declaring "claude-code" on the RETRY — no responder assertion anywhere — is
-// decided and dispatched exactly as a named answer would be (a real Job ID,
-// via twoStageAskableParker's second call), with the decider's recorded
-// asserted approver, and the response's own decision block, both reading the
-// unnamed-confirmation value. The seal itself carries no client name at all
-// (requeststate.State has none); only each call's own declared name does,
-// which is why the RETRY's declared name is what decides this, not the
-// ask's.
-func TestElicit_AskedAsGleipnirRetriedAsClaudeCodeIsUnnamed(t *testing.T) {
-	parker := &twoStageAskableParker{askableParker: askableParker{askable: true}}
-	decider := &approvingDecider{}
-	srv := elicitServer(t, parker, goldenTasks{}, mcp.WithApprovalElicitation(), mcp.WithApprovalDecider(decider))
 
 	_, firstBody, _ := postJSONRPC(t, srv, "tools/call", "run_operation", elicitRunOperationRequest(elicitCaps))
 	first := decodeElicitResult(t, firstBody)
@@ -666,29 +569,13 @@ func TestElicit_AskedAsGleipnirRetriedAsClaudeCodeIsUnnamed(t *testing.T) {
 	}
 	res := decodeElicitResult(t, retryBodyResp)
 	if res.ResultType == "input_required" {
-		t.Fatalf("retry: resultType = input_required, want an accepted dispatch: %s", retryBodyResp)
+		t.Fatalf("retry: resultType = input_required, want an ordinary call's own park: %s", retryBodyResp)
 	}
-
-	var out mcp.RunOrPlanOutput
-	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
-		t.Fatalf("decode structuredContent: %v; %s", err, res.StructuredContent)
+	if !strings.Contains(retryBodyResp, "pending_approval") {
+		t.Fatalf("retry body has no pending_approval — want the ordinary call's own park, not an answer outcome: %s", retryBodyResp)
 	}
-	if out.JobID == "" {
-		t.Errorf("job_id is empty, want a real Job — an unnamed confirmation dispatches exactly as a named answer would: %s", retryBodyResp)
-	}
-	if out.Decision == nil {
-		t.Fatalf("decision is nil: %s", retryBodyResp)
-	}
-	if out.Decision.OnBehalfOf != mcpUnnamedConfirmationApprover {
-		t.Errorf("decision.on_behalf_of = %q, want %q", out.Decision.OnBehalfOf, mcpUnnamedConfirmationApprover)
-	}
-
-	calls := decider.calls()
-	if len(calls) != 1 {
-		t.Fatalf("decider called %d times, want 1", len(calls))
-	}
-	if calls[0].OnBehalfOf != mcpUnnamedConfirmationApprover {
-		t.Errorf("Assertions.OnBehalfOf = %q, want %q", calls[0].OnBehalfOf, mcpUnnamedConfirmationApprover)
+	if strings.Contains(retryBodyResp, "answer_refused") || strings.Contains(retryBodyResp, `"decision"`) {
+		t.Errorf("retry body carries an answered-retry block, want none (the retry must be treated as an ordinary call): %s", retryBodyResp)
 	}
 }
 

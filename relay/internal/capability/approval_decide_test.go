@@ -998,6 +998,110 @@ func TestDecideApprovalAuditEntryCarriesTheAnswerAndChannel(t *testing.T) {
 	}
 }
 
+// TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified is AP-79's
+// domain half: proof that the domain ALREADY accepts an in-band decision by a
+// human Account with nothing in the asserted lane as that Account's own
+// self-confirmation, with no change to package approval or this file's
+// DecideApproval — approval.Request.Decide's own carve-out
+// (relaysAnAssertedHuman) already reads `!d.DeciderHuman && ...`, so a human
+// decider never needs the asserted branch at all. The MCP acceptor
+// (tools_approval.go's claudeCodeAnswerCounts) is what restricts WHICH
+// sessions may reach this path; this test is the domain's side of "and once
+// there, it is treated exactly as a human's in-band self-confirmation always
+// has been".
+//
+// Each subtest gets its own gate, per the plan review's isolation note.
+func TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified(t *testing.T) {
+	t.Run("requester_allowed true, in-band: recorded as this human's own decision", func(t *testing.T) {
+		s, audit := decideFixtureWithRequirement(t,
+			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+
+		p := humanApprover("acct-ana", "ana")
+		parked := park(t, s, p)
+
+		updated, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
+		})
+		if err != nil {
+			t.Fatalf("DecideApproval: %v", err)
+		}
+		if updated.State != approval.StateApproved {
+			t.Errorf("State = %v, want StateApproved", updated.State)
+		}
+
+		var entry *AuditEntry
+		for i := range audit.entries {
+			if audit.entries[i].Kind == AuditKindApprovalDecided && audit.entries[i].ApprovalID == parked.RequestID {
+				entry = &audit.entries[i]
+			}
+		}
+		if entry == nil {
+			t.Fatal("no AuditKindApprovalDecided entry recorded")
+		}
+		if !reflect.DeepEqual(entry.Principal, p) {
+			t.Errorf("audit entry Principal = %+v, want the human decider %+v", entry.Principal, p)
+		}
+		if entry.Asserted.OnBehalfOf != "" {
+			t.Errorf("audit entry Asserted.OnBehalfOf = %q, want empty — nothing was asserted", entry.Asserted.OnBehalfOf)
+		}
+	})
+
+	t.Run("requester_allowed false: still excluded, whatever DeciderHuman says", func(t *testing.T) {
+		s, audit := decideFixtureWithRequirement(t,
+			approval.Requirement{Count: 1, RequesterAllowed: false, Channel: approval.ChannelInBand, TTL: time.Hour},
+			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+
+		p := humanApprover("acct-ana", "ana")
+		parked := park(t, s, p)
+
+		_, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
+		})
+		if !errors.Is(err, approval.ErrRequesterExcluded) {
+			t.Errorf("err = %v, want errors.Is(_, approval.ErrRequesterExcluded)", err)
+		}
+		for _, e := range audit.entries {
+			if e.Kind == AuditKindApprovalDecided {
+				t.Errorf("an AuditKindApprovalDecided entry was written for a refused decision: %+v", e)
+			}
+		}
+	})
+
+	t.Run("channel out-of-band required (AP-13): an in-band decision is still too weak", func(t *testing.T) {
+		s, _ := decideFixtureWithRequirement(t,
+			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelOutOfBand, TTL: time.Hour},
+			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+
+		p := humanApprover("acct-ana", "ana")
+		parked := park(t, s, p)
+
+		_, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
+		})
+		if !errors.Is(err, approval.ErrWeakChannel) {
+			t.Errorf("err = %v, want errors.Is(_, approval.ErrWeakChannel)", err)
+		}
+	})
+
+	t.Run("machine Account, same shape otherwise: ErrMachineSelfDecision", func(t *testing.T) {
+		s, _ := decideFixtureWithRequirement(t,
+			approval.Requirement{Count: 1, RequesterAllowed: true, Channel: approval.ChannelInBand, TTL: time.Hour},
+			newMemApprovals(), &spyApprovalAuthorizer{}, func() time.Time { return apNow })
+
+		p := Principal{AccountID: "acct-mo", Account: "mo", Role: "operator", Kind: "machine"}
+		parked := park(t, s, p)
+
+		_, err := s.DecideApproval(context.Background(), p, ApprovalDecision{
+			RequestID: parked.RequestID, PlanHash: parked.PlanHash, Approve: true, Channel: approval.ChannelInBand,
+		})
+		if !errors.Is(err, approval.ErrMachineSelfDecision) {
+			t.Errorf("err = %v, want errors.Is(_, approval.ErrMachineSelfDecision) — a machine Account must never "+
+				"be inferred human from anything about the session", err)
+		}
+	})
+}
+
 // --- #724: a refused decision reports what became of the request ----------
 
 // TestDecideApproval_NotPendingReturnsTheCurrentRequest is the issue's first

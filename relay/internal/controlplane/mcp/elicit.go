@@ -56,13 +56,16 @@ const (
 
 	// clientNameGleipnir and clientNameClaudeCode are the declared client
 	// names (io.modelcontextprotocol/clientInfo.name) Relay recognises for
-	// AP-78: the emission predicate asks a question only to one of these two.
-	// The name decides WHETHER to ask; for claude-code it also selects
-	// AP-79's unnamed form in acceptElicitedAnswer's admission (tools_approval.go),
-	// which is admitted only where a named answer would be — the same domain
-	// checks apply, and a present responder assertion always takes the named
-	// path. These identifiers name an external consumer's wire value, exactly
-	// as responderMetaKey already does, so they do not conflict with ADR-0016.
+	// AP-78: gleipnir is asked wherever the emission predicate otherwise
+	// allows; claude-code is asked only on a session that authenticated by
+	// OAuth with a human Account (clientCanBeAsked calls
+	// tools_approval.go's claudeCodeAnswerCounts to check that). The same
+	// declared name also selects AP-79's verified-decision form in
+	// acceptElicitedAnswer's admission (tools_approval.go), admitted only on
+	// the same session shape — a present responder assertion always takes
+	// the named path first. These identifiers name an external consumer's
+	// wire value, exactly as responderMetaKey already does, so they do not
+	// conflict with ADR-0016.
 	clientNameGleipnir   = "gleipnir"
 	clientNameClaudeCode = "claude-code"
 )
@@ -169,27 +172,26 @@ func declaredClientName(meta sdkmcp.Meta) (string, bool) {
 	}
 }
 
-// recognisedClientName reports whether name is one of the declared client
-// names AP-78 recognises: exactly clientNameGleipnir or clientNameClaudeCode,
-// case-sensitively. "Claude-Code", " gleipnir" and "gleipnir-agent" are all
-// unrecognised — this only narrows who is asked, and narrowing on an exact
-// match fails closed rather than guessing at a near match.
-func recognisedClientName(name string) bool {
-	return name == clientNameGleipnir || name == clientNameClaudeCode
-}
-
 // clientCanBeAsked implements the emission predicate's conditions 2 (the
 // SDK's own MRTR judgment), 3 (the per-request `_meta` agrees) and 5 (the
-// declared client name is recognised, AP-78) — conditions 1 (a questioner is
-// wired) and 4 (the park is Askable) are the caller's, question below. It
-// also gates the answered retry (#727's isAnsweredRetry, tools_execution.go):
-// a client that cannot be asked never has its retry fields — requestState,
-// inputResponses — read at all, so an unrecognised name's stray answer fields
-// are ignored exactly as AP-70 already ignores them for any other client that
-// cannot be asked.
+// declared client name is recognised for THIS session, AP-78) — conditions 1
+// (a questioner is wired) and 4 (the park is Askable) are the caller's,
+// question below. It also gates the answered retry (#727's isAnsweredRetry,
+// tools_execution.go): a client that cannot be asked never has its retry
+// fields — requestState, inputResponses — read at all, so an unrecognised
+// name's (or an ineligible session's) stray answer fields are ignored exactly
+// as AP-70 already ignores them for any other client that cannot be asked.
+//
+// p is the authenticated caller: gleipnir is asked on any session, but
+// claude-code is asked only where claudeCodeAnswerCounts (tools_approval.go)
+// reports the session authenticated by OAuth with a human Account — checked
+// here, never inferred from anything about the request itself, since the
+// declared name is self-reported and only the session's own verified facts
+// can be trusted to gate an ask that must be acceptable once answered
+// (AP-61).
 //
 // A nil req or a nil req.Session/req.Params fails closed.
-func clientCanBeAsked(req *sdkmcp.CallToolRequest) bool {
+func clientCanBeAsked(req *sdkmcp.CallToolRequest, p capability.Principal) bool {
 	if req == nil || req.Session == nil || req.Params == nil {
 		return false
 	}
@@ -253,11 +255,21 @@ func clientCanBeAsked(req *sdkmcp.CallToolRequest) bool {
 	// `_meta` map condition 3 already reads, so the first call and a retry are
 	// each judged by their OWN request's declared name. This narrows who gets
 	// asked; for claude-code the same declared name also selects AP-79's
-	// unnamed form in acceptElicitedAnswer (tools_approval.go), admitted only
-	// where a named answer would be, and a present responder assertion always
-	// takes the named path.
+	// verified-decision form in acceptElicitedAnswer (tools_approval.go),
+	// admitted only on the same session shape, and a present responder
+	// assertion always takes the named path.
 	name, ok := declaredClientName(meta)
-	return ok && recognisedClientName(name)
+	if !ok {
+		return false
+	}
+	switch name {
+	case clientNameGleipnir:
+		return true
+	case clientNameClaudeCode:
+		return claudeCodeAnswerCounts(p)
+	default:
+		return false
+	}
 }
 
 // callArgsDigest digests the TYPED, re-marshalled tool input (runOperationInput
@@ -285,11 +297,11 @@ func elicitRequestedSchema() map[string]any {
 }
 
 // question renders parked as an input-required CallToolResult if and only if
-// ALL of: q (and its sealer) is wired, parked is Askable, and req's client
-// can be asked (clientCanBeAsked — MRTR-capable, elicitation-capable, and
-// declaring a recognised client name, AP-78). Any other outcome — including a
-// sealing failure — returns (nil, false), telling the caller to fall back to
-// rendering today's pending_approval.
+// ALL of: q (and its sealer) is wired, parked is Askable, and req's client can
+// be asked (clientCanBeAsked — MRTR-capable, elicitation-capable, and
+// declaring a client name recognised for p's own session, AP-78). Any other
+// outcome — including a sealing failure — returns (nil, false), telling the
+// caller to fall back to rendering today's pending_approval.
 //
 // tool is the literal registered tool name (toolRunOperation/toolRawExec) and
 // in is the handler's own typed input value, so the sealed tool/args-digest
@@ -301,7 +313,7 @@ func (q *questioner) question(req *sdkmcp.CallToolRequest, p capability.Principa
 	if parked == nil || !parked.Askable {
 		return nil, false
 	}
-	if !clientCanBeAsked(req) {
+	if !clientCanBeAsked(req, p) {
 		return nil, false
 	}
 

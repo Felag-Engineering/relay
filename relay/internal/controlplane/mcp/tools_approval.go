@@ -57,24 +57,25 @@ import (
 // carrying an elicitation response to a parked approval. It lives here, in
 // the one exempt file, by the same choice that put approve_request here —
 // the seal check (package requeststate), the responder-assertion rule, the
-// unnamed-confirmation rule (AP-79, below), and the classification of what
+// verified-decision rule (AP-78/AP-79, below), and the classification of what
 // capability.Service.DecideApproval returned are ALL written in this file, so
 // a reviewer can audit the whole of this hole by opening one file, and that
 // promise is kept by what is written in the file rather than by the AST scan
 // (no_decision_test.go still enforces the scan; this paragraph is the
 // reviewer's map of what to read).
 //
-// A retry that declares client name "claude-code" (elicit.go's
-// clientNameClaudeCode) and carries no responder assertion is recorded as an
-// unnamed confirmation (AP-79) rather than refused as a machine self-decision
-// — see unnamedConfirmationApprover below. A present responder assertion
-// always takes the named path first, whatever the declared name: the unnamed
-// form only fills the gap the named form leaves, never rescues an answer the
-// named form refused. The declared name is read from the RETRIED call's own
-// `_meta` (elicitedAnswer.CallMeta), never from the ElicitResult's own `_meta`
-// and never from the sealed state — so a call first asked under one
-// recognised name and retried declaring "claude-code" is judged, on the
-// retry, by the retry's own declared name.
+// A present responder assertion always takes the named path first, whatever
+// the declared client name (AP-64). Absent that, a retry that declares client
+// name "claude-code" (elicit.go's clientNameClaudeCode) on a session that
+// authenticated by OAuth with a human Account (claudeCodeAnswerCounts, below)
+// is that human's own verified in-band decision (AP-79): nothing is written
+// to the asserted lane. Every other retry — an unrecognised name, or
+// "claude-code" off that specific session shape — is refused as a machine
+// self-decision, exactly as approve_request with no approver is. The declared
+// name is read from the RETRIED call's own `_meta` (elicitedAnswer.CallMeta),
+// never from the ElicitResult's own `_meta` and never from the sealed state —
+// so a call first asked under one recognised name and retried declaring
+// "claude-code" is judged, on the retry, by the retry's own declared name.
 //
 // tools_execution.go's run_operation and raw_exec are the only callers of
 // acceptElicitedAnswer (#727, S4a-2): a retry carrying requestState/
@@ -192,7 +193,7 @@ type ApprovalDecisionOutput struct {
 	State      string `json:"state" jsonschema:"The request's state: after this decision on approve_request, or at the moment this answer was evaluated on an answered retry's decision block — the dispatch that follows may have moved the request on further (for example a concurrent approval completing the quorum). One of pending (more approvals still required), approved, denied, or expired."`
 	Progress   string `json:"progress" jsonschema:"Quorum progress, e.g. '1 of 2'."`
 	Channel    string `json:"channel" jsonschema:"'in-band' when this decision was recorded through this tool — the answer arrived over the same session that requested the action, and rules requiring out-of-band strength are not satisfied by it. On an answered retry's decision block this is empty when THIS call's answer was not recorded (for example the request was already decided by someone else); approve_request always sets it, because it returns a tool error rather than this shape when nothing was recorded."`
-	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty exactly when channel is empty."`
+	OnBehalfOf string `json:"on_behalf_of" jsonschema:"The asserted approver identity recorded for this decision. Asserted, never verified. Empty when channel is empty, and also when the decision was the calling human's own verified answer with no asserted approver (a Claude Code answer on that human's OAuth session)."`
 	NextStep   string `json:"next_step" jsonschema:"What to do next."`
 }
 
@@ -305,24 +306,21 @@ func renderApprovalError(err error) error {
 // file's shape.
 const responderMetaKey = "io.gleipnir/responder"
 
-// unnamedConfirmationApprover is the asserted-lane value AP-79 records for a
-// Claude Code accept/decline that carries no responder assertion: an unnamed
-// confirmation. It is explicit and non-empty, so approval.Decision's in-band
-// machine carve-out (relaysAnAssertedHuman — a non-blank OnBehalfOf on an
-// in-band decision) admits it exactly as it admits a named answer, with no
-// change to package approval. It names the FORM (the client), never a
-// person, and must never be read as a person's name. It passes
-// audit.ValidateAsserted (35 bytes, no control characters), so the audit
-// write and the read lane's field-length filter both accept it as-is.
+// claudeCodeAnswerCounts reports whether p is a session on which a
+// claude-code answer is the caller's own verified decision (AP-78, AP-79):
+// an OAuth session AND a human Account. Both elicit.go's asking predicate and
+// this file's acceptance path call this one definition, so the rule cannot
+// drift between "whether to ask" and "whether to accept".
 //
-// This value is NOT reserved: like every in-band OnBehalfOf, it is an
-// assertion, never verified, and a caller can already assert the identical
-// string through approve_request's `approver` argument or a responder's
-// `username` — exactly as it can assert any other string. Refusing that
-// collision here would add a second approve_request refusal and make AP-70's
-// "exactly as before, with one exception" untrue, so it is recorded as-is on
-// every path that reaches assertedApprover.
-const unnamedConfirmationApprover = "(unnamed: claude-code confirmation)"
+// The OAuth resolver copies the Account's Kind through unchecked
+// (controlplane/oauth.go), so "human" is checked here explicitly, never
+// inferred from AuthMethod alone: an OAuth session of a machine Account, or
+// any other auth method entirely (API Token, Console session, unspecified),
+// fails closed. p.Human() itself fails closed on an unset or unrecognised
+// Kind (capability.Principal.Human).
+func claudeCodeAnswerCounts(p capability.Principal) bool {
+	return p.AuthMethod == capability.AuthMethodOAuth && p.Human()
+}
 
 // replayedFromMetaKey marks a response as a client-side replay of an earlier
 // answer rather than a fresh one — present on either the elicitation
@@ -472,12 +470,23 @@ type elicitedAnswerResult struct {
 	stateReported bool
 	// Progress is set only when Err is nil; empty on every refusal.
 	Progress string
-	// OnBehalfOf is the asserted approver value (a responder's username, or
-	// the unnamed-confirmation value) handed to the decider. Empty if the
-	// call never reached the decider (any refusal before step 6 of
-	// acceptElicitedAnswer).
+	// OnBehalfOf is the asserted approver value (a responder's username)
+	// handed to the decider. EMPTY on an AP-79 verified decision — nothing is
+	// written to the asserted lane for a claude-code answer on its own
+	// human's OAuth session — and on every refusal before the decider was
+	// reached. See deciderReached for whether the decider was actually
+	// called; that, not this field, is the was-it-recorded signal.
 	OnBehalfOf string
-	Err        error
+	// deciderReached is true once acceptElicitedAnswer has called the
+	// decider (whatever it returned) — set right alongside OnBehalfOf. It
+	// replaces "OnBehalfOf is empty" as the was-the-decider-called signal:
+	// under AP-79 the decider is reached with OnBehalfOf left empty, so that
+	// old signal would mis-render a post-record failure (an audit write that
+	// failed after a real decision) as "this call left the request
+	// unchanged" — a false-safe reading security review #727 finding 1
+	// forbade.
+	deciderReached bool
+	Err            error
 }
 
 // elicitedAnswer is what a retried tool call carries into acceptElicitedAnswer.
@@ -514,9 +523,11 @@ type elicitedAnswer struct {
 // approval, returning a classification the caller can render without
 // re-deciding anything.
 //
-// AP-79 governs which approver gets recorded: a present responder assertion
-// always takes the named path, never downgraded; only absent that does a
-// retry declaring claude-code fall back to AP-79's unnamed confirmation.
+// AP-64/AP-79 govern which approver gets recorded: a present responder
+// assertion always takes the named path, never downgraded; only absent that
+// does a retry declaring claude-code, on a session claudeCodeAnswerCounts
+// admits, count as that human's own verified decision, with nothing written
+// to the asserted lane.
 //
 // open and now are parameters rather than server fields so this function
 // stays testable in isolation and so this issue does not have to touch
@@ -602,16 +613,27 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	if _, replayed := in.CallMeta[replayedFromMetaKey]; replayed {
 		return refused(errNoNamedApprover)
 	}
-	// AP-64/AP-79: a three-way choice between the named form, the unnamed
-	// confirmation, and refusal. Order is load-bearing — a present responder
-	// key ALWAYS takes the named path first, whatever the declared client
-	// name: the unnamed form only fills the gap the named form leaves, and it
-	// can never rescue an answer the named form refused. Only when no
-	// responder key is present at all does the declared client name — read
-	// from the RETRIED call's own CallMeta, never the ElicitResult's own
-	// `_meta`, and never the sealed state — get a say.
+	// AP-64/AP-79: a two-way choice between the named form and this caller's
+	// own verified decision, or refusal. A present responder key ALWAYS takes
+	// the named path first, whatever the declared client name (AP-64): the
+	// verified form only fills the gap the named form leaves, and it can
+	// never rescue an answer the named form refused.
 	declaredName, named := declaredClientName(in.CallMeta)
 	isClaudeCodeCaller := named && declaredName == clientNameClaudeCode
+
+	// Defence in depth (plan review #765, finding 1): production only ever
+	// reaches this function for a claude-code retry on a session
+	// claudeCodeAnswerCounts admits — isAnsweredRetry gates it via
+	// clientCanBeAsked (tools_execution.go, elicit.go) before this file is
+	// even called. This file re-checks anyway, rather than trusting that
+	// gate: acceptElicitedAnswer is callable on its own, and a future caller
+	// that skipped the gate must not be able to turn a claude-code CallMeta
+	// carrying a real responder assertion into a named decision on a session
+	// AP-78 would never have asked in the first place.
+	if isClaudeCodeCaller && !claudeCodeAnswerCounts(p) {
+		return refused(errNoNamedApprover)
+	}
+
 	_, hasResponder := result.Meta[responderMetaKey]
 
 	var username string
@@ -619,7 +641,7 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	case hasResponder:
 		// The named form (AP-64). A responder that is present but malformed
 		// (recognisedResponder not ok) or not gate "permission" is refused
-		// with errNoNamedApprover and NEVER downgraded to the unnamed form
+		// with errNoNamedApprover and NEVER downgraded to the verified form
 		// below.
 		responder, recognised := recognisedResponder(result.Meta)
 		if !recognised || responder.Gate != responderGatePermission {
@@ -633,16 +655,22 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 			return refused(err)
 		}
 		username = u
-	case isClaudeCodeCaller:
-		// The unnamed confirmation (AP-79): an accept/decline from a client
-		// declaring "claude-code" with no responder assertion at all.
-		username = unnamedConfirmationApprover
+		ctx = withAssertedApprover(ctx, username)
+	case isClaudeCodeCaller && claudeCodeAnswerCounts(p):
+		// AP-79: this caller's own verified decision. username stays "" —
+		// nothing is written to the asserted lane — and the clear is
+		// explicit rather than merely skipping withAssertedApprover:
+		// controlplane/auth.go's Middleware puts X-Relay-On-Behalf-Of into
+		// ctx for every authenticated route including /mcp, so without this
+		// a stray header would otherwise write the asserted lane anyway.
+		// withAssertedApprover preserves the ctx's other assertions (a
+		// traceparent, session_ref).
+		ctx = withAssertedApprover(ctx, "")
 	default:
 		return refused(errNoNamedApprover)
 	}
 
 	approve := result.Action == "accept"
-	ctx = withAssertedApprover(ctx, username)
 	updated, err := decider.DecideApproval(ctx, p, capability.ApprovalDecision{
 		RequestID: st.RequestID,
 		PlanHash:  st.PlanHash,
@@ -656,6 +684,7 @@ func acceptElicitedAnswer(ctx context.Context, decider ApprovalDecider, open sta
 	out.RequestID = st.RequestID
 	out.PlanHash = st.PlanHash
 	out.OnBehalfOf = username
+	out.deciderReached = true
 	return out
 }
 
@@ -845,9 +874,12 @@ func (r elicitedAnswerResult) decisionOutput(after RunOrPlanOutput) *ApprovalDec
 		Progress:  r.Progress,
 	}
 	if r.Err == nil {
-		// Channel and OnBehalfOf name an IN-BAND DECISION. An answer that was
-		// not recorded made no in-band decision at all (plan review
-		// suggestion 4), so both stay empty whenever r.Err is non-nil.
+		// Channel names an IN-BAND DECISION; it stays empty whenever r.Err is
+		// non-nil, because an answer that was not recorded made no in-band
+		// decision at all (plan review suggestion 4). OnBehalfOf is r's own
+		// asserted-approver value as-is: empty here means AP-79's verified
+		// decision wrote nothing to the asserted lane, never that the
+		// decision itself was not recorded.
 		out.Channel = approval.ChannelInBand.String()
 		out.OnBehalfOf = r.OnBehalfOf
 	}
@@ -906,7 +938,7 @@ func isKnownApprovalRefusal(err error) bool {
 }
 
 // answerRefusalNextStepUnchanged is refusalOutput's NextStep for a refusal
-// made before the decider was ever reached (r.OnBehalfOf == ""), and for
+// made before the decider was ever reached (!r.deciderReached), and for
 // approval.ErrPlanChanged: in both cases the request, if one exists, is
 // still open and still answerable exactly as this text says — re-reading the
 // queue for the current plan_hash is what ErrPlanChanged itself asks for.
@@ -987,7 +1019,7 @@ const answerRefusalNextStepDeclineRecordedButNotHonoured = "the decline was reco
 	"as an approval of this call. This call dispatched nothing."
 
 // answerRefusalNextStepMayAlreadyReflectAnswer is refusalOutput's NextStep
-// for the default arm below: the decider WAS reached (r.OnBehalfOf != "") and
+// for the default arm below: the decider WAS reached (r.deciderReached) and
 // something non-domain failed afterwards, so — unlike
 // answerRefusalNextStepUnchanged — this must never say the request is
 // unchanged or safe to answer again outright; the decision may already be
@@ -1099,9 +1131,10 @@ func (r elicitedAnswerResult) refusalOutput() *AnswerRefusalOutput {
 	case isKnownApprovalRefusal(r.Err):
 		out.Reason = renderApprovalError(r.Err).Error()
 		out.NextStep = r.knownRefusalNextStep()
-	case r.OnBehalfOf == "":
+	case !r.deciderReached:
 		// The decider was never reached (see elicitedAnswerResult's doc on
-		// OnBehalfOf) — nothing could have been recorded, whatever the error.
+		// deciderReached) — nothing could have been recorded, whatever the
+		// error.
 		out.Reason = fmt.Sprintf("this answer was not recorded: %v. The request, if any, can still be answered "+
 			"with approve_request or on the Control API.", r.Err)
 	default:

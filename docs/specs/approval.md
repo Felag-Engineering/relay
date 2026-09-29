@@ -255,6 +255,27 @@ whose approver Relay verifies.
   bytes, no control characters), and an approver outside it is refused, never truncated.
 - **AP-71** A park that emitted a question emits **no MCP task envelope**. (ADR-0028 §Amendment
   2026-09-24 carves this out of the shim's otherwise unconditional result rewrite.)
+- **AP-78** A question is emitted only to a client Relay recognises by the client name it declares
+  with the call. `gleipnir` is asked wherever AP-61 allows. `claude-code` is asked only where
+  AP-61 allows **and** the call arrives on an **OAuth session** of a **human** Account (AP-79).
+  Any other client — including one that advertises elicitation — and a client declaring
+  `claude-code` on any other session, an API Token session or a machine Account among them, gets
+  today's `pending_approval` and asks nobody. The declared name is self-reported and only decides
+  whether to ask; the answer is still bound to the caller's own authenticated identity (AP-65) and
+  accepted only under AP-64 or AP-79. Narrows AP-61 and closes #743. Rewritten before being built
+  (owner decision 2026-09-28).
+- **AP-79** An answer from a client declaring itself `claude-code` counts only when the calling
+  Principal authenticated by **OAuth** and its Account is **human**. It is then that human's own
+  **verified** decision: recorded in-band, with the deciding Account in the verified lane as the
+  approver, no responder assertion required, and nothing written to the asserted lane in its
+  place. An `accept` is an approval and a `decline` a denial, and it meets exactly the refusals
+  any in-band decision by that Account meets (AP-42 … AP-49) — as the requester too, it never
+  satisfies a rule that excludes the requester, and AP-13 keeps it from satisfying an
+  `out-of-band` rule. On any other session the client is not asked (AP-78), so a Claude Code
+  answer never reaches a path that accepts it without a verified human. The request stays
+  agent-grade (ADR-0027); the answer, given in the client's own UI which the model never sees,
+  counts as the human's. Owner decision 2026-09-28, replacing the unnamed confirmation of
+  2026-09-27 before it was built (#716, #351).
 
 ### What an approval commits to
 
@@ -527,6 +548,8 @@ covers every row below; the end-to-end rows additionally need `make test-integra
 | AP-73 | `TestQuorumNeedsDistinctDeciders`, `TestRecordDecisionPersistsQuorumProgress`, `TestBlankAudienceEntryCannotPadPastQuorumCheck`, `TestDecide_PartialQuorumNamesWhoSigned` | approval, capability, Console |
 | AP-28 | `TestDecideApprovalDoesNotDispatch`, `TestApprovalCallout_ParkDecideRun` | capability, e2e |
 | AP-77 | `TestBindJob_BindsOnceAndReportsTheBoundJob`, `TestBindJob_ConcurrentClaimsExactlyOneWins`, `TestRun_ReleasedJobStaysBoundWhenTheCallIsCancelledMidDispatch`, `TestJobEngine_ReservedRunSurvivesRequestCancellationAfterCreateJob`, `TestRun_ReDriveOfAReleasedApprovalReAttachesAndDispatchesNothing`, `TestRun_ConcurrentReDrivesDispatchExactlyOneJob`, `TestRun_ReleasedApprovalReAttachesEvenWhenAGrantCoversThePlan`, `TestRun_ReleasedApprovalPastItsDeadlineParksAfresh`, `TestRun_DifferentRequesterReAttachesToTheReleasedJob`, `TestApprovalRelease_ReDriveOnAnySurfaceReAttaches`, `TestApprovalRelease_DifferentAccountReAttachesAndRunsNothing`, `TestRunAuthorizeDeniedShortCircuits` | store, capability, e2e |
+| AP-78 | `TestMCPElicitation_UnrecognisedMRTRClientGetsPendingApproval`, `TestMCPElicitation_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestMCPElicitation_ClaudeCodeOnAMachineOAuthSessionIsNotAskedAndNotAccepted`, `TestMCPElicitation_SpoofedClaudeCodeOnANonOAuthSessionEarnsNothing`, `TestElicit_WhoIsAskedByNameAndSession`, `TestElicit_ClaudeCodeOnAnAPITokenSessionIsNotAsked`, `TestElicit_ClaudeCodeRetryOnAnAPITokenSessionIsAnOrdinaryCall`, `TestE2EOAuth_SessionResolvesToTheAccount` | e2e, MCP |
+| AP-79 | `TestMCPElicitation_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestMCPElicitation_ClaudeCodeHumanAnswerMeetsTheSameRefusals`, `TestMCPElicitation_ClaudeCodeAnswerWithAResponderTakesTheNamedPath`, `TestElicitedAnswer_ClaudeCodeOnAnOAuthHumanSessionIsTheHumansVerifiedDecision`, `TestElicitedAnswer_ClaudeCodeDeclineIsADenial`, `TestElicitedAnswer_ClaudeCodeOffAnOAuthHumanSessionEarnsNothing`, `TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`, `TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified` | e2e, MCP, capability |
 | AP-29 | `TestGrantDoesNotCoverOutsideItsScope`, `TestRawExecIsASeparateOptIn` | approval |
 | AP-30 | `TestRawExecIsASeparateOptIn` | approval |
 | AP-33 | `TestCreateGrant_RefusesTheRetiredSelectorNamespace` | API |
@@ -618,8 +641,6 @@ diff is a lookup rather than a scan, and nothing measures that it stays one.
 | AP-57 | An approval grant's window is capped at 4 hours, and a longer one is refused. Retires AP-31 and narrows AP-53. (ADR-0027 §Amendment 2026-09-24.) | v0.6.5 — Install Path: relay init, join string, packages |
 | AP-59 | The Console may approve or deny several pending requests in one act, Raw Exec included. A bulk decision is a set of individual Decisions made together, never a new kind and never an approval grant: each request is answered against its own plan hash, checked against every rule in *Deciding*, and audited as its own Decision, and one refused request does not carry the others with it. One step-up re-authentication covers the whole act, entered immediately before it is submitted, and approval grant requests are excluded. | v0.7.0 — Admin Console: Administration & Execution |
 | AP-72 | Gate rules are runtime objects in the Relay's store, edited only by a human `admin` in the Admin Console with step-up re-authentication, audited per rule with old and new values, and taking effect on the next dispatch; no MCP tool and no Control API route writes them, and none may be added. Retires AP-4, AP-8 and AP-54 — the store is the only source, no file is read, and there is nothing left to fail to load. (ADR-0027 §Amendment 2026-09-15; #590, #596.) | v0.7.0 — Admin Console: Administration & Execution |
-| AP-78 | A question is emitted only to a client Relay recognises by the client name it declares with the call. `gleipnir` is asked wherever AP-61 allows. `claude-code` is asked only where AP-61 allows **and** the call arrives on an **OAuth session** of a **human** Account (AP-79). Any other client — including one that advertises elicitation — and a client declaring `claude-code` on any other session, an API Token session or a machine Account among them, gets today's `pending_approval` and asks nobody. The declared name is self-reported and only decides whether to ask; the answer is still bound to the caller's own authenticated identity (AP-65) and accepted only under AP-64 or AP-79. Narrows AP-61 and closes #743. Rewritten before being built (owner decision 2026-09-28). | v0.7.0 — Admin Console: Administration & Execution |
-| AP-79 | An answer from a client declaring itself `claude-code` counts only when the calling Principal authenticated by **OAuth** and its Account is **human**. It is then that human's own **verified** decision: recorded in-band, with the deciding Account in the verified lane as the approver, no responder assertion required, and nothing written to the asserted lane in its place. An `accept` is an approval and a `decline` a denial, and it meets exactly the refusals any in-band decision by that Account meets (AP-42 … AP-49) — as the requester too, it never satisfies a rule that excludes the requester, and AP-13 keeps it from satisfying an `out-of-band` rule. On any other session the client is not asked (AP-78), so a Claude Code answer never reaches a path that accepts it without a verified human. The request stays agent-grade (ADR-0027); the answer, given in the client's own UI which the model never sees, counts as the human's. Owner decision 2026-09-28, replacing the unnamed confirmation of 2026-09-27 before it was built (#716, #351). | v0.7.0 — Admin Console: Administration & Execution |
 
 ## Out of scope
 
@@ -839,6 +860,19 @@ no longer open either: the amendment is drafted in this change.
 
 ## History
 
+- `2026-09-28` — **AP-78 and AP-79 promoted to Behaviour, as rewritten.** Both are proven on
+  the branch through the real composition root: `gleipnir` is asked wherever AP-61 allows, and a
+  `claude-code` client is asked only on an OAuth session of a human Account — an API-token
+  session, a machine Account's OAuth session, an unrecognised client name, and a spoofed
+  `claude-code` name on any other session all get today's `pending_approval` unchanged. On that
+  qualifying session, a `claude-code` accept dispatches and a decline is a terminal denial,
+  recorded as that human's own verified in-band decision with nothing written to the asserted
+  lane, and it meets exactly the refusals any in-band decision by that Account meets. Proof rows
+  added at the e2e, MCP and capability seams; AP-79's requester-exclusion clause is unreachable
+  end to end — AP-61 never asks a caller its own rule would refuse, and the seal binds the
+  Account — so it is proven at the capability seam
+  (`TestDecideApproval_InBandHumanWithNoAssertedApproverIsVerified`) and the MCP acceptor seam
+  (`TestElicitedAnswer_VerifiedFormMeetsTheSameRefusals`) rather than end to end. (#743)
 - `2026-09-28` — **AP-78 and AP-79 rewritten before being built (owner, 2026-09-28).**
   Implementing them (#743, draft PR #765) exposed a flaw in the decision of `2026-09-27`: the
   declared client name is self-reported, so any client, automated or model-driven,

@@ -18,13 +18,18 @@ const callToolTimeout = 30 * time.Second
 
 // defaultClientName is what ConnectOptions.ClientName defaults to: a name
 // AP-78 does not recognise, so a test that wants the emission predicate to
-// ask a question must opt in with GleipnirClientName or ClaudeCodeClientName.
+// ask a question must opt in with GleipnirClientName (asked on any session)
+// or ClaudeCodeClientName (asked only on an OAuth session of a human
+// Account).
 const defaultClientName = "relaytest-client"
 
 // GleipnirClientName and ClaudeCodeClientName are the declared client names
 // AP-78 recognises (elicit.go's clientNameGleipnir/clientNameClaudeCode),
 // exported so a test can set ConnectOptions.ClientName without repeating the
-// literal.
+// literal. Gleipnir is asked wherever AP-61 otherwise allows, whatever the
+// session; Claude Code is asked only where the calling Principal also
+// authenticated by OAuth with a human Account (AP-78) — declaring
+// ClaudeCodeClientName alone is not enough.
 const (
 	GleipnirClientName   = "gleipnir"
 	ClaudeCodeClientName = "claude-code"
