@@ -42,6 +42,13 @@ mkdir -p "$STUB_BIN"
 #     script passes — any OTHER `publish=` value (in particular one carrying
 #     a bind address) is rejected the way real Docker rejects
 #     `publish=127.0.0.1:PORT` (#622 review finding B2).
+#   `docker ps --filter publish=8180 ...`      -> $STUB_PORT_8180_OWNER if
+#     set, else nothing; exit $STUB_PS_EXIT. The OAuth overlay's IdP port
+#     (#351), checked only by `reset --oauth` / `up --oauth`.
+#   `docker ps ... com.docker.compose.service ...` -> $STUB_SERVICES if set
+#     (newline-separated service names of the project's existing
+#     containers), else nothing; exit $STUB_PS_EXIT. How `up` tells which
+#     way the running fleet was brought up (#351).
 #   `docker compose ... config --images`       -> exit
 #     $STUB_COMPOSE_IMAGES_RC (default 1, i.e. fails); on 0, prints
 #     $STUB_COMPOSE_IMAGES_OUT (default empty).
@@ -79,6 +86,14 @@ if [ "${1-}" = "ps" ]; then
                 ;;
             publish=7654 | publish=9443)
                 [ -n "${STUB_PORT_OWNER:-}" ] && echo "$STUB_PORT_OWNER"
+                exit "${STUB_PS_EXIT:-0}"
+                ;;
+            publish=8180)
+                [ -n "${STUB_PORT_8180_OWNER:-}" ] && echo "$STUB_PORT_8180_OWNER"
+                exit "${STUB_PS_EXIT:-0}"
+                ;;
+            *com.docker.compose.service*)
+                [ -n "${STUB_SERVICES:-}" ] && printf '%s\n' "$STUB_SERVICES"
                 exit "${STUB_PS_EXIT:-0}"
                 ;;
             publish=*)
@@ -158,6 +173,7 @@ run() {
     OUT="$(env \
         -u COMPOSE_PROJECT_NAME -u DOCKER_HOST -u DEMO_WAIT_SECONDS -u DOCKER_CONTEXT \
         -u STUB_ENDPOINT -u STUB_FOREIGN_WORKDIR -u STUB_PORT_OWNER -u STUB_PS_EXIT \
+        -u STUB_PORT_8180_OWNER -u STUB_SERVICES \
         -u STUB_COMPOSE_IMAGES_RC -u STUB_COMPOSE_IMAGES_OUT \
         -u STUB_COMPOSE_CONFIG_JSON_RC -u STUB_COMPOSE_CONFIG_JSON_OUT \
         -u STUB_IMAGE_INSPECT_RC -u STUB_COMPOSE_OK \
@@ -364,17 +380,21 @@ check "SEC3-reset-wait-seconds-leading-zero-refused" 2 refuses empty_log
 # --- Build pulls the image-only services; reset and up never pull ---
 
 COMPOSE_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo"
+COMPOSE_OAUTH_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo"
 
 # B1: `build` builds, THEN pulls every service that has no build section
 # (`--ignore-buildable`), fetching only what is missing. Without the pull a
 # fresh engine builds cleanly and reset's image precheck then fails on the
-# curl one-shots' image.
+# curl one-shots' image. The build names docker-compose.yml alone; the pull
+# names the OAuth overlay too (#351), so one build also fetches the identity
+# provider's image and an OAuth fleet is startable on a fresh engine.
 run STUB_COMPOSE_OK="build pull" -- build
 check "B1-build-then-pulls-image-only-services" 0 \
     "log_contains:$COMPOSE_PREFIX build" \
-    "log_contains:$COMPOSE_PREFIX pull --ignore-buildable --policy missing"
+    "log_contains:$COMPOSE_OAUTH_PREFIX pull --ignore-buildable --policy missing" \
+    "log_not_contains:$COMPOSE_OAUTH_PREFIX build"
 build_line="$(grep -nF -- "$COMPOSE_PREFIX build" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
-pull_line="$(grep -nF -- "$COMPOSE_PREFIX pull" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
+pull_line="$(grep -nF -- "$COMPOSE_OAUTH_PREFIX pull" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
 if [ -z "$build_line" ] || [ -z "$pull_line" ] || [ "$build_line" -ge "$pull_line" ]; then
     echo "FAIL: B1-build-then-pulls-image-only-services: build (line ${build_line:-none}) must come before pull (line ${pull_line:-none})" >&2
     fail=$((fail + 1))
@@ -383,7 +403,7 @@ fi
 # B2: a failed build stops there; nothing is pulled.
 run STUB_COMPOSE_OK="pull" -- build
 check "B2-failed-build-does-not-pull" 1 \
-    "contains:docker compose build failed" "log_not_contains:$COMPOSE_PREFIX pull"
+    "contains:docker compose build failed" "log_not_contains:--profile demo pull"
 
 # B3: a failed pull fails the build step, loudly, rather than leaving reset to
 # discover the missing image later.
@@ -401,13 +421,19 @@ run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
     -- reset
 check "B4-reset-never-pulls" 1 \
     "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
-    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
 
 # B5: up never pulls either.
 run -- up
 check "B5-up-never-pulls" 1 \
     "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
-    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
+
+# B6: `up --oauth` and `reset --oauth` never pull either.
+run -- up --oauth
+check "B6-oauth-up-never-pulls" 1 \
+    "log_contains:$COMPOSE_OAUTH_PREFIX up -d --no-build --pull never" \
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
 
 # --- The demo fleet's approval gate ---
 
@@ -450,6 +476,99 @@ if ! grep -qF 'RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/e
     echo "FAIL: G2: docker-compose.yml does not select the gate with DEV_FLEET_APPROVAL_GATE_CONFIG, defaulting to the default fleet's gate" >&2
     fail=$((fail + 1))
 fi
+# --- The OAuth overlay (#351): opt-in by a flag, never by the environment ---
+
+# O1: reset and up take nothing but --oauth. Anything else is refused before
+# any compose call (the guard's two read-only calls have already run).
+run -- reset --0auth
+check "O1-reset-unknown-flag-refused" 2 refuses "log_not_contains:compose -p"
+run -- up --oauth extra
+check "O1-up-extra-argument-refused" 2 refuses "log_not_contains:compose -p"
+
+# O2: `reset --oauth` layers the overlay onto the image precheck — so a
+# missing IdP image stops reset before `down -v`, like any other image.
+run -- reset --oauth
+check "O2-reset-oauth-prechecks-with-the-overlay" 1 \
+    "log_contains:compose -p relay-demo -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo config --images" \
+    "log_not_contains: down" "log_not_contains: up"
+
+# O3: plain `reset` never names the overlay before its wipe — the default
+# fleet is exactly docker-compose.yml.
+run -- reset
+check "O3-plain-reset-precheck-names-no-overlay" 1 "log_not_contains:docker-compose.oauth.yml"
+
+# O4: `reset --oauth` also checks the IdP's host port, and refuses before
+# `down` when another project already publishes it.
+run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 STUB_PORT_8180_OWNER=some-other-project \
+    -- reset --oauth
+check "O4-reset-oauth-foreign-idp-port-refuses-before-down" 1 \
+    "contains:host port 8180" "log_contains:publish=8180" \
+    "log_not_contains: down" "log_not_contains: up"
+
+# O5: plain `reset` does not check the IdP port at all.
+run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 STUB_PORT_8180_OWNER=some-other-project \
+    -- reset
+check "O5-plain-reset-ignores-idp-port" 1 "log_not_contains:publish=8180"
+
+# O7: plain `reset` WIPES with the overlay named — so a previous --oauth run's
+# IdP and its volume go too — but BRINGS UP with docker-compose.yml alone.
+# `down` is made to succeed so reset reaches `up`; `up` fails, stopping it.
+run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 \
+    STUB_COMPOSE_CONFIG_JSON_RC=0 STUB_COMPOSE_CONFIG_JSON_OUT='{"volumes":{"relay-data":{}}}' \
+    STUB_COMPOSE_OK="down" \
+    -- reset
+check "O7-plain-reset-wipes-with-overlay-brings-up-without" 1 "contains:docker compose up failed"
+o7_down="$(grep -F ' down -v ' "$DOCKER_LOG")"
+o7_up="$(grep -F ' up -d ' "$DOCKER_LOG")"
+case "$o7_down" in
+    *"-f $REPO_ROOT/docker-compose.oauth.yml"*) ;;
+    *)
+        echo "FAIL: O7: plain reset's down -v does not name the overlay: [$o7_down]" >&2
+        fail=$((fail + 1))
+        ;;
+esac
+case "$o7_up" in
+    '')
+        echo "FAIL: O7: plain reset never reached up: $(cat "$DOCKER_LOG")" >&2
+        fail=$((fail + 1))
+        ;;
+    *docker-compose.oauth.yml*)
+        echo "FAIL: O7: plain reset's up names the overlay: [$o7_up]" >&2
+        fail=$((fail + 1))
+        ;;
+esac
+
+# O8 (static): the human the IdP signs in and the Account the one-shot creates
+# are one name — the realm fixture's user, the overlay's OAUTH_ACCOUNT_NAME, and
+# the sign-in hint the script prints — and it is `demo-user`. A rename that
+# misses one leaves a sign-in the Relay refuses with no reason given.
+oauth_account="$(sed -n 's/^ *OAUTH_ACCOUNT_NAME: "\(.*\)"$/\1/p' "$REPO_ROOT/docker-compose.oauth.yml")"
+if [ "$oauth_account" != "demo-user" ]; then
+    echo "FAIL: O8: docker-compose.oauth.yml's OAUTH_ACCOUNT_NAME is '${oauth_account}', not demo-user" >&2
+    fail=$((fail + 1))
+fi
+if ! python3 -c '
+import json, sys
+users = [u["username"] for u in json.load(open(sys.argv[1]))["users"]]
+sys.exit(0 if sys.argv[2] in users else 1)' \
+    "$REPO_ROOT/docker/fixtures/keycloak/relay-demo-realm.json" "$oauth_account"; then
+    echo "FAIL: O8: the realm fixture has no user named '${oauth_account}'" >&2
+    fail=$((fail + 1))
+fi
+if ! grep -qF "sign in as ${oauth_account} / dev-only-${oauth_account} (DEV-ONLY)" "$SCRIPT"; then
+    echo "FAIL: O8: scripts/demo-fleet.sh's sign-in hint does not name ${oauth_account}" >&2
+    fail=$((fail + 1))
+fi
+
+# O6: `up` refuses to switch modes over a fleet whose containers still exist
+# — either way — before any compose call.
+run STUB_SERVICES=$'relay-netns\nidp\nrelay' -- up
+check "O6-plain-up-over-oauth-fleet-refused" 2 refuses "log_not_contains:compose -p"
+run STUB_SERVICES=$'relay\ndaemon-1' -- up --oauth
+check "O6-oauth-up-over-plain-fleet-refused" 2 refuses "log_not_contains:compose -p"
 
 # --- Static structure checks ---
 
@@ -523,4 +642,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "PASS: scripts/demo-fleet.sh refuses unless the target is the relay-demo project on a local engine — with no more than two read-only Docker calls (the context endpoint, the cross-worktree ps) before that refusal — admits it when it is, stops before down/up on a failed image precheck / foreign port / foreign worktree / foreign volume name, refuses a DEMO_FAULT_NODES value carrying a shell metacharacter before any exec, and routes every docker compose call through one guarded wrapper (#622); build pulls the image-only services while reset and up never pull, and every compose call is handed the demo fleet's baked-in in-band gate."
+echo "PASS: scripts/demo-fleet.sh refuses unless the target is the relay-demo project on a local engine — with no more than two read-only Docker calls (the context endpoint, the cross-worktree ps) before that refusal — admits it when it is, stops before down/up on a failed image precheck / foreign port / foreign worktree / foreign volume name, refuses a DEMO_FAULT_NODES value carrying a shell metacharacter before any exec, and routes every docker compose call through one guarded wrapper (#622); build pulls the image-only services while reset and up never pull, and every compose call is handed the demo fleet's baked-in in-band gate; and it layers the OAuth overlay on only for --oauth, refusing a mode switch over a running fleet (#351)."

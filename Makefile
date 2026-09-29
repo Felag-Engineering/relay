@@ -47,7 +47,8 @@ endif
         build-relay-devharness devharness-absent-check test-crossbinary lint-devharness \
         test-security-surface test-codex-review test-proto-tools-check \
         gen-opschema dev-fleet-up dev-fleet-down dev-fleet-logs dev-fleet-creds \
-        demo-build demo-reset demo-fault demo-up demo-down demo-creds test-demo-fleet \
+        demo-build demo-reset demo-reset-oauth demo-fault demo-up demo-up-oauth demo-down demo-creds \
+        test-demo-fleet \
         fuzz-relay fuzz-daemon \
         verify opschema-check openapi-check gen-apiclient apiclient-check
 
@@ -567,6 +568,19 @@ demo-down:
 # mint": see `demo-creds` below for what `up` does and does not do to them.
 demo-up:
 	bash scripts/demo-fleet.sh up
+
+# The same two, with the opt-in OAuth overlay (docker-compose.oauth.yml, #351): a
+# DEV-ONLY Keycloak identity provider, and the Relay's OAuth resource-server half
+# turned on, so an MCP client can sign in as a human. Off unless you run one of
+# these. `demo-down` and every reset's wipe name the overlay whichever kind is up,
+# so even the plain targets need it to parse (Compose >= 2.18.0, for `!reset`).
+# `demo-build`'s pull names it as well, so it fetches the IdP's image too — see
+# "Signing in as a human over OAuth" in docs/operations/demo-fleet.md.
+demo-reset-oauth:
+	bash scripts/demo-fleet.sh reset --oauth
+
+demo-up-oauth:
+	bash scripts/demo-fleet.sh up --oauth
 
 # Copy the CURRENT control-plane credentials (and CA) out to the gitignored
 # .dev-fleet/ — this mints nothing itself (scripts/dev-fleet-mcp.sh init is a

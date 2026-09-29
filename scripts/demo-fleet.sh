@@ -22,7 +22,12 @@
 # no -v), up (the opposite of down — bring it back with no -v, no build; the
 # mint one-shots still re-run on a fresh `up`, so .dev-fleet/ can go stale),
 # creds (copy the current credentials out to .dev-fleet/ — mints nothing
-# itself). `dc()` is the ONLY place in this file that runs `docker compose` —
+# itself). `reset` and `up` also take `--oauth`, which layers
+# docker-compose.oauth.yml on (#351: a DEV-ONLY identity provider, and the
+# Relay's OAuth sign-in turned on). Without it, what reset/up bring up is
+# exactly docker-compose.yml; but `down` and every reset's wipe name the
+# overlay too, so they need it to parse (and Compose >= 2.18.0 for `!reset`).
+# `dc()` is the ONLY place in this file that runs `docker compose` —
 # enforced by scripts/demo-fleet-test.sh's static check S1, so a later edit
 # cannot add a second, unguarded call site.
 set -euo pipefail
@@ -42,6 +47,17 @@ readonly DEMO_PROJECT="relay-demo"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 readonly REPO_ROOT
 readonly COMPOSE_YML="${REPO_ROOT}/docker-compose.yml"
+# The opt-in OAuth overlay (#351): a real identity provider, and the Relay's
+# OAuth resource-server half turned on. Layered on only by `reset --oauth` /
+# `up --oauth` — a command-line flag, never an environment variable, for the
+# same reason as the constants above — and by `down`, so the provider goes
+# down with the rest of the fleet whichever way it came up.
+readonly COMPOSE_OAUTH_YML="${REPO_ROOT}/docker-compose.oauth.yml"
+# The IdP's host port, published only when the overlay is on.
+readonly OAUTH_IDP_PORT=8180
+# The service only the overlay defines; its presence is how a running fleet
+# says which way it was brought up.
+readonly OAUTH_MARKER_SERVICE="relay-netns"
 
 # The demo fleet's approval gate: in-band, no audience, requester allowed, so
 # an MCP client can be asked the approval question or answer with
@@ -148,11 +164,69 @@ demo_guard() {
     export DEV_FLEET_APPROVAL_GATE_CONFIG="$DEMO_APPROVAL_GATE_CONFIG"
 }
 
+# OAUTH is 1 when this run layers the OAuth overlay on, else 0. It is set only
+# by use_compose_files below, from a subcommand's own `--oauth` flag or from
+# what is already running — never from the environment.
+OAUTH=0
+DC_FILES=(-f "$COMPOSE_YML")
+
+# use_compose_files <0|1>: which compose files dc() — and dev_fleet_mcp's
+# child — name from here on.
+use_compose_files() {
+    case "$1" in
+        0) OAUTH=0 DC_FILES=(-f "$COMPOSE_YML") ;;
+        1) OAUTH=1 DC_FILES=(-f "$COMPOSE_YML" -f "$COMPOSE_OAUTH_YML") ;;
+        *) die 1 "internal: use_compose_files takes 0 or 1, got '$1'" ;;
+    esac
+}
+
 # dc: the ONLY place in this file that runs `docker compose`. Always pins the
-# project, compose file, and profile, so nothing in the caller's environment
-# can change which project a call reaches once the guard has passed.
+# project, the compose file(s), and profile, so nothing in the caller's
+# environment can change which project a call reaches once the guard has
+# passed. DC_FILES is this file's own constant paths, chosen above.
 dc() {
-    docker compose -p "$DEMO_PROJECT" -f "$COMPOSE_YML" --profile demo "$@"
+    docker compose -p "$DEMO_PROJECT" "${DC_FILES[@]}" --profile demo "$@"
+}
+
+# running_mode: prints `oauth` if the relay-demo project has any container of
+# the overlay's marker service, `plain` if it has a relay container and none
+# of the marker's, and `none` if it has neither. Read-only (`docker ps`).
+running_mode() {
+    local services
+    services="$(docker ps -a --filter "label=com.docker.compose.project=${DEMO_PROJECT}" \
+        --format '{{.Label "com.docker.compose.service"}}' 2>/dev/null)" ||
+        die 1 "could not list the ${DEMO_PROJECT} containers (docker ps failed)"
+    if printf '%s\n' "$services" | grep -qxF "$OAUTH_MARKER_SERVICE"; then
+        echo oauth
+    elif printf '%s\n' "$services" | grep -qxF relay; then
+        echo plain
+    else
+        echo none
+    fi
+}
+
+# adopt_running_mode: for the subcommands that act on a fleet already up
+# (fault, creds) — name the same compose files it was brought up with, so
+# Compose sees no orphans. Assigned before it is tested, so a failed
+# `docker ps` stops the script rather than reading as "plain".
+adopt_running_mode() {
+    local have
+    have="$(running_mode)"
+    if [ "$have" = oauth ]; then
+        use_compose_files 1
+    fi
+}
+
+# parse_oauth_flag <subcommand> [args...]: accepts nothing, or exactly
+# `--oauth`; anything else is a usage error. Sets the compose files to match.
+parse_oauth_flag() {
+    local sub="$1"
+    shift
+    case "$#:${1-}" in
+        0:) use_compose_files 0 ;;
+        1:--oauth) use_compose_files 1 ;;
+        *) die 2 "refusing: '${sub}' takes no argument but --oauth, got: $*" ;;
+    esac
 }
 
 # dev_fleet_mcp: runs scripts/dev-fleet-mcp.sh against the demo project from
@@ -170,7 +244,12 @@ dev_fleet_mcp() {
         # review S4).
         unset STATE_DIR BASE
         export COMPOSE_PROJECT_NAME="$DEMO_PROJECT"
-        export COMPOSE_FILE="$COMPOSE_YML"
+        # Colon-separated: Compose's own COMPOSE_FILE list separator on Linux.
+        if [ "$OAUTH" -eq 1 ]; then
+            export COMPOSE_FILE="${COMPOSE_YML}:${COMPOSE_OAUTH_YML}"
+        else
+            export COMPOSE_FILE="$COMPOSE_YML"
+        fi
         export COMPOSE_PROFILES=demo
         bash scripts/dev-fleet-mcp.sh "$@"
     )
@@ -246,11 +325,23 @@ by_service = {i.get("Service"): i for i in items}
 
 daemons = os.environ.get("DAEMON_SERVICES", "").split()
 oneshots = ["credential", "approver", "console-admin", "console-password", "bootstrap"]
+healthy = ["relay"] + daemons
+running = []
+if os.environ.get("OAUTH") == "1":
+    # docker-compose.oauth.yml's services: the IdP has a healthcheck, the
+    # namespace holder has nothing to check but that it runs.
+    healthy.append("idp")
+    running.append("relay-netns")
+    oneshots.append("oauth-account")
 
 missing = []
-for svc in ["relay"] + daemons:
+for svc in healthy:
     item = by_service.get(svc)
     if not item or item.get("State") != "running" or item.get("Health") != "healthy":
+        missing.append(svc)
+for svc in running:
+    item = by_service.get(svc)
+    if not item or item.get("State") != "running":
         missing.append(svc)
 
 failed = []
@@ -282,7 +373,7 @@ wait_healthy() {
     while :; do
         json="$(dc ps -a --format json 2>/dev/null)" || json=""
         rc=0
-        out="$(DAEMON_SERVICES="$DAEMON_SERVICES" python3 -c "$WAIT_HEALTHY_PY" <<<"$json")" || rc=$?
+        out="$(DAEMON_SERVICES="$DAEMON_SERVICES" OAUTH="$OAUTH" python3 -c "$WAIT_HEALTHY_PY" <<<"$json")" || rc=$?
         if [ "$rc" -eq 0 ]; then
             return 0
         fi
@@ -322,7 +413,11 @@ image_precheck() {
 # by some OTHER compose project — read-only (`docker ps`, never `docker compose`).
 check_ports_not_foreign() {
     local port owner proj
-    for port in 7654 9443; do
+    local ports=(7654 9443)
+    if [ "$OAUTH" -eq 1 ]; then
+        ports+=("$OAUTH_IDP_PORT")
+    fi
+    for port in "${ports[@]}"; do
         # `--filter publish=<port>` only — real Docker rejects a filter value
         # that contains ':' ("filter for 'publish' should not contain ':'"),
         # so this must NOT include the bind address. Any container publishing
@@ -418,22 +513,41 @@ if bad:
 # missing` fetches only what is not already present: every such image is
 # pinned by tag, so a present one is the right one, and a rebuild on a machine
 # with no network still succeeds.
+#
+# The pull names the OAuth overlay too (#351), so one `build` leaves either
+# fleet startable: its image-only services are the identity provider and the
+# namespace holder, both pinned by digest. It is named here for the same
+# reason `down` and every reset's wipe name it — which fleet will be brought up
+# next is not known at build time — and it only adds images. The build itself
+# stays plain: the overlay adds no service with a `build:` section.
 cmd_build() {
     dc build || die 1 "docker compose build failed"
+    use_compose_files 1
     dc pull --ignore-buildable --policy missing ||
         die 1 "docker compose pull of the image-only services failed"
 }
 
 cmd_reset() {
+    parse_oauth_flag reset "$@"
+    local want="$OAUTH"
+
     # Image precheck first, before ANY volume is touched. compose_services
     # (which needs no running fleet, only the compose FILE) is deliberately
     # deferred past this point: a stub/offline failure at the precheck must
     # stop reset before `down -v` runs, with nothing else attempted first.
+    # Checked for the fleet being brought up — with --oauth, that includes
+    # the IdP's image, which `build` pulls.
     image_precheck
     check_ports_not_foreign
-    check_volume_names_scoped
 
+    # Wipe with the overlay layered on whichever way this reset brings the
+    # fleet back, so a previous --oauth run's IdP container and its volume go
+    # too — `--remove-orphans` alone would leave the volume behind.
+    use_compose_files 1
+    check_volume_names_scoped
     dc down -v --remove-orphans --timeout 5 || die 1 "docker compose down -v failed"
+
+    use_compose_files "$want"
     dc up -d --no-build --pull never || die 1 "docker compose up failed"
 
     compose_services
@@ -463,10 +577,24 @@ cmd_reset() {
     echo "demo-fleet: reset complete — ${n_daemons} Nodes healthy, ${n_web} web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted."
     echo "demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:"
     echo "demo-fleet:   claude mcp remove relay"
-    echo "demo-fleet:   claude mcp add --transport http relay https://relay:9443/mcp --header \"Authorization: Bearer \$(cat .dev-fleet/control-credential)\""
+    if [ "$OAUTH" -eq 1 ]; then
+        oauth_hint
+    else
+        echo "demo-fleet:   claude mcp add --transport http relay https://relay:9443/mcp --header \"Authorization: Bearer \$(cat .dev-fleet/control-credential)\""
+    fi
+}
+
+# The registration that signs Claude Code in through the IdP instead of a
+# bearer token (docs/operations/demo-fleet.md, "Signing in as a human over
+# OAuth"). The client id and callback port are the realm fixture's
+# (docker/fixtures/keycloak/relay-demo-realm.json); the IdP login is DEV-ONLY.
+oauth_hint() {
+    echo "demo-fleet:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp"
+    echo "demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS=\"\$PWD/.dev-fleet/ca-cert.pem\", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY)."
 }
 
 cmd_fault() {
+    adopt_running_mode
     compose_services
 
     local targets=("$@")
@@ -533,6 +661,11 @@ cmd_fault() {
 }
 
 cmd_down() {
+    # Always with the overlay layered on: it only adds services, so this stops
+    # a plain fleet's containers exactly as before, and an --oauth one without
+    # leaving its IdP running (and the network it holds) behind. The cost: a
+    # plain `down` now fails if docker-compose.oauth.yml does not parse.
+    use_compose_files 1
     dc down || die 1 "docker compose down failed"
 }
 
@@ -544,12 +677,30 @@ cmd_down() {
 # and so re-mints fresh values into the (persisted) volume — see
 # docker/mint-credential.sh. What `up` does NOT do is copy those new values
 # out to .dev-fleet/; run `cmd_creds` (`make demo-creds`) after this for that.
+#
+# `up --oauth` brings it up with the OAuth overlay. Switching between the two
+# while containers of the other exist is refused: the two put the Relay's
+# ports on different containers, and Compose would recreate the Relay while
+# the old holder of those ports still runs. `down` (or `reset`) first.
 cmd_up() {
+    parse_oauth_flag up "$@"
+    local have
+    have="$(running_mode)"
+    if [ "$OAUTH" -eq 1 ] && [ "$have" = plain ]; then
+        die 2 "refusing: ${DEMO_PROJECT} was brought up without --oauth; run 'make demo-down' first, then 'make demo-up-oauth'."
+    fi
+    if [ "$OAUTH" -eq 0 ] && [ "$have" = oauth ]; then
+        die 2 "refusing: ${DEMO_PROJECT} was brought up with --oauth; run 'make demo-down' first, or 'make demo-up-oauth' to keep it."
+    fi
     check_ports_not_foreign
     dc up -d --no-build --pull never || die 1 "docker compose up failed"
     compose_services
     wait_healthy
     echo "demo-fleet: relay-demo is up and healthy (no volume touched). If this recreated the mint one-shots, .dev-fleet/ is now stale — run 'make demo-creds' to refresh it."
+    if [ "$OAUTH" -eq 1 ]; then
+        echo "demo-fleet: OAuth is on. A Claude Code already signed in stays signed in (the IdP's sessions survive down/up); to register one:"
+        oauth_hint
+    fi
 }
 
 # Copies the CURRENT control-plane credentials and CA out to .dev-fleet/
@@ -559,6 +710,7 @@ cmd_up() {
 # either `demo-reset` or `demo-up`, and is a no-op with respect to Jobs,
 # approvals, the registry, or any Node's identity.
 cmd_creds() {
+    adopt_running_mode
     copy_creds || die 1 "failed to copy credentials with scripts/dev-fleet-mcp.sh init"
 }
 
@@ -567,13 +719,16 @@ usage() {
 Usage: scripts/demo-fleet.sh <command>
 
   build              Build the relay-demo images and pull the image-only services'
-                      images (the only subcommand that builds or pulls)
-  reset              Wipe and recreate the relay-demo fleet, verify it, mint fresh credentials
+                      images, the OAuth overlay's included (the only subcommand that
+                      builds or pulls)
+  reset [--oauth]    Wipe and recreate the relay-demo fleet, verify it, mint fresh credentials;
+                      --oauth adds the DEV-ONLY identity provider and turns on OAuth sign-in
   fault [service...] Kill the dev-fleet demo service on the given web Nodes
                       (default: ${DEFAULT_FAULT_TARGETS[*]})
   down               Stop the relay-demo fleet (no -v)
-  up                 Bring the relay-demo fleet back up (no -v, no build); the mint
-                      one-shots still re-run, so follow with 'creds' to refresh .dev-fleet/
+  up [--oauth]       Bring the relay-demo fleet back up (no -v, no build); the mint
+                      one-shots still re-run, so follow with 'creds' to refresh .dev-fleet/;
+                      --oauth must match how it was last brought up
   creds              Copy the CURRENT credentials to .dev-fleet/ — mints nothing itself
                       (scripts/dev-fleet-mcp.sh init); run after 'reset' or 'up'
 
@@ -592,13 +747,19 @@ demo_guard
 
 case "$1" in
     build) cmd_build ;;
-    reset) cmd_reset ;;
+    reset)
+        shift
+        cmd_reset "$@"
+        ;;
     fault)
         shift
         cmd_fault "$@"
         ;;
     down) cmd_down ;;
-    up) cmd_up ;;
+    up)
+        shift
+        cmd_up "$@"
+        ;;
     creds) cmd_creds ;;
     *) usage ;;
 esac

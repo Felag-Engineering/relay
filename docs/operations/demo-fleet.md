@@ -12,7 +12,8 @@ Gleipnir is the AI-agent that drives the demo: a consumer of Relay, never a part
 ## Presenter runbook
 
 A presenter who has never run this fleet, from cold to on stage: bring-up, the credentials
-Gleipnir authenticates with, the human approver, the scripted bypass beat, the fault, and reset.
+Gleipnir authenticates with, the human approver, the scripted bypass beat, the fault, and reset — and, opt-in,
+[signing Claude Code in as a human over OAuth](#signing-in-as-a-human-over-oauth).
 
 ### Posture, stated once
 
@@ -89,8 +90,32 @@ count below is for nine.
 
 ### Credentials for Gleipnir (copy-paste)
 
+**One machine Account per named AI-agent.** The demo's agent is `auto-incident-response`, and
+it gets a machine Account of that name, so the agent's own name is the **verified** actor on
+every audit row it causes — not a shared `gleipnir` Account that every agent would hide behind.
+A second agent gets its own Account and its own API Token: re-run the block below with another
+name in `AGENT=` on its first line. That is the only edit.
+
+**The Account name is not the client name.** The Account is the agent's and its name is free to
+choose. But the MCP client must still **declare its client name as `gleipnir`** in the request's
+`clientInfo`, because the Relay asks the approval question in-band only of a client name it
+recognises (AP-78): `gleipnir` on any session, `claude-code` only on an OAuth session of a human
+Account; anything else gets `pending_approval` and asks nobody. And on an API Token session —
+which this is — the answered retry must carry the responder assertion `io.gleipnir/responder`,
+with `gate` `permission` and a `username` (AP-64); without it the answer is refused. The
+approver the demo names there is `mrapp`. That username is **asserted**, recorded beside the
+verified `auto-incident-response`, never verified (see `kind: "machine"` below).
+
+Observed on 2026-09-29, with the block below run as written: a client declaring `gleipnir` on
+the `auto-incident-response` token was asked in-band for `service.restart` of `nginx` on
+`node:role=web`, and its retry naming responder `mrapp` ran the Job, 6 × `success`. Read back:
+the request's `requested_by` is `auto-incident-response`; its one decision is by
+`auto-incident-response`, `human: false`, channel `in-band`; and the store records `mrapp` only
+as the decision's asserted `on_behalf_of` (the audit row's `asserted_on_behalf_of`), beside the
+verified `auto-incident-response` with method `api_token`.
+
 **Re-run this after every reset.** `make demo-reset` runs `down -v`, which destroys the store:
-the `gleipnir` machine Account, its API Token, and the CA all die with it. After running the
+the agent's machine Account, its API Token, and the CA all die with it. After running the
 block below, make Gleipnir pick up the new token and the new CA. How Gleipnir reloads them
 (restart, or otherwise) is Gleipnir's own runbook to document
 ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) — most clients read a
@@ -102,28 +127,32 @@ fail-fast settings, is safe to re-run (create-or-lookup), never echoes the token
 token file `0600` with no trailing newline. The shell below is literal — copy it as written:
 
 ```console
-$ ( set -euo pipefail; umask 077
+$ ( AGENT=auto-incident-response
+    set -euo pipefail; umask 077
+    case "$AGENT" in ''|*[!A-Za-z0-9._-]*) echo "AGENT must be an Account name" >&2; exit 1 ;; esac
+    export AGENT
     find_id() {
       scripts/dev-fleet-mcp.sh api GET /api/v1/accounts \
-        | python3 -c 'import json,sys; print(next((a["id"] for a in json.load(sys.stdin)["accounts"] if a["name"]=="gleipnir"), ""))'
+        | python3 -c 'import json,os,sys; print(next((a["id"] for a in json.load(sys.stdin)["accounts"] if a["name"]==os.environ["AGENT"]), ""))'
     }
     ACCOUNT_ID=$(find_id)
     if [ -z "$ACCOUNT_ID" ]; then
       scripts/dev-fleet-mcp.sh api POST /api/v1/accounts \
-        '{"name":"gleipnir","kind":"machine","role":"operator"}' >/dev/null
+        "{\"name\":\"$AGENT\",\"kind\":\"machine\",\"role\":\"operator\"}" >/dev/null
       ACCOUNT_ID=$(find_id)
     fi
-    test -n "$ACCOUNT_ID" || { echo "no gleipnir Account id; is .dev-fleet/ current?" >&2; exit 1; }
+    test -n "$ACCOUNT_ID" || { echo "no $AGENT Account id; is .dev-fleet/ current?" >&2; exit 1; }
     scripts/dev-fleet-mcp.sh api POST "/api/v1/accounts/$ACCOUNT_ID/tokens" \
-      '{"name":"gleipnir-demo","ttl_seconds":86400}' \
+      "{\"name\":\"$AGENT-demo\",\"ttl_seconds\":86400}" \
       | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin)["token"])' \
-      > .dev-fleet/gleipnir-credential.tmp
-    test -s .dev-fleet/gleipnir-credential.tmp
-    mv .dev-fleet/gleipnir-credential.tmp .dev-fleet/gleipnir-credential
-    echo "gleipnir: Account $ACCOUNT_ID; API Token in .dev-fleet/gleipnir-credential" )
+      > ".dev-fleet/$AGENT-credential.tmp"
+    test -s ".dev-fleet/$AGENT-credential.tmp"
+    mv ".dev-fleet/$AGENT-credential.tmp" ".dev-fleet/$AGENT-credential"
+    echo "$AGENT: Account $ACCOUNT_ID; API Token in .dev-fleet/$AGENT-credential" )
 ```
 
-Expected output *(predicted)*: the one `gleipnir: Account ...` line. A python traceback here
+Expected output (observed 2026-09-29, the id differs per reset): the one line
+`auto-incident-response: Account acct-…; API Token in .dev-fleet/auto-incident-response-credential`. A python traceback here
 (typically a `KeyError`) means the call it wraps was refused — re-run the same
 `scripts/dev-fleet-mcp.sh api` call without the python filter to see why (most likely
 `.dev-fleet/` is stale; run `make demo-creds`).
@@ -136,10 +165,12 @@ Why each guard, stated once on the page:
   regardless. This mirrors `docker/mint-approver.sh`'s own create-then-resolve pattern.
 - Without `pipefail` and the tmp-then-`mv` step, a failed mint would leave an empty file that
   looks like a credential. With them, the real file only ever holds a token. A run that fails
-  before the `mv` can leave `.dev-fleet/gleipnir-credential.tmp` behind — harmless (it is
+  before the `mv` can leave `.dev-fleet/<agent>-credential.tmp` behind — harmless (it is
   `0600`, inside the gitignored `.dev-fleet/`, and the next successful run overwrites it before
   renaming it), but safe to `rm -f` before re-running if you want a clean directory.
 - No trailing newline, so a client that reads the file verbatim into a header does not send one.
+- The `case` refuses an `AGENT` outside the Account-name alphabet before anything runs, so the
+  name can never reach a file path or a JSON body as anything but a plain name.
 
 Field names come from the code
 (`relay/internal/controlplane/api/accounts.go`). The list response is an object with an
@@ -154,8 +185,8 @@ The role choice, stated plainly:
   `requester_allowed` says, Relay refuses a machine Account's answer to its own request
   (`approval.ErrMachineSelfDecision`) unless it arrives in-band carrying a non-blank asserted
   name — the `approver` on `approve_request`, or the responder on an answered approval
-  question — which is recorded as an assertion beside Gleipnir's verified identity, never as
-  verified. Relay cannot tell whether a human gave that name: an AI-agent steered by prompt
+  question — which is recorded as an assertion beside the agent's verified Account
+  (`auto-incident-response`), never as verified. Relay cannot tell whether a human gave that name: an AI-agent steered by prompt
   injection could call `approve_request` with a made-up name and release its own request. That
   is the accepted client-integrity assumption of in-band approval
   ([approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029), not a
@@ -166,16 +197,16 @@ The role choice, stated plainly:
   [control-plane-credential.md](control-plane-credential.md) states. An operator also cannot mint
   an API Token for anyone through the Control API. See
   [The human approver](#the-human-approver) for who may decide what under the demo gate.
-- **What operator can do, and what it costs.** Raw Exec is admin-only, so Gleipnir cannot
-  request the Raw Exec repair of the fault — the presenter drives that one by hand (see
+- **What operator can do, and what it costs.** Raw Exec is admin-only, so the agent's
+  `operator` Account cannot request the Raw Exec repair of the fault — the presenter drives that one by hand (see
   [Triggering and clearing the fault](#triggering-and-clearing-the-fault)). But Gleipnir can
   discover the fault with a read (`file.read`) and repair it with a gated mutate of its own:
   `service.restart` with unit `nginx` on `node:role=web, node:env=prod` (fan-out 2, mutate
   class) parks under `demo-fleet-wide-mutates-need-a-human` — a different rule from the one
   beat (c) below exercises (`demo-raw-exec-always-needs-a-human`, which is Raw Exec-specific,
   not fan-out-specific). Because that rule is in-band, Relay sends the approval question to
-  Gleipnir — a client declaring the name `gleipnir` — and Gleipnir's retry carrying an answer
-  with a responder named runs the Job. That Gleipnir puts the question to a human in its own UI,
+  Gleipnir — a client declaring the name `gleipnir`, on the `auto-incident-response` Account's
+  token — and its retry carrying an answer with a responder named (`mrapp`) runs the Job. That Gleipnir puts the question to a human in its own UI,
   and that the named responder is that human, is Gleipnir's behaviour, which Relay does not
   verify (see `kind: "machine"` above). On the web Nodes `service.restart`
   reaches the dev-fleet demo service through the DEV-ONLY `systemctl` shim
@@ -187,27 +218,28 @@ The role choice, stated plainly:
   Beat (d) is unaffected: both of its Selectors are fan-out 1, so it runs with no human, and
   `operator` is enough to run it.
 - **`role: "admin"` is the alternative**, and its trade-off is named rather than hidden: it lets
-  Gleipnir request the Raw Exec repair itself, and a Raw Exec is decided at `admin` too — the
+  the agent request the Raw Exec repair itself, and a Raw Exec is decided at `admin` too — the
   floor for deciding is the floor for requesting. Account and API-Token administration are
   admin-only and not human-only (`authz.requiredControlRole`; the owner decision to narrow them
   is recorded there as open), so a machine admin can also mint API Tokens for other Accounts.
-  It is not free for approvals either: under the demo gate an `admin` Gleipnir can release its
-  own Raw Exec exactly as an `operator` Gleipnir can release its own Operation — an in-band
+  It is not free for approvals either: under the demo gate an `admin` agent Account can release
+  its own Raw Exec exactly as an `operator` one can release its own Operation — an in-band
   answer carrying a name it supplied itself — so with `admin`, every Raw Exec on this fleet is
-  one Gleipnir could request and release alone (see `kind: "machine"` above and
+  one the agent could request and release alone (see `kind: "machine"` above and
   [The human approver](#the-human-approver)). If you choose `admin`, change `"operator"` to
   `"admin"` in the create body above. **A human should confirm this choice** before a presenter
   relies on it, and the Gleipnir-side runbook
   ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) must agree with
   whichever role is actually used.
-- A pre-existing `gleipnir` Account is reused as it is, whatever its role. To see its role, read
+- A pre-existing Account of the `AGENT` name is reused as it is, whatever its role. To see its role, read
   `"role"` in `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`. After a reset there is none.
 
 **Export the CA.** `.dev-fleet/ca-cert.pem` is written by `make demo-reset` (it runs
 `scripts/dev-fleet-mcp.sh init`) and by `make demo-creds`. Give Gleipnir exactly three values:
 the MCP URL `https://relay:9443/mcp`; the CA file (the absolute path of
-`.dev-fleet/ca-cert.pem`); and the API Token in `.dev-fleet/gleipnir-credential`, sent in an
-`Authorization: Bearer` header. Gleipnir's own config keys are Gleipnir's to document
+`.dev-fleet/ca-cert.pem`); and the API Token in `.dev-fleet/auto-incident-response-credential`,
+sent in an `Authorization: Bearer` header — plus the two things the block cannot set: declare
+the client name `gleipnir`, and name the responder (`mrapp`) on an answered approval. Gleipnir's own config keys are Gleipnir's to document
 ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)/[#928](https://github.com/Felag-Engineering/gleipnir/issues/928))
 — they are not invented here.
 
@@ -221,7 +253,7 @@ Verify the new API Token over verified TLS, mirroring the script's own `curl` fl
 
 ```console
 $ curl -sS --resolve relay:9443:127.0.0.1 --cacert .dev-fleet/ca-cert.pem \
-    -H "Authorization: Bearer $(cat .dev-fleet/gleipnir-credential)" \
+    -H "Authorization: Bearer $(cat .dev-fleet/auto-incident-response-credential)" \
     https://relay:9443/api/v1/approvals
 ```
 
@@ -231,7 +263,7 @@ Expected *(predicted)*: an empty `approvals` array. Any authenticated caller may
 ```console
 $ curl -sS -o /dev/null -w '%{http_code}\n' --resolve relay:9443:127.0.0.1 \
     --cacert .dev-fleet/ca-cert.pem \
-    -H "Authorization: Bearer $(cat .dev-fleet/gleipnir-credential)" \
+    -H "Authorization: Bearer $(cat .dev-fleet/auto-incident-response-credential)" \
     https://relay:9443/api/v1/accounts
 ```
 
@@ -275,12 +307,13 @@ is emitted and `approve_request` is refused as too weak a channel.
 - **No audience** means any Account whose role clears the decision floor, which is the floor
   the Action needed to be requested: `operator` for an Operation, `admin` for a Raw Exec. So
   `dev-approver` (human, admin), the founding admin (human, admin) and the Console's `admin`
-  (human, admin) may each decide any request here. An `operator` Gleipnir may decide a gated
-  Operation, and never a Raw Exec.
+  (human, admin) may each decide any request here. The agent's `operator` Account
+  (`auto-incident-response`) may decide a gated Operation, and never a Raw Exec; so may
+  `demo-user`, the OAuth fleet's human operator.
 - **`requester_allowed: true`** means the requester may fill the slot. A **human** requester —
   the founding admin driving a Raw Exec by hand — may approve its own parked dispatch. A
-  **machine** requester — Gleipnir — may too, provided its in-band answer carries a non-blank
-  asserted name, recorded beside Gleipnir's verified identity. Relay cannot tell whether a
+  **machine** requester — the agent's Account, `auto-incident-response` — may too, provided its
+  in-band answer carries a non-blank asserted name, recorded beside that verified Account. Relay cannot tell whether a
   human gave that name; a prompt-injected AI-agent could supply a made-up one and release its
   own request (see `kind: "machine"` above).
 - **In-band is the floor, not the only way.** An in-band rule is satisfied by an in-band answer
@@ -293,7 +326,8 @@ it does not itself dispatch (on the asked-in-band path the client's retry is tha
    Relay-authored approval question instead of `pending_approval`; its retry carrying an
    answer, with a responder named, records the decision and runs the Job. Putting the question
    to a human is the client's job, and Relay does not verify that it did. Observed on
-   a live fleet, with Gleipnir on its API Token. `claude-code` is asked only on a human
+   a live fleet, with a client declaring `gleipnir` on the `auto-incident-response` Account's API
+   Token. `claude-code` is asked only on a human
    Account's OAuth session, and every other client — `scripts/dev-fleet-mcp.sh` included —
    gets `pending_approval` and asks nobody.
 2. **`approve_request`**, from a client that got `pending_approval`. Observed on a live fleet
@@ -455,7 +489,7 @@ Three ways to clear it:
   a fault repair; see there for what was observed)*. `node:role=web` alone would reach all six
   web Nodes in one call, which is also fine: the restart is idempotent.
 - **On stage, by hand:** the Raw Exec restart, parked under `demo-raw-exec-always-needs-a-human`.
-  With Gleipnir at `operator` (the default), the presenter requests
+  With the agent's Account at `operator` (the default), the presenter requests
   it by hand as the founding admin, using the same fleet-wide selector as beat (c) below so both
   faulted Nodes (`daemon-4`, `env=prod`; `daemon-6`, `env=staging`) clear in one call — a
   narrower Selector such as `node:role=web, node:env=prod` would only reach `daemon-4`:
@@ -468,7 +502,7 @@ Three ways to clear it:
   Then decide it by any of the three ways in [The human approver](#the-human-approver) that an
   `admin` can use — for example `approve_request` as the founding admin itself (the gate lets
   the requester decide), or the Control API as `dev-approver` — and re-issue the call unchanged
-  *(predicted)*. If Gleipnir asks for Raw Exec as `operator`,
+  *(predicted)*. If the agent asks for Raw Exec on its `operator` Account,
   the Relay refuses it on role before any gate or Node sees it — say so, so the presenter is not
   surprised.
 - **Between takes:** `make demo-reset`.
@@ -497,7 +531,7 @@ Independent checks for the presenter, as literal commands:
   Expected *(predicted)*: `9 Nodes, 9 connected`. It reads `result.structuredContent.nodes`, the
   same path `check_nodes_healthy` reads.
 - `scripts/dev-fleet-mcp.sh api GET /api/v1/approvals`: an empty `approvals` array.
-- Re-run the [Gleipnir credential block](#credentials-for-gleipnir-copy-paste), then the
+- Re-run the [agent credential block](#credentials-for-gleipnir-copy-paste), then the
   approvals curl above with the NEW token: `200` with an empty `approvals` array. Negative
   check: a token saved from before the reset must now be refused, because the store was wiped —
   expected `401` *(predicted)*. Save the old token to a scratch file outside the repo only if you
@@ -508,6 +542,257 @@ Independent checks for the presenter, as literal commands:
 Back to back: run `make demo-reset` two or three times in a row. This has not been observed
 live — see [Verification honesty](#verification-honesty) below, which already says so; record
 the result there the first time someone runs it.
+
+### Signing in as a human over OAuth
+
+**Opt-in, and off unless you ask for it.** `make demo-reset` and `make demo-up` bring up exactly
+the fleet described everywhere else on this page — but `make demo-down` and every reset's wipe
+now name `docker-compose.oauth.yml` too, so that an IdP left from an earlier OAuth run goes down
+with the rest. So even the plain targets now need that file to parse, and a Compose new enough
+for it (see Prerequisites below). `make demo-reset-oauth` and
+`make demo-up-oauth` layer `docker-compose.oauth.yml` on top: a DEV-ONLY Keycloak identity
+provider, and the Relay's OAuth resource-server half turned on (ADR-0024;
+[Human sessions](control-plane-credential.md#human-sessions-oauth-21-through-your-idp)). With
+it, Claude Code signs in through a browser as the realm's human user and reaches `/mcp` on
+that human's own Account, `demo-user` (kind `human`, role `operator`), instead of on a shared
+API Token. That is the session on which an answer to an approval question, given in Claude
+Code's own UI, is recorded as that human's **verified** decision
+([approval.md](../specs/approval.md), AP-78 and AP-79). What it does and does not prove is at
+the end of this section — read it before saying anything about it on stage.
+
+Every name below is fixed in `docker-compose.oauth.yml` or its realm fixture,
+`docker/fixtures/keycloak/relay-demo-realm.json`:
+
+| What | Value |
+| --- | --- |
+| Issuer | `http://127.0.0.1:8180/realms/relay-demo` |
+| Audience (the MCP URL clients dial) | `https://relay:9443/mcp` |
+| Claim naming the Account | `preferred_username` |
+| Client for Claude Code | `relay-demo-claude-code` — public (no secret), PKCE `S256`, one redirect URI: `http://localhost:33418/callback` |
+| The human | `demo-user`, password `dev-only-demo-user` — **DEV-ONLY**, committed like every other credential in this fleet |
+| The negative control | `no-relay-account`, password `dev-only-no-relay-account` — **DEV-ONLY**, and deliberately given **no** Relay Account: signing in as it must be refused |
+| Lifetimes | access token 12h; sign-in session 12h idle, 24h maximum — so a refresh cannot land mid-demo. **DEV-ONLY: do not copy these into a real realm** |
+| Transport | `sslRequired: none` and plain HTTP on loopback. **DEV-ONLY: do not copy** |
+| Administrator | **None.** No Keycloak admin exists, by design — see [Who can impersonate whom](#who-can-impersonate-whom) |
+
+Two things differ from the plain fleet, each on purpose:
+
+- **No new `/etc/hosts` line.** The issuer must be one URL, byte for byte, for the browser, for
+  Claude Code on the host, and for the Relay inside the fleet. Claude Code 2.1.284 refuses to
+  send credentials to a plain-HTTP token endpoint unless the host is exactly `localhost`,
+  `127.0.0.1` or `::1` (read from its bundled MCP SDK, then confirmed by the sign-in below
+  succeeding), and any other name would also need a hosts entry — `idp.localhost` does not
+  resolve on a stock Debian host, nor in Node. So the issuer is `127.0.0.1:8180`, and the Relay
+  and Keycloak share one network namespace, owned by a container that does nothing else
+  (`relay-netns`), so that `127.0.0.1:8180` inside the Relay is Keycloak. `relay-netns` carries
+  the network alias `relay` and publishes `7654`, `9443` and `8180`, so every other service
+  still reaches the Relay exactly as before. The existing `127.0.0.1 relay` line is the only
+  hosts entry either mode needs.
+- **The Account claim is `preferred_username`, not the default `email`.** An Account name is
+  `[A-Za-z0-9._-]` only, so an email address can never name one. `preferred_username` is the
+  realm username, which the realm does not let a user edit.
+
+#### Bring-up
+
+1. **Prerequisites.** Everything in [From cold to ready](#from-cold-to-ready), including the
+   `127.0.0.1 relay` hosts line; host port `8180` free as well as `7654` and `9443`; **Docker
+   Compose v2.18.0 or later** — the overlay uses the `!reset` tag, which first shipped in the
+   compose-go that v2.18.0 pins (compose-spec/compose-go#380; this runbook was run on v5.1.4
+   only), and since `make demo-down` and `make demo-reset` read the overlay too, an older Compose
+   breaks the plain targets as well.
+2. **`make demo-build`**, as for the plain fleet. Its pull names the overlay too, so it also
+   fetches the IdP's image (Keycloak, pinned by digest) and the namespace holder's — whichever
+   fleet you bring up next. Observed on 2026-09-29: with the Keycloak image deleted locally,
+   `make demo-build` pulled it by digest and `make demo-reset-oauth` then started. Without it,
+   `make demo-reset-oauth` stops at its image precheck, before touching a volume, naming the
+   missing image.
+3. **`make demo-reset-oauth`.** The Relay starts only once Keycloak is healthy — it fetches the
+   issuer's discovery document once, at boot, and would not start without it — and the
+   `oauth-account` one-shot then creates `demo-user` through `/api/v1/accounts`, the way
+   `dev-approver` is created. Observed on 2026-09-29 (4 CPUs, 8 GB, images already present):
+   76s wall, the Relay booting first time with no restart. The closing output (observed):
+
+   ```
+   demo-fleet: reset complete — 9 Nodes healthy, 6 web Nodes serving, .dev-fleet/ refreshed with the fresh credentials this reset just minted.
+   demo-fleet: the CA was regenerated, so a registered MCP client still holds the OLD bearer token AND the OLD CA (NODE_EXTRA_CA_CERTS is read only at process start). Restart it — .dev-fleet/ is already current, so there is no need to run 'make demo-creds' again first:
+   demo-fleet:   claude mcp remove relay
+   demo-fleet:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
+   demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY).
+   ```
+
+4. [Credentials for Gleipnir](#credentials-for-gleipnir-copy-paste) as usual — API Tokens are
+   untouched by the overlay.
+
+Keycloak costs about 490 MiB of memory at idle (one `docker stats` sample, same machine); the
+Relay and daemons are unchanged.
+
+#### Signing Claude Code in
+
+From the repo root:
+
+```console
+$ claude mcp remove relay     # only if a bearer-token `relay` is already registered
+$ claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp
+$ NODE_EXTRA_CA_CERTS="$PWD/.dev-fleet/ca-cert.pem" claude
+```
+
+No `--client-secret` (the client is public) and no `--header`. `NODE_EXTRA_CA_CERTS` is for the
+Relay's CA only; the IdP is plain HTTP on loopback. Then, in Claude Code: `/mcp`, pick `relay`,
+choose to authenticate. A browser opens Keycloak's sign-in page at `127.0.0.1:8180`; sign in as
+`demo-user` / `dev-only-demo-user`; the page then reads "Authentication successful. You
+can close this tab and return to Claude Code.", and `/mcp` shows `relay` connected.
+
+Observed on 2026-09-29 with Claude Code 2.1.284 — driven without a person, through an isolated
+config directory, its `mcp_authenticate` control request, and headless Chrome for the login:
+the `401` led it to the metadata document and on to Keycloak; its authorization URL carried
+`client_id=relay-demo-claude-code`, `redirect_uri=http://localhost:33418/callback`,
+`resource=https://relay:9443/mcp` and no `scope`; after the login it exchanged the code at the
+plain-HTTP token endpoint, and its status for `relay` became `connected`; a `list_nodes` call
+it then made on that session is in the audit trail as `demo-user`, method `oauth`. After a
+`make demo-reset-oauth` it dropped the dead token by itself and reported the server as needing
+authentication again, and signing in again reconnected it. The command above
+writes exactly the server entry that run used (also checked against an isolated config). **Not
+observed:** the interactive `/mcp` menu's wording, and the browser opening by itself rather than
+Claude Code printing the URL *(predicted)*.
+
+Independent checks, as literal commands from the repo root (both observed):
+
+```console
+$ curl -sS --cacert .dev-fleet/ca-cert.pem https://relay:9443/.well-known/oauth-protected-resource
+{"resource":"https://relay:9443/mcp","authorization_servers":["http://127.0.0.1:8180/realms/relay-demo"],"bearer_methods_supported":["header"],"resource_name":"Relay control plane"}
+$ curl -sS -o /dev/null -D - --cacert .dev-fleet/ca-cert.pem -X POST https://relay:9443/mcp | grep -i www-authenticate
+www-authenticate: Bearer resource_metadata="https://relay:9443/.well-known/oauth-protected-resource"
+```
+
+On the plain fleet the first returns `404` and the second a `401` with a bare
+`WWW-Authenticate: Bearer` and no `resource_metadata` (a Relay with no issuer advertises no
+flow) — both correct there, and a quick way to tell which mode is up *(predicted from the
+Relay's code; the OAuth half is observed)*.
+
+**The Console and OAuth run together.** The Console is on in both modes, exactly as
+`docker-compose.yml` sets it: an unauthenticated request off the Console — `/mcp` and `/api/v1`
+included — gets the `401` challenge above, while a browser on `/console/` is still sent to the
+Console's own sign-in, where `admin` signs in as on the plain fleet. The founding admin's,
+`dev-approver`'s and `auto-incident-response`'s API Tokens work exactly as before. Observed on
+2026-09-29 with the Console mounted and OAuth on: `POST /mcp` unauthenticated got the `401`
+challenge above, `GET /console/` a `303` to `/console/login`, `admin` signed in; a
+`demo-user` authorization-code + PKCE sign-in was accepted for `list_nodes`; Claude Code (isolated
+config) went from needing authentication to `connected` through the sign-in above; and both
+approval stories — the agent's with responder `mrapp`, and `demo-user`'s on the OAuth session —
+ran their Jobs and read back as described in this section.
+
+#### Between takes
+
+- **`make demo-down`, then `make demo-up-oauth`**: Keycloak's database is on its own volume, so
+  its signing keys and sessions survive, and a signed-in Claude Code stays signed in — the same
+  access token was accepted after the round trip, and a fresh Claude Code on the same config
+  came up `connected` without signing in again (observed).
+- **`make demo-reset-oauth`** wipes that volume with every other: new signing keys, new sessions,
+  and a new Relay CA. Restart Claude Code with `NODE_EXTRA_CA_CERTS` and authenticate again from
+  `/mcp`: it discards the dead token itself and shows `relay` as needing authentication
+  (observed; the menu wording is *(predicted)*).
+- **Switching modes** needs `make demo-down` first: `make demo-up` refuses over a fleet brought
+  up with OAuth, and `make demo-up-oauth` over one brought up without. `make demo-reset` and
+  `make demo-reset-oauth` switch either way on their own. `make demo-down`, `make demo-creds` and
+  `make demo-fault` work in either mode.
+
+#### Who can impersonate whom
+
+**Whoever administers the identity provider can impersonate any Relay Account, machine or human,
+admin included.** Sign-in maps a claim to an Account *name* and checks only that the Account
+exists and is enabled; it does not restrict OAuth sign-in by Account kind. ADR-0024's rule that
+the Relay never creates an Account from a token stops the IdP from *minting* Accounts — it does
+not stop it naming an existing one. A realm user called `founding-admin` would sign in as the
+founding admin.
+
+So this IdP has **no administrator.** The overlay sets no `KC_BOOTSTRAP_ADMIN_*`, so Keycloak's
+master realm has no user, and the realm is imported from the fixture at start, which needs none.
+Keycloak offers to create a first administrator only to a request arriving on its own loopback —
+here the namespace it shares with the Relay, never another container and never the host (the
+published port arrives from the Docker bridge gateway). Keycloak's management port (`9000`) is
+not opened at all: health and metrics are off, and the healthcheck reads the realm's discovery
+document instead. Observed on 2026-09-29, from `daemon-4`'s own network namespace (a curl
+container joined to it, since the daemon image ships no HTTP client):
+
+| From a daemon's position | Answer |
+| --- | --- |
+| `http://relay:8180/` | `200`, Keycloak's welcome page saying "Local access required" to create an administrator, with no form |
+| `POST http://relay:8180/` (create-admin form fields) | `400` |
+| master-realm password grant as `admin` / `dev-only-keycloak-admin` (the credential this overlay used to set) | `400 invalid_grant` |
+| `http://relay:8180/admin/realms/relay-demo/users`, no token | `401` |
+| `http://relay:9000/…` | connection refused |
+| `http://relay:8180/realms/relay-demo/…` (sign-in and token endpoints) | served |
+
+From the host the welcome page also says "Local access required", and the admin API answers
+`401`.
+
+**The residual reach, stated plainly: any container on the fleet network — a daemon, so a
+compromised Node or a Raw Exec Task — can sign in as `demo-user`.** Sharing a namespace puts
+Keycloak's sign-in and token endpoints on the Relay's address, `relay:8180`, and
+`demo-user`'s password is committed. Observed: from `daemon-4`'s network namespace, a
+scripted authorization-code + PKCE sign-in against `relay:8180` with the committed password got a
+token, and the Relay accepted it (`tools/list` → `200`). That reaches what `demo-user` can
+do — role `operator` — and no further, because no one can add a realm user. Binding Keycloak to
+`127.0.0.1` would close `8180` to the fleet, but to the host as well: observed on a scratch
+Keycloak, a published port does not reach a listener bound to container loopback. So it is left
+open, and this is why the overlay is DEV-ONLY.
+
+#### What an OAuth session proves, and what it does not
+
+- **It proves whose session made the call.** The Relay verified, offline against the IdP's keys,
+  a token issued by this issuer for this audience, naming an existing, enabled Account — here
+  `demo-user`, created human by the `oauth-account` one-shot (which also refuses to go on if
+  that Account is not human, not enabled, or not `operator`). The Relay does **not** restrict
+  OAuth sign-in by Account kind, so an identity-provider username equal to a machine or admin
+  Account's name signs in as that Account; kind matters only later, when an answer is weighed
+  (AP-79). The audit trail records the session as that Account with method `oauth` and no API
+  Token id — observed for a `list_nodes` read on a token from a real authorization-code + PKCE
+  sign-in: `account_name=demo-user`, `account_role=operator`, `auth_method=oauth`,
+  `token_id` empty. A real token for the same user from another client of the same realm,
+  carrying no Relay audience, was refused `401`; so was a real token for `no-relay-account`, the
+  realm user with no Account (both observed).
+- **On this fleet, a verified answer proves nothing about who decided.** `demo-user`'s
+  password is committed, and the AI-agent under test can read it — and it also has a shell on the
+  host, so it can script the sign-in itself, as the observation above shows any container can.
+  A verified OAuth answer here demonstrates the mechanism only.
+- **It does not prove a person read the question.** Anything holding `demo-user`'s token
+  answers as `demo-user`, and a configured Claude Code **hook** can answer an approval
+  question with nobody present — Relay cannot tell that from a person, so the verified lane can
+  name a human who never saw the request ([approval.md](../specs/approval.md), the
+  OAuth-session entry under accepted risks). A rule that needs evidence a person decided is an
+  `out-of-band` rule.
+- **The request is still the model's.** On this session `demo-user` is also the requester of
+  whatever Claude Code runs: the calls are model-generated and stay agent-grade (ADR-0027). An
+  answer on it meets the same refusals as any in-band decision by `demo-user`, so it never
+  satisfies a rule that excludes the requester, and never an `out-of-band` rule (AP-79, AP-13).
+- **The OAuth fleet runs the demo gate, exactly as the plain demo fleet does.**
+  `scripts/demo-fleet.sh` hands every compose call the in-band demo gate
+  ([The human approver](#the-human-approver)), with or without `--oauth`. Under it
+  `demo-user` — human, `operator`, and the gate has `requester_allowed: true` and no
+  audience — may answer its own request for an Operation. It cannot release a Raw Exec: the
+  decision floor for a Raw Exec is `admin`, and `demo-user` cannot even request one
+  (observed: `raw_exec` → `Raw Exec requires role "admin", has "operator"`).
+
+  Observed on 2026-09-29 on the wire, with a scripted client declaring `claude-code` and form
+  elicitation, on a real authorization-code + PKCE token for `demo-user`:
+  `run_operation service.restart unit=nginx` on `node:role=web` came back `input_required`,
+  with one form question keyed by the request id and a `requestState`; the retry answering
+  `accept`, with **no** responder assertion, ran the Job, 6 × `success`. Read back on the
+  Control API, the request is `approved` with one decision by `demo-user`, `human: true`,
+  channel `in-band`; in the store that decision has no `on_behalf_of` (AP-79: nothing written
+  to the asserted lane). Answering `decline` instead, on `node:role=web, node:env=staging`,
+  left the request `denied`, no Job and no dispatch. The same call declaring `claude-code` on
+  the founding admin's API Token was not asked: `pending_approval` (AP-78).
+
+  **Real Claude Code, headless** (observed, Claude Code 2.1.284, driven through its SDK control
+  protocol with no model turn, since the isolated config is signed in to relay but not to a
+  model): it receives the question and hands it to its host as an `elicitation` control request,
+  then waits. Unanswered, the tool call hung until it was killed after 120s, leaving the
+  request `pending`. Answered `cancel` — what a client with nobody present may send — the
+  Relay replied `answer_refused` ("approver is required …") and left the request `pending`,
+  `0 of 1`, with no decision recorded, so it can still be answered another way. A later call
+  on an already-pending request of the same plan got `pending_approval` instead of being asked
+  again (observed once). The interactive dialog itself, with a person at it, is *(predicted)*.
 
 ## The demo profile
 
@@ -656,7 +941,8 @@ saw.** Each beat below is marked *(tested)* for the half a hermetic test covers,
 *(predicted)* for the half that requires the real fleet.
 
 Observed since, by hand on a live demo fleet (2026-09-29), and nothing more: under the
-in-band demo gate, a client named `gleipnir` on an API Token was asked the approval question
+in-band demo gate, a client named `gleipnir` on an API Token (then a shared `gleipnir` machine
+Account; now the agent's own, `auto-incident-response`) was asked the approval question
 and its answered retry ran the Job; an unrecognised client got `pending_approval`, answered
 with `approve_request`, re-issued, and ran; and `service.restart` of `nginx` on a web Node,
 through the `systemctl` shim, exited `0`. The beats below were not re-run under that gate.
