@@ -1,0 +1,103 @@
+// Package main: unauthenticated_refusal_e2e_test.go pins the SHAPE of an
+// authentication refusal against the real composition root, with the Console
+// mounted and OAuth configured — the deployment in which the two refusals
+// meet on one listener.
+//
+// An MCP harness's first request carries no token; the 401's
+// `WWW-Authenticate: Bearer resource_metadata=…` is how it discovers the
+// OAuth flow (ADR-0024). The Console's sign-in redirect is for a browser on a
+// Console page. The unit tests in controlplane pin the branch against stand-in
+// predicates; this pins that the composition root wires the real ones so that
+// a request for /mcp or /api/v1 is never sent to the Console's sign-in page.
+package main
+
+import (
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane/console"
+)
+
+func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
+	idp := startE2EIDP(t)
+	f := startRelay(t,
+		WithControlPlane(),
+		withE2EOAuth(idp),
+		WithConfig(func(c *Config) { c.ConsoleEnabled = true }),
+	)
+	wantChallenge := `Bearer resource_metadata="https://relay.e2e.invalid` + controlplane.ProtectedResourceMetadataPath + `"`
+
+	// Redirects are asserted, never followed: following one is exactly the
+	// failure this pins (a harness landing on HTML instead of a challenge).
+	noFollow := func(credential string) *http.Client {
+		c := f.ClientFor(credential)
+		c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		return c
+	}
+
+	send := func(t *testing.T, client *http.Client, method, path string) *http.Response {
+		t.Helper()
+		var body *strings.Reader
+		if method == http.MethodPost {
+			body = strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`)
+		} else {
+			body = strings.NewReader("")
+		}
+		req, err := http.NewRequest(method, f.ControlBase+path, body) //nolint:noctx // test
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		if method == http.MethodPost {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		t.Cleanup(func() { resp.Body.Close() }) //nolint:errcheck
+		return resp
+	}
+
+	challenged := []struct {
+		name, credential, method, path string
+	}{
+		{"no credential, MCP", "", http.MethodPost, "/mcp"},
+		{"no credential, Control API", "", http.MethodGet, "/api/v1/ping"},
+		{"invalid bearer, MCP", "not-a-real-token", http.MethodPost, "/mcp"},
+		{"invalid bearer, Console page", "not-a-real-token", http.MethodGet, console.PathPrefix},
+	}
+	for _, c := range challenged {
+		t.Run(c.name, func(t *testing.T) {
+			resp := send(t, noFollow(c.credential), c.method, c.path)
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("status = %d (Location %q), want 401", resp.StatusCode, resp.Header.Get("Location"))
+			}
+			if loc := resp.Header.Get("Location"); loc != "" {
+				t.Errorf("Location = %q, want none", loc)
+			}
+			if got := resp.Header.Get("WWW-Authenticate"); got != wantChallenge {
+				t.Errorf("WWW-Authenticate = %q, want %q", got, wantChallenge)
+			}
+		})
+	}
+
+	t.Run("no credential, Console page", func(t *testing.T) {
+		resp := send(t, noFollow(""), http.MethodGet, console.PathPrefix)
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("status = %d, want 303 to the sign-in page", resp.StatusCode)
+		}
+		if loc := resp.Header.Get("Location"); !strings.HasPrefix(loc, console.LoginPath) {
+			t.Errorf("Location = %q, want the sign-in page %q", loc, console.LoginPath)
+		}
+	})
+
+	t.Run("no credential, protected-resource metadata", func(t *testing.T) {
+		resp := send(t, noFollow(""), http.MethodGet, controlplane.ProtectedResourceMetadataPath)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200: the document the challenge points at must be reachable without a credential", resp.StatusCode)
+		}
+	})
+}

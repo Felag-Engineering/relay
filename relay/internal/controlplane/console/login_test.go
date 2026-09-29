@@ -316,12 +316,17 @@ func TestConsole_UnauthenticatedPublicPathVariantGetsAPlainNotFoundOnce(t *testi
 // safeReturnPath in isolation: a fix applied in handleLoginForm rather than
 // in safeReturnPath itself would still mint the crafted destination into
 // THIS redirect, because UnauthorizedHandler calls safeReturnPath directly.
+//
+// The targets must clean to a path INSIDE the Console, or the boundary never
+// calls UnauthorizedHandler at all: a request whose cleaned path is off the
+// Console gets the 401 challenge, not a redirect (the second loop below).
 func TestConsole_UnauthorizedRedirectDropsATraversalDestination(t *testing.T) {
 	f := newLoginFixture(t)
 
 	for _, target := range []string{
-		"/console/../api/v1/x",     // plain
-		"/console/%2e%2e/api/v1/x", // escaped
+		"/console/nodes/../activity",     // plain
+		"/console/nodes/%2e%2e/activity", // escaped
+		"/api/v1/../../console/activity", // from outside the Console, into it
 	} {
 		t.Run(target, func(t *testing.T) {
 			rec := f.do(t, httptest.NewRequest(http.MethodGet, target, nil))
@@ -330,6 +335,24 @@ func TestConsole_UnauthorizedRedirectDropsATraversalDestination(t *testing.T) {
 			}
 			if loc := rec.Header().Get("Location"); loc != LoginPath {
 				t.Errorf("Location = %q, want exactly %q with no next at all", loc, LoginPath)
+			}
+		})
+	}
+
+	// A traversal OUT of the Console is not the Console's to refuse: it gets
+	// the 401 challenge and no Location at all, so there is no redirect for a
+	// crafted destination to ride on.
+	for _, target := range []string{
+		"/console/../api/v1/x",     // plain
+		"/console/%2e%2e/api/v1/x", // escaped
+	} {
+		t.Run(target, func(t *testing.T) {
+			rec := f.do(t, httptest.NewRequest(http.MethodGet, target, nil))
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("Location = %q, want none", loc)
 			}
 		})
 	}
