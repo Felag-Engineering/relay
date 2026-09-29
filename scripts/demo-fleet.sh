@@ -48,8 +48,9 @@ readonly COMPOSE_YML="${REPO_ROOT}/docker-compose.yml"
 # approve_request (docs/operations/demo-fleet.md, "The human approver"). A path
 # INSIDE the relay image — docker/relay.Dockerfile bakes it beside the default
 # fleet's gate — handed to docker-compose.yml's DEV_FLEET_APPROVAL_GATE_CONFIG,
-# which selects between the two. Only this script sets it, so the default
-# three-Node fleet keeps its out-of-band gate.
+# which selects between the two. By convention only this script sets it, so
+# the default three-Node fleet keeps its out-of-band gate — a convention, not
+# an enforced property (see the comment in docker-compose.yml).
 readonly DEMO_APPROVAL_GATE_CONFIG="/etc/relay/approval-gates.demo.json"
 
 # One env=prod web Node and one env=staging web Node; neither is on the #452

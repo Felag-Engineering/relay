@@ -82,10 +82,14 @@ services:
       #
       # DEV_FLEET_APPROVAL_GATE_CONFIG picks WHICH baked-in gate file, and
       # nothing else: both candidates are in the image, root-owned 0644. Unset,
-      # it is the dev gate above (out-of-band, `dev-approver` only). Only
+      # it is the dev gate above (out-of-band, `dev-approver` only).
       # scripts/demo-fleet.sh sets it, to the demo fleet's in-band gate
-      # (docker/fixtures/approval-gates.demo.json). A path that is not in the
-      # image fails startup, like any other unloadable gate file.
+      # (docker/fixtures/approval-gates.demo.json). That nothing else sets it
+      # is a CONVENTION, not an enforced property: any bare `docker compose`
+      # — `make dev-fleet-up` included — interpolates it from the caller's
+      # shell or a repo-root .env, so a leftover export or .env line would
+      # start the default fleet on the in-band gate. A path that is not in
+      # the image fails startup, like any other unloadable gate file.
       RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"
       # The Admin Console (ADR-0009), served on the SAME control-plane listener
       # as MCP and /api/v1 — no new listener and no new auth path (invariant

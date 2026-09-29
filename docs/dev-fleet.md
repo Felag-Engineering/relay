@@ -281,9 +281,13 @@ the parked-dispatch and MCP-task-handle surfaces are exercisable rather than the
 This section covers the dev fixture only; the operator-facing account of gates — rule
 schema, webhook, decision endpoint — is
 [docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
-runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected only
-by `scripts/demo-fleet.sh`; see
-[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook.
+runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by
+`scripts/demo-fleet.sh`; see
+[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook. That nothing
+else selects it is a convention, not an enforced property: `docker-compose.yml` reads the selector,
+`DEV_FLEET_APPROVAL_GATE_CONFIG`, from the caller's shell or a repo-root `.env`, so if either
+sets it, `make dev-fleet-up` starts this fleet on the demo fleet's in-band gate. Check that
+neither does.
 Two rules:
 
 | Rule | Matches | Requires |
