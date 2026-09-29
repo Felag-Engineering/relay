@@ -68,17 +68,11 @@ should not have to find their own item in someone else's list.
 
 ## Refreshing
 
-A request parked by a gate rule must appear here without the operator hunting for the browser's
-reload button. The queue offers **Refresh** and opt-in **auto-refresh**, under the rules in
+A request parked by a gate rule must be one click away without the operator hunting for the
+browser's reload button. The queue offers a **Refresh** control, under the rules in
 [`00-foundations.md`](00-foundations.md) ("Refreshing a screen"), in every state the queue renders
 once it is wired — the empty state above all, since that is the state someone watches while waiting
-for a request to arrive. Both carry the current filter.
-
-**Auto-refresh is safe here because the queue holds no form in any state:** every filter is an
-anchor, and no row carries a control (the acceptance criteria below). The bulk decision described
-above would add a selection and a step-up field; **where the queue ever renders a form, it stops
-offering auto-refresh** on that page, keeping Refresh. The approval object ([08](08-approval-object.md))
-never auto-refreshes: it holds the decision form.
+for a request to arrive. It carries the current filter. Nothing reloads the queue on a timer.
 
 **Reloading the queue is not an audited read, and the screen says so.** Unlike the screens on the
 read lane, the queue reads the pending Requests and the live Grants through the capability layer's

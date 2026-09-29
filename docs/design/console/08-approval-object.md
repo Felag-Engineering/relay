@@ -110,11 +110,6 @@ section (spec 13) draws the same label from the same record.
 - **Partial quorum** — shows who has signed and who is still needed.
 - **`viewer`** — reads the card, cannot decide.
 
-**The card never refreshes itself.** It holds the decision form — a reason and a password an
-approver may be typing — so it offers no auto-refresh in any state (`00-foundations.md`,
-"Refreshing a screen"); a card that reloaded under a half-typed reason would cost the approver
-their words, or their place.
-
 ## Acceptance
 
 - [x] Renders legibly at 390px wide with no horizontal scroll and 44px minimum hit targets.

@@ -65,8 +65,8 @@ negotiable on a screen whose whole job is careful reading.
 small text, and it reloads the page with the current filter preserved, at its newest page. Beside
 it, one sentence says what the number counts, in plain lower-case words: events on the stream,
 not rows that will appear, from a stream this page's filter does not narrow, where one Job
-announces itself more than once. Activity never auto-refreshes: its filter bar is a form the
-operator types into (`00-foundations.md`, "Refreshing a screen"). The "About this screen"
+announces itself more than once. The control is a Refresh in the sense of `00-foundations.md`
+("Refreshing a screen"): a deliberate click, never a timer. The "About this screen"
 disclosure says that every reload is an audited read.
 
 ## Read rows

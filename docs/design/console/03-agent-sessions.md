@@ -171,7 +171,7 @@ signed in with.
   back.
 - **`?account=` composes with it.** An Account filter narrows what the default leaves; with
   `?console=show` it narrows everything. Every link the screen draws — the rail, Older, Newest,
-  "Show every Account", Refresh and auto-refresh — carries both parameters as it found them.
+  "Show every Account" and Refresh — carries both parameters as it found them.
 - **It is presentation over the fetched page**, like the polling collapse: the lane is asked for
   the same page with the same filter it always was, and no read is added or widened. The page is
   still bounded by the most recent 200 audited calls counted *before* the exclusion, so a page can
@@ -188,12 +188,11 @@ signed in with.
 
 ## Refreshing
 
-The Agents screen offers **Refresh** and opt-in **auto-refresh**, under the rules in
-[`00-foundations.md`](00-foundations.md) ("Refreshing a screen"). It holds no form an operator
-types into in any state. It does hold Cancel forms (v0.7.0), so **where a page renders a Cancel
-control, auto-refresh is paused** on that page and one plain sentence beside the control says so;
-Refresh stays. The "About this screen" disclosure says that every reload is an audited read, and
-that those reads are Console calls, so the default above leaves them out of this screen.
+The Agents screen offers a **Refresh** control, under the rules in
+[`00-foundations.md`](00-foundations.md) ("Refreshing a screen"): it reloads the screen with
+`?account=` and `?console=` preserved, and nothing reloads it on a timer. The "About this screen"
+disclosure says that every Refresh is an audited read, and that those reads are Console calls, so
+the default above leaves them out of this screen.
 
 ## Interruption
 
