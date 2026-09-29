@@ -324,9 +324,10 @@ func TestConsole_UnauthorizedRedirectDropsATraversalDestination(t *testing.T) {
 	f := newLoginFixture(t)
 
 	for _, target := range []string{
-		"/console/nodes/../activity",     // plain
-		"/console/nodes/%2e%2e/activity", // escaped
-		"/api/v1/../../console/activity", // from outside the Console, into it
+		"/console/nodes/../activity",             // plain
+		"/console/nodes/%2e%2e/activity",         // escaped
+		"/api/v1/../../console/activity",         // from outside the Console, into it
+		"/api/v1/%2e%2e/%2e%2e/console/activity", // the same, escaped
 	} {
 		t.Run(target, func(t *testing.T) {
 			rec := f.do(t, httptest.NewRequest(http.MethodGet, target, nil))

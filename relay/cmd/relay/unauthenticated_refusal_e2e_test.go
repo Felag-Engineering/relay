@@ -94,6 +94,56 @@ func TestE2E_UnauthenticatedRefusalShapeWithConsoleAndOAuth(t *testing.T) {
 		}
 	})
 
+	// Escaped dot-segments over a real socket. net/http's ServeMux cleans the
+	// ESCAPED path, so `%2e%2e` reaches the auth middleware as a literal
+	// segment, while console.SessionScope decodes and then cleans. These are
+	// the forms where the router and the scope check see different paths
+	// (plain `..` is answered with a 301 by the mux before auth runs), so the
+	// refusal's shape is pinned for each: what matters here is that a path
+	// the scope check places OFF the Console is never redirected, and one it
+	// places ON the Console is redirected with no crafted destination.
+	escaped := func(t *testing.T, rawPath string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, f.ControlBase+rawPath, nil) //nolint:noctx // test
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		// Guard the premise: the client must put the path on the wire exactly
+		// as written, not a normalised form of it.
+		if got := req.URL.RequestURI(); got != rawPath {
+			t.Fatalf("the client would send %q, not %q: the escaped path was normalised before sending", got, rawPath)
+		}
+		resp, err := noFollow("").Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", rawPath, err)
+		}
+		t.Cleanup(func() { resp.Body.Close() }) //nolint:errcheck
+		return resp
+	}
+
+	t.Run("no credential, escaped traversal out of the Console", func(t *testing.T) {
+		resp := escaped(t, "/console/%2e%2e/api/v1/ping")
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("status = %d (Location %q), want 401", resp.StatusCode, resp.Header.Get("Location"))
+		}
+		if loc := resp.Header.Get("Location"); loc != "" {
+			t.Errorf("Location = %q, want none", loc)
+		}
+		if got := resp.Header.Get("WWW-Authenticate"); got != wantChallenge {
+			t.Errorf("WWW-Authenticate = %q, want %q", got, wantChallenge)
+		}
+	})
+
+	t.Run("no credential, escaped traversal into the Console", func(t *testing.T) {
+		resp := escaped(t, "/api/v1/%2e%2e/%2e%2e/console/")
+		if resp.StatusCode != http.StatusSeeOther {
+			t.Fatalf("status = %d (WWW-Authenticate %q), want 303", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+		}
+		if loc := resp.Header.Get("Location"); loc != console.LoginPath {
+			t.Errorf("Location = %q, want exactly %q with no next", loc, console.LoginPath)
+		}
+	})
+
 	t.Run("no credential, protected-resource metadata", func(t *testing.T) {
 		resp := send(t, noFollow(""), http.MethodGet, controlplane.ProtectedResourceMetadataPath)
 		if resp.StatusCode != http.StatusOK {
