@@ -187,6 +187,27 @@ screen.
 
 **Verified / asserted chips** (everywhere). See the trust lane above.
 
+**Kind label** (Job detail, Activity, approval object, Accounts). The word `human` or `machine`,
+set immediately after a trust chip and never inside it. **It is not a chip**: no pill, no border,
+no fill — small upper-case lettering with wide tracking in the secondary text colour, so it cannot
+be read as a verified (filled) or an asserted (dashed) identity beside either one. The word carries
+the meaning and nothing about it is encoded in colour; `human` and `machine` share one treatment,
+in the dark theme and the light theme alike, and there is one treatment for every screen that draws
+one. It qualifies the verified lane only — the Account the Relay authenticated — and never an
+asserted `on_behalf_of`: **where a kind label is drawn, it is drawn only beside a verified (filled)
+chip**, and an actor rendered as a dashed chip gets no kind label whatever its record says. It is
+not a trust signal: `machine` beside a filled chip is still an
+identity the Relay authenticated.
+
+**Where a kind label is drawn beside the actor of a record, it is read from that record as it was
+written, and never looked up from the Account registry's current kind.** Where the record carries
+no kind, no label is drawn and nothing is inferred in its place. This is the owner decision of
+2026-09-08 (#540) recorded in [03](03-agent-sessions.md) under "Kind (machine or human) is not on
+the rail": a registry read reports the Account's kind today, so an Account converted later would
+retroactively relabel its own history. The Accounts screen ([15](15-accounts-and-tokens.md)) is
+the one surface that describes Accounts as they are now; it reads the registry's current kind
+because that is its subject, and draws it in the same treatment because it is the same fact.
+
 **Label chips** (everywhere). Four namespaces, per the table above.
 
 **Step-up modal** (approval, apply, every privilege-granting act). A session proves a human
@@ -215,6 +236,35 @@ mean something. They are operational alarms, not configuration — invariant #11
 nothing here is editable. Note the limit honestly: both listeners share one certificate
 (ADR-0031), so once the Relay's leaf actually lapses the Console is unreachable too. The banner is
 a warning ahead of the event and can never be the only alarm.
+
+## Standing notes and situational messages
+
+Screens carry prose that says what they cannot do. Two kinds, told apart by one rule:
+
+- A note rendered **unconditionally on every view of the screen** — what the screen cannot show
+  yet, how it pages, why a filter it was asked for is absent — is a **standing note**.
+- A note rendered **because of this request, this caller or this record's state** — a part of the
+  URL that could not be read, a read that failed, "you already signed this", "your role cannot
+  decide this" — is a **situational message**.
+
+Where a screen has standing notes, they are drawn together in **one disclosure at the foot of the
+screen, closed by default**, labelled in plain words ("About this screen"), and built from a native
+`<details>`/`<summary>` so it needs no script under the strict CSP. A standing note is moved there,
+never deleted: it keeps its substance and stays one click away, and only words that pointed at its
+old position ("below", "above") change with it. Situational messages are never
+collapsed or hidden; they render where they always have, because the operator needs them for the
+thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
+A note that states a property the Console must be visibly bound by is never collapsed. Two are
+named: Node detail's "there is no path from this screen to this Node's Policy" (invariant 2), and
+Read egress's statement that read output still sits on a Job's Task rows, is readable through the
+Job read, and is never shown by the Console (ADR-0025). A note that qualifies a claim the screen
+visibly makes — "every figure is exact", "this is the feed" — is situational too, because hiding
+it makes the visible claim stronger than the truth.
+
+**Visible does not mean boxed.** A note that must stay visible is kept to one plain sentence and
+drawn as part of the control or figure it qualifies, in the quiet note style, not as a dashed
+block; its longer explanation may stay in the disclosure. The dashed `gap` box is for a message
+about this request, this caller or this record that the operator must stop and read.
 
 ## The incident ladder
 

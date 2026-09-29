@@ -596,6 +596,22 @@ main { padding: var(--space-5) var(--space-6) var(--space-12); }
 .chip.trust[data-trust="verified"] { background: var(--text-primary); color: var(--bg-canvas); border-color: var(--text-primary); font-weight: var(--weight-medium); }
 .chip.trust[data-trust="asserted"] { background: transparent; color: var(--text-muted); border: 1px dashed var(--text-muted); }
 
+/* Kind label: "human" or "machine", set after a trust chip (00-foundations.md,
+ * "Kind label"). It is deliberately NOT a chip — no pill, no fill, no border —
+ * because the trust lane owns fill-versus-outline, and a kind drawn as either
+ * would read as a second identity, verified or asserted. It is a small-caps
+ * eyebrow instead: upper case, tracked wide, in the secondary text token, which
+ * clears AA on every background token in both themes. Case, tracking and weight
+ * are the channel that sets it apart from a name; the WORD carries the meaning,
+ * so nothing here is encoded in colour, and human and machine share one
+ * treatment on purpose — neither is the unmarked case. The Accounts screen uses
+ * the same rule for the same fact. */
+.kind {
+  font-family: var(--font-body); font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+  letter-spacing: 0.12em; text-transform: uppercase; line-height: 1.8;
+  color: var(--text-second); white-space: nowrap;
+}
+
 /* --- Outcome vocabulary: all EIGHT ---------------------------------------
  *
  * Three of them are different kinds of "it did not run" that must not be
@@ -1020,6 +1036,30 @@ tr.attnrow td { background: var(--attention-bg); }
   padding: var(--space-3) var(--space-4); margin: var(--space-4) 0; max-width: 64em; line-height: 1.65;
 }
 .gap b { color: var(--text-primary); }
+
+/* "About this screen": the one disclosure at a screen's foot that holds its
+ * STANDING notes — the ones rendered on every view, saying what the screen
+ * cannot do yet or how it pages (00-foundations.md, "Standing notes and
+ * situational messages"). Closed by default, native <details>, no script.
+ * Situational .gap messages never go in here; they stay boxed where they are.
+ * Inside, the notes drop the dashed box: the disclosure is already the
+ * container, and a stack of dashed boxes would shout what was put here to be
+ * quiet. The open/closed state is carried by a drawn chevron's direction, not
+ * by colour, and by the element's own expanded state for assistive technology. */
+details.about { margin: var(--space-8) 0 0; max-width: 64em; border-top: 1px solid var(--border-subtle); }
+details.about > summary {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) 0; min-height: 44px; cursor: pointer; list-style: none;
+  font-size: var(--text-xs); color: var(--text-second);
+}
+details.about > summary::-webkit-details-marker { display: none; }
+details.about > summary::before {
+  content: ""; width: 6px; height: 6px; flex: none;
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform var(--duration-fast) var(--ease-out);
+}
+details.about[open] > summary::before { transform: rotate(45deg); }
+details.about > .gap { border: 0; background: transparent; padding: 0; margin: var(--space-3) 0 var(--space-4); }
 .note { font-size: var(--text-xs); color: var(--text-muted); margin: var(--space-3) 0 0; max-width: 64em; line-height: 1.65; }
 
 /* --- Node detail ---------------------------------------------------------- */
@@ -1126,6 +1166,11 @@ dl.kv {
 
 /* --- Activity feed -------------------------------------------------------- */
 .kindbar { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
+/* The one visible sentence saying which family the default feed leaves out
+ * (04-activity.md). It qualifies the chips above it, so it sits tight under
+ * them in the quiet note style rather than as a dashed gap box. */
+.kindbar:has(+ .kindnote) { margin-bottom: var(--space-2); }
+.kindnote { font-size: var(--text-xs); color: var(--text-muted); margin: 0 0 var(--space-4); max-width: 64em; line-height: 1.65; }
 .kchip {
   font-size: var(--text-xs); padding: 3px var(--space-3); border-radius: 10px;
   border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-second);

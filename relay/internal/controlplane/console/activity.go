@@ -251,6 +251,15 @@ type activityRow struct {
 	Verified   bool
 	OnBehalfOf string
 
+	// RequesterKind is "human" or "machine" as the Job row recorded it when
+	// the Job was created (capability.JobSummary.RequesterKind), and empty
+	// everywhere else: on a Job that recorded none, and on every non-dispatch
+	// row, whose audit record carries no kind. It is NEVER looked up from the
+	// Account registry, which would report the Account's kind today and
+	// relabel history once an Account is converted (#540; 03-agent-sessions.md,
+	// "Kind (machine or human) is not on the rail").
+	RequesterKind string
+
 	Selector string
 	NodeID   string
 	NodeHref string
@@ -600,6 +609,15 @@ type activityView struct {
 	ExportHref string
 	ReadsHref  string
 
+	// ReadsLeftOutHref is set ONLY when no kind filter is set — the one case
+	// in which the feed leaves the `read` family out (activityLaneExcluded).
+	// It is the `read` chip's own href, so following it keeps every other
+	// filter (an Account, a window) in place. The template draws the visible
+	// read-records sentence beside the kind chips from it: a responder
+	// filtering to one Account must be told, where they are looking, that
+	// its enumeration is not in this feed.
+	ReadsLeftOutHref string
+
 	Live Live
 }
 
@@ -689,6 +707,13 @@ func handleActivity(d Deps) http.HandlerFunc {
 			Windows:   windowChoices(f.Window),
 			Outcomes:  outcomeChoices(f.Outcome),
 			Kinds:     kindChips(f),
+		}
+		if f.Kind == "" {
+			for _, c := range v.Kinds {
+				if c.Kind == rowRead {
+					v.ReadsLeftOutHref = c.Href
+				}
+			}
 		}
 		if !known {
 			v.UnknownKind = f.Kind
@@ -942,18 +967,19 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		// The DECLARED class, from tasks.risk_class — never this package's
 		// name inference. A Template Operation the Console has never heard of
 		// is still classified by the catalog that dispatched it.
-		ReadClass:  sum.RiskClass == jobs.RiskClassRead,
-		Selector:   sum.Selector,
-		FanOut:     sum.Total,
-		InFlight:   sum.Unresolved,
-		Outcomes:   barFrom(sum.Counts),
-		JobID:      sum.JobID,
-		JobHref:    "/console/jobs/" + sum.JobID,
-		Principal:  sum.Requester,
-		Verified:   sum.RequesterAccountID != "",
-		OnBehalfOf: sum.OnBehalfOf,
-		ApprovalID: sum.ApprovalID,
-		GrantID:    sum.GrantID,
+		ReadClass:     sum.RiskClass == jobs.RiskClassRead,
+		Selector:      sum.Selector,
+		FanOut:        sum.Total,
+		InFlight:      sum.Unresolved,
+		Outcomes:      barFrom(sum.Counts),
+		JobID:         sum.JobID,
+		JobHref:       "/console/jobs/" + sum.JobID,
+		Principal:     sum.Requester,
+		Verified:      sum.RequesterAccountID != "",
+		RequesterKind: verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
+		OnBehalfOf:    sum.OnBehalfOf,
+		ApprovalID:    sum.ApprovalID,
+		GrantID:       sum.GrantID,
 	}
 	if sum.RiskClass != jobs.RiskClassUnspecified {
 		row.Risk = jobs.RiskClassName(sum.RiskClass)
@@ -1286,6 +1312,9 @@ var activityTmpl = newScreen("activity", `
 <div class="kindbar">
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
 </div>
+{{with .ReadsLeftOutHref}}<p class="kindnote">Read records &mdash; every Account&#39;s enumeration and
+every read of this trail &mdash; are left out of this feed: <a href="{{.}}">show them</a>, or see
+<a href="{{$.ReadsHref}}">Read egress</a>.</p>{{end}}
 
 {{if .UnknownKind}}
 <p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;.</b> Nothing was queried:
@@ -1305,7 +1334,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if .Unrecorded}}
           {{if .Pending}}<span class="dim">attribution is recorded when the dispatch completes</span>
           {{else}}<span class="unattrib" title="Every dispatch writes an audit record naming the principal that asked for it. This Job finished without one, which is a defect in the trail rather than an anonymous caller.">this dispatch finished with no recorded principal &mdash; the trail should carry one</span>{{end}}
-        {{else}}{{template "trust-chip" (trust .Principal .Verified)}}{{end}}
+        {{else}}{{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}{{end}}
         {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}{{end}}
         {{if .OpIsLink}}<a class="evop" href="{{.JobHref}}"><code>{{.Operation}}</code></a>
         {{else}}<span class="evsum">{{.Summary}}</span>{{end}}
@@ -1344,13 +1373,10 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
   {{with .ExportHref}}<a href="{{.}}">Export this filter as CSV</a>{{end}}
 </div>
 
-<p class="gap"><b>Each page holds up to {{.JobPageSize}} dispatches and up to {{.AuditPageSize}} other
-events, merged by time.</b>
-{{if or .DispatchOnly .TrailOnly}}This filter runs one lane, so the page boundary is a single instant.
-{{else}}The two lanes page independently, so a page boundary is not a single instant &mdash; following
-&ldquo;older&rdquo; carries both cursors and neither lane restarts.{{end}}
-{{with .Filter.Q}}<b>Refine</b> is a substring match over the rows already on this page and does NOT
-reach the trail; the fields beside it do.{{end}}</p>
+{{if .Filter.Q}}
+<p class="gap"><b>Refine</b> is a substring match over the rows already on this page and does NOT
+reach the trail; the fields beside it do.</p>
+{{end}}
 
 {{if .Filter.Outcome}}
 <p class="gap"><b>Outcome narrows dispatch rows after the page is fetched.</b> A Job has no single
@@ -1359,6 +1385,15 @@ outcome &mdash; the predicate here is &ldquo;this Job produced at least one
 so a filtered page can come back short while &ldquo;older&rdquo; still leads somewhere. On every
 other row kind the outcome is applied in the query.</p>
 {{end}}
+
+<details class="about">
+<summary>About this screen</summary>
+
+<p class="gap"><b>Each page holds up to {{.JobPageSize}} dispatches and up to {{.AuditPageSize}} other
+events, merged by time.</b>
+{{if or .DispatchOnly .TrailOnly}}This filter runs one lane, so the page boundary is a single instant.
+{{else}}The two lanes page independently, so a page boundary is not a single instant &mdash; following
+&ldquo;older&rdquo; carries both cursors and neither lane restarts.{{end}}</p>
 
 <p class="gap"><b>The default feed leaves out the trail&#39;s own read records.</b> Reading the trail
 WRITES to it &mdash; this page appends one record per lane it queries &mdash; so a feed that included
@@ -1382,6 +1417,7 @@ They used to carry counts. Counting per family across a paginated trail would ta
 query each, and each of those appends its own record to the append-only trail &mdash; ten extra rows
 to print ten numbers. A page that prints a number it did not compute has nothing to offer an
 operator reading it during an incident.</p>
+</details>
 
 {{end}}
 `)

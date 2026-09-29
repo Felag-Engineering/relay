@@ -485,7 +485,7 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
   {{range .Accounts}}
     <tr>
       <td>{{if .Current}}<b>{{.Name}}</b>{{else}}<a href="{{.Href}}">{{.Name}}</a>{{end}}</td>
-      <td><span class="chip" data-kind="{{.Kind}}">{{.Kind}}</span></td>
+      <td><span class="kind" data-kind="{{.Kind}}">{{.Kind}}</span></td>
       <td>{{.Role}}</td>
       <td>{{.State}}</td>
       <td>{{stamp .LastAuthAt}}</td>

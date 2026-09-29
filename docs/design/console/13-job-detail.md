@@ -19,6 +19,23 @@ design problem, and it is why the outcome bar and the disclosure ladder exist.
 plus a dashed asserted chip when run on behalf of someone; approver chip when it was parked;
 timestamps; Job state.
 
+**Kind beside the requester and each approver.** The requester's verified chip is followed by a
+kind label, `human` or `machine` (`00-foundations.md`). **Where Job detail shows its requester's
+kind, it is read from the kind the Job row recorded for its requester when the Job was created,
+and from nothing else** — never from the Account registry's current kind (owner decision of
+2026-09-08, #540, recorded in [03](03-agent-sessions.md) under "Kind (machine or human) is not on
+the rail"). A Job that recorded no kind shows no label; in particular, a Job whose requester is
+drawn from its dispatch audit record because the Job row carries none gets no label, since that
+record carries no kind either. In the approval section, **each approving decider's chip is
+followed by a kind label read from that Decision's own record** of whether its decider was human —
+`human` when it records a human decider, `machine` otherwise (a Decision records an unknown kind
+as not human, the restrictive default). A kind label is drawn only beside a verified chip: a
+requester or decider rendered dashed, because its record carries no Account ID, gets none. The
+lane key under the header says in words what the label means, including that on a decision
+`machine` means "not recorded as human". The Account that parked the approval, when it is not the
+Job's requester, shows no kind: the approval record carries none. Nothing on this screen says how
+an actor authenticated (owner decision, 2026-09-29).
+
 **Plan block.** The shared Plan renderer (`00-foundations.md`): fan-out with cap arithmetic, and
 the plan hash in mono. This is the Plan the Job was dispatched against, not a fresh one.
 
