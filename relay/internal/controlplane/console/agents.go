@@ -461,7 +461,7 @@ type agentsView struct {
 	// else kept.
 	AllAccountsHref string
 
-	// Refresh is the Refresh / auto-refresh control (spec 03, "Refreshing").
+	// Refresh is the manual Refresh control (spec 03, "Refreshing").
 	Refresh Refresh
 }
 
@@ -505,17 +505,14 @@ func withoutConsoleCalls(rows []capability.AuditRow) ([]capability.AuditRow, int
 }
 
 // agentsLink is the part of this screen's URL every link it draws carries:
-// the Account filter, the Console-session choice, and the auto-refresh
-// interval (only ever a value parseRefresh accepted). Built from parsed
+// the Account filter and the Console-session choice. Built from parsed
 // values, never by echoing the raw query.
 type agentsLink struct {
 	Account     string
 	ShowConsole bool
-	Refresh     string
 }
 
-// query renders the link as URL values without a cursor and without the
-// refresh interval — the shape newRefresh wants.
+// query renders the link as URL values without a cursor.
 func (l agentsLink) query() url.Values {
 	v := url.Values{}
 	if l.Account != "" {
@@ -533,9 +530,6 @@ func (l agentsLink) query() url.Values {
 // to the wrong Account or drops the cursor (#467).
 func (l agentsLink) href(cursor string) string {
 	v := l.query()
-	if l.Refresh != "" {
-		v.Set(refreshParam, l.Refresh)
-	}
 	if cursor != "" {
 		v.Set("cursor", cursor)
 	}
@@ -572,9 +566,6 @@ func handleAgents(d Deps) http.HandlerFunc {
 		query := r.URL.Query()
 		account := query.Get("account")
 		link := agentsLink{Account: account, ShowConsole: query.Get(consoleParam) == consoleShow}
-		if secs, _ := parseRefresh(query); secs > 0 {
-			link.Refresh = strconv.Itoa(secs)
-		}
 		// An unparseable cursor is NOT reset to page one — that would be a
 		// silent "start over" for a caller who asked to go further, which is
 		// the same class of lie a truncated trail would tell. It is instead
@@ -619,9 +610,8 @@ func handleAgents(d Deps) http.HandlerFunc {
 
 		var dropped int
 		v.Accounts, v.Calls, dropped = buildAgents(rows, account, d.now())
-		// The rail's links carry the Console choice and the auto-refresh
-		// interval too; buildAgents knows neither and keeps building the
-		// ?account= half on its own.
+		// The rail's links carry the Console choice too; buildAgents does
+		// not know it and keeps building the ?account= half on its own.
 		for i := range v.Accounts {
 			scoped := link
 			scoped.Account = v.Accounts[i].Name
@@ -693,11 +683,10 @@ func handleAgents(d Deps) http.HandlerFunc {
 			}
 		}
 
-		// Auto-refresh never runs on a page showing a Cancel control: a
-		// reload could move a Cancel button under the operator's pointer
-		// (00-foundations.md, "Refreshing a screen"). This screen holds no
-		// form an operator types into in any state.
-		v.Refresh = newRefresh("/console/agents", link.query(), query, !showsCancel(v))
+		// Refresh reloads this view: Account filter, Console choice and
+		// cursor kept. A click, never a timer (00-foundations.md,
+		// "Refreshing a screen").
+		v.Refresh = Refresh{Href: link.href(cursor)}
 		renderScreen(w, p, agentsTmpl, v)
 	}
 }
@@ -837,22 +826,6 @@ func runningToolName(sum capability.JobSummary) string {
 	// this screen has never had to name before (dispatch rows always carry
 	// one or the other) — say what it is rather than render an empty cell.
 	return "dispatch"
-}
-
-// showsCancel reports whether the rendered page carries any Cancel control,
-// on a call row or on a running Job's card.
-func showsCancel(v agentsView) bool {
-	for _, c := range v.Calls {
-		if c.CancelAction != "" {
-			return true
-		}
-	}
-	for _, r := range v.Running {
-		if r.CancelAction != "" {
-			return true
-		}
-	}
-	return false
 }
 
 // buildAgents rolls one fetched page up per Account and renders the call
@@ -1555,8 +1528,7 @@ fabricate.</p>
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>Every reload is an audited read</b>, whether you click Refresh or auto-refresh does
-it, and like every call made from this Console it is left out of this screen unless you show those
-calls.</p>
+<p class="gap"><b>Every Refresh is an audited read</b>, and like every call made from this Console it
+is left out of this screen unless you show those calls.</p>
 </details>
 `)

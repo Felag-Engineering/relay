@@ -21,8 +21,6 @@ import (
 	"html/template"
 	"net/url"
 	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
@@ -543,115 +541,27 @@ type StepUp struct {
 
 // --- Rendering --------------------------------------------------------------
 
-// --- Refresh and auto-refresh -----------------------------------------------
+// --- Refresh --------------------------------------------------------------
 
-// refreshParam is the one query parameter that turns auto-refresh on
-// (00-foundations.md, "Refreshing a screen").
-const refreshParam = "refresh"
-
-// refreshIntervals is the WHOLE set of auto-refresh intervals, in seconds,
-// chosen here. The URL only ever selects one of these; a number it carries is
-// never rendered as-is, so no link can make a page reload every second. On a
-// screen that reads through the audited lane every reload is an audited
-// read, and an interval an outsider could shrink would be a way to fill the
-// trail, or load the Relay, by sending someone a link.
-var refreshIntervals = []int{15, 30, 60}
-
-// parseRefresh reads ?refresh=. secs is 0 when the parameter is absent or is
-// not exactly one of refreshIntervals; invalid reports the second case, so
-// the screen can say auto-refresh is off rather than ignoring the URL
-// silently.
-func parseRefresh(q url.Values) (secs int, invalid bool) {
-	raw := q.Get(refreshParam)
-	if raw == "" {
-		return 0, false
-	}
-	for _, s := range refreshIntervals {
-		if raw == strconv.Itoa(s) {
-			return s, false
-		}
-	}
-	return 0, true
-}
-
-// RefreshOption is one choice in the auto-refresh control: off, or one of
-// refreshIntervals. Each is an anchor, never a form.
-type RefreshOption struct {
-	Label string
-	Href  string
-	On    bool
-}
-
-// Refresh is the Refresh / auto-refresh control. It holds no script: the
-// manual control is a link to the same screen with the query preserved, and
-// auto-refresh is a <meta http-equiv="refresh"> rendered only while Auto is
-// non-zero. Neither is touched by the content security policy, which governs
-// script, style and fetches rather than a document reloading itself.
+// Refresh is the manual Refresh control (00-foundations.md, "Refreshing a
+// screen"): a plain link to the same screen with the current query preserved.
+// It is a deliberate act by the operator. The Console never reloads a screen
+// on a timer — the README records the owner decision "No scheduled or
+// repeated reads. Every read is a deliberate, audited act."
 type Refresh struct {
-	// Href reloads the screen exactly as it is, auto-refresh choice included.
+	// Href reloads the screen exactly as it is.
 	Href string
-
-	// Options is off plus one entry per refreshIntervals value. Empty when
-	// the screen offers only the manual control.
-	Options []RefreshOption
-
-	// Auto is the interval the page reloads itself at, in seconds, and 0 for
-	// no <meta> at all. It is only ever a value from refreshIntervals.
-	Auto int
-
-	// InvalidNote is set when ?refresh= carried a value outside the set.
-	InvalidNote string
-
-	// Paused is set when auto-refresh was asked for on a page that is
-	// showing a Cancel control: a reload could move a Cancel button under the
-	// operator's pointer, so the page does not reload itself and says so.
-	Paused bool
 }
 
 // newRefresh builds the control for the screen at path, whose own query —
-// every parameter it understands, EXCEPT refresh — is q. The caller rebuilds
-// q from the parameters it parsed rather than echoing the raw URL, so a
-// parameter the screen does not know never travels on its links.
-//
-// auto says whether this page may reload itself at all. Pass false for a page
-// holding a form the operator may type into, or showing a Cancel control
-// (00-foundations.md, "Refreshing a screen"); the options are still drawn, so
-// the operator can see the choice and turn it off.
-func newRefresh(path string, q url.Values, requested url.Values, auto bool) Refresh {
-	secs, invalid := parseRefresh(requested)
-	link := func(s int) string {
-		v := url.Values{}
-		for k, vs := range q {
-			v[k] = append([]string(nil), vs...)
-		}
-		if s > 0 {
-			v.Set(refreshParam, strconv.Itoa(s))
-		}
-		if len(v) == 0 {
-			return path
-		}
-		return path + "?" + v.Encode()
+// every parameter it understands — is q. The caller rebuilds q from the
+// parameters it parsed rather than echoing the raw URL, so a parameter the
+// screen does not know never travels on its links.
+func newRefresh(path string, q url.Values) Refresh {
+	if len(q) == 0 {
+		return Refresh{Href: path}
 	}
-	r := Refresh{Href: link(secs)}
-	r.Options = append(r.Options, RefreshOption{Label: "off", Href: link(0), On: secs == 0})
-	for _, s := range refreshIntervals {
-		r.Options = append(r.Options, RefreshOption{Label: strconv.Itoa(s) + " s", Href: link(s), On: secs == s})
-	}
-	if invalid {
-		words := make([]string, len(refreshIntervals))
-		for i, s := range refreshIntervals {
-			words[i] = strconv.Itoa(s)
-		}
-		r.InvalidNote = "Auto-refresh can reload every " + strings.Join(words[:len(words)-1], ", ") +
-			" or " + words[len(words)-1] + " seconds, and nothing else, so it is off."
-	}
-	switch {
-	case secs > 0 && auto:
-		r.Auto = secs
-	case secs > 0:
-		r.Paused = true
-	}
-	return r
+	return Refresh{Href: path + "?" + q.Encode()}
 }
 
 // --- The live region --------------------------------------------------------
@@ -779,16 +689,8 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
   {{with .CountNote}}<p class="livenote">{{.}}</p>{{end}}
 </section>{{end}}{{end}}
 
-{{/* refresh: 00-foundations.md, "Refreshing a screen". Anchors only; the
-     <meta> is rendered only while .Auto holds a value from refreshIntervals. */}}
-{{define "refresh"}}<div class="refreshbar">
-  <a class="refreshbtn" href="{{.Href}}">Refresh</a>
-  {{with .Options}}<span class="refreshauto"><span class="fgroup">auto-refresh</span>{{range .}}<a class="kchip{{if .On}} on{{end}}" href="{{.Href}}"{{if .On}} aria-current="true"{{end}}>{{.Label}}</a>{{end}}</span>{{end}}
-  {{with .InvalidNote}}<span class="refreshnote">{{.}}</span>{{end}}
-  {{if .Paused}}<span class="refreshnote">Auto-refresh is paused while this page shows a Cancel
-  button, so a reload cannot move one under your pointer. Refresh still works.</span>{{end}}
-  {{with .Auto}}<meta http-equiv="refresh" content="{{.}}">{{end}}
-</div>{{end}}
+{{/* refresh: 00-foundations.md, "Refreshing a screen". An anchor, never a timer. */}}
+{{define "refresh"}}<div class="refreshbar"><a class="refreshbtn" href="{{.Href}}">Refresh</a></div>{{end}}
 
 {{define "pin-bar"}}<div class="pinbar">
   <span class="pinlbl">Pinned</span>

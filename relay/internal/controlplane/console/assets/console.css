@@ -1627,8 +1627,8 @@ dl.kv dd { min-width: 0; }
  * One block, appended, so nothing above it moves. Every colour is a token.
  * ========================================================================== */
 
-/* Refresh and the auto-refresh choice. Anchors only: the bar holds no form,
- * which is what lets a page carrying it reload itself at all. */
+/* Refresh: a plain anchor that reloads the screen with its query. There is
+ * no timer anywhere in the Console (00-foundations.md). */
 .refreshbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3);
   margin: 0 0 var(--space-4);
@@ -1641,9 +1641,6 @@ dl.kv dd { min-width: 0; }
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 .refreshbtn:hover { text-decoration: none; border-color: var(--color-blue); }
-.refreshauto { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.refreshauto .fgroup { margin-right: var(--space-1); }
-.refreshnote { flex-basis: 100%; font-size: var(--text-xs); color: var(--text-muted); max-width: 64em; line-height: 1.65; }
 
 /* Activity's queue control, once something has queued: drawn as a button in
  * the interactive colour so it reads as the thing to click, not as a line of

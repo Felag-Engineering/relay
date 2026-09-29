@@ -205,11 +205,6 @@ type approvalFilter struct {
 	Risk   string
 	Quorum string
 	Scope  string
-
-	// Refresh is the auto-refresh interval, carried so a filter link does
-	// not silently turn auto-refresh off. It holds only a value parseRefresh
-	// accepted — never the raw parameter.
-	Refresh string
 }
 
 type approvalsView struct {
@@ -252,11 +247,8 @@ type approvalsView struct {
 	// in it is expiring.
 	GrantsUnreadable bool
 
-	// Refresh is the Refresh / auto-refresh control (spec 14, "Refreshing").
-	// Auto-refresh is allowed on every state of this screen because the queue
-	// holds no form in any state — every filter is an anchor and no row
-	// carries a control (filterOption's doc). A queue that ever grows a form
-	// (the bulk decision) must pass auto=false to newRefresh for that page.
+	// Refresh is the manual Refresh control (spec 14, "Refreshing"): this
+	// queue, reloaded with its filter.
 	Refresh Refresh
 }
 
@@ -297,7 +289,7 @@ func handleApprovals(d Deps) http.HandlerFunc {
 		f := parseApprovalFilter(r.URL.Query())
 		v := buildApprovalsView(rows, f)
 		v.GrantsUnreadable = grantsErr != nil
-		v.Refresh = newRefresh("/console/approvals", f.query(), r.URL.Query(), true)
+		v.Refresh = newRefresh("/console/approvals", f.query())
 		if refusedUnaudited(w, lane, "the approval queue's audit trail") {
 			return
 		}
@@ -551,17 +543,13 @@ func approvalStandingFor(req approval.Request, caller capability.Principal) appr
 func (r approvalRow) mine() bool { return r.Waiting != waitingNo || r.Own }
 
 func parseApprovalFilter(q url.Values) approvalFilter {
-	f := approvalFilter{
+	return approvalFilter{
 		Who:    filterValue(q, "who"),
 		Op:     filterValue(q, "op"),
 		Risk:   filterValue(q, "risk"),
 		Quorum: filterValue(q, "quorum"),
 		Scope:  filterValue(q, "scope"),
 	}
-	if secs, _ := parseRefresh(q); secs > 0 {
-		f.Refresh = strconv.Itoa(secs)
-	}
-	return f
 }
 
 func filterValue(q url.Values, key string) string {
@@ -609,8 +597,6 @@ func (f approvalFilter) value(key string) string {
 		return f.Quorum
 	case "scope":
 		return f.Scope
-	case refreshParam:
-		return f.Refresh
 	}
 	return ""
 }
@@ -623,9 +609,6 @@ func (f approvalFilter) value(key string) string {
 // preimage (see approvalRow.shapeKey).
 func (f approvalFilter) with(key, value string) string {
 	q := f.query()
-	if f.Refresh != "" {
-		q.Set(refreshParam, f.Refresh)
-	}
 	if value == "" {
 		q.Del(key)
 	} else {
@@ -637,8 +620,8 @@ func (f approvalFilter) with(key, value string) string {
 	return "/console/approvals?" + q.Encode()
 }
 
-// query is the filter as URL values, WITHOUT the auto-refresh choice — the
-// shape newRefresh wants, since it sets that parameter itself per option.
+// query is the filter as URL values — what with() starts from, and what the
+// Refresh control reloads.
 func (f approvalFilter) query() url.Values {
 	q := url.Values{}
 	for _, k := range []string{"who", "op", "risk", "quorum", "scope"} {
@@ -663,7 +646,7 @@ func buildApprovalsView(rows []approvalRow, f approvalFilter) approvalsView {
 		Count:     len(rows),
 		Filters:   approvalFilterGroups(rows, f),
 		AllHref:   f.with("scope", scopeAll),
-		ClearHref: approvalFilter{Scope: scopeAll, Refresh: f.Refresh}.with("scope", scopeAll),
+		ClearHref: "/console/approvals?scope=" + scopeAll,
 	}
 
 	narrowed := make([]approvalRow, 0, len(rows))
@@ -1808,8 +1791,8 @@ Control API.</p>
 <details class="about">
 <summary>About this screen</summary>
 <p class="gap"><b>Reloading this queue is not recorded on the audit trail</b>: the pending requests
-are read without writing a read record, so Refresh and auto-refresh add nothing to it, although
-opening a request is recorded.</p>
+are read without writing a read record, so Refresh adds nothing to it, although opening a request
+is recorded.</p>
 </details>
 {{end}}
 `)
