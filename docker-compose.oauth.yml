@@ -165,18 +165,11 @@ services:
       # email address can ever name one. Keycloak's `preferred_username` is the
       # realm username, which the realm forbids users to edit.
       RELAY_OAUTH_ACCOUNT_CLAIM: "preferred_username"
-      # WORKAROUND FOR A RELAY DEFECT — remove this line once the fix lands.
-      # With the Console mounted, Authenticator.refuse (controlplane/auth.go)
-      # answers EVERY request that carries no Authorization header — /mcp and
-      # /api/v1 included — with a 303 to /console/login, not the 401 whose
-      # `WWW-Authenticate: Bearer resource_metadata=...` is the discovery
-      # handshake ADR-0024 promises. Claude Code's first request carries no
-      # token, follows the 303, gets HTML, and marks the server failed instead
-      # of offering to sign in (observed 2026-09-29, Claude Code 2.1.284). A fix
-      # is proposed separately on branch fix/unauthenticated-api-request-gets-401;
-      # once it lands, delete this line so the Console and OAuth run together.
-      # Until then the Console is unavailable whenever this overlay is on.
-      RELAY_CONSOLE_ENABLED: "false"
+      # The Console stays on, as docker-compose.yml sets it: the Console and
+      # OAuth run together. An unauthenticated request off the Console — /mcp
+      # included — gets the 401 whose `WWW-Authenticate: Bearer
+      # resource_metadata=...` is how a client discovers the sign-in, while a
+      # browser on /console/ is still sent to the Console's own sign-in (#775).
 
   # One-shot: creates the human Account the IdP's user signs in as. The Relay
   # never creates an Account from a token (ADR-0024).

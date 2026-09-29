@@ -575,7 +575,7 @@ Every name below is fixed in `docker-compose.oauth.yml` or its realm fixture,
 | Transport | `sslRequired: none` and plain HTTP on loopback. **DEV-ONLY: do not copy** |
 | Administrator | **None.** No Keycloak admin exists, by design — see [Who can impersonate whom](#who-can-impersonate-whom) |
 
-Three things differ from the plain fleet, each on purpose:
+Two things differ from the plain fleet, each on purpose:
 
 - **No new `/etc/hosts` line.** The issuer must be one URL, byte for byte, for the browser, for
   Claude Code on the host, and for the Relay inside the fleet. Claude Code 2.1.284 refuses to
@@ -588,21 +588,6 @@ Three things differ from the plain fleet, each on purpose:
   the network alias `relay` and publishes `7654`, `9443` and `8180`, so every other service
   still reaches the Relay exactly as before. The existing `127.0.0.1 relay` line is the only
   hosts entry either mode needs.
-- **The Console is unavailable whenever this overlay is on — a workaround for a Relay defect.**
-  With the Console mounted, `Authenticator.refuse` (`controlplane/auth.go`) answers every request
-  that carries no `Authorization` header — `/mcp` and `/api/v1` included — with a `303` to
-  `/console/login`, instead of the `401` whose `WWW-Authenticate: Bearer resource_metadata="..."`
-  is the discovery handshake ADR-0024 promises. That contradicts ADR-0024. Claude Code's first
-  request carries no token, so with the Console on it follows the redirect, gets HTML, and marks
-  the server failed instead of offering to sign in (observed). The overlay therefore sets
-  `RELAY_CONSOLE_ENABLED=false`. A fix is proposed separately, on branch
-  `fix/unauthenticated-api-request-gets-401`; **once it lands, that line must be removed from
-  the overlay** so the Console and OAuth run together. Until then, any beat that shows the
-  Console cannot run on an OAuth fleet: run it on a plain `make demo-reset` fleet instead. The
-  founding admin's, `dev-approver`'s and `auto-incident-response`'s API Tokens work exactly as
-  before. The
-  `console-password` one-shot still runs and still prints a Console URL, which does not serve in
-  this mode.
 - **The Account claim is `preferred_username`, not the default `email`.** An Account name is
   `[A-Za-z0-9._-]` only, so an email address can never name one. `preferred_username` is the
   realm username, which the realm does not let a user edit.
@@ -679,8 +664,22 @@ $ curl -sS -o /dev/null -D - --cacert .dev-fleet/ca-cert.pem -X POST https://rel
 www-authenticate: Bearer resource_metadata="https://relay:9443/.well-known/oauth-protected-resource"
 ```
 
-On the plain fleet the first returns `404` and the second is a `303` to the Console's sign-in —
-both correct there, and a quick way to tell which mode is up.
+On the plain fleet the first returns `404` and the second a `401` with a bare
+`WWW-Authenticate: Bearer` and no `resource_metadata` (a Relay with no issuer advertises no
+flow) — both correct there, and a quick way to tell which mode is up *(predicted from the
+Relay's code; the OAuth half is observed)*.
+
+**The Console and OAuth run together.** The Console is on in both modes, exactly as
+`docker-compose.yml` sets it: an unauthenticated request off the Console — `/mcp` and `/api/v1`
+included — gets the `401` challenge above, while a browser on `/console/` is still sent to the
+Console's own sign-in, where `admin` signs in as on the plain fleet. The founding admin's,
+`dev-approver`'s and `auto-incident-response`'s API Tokens work exactly as before. Observed on
+2026-09-29 with the Console mounted and OAuth on: `POST /mcp` unauthenticated got the `401`
+challenge above, `GET /console/` a `303` to `/console/login`, `admin` signed in; a
+`demo-user` authorization-code + PKCE sign-in was accepted for `list_nodes`; Claude Code (isolated
+config) went from needing authentication to `connected` through the sign-in above; and both
+approval stories — the agent's with responder `mrapp`, and `demo-user`'s on the OAuth session —
+ran their Jobs and read back as described in this section.
 
 #### Between takes
 
