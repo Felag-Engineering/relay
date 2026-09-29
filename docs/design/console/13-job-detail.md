@@ -106,7 +106,7 @@ shows its audited metadata only (ADR-0025).
       behind `console_execution` (that flag scopes the composer and dispatch, and Cancel cannot
       run anything). The result block reads the Job's `job_cancel` audit record — never a
       query-string flash — and says which cancelled Tasks never left the Relay and which were
-      stopped after being sent, qualifies the still-in-flight count as best-effort ("where its
+      stopped after being sent, qualifies the still-in-flight count as best-effort ("if its
       Node is connected"), and leaves every already-resolved Task's real outcome untouched.
 - [ ] The Plan block does not change while the Job runs.
       **Partially met.** Everything the block renders is fixed at dispatch — risk class,
