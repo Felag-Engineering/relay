@@ -604,6 +604,17 @@ var componentsTmpl = template.Must(template.New("components").Funcs(template.Fun
 }).Parse(`
 {{define "label-chip"}}<span class="chip lbl" data-ns="{{.Namespace}}"{{if .SecurityLane}} data-lane="security"{{end}}{{if .Attention}} data-sev="attention"{{end}} title="{{.}}"><span class="ns">{{.Namespace}}:</span>{{.Key}}{{if .Value}}<span class="eq">=</span>{{.Value}}{{end}}</span>{{end}}
 
+{{/* kind-label is the word human or machine drawn after a trust chip
+     (00-foundations.md, "Kind label"). It is NOT a chip: no pill, no fill, no
+     border, so it can never be read as either trust lane. The value is drawn
+     only when it is one of the two words a record can hold; anything else,
+     including the empty string of a record with no kind, renders nothing
+     rather than a guess. Callers pass what the RECORD says (the Job row's
+     requester_kind, a Decision's DeciderHuman) and never the Account
+     registry's current kind (#540) — except the Accounts screen, whose
+     subject is the Account as it is now. */}}
+{{define "kind-label"}}{{if or (eq . "human") (eq . "machine")}} <span class="kind" data-kind="{{.}}">{{.}}</span>{{end}}{{end}}
+
 {{define "trust-chip"}}<span class="chip trust" data-trust="{{if .Verified}}verified{{else}}asserted{{end}}" title="{{if .Verified}}The Relay authenticated this identity.{{else}}The caller claimed this. Nothing checked it.{{end}}">{{.Text}}</span>{{end}}
 
 {{define "outcome-bar"}}<div class="obar" role="img" aria-label="{{.Total}} Nodes: {{range .Segments}}{{.Count}} {{.Label}}. {{end}}">

@@ -954,13 +954,6 @@ for an AI-agent that means the model provider. This screen is a map of that expo
 what, from where, and when</b>. It cannot show you the contents, at any age, and it is not going
 to grow the ability to.</p>
 
-<p class="gap"><b>The audit trail keeps outcomes and timings and never read output</b> (ADR-0025):
-reading is exfiltration, so what left a Node is audited and what it said is not. That is the precise
-claim, because the stronger one would be false &mdash; what the daemon sent still lives on the Task
-rows until the Job is collected, and is readable through <code>GET /api/v1/jobs/{job_id}</code>.
-Nothing on this page will show it, at any age or aggregation, because a screen that did would become
-the durable place read output is read from.</p>
-
 <p class="scoped">
 {{range .WindowLine}}{{if .Current}}<b>{{.Label}}</b>{{else}}<a href="{{.Href}}">{{.Label}}</a>{{end}}
 {{end}}
@@ -1103,12 +1096,6 @@ exposure either way. See the notes below.</p>
   {{.RefusalsListed}} most recent refusals are listed.</p>{{end}}
   {{else if .RefusedKnown}}<p class="dim">No read was refused in this window.</p>
   {{else}}<p class="dim">The refusal lane was not queried for this window — see the note below.</p>{{end}}
-  <p class="gap"><b>The deciding rule is not shown, and not for want of looking.</b> The daemon
-  explains a refusal in the Task&#39;s own output, and for a read-class Task the audit trail never
-  retains that output (ADR-0025) — so the rule is absent from the trail by design rather than
-  missing by accident. Open the Node to read its effective Policy, which is where the rule lives.
-  The trail also cannot say a refusal came from the confidentiality deny-list specifically: it
-  records that this Node&#39;s Policy refused, and that is the claim this page makes.</p>
 </section>
 
 <section class="panel">
@@ -1153,17 +1140,6 @@ exposure either way. See the notes below.</p>
   {{end}}
 </section>
 
-<p class="gap"><b>Reading this page is itself a read, and it is counted here.</b> The Relay records a
-read of the trail as a read, so this view wrote {{.Queries}} {{plural .Queries "record" "records"}}
-that the next view of it will count. The enumeration figure above is not merely affected by that
-later — it already includes it: the read lane writes its record BEFORE the query runs, so the
-enumeration aggregate has counted every query this page had already made, itself included. The
-headline figure and the By-principal Enumerations column are computed from that SAME aggregate, so
-the two always agree with each other, however many of this page's own queries the window catches.
-These records are labelled rather than filtered out: hiding them would take a second hardcoded name
-list — the exact smell this screen was rebuilt to remove — and &ldquo;who queried the audit
-trail&rdquo; is legitimately part of read egress.</p>
-
 {{if .OpsEmpty}}
 <p class="gap"><b>The audit lane was not queried for Node reads.</b>
 {{if .Operation}}No read-class Job ran <code>{{.Operation}}</code> in this window, so it is not part
@@ -1174,15 +1150,6 @@ there was no Operation to count reads for.{{end}}
 The Operation filter is what keeps this page reading dispatch records for READS: without one, the
 same query matches every mutate dispatch in the window, so it is not run at all.</p>
 {{end}}
-
-<p class="gap"><b>The two halves of this page read different clocks.</b> The read vocabulary comes
-from Jobs CREATED in this window; every figure comes from audit records TIMESTAMPED in it, and a
-Job&#39;s dispatch records are written after the dispatch returns. So a read-class Job created just
-before this window whose records land inside it contributes no Operation to the vocabulary, and its
-reads are missing from every figure above — and if it were the only one, this page would say the
-lane was not queried while matching records existed. Same class of gap as the {{.JobPageSize}}-Job
-page and the {{.OpsCap}}-Operation cap below, and it closes when the audit record carries a risk
-class of its own.</p>
 
 {{if .JobsSampled}}
 <p class="gap"><b>The read vocabulary is drawn from the most recent {{.JobPageSize}}
@@ -1204,10 +1171,48 @@ Dropping the name costs one row; sending it would have failed every figure on th
 window.</p>
 {{end}}
 
+<details class="about">
+<summary>About this screen</summary>
+
+<p class="gap"><b>The audit trail keeps outcomes and timings and never read output</b> (ADR-0025):
+reading is exfiltration, so what left a Node is audited and what it said is not. That is the precise
+claim, because the stronger one would be false &mdash; what the daemon sent still lives on the Task
+rows until the Job is collected, and is readable through <code>GET /api/v1/jobs/{job_id}</code>.
+Nothing on this page will show it, at any age or aggregation, because a screen that did would become
+the durable place read output is read from.</p>
+
+<p class="gap"><b>A refused read&#39;s deciding rule is not shown, and not for want of looking.</b>
+The daemon explains a refusal in the Task&#39;s own output, and for a read-class Task the audit trail
+never retains that output (ADR-0025) — so the rule is absent from the trail by design rather than
+missing by accident. Open the Node to read its effective Policy, which is where the rule lives.
+The trail also cannot say a refusal came from the confidentiality deny-list specifically: it
+records that this Node&#39;s Policy refused, and that is the claim this page makes.</p>
+
+<p class="gap"><b>Reading this page is itself a read, and it is counted here.</b> The Relay records a
+read of the trail as a read, so this view wrote {{.Queries}} {{plural .Queries "record" "records"}}
+that the next view of it will count. The enumeration figure above is not merely affected by that
+later — it already includes it: the read lane writes its record BEFORE the query runs, so the
+enumeration aggregate has counted every query this page had already made, itself included. The
+headline figure and the By-principal Enumerations column are computed from that SAME aggregate, so
+the two always agree with each other, however many of this page's own queries the window catches.
+These records are labelled rather than filtered out: hiding them would take a second hardcoded name
+list — the exact smell this screen was rebuilt to remove — and &ldquo;who queried the audit
+trail&rdquo; is legitimately part of read egress.</p>
+
+<p class="gap"><b>The two halves of this page read different clocks.</b> The read vocabulary comes
+from Jobs CREATED in this window; every figure comes from audit records TIMESTAMPED in it, and a
+Job&#39;s dispatch records are written after the dispatch returns. So a read-class Job created just
+before this window whose records land inside it contributes no Operation to the vocabulary, and its
+reads are missing from every figure above — and if it were the only one, this page would say the
+lane was not queried while matching records existed. Same class of gap as the {{.JobPageSize}}-Job
+page and the {{.OpsCap}}-Operation cap, and it closes when the audit record carries a risk
+class of its own.</p>
+
 <p class="gap"><b>Two filters this screen does not offer.</b> Selector filtering, because the read
 lane&#39;s audit filter carries no Selector field and adding one is a change to three packages, not
 to this screen. Export, for the same reason it is not faked: an auditor&#39;s CSV needs its own
 escaping rules and its own tests, and shipping it untested here would be worse than saying it is
 not built. Principal, Operation, Node, path prefix and window all work, and every one of them is
 recorded in the trail as this page&#39;s own search.</p>
+</details>
 `)

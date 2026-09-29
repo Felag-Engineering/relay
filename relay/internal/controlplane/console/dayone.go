@@ -267,11 +267,6 @@ var dayOneTmpl = newScreen("dayone", `
   the event seam is what makes the difference visible.</p>
   {{end}}
 
-  <p class="gap"><b>A daemon that refuses this Relay&#39;s certificate never appears here.</b> It
-  aborts the handshake before it sends a token, so the Relay sees a connection and no attempt at
-  all. What catches that is checking the CA fingerprint below against the one this Relay logged at
-  startup before you install a daemon against it &mdash; this screen cannot.</p>
-
   <section class="trust">
     <h3>What a machine needs in order to trust this Relay</h3>
     {{if .TrustWired}}
@@ -294,5 +289,13 @@ var dayOneTmpl = newScreen("dayone", `
     absence of certificates.</p>
     {{end}}
   </section>
+
+  <details class="about">
+    <summary>About this screen</summary>
+    <p class="gap"><b>A daemon that refuses this Relay&#39;s certificate never appears here.</b> It
+    aborts the handshake before it sends a token, so the Relay sees a connection and no attempt at
+    all. What catches that is checking the CA fingerprint above against the one this Relay logged at
+    startup before you install a daemon against it &mdash; this screen cannot.</p>
+  </details>
 </div>
 `)

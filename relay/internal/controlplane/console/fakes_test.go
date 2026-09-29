@@ -1065,7 +1065,14 @@ func withExecution(d Deps, on bool) Deps {
 func sweepFixture() Deps {
 	d := fleetFixture()
 	d.Approvals = &fakeApprovals{pending: []approval.Request{
-		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 1}},
+		// Partly signed, by one human and one machine decider, so the
+		// snapshot producer renders the Decisions table and both kind labels
+		// (00-foundations.md, "Kind label") rather than an empty card.
+		{ID: "ap-1", ExpiresAt: testNow.Add(time.Hour), Require: approval.Requirement{Count: 3},
+			Decisions: []approval.Decision{
+				{Account: "mike", AccountID: "acct-mike", Approve: true, Channel: approval.ChannelOutOfBand, DeciderHuman: true, At: testNow.Add(-time.Hour)},
+				{Account: "gleipnir-prod", AccountID: sweepMachineAccountID, Approve: true, Channel: approval.ChannelInBand, OnBehalfOf: "carol", At: testNow.Add(-30 * time.Minute)},
+			}},
 	}}
 	// Decide and Auth are both wired (#453) so the route sweeps and the
 	// snapshot producer see the REAL decision card — an unwired seam would
@@ -1092,6 +1099,9 @@ func sweepFixture() Deps {
 			JobID: "job-1", CreatedAt: testNow, OperationName: "service.restart",
 			RiskClass: jobs.RiskClassMutate, Total: 1,
 			Counts: map[jobs.Outcome]int{jobs.OutcomeSuccess: 1},
+			// The requester as the Job row records it (#616), kind included,
+			// so the sweeps and snapshots draw the requester's kind label.
+			Requester: "gleipnir-prod", RequesterAccountID: sweepMachineAccountID, RequesterKind: "machine",
 		}},
 		tasks: []capability.TaskRow{{
 			TaskID: "task-1", NodeID: "node-web-1", Outcome: jobs.OutcomeSuccess,

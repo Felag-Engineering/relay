@@ -305,6 +305,17 @@ type jobView struct {
 	Verified   bool
 	OnBehalfOf string
 
+	// RequesterKind is the requester's kind as the Job row recorded it when
+	// the Job was created (capability.JobSummary.RequesterKind): "human",
+	// "machine", or empty for a Job that recorded none. It is read from
+	// nothing else — not the dispatch record (which carries no kind), and
+	// never the Account registry, which would report the Account's kind
+	// today and relabel history once an Account is converted (#540;
+	// 03-agent-sessions.md, "Kind (machine or human) is not on the rail").
+	// A Job whose Principal fell back to the dispatch record has no recorded
+	// requester on its row, so this is empty for it too.
+	RequesterKind string
+
 	ApprovalID   string
 	ApprovalHref string
 	GrantID      string
@@ -398,10 +409,12 @@ type jobDecider struct {
 	Account  string
 	Verified bool
 
-	// Human is Decision.DeciderHuman. False renders a "machine" qualifier
-	// beside the chip rather than nothing, so a machine-issued approval never
-	// reads like a person's.
-	Human bool
+	// Kind is deciderKind(Decision.DeciderHuman): "human" or "machine", read
+	// from the decision's own record and never from the Account registry
+	// (#540). Both render as the kind label beside the chip, so a machine-
+	// issued approval never reads like a person's and a person's is not the
+	// unmarked case.
+	Kind string
 
 	// OnBehalfOf is the decider's own asserted human (ADR-0029) — the caller
 	// said this decision speaks for someone; nothing checked it. It renders in
@@ -479,7 +492,7 @@ func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequ
 		a.Deciders = append(a.Deciders, jobDecider{
 			Account:    dec.Account,
 			Verified:   dec.AccountID != "",
-			Human:      dec.DeciderHuman,
+			Kind:       deciderKind(dec.DeciderHuman),
 			OnBehalfOf: dec.OnBehalfOf,
 			Channel:    dec.Channel.String(),
 			At:         stampOrAbsent(dec.At),
@@ -574,10 +587,18 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		ReadClass:      sum.RiskClass == jobs.RiskClassRead,
 		Principal:      sum.Requester,
 		Verified:       sum.RequesterAccountID != "",
+		RequesterKind:  sum.RequesterKind,
 		FanOut:         sum.Total,
 		InFlight:       sum.Unresolved,
 		Bar:            barFrom(sum.Counts),
 		CancelledCount: sum.Counts[jobs.OutcomeCancelled],
+	}
+
+	if sum.Requester == "" {
+		// The chip below falls back to the dispatch record's principal, which
+		// carries no kind; a kind from the Job row must never sit beside a
+		// name the Job row did not supply.
+		v.RequesterKind = ""
 	}
 
 	if sum.Unresolved > 0 && cancelOffered(d, role) {
@@ -1076,7 +1097,7 @@ var jobTmpl = newScreen("job", `
     {{with .Args}}<span class="mono dim">{{.}}</span>{{end}}
   </div>
   <div class="jhrow">
-    {{template "trust-chip" (trust .Principal .Verified)}}
+    {{template "trust-chip" (trust .Principal .Verified)}}{{template "kind-label" .RequesterKind}}
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">on behalf of — caller-claimed, nothing checked it</span>{{end}}
     {{if .ApprovalHref}}released by approval <a href="{{.ApprovalHref}}"><code>{{short .ApprovalID}}</code></a>{{end}}
     {{with .GrantID}}<span class="grant" title="A human approved a window this plan fell inside, not this plan.">grant {{short .}}</span>{{end}}
@@ -1097,7 +1118,7 @@ var jobTmpl = newScreen("job", `
   {{if .ParkedByDiffers}}<p>approval parked by {{template "trust-chip" (trust .ParkedBy .ParkedByVerified)}} <span class="dim">{{if .ViaGrant}}— the Account that requested the Grant{{else}}— not the Account that requested this Job; the approval was released on its plan hash{{end}}</span></p>{{end}}
   {{range .Deciders}}
   <div class="decider">
-    {{template "trust-chip" (trust .Account .Verified)}}{{if not .Human}}<span class="dim">machine</span>{{end}}
+    {{template "trust-chip" (trust .Account .Verified)}}{{template "kind-label" .Kind}}
     <span>{{if eq .At "not recorded"}}approved, time not recorded{{else}}approved {{.At}}{{end}}</span> <code>{{.Channel}}</code>
     {{with .OnBehalfOf}}{{template "trust-chip" (trust . false)}}<span class="dim">answering for — asserted by the deciding client, nothing checked it</span>{{end}}
     {{with .Reason}}<span class="dim">{{.}}</span>{{end}}
@@ -1120,7 +1141,9 @@ released by that approval.</p>
 {{end}}
 
 <p class="lanekey">{{template "trust-chip" (trust "verified" true)}} the Relay authenticated this identity ·
-{{template "trust-chip" (trust "asserted" false)}} the caller claimed this; nothing checked it</p>
+{{template "trust-chip" (trust "asserted" false)}} the caller claimed this; nothing checked it ·
+<span class="kind">human</span> / <span class="kind">machine</span> the Account&#39;s kind as the record
+wrote it at the time, shown only where it did</p>
 
 {{template "plan" .Plan}}
 <p class="note">This is the Plan the Job was dispatched against, not a fresh one: the fan-out was

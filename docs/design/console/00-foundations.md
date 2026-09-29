@@ -248,7 +248,8 @@ Screens carry prose that says what they cannot do. Two kinds, told apart by one 
 Where a screen has standing notes, they are drawn together in **one disclosure at the foot of the
 screen, closed by default**, labelled in plain words ("About this screen"), and built from a native
 `<details>`/`<summary>` so it needs no script under the strict CSP. A standing note is moved there,
-never deleted: it stays one click away and its words do not change. Situational messages are never
+never deleted: it keeps its substance and stays one click away, and only words that pointed at its
+old position ("below", "above") change with it. Situational messages are never
 collapsed or hidden; they render where they always have, because the operator needs them for the
 thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
 A note that states a property the Console must be visibly bound by — such as Node detail's "there

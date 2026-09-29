@@ -813,12 +813,30 @@ func countedGroup(name, key string, f approvalFilter, counts map[string]int) fil
 // --- The approval object (spec 08) ------------------------------------------
 
 // decisionRow is one recorded answer.
+// deciderKind renders a Decision's recorded DeciderHuman as the kind label's
+// word. The record is false-by-default — an unknown or unset kind is stored as
+// not human (approval.Decision) — so "machine" here means "not recorded as
+// human", which is the restrictive reading and the one the record itself
+// makes. It reads nothing but the bool it is handed.
+func deciderKind(human bool) string {
+	if human {
+		return "human"
+	}
+	return "machine"
+}
+
 type decisionRow struct {
 	Account string
 	Approve bool
 	Reason  string
 	Channel string
-	Human   bool
+
+	// Kind is "human" or "machine", from the Decision's OWN record
+	// (Decision.DeciderHuman) — never from the Account registry, which would
+	// report the decider's kind today rather than when it decided (#540).
+	// Both values render; a human decider is labelled as plainly as a machine
+	// one. See deciderKind.
+	Kind string
 
 	// At is the stamped decision time and Ago its relative form. It is
 	// PERSISTED (approval_decisions.decided_at) and read back by the store;
@@ -1153,7 +1171,7 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 			Approve: dec.Approve,
 			Reason:  dec.Reason,
 			Channel: dec.Channel.String(),
-			Human:   dec.DeciderHuman,
+			Kind:    deciderKind(dec.DeciderHuman),
 			At:      stampOrAbsent(dec.At),
 			Ago:     decisionAgo(dec.At, now),
 		}
@@ -1731,7 +1749,9 @@ hidden: who may decide is the capability layer's answer, and this screen never s
 
 <p class="note">There is no Approve control on a row, and there will not be one. A decision is made
 on the approval itself, with its Plan in front of you — approving from a list is approving without
-seeing what you approved. Deciding arrives with step-up in the administration milestone.</p>
+seeing what you approved. Deciding happens on the request itself, behind step-up: your password
+is asked for on every decision. This Console does not decide a Grant; answer one through the
+Control API.</p>
 {{end}}
 `)
 
@@ -1834,9 +1854,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <ul class="joblist">{{range .Grant.Jobs}}<li><a href="{{.Href}}">{{short .ID}}</a></li>{{end}}</ul>
     {{end}}
   </details>
-  <p class="note"><b>Approving a Grant requires expanding this Scope at least once.</b> That
-  enforcement arrives with the decision controls in the administration milestone; this Console
-  cannot decide anything yet, so nothing here is gating on it.</p>
+  <p class="note"><b>Approving a Grant requires expanding this Scope at least once.</b> This
+  Console does not enforce that yet, so it does not decide a Grant at all: it decides a single
+  Plan, behind step-up, and a Grant is answered through the Control API.</p>
   {{if not .Grant.LegacyNamespacePin}}
   <p class="note">The quorum below was derived at this Scope's <b>widest admissible dispatch</b>:
   count, channel, requester exclusion and decision deadline (TTL) are priced at the strictest any
@@ -1900,7 +1920,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <tbody>
     {{range .Decisions}}
       <tr>
-        <td>{{template "trust-chip" (trust .Account true)}}{{if not .Human}}<span class="dim">machine</span>{{end}}</td>
+        <td>{{template "trust-chip" (trust .Account true)}}{{template "kind-label" .Kind}}</td>
         <td><span class="chip state" data-state="{{if .Approve}}approved{{else}}denied{{end}}">{{if .Approve}}approved{{else}}denied{{end}}</span></td>
         <td>{{.At}}{{with .Ago}} <span class="dim">({{.}})</span>{{end}}</td>
         <td><code>{{.Channel}}</code></td>
@@ -1911,7 +1931,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   </table>
   <p class="note">The channel is recorded rather than assumed. A decision that arrived over a
   credential the requesting session does not hold is evidence; one that arrived in-band is a
-  delivery convenience, and the difference is the whole security property.</p>
+  delivery convenience, and the difference is the whole security property. <b>Human</b> or
+  <b>machine</b> beside a decider is what the decision recorded about its own Account when it was
+  made, not what that Account is today.</p>
 </section>
 {{end}}
 
