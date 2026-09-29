@@ -29,7 +29,10 @@ drawn from its dispatch audit record because the Job row carries none gets no la
 record carries no kind either. In the approval section, **each approving decider's chip is
 followed by a kind label read from that Decision's own record** of whether its decider was human —
 `human` when it records a human decider, `machine` otherwise (a Decision records an unknown kind
-as not human, the restrictive default). The Account that parked the approval, when it is not the
+as not human, the restrictive default). A kind label is drawn only beside a verified chip: a
+requester or decider rendered dashed, because its record carries no Account ID, gets none. The
+lane key under the header says in words what the label means, including that on a decision
+`machine` means "not recorded as human". The Account that parked the approval, when it is not the
 Job's requester, shows no kind: the approval record carries none. Nothing on this screen says how
 an actor authenticated (owner decision, 2026-09-29).
 

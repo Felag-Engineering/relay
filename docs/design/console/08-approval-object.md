@@ -27,8 +27,8 @@ Everything below is aimed at that.
    reference. One line explaining the difference, because this may be the reader's first
    encounter with it. **Where the requester line shows the requester's kind, it is read from
    what the approval record recorded at request time**, never from the Account registry's
-   current kind (`00-foundations.md`, "Kind label"; #540). The approval record carries no
-   requester kind today, so the requester line shows none.
+   current kind (`00-foundations.md`, "Kind label"; #540). Where the approval record carries no
+   requester kind, the requester line shows none.
 2. **The action.** Operation in mono with its risk badge, then arguments, Selector, fan-out with
    cap arithmetic, grouped verdicts as a segmented bar plus counts, and the **plan hash**. The
    hash is what is being approved.
@@ -93,7 +93,12 @@ note. **Each decider's chip is followed by a kind label, `human` or `machine`, r
 Decision's own record of whether its decider was human** — the same fact the Control API renders
 as `human` on each decision — and never from the Account registry. A Decision records an unknown
 kind as not human (the restrictive default), so `machine` there means "not recorded as human".
-A human decider is labelled as plainly as a machine one; neither is the unmarked case. Nothing on
+A human decider is labelled as plainly as a machine one; neither is the unmarked case. Each
+decider's chip is in the lane its own record earns — verified only where the Decision carries an
+Account ID, as on Job detail — and the kind label is drawn only beside a verified chip. The note
+under the table says, in words, that the kind is what the decision recorded when it was made and
+that `machine` means "not recorded as human", which is what a Decision made before the Relay began
+recording it reads as. Nothing on
 the card says how a decider authenticated (owner decision, 2026-09-29). Job detail's approval
 section (spec 13) draws the same label from the same record.
 

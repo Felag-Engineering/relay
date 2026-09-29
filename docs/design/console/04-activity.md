@@ -50,7 +50,9 @@ from the Account registry's current kind, which would relabel history when an Ac
 converted (owner decision of 2026-09-08, #540, recorded in [03](03-agent-sessions.md) under "Kind
 (machine or human) is not on the rail"). A Job that recorded no kind — one created before the Job
 row carried its requester — shows no label, and the screen does not infer one from the trail or
-anywhere else. Non-dispatch rows show no kind: their audit records carry none. Nothing beside an
+anywhere else. The label is drawn only beside a verified chip; a requester with no recorded
+Account ID renders dashed and gets none. Non-dispatch rows show no kind: their audit records carry
+none. Nothing beside an
 actor says how it authenticated (owner decision, 2026-09-29).
 
 ## Live but stable
@@ -70,12 +72,19 @@ One filter box over principal, Operation, Selector, outcome and Node — the sam
 the live tail filters history. Time controls: live tail, a relative window, an explicit range.
 Export for an auditor.
 
-The screen's standing notes — how a page is bounded, why the trail's own read records are left
-out of the default feed, the row kinds and filter fields it cannot offer yet, why the kind chips
-carry no counts — sit in the closed "About this screen" disclosure at its foot
-(`00-foundations.md`). The messages this request provokes stay visible where they render: a part
-of the URL that could not be read, an unknown row kind, what an outcome filter does to the page,
-and what Refine does and does not reach once it is used.
+**Where the feed leaves a row family out, the screen says so beside the kind chips.** With no kind
+filter, the feed does not request `read` records — every Account's enumeration and every read of
+the trail — so a responder filtering to one Account would otherwise see none of its enumeration
+and nothing saying why. One plain sentence under the kind chips, drawn only while no kind filter
+is set, says read records are left out and links to them (the `read` chip, keeping the other
+filters) and to Read egress. The reasoning behind the exclusion stays in the disclosure.
+
+The screen's standing notes — how a page is bounded, the reasoning behind leaving read records
+out, the row kinds and filter fields it cannot offer yet, why the kind chips carry no counts — sit
+in the closed "About this screen" disclosure at its foot (`00-foundations.md`). The messages this
+request provokes stay visible where they render: a part of the URL that could not be read, an
+unknown row kind, what an outcome filter does to the page, what Refine does and does not reach
+once it is used, and the read-records sentence above.
 
 ## Must not appear
 

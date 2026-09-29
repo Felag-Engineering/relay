@@ -194,7 +194,9 @@ be read as a verified (filled) or an asserted (dashed) identity beside either on
 the meaning and nothing about it is encoded in colour; `human` and `machine` share one treatment,
 in the dark theme and the light theme alike, and there is one treatment for every screen that draws
 one. It qualifies the verified lane only — the Account the Relay authenticated — and never an
-asserted `on_behalf_of`. It is not a trust signal: `machine` beside a filled chip is still an
+asserted `on_behalf_of`: **where a kind label is drawn, it is drawn only beside a verified (filled)
+chip**, and an actor rendered as a dashed chip gets no kind label whatever its record says. It is
+not a trust signal: `machine` beside a filled chip is still an
 identity the Relay authenticated.
 
 **Where a kind label is drawn beside the actor of a record, it is read from that record as it was
@@ -252,8 +254,17 @@ never deleted: it keeps its substance and stays one click away, and only words t
 old position ("below", "above") change with it. Situational messages are never
 collapsed or hidden; they render where they always have, because the operator needs them for the
 thing in front of them. **When a note's class is in doubt, it is situational and stays visible.**
-A note that states a property the Console must be visibly bound by — such as Node detail's "there
-is no path from this screen to this Node's Policy" (invariant 2) — is never collapsed.
+A note that states a property the Console must be visibly bound by is never collapsed. Two are
+named: Node detail's "there is no path from this screen to this Node's Policy" (invariant 2), and
+Read egress's statement that read output still sits on a Job's Task rows, is readable through the
+Job read, and is never shown by the Console (ADR-0025). A note that qualifies a claim the screen
+visibly makes — "every figure is exact", "this is the feed" — is situational too, because hiding
+it makes the visible claim stronger than the truth.
+
+**Visible does not mean boxed.** A note that must stay visible is kept to one plain sentence and
+drawn as part of the control or figure it qualifies, in the quiet note style, not as a dashed
+block; its longer explanation may stay in the disclosure. The dashed `gap` box is for a message
+about this request, this caller or this record that the operator must stop and read.
 
 ## The incident ladder
 

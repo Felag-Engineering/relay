@@ -29,6 +29,19 @@ architecture itself says is the important one. This screen answers it.
 ADR-0025 is explicit: the audit trail can say **a read happened, by whom, of what, and when — but
 not what it contained.** Read output is not retained, at any age, deliberately.
 
+**Two statements stay visible on this screen, each as one plain sentence in the note style**
+(`00-foundations.md`, "Standing notes and situational messages"):
+
+- Beneath the lede: the audit trail never keeps read output, what a daemon sent stays on the
+  Job's Task rows until the Job is collected and is readable through the Job read, and this page
+  will never show it (ADR-0025). It is a property the Console is visibly bound by, so it is never
+  collapsed.
+- Where the page says its figures are exact over the window, the same sentence says what they
+  cannot count: a read-class Job created just before the window whose records land inside it is
+  missing from the Node-read and refusal figures, because the read vocabulary comes from Jobs
+  created in the window and the figures from records timestamped in it. The visible claim is never
+  stronger than the truth. The longer explanation of both stays in the disclosure.
+
 So this screen is a map of **exposure surface**, not a data browser. That is a feature: it is
 useful for the question being asked and structurally incapable of becoming a second copy of the
 fleet's secrets.
