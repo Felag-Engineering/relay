@@ -96,7 +96,7 @@ func (m *sqliteMCPTasks) BindJob(ctx context.Context, id, jobID string, status m
 	if err != nil {
 		return fmt.Errorf("bind job to mcp task handle: %w", err)
 	}
-	return affectedOrNotFound(res)
+	return rowsAffectedOr(res, mcptask.ErrNotFound, "mcp task handle rows affected")
 }
 
 // RecordStatus updates what the client was last told.
@@ -109,7 +109,7 @@ func (m *sqliteMCPTasks) RecordStatus(ctx context.Context, id string, status mcp
 	if err != nil {
 		return fmt.Errorf("record mcp task handle status: %w", err)
 	}
-	return affectedOrNotFound(res)
+	return rowsAffectedOr(res, mcptask.ErrNotFound, "mcp task handle rows affected")
 }
 
 // Cancel ends the client's polling contract.
@@ -155,20 +155,6 @@ func (m *sqliteMCPTasks) DeleteExpired(ctx context.Context, now time.Time) (int,
 		return 0, fmt.Errorf("sweep expired mcp task handles: %w", err)
 	}
 	return int(n), nil
-}
-
-// affectedOrNotFound maps a zero-row update onto ErrNotFound, so a write
-// against a handle that has been swept or never existed is reported rather
-// than passing silently.
-func affectedOrNotFound(res sql.Result) error {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("mcp task handle rows affected: %w", err)
-	}
-	if n == 0 {
-		return mcptask.ErrNotFound
-	}
-	return nil
 }
 
 func scanMCPTask(scan func(...any) error) (mcptask.Handle, error) {

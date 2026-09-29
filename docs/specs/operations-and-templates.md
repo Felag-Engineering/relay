@@ -194,13 +194,3 @@ none is a commitment to an order.
 
 None open. Questions this spec raised for others: `query.md` owns how `list_operations` stays
 legible across thousands of Nodes; `approval.md` owns Template-call grouping.
-
-## History
-
-- `2026-09-13` — worked through with the owner. Native vocabulary stays at four; Template
-  definitions live in Policy and run through a shell with single-quoted standalone slots; three
-  closed slot types narrowed by `allow`; most-restrictive risk class over the Nodes reporting a
-  Template, checked again by the daemon; non-reporting Nodes excluded before the cap; generic
-  `list_operations`/`run_operation`; required descriptions; argument schemas into `/proto`.
-  Safe-Template authoring, stronger risk-class trust and MCP-at-scale research deferred.
-- `2026-09-13` — stub created to name the capability.

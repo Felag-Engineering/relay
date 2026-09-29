@@ -233,11 +233,3 @@ can never raise its own limits" becomes "the API cannot, and a human in the Cons
 - **The operator runbook describes retired mechanisms** — the shared control-plane credential and
   "no packaged unit exists". Stale documentation rather than an open decision, but it is what an
   operator reads first.
-
-## History
-
-- `2026-09-15` — First worked through with the owner. Split into a security floor and operator
-  settings; blast caps and approval-gate rules became Console-only operator settings with no
-  root-set bound; configuration flags dropped; `SIGHUP` reload of the floor adopted as
-  all-or-nothing; `relay init` deferred as the eventual replacement for the two local commands.
-- `2026-09-13` — Stub created to name the capability.

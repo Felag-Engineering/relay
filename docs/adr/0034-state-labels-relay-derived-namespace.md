@@ -91,7 +91,8 @@ nobody else; `state:` is set by **nobody at all**.
   pressed the button". It remains a perfectly good *manual* workflow.
 
 - **Make Facts targetable.** Superficially simpler — one fewer category. Rejected: it makes the
-  Relay a config-management query engine, which the ROADMAP's scope rule puts out of realm ("if
+  Relay a config-management query engine, which the scope rule (then in ROADMAP.md, retired
+  2026-09-12; now in AGENTS.md's *Out of realm*) puts out of realm ("if
   Ansible could check it in check-mode, it is out of realm"), and it creates fragile Selectors over
   high-cardinality, Node-asserted values. An operator who wants to target on OS has their config
   management stamp `node:os=ubuntu`; that is what `node:` labels are for.
@@ -132,10 +133,13 @@ nobody else; `state:` is set by **nobody at all**.
   failed, never a heads-up, and it is quiet on a healthy fleet by construction. Expressed as a
   fraction so it tracks any change to the lifetime; file-only configuration (invariant #11).
 
-- **The Selector change carries `tag:` parsing too.** `capability/selector.go` parses only
-  `node:` and `relay:` today; the namespace enum grows to four in one pass (the `tag:` *write*
-  path stays with ADR-0020's label management, #430). `NamespaceNames()` reports `state`, so
-  approval-gate rules stay honest about what a Selector touched.
+- **The Selector change carries `tag:` parsing too.** `relay/internal/capability/selector.go`
+  parses only `node:` and `relay:` today; the namespace enum grows to four in one pass (the `tag:`
+  *write* path stays with ADR-0020's label management, #430). `NamespaceNames()` reports `state`,
+  so approval-gate rules stay honest about what a Selector touched.
+  *(Noted 2026-09-29: "today" above is as of this ADR. Since #561 (2026-09-09) the parser accepts
+  `node:`, `relay:` and `state:`, and refuses a `tag:` term at parse with a recognisable sentinel
+  rather than matching nothing; `tag:` still has no write path (#430, AGENTS.md's gap table).)*
 
 - **Approvals bound to `state:` Selectors re-park more often.** `HashPlan` binds the resolved Node
   set; `state:offline` and `state:policy-fingerprint=` flip as Nodes reconnect and roll, so a

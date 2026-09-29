@@ -322,28 +322,3 @@ none is a commitment to an order.
 | Question | Classification | What forces the call |
 |---|---|---|
 | What limits, pagination, and audit-query disclosure apply to Account and Token listings? | Follow-up | Expected operator scale, or #654's screen needing a caller-visible contract. |
-
-## History
-
-- `2026-09-19` — #653 (PR #657) closed the invariant-10 gap this spec had recorded as open:
-  Account and API-Token administration is now authorized once in the capability layer, behind
-  eight `admin`-floored control actions, and the Control API's nine identity routes were migrated
-  onto it rather than keeping their own role check. Two refusals this spec asserted and that the
-  code did not implement became real — self-targeting in the capability layer, and the last
-  enabled `admin` in the Accounts repository — and both gained proof rows. Their placement, and
-  the reason they differ, is now recorded in *Account administration*. `#433` was split into
-  #653, #654 (the Console screen, read half) and #655 (its write routes and step-up); references
-  here were retargeted. Console step-up remains unbuilt and is #655's. The owner decided the
-  Accounts screen is `admin`-only, so a `viewer` never sees it, and that revoking a Token is
-  `admin`-floored without step-up. Both decisions were written into
-  `docs/design/console/15-accounts-and-tokens.md` in the same change, so the screen is not built
-  from a stale *States* row.
-- `2026-09-14` — Confirmed with the owner. Role stays the only Relay-side limit in the first pass,
-  with narrowing below role (#578) as research; the last enabled `admin` cannot be disabled or
-  demoted, recovery through `relay bootstrap-token`; Console step-up is required for creating an
-  `admin`, raising a role, re-enabling an Account and minting a Token for another Account (#433);
-  Account administration authorized per surface route is a gap to close under invariant 10; Console
-  OIDC, per-Account rate limits (#279) and IdP group claims moved to Future work. Gathers the role
-  floors settled in other specs (cancel, tags, Freeze, approval grants).
-- `2026-09-13` — proposed draft assembled from current contracts, code, ADRs, Console design,
-  and #433; awaiting explicit human approval.

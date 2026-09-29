@@ -351,7 +351,7 @@ up as a decision rather than rediscovered as a gap.
 - **Staged rollout.** `Stage` is a different axis (`docs/deferred.md`) and the two compose rather
   than compete.
 - **Policy preflight itself** — the verdicts, the four values, and the query that obtains them.
-  See `policy-preflight.md`, renamed from `plan-mode.md` by ADR-0038.
+  See `policy-preflight.md`, renamed from the plan-mode spec by ADR-0038.
 - **The Approval a Plan parks through** — gate rules, channels, quorum, grants: `approval.md`.
 
 ## Accepted residual risk
@@ -388,19 +388,3 @@ is a commitment to an order.
 None open. Resolved on `2026-09-14`: advance re-authentication (every `mutate` step now needs its
 own approval), the window length (1 hour default, 4-hour cap), advance granularity (one step), and
 the dependent-verdict presentation and multi-Node aggregate blast (both Future work).
-
-## History
-
-- `2026-09-14` — worked through with the owner. Every `mutate` step of an approved Plan now parks
-  for its own approval bound to the Plan hash and step; `read` steps advance on the route's
-  approval. Window 1 hour by default, capped at 4 hours. One step per advance; MCP-only proposing;
-  one Node, linear, halt kept, with multi-Node and aggregate blast in Future work; later-step
-  verdicts labelled as possibly dependent; an approval grant never releases a Plan. Open questions
-  on re-authentication, window, batching, dependent verdicts and aggregate blast resolved.
-
-- `2026-09-12` — Revised after adversarial plan and security reviews. The fan-out ceiling became
-  **identity binding** (a count binds nothing; a compromised Node could forge `node:` labels to
-  elect itself into an approved route), the cursor's compare-and-advance was made explicitly
-  transactional, an Approval grant was ruled out as a release path, and the first-cut table stopped
-  claiming every reduction widens for free.
-- `2026-09-12` — First written, from ADR-0038, specifying the one-Node cut. Nothing built.

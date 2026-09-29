@@ -7,8 +7,9 @@ byte string. Finding **#236** showed that deny is evaded by any non-canonical sp
 same file — `/etc/../etc/shadow`, `//etc/shadow`, `/etc//shadow`, `/etc/./shadow`,
 `/etc/shadow/`, `/proc/self/root/etc/shadow`, a symlink, or (on a case-folding mount)
 `/etc/Shadow`. This ADR decides how the deny is made to hold. It closes the security debt the
-v0.0.8 red-team filed as #236 and resolves the `#[ignore]`d regression test at
-`daemon/src/policy.rs:2270`.
+v0.0.8 red-team filed as #236 and resolves the `#[ignore]`d regression test
+`exact_string_deny_evaded_by_noncanonical_path` in `daemon/src/policy.rs` (renamed
+`noncanonical_path_denied_by_canonical_form_precondition` when it was enabled).
 
 ## Decision
 
@@ -74,7 +75,7 @@ the case/Unicode row as this residual rather than asserting it fs-independently.
   This is a deliberately stricter contract — the more restrictive option on the privileged side.
 - The `file.read` executor no longer does a bare `File::open`: it opens once, resolves the real
   target off the descriptor, re-checks Policy, and reads only from that same descriptor.
-- The `#[ignore]`d test at `policy.rs:2270` is enabled for the deterministic evasions;
+- The `#[ignore]`d test in `daemon/src/policy.rs` is enabled for the deterministic evasions;
   executor-level symlink/`/proc` re-check is covered by a new `file_read` test.
 - Any future path-typed Operation inherits the same two-layer obligation; this ADR is its
   reference.

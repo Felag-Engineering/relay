@@ -17,15 +17,20 @@ for f in docs/adr/[0-9]*.md; do
   n=$(adr_number "$f")
   numbers+=("$n"); file[$n]=$f
   title[$n]=$(adr_title "$f" | sed 's/|/\\|/g')
-  status[$n]=$(adr_status "$f"); : "${status[$n]:=—}"
-  amends[$n]=$(adr_amends "$f" | tr '\n' ' ')
+  status[$n]=$(adr_status "$f" | sed 's/|/\\|/g'); : "${status[$n]:=—}"
+  amends[$n]=""
+  if adr_in_force "$f"; then amends[$n]=$(adr_amends "$f" | tr '\n' ' '); fi
 done
 # Links run both ways. An ADR's own header ("amended by ADR-X") records that X amends it, so X
-# gains a forward link and this ADR a reverse one; an in-force ADR that says it amends Y gives
-# Y a reverse link. An ADR that is Proposed or Deferred amends nothing, so it contributes none.
+# gains a forward link and this ADR a reverse one; an in-force ADR that says it amends Y gains
+# a forward link and Y a reverse one. An ADR that is Proposed, Deferred or Withdrawn
+# amends nothing, so it contributes neither link — from its own text or from another's header.
 for n in "${numbers[@]}"; do
   f=${file[$n]}
-  for x in $(adr_header_amended_by "$f"); do amended_by[$n]+="$x "; amends[$x]+="$n "; done
+  for x in $(adr_header_amended_by "$f"); do
+    if xf=$(adr_file "$x") && ! adr_in_force "$xf"; then continue; fi
+    amended_by[$n]+="$x "; amends[$x]+="$n "
+  done
 done
 for n in "${numbers[@]}"; do
   adr_in_force "${file[$n]}" || continue

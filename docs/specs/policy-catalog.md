@@ -156,13 +156,6 @@ Every row depends on the daemon loading a Policy directory beside the Policy fil
    `/design`: either such checks, or the owner accepts the risk on the record with a threat-model
    row naming both artifacts.
 
-## History
+## Retired
 
-- `2026-09-19` — revised with the owner after `/spec-check` returned BLOCKED on ADR-0021,
-  ADR-0022 and ADR-0033: the shipped default Policy leaves the catalog; catalog fragments are
-  Native-only and define no Templates; the catalog is a release artifact, not a package or role;
-  a Policy directory applied by restart, not reload; exported fragments carry release digests
-  (PC-16).
-- `2026-09-18` — created with the owner: first-party read-only catalog, arrange-and-narrow,
-  nothing stored on the Relay, fragments never widen in place, `viewer` access, all of it in
-  v0.7.0. Replaces Console screen spec 06's Policy Author (#436).
+None.

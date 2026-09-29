@@ -18,10 +18,15 @@ adr_number() { basename "$1" | cut -c1-4; }
 # adr_title <file>  →  the H1 without its "# "
 adr_title() { head -1 "$1" | sed -E 's/^# //'; }
 
-# adr_status <file>  →  the text after "**Status:**" on the first line that carries it (no
-# trailing period), or the empty string when the file has no such line.
+# adr_status <file>  →  the text after "**Status:**" in the first paragraph that opens with it,
+# its continuation lines joined up to the next blank line (a Status may wrap), with no trailing
+# period; or the empty string when the file has no such line.
 adr_status() {
-  grep -m1 -E '^\*\*Status:\*\*' "$1" | sed -E 's/^\*\*Status:\*\* *//; s/\.$//'
+  awk '!f && /^\*\*Status:\*\*/ { f=1; s=$0; next }
+       f && /^[[:space:]]*$/    { exit }
+       f                        { s=s " " $0 }
+       END                      { if (f) print s }' "$1" \
+    | sed -E 's/^\*\*Status:\*\* *//; s/[[:space:]]+/ /g; s/ $//; s/\.$//'
   return 0
 }
 

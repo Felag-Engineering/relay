@@ -169,7 +169,7 @@ func (r *sqliteRegistry) UpdateLastSeen(nodeID string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update last_seen: %w", err)
 	}
-	return requireRowsAffected(res)
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
 }
 
 // SetRelayLabels replaces the relay-space label set for nodeID. Returns
@@ -213,7 +213,7 @@ func (r *sqliteRegistry) RecordEnrollment(nodeID string, cert registry.Certifica
 	if err != nil {
 		return fmt.Errorf("record enrollment: %w", err)
 	}
-	return requireRowsAffected(res)
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
 }
 
 // RecordRenewal persists a reissued certificate.
@@ -233,7 +233,7 @@ func (r *sqliteRegistry) RecordRenewal(nodeID string, cert registry.Certificate,
 	if err != nil {
 		return fmt.Errorf("record renewal: %w", err)
 	}
-	return requireRowsAffected(res)
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
 }
 
 // SetConnected records a Tunnel opening or closing.
@@ -271,7 +271,7 @@ func (r *sqliteRegistry) SetRevoked(nodeID string, at time.Time) error {
 	if err != nil {
 		return fmt.Errorf("update revoked_at: %w", err)
 	}
-	return requireRowsAffected(res)
+	return rowsAffectedOr(res, registry.ErrNotFound, "rows affected")
 }
 
 // SetRevokedAll is SetRevoked's chunked twin: it marks every id in nodeIDs
@@ -686,13 +686,17 @@ func replaceLabels(ctx context.Context, tx *sql.Tx, table, nodeID string, labels
 	return nil
 }
 
-func requireRowsAffected(res sql.Result) error {
+// rowsAffectedOr maps a single-row write's result onto the caller's contract:
+// a RowsAffected failure is wrapped as "<what>: <err>", and a write that
+// matched no row returns notFound, so an update against a missing row is
+// reported rather than passing silently.
+func rowsAffectedOr(res sql.Result, notFound error, what string) error {
 	n, err := res.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if n == 0 {
-		return registry.ErrNotFound
+		return notFound
 	}
 	return nil
 }

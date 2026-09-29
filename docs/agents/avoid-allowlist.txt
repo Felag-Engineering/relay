@@ -70,8 +70,6 @@ runbook           # docs/operations/ holds operator-facing runbooks; rejected on
 
 # --- historical notes that name the old word to record the rename -------------------------------
 plan mode         # "called plan mode until ADR-0038" (execution.md, plan.md, GLOSSARY.md)
-policy author @ docs/specs/policy-catalog.md      # "Replaces Console screen spec 06's Policy Author"
-held elicitation @ docs/specs/approval.md         # History line: ADR-0029 overtakes "held elicitation"
 
 # --- per-file: another sense in that file ----------------------------------------------------------
 agent @ AGENTS.md                                 # the file is addressed to Claude agents; it also states the rule itself

@@ -250,19 +250,3 @@ none is a commitment to an order.
 
 Resolved elsewhere: how the Relay trusts a Template's risk class, and what remains of
 `operations-and-templates.md`, were settled in that spec on `2026-09-13`.
-
-## History
-
-- `2026-09-19` — with the owner, for `policy-catalog.md`: Composition, Load and The shipped
-  default marked not yet reconciled with `daemon-installation.md`'s first cut (#648).
-- `2026-09-17` — with the owner: caller text in denial text is an accepted residual risk for now;
-  removing it is future work (#619).
-- `2026-09-17` — Raw Exec allow patterns now require a whole-command match, and any argv
-  element containing whitespace is denied before allow patterns run (#589).
-- `2026-09-13` — worked through with the owner. Policy and Templates collapse into one concept in
-  a drop-in directory of fragments; explicit reload; any error invalidates the whole Policy and
-  is reported; config management is the only delivery path (superseding the 2026-07-07
-  signed-bundle direction); named arguments with inline slot constraints; glob path patterns;
-  stricter Raw Exec; full Policy visible to the Relay; bare structured denials; no
-  approval-in-Policy; output rules deferred.
-- `2026-09-13` — stub created to name the capability.

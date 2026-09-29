@@ -248,14 +248,7 @@ func (r *sqliteAccounts) update(ctx context.Context, query string, value any, id
 	if err != nil {
 		return fmt.Errorf("update account: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update account rows affected: %w", err)
-	}
-	if n == 0 {
-		return accounts.ErrNotFound
-	}
-	return nil
+	return rowsAffectedOr(res, accounts.ErrNotFound, "update account rows affected")
 }
 
 // updateGuarded runs a single guarded UPDATE (query, built from extraArgs

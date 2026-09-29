@@ -279,6 +279,8 @@ spending limit; a Plan is an itemised invoice.
   it is where the two meanings **collide on screen**, since the Console will render preflight
   results *and* approved routes in the same queue, and it is user-facing copy. It wants a product
   decision and its own issue.
+  *(Noted 2026-09-29: the four ADRs' amendments tracked in #574 were completed in #665 on
+  2026-09-21, and #574 is closed; see the 2026-09-20 amendment below.)*
 
 - **The code rename is a hard prerequisite, not a follow-up of convenience.** The capability
   layer already defines `Service.Plan` and `PlanResult` for the *old* preview, and the audit kind

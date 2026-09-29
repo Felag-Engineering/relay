@@ -329,7 +329,7 @@ before the issue closes (see 7).
 make any claim in a migrated capability spec untrue is a stop-and-escalate, not a docs edit: a
 human updates the spec first, and the code follows. That is *When documents and the code
 disagree*, above, applied before the disagreement exists. The loop does maintain a spec's
-*evidence* — proof rows, History, Status, and promoting a Designed claim verbatim once its test
+*evidence* — proof rows, Status, and promoting a Designed claim verbatim once its test
 lands — and nothing else; the split is the authority table in `docs/agents/workflow.md`.
 
 Bugs never get specs: diagnose and fix. If the spec described the broken behaviour as correct,

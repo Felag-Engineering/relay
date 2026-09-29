@@ -231,24 +231,3 @@ Wanted, deliberately not in the first pass. None is a commitment to an order.
 ## Open questions
 
 None open.
-
-## History
-
-- `2026-09-23` — The token-revocation cascade's registry writes are now chunked into one
-  transaction per chunk, the same boundary #563 gave the cascade's audit records, replacing one
-  autocommit `SetRevoked` UPDATE per Node; on a chunk failure it falls back to the per-Node
-  writes, so a store fault costs no more durable revocations than it did before. Ordering is
-  unchanged: a chunk's audit records commit before its Nodes are marked revoked, and the
-  in-memory denylist and the Tunnel teardown cover every Node regardless of a store failure
-  (#607). Spec unmigrated (`aspirational`); claims not updated.
-- `2026-09-21` — `RevokeToken` serialised per token ID; a single-Node revoke racing a cascade for
-  the same Node now produces exactly one `node_revoke` record (#605). Spec unmigrated
-  (`aspirational`); claims not updated.
-- `2026-09-16` — Store change landed for the token-revocation cascade's per-Node audit inserts
-  (#563). Spec unmigrated (`aspirational`); claims not updated; the lines this makes stale are listed in #563's PR.
-- `2026-09-14` — Worked through with the owner. The join string is first-pass behaviour; token scope of
-  `relay:` Labels is retired in favour of `relay:enrollment-token`, `relay:node-id` and optional token
-  `tag:` Labels; re-enrollment creates a new record with no tags carried; rendered bundles, `relay init`,
-  Console Add Nodes, revocation audit batching (#563) and a fleet-scale enrollment research task moved
-  to Future work; token storage on the Node moved to `daemon-installation.md`.
-- `2026-09-13` — Proposed first durable enrollment specification for human approval.
