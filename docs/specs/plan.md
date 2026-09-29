@@ -351,7 +351,7 @@ up as a decision rather than rediscovered as a gap.
 - **Staged rollout.** `Stage` is a different axis (`docs/deferred.md`) and the two compose rather
   than compete.
 - **Policy preflight itself** — the verdicts, the four values, and the query that obtains them.
-  See `policy-preflight.md`, renamed from `plan-mode.md` by ADR-0038.
+  See `policy-preflight.md`, renamed from the plan-mode spec by ADR-0038.
 - **The Approval a Plan parks through** — gate rules, channels, quorum, grants: `approval.md`.
 
 ## Accepted residual risk

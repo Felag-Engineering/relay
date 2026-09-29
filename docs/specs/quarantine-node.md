@@ -222,7 +222,7 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
 
 ## History
 
-- `2026-09-14` — worked through with the owner and renamed from `response-lane.md`. Scope is
+- `2026-09-14` — worked through with the owner and renamed from the response-lane spec. Scope is
   quarantine only: remediation is ordinary Operations and Plans on `relay:` targets, and secret
   distribution is Future work. A quarantine blocks every Task, reads included, enforced on the
   Relay at resolution; cheap to engage (`operator`+, machine Accounts allowed, `relay:` or `tag:`

@@ -159,7 +159,7 @@ interrogation.
 |---|---|
 | `execution.md` | Dispatch, fan-out, the blast-radius cap, at-most-once Tasks, the three Operation tiers, Raw Exec, cancellation |
 | `selectors-and-labels.md` | The four namespaces and who writes each, the closed `state:` vocabulary, resolution-time evaluation, what a compromised Node can forge |
-| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply. Renamed from `plan-mode.md` by ADR-0038 |
+| `policy-preflight.md` | Daemon-evaluated hypotheticals and preflight-before-apply. Renamed from the plan-mode spec by ADR-0038 |
 | `plan.md` | The approved route of execution: steps, the cursor, the derived requirement, the plan hash |
 | `approval.md` | Gate rules, callout, decisions and channels, approval Grants and scope |
 | `approval-assurance.md` *(stub)* | The approval assurance properties shelved by ADR-0040 pending the permissions rework: out-of-band as a rule requirement, a Relay-verified approver, the grant-issuance floor, second-person rules whose second person Relay authenticated |
