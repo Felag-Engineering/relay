@@ -513,11 +513,14 @@ the result there the first time someone runs it.
 ### Signing in as a human over OAuth
 
 **Opt-in, and off unless you ask for it.** `make demo-reset` and `make demo-up` bring up exactly
-the fleet described everywhere else on this page. `make demo-reset-oauth` and
+the fleet described everywhere else on this page — but `make demo-down` and every reset's wipe
+now name `docker-compose.oauth.yml` too, so that an IdP left from an earlier OAuth run goes down
+with the rest. So even the plain targets now need that file to parse, and a Compose new enough
+for it (see Prerequisites below). `make demo-reset-oauth` and
 `make demo-up-oauth` layer `docker-compose.oauth.yml` on top: a DEV-ONLY Keycloak identity
 provider, and the Relay's OAuth resource-server half turned on (ADR-0024;
 [Human sessions](control-plane-credential.md#human-sessions-oauth-21-through-your-idp)). With
-it, Claude Code signs in through a browser as the realm's one human user and reaches `/mcp` on
+it, Claude Code signs in through a browser as the realm's human user and reaches `/mcp` on
 that human's own Account, `demo-operator` (kind `human`, role `operator`), instead of on a shared
 API Token. That is the session on which an answer to an approval question, given in Claude
 Code's own UI, is recorded as that human's **verified** decision
@@ -534,8 +537,10 @@ Every name below is fixed in `docker-compose.oauth.yml` or its realm fixture,
 | Claim naming the Account | `preferred_username` |
 | Client for Claude Code | `relay-demo-claude-code` — public (no secret), PKCE `S256`, one redirect URI: `http://localhost:33418/callback` |
 | The human | `demo-operator`, password `dev-only-demo-operator` — **DEV-ONLY**, committed like every other credential in this fleet |
-| Lifetimes | access token 12h; sign-in session 12h idle, 24h maximum — a refresh cannot land mid-demo |
-| Keycloak's own admin console | `http://127.0.0.1:8180/admin/`, `admin` / `dev-only-keycloak-admin` (**DEV-ONLY**); no Relay Account, no meaning to the Relay |
+| The negative control | `no-relay-account`, password `dev-only-no-relay-account` — **DEV-ONLY**, and deliberately given **no** Relay Account: signing in as it must be refused |
+| Lifetimes | access token 12h; sign-in session 12h idle, 24h maximum — so a refresh cannot land mid-demo. **DEV-ONLY: do not copy these into a real realm** |
+| Transport | `sslRequired: none` and plain HTTP on loopback. **DEV-ONLY: do not copy** |
+| Administrator | **None.** No Keycloak admin exists, by design — see [Who can impersonate whom](#who-can-impersonate-whom) |
 
 Three things differ from the plain fleet, each on purpose:
 
@@ -550,15 +555,20 @@ Three things differ from the plain fleet, each on purpose:
   the network alias `relay` and publishes `7654`, `9443` and `8180`, so every other service
   still reaches the Relay exactly as before. The existing `127.0.0.1 relay` line is the only
   hosts entry either mode needs.
-- **The Console is off.** With the Console mounted, the Relay answers every request that carries
-  no `Authorization` header — `/mcp` included — with a `303` to `/console/login` instead of the
-  `401` whose `WWW-Authenticate: Bearer resource_metadata="..."` is how a client discovers the
-  sign-in. Claude Code's first request carries no token, so with the Console on it follows the
-  redirect, gets HTML, and marks the server failed instead of offering to sign in (observed). The
-  overlay sets `RELAY_CONSOLE_ENABLED=false`. Nothing in this runbook decides through the Console
-  (see [The human approver](#the-human-approver)); the founding admin's, `dev-approver`'s and
-  Gleipnir's API Tokens work exactly as before. The `console-password` one-shot still runs and
-  still prints a Console URL, which does not serve in this mode.
+- **The Console is unavailable whenever this overlay is on — a workaround for a Relay defect.**
+  With the Console mounted, `Authenticator.refuse` (`controlplane/auth.go`) answers every request
+  that carries no `Authorization` header — `/mcp` and `/api/v1` included — with a `303` to
+  `/console/login`, instead of the `401` whose `WWW-Authenticate: Bearer resource_metadata="..."`
+  is the discovery handshake ADR-0024 promises. That contradicts ADR-0024. Claude Code's first
+  request carries no token, so with the Console on it follows the redirect, gets HTML, and marks
+  the server failed instead of offering to sign in (observed). The overlay therefore sets
+  `RELAY_CONSOLE_ENABLED=false`. A fix is proposed separately, on branch
+  `fix/unauthenticated-api-request-gets-401`; **once it lands, that line must be removed from
+  the overlay** so the Console and OAuth run together. Until then, any beat that shows the
+  Console cannot run on an OAuth fleet: run it on a plain `make demo-reset` fleet instead. The
+  founding admin's, `dev-approver`'s and Gleipnir's API Tokens work exactly as before. The
+  `console-password` one-shot still runs and still prints a Console URL, which does not serve in
+  this mode.
 - **The Account claim is `preferred_username`, not the default `email`.** An Account name is
   `[A-Za-z0-9._-]` only, so an email address can never name one. `preferred_username` is the
   realm username, which the realm does not let a user edit.
@@ -566,8 +576,12 @@ Three things differ from the plain fleet, each on purpose:
 #### Bring-up
 
 1. **Prerequisites.** Everything in [From cold to ready](#from-cold-to-ready), including the
-   `127.0.0.1 relay` hosts line; host port `8180` free as well as `7654` and `9443`; and the
-   IdP image, which `make demo-build` does not fetch (it builds, it never pulls):
+   `127.0.0.1 relay` hosts line; host port `8180` free as well as `7654` and `9443`; **Docker
+   Compose v2.18.0 or later** — the overlay uses the `!reset` tag, which first shipped in the
+   compose-go that v2.18.0 pins (compose-spec/compose-go#380; this runbook was run on v5.1.4
+   only), and since `make demo-down` and `make demo-reset` read the overlay too, an older Compose
+   breaks the plain targets as well; and the IdP image, which `make demo-build` does not fetch (it
+   builds, it never pulls):
 
    ```console
    $ docker pull quay.io/keycloak/keycloak:26.7.4
@@ -652,16 +666,65 @@ both correct there, and a quick way to tell which mode is up.
   `make demo-reset-oauth` switch either way on their own. `make demo-down`, `make demo-creds` and
   `make demo-fault` work in either mode.
 
+#### Who can impersonate whom
+
+**Whoever administers the identity provider can impersonate any Relay Account, machine or human,
+admin included.** Sign-in maps a claim to an Account *name* and checks only that the Account
+exists and is enabled; it does not restrict OAuth sign-in by Account kind. ADR-0024's rule that
+the Relay never creates an Account from a token stops the IdP from *minting* Accounts — it does
+not stop it naming an existing one. A realm user called `founding-admin` would sign in as the
+founding admin.
+
+So this IdP has **no administrator.** The overlay sets no `KC_BOOTSTRAP_ADMIN_*`, so Keycloak's
+master realm has no user, and the realm is imported from the fixture at start, which needs none.
+Keycloak offers to create a first administrator only to a request arriving on its own loopback —
+here the namespace it shares with the Relay, never another container and never the host (the
+published port arrives from the Docker bridge gateway). Keycloak's management port (`9000`) is
+not opened at all: health and metrics are off, and the healthcheck reads the realm's discovery
+document instead. Observed on 2026-09-29, from `daemon-4`'s own network namespace (a curl
+container joined to it, since the daemon image ships no HTTP client):
+
+| From a daemon's position | Answer |
+| --- | --- |
+| `http://relay:8180/` | `200`, Keycloak's welcome page saying "Local access required" to create an administrator, with no form |
+| `POST http://relay:8180/` (create-admin form fields) | `400` |
+| master-realm password grant as `admin` / `dev-only-keycloak-admin` (the credential this overlay used to set) | `400 invalid_grant` |
+| `http://relay:8180/admin/realms/relay-demo/users`, no token | `401` |
+| `http://relay:9000/…` | connection refused |
+| `http://relay:8180/realms/relay-demo/…` (sign-in and token endpoints) | served |
+
+From the host the welcome page also says "Local access required", and the admin API answers
+`401`.
+
+**The residual reach, stated plainly: any container on the fleet network — a daemon, so a
+compromised Node or a Raw Exec Task — can sign in as `demo-operator`.** Sharing a namespace puts
+Keycloak's sign-in and token endpoints on the Relay's address, `relay:8180`, and
+`demo-operator`'s password is committed. Observed: from `daemon-4`'s network namespace, a
+scripted authorization-code + PKCE sign-in against `relay:8180` with the committed password got a
+token, and the Relay accepted it (`tools/list` → `200`). That reaches what `demo-operator` can
+do — role `operator` — and no further, because no one can add a realm user. Binding Keycloak to
+`127.0.0.1` would close `8180` to the fleet, but to the host as well: observed on a scratch
+Keycloak, a published port does not reach a listener bound to container loopback. So it is left
+open, and this is why the overlay is DEV-ONLY.
+
 #### What an OAuth session proves, and what it does not
 
 - **It proves whose session made the call.** The Relay verified, offline against the IdP's keys,
-  a token issued by this issuer for this audience, naming an existing, enabled human Account. The
-  audit trail records it as that Account with method `oauth` and no API Token id — observed for
-  a `list_nodes` read on a token from a real authorization-code + PKCE sign-in:
-  `account_name=demo-operator`, `account_role=operator`, `auth_method=oauth`, `token_id` empty.
-  A real token for the same user from another client of the same realm, carrying no Relay
-  audience, was refused `401`; so was a real token for a realm user with no Account (both
-  observed).
+  a token issued by this issuer for this audience, naming an existing, enabled Account — here
+  `demo-operator`, created human by the `oauth-account` one-shot (which also refuses to go on if
+  that Account is not human, not enabled, or not `operator`). The Relay does **not** restrict
+  OAuth sign-in by Account kind, so an identity-provider username equal to a machine or admin
+  Account's name signs in as that Account; kind matters only later, when an answer is weighed
+  (AP-79). The audit trail records the session as that Account with method `oauth` and no API
+  Token id — observed for a `list_nodes` read on a token from a real authorization-code + PKCE
+  sign-in: `account_name=demo-operator`, `account_role=operator`, `auth_method=oauth`,
+  `token_id` empty. A real token for the same user from another client of the same realm,
+  carrying no Relay audience, was refused `401`; so was a real token for `no-relay-account`, the
+  realm user with no Account (both observed).
+- **On this fleet, a verified answer proves nothing about who decided.** `demo-operator`'s
+  password is committed, and the AI-agent under test can read it — and it also has a shell on the
+  host, so it can script the sign-in itself, as the observation above shows any container can.
+  A verified OAuth answer here demonstrates the mechanism only.
 - **It does not prove a person read the question.** Anything holding `demo-operator`'s token
   answers as `demo-operator`, and a configured Claude Code **hook** can answer an approval
   question with nobody present — Relay cannot tell that from a person, so the verified lane can

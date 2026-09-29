@@ -572,7 +572,9 @@ demo-up:
 # The same two, with the opt-in OAuth overlay (docker-compose.oauth.yml, #351): a
 # DEV-ONLY Keycloak identity provider, and the Relay's OAuth resource-server half
 # turned on, so an MCP client can sign in as a human. Off unless you run one of
-# these; `demo-down` stops either kind. The IdP image is pulled, never built, so
+# these. `demo-down` and every reset's wipe name the overlay whichever kind is up,
+# so even the plain targets need it to parse (Compose >= 2.18.0, for `!reset`).
+# The IdP image is pulled, never built, so
 # `demo-build` does not fetch it — see "Signing in as a human over OAuth" in
 # docs/operations/demo-fleet.md.
 demo-reset-oauth:

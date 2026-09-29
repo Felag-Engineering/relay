@@ -502,6 +502,35 @@ run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
     -- reset
 check "O5-plain-reset-ignores-idp-port" 1 "log_not_contains:publish=8180"
 
+# O7: plain `reset` WIPES with the overlay named — so a previous --oauth run's
+# IdP and its volume go too — but BRINGS UP with docker-compose.yml alone.
+# `down` is made to succeed so reset reaches `up`; `up` fails, stopping it.
+run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 \
+    STUB_COMPOSE_CONFIG_JSON_RC=0 STUB_COMPOSE_CONFIG_JSON_OUT='{"volumes":{"relay-data":{}}}' \
+    STUB_COMPOSE_OK="down" \
+    -- reset
+check "O7-plain-reset-wipes-with-overlay-brings-up-without" 1 "contains:docker compose up failed"
+o7_down="$(grep -F ' down -v ' "$DOCKER_LOG")"
+o7_up="$(grep -F ' up -d ' "$DOCKER_LOG")"
+case "$o7_down" in
+    *"-f $REPO_ROOT/docker-compose.oauth.yml"*) ;;
+    *)
+        echo "FAIL: O7: plain reset's down -v does not name the overlay: [$o7_down]" >&2
+        fail=$((fail + 1))
+        ;;
+esac
+case "$o7_up" in
+    '')
+        echo "FAIL: O7: plain reset never reached up: $(cat "$DOCKER_LOG")" >&2
+        fail=$((fail + 1))
+        ;;
+    *docker-compose.oauth.yml*)
+        echo "FAIL: O7: plain reset's up names the overlay: [$o7_up]" >&2
+        fail=$((fail + 1))
+        ;;
+esac
+
 # O6: `up` refuses to switch modes over a fleet whose containers still exist
 # — either way — before any compose call.
 run STUB_SERVICES=$'relay-netns\nidp\nrelay' -- up

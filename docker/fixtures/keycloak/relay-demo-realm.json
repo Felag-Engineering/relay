@@ -30,6 +30,22 @@
           "temporary": false
         }
       ]
+    },
+    {
+      "username": "no-relay-account",
+      "enabled": true,
+      "email": "no-relay-account@relay-demo.invalid",
+      "emailVerified": true,
+      "firstName": "DEV-ONLY negative control",
+      "lastName": "deliberately has no Relay Account",
+      "requiredActions": [],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-no-relay-account",
+          "temporary": false
+        }
+      ]
     }
   ],
   "clients": [
@@ -59,9 +75,7 @@
         "email",
         "acr"
       ],
-      "optionalClientScopes": [
-        "offline_access"
-      ],
+      "optionalClientScopes": [],
       "protocolMappers": [
         {
           "name": "relay-audience",

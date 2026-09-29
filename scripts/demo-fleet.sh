@@ -24,7 +24,9 @@
 # creds (copy the current credentials out to .dev-fleet/ — mints nothing
 # itself). `reset` and `up` also take `--oauth`, which layers
 # docker-compose.oauth.yml on (#351: a DEV-ONLY identity provider, and the
-# Relay's OAuth sign-in turned on); without it nothing about the fleet changes.
+# Relay's OAuth sign-in turned on). Without it, what reset/up bring up is
+# exactly docker-compose.yml; but `down` and every reset's wipe name the
+# overlay too, so they need it to parse (and Compose >= 2.18.0 for `!reset`).
 # `dc()` is the ONLY place in this file that runs `docker compose` —
 # enforced by scripts/demo-fleet-test.sh's static check S1, so a later edit
 # cannot add a second, unguarded call site.
@@ -652,8 +654,9 @@ cmd_fault() {
 
 cmd_down() {
     # Always with the overlay layered on: it only adds services, so this stops
-    # a plain fleet exactly as before, and an --oauth one without leaving its
-    # IdP running (and the network it holds) behind.
+    # a plain fleet's containers exactly as before, and an --oauth one without
+    # leaving its IdP running (and the network it holds) behind. The cost: a
+    # plain `down` now fails if docker-compose.oauth.yml does not parse.
     use_compose_files 1
     dc down || die 1 "docker compose down failed"
 }

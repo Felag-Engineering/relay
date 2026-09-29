@@ -63,5 +63,11 @@ case "${RECORD}" in
     *'"enabled":true'*) ;;
     *) echo "oauth-account: ${ACCOUNT_NAME} exists but is not enabled: ${RECORD}" >&2; exit 1 ;;
 esac
+# And still `operator`: an Account of this name promoted to admin since it was
+# created would hand the IdP's user admin reach, so refuse rather than go on.
+case "${RECORD}" in
+    *'"role":"operator"'*) ;;
+    *) echo "oauth-account: ${ACCOUNT_NAME} exists but its role is not operator: ${RECORD}" >&2; exit 1 ;;
+esac
 
-echo "oauth-account: ${ACCOUNT_NAME} exists, kind human, enabled; the IdP's demo-operator signs in as it."
+echo "oauth-account: ${ACCOUNT_NAME} exists, kind human, role operator, enabled; the IdP's ${ACCOUNT_NAME} signs in as it."
