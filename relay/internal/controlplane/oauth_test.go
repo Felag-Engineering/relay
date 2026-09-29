@@ -18,6 +18,7 @@ import (
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // -----------------------------------------------------------------------
@@ -435,7 +436,7 @@ func TestOAuth_MetadataIsReachableWithoutACredential(t *testing.T) {
 	f := newIDP(t)
 	authn := oauthAuthenticator(t, f, &fakeLookup{accts: map[string]accounts.Account{}}, "")
 
-	srv := New(Config{Addr: "127.0.0.1:0", GetCertificate: staticCert(selfSignedCert(t))}, authn)
+	srv := New(Config{Addr: "127.0.0.1:0", GetCertificate: staticCert(relaytest.SelfSignedServerCert(t, "controlplane-test"))}, authn)
 	srv.Mux().HandleFunc("GET /api/v1/protected", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})

@@ -8,7 +8,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
+	"net"
 	"testing"
+	"time"
 )
 
 // NewCSR generates a fresh ECDSA P-256 key and returns a PEM-encoded
@@ -54,4 +57,47 @@ func CertPool(t *testing.T, bundlePEM []byte) *x509.CertPool {
 		t.Fatal("CertPool: AppendCertsFromPEM returned false — empty or invalid PEM")
 	}
 	return pool
+}
+
+// SelfSignedServerCert mints a throwaway, self-signed TLS server certificate
+// with the given CommonName, valid for localhost and both loopback addresses
+// for an hour either side of now. Production wires a real Relay-CA-issued
+// certificate (relay/cmd/relay/main.go); this is for tests that only need a
+// TLS listener.
+func SelfSignedServerCert(t *testing.T, cn string) tls.Certificate {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("X509KeyPair: %v", err)
+	}
+	return cert
 }

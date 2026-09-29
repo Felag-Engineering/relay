@@ -81,14 +81,7 @@ func (r *sqliteAPITokens) RevokeToken(ctx context.Context, id string, at time.Ti
 	if err != nil {
 		return fmt.Errorf("revoke api token: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("revoke api token rows affected: %w", err)
-	}
-	if n == 0 {
-		return accounts.ErrTokenNotFound
-	}
-	return nil
+	return rowsAffectedOr(res, accounts.ErrTokenNotFound, "revoke api token rows affected")
 }
 
 // TouchTokenLastUsed records a successful verification.

@@ -2,16 +2,10 @@ package mcp_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
-	"math/big"
 	"net"
 	"net/http"
 	"path/filepath"
@@ -108,47 +102,6 @@ func (l testReadLane) ListOperations(ctx context.Context, nodeID string) (mcp.No
 		return mcp.NodeVocabulary{}, err
 	}
 	return mcp.NodeVocabulary{Templates: vocab.Templates, Reported: vocab.Reported}, nil
-}
-
-// selfSignedCert mints a throwaway, self-signed TLS certificate for tests
-// (mirrors controlplane's own selfSignedCert test helper — unexported there,
-// so duplicated here rather than exported solely for tests).
-func selfSignedCert(t *testing.T) tls.Certificate {
-	t.Helper()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "mcp-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("CreateCertificate: %v", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("MarshalECPrivateKey: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("X509KeyPair: %v", err)
-	}
-	return cert
 }
 
 // testJobResultReader adapts a *store.Store's Jobs()/Tasks() to
@@ -305,7 +258,7 @@ func newTestServerWithConfig(t *testing.T, readCap, mutateCap int, minDaemonVers
 
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
 
-	cert := selfSignedCert(t)
+	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
 		controlplane.Config{
 			Addr: "127.0.0.1:0",
@@ -400,7 +353,7 @@ func newTestServerWithFailingReadSink(t *testing.T) testServer {
 	results := testJobResultReader{jobsRepo: st.Jobs(), tasksRepo: st.Tasks()}
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, nil)
 
-	cert := selfSignedCert(t)
+	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
 		controlplane.Config{
 			Addr:           "127.0.0.1:0",

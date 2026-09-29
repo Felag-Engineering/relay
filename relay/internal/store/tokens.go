@@ -115,14 +115,7 @@ func (r *sqliteTokens) Save(ctx context.Context, t *enroll.Token) error {
 	if err != nil {
 		return fmt.Errorf("update token: %w", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return enroll.ErrNotFound
-	}
-	return nil
+	return rowsAffectedOr(res, enroll.ErrNotFound, "rows affected")
 }
 
 func boolToInt(b bool) int {

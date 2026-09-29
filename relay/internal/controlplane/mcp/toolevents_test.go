@@ -91,7 +91,7 @@ func newObservedServer(t *testing.T, nodeID, hostname string, observer mcp.ToolC
 	// is actually registered for TestToolCallMiddleware_DoesNotFireFor.
 	handler := mcp.New(testReadLane{svc: capSvc}, opsLister{}, capSvc, results, nil, capSvc, opts...)
 
-	cert := selfSignedCert(t)
+	cert := relaytest.SelfSignedServerCert(t, "mcp-test")
 	controlSrv := controlplane.New(
 		controlplane.Config{
 			Addr:           "127.0.0.1:0",
