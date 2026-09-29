@@ -491,33 +491,33 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
       <td>{{stamp .LastAuthAt}}</td>
       <td>{{if .Machine}}{{if .LastCallAt.IsZero}}<span class="dim">no tool call in the last {{$.CallPage}} recorded calls</span>{{else}}<a href="{{.LastCallHref}}">{{stamp .LastCallAt}}</a>{{end}}{{end}}</td>
       {{if $.Write}}
-      <td>
-        <form method="post" action="{{.RoleAction}}">
+      <td class="acctchange">
+        <form class="ctlform ctlrow" method="post" action="{{.RoleAction}}">
           <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-          <label>Role
+          <label class="fld"><span class="fldlabel">Role</span>
             <select name="role">
               {{range .OtherRoles}}<option value="{{.}}">{{.}}</option>{{end}}
             </select>
           </label>
-          <label>Password &mdash; required to raise a role
+          <label class="fld"><span class="fldlabel">Password &mdash; required to raise a role</span>
             <input name="password" type="password" autocomplete="current-password">
           </label>
-          <button type="submit">Set role</button>
+          <button class="btn grant" type="submit">Set role</button>
         </form>
         {{if .Enabled}}
-        <form method="post" action="{{.EnabledAction}}">
+        <form class="ctlform ctlrow" method="post" action="{{.EnabledAction}}">
           <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
           <input type="hidden" name="enabled" value="false">
-          <button type="submit">Disable</button>
+          <button class="btn reduce" type="submit">Disable</button>
         </form>
         {{else}}
-        <form method="post" action="{{.EnabledAction}}">
+        <form class="ctlform ctlrow" method="post" action="{{.EnabledAction}}">
           <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
           <input type="hidden" name="enabled" value="true">
-          <label>Password &mdash; required to re-enable
+          <label class="fld"><span class="fldlabel">Password &mdash; required to re-enable</span>
             <input name="password" type="password" autocomplete="current-password" required>
           </label>
-          <button type="submit">Enable</button>
+          <button class="btn grant" type="submit">Enable</button>
         </form>
         {{end}}
       </td>
@@ -531,21 +531,29 @@ an Account, and minting or revoking a token, are not wired into this Relay's Con
 {{with .Write}}
 <section class="panel">
   <h3>Create an Account</h3>
-  <form method="post" action="{{.CreateAction}}">
+  <form class="ctlform ctlgrid" method="post" action="{{.CreateAction}}">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-    <label for="create-name">Name</label>
-    <input id="create-name" name="name" maxlength="64" required>
-    <label for="create-kind">Kind</label>
-    <select id="create-kind" name="kind">
-      {{range .Kinds}}<option value="{{.}}">{{.}}</option>{{end}}
-    </select>
-    <label for="create-role">Role</label>
-    <select id="create-role" name="role">
-      {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
-    </select>
-    <label for="create-password">Your password &mdash; creating an Account is a privilege-granting act</label>
-    <input id="create-password" name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Create Account</button>
+    <div class="fld">
+      <label class="fldlabel" for="create-name">Name</label>
+      <input id="create-name" name="name" maxlength="64" required>
+    </div>
+    <div class="fld">
+      <label class="fldlabel" for="create-kind">Kind</label>
+      <select id="create-kind" name="kind">
+        {{range .Kinds}}<option value="{{.}}">{{.}}</option>{{end}}
+      </select>
+    </div>
+    <div class="fld">
+      <label class="fldlabel" for="create-role">Role</label>
+      <select id="create-role" name="role">
+        {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+      </select>
+    </div>
+    <div class="fld">
+      <label class="fldlabel" for="create-password">Your password &mdash; required to create an Account</label>
+      <input id="create-password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="btn grant" type="submit">Create Account</button>
   </form>
   <p class="note">A <b>human</b> Account created here cannot sign in until a password is set for it
   with <code>relay console-password</code> on the Relay host. Nothing on this screen can set one:
@@ -580,9 +588,9 @@ absent from the window rather than as never having called.</p>
         <td>{{if .Revoked}}revoked{{else}}live{{end}}</td>
         {{if $.Write}}
         <td>{{with .RevokeAction}}
-          <form method="post" action="{{.}}">
+          <form class="ctlform" method="post" action="{{.}}">
             <input type="hidden" name="csrf_token" value="{{$.Write.CSRFToken}}">
-            <button type="submit">Revoke</button>
+            <button class="btn reduce" type="submit">Revoke</button>
           </form>
         {{end}}</td>
         {{end}}
@@ -598,17 +606,23 @@ absent from the window rather than as never having called.</p>
   <p class="dim">This Account has no API Tokens.</p>
   {{end}}
   {{if and .Write .SelectedMintAction}}
-  <form method="post" action="{{.SelectedMintAction}}">
+  <form class="ctlform ctlgrid" method="post" action="{{.SelectedMintAction}}">
     <input type="hidden" name="csrf_token" value="{{.Write.CSRFToken}}">
-    <label for="mint-name">Token name</label>
-    <input id="mint-name" name="name" maxlength="128" required>
-    <label for="mint-ttl">Lifetime</label>
-    <select id="mint-ttl" name="ttl">
-      {{range .Write.TTLs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
-    </select>
-    <label for="mint-password">Your password &mdash; minting brings a new credential into existence</label>
-    <input id="mint-password" name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Mint API Token</button>
+    <div class="fld">
+      <label class="fldlabel" for="mint-name">Token name</label>
+      <input id="mint-name" name="name" maxlength="128" required>
+    </div>
+    <div class="fld">
+      <label class="fldlabel" for="mint-ttl">Lifetime</label>
+      <select id="mint-ttl" name="ttl">
+        {{range .Write.TTLs}}<option value="{{.Value}}">{{.Label}}</option>{{end}}
+      </select>
+    </div>
+    <div class="fld">
+      <label class="fldlabel" for="mint-password">Your password &mdash; required to mint a token</label>
+      <input id="mint-password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="btn grant" type="submit">Mint API Token</button>
   </form>
   <p class="note">The value is shown once, on the response to this form, and never again.</p>
   {{end}}
