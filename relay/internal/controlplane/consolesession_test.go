@@ -16,6 +16,7 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/accounts"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/consoleauth"
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
 
 // consolesession_test.go covers the browser credential lane (#418) and, since
@@ -90,17 +91,27 @@ func testConsoleAuthenticator() (*Authenticator, *fakeSessionResolver) {
 	resolver := &fakeSessionResolver{acct: storedFoundingAdmin(), valid: testSessionID}
 	a := NewAuthenticator(
 		&fakeVerifier{acct: storedFoundingAdmin(), valid: testToken},
-		WithConsoleSessions(resolver, ConsoleSessionOptions{
-			Public: func(r *http.Request) bool { return r.URL.Path == "/console/login" },
-			Scope: func(r *http.Request) bool {
-				return r.URL.Path == "/console" || strings.HasPrefix(r.URL.Path, "/console/")
-			},
-			Unauthorized: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusSeeOther)
-			}),
-		}),
+		WithConsoleSessions(resolver, testConsoleSessionOptions()),
 	)
 	return a, resolver
+}
+
+// testConsoleSessionOptions is the browser lane's configuration, shared by
+// every harness here so the stand-in predicates cannot drift between them.
+// The Unauthorized stand-in redirects to a sign-in path the way package
+// console's real handler does, so a test can tell the redirect apart from the
+// 401 challenge by more than its status code.
+func testConsoleSessionOptions() ConsoleSessionOptions {
+	return ConsoleSessionOptions{
+		Public: func(r *http.Request) bool { return r.URL.Path == "/console/login" },
+		Scope: func(r *http.Request) bool {
+			return r.URL.Path == "/console" || strings.HasPrefix(r.URL.Path, "/console/")
+		},
+		Unauthorized: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Location", "/console/login")
+			w.WriteHeader(http.StatusSeeOther)
+		}),
+	}
 }
 
 // consoleRequest drives one cookie-bearing request through the middleware and
@@ -211,6 +222,153 @@ func TestConsoleSession_BearerHeaderIsNeverResolvedAsASession(t *testing.T) {
 	}
 	if len(resolver.seen) != 0 {
 		t.Errorf("the session resolver saw %d request(s) carrying a bearer header", len(resolver.seen))
+	}
+}
+
+// -----------------------------------------------------------------------
+// Refusal shape
+// -----------------------------------------------------------------------
+
+// testConsoleOAuthAuthenticator is testConsoleAuthenticator with OAuth also
+// configured — the deployment in which the refusal's shape matters most,
+// because the 401 challenge is the only way an off-the-shelf harness learns
+// where to sign in.
+func testConsoleOAuthAuthenticator(t *testing.T) (*Authenticator, string) {
+	t.Helper()
+	f := newIDP(t)
+	metadataURL := "https://relay.example.internal:9443" + ProtectedResourceMetadataPath
+	a := NewAuthenticator(
+		&fakeVerifier{acct: storedFoundingAdmin(), valid: testToken},
+		WithOAuth(
+			OAuthConfig{Issuer: testIssuer, Audience: testAudience},
+			f.verifier, &fakeLookup{accts: map[string]accounts.Account{}}, metadataURL,
+		),
+		WithConsoleSessions(
+			&fakeSessionResolver{acct: storedFoundingAdmin(), valid: testSessionID},
+			testConsoleSessionOptions(),
+		),
+	)
+	return a, metadataURL
+}
+
+// refusedRequest drives one request through the middleware and returns the
+// recorded response, failing the test if the handler was reached.
+func refusedRequest(t *testing.T, a *Authenticator, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	a.Middleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Errorf("%s %s reached the handler without a valid credential", req.Method, req.URL.Path)
+	})).ServeHTTP(rec, req)
+	return rec
+}
+
+// assertChallenge checks that rec is the generic 401 carrying the discovery
+// pointer, and not the Console's redirect to its sign-in page.
+func assertChallenge(t *testing.T, rec *httptest.ResponseRecorder, metadataURL string) {
+	t.Helper()
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d (Location %q), want 401", rec.Code, rec.Header().Get("Location"))
+	}
+	if loc := rec.Header().Get("Location"); loc != "" {
+		t.Errorf("Location = %q, want none: a machine caller must not be sent to the Console's sign-in page", loc)
+	}
+	want := `Bearer resource_metadata="` + metadataURL + `"`
+	if got := rec.Header().Get("WWW-Authenticate"); got != want {
+		t.Errorf("WWW-Authenticate = %q, want %q", got, want)
+	}
+	if body := rec.Body.String(); body != genericAuthError {
+		t.Errorf("body = %q, want the generic %q", body, genericAuthError)
+	}
+}
+
+// The finding, pinned: with the Console mounted, an unauthenticated request
+// for the MCP endpoint or the Control API is answered with the 401 discovery
+// challenge (ADR-0024), not a redirect to the Console's sign-in page. Before
+// this, the refusal branched on "no bearer header" alone, so an MCP harness's
+// first, tokenless request was sent to an HTML page instead of into the OAuth
+// flow the challenge advertises.
+//
+// A Console cookie on the request changes nothing: off the Console it is not a
+// credential (#459), so it must not change the refusal's shape either.
+func TestConsoleSession_UnauthenticatedOffConsoleGetsTheChallenge(t *testing.T) {
+	offConsole := []struct{ method, target string }{
+		{http.MethodPost, "/mcp"},
+		{http.MethodGet, "/mcp"},
+		{http.MethodGet, "/api/v1/operations"},
+		{http.MethodPost, "/api/v1/raw-exec"},
+		{http.MethodGet, "/metrics"},
+		{http.MethodGet, "/"},
+		{http.MethodGet, "/consoleX"}, // a sibling of the prefix, not inside it
+	}
+	a, metadataURL := testConsoleOAuthAuthenticator(t)
+	for _, c := range offConsole {
+		for _, withCookie := range []bool{false, true} {
+			name := c.method + " " + c.target
+			if withCookie {
+				name += " with a Console cookie"
+			}
+			t.Run(name, func(t *testing.T) {
+				req := httptest.NewRequest(c.method, c.target, nil)
+				if withCookie {
+					req.AddCookie(&http.Cookie{Name: consoleauth.SessionCookieName, Value: testSessionID})
+				}
+				assertChallenge(t, refusedRequest(t, a, req), metadataURL)
+			})
+		}
+	}
+}
+
+// The other half: an unauthenticated browser on a Console page is still sent
+// to the sign-in page, because a browser cannot answer a Bearer challenge.
+func TestConsoleSession_UnauthenticatedOnConsoleIsRedirectedToSignIn(t *testing.T) {
+	onConsole := []string{"/console", "/console/", "/console/nodes/node-1", "/console/events"}
+	a, _ := testConsoleOAuthAuthenticator(t)
+	for _, target := range onConsole {
+		t.Run(target, func(t *testing.T) {
+			rec := refusedRequest(t, a, httptest.NewRequest(http.MethodGet, target, nil))
+			if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/console/login" {
+				t.Errorf("status = %d, Location = %q; want 303 to the sign-in page", rec.Code, rec.Header().Get("Location"))
+			}
+			if got := rec.Header().Get("WWW-Authenticate"); got != "" {
+				t.Errorf("WWW-Authenticate = %q on a browser redirect, want none", got)
+			}
+		})
+	}
+}
+
+// A request that presents a bearer credential is a machine caller wherever it
+// was going, so a bad one gets the 401 challenge — on the Console's own paths
+// too. Redirecting it would send a script to an HTML sign-in page it cannot
+// use. (This is the property the original `!hasBearer` condition held, and
+// scoping the redirect keeps it.)
+func TestConsoleSession_InvalidBearerGetsTheChallengeEverywhere(t *testing.T) {
+	a, metadataURL := testConsoleOAuthAuthenticator(t)
+	for _, target := range []string{"/mcp", "/api/v1/operations", "/console/", "/console/nodes/node-1"} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.Header.Set("Authorization", "Bearer not-a-real-token")
+			assertChallenge(t, refusedRequest(t, a, req), metadataURL)
+		})
+	}
+}
+
+// The discovery document stays reachable with no credential when the Console
+// is mounted: the handshake is the challenge AND the document it points at,
+// and mounting the Console must not put either behind its sign-in page.
+func TestConsoleSession_MetadataIsReachableWithoutACredential(t *testing.T) {
+	a, _ := testConsoleOAuthAuthenticator(t)
+	srv := New(Config{Addr: "127.0.0.1:0", GetCertificate: staticCert(relaytest.SelfSignedServerCert(t, "controlplane-test"))}, a)
+
+	ts := httptest.NewServer(srv.http.Handler)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + ProtectedResourceMetadataPath) //nolint:noctx // test
+	if err != nil {
+		t.Fatalf("Get metadata: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("metadata status = %d, want 200 without a credential", resp.StatusCode)
 	}
 }
 
