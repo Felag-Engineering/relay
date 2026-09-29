@@ -541,6 +541,28 @@ case "$o7_up" in
         ;;
 esac
 
+# O8 (static): the human the IdP signs in and the Account the one-shot creates
+# are one name — the realm fixture's user, the overlay's OAUTH_ACCOUNT_NAME, and
+# the sign-in hint the script prints — and it is `demo-user`. A rename that
+# misses one leaves a sign-in the Relay refuses with no reason given.
+oauth_account="$(sed -n 's/^ *OAUTH_ACCOUNT_NAME: "\(.*\)"$/\1/p' "$REPO_ROOT/docker-compose.oauth.yml")"
+if [ "$oauth_account" != "demo-user" ]; then
+    echo "FAIL: O8: docker-compose.oauth.yml's OAUTH_ACCOUNT_NAME is '${oauth_account}', not demo-user" >&2
+    fail=$((fail + 1))
+fi
+if ! python3 -c '
+import json, sys
+users = [u["username"] for u in json.load(open(sys.argv[1]))["users"]]
+sys.exit(0 if sys.argv[2] in users else 1)' \
+    "$REPO_ROOT/docker/fixtures/keycloak/relay-demo-realm.json" "$oauth_account"; then
+    echo "FAIL: O8: the realm fixture has no user named '${oauth_account}'" >&2
+    fail=$((fail + 1))
+fi
+if ! grep -qF "sign in as ${oauth_account} / dev-only-${oauth_account} (DEV-ONLY)" "$SCRIPT"; then
+    echo "FAIL: O8: scripts/demo-fleet.sh's sign-in hint does not name ${oauth_account}" >&2
+    fail=$((fail + 1))
+fi
+
 # O6: `up` refuses to switch modes over a fleet whose containers still exist
 # — either way — before any compose call.
 run STUB_SERVICES=$'relay-netns\nidp\nrelay' -- up

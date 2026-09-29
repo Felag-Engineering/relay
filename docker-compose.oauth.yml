@@ -67,8 +67,8 @@
 #   - RESIDUAL REACH, stated plainly: sharing a namespace puts the IdP on the
 #     Relay's address, so any container on the fleet network — a daemon, so a
 #     compromised Node or a Raw Exec Task — reaches Keycloak's sign-in and token
-#     endpoints at relay:8180. With demo-operator's committed password it can
-#     sign in as demo-operator (role operator) exactly as the presenter does.
+#     endpoints at relay:8180. With demo-user's committed password it can
+#     sign in as demo-user (role operator) exactly as the presenter does.
 #     Keycloak's management port (9000) is not opened at all: health and
 #     metrics are off, and the healthcheck reads the realm's discovery
 #     document instead. Binding Keycloak to 127.0.0.1 would close 8180 to the
@@ -191,7 +191,7 @@ services:
         condition: service_completed_successfully
     environment:
       # Must equal the realm user's username (the token's preferred_username).
-      OAUTH_ACCOUNT_NAME: "demo-operator"
+      OAUTH_ACCOUNT_NAME: "demo-user"
     entrypoint: ["sh", "/oauth-account.sh"]
     volumes:
       - ./docker/oauth-account.sh:/oauth-account.sh:ro

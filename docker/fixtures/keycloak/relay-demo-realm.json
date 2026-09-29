@@ -16,17 +16,17 @@
   "clientSessionMaxLifespan": 86400,
   "users": [
     {
-      "username": "demo-operator",
+      "username": "demo-user",
       "enabled": true,
-      "email": "demo-operator@relay-demo.invalid",
+      "email": "demo-user@relay-demo.invalid",
       "emailVerified": true,
       "firstName": "Demo",
-      "lastName": "Operator",
+      "lastName": "User",
       "requiredActions": [],
       "credentials": [
         {
           "type": "password",
-          "value": "dev-only-demo-operator",
+          "value": "dev-only-demo-user",
           "temporary": false
         }
       ]

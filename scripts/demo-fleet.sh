@@ -590,7 +590,7 @@ cmd_reset() {
 # (docker/fixtures/keycloak/relay-demo-realm.json); the IdP login is DEV-ONLY.
 oauth_hint() {
     echo "demo-fleet:   claude mcp add --transport http --client-id relay-demo-claude-code --callback-port 33418 relay https://relay:9443/mcp"
-    echo "demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS=\"\$PWD/.dev-fleet/ca-cert.pem\", run /mcp, pick relay, Authenticate, and sign in as demo-operator / dev-only-demo-operator (DEV-ONLY)."
+    echo "demo-fleet: then start Claude Code with NODE_EXTRA_CA_CERTS=\"\$PWD/.dev-fleet/ca-cert.pem\", run /mcp, pick relay, Authenticate, and sign in as demo-user / dev-only-demo-user (DEV-ONLY)."
 }
 
 cmd_fault() {
