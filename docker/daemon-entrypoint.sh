@@ -37,6 +37,13 @@ set -eu
 # non-fatal: the fleet's core enrollment and dispatch paths must not depend on
 # a demo fixture, and a failure here stays legible through
 # `dev-fleet-service status` (exit 3, state=down).
+#
+# The same Nodes also get the DEV-ONLY systemctl shim on the daemon's PATH
+# (docker/fixtures/systemctl-shim), so `service.restart` restarts that demo
+# service instead of failing to spawn systemctl. Only here, never on a Node
+# without the demo service: there it would have nothing to restart, and the
+# db Nodes' `spawn systemctl` failure is a documented demo beat. Non-fatal for
+# the same reason as the service start.
 labels=$(printf '%s' "${RELAY_NODE_LABELS:-}" | tr -d ' ')
 case ",$labels," in
     *,role=web,*)
@@ -44,6 +51,11 @@ case ",$labels," in
             echo "dev-fleet-service: started on :8080" >&2
         else
             echo "dev-fleet-service: WARNING: failed to start; the Node still enrolls and every other dev-fleet path still works. See /var/lib/dev-fleet-service/httpd.log" >&2
+        fi
+        if ln -sf /usr/local/lib/dev-fleet-service/systemctl /usr/local/bin/systemctl; then
+            echo "dev-fleet-service: systemctl shim installed (service.restart -> dev-fleet-service)" >&2
+        else
+            echo "dev-fleet-service: WARNING: could not install the systemctl shim; service.restart will fail to spawn systemctl on this Node" >&2
         fi
         ;;
 esac

@@ -88,10 +88,19 @@ COPY --chmod=0644 docker/fixtures/templates.d/relay-demo/catalog.toml /etc/relay
 
 # The demo service (#389): a root-owned script that manages a real
 # `busybox httpd` on the `role=web` Nodes (docker/daemon-entrypoint.sh starts
-# it), reachable today only through the Raw Exec allow in policy.web.toml.
+# it), reachable through the Raw Exec allow in policy.web.toml and, via the
+# systemctl shim below, through `service.restart`.
 COPY --chmod=0755 docker/fixtures/dev-fleet-service /usr/local/bin/dev-fleet-service
 COPY --chmod=0644 docker/fixtures/www/index.html /srv/dev-fleet-service/www/index.html
 RUN mkdir -p /var/lib/dev-fleet-service && chmod 0755 /var/lib/dev-fleet-service
+
+# DEV-ONLY: a systemctl stand-in so the Native `service.restart` Operation can
+# restart the demo service on the `role=web` Nodes (docker/fixtures/systemctl-shim
+# says what it does and does not fake). Baked OFF the PATH on purpose: the one
+# image serves every Node, and docker/daemon-entrypoint.sh links it to
+# /usr/local/bin/systemctl only where RELAY_NODE_LABELS says role=web. On the db
+# and bastion Nodes there is still no systemctl to spawn.
+COPY --chmod=0755 docker/fixtures/systemctl-shim /usr/local/lib/dev-fleet-service/systemctl
 
 # busybox ships no /etc/os-release; bake one in so the documented
 # list_operations file.read example (path=/etc/os-release) succeeds on the

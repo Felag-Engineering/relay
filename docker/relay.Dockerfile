@@ -43,6 +43,16 @@ COPY --from=build /out/relay /usr/local/bin/relay
 # on whose laptop built it.
 COPY --chmod=0644 docker/fixtures/approval-gates.json /etc/relay/approval-gates.json
 
+# A SECOND gate file, baked beside the first under the same rules, for the
+# nine-Node demo fleet only (docs/operations/demo-fleet.md). Its two rules match
+# the same dispatches as the file above, but ask in-band with no audience and
+# `requester_allowed: true`, so an MCP client can be asked the approval
+# question (MRTR) or answer with `approve_request`. The Relay reads only the
+# file RELAY_APPROVAL_GATE_CONFIG names: docker-compose.yml defaults that to
+# the file above, and only scripts/demo-fleet.sh points it here — so baking
+# this file in changes nothing about the default three-Node fleet.
+COPY --chmod=0644 docker/fixtures/approval-gates.demo.json /etc/relay/approval-gates.demo.json
+
 # No credential fixture is baked into the image: since #298 (ADR-0023) the
 # control plane accepts only per-Account API Tokens, and the dev fleet's first
 # one is minted at runtime by the `credential` service (docker/mint-credential.sh)

@@ -15,7 +15,8 @@
 # that no OTHER checkout already owns the relay-demo project). See "The
 # fault, and resetting between takes" in docs/operations/demo-fleet.md.
 #
-# Six subcommands: build (the only one that builds images), reset (wipe +
+# Six subcommands: build (the only one that builds images, and the only one
+# that pulls the image-only services' images), reset (wipe +
 # recreate + verify), fault (kill the #389 dev-fleet-service on a subset of
 # web Nodes, then verify the kill with the service's own probe), down (stop,
 # no -v), up (the opposite of down — bring it back with no -v, no build; the
@@ -41,6 +42,15 @@ readonly DEMO_PROJECT="relay-demo"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)" || exit 1
 readonly REPO_ROOT
 readonly COMPOSE_YML="${REPO_ROOT}/docker-compose.yml"
+
+# The demo fleet's approval gate: in-band, no audience, requester allowed, so
+# an MCP client can be asked the approval question or answer with
+# approve_request (docs/operations/demo-fleet.md, "The human approver"). A path
+# INSIDE the relay image — docker/relay.Dockerfile bakes it beside the default
+# fleet's gate — handed to docker-compose.yml's DEV_FLEET_APPROVAL_GATE_CONFIG,
+# which selects between the two. Only this script sets it, so the default
+# three-Node fleet keeps its out-of-band gate.
+readonly DEMO_APPROVAL_GATE_CONFIG="/etc/relay/approval-gates.demo.json"
 
 # One env=prod web Node and one env=staging web Node; neither is on the #452
 # "drop first" list (daemon-9, then daemon-5) if the roster is ever trimmed.
@@ -128,8 +138,13 @@ demo_guard() {
     # Guard passed. Clear anything in the caller's shell that could still
     # redirect `dc()`, then pin COMPOSE_PROJECT_NAME so the child call to
     # dev-fleet-mcp.sh (dev_fleet_mcp below) resolves to the same project.
+    # The gate selector is pinned the same way, overriding any value the
+    # caller exported: every compose call this script makes, the child's
+    # included, must resolve the relay service identically, or one of them
+    # would see a changed config and recreate the Relay on the wrong gate.
     unset COMPOSE_FILE COMPOSE_PROFILES
     export COMPOSE_PROJECT_NAME="$DEMO_PROJECT"
+    export DEV_FLEET_APPROVAL_GATE_CONFIG="$DEMO_APPROVAL_GATE_CONFIG"
 }
 
 # dc: the ONLY place in this file that runs `docker compose`. Always pins the
@@ -392,8 +407,20 @@ if bad:
 
 # --- Subcommands -------------------------------------------------------
 
+# `compose build` only builds the services that have a `build:` section. The
+# image-only services (today the curl one-shots: approver, console-admin,
+# bootstrap) are never built, and reset/up deliberately run with
+# `--pull never`, so without the pull below a fresh Docker engine could build
+# successfully and still fail reset's image precheck. `--ignore-buildable`
+# pulls exactly the services that have no build, whatever they are, so a
+# future image-only service is covered without an edit here. `--policy
+# missing` fetches only what is not already present: every such image is
+# pinned by tag, so a present one is the right one, and a rebuild on a machine
+# with no network still succeeds.
 cmd_build() {
     dc build || die 1 "docker compose build failed"
+    dc pull --ignore-buildable --policy missing ||
+        die 1 "docker compose pull of the image-only services failed"
 }
 
 cmd_reset() {
@@ -538,7 +565,8 @@ usage() {
     cat >&2 <<USAGE
 Usage: scripts/demo-fleet.sh <command>
 
-  build              Build the relay-demo images (the only subcommand that builds)
+  build              Build the relay-demo images and pull the image-only services'
+                      images (the only subcommand that builds or pulls)
   reset              Wipe and recreate the relay-demo fleet, verify it, mint fresh credentials
   fault [service...] Kill the dev-fleet demo service on the given web Nodes
                       (default: ${DEFAULT_FAULT_TARGETS[*]})

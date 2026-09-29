@@ -9,6 +9,12 @@
 # release it — the approval surface would be untestable by construction. This
 # script creates the second, human Account the gate names as its audience.
 #
+# The nine-Node demo fleet runs a different gate
+# (docker/fixtures/approval-gates.demo.json, selected by scripts/demo-fleet.sh):
+# in-band, `requester_allowed: true`, and no audience, so any Account whose
+# role clears the decision floor may decide there. This Account is still
+# created on that fleet and can still decide; it is simply not the only one.
+#
 # SECURITY notes:
 #   - The approver is a HUMAN Account, distinct from the machine/admin
 #     credential an MCP client drives. That separation is the whole point: the
