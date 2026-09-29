@@ -221,16 +221,3 @@ Two things that did *not* come here, and should not be moved here later without 
 - **The built channel claims** — AP-12, AP-13, AP-14 and the weak-channel refusal. The code still
   does all of it and the claims are still true. A spec describes what the system does, not what
   its shipped configuration exercises.
-
-## History
-
-- `2026-09-24` — Created as a `stub` by ADR-0040, holding what that decision shelved: out-of-band
-  as a rule requirement, a Relay-verified approver, the grant-issuance floor that `approval.md`
-  AP-58 was, and second-person rules whose second person Relay authenticated. Each kept with its
-  original argument rather than a summary, because the reasoning is the part worth preserving.
-- `2026-09-25` — ADR-0040 amended: strict separation withdrawn, MCP the approved pathway, the
-  Console and the Control API kept and not relied on. The four shelved properties are unchanged.
-  Two owner rulings recorded here rather than solved: **restarts strand an in-flight approval**
-  (with the two candidate fixes named and neither chosen) and **surface versus client identity**
-  (unresolved by design). *Why this document exists*, the verified-approver item and the AP-69
-  entry are corrected so they no longer describe separation as the posture.

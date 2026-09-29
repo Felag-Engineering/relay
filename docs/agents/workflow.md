@@ -73,8 +73,8 @@ claim or dead weight, for a human to decide. It reports and never fails.
 | Artifact | Written by | The loop may |
 |---|---|---|
 | An invariant, an ADR, `GLOSSARY.md` | You, co-authored in `/spec-author` | Never touch; escalate |
-| Spec: Behaviour, Refusals, Designed, Out of scope, Open questions | You, co-authored in `/spec-author` | Never edit claim text; promote a claim from Designed to Behaviour when its PR lands |
-| Spec: proof rows, Performance rows, History, the Status line | The loop, in the implementing PR | Add and update; never delete a row without a History line |
+| Spec: Behaviour, Refusals, Designed, Out of scope, Open questions, Retired | You, co-authored in `/spec-author` | Never edit claim text; promote a claim from Designed to Behaviour when its PR lands |
+| Spec: proof rows, Performance rows, the Status line | The loop, in the implementing PR | Add and update; never delete a proof row — that is the human's |
 | Design doc (`docs/design/plans/`) | `/design`, by PR | Read; `/milestone-close` deletes it |
 | Issue | `/decompose`; bugs by hand | Comment, label, branch |
 | Code and tests | `/dev-loop`, `/pr-respond` | Everything, on a branch, never on `main` |

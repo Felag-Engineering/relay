@@ -192,14 +192,3 @@ Claims above with **no row**, and so nothing checking them:
   unauthenticated endpoint should not give.
 - **What is the retention and scrape interval assumption behind the latency histogram?** Bucket
   boundaries are a contract once dashboards depend on them.
-
-## History
-
-- `2026-09-17` — with the owner: a Policy denial quoting caller text into the daemon log is an
-  accepted exception to never logging arguments (`policy.md`, R20; #619).
-- `2026-09-15` — First worked through with the owner. Metrics move to a third, loopback-bound
-  listener with an unauthenticated health endpoint; operational signals added (latency, queue
-  depth, pending approvals, reconnect churn, enrollment refusals, store size, webhook failures,
-  below-minimum-version count); the daemon stays dark and is aggregated Relay-side; Prometheus
-  text committed with OpenTelemetry deferred; the security floor is not exported.
-- `2026-09-13` — Stub created to name the capability.

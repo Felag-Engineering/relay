@@ -324,18 +324,3 @@ Wanted, deliberately not in the first pass.
 None open. Who may take the actions that write `relay:` labels is settled in `enrollment.md` and
 `quarantine-node.md`; a re-enrolled Node is a new record whose tags do not follow it
 (`enrollment.md`).
-
-## History
-
-- `2026-09-13` — worked through with the owner. `relay:` labels exist only as the side effect of
-  Relay actions (enrollment writes `relay:enrollment-token` and `relay:node-id`; token scope moves
-  to `tag:`); `node:` gains daemon-filled built-ins beside declared labels read on reload, with an
-  all-or-nothing file and `state:labels-invalid`; `tag:` is writable by `operator`+ on every
-  surface including MCP; `state:` gains `policy-invalid` and `raw-exec-enabled` and retires the
-  Template terms; Selectors gain value sets, value globs and negation outside `relay:`; an empty
-  Selector is refused for dispatch; per-Node label limits.
-- `2026-09-12` — ADR-0038: the list of specs citing invariant 7 now names `policy-preflight`
-  (renamed from `plan-mode`) and `plan`.
-- `2026-09-12` — First written. Extracted because several capability specs cite this vocabulary
-  (execution, policy-preflight, plan, approval, query) and would otherwise restate invariant 7's
-  namespace rules.

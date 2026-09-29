@@ -229,16 +229,3 @@ leaked (#584).
   answer sets the CI matrix and the signing-key story.
 - **Does a restart-interrupted Task have a distinct outcome on the wire, or is it an existing
   one?** It is contract (`/proto`) either way, so it is decided before it is built.
-
-## History
-
-- `2026-09-19` — with the owner, for `policy-catalog.md`: a Policy directory of fragments beside
-  the Policy file, composed into one Policy, applied by restart; the Policy file's
-  place-if-absent rule unchanged; a first-party Ansible role named as Future work.
-
-- `2026-09-15` — First worked through with the owner. Bare binary plus unit and env file as the
-  day-one artifact, with packages deferred; the install places the default Policy only when
-  absent; the two-line join-string configuration adopted; hardened unit by default with a
-  documented drop-in for mutate-capable Nodes; restart grace with an interrupted-Task outcome;
-  revoke-then-remove decommissioning; agentless SSH kept out of the capability and tracked.
-- `2026-09-13` — Stub created to name the capability.

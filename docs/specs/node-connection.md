@@ -248,14 +248,3 @@ Claims with **no row**, and so nothing checking them:
 ## Open questions
 
 None open. The stub's twelve questions were settled with the owner on `2026-09-14`.
-
-## History
-
-- `2026-09-14` — worked through with the owner. "Connected" means a 60-second jittered heartbeat
-  within a 3-miss allowance, with gRPC keepalive on both sides; a Task acknowledgement deadline
-  resolves silent Nodes as `unacknowledged` (may have run, never re-sent); one current stream per
-  Node, newest replaces; Relay-paced admission with a retry-after hint; audited changes to
-  security-relevant self-reports; protocol-too-old refused at connect while outdated Nodes connect;
-  renewed certificates on next connect; clock skew as a Fact; an expired Node goes dark until
-  re-enrolled; the 10k/100k scale contract lives here.
-- `2026-09-13` — stub created to name the capability.

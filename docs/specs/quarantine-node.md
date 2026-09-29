@@ -219,14 +219,3 @@ No claim here is proven yet. Claims with **no row**, and so nothing checking the
    it. Forced if AI-agent quarantines prove noisy in practice.
 2. **Is a single pinned key enough?** ADR-0006 mentions "emergency cohorts"; nothing defines one.
    Forced if a second response state beyond quarantine is ever proposed.
-
-## History
-
-- `2026-09-14` — worked through with the owner and renamed from `response-lane.md`. Scope is
-  quarantine only: remediation is ordinary Operations and Plans on `relay:` targets, and secret
-  distribution is Future work. A quarantine blocks every Task, reads included, enforced on the
-  Relay at resolution; cheap to engage (`operator`+, machine Accounts allowed, `relay:` or `tag:`
-  targets, counted against the `mutate` cap) and deliberate to lift (human `admin`, step-up,
-  `relay:` targets only); the Node is not told and stays connected; no expiry; a re-enrolled
-  identity does not inherit it. Invariant 7 amended to match (#582).
-- `2026-09-13` — stub created to name the capability.

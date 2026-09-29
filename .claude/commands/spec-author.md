@@ -34,7 +34,7 @@ subagent with a narrow brief and take back only the verdict.
    spec's prefix. Behaviour and Refusals hold only what is true of `main` today; decided-but-
    unbuilt goes under *Designed, not built* with the milestone the owner names. Never write an
    unbuilt behaviour in the present tense in Behaviour. Never reuse an ID; a retired claim gets
-   a History line.
+   a line under *Retired*.
 4. **Argue.** After the draft, read it back adversarially: the two or three places you think it
    is wrong, over-reaching or inconsistent. Then revise with the owner.
 5. **Check.** Run `/spec-check <spec>` and work through its findings with the owner until it
