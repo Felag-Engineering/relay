@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/capability"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/controlplane"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/jobs"
-	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodestate"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/nodevocab"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/policyview"
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
@@ -23,54 +21,21 @@ import (
 // state_labels can never disagree with whether it matched the request's own
 // filter.
 func nodeItemFromNode(n registry.Node, ev capability.StateEval) NodeItem {
-	states := nodestate.Labels(nodestate.Input{Node: n, Now: ev.Now, CertExpiringWithin: ev.CertExpiringWithin})
-	stateLabels := make([]string, 0, len(states))
-	for _, l := range states {
-		stateLabels = append(stateLabels, l.String())
-	}
-
 	item := NodeItem{
-		NodeID:      n.NodeID,
-		NodeLabels:  n.NodeLabels,
-		RelayLabels: n.RelayLabels,
-		Facts: FactsOutput{
-			Hostname:    n.Facts.Hostname,
-			OS:          n.Facts.OS,
-			Kernel:      n.Facts.Kernel,
-			Arch:        n.Facts.Arch,
-			IPAddresses: n.Facts.IPAddresses,
-		},
+		NodeID:                 n.NodeID,
+		NodeLabels:             n.NodeLabels,
+		RelayLabels:            n.RelayLabels,
+		Facts:                  FactsOutput(controlplane.RenderFacts(n)),
 		PolicyFingerprint:      n.PolicyFingerprint,
 		TemplateSetFingerprint: n.TemplateSetFingerprint,
 		Revoked:                !n.RevokedAt.IsZero(),
 		Outdated:               n.Outdated,
 		Connected:              n.Connected,
-		StateLabels:            stateLabels,
+		StateLabels:            controlplane.StateLabels(n, ev),
 	}
 	item.LastSeen = controlplane.RFC3339(n.LastSeen)
 	item.RevokedAt = controlplane.RFC3339(n.RevokedAt)
 	return item
-}
-
-// certificateFromNode renders the Node's identity provenance (#440).
-//
-// Recorded gates every other field. A Node that enrolled before provenance was
-// stored has a zero NotAfter, and emitting that as an RFC3339 timestamp would
-// hand a caller an expiry in 1970 — a Node that reads as catastrophically
-// overdue rather than one the Relay simply has nothing to say about.
-func certificateFromNode(n registry.Node) CertificateOutput {
-	out := CertificateOutput{
-		Recorded:     n.CertProvenanceKnown(),
-		Fingerprint:  n.CertFingerprint,
-		RenewalCount: n.RenewalCount,
-	}
-	if !out.Recorded {
-		return out
-	}
-	out.NotAfter = n.CertNotAfter.UTC().Format(time.RFC3339)
-	out.EnrolledAt = controlplane.RFC3339(n.EnrolledAt)
-	out.LastRenewedAt = controlplane.RFC3339(n.LastRenewedAt)
-	return out
 }
 
 // normalizeArgSets maps a nil positional arg-set list to an empty one, so a
@@ -243,7 +208,7 @@ func registerNodeTools(srv *sdkmcp.Server, lane ReadLane) {
 
 		out := DescribeNodeOutput{
 			NodeItem:    nodeItemFromNode(desc.Node, desc.Eval),
-			Certificate: certificateFromNode(desc.Node),
+			Certificate: CertificateOutput(controlplane.RenderCertificate(desc.Node)),
 		}
 		out.TemplateVocabulary = templateVocabularyOutput(desc.Templates, desc.TemplatesReported)
 		if desc.PolicyReported {
