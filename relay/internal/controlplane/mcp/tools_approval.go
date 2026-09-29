@@ -53,8 +53,9 @@ import (
 //
 // approve_request is always asserted this way, including on an OAuth human
 // session, because the tool is model-called: treating its approver as
-// verified would let a model approve its own request on a human's session.
-// The answered retry's AP-79 exception to this rule is described below.
+// verified would record a model-supplied approver as verified, when the
+// tool call only ever lets it assert one. The answered retry's AP-79
+// exception to this rule is described below.
 //
 // # The second envelope (ADR-0029 decision 6)
 //

@@ -184,6 +184,9 @@ func TestE2EOAuth_ApproveRequestOnAHumanSessionStillRecordsAnAssertion(t *testin
 
 	// Subtests run in order on the SAME parked request: (a) before (b),
 	// because (b) decides it.
+	// This would refuse on any session — the approver bound refuses a blank
+	// value first — so it proves nothing about the human-OAuth case on its
+	// own; the next subtest carries that proof.
 	t.Run("approver \"\" is refused as a machine self-decision", func(t *testing.T) {
 		approveRes := relaytest.CallTool(t, session, "approve_request", map[string]any{
 			"request_id": requestID,
