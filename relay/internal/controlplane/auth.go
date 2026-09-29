@@ -280,14 +280,22 @@ func SourceAddress(r *http.Request) string {
 }
 
 // refuse renders an authentication failure in the shape the caller can act on:
-// a browser reaching the Console is sent to the sign-in page, everything else
-// gets the generic 401 challenge.
+// a request for a Console page that presents no bearer header is sent to the
+// sign-in page; everything else gets the generic 401 challenge.
+//
+// Both conditions are needed. Scope (#459) is where the request was going:
+// `/mcp` and `/api/v1` answer with the challenge whether or not a Console is
+// mounted, because its `resource_metadata` pointer is how an MCP harness
+// discovers the OAuth flow (ADR-0024), and a harness sent to an HTML sign-in
+// page instead cannot start it. The bearer header is the shape the lane was
+// chosen by (authenticateRequest): a caller that presented one is a machine
+// caller even on a Console path, and a sign-in page is no use to it.
 //
 // The DISTINCTION IS PRESENTATION ONLY. Both paths refuse identically and
-// disclose nothing about why, and the branch is taken on where the request was
-// going, never on anything about the credential presented.
+// disclose nothing about why: nothing about whether a credential was
+// recognised, expired or revoked decides which one is taken.
 func (a *Authenticator) refuse(w http.ResponseWriter, r *http.Request) {
-	if a.console != nil && !hasBearer(r) {
+	if a.console != nil && a.console.scope(r) && !hasBearer(r) {
 		a.console.unauthorized.ServeHTTP(w, r)
 		return
 	}
