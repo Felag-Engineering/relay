@@ -21,6 +21,13 @@ does not see the model's intent, and it must never pretend to. That limitation i
 verified record of what was asked beats a narrated account of why, which an agent under prompt
 injection would happily fabricate.
 
+**The lede claims no more than the screen lists.** It says the screen lists calls that reached the
+Relay from outside this Console — which is where an AI-agent's calls arrive, and where a person's
+arrive too when they call through MCP or the Control API — and it keeps the warning that the Relay
+sees the request and never the reasoning. It does not say "every call an AI-agent makes": the
+screen cannot tell an AI-agent from a person using the same surface, and it deliberately leaves
+out calls made from this Console (below).
+
 ## There are no sessions
 
 The MCP transport is **stateless** (ADR-0028; `Stateless: true`, no `Mcp-Session-Id` — a Job ID
@@ -140,6 +147,53 @@ an audited call, so it is not a call this screen's rail can count — the rail's
 Denied fields stay call-grained. It joins the rail once its dispatch is recorded. An otherwise
 empty rail says so instead of "No Account has called a control surface yet.", since a page
 showing only running Jobs is not truthfully an empty one.
+
+## Calls made from this Console
+
+Every page this Console renders reads through the capability layer's audited read lane, so every
+page the signed-in operator opens is itself a call on the trail (`query_audit`, `list_nodes`,
+`query_jobs`, …, attributed to their own Account). Listed as they are, they fill the feed and the
+rail within minutes of use and bury the AI-agent's calls this screen exists to show.
+
+**Where the Agents screen lists calls and counts them on the rail, a call whose audit record says
+its identity was established by a Console session is left out by default.** The rule reads the
+authentication method on the record's verified lane, as it was written when the call was made
+(`console_session`), and nothing else. It never reads the Account registry and never reads an
+Account's kind: the owner decision under "Kind (machine or human) is not on the rail" above
+(2026-09-08, #540) stands unchanged, and this rule does not depend on it. A call made from a
+Console session is, by construction, a person using this Console, whatever kind of Account they
+signed in with.
+
+- **The exclusion is never silent.** Where it is in force, one plain sentence beside the feed says
+  that calls made from this Console are left out, how many of the calls on this page that was, and
+  links to the same view with them shown (`?console=show`). Where that parameter is set, the
+  screen lists and counts exactly as it would without this rule, and the sentence offers the way
+  back.
+- **`?account=` composes with it.** An Account filter narrows what the default leaves; with
+  `?console=show` it narrows everything. Every link the screen draws — the rail, Older, Newest,
+  "Show every Account", Refresh and auto-refresh — carries both parameters as it found them.
+- **It is presentation over the fetched page**, like the polling collapse: the lane is asked for
+  the same page with the same filter it always was, and no read is added or widened. The page is
+  still bounded by the most recent 200 audited calls counted *before* the exclusion, so a page can
+  list fewer than 200, and a page of nothing but Console calls lists none while still offering
+  Older. The sentence's count is what keeps that arithmetic visible.
+- **The method decides what is listed and is never displayed.** Nothing on this screen says how an
+  actor authenticated (owner decision, 2026-09-29).
+- **Everything done from a Console session is left out alike**: its reads, and also a Cancel or an
+  approval decision made from this Console. Those acts stay on Activity, on Job detail and on the
+  approval object, where they are the subject.
+- **The Running section is unaffected.** It is read from the Job row, which records no method.
+- **The rail's empty-state sentences stay true.** Where the rail lists nobody because every call
+  on the page came from this Console, it says that, rather than that no Account has called.
+
+## Refreshing
+
+The Agents screen offers **Refresh** and opt-in **auto-refresh**, under the rules in
+[`00-foundations.md`](00-foundations.md) ("Refreshing a screen"). It holds no form an operator
+types into in any state. It does hold Cancel forms (v0.7.0), so **where a page renders a Cancel
+control, auto-refresh is paused** on that page and one plain sentence beside the control says so;
+Refresh stays. The "About this screen" disclosure says that every reload is an audited read, and
+that those reads are Console calls, so the default above leaves them out of this screen.
 
 ## Interruption
 

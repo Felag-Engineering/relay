@@ -61,6 +61,14 @@ New events **queue behind an explicit click** ("3 new events — show") rather t
 Nothing moves under what someone is reading. This is rule 6 of the foundations and it is not
 negotiable on a screen whose whole job is careful reading.
 
+**Where events have queued, the click is an obvious control**: drawn as a button, not as a line of
+small text, and it reloads the page with the current filter preserved, at its newest page. Beside
+it, one sentence says what the number counts, in plain lower-case words: events on the stream,
+not rows that will appear, from a stream this page's filter does not narrow, where one Job
+announces itself more than once. Activity never auto-refreshes: its filter bar is a form the
+operator types into (`00-foundations.md`, "Refreshing a screen"). The "About this screen"
+disclosure says that every reload is an audited read.
+
 ## Read rows
 
 A read-class dispatch shows its metadata and says the output is not retained. Do not build a

@@ -266,6 +266,40 @@ drawn as part of the control or figure it qualifies, in the quiet note style, no
 block; its longer explanation may stay in the disclosure. The dashed `gap` box is for a message
 about this request, this caller or this record that the operator must stop and read.
 
+## Refreshing a screen
+
+A screen that lists things which arrive on their own — calls, approval requests, Jobs — may offer
+a way to see what is new without the browser's reload button. Two controls, with rules:
+
+- **Refresh** is a plain link to the same screen with the current query preserved. It reloads the
+  page; it never splices rows into the page someone is reading (rule 6).
+- **Auto-refresh**, where a screen offers it, is **off by default** and is turned on and off by a
+  link that sets or clears one query parameter, `refresh`. The choice is visible in the URL and
+  lasts only as long as the operator keeps that URL.
+- **Where auto-refresh reloads a page, its interval is one of a fixed set chosen in code** — 15,
+  30 or 60 seconds — and never a number taken from the URL. Any other value leaves auto-refresh
+  off, and the screen says so in one plain sentence beside the control.
+- **Where auto-refresh reloads a page, it does so without script**: a `<meta http-equiv="refresh">`
+  rendered only while the parameter holds an allowed value. The content security policy and the
+  no-inline-script rule are unchanged by it.
+- **Where a page holds a form the operator may type into, it never auto-refreshes**, in any state.
+  That rules out the approval object ([08](08-approval-object.md)), Accounts
+  ([15](15-accounts-and-tokens.md)) and Activity, whose filter bar is a form
+  ([04](04-activity.md)). Those offer the manual control only, or none.
+- **Where a page is showing a Cancel control, it does not auto-refresh either**: a reload can move
+  a button under the operator's pointer, and on Cancel that is a different Job's Tasks stopped.
+  While auto-refresh is asked for on such a page, one plain sentence says it is paused and why.
+
+**A reload makes exactly the reads a page load makes, and is audited exactly as they are.** Where
+a screen's reads go through the capability layer's audited read lane, every reload, by hand or
+automatic, is an audited read; where a screen's read writes no record, a reload writes none either.
+Each screen that offers either control says which in one sentence in its "About this screen"
+disclosure, and never claims a record the trail does not hold. Auto-refresh re-reads the Relay's own records and dispatches nothing to any Node. It is the
+operator's opt-in to reload a page, not a scheduled read of the fleet. This section reads the
+"no scheduled or repeated reads" decision in [README](README.md) as a rule about pulling data from
+Nodes — a Node is still only ever read by a Job with a Plan — and if that decision was meant to
+cover page reloads too, auto-refresh needs a ruling before it stays.
+
 ## The incident ladder
 
 Three rungs, in ascending order of blast radius. Every screen that offers one must make its
