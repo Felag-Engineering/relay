@@ -1,0 +1,35 @@
+#!/bin/sh
+# systemctl-shim — DEV-ONLY demo fixture. Never ship this anywhere but the
+# local dev fleet (docs/dev-fleet.md).
+#
+# The busybox Nodes have no systemd, so the Native `service.restart` Operation
+# has nothing to spawn: the daemon runs the fixed argv
+# `systemctl restart <unit>` (resolved on its own fixed PATH) and the Task
+# fails with `spawn systemctl: No such file or directory`. On the Nodes that
+# run the dev-fleet demo service, this shim stands in for systemctl and runs
+# `/usr/local/bin/dev-fleet-service restart`, so a Policy-allowed
+# `service.restart` (unit nginx or php-fpm on policy.web.toml) restarts the
+# real `busybox httpd` that script manages.
+#
+# It accepts `restart` and nothing else: `service.restart` is its only
+# caller, and every other verb exits 2 without touching the service.
+#
+# What it does NOT fake: every exit code still comes from dev-fleet-service's
+# own live HTTP probe of that httpd, never from this file. The unit name is
+# ignored — there is one service on these Nodes, whatever the unit is called —
+# and Policy, not this shim, decides which units may be asked for.
+#
+# Where it exists. The image bakes it OFF the PATH, at
+# /usr/local/lib/dev-fleet-service/systemctl; docker/daemon-entrypoint.sh
+# links it to /usr/local/bin/systemctl only on `role=web` Nodes. Everywhere
+# else `service.restart` still fails exactly as before, which the demo
+# runbook's db beat relies on. It is not reachable through Raw Exec: the
+# fixtures' only systemctl allow names /usr/bin/systemctl, which does not
+# exist on this image.
+case "$1" in
+    restart) exec /usr/local/bin/dev-fleet-service restart ;;
+    *)
+        echo "systemctl shim: unsupported verb $1" >&2
+        exit 2
+        ;;
+esac

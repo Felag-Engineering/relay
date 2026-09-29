@@ -45,7 +45,10 @@ count below is for nine.
    project already publishes them.
 
 2. **`make demo-build`.** Do it the day before, not on stage — it is the only demo-fleet target
-   that builds anything, and again after any code change.
+   that builds anything, and again after any code change. It also fetches the images of the
+   services that are never built (today `curlimages/curl`, for the `approver`,
+   `console-admin` and `bootstrap` one-shots), only where they are missing, so a fresh Docker
+   engine is left ready for `make demo-reset`, which never pulls.
 
 3. **`make demo-reset`.** Expected closing output *(predicted — the literal `echo` lines in
    `scripts/dev-fleet-mcp.sh`'s `cmd_init` and `scripts/demo-fleet.sh`'s `cmd_reset`)*, in this
@@ -147,41 +150,56 @@ response carries `"api_token"` (redacted metadata) and `"token"` (the `glp_` pla
 
 The role choice, stated plainly:
 
-- **`kind: "machine"`.** The AI-agent authenticates as a machine Account (GLOSSARY). A machine
-  Account may never decide its own request, whatever `requester_allowed` says
-  (`approval.ErrMachineSelfDecision`), and it cannot engage the Freeze (human-only).
+- **`kind: "machine"`.** The AI-agent authenticates as a machine Account (GLOSSARY). Whatever
+  `requester_allowed` says, Relay refuses a machine Account's answer to its own request
+  (`approval.ErrMachineSelfDecision`) unless it arrives in-band carrying a non-blank asserted
+  name — the `approver` on `approve_request`, or the responder on an answered approval
+  question — which is recorded as an assertion beside Gleipnir's verified identity, never as
+  verified. Relay cannot tell whether a human gave that name: an AI-agent steered by prompt
+  injection could call `approve_request` with a made-up name and release its own request. That
+  is the accepted client-integrity assumption of in-band approval
+  ([approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029), not a
+  guarantee this fleet adds. It cannot engage the Freeze (human-only).
 - **`role: "operator"` is the default and the recommendation.** It is the lowest role that can
   run the demo's Operations (running an Operation needs `operator`; `authz.requiredRole`) — the
   "lowest role that does its job" rule
-  [control-plane-credential.md](control-plane-credential.md) states. It also keeps the approval
-  beat honest over the Control API: an operator cannot mint an API Token for anyone through that
-  surface, and it is not in the gate's audience either way — see
-  [The human approver](#the-human-approver) for what that separation does and does not guarantee
-  on a single laptop.
-- **The cost of operator.** Raw Exec is admin-only, so Gleipnir cannot request the Raw Exec
-  repair of the fault — the presenter drives that beat by hand instead (see
-  [Triggering and clearing the fault](#triggering-and-clearing-the-fault)). Gleipnir can still
-  discover the fault with a read (`file.read`) and request a mutate that parks:
-  `service.restart` on `node:role=web, node:env=prod` (fan-out 2, mutate class) parks under
-  `dev-fleet-wide-mutates-need-a-human` *(predicted)* — a different rule from the one beat (c)
-  below exercises (`dev-raw-exec-always-needs-a-human`, which is Raw Exec-specific, not
-  fan-out-specific). Approving it would not actually repair anything: `service.restart` hits the
-  same busybox limit as beat (d) below (`spawn systemctl: No such file or directory`)
-  *(predicted)*, so this parks-then-fails, and only demonstrates parking. Beat (d) is unaffected
-  by any of this: both of its Selectors are fan-out 1, so it runs with no human, and `operator`
-  is enough to run it. An operator-level repair of the fault, driven by Gleipnir itself, becomes
-  possible once [#626](https://github.com/Felag-Engineering/gleipnir-relay/issues/626) makes the
-  `svc.restart` Template dispatchable.
+  [control-plane-credential.md](control-plane-credential.md) states. An operator also cannot mint
+  an API Token for anyone through the Control API. See
+  [The human approver](#the-human-approver) for who may decide what under the demo gate.
+- **What operator can do, and what it costs.** Raw Exec is admin-only, so Gleipnir cannot
+  request the Raw Exec repair of the fault — the presenter drives that one by hand (see
+  [Triggering and clearing the fault](#triggering-and-clearing-the-fault)). But Gleipnir can
+  discover the fault with a read (`file.read`) and repair it with a gated mutate of its own:
+  `service.restart` with unit `nginx` on `node:role=web, node:env=prod` (fan-out 2, mutate
+  class) parks under `demo-fleet-wide-mutates-need-a-human` — a different rule from the one
+  beat (c) below exercises (`demo-raw-exec-always-needs-a-human`, which is Raw Exec-specific,
+  not fan-out-specific). Because that rule is in-band, Relay sends the approval question to
+  Gleipnir — a client declaring the name `gleipnir` — and Gleipnir's retry carrying an answer
+  with a responder named runs the Job. That Gleipnir puts the question to a human in its own UI,
+  and that the named responder is that human, is Gleipnir's behaviour, which Relay does not
+  verify (see `kind: "machine"` above). On the web Nodes `service.restart`
+  reaches the dev-fleet demo service through the DEV-ONLY `systemctl` shim
+  ([The fixture limit, stated plainly](../dev-fleet.md#the-fixture-limit-stated-plainly)), so
+  it restarts the real `httpd` on `daemon-4` and `daemon-5`: 2 × `success, exit_code: 0`, and a
+  faulted `daemon-4` is serving again. Observed on a live fleet: the question asked and the
+  answered retry running its Job; `service.restart` of `nginx` exiting `0` on a web Node. The
+  combination on this exact Selector, and the fault clearing through it, is *(predicted)*.
+  Beat (d) is unaffected: both of its Selectors are fan-out 1, so it runs with no human, and
+  `operator` is enough to run it.
 - **`role: "admin"` is the alternative**, and its trade-off is named rather than hidden: it lets
-  Gleipnir run the Raw Exec repair itself. But Account and API-Token administration are
+  Gleipnir request the Raw Exec repair itself, and a Raw Exec is decided at `admin` too — the
+  floor for deciding is the floor for requesting. Account and API-Token administration are
   admin-only and not human-only (`authz.requiredControlRole`; the owner decision to narrow them
-  is recorded there as open) — so a machine admin can mint an API Token for `dev-approver` and
-  decide its own parked dispatch as `dev-approver`. With `admin`, the "second human" is a
-  convention on stage, not a structural guarantee. If you choose `admin`, change `"operator"` to
-  `"admin"` in the create body above, and say this on stage rather than claim the gate is
-  structural. **A human should confirm this choice** before a presenter relies on it, and the
-  Gleipnir-side runbook ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933))
-  must agree with whichever role is actually used.
+  is recorded there as open), so a machine admin can also mint API Tokens for other Accounts.
+  It is not free for approvals either: under the demo gate an `admin` Gleipnir can release its
+  own Raw Exec exactly as an `operator` Gleipnir can release its own Operation — an in-band
+  answer carrying a name it supplied itself — so with `admin`, every Raw Exec on this fleet is
+  one Gleipnir could request and release alone (see `kind: "machine"` above and
+  [The human approver](#the-human-approver)). If you choose `admin`, change `"operator"` to
+  `"admin"` in the create body above. **A human should confirm this choice** before a presenter
+  relies on it, and the Gleipnir-side runbook
+  ([gleipnir#933](https://github.com/Felag-Engineering/gleipnir/issues/933)) must agree with
+  whichever role is actually used.
 - A pre-existing `gleipnir` Account is reused as it is, whatever its role. To see its role, read
   `"role"` in `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`. After a reset there is none.
 
@@ -230,51 +248,96 @@ Gleipnir's own secret input, and never copy it off the laptop.
 
 ### The human approver
 
-Nothing to create here. The `approver` one-shot (`docker/mint-approver.sh`) creates
-`dev-approver`, a human admin Account, on every reset, and `make demo-reset` copies its API
-Token to `.dev-fleet/approver-credential`.
+**The demo fleet runs its own gate, and it is in-band.** `make demo-reset` and `make demo-up`
+start the Relay on `docker/fixtures/approval-gates.demo.json`, not on the default fleet's
+`approval-gates.json` ([The approval gate](../dev-fleet.md#the-approval-gate)):
+`scripts/demo-fleet.sh` sets `DEV_FLEET_APPROVAL_GATE_CONFIG`, which `docker-compose.yml` hands
+the Relay as `RELAY_APPROVAL_GATE_CONFIG`. A bare `docker compose --profile demo up` sets
+nothing and gets the default fleet's out-of-band gate — one more reason to use the `make demo-*`
+targets. Both files are baked into the relay image root-owned `0644`. No API writes either of
+them: gate rules are file-loaded today, so the only way to change them is a new image and a
+restart. (Invariant 11 would permit gate rules to become a runtime object, edited only by a
+human with step-up and audited; they are not one yet.) Their rule names are not secret — a
+parked response names the rules that fired in `matched_rules`. Two rules, matching exactly the dispatches the default
+fleet's two rules match:
 
-What is structural here is narrower than "two distinct people": on stage, one presenter holds
-both the founding admin's credential and `dev-approver`'s. What holds, with Gleipnir at
-`operator`, is that Gleipnir's own request cannot be approved with Gleipnir's own credential:
+| Rule | Matches | Requires |
+| --- | --- | --- |
+| `demo-fleet-wide-mutates-need-a-human` | `mutate` class, fan-out **≥ 2** | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
+| `demo-raw-exec-always-needs-a-human` | every Raw Exec | 1 approval, `in-band`, `requester_allowed: true`, no audience, `ttl` 1h |
 
-- Both gate rules in `docker/fixtures/approval-gates.json` name `dev-approver` as their only
-  audience. Only `dev-approver` can satisfy them — neither Gleipnir nor the founding admin is in
-  the audience.
-- `requester_allowed` is unset (the strict default), so the requesting Account may not approve
-  its own parked dispatch. Independently of that, a machine Account may never decide its own
-  request (`ErrMachineSelfDecision`).
-- An operator Gleipnir cannot mint an API Token **through the Control API**, so it cannot obtain
-  `dev-approver`'s credential that way. (With `admin` it could — see the role trade-off above.)
-  That is a property of the API, not of the laptop: `make demo-reset` also writes
-  `.dev-fleet/approver-credential` and `.dev-fleet/control-credential` (`0600`) to the
-  filesystem, and a Gleipnir process running as the presenter's own OS user can read both
-  regardless of its Account role. The separation above is API-enforced only if Gleipnir cannot
-  also read `.dev-fleet/` — a different OS user, a container, or a machine separate from the
-  presenter's own shell. Where it can, the separation is a convention on stage, the same caveat
-  named for the `admin` role above, not a structural one.
+They exist so that an MCP client can be **asked** the approval question in-band, or answer with
+`approve_request` — the default fleet's gate permits neither: it is out-of-band, so no question
+is emitted and `approve_request` is refused as too weak a channel.
 
-See [The approval gate](../dev-fleet.md#the-approval-gate) for the rule table.
+**Who may decide**, from the gate semantics in [approval-gates.md](approval-gates.md#who-may-decide):
 
-Confirm it exists: `scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`, then look for
-`"name": "dev-approver"` with `"kind": "human"`.
+- **No audience** means any Account whose role clears the decision floor, which is the floor
+  the Action needed to be requested: `operator` for an Operation, `admin` for a Raw Exec. So
+  `dev-approver` (human, admin), the founding admin (human, admin) and the Console's `admin`
+  (human, admin) may each decide any request here. An `operator` Gleipnir may decide a gated
+  Operation, and never a Raw Exec.
+- **`requester_allowed: true`** means the requester may fill the slot. A **human** requester —
+  the founding admin driving a Raw Exec by hand — may approve its own parked dispatch. A
+  **machine** requester — Gleipnir — may too, provided its in-band answer carries a non-blank
+  asserted name, recorded beside Gleipnir's verified identity. Relay cannot tell whether a
+  human gave that name; a prompt-injected AI-agent could supply a made-up one and release its
+  own request (see `kind: "machine"` above).
+- **In-band is the floor, not the only way.** An in-band rule is satisfied by an in-band answer
+  and equally by an out-of-band decision — a stronger channel satisfies a weaker rule.
 
-Where the decision is made: on the Control API, as `dev-approver`:
+Three ways to answer, then re-issue the original call unchanged — approving releases the Plan;
+it does not itself dispatch (on the asked-in-band path the client's retry is that re-issue):
 
-```console
-$ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request-id>/decision \
-    '{"approve":true,"plan_hash":"<plan-hash>","reason":"approved on stage"}'
-```
+1. **Asked in-band.** A client that declares the name `gleipnir` and can be asked gets a
+   Relay-authored approval question instead of `pending_approval`; its retry carrying an
+   answer, with a responder named, records the decision and runs the Job. Putting the question
+   to a human is the client's job, and Relay does not verify that it did. Observed on
+   a live fleet, with Gleipnir on its API Token. `claude-code` is asked only on a human
+   Account's OAuth session, and every other client — `scripts/dev-fleet-mcp.sh` included —
+   gets `pending_approval` and asks nobody.
+2. **`approve_request`**, from a client that got `pending_approval`. Observed on a live fleet
+   for an unrecognised client: `pending_approval`, then `approve_request`, then the re-issued
+   call ran. By hand, as the founding admin *(predicted)*:
 
-then re-issue the original call unchanged — see beat (c) below rather than a duplicate of it
-here.
+   ```console
+   $ scripts/dev-fleet-mcp.sh call approve_request \
+       '{"request_id":"<request-id>","plan_hash":"<plan-hash>","approve":true,"approver":"<your name>","reason":"approved on stage"}'
+   ```
 
-**Why not the Console.** The Console can decide an approval — it mounts an approval decision
-route, with step-up re-authentication. But it decides as the signed-in human, and the only
-Account with a Console password in this fleet is `admin`
-(`docker/console-password.sh` sets one only for `CONSOLE_ADMIN_NAME`). `admin` is not in the
-gate's audience, so a Console decision would be refused as not in the audience *(predicted)*.
-`dev-approver` has no Console password, and giving it one is out of scope here.
+   `approver` names the human who decided. It is required, recorded as asserted, and never
+   verified.
+3. **Out-of-band**, exactly as on the default fleet — on the Control API as `dev-approver`
+   *(predicted under this gate)*:
+
+   ```console
+   $ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request-id>/decision \
+       '{"approve":true,"plan_hash":"<plan-hash>","reason":"approved on stage"}'
+   ```
+
+   or in the Console, signed in as `admin`, which mounts an approval decision route with step-up
+   re-authentication. `admin` is inside this gate's empty audience, so a Console decision is
+   accepted here *(predicted)*; on the default fleet's gate it is refused as not in the
+   audience.
+
+**What is structural, and what is not.** Much less than on the default fleet, deliberately: the
+demo gate exists to show the in-band question, and an in-band answer is, by construction, the
+requesting session's word that a human agreed. What still holds: no API changes the gate;
+nobody below `admin` releases a Raw Exec; a decision binds to the plan hash, and a retry whose
+Node set changed parks and asks again. What does not hold is a second person, or even a
+verified first one: a human requester may approve its own request; one presenter holds every
+credential in `.dev-fleet/`; and a machine Account's in-band answer needs only a non-blank
+name the client supplies, so an AI-agent steered by prompt injection could call
+`approve_request` with a made-up name and release its own request. That last one is the
+accepted client-integrity assumption of in-band approval
+([approval.md, Channel strength](../specs/approval.md#channel-strength); ADR-0029). Say so on stage rather than claim the gate is a two-person control; the
+default fleet's gate is the one that demonstrates that.
+
+`dev-approver` still exists on this fleet — the `approver` one-shot (`docker/mint-approver.sh`)
+creates it, a human admin Account, on every reset, and `make demo-reset` copies its API Token
+to `.dev-fleet/approver-credential`. Confirm it with
+`scripts/dev-fleet-mcp.sh api GET /api/v1/accounts`, then look for `"name": "dev-approver"`
+with `"kind": "human"`.
 
 ### The bypass beat, scripted exactly
 
@@ -324,8 +387,8 @@ Evidence on the page:
 Why this call, recorded so nobody "improves" it into one that parks:
 
 - `file.read` is `read` class, so neither gate rule matches
-  (`dev-fleet-wide-mutates-need-a-human` is `mutate` with fan-out 2 or more;
-  `dev-raw-exec-always-needs-a-human` is every Raw Exec). It dispatches straight to the Node
+  (`demo-fleet-wide-mutates-need-a-human` is `mutate` with fan-out 2 or more;
+  `demo-raw-exec-always-needs-a-human` is every Raw Exec). It dispatches straight to the Node
   with no human.
 - Raw Exec on the bastion would be refused by the Node too
   (`bastion_fixture_denies_every_raw_exec`). But it parks under the Raw Exec rule first, so the
@@ -380,10 +443,19 @@ daemon-4: dev-fleet demo service DOWN (dev-fleet-service status: exit 3)
 daemon-6: dev-fleet demo service DOWN (dev-fleet-service status: exit 3)
 ```
 
-Two ways to clear it:
+Three ways to clear it:
 
-- **On stage:** the Raw Exec restart, parked under `dev-raw-exec-always-needs-a-human` and
-  approved as `dev-approver`. With Gleipnir at `operator` (the default), the presenter requests
+- **On stage, by Gleipnir:** `service.restart` with unit `nginx`, one Selector per faulted
+  environment — `node:role=web, node:env=prod` reaches `daemon-4` (and its healthy sibling
+  `daemon-5`), `node:role=web, node:env=staging` reaches `daemon-6` (and `daemon-9`). Each is a
+  fan-out-2 mutate, parks under `demo-fleet-wide-mutates-need-a-human`, and Relay sends Gleipnir
+  the approval question (putting it to a human in Gleipnir's own UI is Gleipnir's behaviour,
+  which Relay does not verify); the answered retry restarts the real `httpd` through the web Nodes' `systemctl`
+  shim. This is the operator-level repair described under the role choice above *(predicted as
+  a fault repair; see there for what was observed)*. `node:role=web` alone would reach all six
+  web Nodes in one call, which is also fine: the restart is idempotent.
+- **On stage, by hand:** the Raw Exec restart, parked under `demo-raw-exec-always-needs-a-human`.
+  With Gleipnir at `operator` (the default), the presenter requests
   it by hand as the founding admin, using the same fleet-wide selector as beat (c) below so both
   faulted Nodes (`daemon-4`, `env=prod`; `daemon-6`, `env=staging`) clear in one call — a
   narrower Selector such as `node:role=web, node:env=prod` would only reach `daemon-4`:
@@ -393,9 +465,10 @@ Two ways to clear it:
       '{"selector":"relay:env=dev","argv":["/usr/local/bin/dev-fleet-service","restart"]}'
   ```
 
-  Then decide it as `dev-approver`, exactly as in [The human approver](#the-human-approver), and
-  re-issue the call unchanged. The founding admin and `dev-approver` are different Accounts, so
-  the unset `requester_allowed` does not block it. If Gleipnir asks for Raw Exec as `operator`,
+  Then decide it by any of the three ways in [The human approver](#the-human-approver) that an
+  `admin` can use — for example `approve_request` as the founding admin itself (the gate lets
+  the requester decide), or the Control API as `dev-approver` — and re-issue the call unchanged
+  *(predicted)*. If Gleipnir asks for Raw Exec as `operator`,
   the Relay refuses it on role before any gate or Node sees it — say so, so the presenter is not
   surprised.
 - **Between takes:** `make demo-reset`.
@@ -541,8 +614,11 @@ because it changes on any edit to the file, including a comment.
 actually differ in a single-host Docker fleet — `os`, `arch`, and `kernel` all come
 from one shared kernel and one image, so every Node reports the same values for
 those regardless of label. Faking them (e.g. per-Node `/etc/os-release` variants) was
-rejected for the same reason the fake `systemctl` was rejected in the base fleet: a
-dev fleet that lies about what it is is worse than one that is legibly limited.
+rejected for the same reason the base fleet refuses a `systemctl` that reports success
+without doing anything: a dev fleet that lies about what it is is worse than one that is
+legibly limited. (The web Nodes' `systemctl` shim is not that: it restarts a real service
+and reports only what that service's own probe observed —
+[The fixture limit, stated plainly](../dev-fleet.md#the-fixture-limit-stated-plainly).)
 
 `node:env=prod` / `node:env=staging` above are **Node-authored** labels (set by
 `RELAY_NODE_LABELS` in the compose environment, and forgeable by a compromised Node),
@@ -578,6 +654,12 @@ test in this repository can prove and which nobody has yet stood up at n=9. **Ru
 beats once before presenting them, and correct this section with what you actually
 saw.** Each beat below is marked *(tested)* for the half a hermetic test covers, and
 *(predicted)* for the half that requires the real fleet.
+
+Observed since, by hand on a live demo fleet (2026-09-29), and nothing more: under the
+in-band demo gate, a client named `gleipnir` on an API Token was asked the approval question
+and its answered retry ran the Job; an unrecognised client got `pending_approval`, answered
+with `approve_request`, re-issued, and ran; and `service.restart` of `nginx` on a web Node,
+through the `systemctl` shim, exited `0`. The beats below were not re-run under that gate.
 
 ### The four beats
 
@@ -616,10 +698,11 @@ Then:
 raw_exec(selector="relay:env=dev", argv=["/usr/local/bin/dev-fleet-service","restart"])
 ```
 
-→ parks under `dev-raw-exec-always-needs-a-human` with a `request_id` and a
+→ parks under `demo-raw-exec-always-needs-a-human` with a `request_id` and a
 `plan_hash` — the gate rule matches every Raw Exec regardless of fan-out, as written
 in the fixture, though nobody has run this specific fan-out to watch it happen.
-Approve as `dev-approver`:
+Approve it any way [The human approver](#the-human-approver) allows an `admin` — here as
+`dev-approver`, on the Control API:
 
 ```console
 $ scripts/dev-fleet-mcp.sh api-approver POST /api/v1/approvals/<request_id>/decision \
@@ -642,7 +725,9 @@ run_operation(selector="node:role=db, node:env=prod", operation="service.restart
 → dispatched with no human, terminates `failure` with
 `stderr="spawn systemctl: No such file or directory"` and no `exit_code` (the
 documented busybox limit from [The fixture limit, stated plainly](../dev-fleet.md#the-fixture-limit-stated-plainly),
-not a defect) *(predicted)*; and
+not a defect: the `systemctl` shim is installed only on the web Nodes, and a db Node runs no
+demo service for it to restart) *(predicted; the shim's absence on a `role=db` Node was
+observed in the image)*; and
 
 ```
 run_operation(selector="node:role=bastion", operation="service.restart", args={"unit":"nginx"})
@@ -651,6 +736,11 @@ run_operation(selector="node:role=bastion", operation="service.restart", args={"
 → dispatched with no human — the gate's fan-out-1 behavior, untested here,
 same as the first command above *(predicted)* — and refused by the Node:
 1 × `denied_by_policy` *(tested, `bastion_allows_exactly_the_documented_read_and_nothing_else`)*.
+
+There is no successful straight-through `service.restart` at n=9: it succeeds only on the web
+Nodes, and no `node:` Selector in this roster reaches a single web Node (see the repair path
+under [The fault, and resetting between takes](#the-fault-and-resetting-between-takes)), so a
+`service.restart` Selected by label that can succeed is fan-out 2 or more and parks.
 
 ### The threshold, stated on the page
 
@@ -661,7 +751,7 @@ with no human, which is strictly weaker and teaches the audience the opposite of
 point. In particular `node:role=db`, which runs straight through in the three-Node default
 fleet, is **two** Nodes here and parks — `min_fan_out: 2` is a floor. The straight-through path stays reachable through the two fan-out-1 Selectors
 in beat (d) above. Every Raw Exec parks at any fan-out under a separate rule
-(`dev-raw-exec-always-needs-a-human`), and that rule is not retuned either.
+(`demo-raw-exec-always-needs-a-human`), and that rule is not retuned either.
 
 ### The fault, and resetting between takes
 
@@ -719,7 +809,7 @@ web Node in this roster. `node:role=web` alone reaches all six. Of the two
 — `daemon-1` and `daemon-2` carry no `env` label at all (see
 [The nine-Node roster](#the-nine-node-roster)), so they cannot be reached by
 a `role`+`env` combination either, only by the even less selective
-`node:role=web`. So the Raw Exec below reaches the faulted Node and its
+`node:role=web`. So either repair below reaches the faulted Node and its
 healthy sibling both. That is harmless: `dev-fleet-service restart` is
 idempotent, and restarting an already-serving instance still ends in
 `state=running`.
@@ -730,10 +820,25 @@ raw_exec(selector="node:role=web, node:env=prod", argv=["/usr/local/bin/dev-flee
 
 matches `daemon-4` (faulted) and `daemon-5` (healthy); swap `env=prod` for
 `env=staging` to reach `daemon-6` (faulted) and `daemon-9` (healthy) instead.
-Every Raw Exec parks under `dev-raw-exec-always-needs-a-human` regardless of
-fan-out; approve it as `dev-approver` exactly as in
-[Approving a parked dispatch](../dev-fleet.md#approving-a-parked-dispatch), then re-issue the same call unchanged.
-`svc.status` and `svc.restart` become the natural read/mutate pair for this
+Every Raw Exec parks under `demo-raw-exec-always-needs-a-human` regardless of
+fan-out; approve it by any way [The human approver](#the-human-approver) allows an
+`admin` — `dev-approver` on the Control API, exactly as in
+[Approving a parked dispatch](../dev-fleet.md#approving-a-parked-dispatch), still works —
+then re-issue the same call unchanged.
+
+The operator-level repair is the Native Operation over the same Selector:
+
+```
+run_operation(selector="node:role=web, node:env=prod", operation="service.restart", args={"unit":"nginx"})
+```
+
+On the web Nodes `systemctl` is the DEV-ONLY shim
+([The fixture limit, stated plainly](../dev-fleet.md#the-fixture-limit-stated-plainly)), so
+this runs `dev-fleet-service restart`. It is a fan-out-2 mutate, parks under
+`demo-fleet-wide-mutates-need-a-human`, and can be approved in-band by the client that asked (with an asserted responder
+name Relay records and does not verify)
+for it; approved, it returns 2 × `success, exit_code: 0` and the faulted Node serves again
+*(predicted)*. `svc.status` and `svc.restart` become the natural read/mutate pair for this
 once #626 makes the Template pack dispatchable.
 
 **Independent verification.** `file.read` of

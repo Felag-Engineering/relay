@@ -79,7 +79,18 @@ services:
       # straight through, so the fleet exercises BOTH paths. Loading it is
       # fail-closed: a malformed file fails startup rather than silently
       # meaning "nothing needs approval".
-      RELAY_APPROVAL_GATE_CONFIG: "/etc/relay/approval-gates.json"
+      #
+      # DEV_FLEET_APPROVAL_GATE_CONFIG picks WHICH baked-in gate file, and
+      # nothing else: both candidates are in the image, root-owned 0644. Unset,
+      # it is the dev gate above (out-of-band, `dev-approver` only).
+      # scripts/demo-fleet.sh sets it, to the demo fleet's in-band gate
+      # (docker/fixtures/approval-gates.demo.json). That nothing else sets it
+      # is a CONVENTION, not an enforced property: any bare `docker compose`
+      # — `make dev-fleet-up` included — interpolates it from the caller's
+      # shell or a repo-root .env, so a leftover export or .env line would
+      # start the default fleet on the in-band gate. A path that is not in
+      # the image fails startup, like any other unloadable gate file.
+      RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"
       # The Admin Console (ADR-0009), served on the SAME control-plane listener
       # as MCP and /api/v1 — no new listener and no new auth path (invariant
       # 10). Browser sessions are one of the authenticator's credential lanes,
@@ -170,7 +181,10 @@ services:
   # Account that requests a parked dispatch may NOT approve it. Without a second
   # Account the fleet could park a dispatch and never release it. This is the
   # human half of that pair, and its credential deliberately lands on the
-  # control-credential volume that daemons never mount.
+  # control-credential volume that daemons never mount. (The demo fleet's gate,
+  # selected by scripts/demo-fleet.sh, names no audience, so dev-approver is
+  # one Account among several that may decide there — still created, still
+  # usable.)
   approver:
     image: curlimages/curl:8.11.1
     user: "0:0"
@@ -268,8 +282,9 @@ services:
   # daemon-1 and daemon-2 are the `role=web` Nodes: docker/daemon-entrypoint.sh
   # starts the dev-fleet demo service (#389) on each. It binds 127.0.0.1:8080
   # INSIDE its own container only — deliberately not published as a compose
-  # `ports:` mapping, so only that Node's own Tasks (via Raw Exec) ever reach
-  # it.
+  # `ports:` mapping, so only that Node's own Tasks (via Raw Exec, or
+  # `service.restart` through the entrypoint's DEV-ONLY systemctl shim) ever
+  # reach it.
   daemon-1:
     <<: *daemon-base
     # Sets the container's kernel hostname, which gather_facts() reads as the

@@ -280,7 +280,14 @@ The fleet ships an **approval gate** (`docker/fixtures/approval-gates.json`, ADR
 the parked-dispatch and MCP-task-handle surfaces are exercisable rather than theoretical.
 This section covers the dev fixture only; the operator-facing account of gates — rule
 schema, webhook, decision endpoint — is
-[docs/operations/approval-gates.md](operations/approval-gates.md).
+[docs/operations/approval-gates.md](operations/approval-gates.md). The nine-Node demo fleet
+runs a different, in-band gate (`docker/fixtures/approval-gates.demo.json`), selected by
+`scripts/demo-fleet.sh`; see
+[The human approver](operations/demo-fleet.md#the-human-approver) in its runbook. That nothing
+else selects it is a convention, not an enforced property: `docker-compose.yml` reads the selector,
+`DEV_FLEET_APPROVAL_GATE_CONFIG`, from the caller's shell or a repo-root `.env`, so if either
+sets it, `make dev-fleet-up` starts this fleet on the demo fleet's in-band gate. Check that
+neither does.
 Two rules:
 
 | Rule | Matches | Requires |
@@ -335,20 +342,30 @@ Two properties worth watching, because they are the point of the design:
 - The decision arrives on a credential the requesting MCP session does not hold. That is
   what `channel: out-of-band` records — evidence, not an assumption about the client.
 
-## A mutate that really runs — and the two that cannot
+## Mutates that really run — and where they cannot
 
 ### The fixture limit, stated plainly
 
-`service.restart` and `pkg.install` cannot complete on `busybox:stable-musl`: there is no
-service manager and no package manager on this image. `service.restart` terminates in
+There is no service manager and no package manager on `busybox:stable-musl`. `pkg.install`
+cannot complete on any Node, and `service.restart` cannot complete on any Node that does not
+run the demo service (the `role=db` and `role=bastion` Nodes): it terminates in
 `outcome=failure` with `stderr="spawn systemctl: No such file or directory"` and **no
 `exit_code` key** — the documented contract for a Task that never ran a process, not a
 defect (see [issue #389](https://github.com/Felag-Engineering/gleipnir-relay/issues/389)).
 
-This was deliberately **not** papered over: a fake `systemctl` that reports success without
-a service manager would bake a lie into the fixture, and a dev fleet that fakes success is
-worse than one that fails legibly. That reasoning does not weaken because there is an
-audience.
+On the `role=web` Nodes, `service.restart` **does** run, through a DEV-ONLY `systemctl`
+shim (`docker/fixtures/systemctl-shim`). The image bakes it off the `PATH`, and
+`docker/daemon-entrypoint.sh` links it to `/usr/local/bin/systemctl` only on the Nodes that
+run the demo service, so the daemon's fixed `systemctl restart <unit>` argv reaches
+`/usr/local/bin/dev-fleet-service restart` there and nowhere else. The unit name is
+ignored — there is one service on these Nodes — and Policy still decides which units may be
+asked for (`nginx` and `php-fpm` on the web fixture). The shim fakes nothing about the
+outcome: the exit code is `dev-fleet-service`'s own, taken from a live HTTP probe of the
+restarted `httpd` ([The real service](#the-real-service), below), so a restart that fails
+still reports failure. What it stands in for is the service manager, not the result — the
+line the fixture has always drawn is that a dev fleet must never report success it did not
+observe. The Raw Exec `systemctl` allow in the web and db fixtures names
+`/usr/bin/systemctl`, which still does not exist, so that allow stays inert.
 
 `service.restart sshd` remains the deterministic **deny** beat below and never needed
 `systemctl` to exist — the daemon refuses before it execs.
@@ -381,8 +398,10 @@ enough to prove a restart happened, and neither one can lie about the present.
 
 ### The Raw Exec beat
 
-Use `raw_exec(selector=…, argv=[…])` for this — **never `run_operation`**, since the vehicle
-for a working mutate here is Raw Exec, not the Template pack (see below).
+Use `raw_exec(selector=…, argv=[…])` for this — **never `run_operation` with the Template
+pack's `svc.*`**, since those are not dispatchable yet (see below). The one other working
+mutate is `service.restart` on the web Nodes, through the shim described in
+[The fixture limit, stated plainly](#the-fixture-limit-stated-plainly).
 
 Preflight without dispatching:
 

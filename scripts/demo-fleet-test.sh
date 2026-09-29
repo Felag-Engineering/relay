@@ -52,8 +52,13 @@ mkdir -p "$STUB_BIN"
 #     expected to fail parsing, same as failing the call outright).
 #   `docker image inspect ...`                 -> exit
 #     $STUB_IMAGE_INSPECT_RC (default 1).
-#   anything else (including a bare `docker compose ... down`/`up`/`exec`)
-#     -> exit 1.
+#   `docker compose ... <subcommand>` for any other subcommand (`build`,
+#     `pull`, `down`, `up`, `exec`, ...) -> exit 0 if that subcommand is
+#     listed in $STUB_COMPOSE_OK (space-separated, default empty), else 1.
+#   anything else -> exit 1.
+# Every `docker compose` call also logs a second line,
+# `compose-env DEV_FLEET_APPROVAL_GATE_CONFIG=<value or <unset>>`, so a case
+# can assert which approval gate the compose file would have been handed.
 # Nothing here reaches a real Docker engine.
 cat >"$STUB_BIN/docker" <<'STUB'
 #!/usr/bin/env bash
@@ -91,12 +96,18 @@ if [ "${1-}" = "ps" ]; then
 fi
 
 if [ "${1-}" = "compose" ]; then
+    printf 'compose-env DEV_FLEET_APPROVAL_GATE_CONFIG=%s\n' \
+        "${DEV_FLEET_APPROVAL_GATE_CONFIG-<unset>}" >>"$DOCKER_LOG"
     has_images=0
     has_format_json=0
+    sub=""
     for a in "$@"; do
         case "$a" in
             --images) has_images=1 ;;
             json) has_format_json=1 ;;
+            build | pull | down | up | exec | ps | config)
+                [ -z "$sub" ] && sub="$a"
+                ;;
         esac
     done
     if [ "$has_images" -eq 1 ]; then
@@ -113,6 +124,9 @@ if [ "${1-}" = "compose" ]; then
         fi
         exit "$rc"
     fi
+    case " ${STUB_COMPOSE_OK:-} " in
+        *" ${sub} "*) [ -n "$sub" ] && exit 0 ;;
+    esac
     exit 1
 fi
 
@@ -146,7 +160,8 @@ run() {
         -u STUB_ENDPOINT -u STUB_FOREIGN_WORKDIR -u STUB_PORT_OWNER -u STUB_PS_EXIT \
         -u STUB_COMPOSE_IMAGES_RC -u STUB_COMPOSE_IMAGES_OUT \
         -u STUB_COMPOSE_CONFIG_JSON_RC -u STUB_COMPOSE_CONFIG_JSON_OUT \
-        -u STUB_IMAGE_INSPECT_RC \
+        -u STUB_IMAGE_INSPECT_RC -u STUB_COMPOSE_OK \
+        -u DEV_FLEET_APPROVAL_GATE_CONFIG \
         "${envs[@]}" \
         PATH="$STUB_BIN:$PATH" DOCKER_LOG="$DOCKER_LOG" \
         bash "$SCRIPT" "$@" 2>&1)"
@@ -346,6 +361,96 @@ check "SEC2-fault-metacharacter-in-node-list-refused-before-exec" 2 refuses "log
 run DEMO_WAIT_SECONDS=08 -- reset
 check "SEC3-reset-wait-seconds-leading-zero-refused" 2 refuses empty_log
 
+# --- Build pulls the image-only services; reset and up never pull ---
+
+COMPOSE_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo"
+
+# B1: `build` builds, THEN pulls every service that has no build section
+# (`--ignore-buildable`), fetching only what is missing. Without the pull a
+# fresh engine builds cleanly and reset's image precheck then fails on the
+# curl one-shots' image.
+run STUB_COMPOSE_OK="build pull" -- build
+check "B1-build-then-pulls-image-only-services" 0 \
+    "log_contains:$COMPOSE_PREFIX build" \
+    "log_contains:$COMPOSE_PREFIX pull --ignore-buildable --policy missing"
+build_line="$(grep -nF -- "$COMPOSE_PREFIX build" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
+pull_line="$(grep -nF -- "$COMPOSE_PREFIX pull" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
+if [ -z "$build_line" ] || [ -z "$pull_line" ] || [ "$build_line" -ge "$pull_line" ]; then
+    echo "FAIL: B1-build-then-pulls-image-only-services: build (line ${build_line:-none}) must come before pull (line ${pull_line:-none})" >&2
+    fail=$((fail + 1))
+fi
+
+# B2: a failed build stops there; nothing is pulled.
+run STUB_COMPOSE_OK="pull" -- build
+check "B2-failed-build-does-not-pull" 1 \
+    "contains:docker compose build failed" "log_not_contains:$COMPOSE_PREFIX pull"
+
+# B3: a failed pull fails the build step, loudly, rather than leaving reset to
+# discover the missing image later.
+run STUB_COMPOSE_OK="build" -- build
+check "B3-failed-pull-fails-build" 1 \
+    "contains:pull of the image-only services failed"
+
+# B4: reset never pulls. The precheck, port check and volume check pass and
+# `down` succeeds, so reset reaches `up`, which must carry `--pull never`; the
+# stubbed `up` then fails, stopping the run there.
+run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 \
+    STUB_COMPOSE_CONFIG_JSON_RC=0 STUB_COMPOSE_CONFIG_JSON_OUT='{"volumes":{}}' \
+    STUB_COMPOSE_OK="down" \
+    -- reset
+check "B4-reset-never-pulls" 1 \
+    "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
+    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+
+# B5: up never pulls either.
+run -- up
+check "B5-up-never-pulls" 1 \
+    "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
+    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+
+# --- The demo fleet's approval gate ---
+
+# G1: every compose call the script makes hands docker-compose.yml the demo
+# fleet's in-band gate — even when the caller's shell exported the default
+# fleet's gate — so the demo Relay can never start on the wrong one. B4 above
+# reaches down and up; this re-runs it with the conflicting value exported.
+run DEV_FLEET_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json \
+    STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
+    STUB_IMAGE_INSPECT_RC=0 \
+    STUB_COMPOSE_CONFIG_JSON_RC=0 STUB_COMPOSE_CONFIG_JSON_OUT='{"volumes":{}}' \
+    STUB_COMPOSE_OK="down" \
+    -- reset
+check "G1-reset-pins-the-demo-gate" 1 \
+    "log_contains:compose-env DEV_FLEET_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.demo.json" \
+    "log_not_contains:DEV_FLEET_APPROVAL_GATE_CONFIG=/etc/relay/approval-gates.json" \
+    "log_not_contains:DEV_FLEET_APPROVAL_GATE_CONFIG=<unset>"
+
+# G2: the path the script pins is one the relay image actually bakes, from a
+# fixture that exists, and docker-compose.yml actually reads the variable
+# (defaulting to the default fleet's gate). A mismatch anywhere in that chain
+# would crash-loop the demo Relay (the gate loader is fail-closed) or quietly
+# run it on the default gate.
+demo_gate_path="$(sed -n 's/^readonly DEMO_APPROVAL_GATE_CONFIG="\(.*\)"$/\1/p' "$SCRIPT")"
+if [ "$demo_gate_path" != "/etc/relay/approval-gates.demo.json" ]; then
+    echo "FAIL: G2: DEMO_APPROVAL_GATE_CONFIG is not declared readonly as /etc/relay/approval-gates.demo.json (got '${demo_gate_path}')" >&2
+    fail=$((fail + 1))
+fi
+if [ ! -s "$REPO_ROOT/docker/fixtures/approval-gates.demo.json" ]; then
+    echo "FAIL: G2: docker/fixtures/approval-gates.demo.json is missing or empty" >&2
+    fail=$((fail + 1))
+fi
+if ! grep -qxF "COPY --chmod=0644 docker/fixtures/approval-gates.demo.json ${demo_gate_path}" \
+    "$REPO_ROOT/docker/relay.Dockerfile"; then
+    echo "FAIL: G2: docker/relay.Dockerfile does not bake docker/fixtures/approval-gates.demo.json at '${demo_gate_path}' with --chmod=0644" >&2
+    fail=$((fail + 1))
+fi
+if ! grep -qF 'RELAY_APPROVAL_GATE_CONFIG: "${DEV_FLEET_APPROVAL_GATE_CONFIG:-/etc/relay/approval-gates.json}"' \
+    "$REPO_ROOT/docker-compose.yml"; then
+    echo "FAIL: G2: docker-compose.yml does not select the gate with DEV_FLEET_APPROVAL_GATE_CONFIG, defaulting to the default fleet's gate" >&2
+    fail=$((fail + 1))
+fi
+
 # --- Static structure checks ---
 
 # S1: exactly one line in the whole file is a real `docker compose`
@@ -418,4 +523,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "PASS: scripts/demo-fleet.sh refuses unless the target is the relay-demo project on a local engine — with no more than two read-only Docker calls (the context endpoint, the cross-worktree ps) before that refusal — admits it when it is, stops before down/up on a failed image precheck / foreign port / foreign worktree / foreign volume name, refuses a DEMO_FAULT_NODES value carrying a shell metacharacter before any exec, and routes every docker compose call through one guarded wrapper (#622)."
+echo "PASS: scripts/demo-fleet.sh refuses unless the target is the relay-demo project on a local engine — with no more than two read-only Docker calls (the context endpoint, the cross-worktree ps) before that refusal — admits it when it is, stops before down/up on a failed image precheck / foreign port / foreign worktree / foreign volume name, refuses a DEMO_FAULT_NODES value carrying a shell metacharacter before any exec, and routes every docker compose call through one guarded wrapper (#622); build pulls the image-only services while reset and up never pull, and every compose call is handed the demo fleet's baked-in in-band gate."
