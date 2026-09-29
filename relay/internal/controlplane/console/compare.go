@@ -574,13 +574,13 @@ var compareTmpl = newScreen("compare", `
 {{if .Pin.Any}}{{template "pin-bar" .Pin}}{{end}}
 
 {{if .Truncated}}<p class="gap"><b>More Nodes were named than a comparison holds.</b> Three columns
-is the width at which a difference is still visible in one glance, so the extra ones are not
-shown — unpin one to swap it for another.</p>{{end}}
+is the most at which a difference is still visible at a glance, so the extra ones are not
+shown. Unpin one to swap it for another.</p>{{end}}
 
 {{with .Unknown}}
 <p class="gap"><b>Not in this Relay's registry:</b> {{range .}}<code>{{.}}</code> {{end}}
-Named rather than dropped: an id that was never enrolled and an id that was mistyped look the
-same from here, and both are answers.</p>
+They are listed rather than dropped. From here, an id that was never enrolled looks the same as
+one that was mistyped, and either is worth knowing.</p>
 {{end}}
 
 {{if lt (len .Columns) 2}}
@@ -625,19 +625,18 @@ tell you where two Nodes diverge and cannot tell you what either will do with a 
 
 {{if .AllPolicyMissing}}
 <p class="gap"><b>Neither Node has reported its Policy since the Relay last started</b>, so the
-Policy rows below compare nothing. They are all marked identical because they are all the same
-absence — that is not agreement between these Nodes, it is the Relay not having been told. A
-snapshot arrives when a Node connects.</p>
+Policy rows above compare nothing. They read as identical only because every value is missing.
+That is not agreement between these Nodes: the Relay has not been told. A Node sends its Policy
+when it connects.</p>
 {{else if .AnyPolicyMissing}}
 <p class="note">A column reading <b>not reported</b> has not been heard from since the Relay last
-started, so there is nothing of its own to compare. Beside a column that has reported, that shows
-as a difference and is marked as one — a blank column must never read as agreement.</p>
+started, so there is nothing of its own to compare. Beside a column that has reported, it is
+marked as a difference, so a blank column never reads as agreement.</p>
 {{end}}
 
-<p class="note">No Fact is compared here. Os, kernel, arch and ip live on Node detail and nowhere
-else, because a self-reported value a Node controls is readable about one machine and misleading as
-a fleet-wide axis. The hostname above each column is the heading that says which machine the column
-is — the same use a fleet row makes of it — and it is self-reported too: recognise a Node by it,
-never trust it.</p>
+<p class="note">No Fact is compared here. OS, kernel, arch and IP appear only on Node detail. A
+Node reports its own Facts, so they describe one machine well but mislead when compared across the
+fleet. The hostname above each column names the machine, as it does on a fleet row, and it is
+self-reported too. Use it to recognise a Node, never to trust one.</p>
 {{end}}
 `)

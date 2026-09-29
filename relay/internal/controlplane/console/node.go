@@ -574,7 +574,7 @@ var nodeTmpl = newScreen("node", `
   <span class="labelnote">
     <b>node:</b> set by the machine's config management, immutable to the Relay ·
     <b>tag:</b> set by operators through the control plane, immutable to the Node, and never a valid
-    security-lane target — no storage for one exists yet (#430), so none renders here ·
+    security-lane target; this Relay cannot store tag: labels yet, so none appear here ·
     <b>relay:</b> set by the Relay, immutable to the Node, and the only namespace the security lane may target ·
     <b>state:</b> derived from this record, set by nobody
   </span>
@@ -596,10 +596,10 @@ var nodeTmpl = newScreen("node", `
       who gave the reason <q>{{.RevocationReason}}</q>.
       {{else}} and records no reason: this Node was revoked before the endpoint accepted one.
       {{end}}
-      {{else}}No revocation record is in the trail: the registry keeps the timestamp whether or not
-      the trail was wired when it happened, so who did it cannot be answered from here.{{end}}
-      The record is retained deliberately, so the machine stays investigable and its history stays
-      answerable; the certificate is not, and this Node cannot reconnect.</p>
+      {{else}}The audit trail holds no record of this revocation. The registry keeps the time even
+      when the trail was not recording, so who revoked this Node cannot be answered from here.{{end}}
+      The Node's record is kept on purpose, so the machine and its history stay investigable. Its
+      certificate is revoked, and this Node cannot reconnect.</p>
       {{end}}
       {{if .CertProvenanceKnown}}
       <dl class="kv">
@@ -610,7 +610,7 @@ var nodeTmpl = newScreen("node", `
       {{else}}
       <p class="gap"><b>This Node's certificate provenance is not recorded.</b> It enrolled before
       the Relay began storing certificate validity, so there is no expiry to compare a clock
-      against. It fills in at this Node's next renewal, which is at most one leaf lifetime away.</p>
+      against. It fills in at this Node's next certificate renewal, at most one certificate lifetime away.</p>
       {{end}}
       <p class="note">Renewal is certificate-authenticated and preserves the node id, so this
       identity chains unbroken back to the Enrollment Token above.</p>
@@ -630,11 +630,11 @@ var nodeTmpl = newScreen("node", `
           <span class="dim">{{.TemplateShared}} {{plural .TemplateShared "Node" "Nodes"}} report this</span>
         {{else}}<span class="dim">no templates installed</span>{{end}}</dd>
       </dl>
-      <p class="note">Confirming a rollout landed is string equality against these, not trust.
-      Relay reports what the daemon says it loaded; it never sets either. Each links to every Node
-      reporting the same value — the readable form of <code>state:policy-fingerprint=</code> and
-      <code>state:template-fingerprint=</code>, targeted as a Selector. A value the Node reported in
-      a shape a Selector cannot carry is shown without a link rather than trimmed to fit.</p>
+      <p class="note">To confirm a rollout landed, check that these values match. That is a string
+      comparison, not trust. The Relay reports what the daemon says it loaded and never sets either.
+      Each value links to every Node reporting the same one, through the Selector
+      <code>state:policy-fingerprint=</code> or <code>state:template-fingerprint=</code>. A value a
+      Selector cannot express is shown without a link rather than trimmed to fit.</p>
     </section>
 
     <section class="panel">
@@ -673,16 +673,15 @@ var nodeTmpl = newScreen("node", `
         </div>
         {{if .PolicyStale}}
         <p class="gap"><b>This Node is offline, so this panel cannot be refreshed.</b> It is the last
-        thing its engine reported{{with .PolicyReportedAt}}, at {{.}}{{end}}, and nothing has re-asked
-        it since — a snapshot is taken when a Node connects and at no other time.</p>
+        thing its engine reported{{with .PolicyReportedAt}}, at {{.}}{{end}}, and nothing has asked
+        it since. A snapshot is taken only when a Node connects.</p>
         {{end}}
         <p class="gap">There is no path from this screen to this Node's Policy: Policy is rooted
         on the machine and the Relay is not one of its writers.</p>
       {{else}}
         <p class="dim">This Node has not reported its Policy since the Relay last started.</p>
-        <p class="note">The Console shows nothing rather than a remembered answer: a Policy view
-        that might be stale is worse than none, because it is the thing an operator checks before
-        deciding a Task is safe.</p>
+        <p class="note">The Console shows nothing rather than an old answer. Operators check this
+        panel before deciding a Task is safe, so a view that might be stale is worse than none.</p>
       {{end}}
     </section>
 
@@ -708,8 +707,8 @@ var nodeTmpl = newScreen("node", `
         </tbody>
       </table>
       </div>
-      {{if .TasksElided}}<p class="gap">Older Tasks are not shown — this page renders the most
-      recent {{len .Tasks}} and the trail has more. Filtered history is on
+      {{if .TasksElided}}<p class="gap">Older Tasks are not shown. This page lists the most
+      recent {{len .Tasks}}, and the audit trail has more. Filtered history is on
       <a href="/console/activity">Activity</a>.</p>{{end}}
       {{else if .AuditWired}}
       <p class="dim">No Tasks have run on this Node.</p>

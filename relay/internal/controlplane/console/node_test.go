@@ -245,7 +245,7 @@ func TestNode_LabelRowNamesAllFourNamespaces(t *testing.T) {
 		t.Error("a tag: chip rendered in the security lane")
 	}
 	// And the explainer is honest about there being no tag storage yet.
-	if !strings.Contains(body, "#430") {
+	if !strings.Contains(body, "cannot store tag: labels yet") {
 		t.Error("the explainer does not say tag: labels have no storage yet")
 	}
 }
@@ -349,7 +349,7 @@ func TestNode_RevokedNodeRendersItsRevocationRecord(t *testing.T) {
 	// And a revoked Node whose trail holds nothing says so.
 	d.Audit = fakeAudit{}
 	quiet := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/nodes/node-gone").Body.String()
-	if !strings.Contains(quiet, "No revocation record is in the trail") {
+	if !strings.Contains(quiet, "The audit trail holds no record of this revocation") {
 		t.Error("a revoked Node with no audit record rendered nothing about the revocation")
 	}
 }
