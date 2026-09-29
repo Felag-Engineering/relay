@@ -277,7 +277,7 @@ func TestSessionID_NeverRendersItself(t *testing.T) {
 	for name, rendered := range map[string]string{
 		"String": id.String(),
 		"%v":     fmt.Sprintf("%v", id),
-		"%s":     fmt.Sprintf("%s", id), //nolint:gosimple,staticcheck // the POINT is that the %s verb is covered: it reaches String() via the Stringer interface, and asserting that is what stops someone "simplifying" the type's redaction away
+		"%s":     fmt.Sprintf("%s", id), //nolint:staticcheck // the POINT is that the %s verb is covered: it reaches String() via the Stringer interface, and asserting that is what stops someone "simplifying" the type's redaction away
 		"%#v":    fmt.Sprintf("%#v", id),
 		"struct": fmt.Sprintf("%v", struct{ ID consoleauth.SessionID }{id}),
 		"slog":   id.LogValue().String(),

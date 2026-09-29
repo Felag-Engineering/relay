@@ -93,7 +93,7 @@ func TestPassword_NeverRendersItsSecret(t *testing.T) {
 	for name, rendered := range map[string]string{
 		"String": p.String(),
 		"%v":     fmt.Sprintf("%v", p),
-		"%s":     fmt.Sprintf("%s", p), //nolint:gosimple,staticcheck // the POINT is that the %s verb is covered: it reaches String() via the Stringer interface, and asserting that is what stops someone "simplifying" the type's redaction away
+		"%s":     fmt.Sprintf("%s", p), //nolint:staticcheck // the POINT is that the %s verb is covered: it reaches String() via the Stringer interface, and asserting that is what stops someone "simplifying" the type's redaction away
 		"%#v":    fmt.Sprintf("%#v", p),
 		"struct": fmt.Sprintf("%v", struct{ P accounts.Password }{p}),
 		"slog":   p.LogValue().String(),

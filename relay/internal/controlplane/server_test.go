@@ -3,61 +3,17 @@ package controlplane
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/relaytest"
 )
-
-// selfSignedCert mints a throwaway, self-signed TLS certificate for tests.
-// Production wires a real Relay-CA-issued certificate (relay/cmd/relay/main.go).
-func selfSignedCert(t *testing.T) tls.Certificate {
-	t.Helper()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("GenerateKey: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "controlplane-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatalf("CreateCertificate: %v", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("MarshalECPrivateKey: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-
-	cert, err := tls.X509KeyPair(certPEM, keyPEM)
-	if err != nil {
-		t.Fatalf("X509KeyPair: %v", err)
-	}
-	return cert
-}
 
 // staticCert presents a fixed certificate through Config.GetCertificate.
 // Production hands that field *ca.ServerCertificate's method, which re-issues
@@ -71,7 +27,7 @@ func staticCert(cert tls.Certificate) func(*tls.ClientHelloInfo) (*tls.Certifica
 func newTestServer(t *testing.T) (*Server, string, *http.Client) {
 	t.Helper()
 
-	cert := selfSignedCert(t)
+	cert := relaytest.SelfSignedServerCert(t, "controlplane-test")
 	srv := New(Config{Addr: "127.0.0.1:0", GetCertificate: staticCert(cert)}, testAuthenticator())
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -152,7 +108,7 @@ func TestServer_Ping_RequiresCredential(t *testing.T) {
 // same Relay CA as the node plane, so a captured certificate here expires on
 // the same timer and locks every operator out of the browser.
 func TestServer_CertificateIsFetchedEveryHandshake(t *testing.T) {
-	first, rotated := selfSignedCert(t), selfSignedCert(t)
+	first, rotated := relaytest.SelfSignedServerCert(t, "controlplane-test"), relaytest.SelfSignedServerCert(t, "controlplane-test")
 
 	var calls atomic.Int64
 	srv := New(Config{
