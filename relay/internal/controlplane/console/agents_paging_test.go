@@ -162,13 +162,14 @@ func TestAgents_AnOlderPageDoesNotClaimToBeTheMostRecent(t *testing.T) {
 
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents?cursor=0").Body.String()
 
-	// "NOT the most recent" is the sentence this page must say — checked for
+	// "not the most recent calls. This page was reached by following Older"
+	// is the sentence this page must say — checked for
 	// the phrase page one uses to claim freshness, not the bare substring
 	// "most recent", which that very sentence also contains.
 	if strings.Contains(body, "Showing the most recent") {
 		t.Errorf("a page reached by following Older still claims to hold the most recent calls:\n%s", body)
 	}
-	if !strings.Contains(body, "NOT the most recent") {
+	if !strings.Contains(body, "not the most recent calls. This page was reached by following Older") {
 		t.Errorf("a scrolled page does not say it is not the most recent calls:\n%s", body)
 	}
 	if !strings.Contains(body, `href="/console/agents"`) {
@@ -274,7 +275,7 @@ func TestAgents_AReadClassDenyDoesNotAssertTheTrailHoldsNothing(t *testing.T) {
 func TestAgents_TheRailSaysWhatItCountedOver(t *testing.T) {
 	body := get(t, newTestHandler(renderableDeps(), accounts.RoleAdmin), "/console/agents").Body.String()
 
-	if !strings.Contains(body, "counted over the calls on this page") {
+	if !strings.Contains(body, "The numbers count the calls on this page.") {
 		t.Errorf("the rail's hint does not say it is counted over the fetched page:\n%s", body)
 	}
 }

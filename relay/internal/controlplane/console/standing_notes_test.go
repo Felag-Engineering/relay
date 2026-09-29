@@ -103,7 +103,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	mustBeStanding(t, inside, outside,
 		"Each page holds up to",
 		"The default feed leaves out the trail&#39;s own read records.",
-		"Two row kinds the specification asks for cannot be rendered here yet.",
+		"Two row kinds cannot be shown here yet: enrollments and label changes.",
 		"The filter box carries no Selector and no Node.",
 		"The chips above list every family this Relay records, including empty ones.",
 	)
@@ -114,7 +114,7 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 	for _, tc := range []struct{ path, msg string }{
 		{"/console/activity?window=fortnight", "Part of this URL could not be read:"},
 		{"/console/activity?kind=nonesuch", "There is no row kind called"},
-		{"/console/activity?q=nginx", "is a substring match over the rows already on this page"},
+		{"/console/activity?q=nginx", "matches text within the rows already on this page"},
 		{"/console/activity?outcome=failure", "Outcome narrows dispatch rows after the page is fetched."},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
@@ -122,7 +122,7 @@ func TestActivity_SituationalMessagesStayVisible(t *testing.T) {
 		})
 	}
 	// Refine's note is situational: without a Refine term it is not drawn.
-	if strings.Contains(get(t, h, "/console/activity").Body.String(), "is a substring match over the rows") {
+	if strings.Contains(get(t, h, "/console/activity").Body.String(), "matches text within the rows") {
 		t.Error("the Refine note renders when nothing was refined")
 	}
 }

@@ -507,12 +507,12 @@ func TestActivity_OlderLinkCarriesBothLaneCursors(t *testing.T) {
 // an operator infer it.
 func TestActivity_PageStatesItsTwoLaneBoundary(t *testing.T) {
 	both := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
-	if !strings.Contains(both, "a page boundary is not a single instant") {
+	if !strings.Contains(both, "a page does not end at a single moment") {
 		t.Error("the two-lane feed does not state that its page boundary is not an instant")
 	}
 
 	one := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity?kind=dispatch").Body.String()
-	if !strings.Contains(one, "the page boundary is a single instant") {
+	if !strings.Contains(one, "a page ends at a single moment") {
 		t.Error("a single-lane filter does not say its page boundary IS an instant")
 	}
 }
@@ -628,10 +628,10 @@ func TestActivity_LiveCounterSaysWhatItCounts(t *testing.T) {
 	d.Events = newFakeEvents()
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity").Body.String()
 
-	if !strings.Contains(body, "JOB EVENTS ON THE STREAM, not rows that will appear") {
+	if !strings.Contains(body, "counts job events on the stream, not rows that will appear") {
 		t.Error("the live counter does not say that it counts stream events rather than rows")
 	}
-	if !strings.Contains(body, "one Job announces itself more than once") {
+	if !strings.Contains(body, "One Job announces itself more than once") {
 		t.Error("the live counter does not admit that it double-counts")
 	}
 	if !strings.Contains(body, `id="live-new-count"`) {
@@ -872,7 +872,7 @@ func TestActivity_SpecConflictsAreStatedRatherThanFaked(t *testing.T) {
 	body := get(t, newTestHandler(activityDeps(&fakeQueries{}), accounts.RoleAdmin), "/console/activity").Body.String()
 
 	for _, want := range []string{
-		"no enrollment record and no label record in the audit trail",
+		"The\naudit trail holds no record of either.",
 		"The filter box carries no Selector and no Node.",
 		"list every family this Relay records, including empty ones",
 	} {
@@ -1222,7 +1222,7 @@ func TestActivity_ExhaustedPositionSaysSoRatherThanNothingMatches(t *testing.T) 
 	d.Queries = q
 	body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/activity?jdone=1&adone=1").Body.String()
 
-	if !strings.Contains(body, "paged to the end of this filter") {
+	if !strings.Contains(body, "There is nothing older for this filter.") {
 		t.Error("both lanes exhausted does not say so")
 	}
 	if strings.Contains(body, "Nothing matches") || strings.Contains(body, "Nothing has been recorded yet") {

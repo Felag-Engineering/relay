@@ -530,7 +530,7 @@ func TestAgents_ThePageNoteSaysWhatTheCollapseDid(t *testing.T) {
 		if !strings.Contains(body, "are collapsed into") {
 			t.Errorf("no collapse clause on a scrolled page:\n%s", body)
 		}
-		if !strings.Contains(body, "NOT the most recent") {
+		if !strings.Contains(body, "not the most recent calls. This page was reached by following Older") {
 			t.Errorf("the scrolled position clause did not survive #541's PageNote rewrite:\n%s", body)
 		}
 		if !strings.Contains(body, ">Newest<") {
