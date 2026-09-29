@@ -953,6 +953,9 @@ var readsTmpl = newScreen("reads", `
 for an AI-agent that means the model provider. This screen is a map of that exposure — <b>who read
 what, from where, and when</b>. It cannot show you the contents, at any age, and it is not going
 to grow the ability to.</p>
+<p class="note">The trail never keeps read output (ADR-0025); what a daemon sent stays on
+the Job&#39;s Task rows until the Job is collected, readable through
+<code>GET /api/v1/jobs/{job_id}</code>, and this page will never show it.</p>
 
 <p class="scoped">
 {{range .WindowLine}}{{if .Current}}<b>{{.Label}}</b>{{else}}<a href="{{.Href}}">{{.Label}}</a>{{end}}
@@ -980,8 +983,10 @@ one target and four thousand exposures; which one matters depends on whether you
 was seen or how far it reached. Enumerations are counted apart from all three: listing the
 registry is exposure — it hands over the shape of your estate — but it is not bytes off a machine,
 and a headline that mixes the two makes both softer than they are.
-Every figure shown above is exact over the {{.Window}} shown: each is one aggregate computed over
-every matching record, not a tally of the rows in the tables below. A figure this page did not
+<b>Every figure shown above is exact over the audit records timestamped in the {{.Window}} shown,
+except that the read and refusal figures miss a read-class Job created just before it whose records
+land inside it.</b> Each is one aggregate computed over every matching record, not a tally of the
+rows in the tables below. A figure this page did not
 compute — because the query failed, or because the lane was deliberately not queried — is ABSENT
 rather than rendered as a zero, since an exact zero is the strongest claim on this screen.</p>
 {{else if .Measured}}
@@ -1073,8 +1078,9 @@ exposure either way. See the notes below.</p>
   {{plural .RefusedTargets "target" "targets"}} and <b>{{.RefusedNodes}}</b>
   {{plural .RefusedNodes "Node" "Nodes"}}. A refusal is Policy working: something asked and a Node
   said no, which is the product doing exactly what it is for. The three figures are exact over the
-  window: they come from their own aggregate, so a refusal can never be hidden by a table that was
-  too short to reach it.</p>
+  window, except that they miss a read-class Job created just before it whose records land inside
+  it; they come from their own aggregate, so a refusal can never be hidden by a table that was too
+  short to reach it.</p>
   {{end}}
   {{if .Refusals}}
   <div class="tablescroll">

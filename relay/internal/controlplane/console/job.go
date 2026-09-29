@@ -492,7 +492,7 @@ func newJobApproval(req approval.Request, viaGrant bool, jobRequesterID, jobRequ
 		a.Deciders = append(a.Deciders, jobDecider{
 			Account:    dec.Account,
 			Verified:   dec.AccountID != "",
-			Kind:       deciderKind(dec.DeciderHuman),
+			Kind:       verifiedKind(dec.AccountID != "", deciderKind(dec.DeciderHuman)),
 			OnBehalfOf: dec.OnBehalfOf,
 			Channel:    dec.Channel.String(),
 			At:         stampOrAbsent(dec.At),
@@ -587,7 +587,7 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		ReadClass:      sum.RiskClass == jobs.RiskClassRead,
 		Principal:      sum.Requester,
 		Verified:       sum.RequesterAccountID != "",
-		RequesterKind:  sum.RequesterKind,
+		RequesterKind:  verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
 		FanOut:         sum.Total,
 		InFlight:       sum.Unresolved,
 		Bar:            barFrom(sum.Counts),
@@ -1142,8 +1142,9 @@ released by that approval.</p>
 
 <p class="lanekey">{{template "trust-chip" (trust "verified" true)}} the Relay authenticated this identity ·
 {{template "trust-chip" (trust "asserted" false)}} the caller claimed this; nothing checked it ·
-<span class="kind">human</span> / <span class="kind">machine</span> the Account&#39;s kind as the record
-wrote it at the time, shown only where it did</p>
+<span class="kind">human</span> / <span class="kind">machine</span> the verified Account&#39;s kind as the
+record wrote it at the time, shown only where it did; on an approval, machine means &ldquo;not
+recorded as human&rdquo;</p>
 
 {{template "plan" .Plan}}
 <p class="note">This is the Plan the Job was dispatched against, not a fresh one: the fan-out was

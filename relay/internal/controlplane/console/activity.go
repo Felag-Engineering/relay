@@ -609,6 +609,15 @@ type activityView struct {
 	ExportHref string
 	ReadsHref  string
 
+	// ReadsLeftOutHref is set ONLY when no kind filter is set — the one case
+	// in which the feed leaves the `read` family out (activityLaneExcluded).
+	// It is the `read` chip's own href, so following it keeps every other
+	// filter (an Account, a window) in place. The template draws the visible
+	// read-records sentence beside the kind chips from it: a responder
+	// filtering to one Account must be told, where they are looking, that
+	// its enumeration is not in this feed.
+	ReadsLeftOutHref string
+
 	Live Live
 }
 
@@ -698,6 +707,13 @@ func handleActivity(d Deps) http.HandlerFunc {
 			Windows:   windowChoices(f.Window),
 			Outcomes:  outcomeChoices(f.Outcome),
 			Kinds:     kindChips(f),
+		}
+		if f.Kind == "" {
+			for _, c := range v.Kinds {
+				if c.Kind == rowRead {
+					v.ReadsLeftOutHref = c.Href
+				}
+			}
 		}
 		if !known {
 			v.UnknownKind = f.Kind
@@ -960,7 +976,7 @@ func dispatchRowFromJob(sum capability.JobSummary) activityRow {
 		JobHref:       "/console/jobs/" + sum.JobID,
 		Principal:     sum.Requester,
 		Verified:      sum.RequesterAccountID != "",
-		RequesterKind: sum.RequesterKind,
+		RequesterKind: verifiedKind(sum.RequesterAccountID != "", sum.RequesterKind),
 		OnBehalfOf:    sum.OnBehalfOf,
 		ApprovalID:    sum.ApprovalID,
 		GrantID:       sum.GrantID,
@@ -1296,6 +1312,9 @@ var activityTmpl = newScreen("activity", `
 <div class="kindbar">
   {{range .Kinds}}<a class="kchip{{if .Current}} on{{end}}" href="{{.Href}}">{{.Kind}}</a>{{end}}
 </div>
+{{with .ReadsLeftOutHref}}<p class="kindnote">Read records &mdash; every Account&#39;s enumeration and
+every read of this trail &mdash; are left out of this feed: <a href="{{.}}">show them</a>, or see
+<a href="{{$.ReadsHref}}">Read egress</a>.</p>{{end}}
 
 {{if .UnknownKind}}
 <p class="gap"><b>There is no row kind called &ldquo;{{.UnknownKind}}&rdquo;.</b> Nothing was queried:

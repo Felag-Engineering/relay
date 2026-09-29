@@ -1166,6 +1166,11 @@ dl.kv {
 
 /* --- Activity feed -------------------------------------------------------- */
 .kindbar { display: flex; gap: var(--space-2); flex-wrap: wrap; margin-bottom: var(--space-4); }
+/* The one visible sentence saying which family the default feed leaves out
+ * (04-activity.md). It qualifies the chips above it, so it sits tight under
+ * them in the quiet note style rather than as a dashed gap box. */
+.kindbar:has(+ .kindnote) { margin-bottom: var(--space-2); }
+.kindnote { font-size: var(--text-xs); color: var(--text-muted); margin: 0 0 var(--space-4); max-width: 64em; line-height: 1.65; }
 .kchip {
   font-size: var(--text-xs); padding: 3px var(--space-3); border-radius: 10px;
   border: 1px solid var(--border-subtle); background: var(--bg-surface); color: var(--text-second);

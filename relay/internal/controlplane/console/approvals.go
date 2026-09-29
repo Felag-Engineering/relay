@@ -825,11 +825,29 @@ func deciderKind(human bool) string {
 	return "machine"
 }
 
+// verifiedKind returns kind only for an actor drawn in the VERIFIED lane, and
+// "" otherwise. A kind label qualifies the Account the Relay authenticated
+// (00-foundations.md, "Kind label"); beside a dashed chip it would read as a
+// fact about an identity nothing checked. Every place that draws a kind label
+// passes through here, with the same verified test its chip uses.
+func verifiedKind(verified bool, kind string) string {
+	if !verified {
+		return ""
+	}
+	return kind
+}
+
 type decisionRow struct {
 	Account string
-	Approve bool
-	Reason  string
-	Channel string
+
+	// Verified is the decider's lane, by the rule Job detail's jobDecider
+	// already applies: verified only when the Decision itself carries an
+	// Account ID. A decision with none must never render as though the Relay
+	// authenticated it.
+	Verified bool
+	Approve  bool
+	Reason   string
+	Channel  string
 
 	// Kind is "human" or "machine", from the Decision's OWN record
 	// (Decision.DeciderHuman) — never from the Account registry, which would
@@ -1167,13 +1185,14 @@ func buildApprovalView(ctx context.Context, d Deps, caller capability.Principal,
 	}
 	for _, dec := range req.Decisions {
 		row := decisionRow{
-			Account: dec.Account,
-			Approve: dec.Approve,
-			Reason:  dec.Reason,
-			Channel: dec.Channel.String(),
-			Kind:    deciderKind(dec.DeciderHuman),
-			At:      stampOrAbsent(dec.At),
-			Ago:     decisionAgo(dec.At, now),
+			Account:  dec.Account,
+			Approve:  dec.Approve,
+			Reason:   dec.Reason,
+			Channel:  dec.Channel.String(),
+			Verified: dec.AccountID != "",
+			Kind:     verifiedKind(dec.AccountID != "", deciderKind(dec.DeciderHuman)),
+			At:       stampOrAbsent(dec.At),
+			Ago:      decisionAgo(dec.At, now),
 		}
 		v.Decisions = append(v.Decisions, row)
 		if dec.Approve {
@@ -1920,7 +1939,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <tbody>
     {{range .Decisions}}
       <tr>
-        <td>{{template "trust-chip" (trust .Account true)}}{{template "kind-label" .Kind}}</td>
+        <td>{{template "trust-chip" (trust .Account .Verified)}}{{template "kind-label" .Kind}}</td>
         <td><span class="chip state" data-state="{{if .Approve}}approved{{else}}denied{{end}}">{{if .Approve}}approved{{else}}denied{{end}}</span></td>
         <td>{{.At}}{{with .Ago}} <span class="dim">({{.}})</span>{{end}}</td>
         <td><code>{{.Channel}}</code></td>
@@ -1932,8 +1951,9 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <p class="note">The channel is recorded rather than assumed. A decision that arrived over a
   credential the requesting session does not hold is evidence; one that arrived in-band is a
   delivery convenience, and the difference is the whole security property. <b>Human</b> or
-  <b>machine</b> beside a decider is what the decision recorded about its own Account when it was
-  made, not what that Account is today.</p>
+  <b>machine</b> beside a verified decider is what the decision recorded about its own Account when
+  it was made, not what that Account is today; <b>machine</b> means &ldquo;not recorded as
+  human&rdquo;, which is how a decision made before the Relay recorded it reads.</p>
 </section>
 {{end}}
 

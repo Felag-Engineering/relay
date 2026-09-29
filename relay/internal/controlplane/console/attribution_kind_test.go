@@ -8,9 +8,12 @@ package console
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -282,22 +285,88 @@ func TestConsole_KindLabelIsNotAChip(t *testing.T) {
 	}
 }
 
-// TestConsole_KindIsNeverLookedUpFromTheRegistry is the rule made structural:
-// the three screens that draw a recorded kind never name the Account registry
-// seam at all, so no later edit can quietly fill a missing kind from it.
-func TestConsole_KindIsNeverLookedUpFromTheRegistry(t *testing.T) {
+// registryKindFiles are the only non-test files in this package allowed to
+// hold the Account registry seam or read an Account's registry kind: the
+// Accounts screen and its write routes, whose subject IS the Account as it is
+// now (00-foundations.md, "Kind label").
+var registryKindFiles = map[string]bool{
+	"accounts.go":       true,
+	"accounts_write.go": true,
+}
+
+// TestConsole_RegistryKindIsReadOnlyByTheAccountsScreens is the kind rule made
+// structural, BY TYPE rather than by spelling. It type-checks the whole
+// package (every non-test file) and fails if any file outside
+// registryKindFiles
+//
+//   - evaluates an expression whose type is the AccountReader seam — which
+//     covers d.Accounts, a helper parameter of that type, and every method
+//     call made on one, whatever the variable is called; or
+//   - reads the Kind field of an accounts.Account, the registry's CURRENT kind.
+//
+// What it does NOT prevent: a file on the allowlist exporting a helper that
+// hands a current kind back as a plain string, which another screen could
+// then call. That shape passes this test and is left to review. It also does
+// not look at test files, or at any package other than this one.
+func TestConsole_RegistryKindIsReadOnlyByTheAccountsScreens(t *testing.T) {
 	fset := token.NewFileSet()
-	for _, name := range []string{"job.go", "activity.go", "approvals.go"} {
-		file, err := parser.ParseFile(fset, name, nil, 0)
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var files []*ast.File
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, name, nil, 0)
 		if err != nil {
 			t.Fatalf("parse %s: %v", name, err)
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Accounts" {
-				t.Errorf("%s reads .Accounts at %s — a kind shown beside a record is read from that record, "+
-					"never from the registry's current kind (#540)", name, fset.Position(sel.Pos()))
-			}
-			return true
-		})
+		files = append(files, f)
+	}
+	info := &types.Info{
+		Types:      map[ast.Expr]types.TypeAndValue{},
+		Selections: map[*ast.SelectorExpr]*types.Selection{},
+	}
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	pkg, err := conf.Check("console", fset, files, info)
+	if err != nil {
+		t.Fatalf("type-check the console package: %v", err)
+	}
+	reader := pkg.Scope().Lookup("AccountReader")
+	if reader == nil {
+		t.Fatal("no AccountReader type in the package — this guard has lost what it guards")
+	}
+
+	fileOf := func(p token.Pos) string { return filepath.Base(fset.Position(p).Filename) }
+	sawReader, sawKind := false, false
+	for expr, tv := range info.Types {
+		if tv.Type == nil || tv.IsType() || !types.Identical(tv.Type, reader.Type()) {
+			continue
+		}
+		sawReader = true
+		if f := fileOf(expr.Pos()); !registryKindFiles[f] {
+			t.Errorf("%s holds the Account registry seam at %s — a kind shown beside a record is read "+
+				"from that record, never from the registry's current kind (#540)", f, fset.Position(expr.Pos()))
+		}
+	}
+	for sel, s := range info.Selections {
+		if s.Kind() != types.FieldVal || s.Obj().Name() != "Kind" || s.Obj().Pkg() == nil ||
+			!strings.HasSuffix(s.Obj().Pkg().Path(), "/internal/accounts") {
+			continue
+		}
+		sawKind = true
+		if f := fileOf(sel.Pos()); !registryKindFiles[f] {
+			t.Errorf("%s reads an Account's registry Kind at %s — that is the kind TODAY, which would "+
+				"relabel history (#540)", f, fset.Position(sel.Pos()))
+		}
+	}
+	// A guard that matches nothing reports success forever: the Accounts
+	// screens really do both, so both must have been seen.
+	if !sawReader || !sawKind {
+		t.Fatalf("the guard saw the registry seam=%v and a registry Kind read=%v; the Accounts screens do "+
+			"both, so the guard is not looking at what it thinks it is", sawReader, sawKind)
 	}
 }
