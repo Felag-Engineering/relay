@@ -513,8 +513,16 @@ if bad:
 # missing` fetches only what is not already present: every such image is
 # pinned by tag, so a present one is the right one, and a rebuild on a machine
 # with no network still succeeds.
+#
+# The pull names the OAuth overlay too (#351), so one `build` leaves either
+# fleet startable: its image-only services are the identity provider and the
+# namespace holder, both pinned by digest. It is named here for the same
+# reason `down` and every reset's wipe name it — which fleet will be brought up
+# next is not known at build time — and it only adds images. The build itself
+# stays plain: the overlay adds no service with a `build:` section.
 cmd_build() {
     dc build || die 1 "docker compose build failed"
+    use_compose_files 1
     dc pull --ignore-buildable --policy missing ||
         die 1 "docker compose pull of the image-only services failed"
 }
@@ -528,7 +536,7 @@ cmd_reset() {
     # deferred past this point: a stub/offline failure at the precheck must
     # stop reset before `down -v` runs, with nothing else attempted first.
     # Checked for the fleet being brought up — with --oauth, that includes
-    # the IdP's image, which `build` does not fetch.
+    # the IdP's image, which `build` pulls.
     image_precheck
     check_ports_not_foreign
 
@@ -711,7 +719,8 @@ usage() {
 Usage: scripts/demo-fleet.sh <command>
 
   build              Build the relay-demo images and pull the image-only services'
-                      images (the only subcommand that builds or pulls)
+                      images, the OAuth overlay's included (the only subcommand that
+                      builds or pulls)
   reset [--oauth]    Wipe and recreate the relay-demo fleet, verify it, mint fresh credentials;
                       --oauth adds the DEV-ONLY identity provider and turns on OAuth sign-in
   fault [service...] Kill the dev-fleet demo service on the given web Nodes

@@ -380,17 +380,21 @@ check "SEC3-reset-wait-seconds-leading-zero-refused" 2 refuses empty_log
 # --- Build pulls the image-only services; reset and up never pull ---
 
 COMPOSE_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml --profile demo"
+COMPOSE_OAUTH_PREFIX="compose -p relay-demo -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.oauth.yml --profile demo"
 
 # B1: `build` builds, THEN pulls every service that has no build section
 # (`--ignore-buildable`), fetching only what is missing. Without the pull a
 # fresh engine builds cleanly and reset's image precheck then fails on the
-# curl one-shots' image.
+# curl one-shots' image. The build names docker-compose.yml alone; the pull
+# names the OAuth overlay too (#351), so one build also fetches the identity
+# provider's image and an OAuth fleet is startable on a fresh engine.
 run STUB_COMPOSE_OK="build pull" -- build
 check "B1-build-then-pulls-image-only-services" 0 \
     "log_contains:$COMPOSE_PREFIX build" \
-    "log_contains:$COMPOSE_PREFIX pull --ignore-buildable --policy missing"
+    "log_contains:$COMPOSE_OAUTH_PREFIX pull --ignore-buildable --policy missing" \
+    "log_not_contains:$COMPOSE_OAUTH_PREFIX build"
 build_line="$(grep -nF -- "$COMPOSE_PREFIX build" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
-pull_line="$(grep -nF -- "$COMPOSE_PREFIX pull" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
+pull_line="$(grep -nF -- "$COMPOSE_OAUTH_PREFIX pull" "$DOCKER_LOG" | head -1 | cut -d: -f1)"
 if [ -z "$build_line" ] || [ -z "$pull_line" ] || [ "$build_line" -ge "$pull_line" ]; then
     echo "FAIL: B1-build-then-pulls-image-only-services: build (line ${build_line:-none}) must come before pull (line ${pull_line:-none})" >&2
     fail=$((fail + 1))
@@ -399,7 +403,7 @@ fi
 # B2: a failed build stops there; nothing is pulled.
 run STUB_COMPOSE_OK="pull" -- build
 check "B2-failed-build-does-not-pull" 1 \
-    "contains:docker compose build failed" "log_not_contains:$COMPOSE_PREFIX pull"
+    "contains:docker compose build failed" "log_not_contains:--profile demo pull"
 
 # B3: a failed pull fails the build step, loudly, rather than leaving reset to
 # discover the missing image later.
@@ -417,13 +421,19 @@ run STUB_COMPOSE_IMAGES_RC=0 STUB_COMPOSE_IMAGES_OUT=relay-demo-relay \
     -- reset
 check "B4-reset-never-pulls" 1 \
     "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
-    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
 
 # B5: up never pulls either.
 run -- up
 check "B5-up-never-pulls" 1 \
     "log_contains:$COMPOSE_PREFIX up -d --no-build --pull never" \
-    "log_not_contains:$COMPOSE_PREFIX pull" "log_not_contains:$COMPOSE_PREFIX build"
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
+
+# B6: `up --oauth` and `reset --oauth` never pull either.
+run -- up --oauth
+check "B6-oauth-up-never-pulls" 1 \
+    "log_contains:$COMPOSE_OAUTH_PREFIX up -d --no-build --pull never" \
+    "log_not_contains:--profile demo pull" "log_not_contains:--profile demo build"
 
 # --- The demo fleet's approval gate ---
 

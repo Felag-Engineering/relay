@@ -580,16 +580,13 @@ Three things differ from the plain fleet, each on purpose:
    Compose v2.18.0 or later** — the overlay uses the `!reset` tag, which first shipped in the
    compose-go that v2.18.0 pins (compose-spec/compose-go#380; this runbook was run on v5.1.4
    only), and since `make demo-down` and `make demo-reset` read the overlay too, an older Compose
-   breaks the plain targets as well; and the IdP image, which `make demo-build` does not fetch (it
-   builds, it never pulls):
-
-   ```console
-   $ docker pull quay.io/keycloak/keycloak:26.7.4
-   ```
-
-   Without it, `make demo-reset-oauth` stops at its image precheck, before touching a volume,
-   naming the missing image.
-2. **`make demo-build`**, as for the plain fleet.
+   breaks the plain targets as well.
+2. **`make demo-build`**, as for the plain fleet. Its pull names the overlay too, so it also
+   fetches the IdP's image (Keycloak, pinned by digest) and the namespace holder's — whichever
+   fleet you bring up next. Observed on 2026-09-29: with the Keycloak image deleted locally,
+   `make demo-build` pulled it by digest and `make demo-reset-oauth` then started. Without it,
+   `make demo-reset-oauth` stops at its image precheck, before touching a volume, naming the
+   missing image.
 3. **`make demo-reset-oauth`.** The Relay starts only once Keycloak is healthy — it fetches the
    issuer's discovery document once, at boot, and would not start without it — and the
    `oauth-account` one-shot then creates `demo-operator` through `/api/v1/accounts`, the way
@@ -735,10 +732,34 @@ open, and this is why the overlay is DEV-ONLY.
   whatever Claude Code runs: the calls are model-generated and stay agent-grade (ADR-0027). An
   answer on it meets the same refusals as any in-band decision by `demo-operator`, so it never
   satisfies a rule that excludes the requester, and never an `out-of-band` rule (AP-79, AP-13).
-- **So this fleet, as committed here, asks nothing in-band.** Both rules in
-  `docker/fixtures/approval-gates.json` are `out-of-band` and name only `dev-approver`. Seeing
-  Claude Code's approval dialog on this session needs gate rules that allow an in-band decision
-  by `demo-operator`, which this change does not add.
+- **The OAuth fleet runs the demo gate, exactly as the plain demo fleet does.**
+  `scripts/demo-fleet.sh` hands every compose call the in-band demo gate
+  ([The human approver](#the-human-approver)), with or without `--oauth`. Under it
+  `demo-operator` — human, `operator`, and the gate has `requester_allowed: true` and no
+  audience — may answer its own request for an Operation. It cannot release a Raw Exec: the
+  decision floor for a Raw Exec is `admin`, and `demo-operator` cannot even request one
+  (observed: `raw_exec` → `Raw Exec requires role "admin", has "operator"`).
+
+  Observed on 2026-09-29 on the wire, with a scripted client declaring `claude-code` and form
+  elicitation, on a real authorization-code + PKCE token for `demo-operator`:
+  `run_operation service.restart unit=nginx` on `node:role=web` came back `input_required`,
+  with one form question keyed by the request id and a `requestState`; the retry answering
+  `accept`, with **no** responder assertion, ran the Job, 6 × `success`. Read back on the
+  Control API, the request is `approved` with one decision by `demo-operator`, `human: true`,
+  channel `in-band`; in the store that decision has no `on_behalf_of` (AP-79: nothing written
+  to the asserted lane). Answering `decline` instead, on `node:role=web, node:env=staging`,
+  left the request `denied`, no Job and no dispatch. The same call declaring `claude-code` on
+  the founding admin's API Token was not asked: `pending_approval` (AP-78).
+
+  **Real Claude Code, headless** (observed, Claude Code 2.1.284, driven through its SDK control
+  protocol with no model turn, since the isolated config is signed in to relay but not to a
+  model): it receives the question and hands it to its host as an `elicitation` control request,
+  then waits. Unanswered, the tool call hung until it was killed after 120s, leaving the
+  request `pending`. Answered `cancel` — what a client with nobody present may send — the
+  Relay replied `answer_refused` ("approver is required …") and left the request `pending`,
+  `0 of 1`, with no decision recorded, so it can still be answered another way. A later call
+  on an already-pending request of the same plan got `pending_approval` instead of being asked
+  again (observed once). The interactive dialog itself, with a person at it, is *(predicted)*.
 
 ## The demo profile
 
