@@ -42,6 +42,17 @@ verified — the Relay authenticated it. `on_behalf_of` is asserted — the call
 nothing checked. `approved_by` is verified. Blurring the two is how audit trails become fiction: a
 jailbroken agent can assert anything, but it cannot forge the verified fields.
 
+**Whether the requester is a person or an AI-agent's machine Account.** On a `dispatch` row the
+requester's verified chip is followed by a kind label, `human` or `machine` (the treatment is in
+`00-foundations.md`). **Where a dispatch row shows its requester's kind, it is read from the kind
+the Job row recorded for its requester when the Job was created, and from nothing else** — never
+from the Account registry's current kind, which would relabel history when an Account is
+converted (owner decision of 2026-09-08, #540, recorded in [03](03-agent-sessions.md) under "Kind
+(machine or human) is not on the rail"). A Job that recorded no kind — one created before the Job
+row carried its requester — shows no label, and the screen does not infer one from the trail or
+anywhere else. Non-dispatch rows show no kind: their audit records carry none. Nothing beside an
+actor says how it authenticated (owner decision, 2026-09-29).
+
 ## Live but stable
 
 New events **queue behind an explicit click** ("3 new events — show") rather than pushing in.
@@ -58,6 +69,13 @@ detail view that promises to show it later.
 One filter box over principal, Operation, Selector, outcome and Node — the same box that filters
 the live tail filters history. Time controls: live tail, a relative window, an explicit range.
 Export for an auditor.
+
+The screen's standing notes — how a page is bounded, why the trail's own read records are left
+out of the default feed, the row kinds and filter fields it cannot offer yet, why the kind chips
+carry no counts — sit in the closed "About this screen" disclosure at its foot
+(`00-foundations.md`). The messages this request provokes stay visible where they render: a part
+of the URL that could not be read, an unknown row kind, what an outcome filter does to the page,
+and what Refine does and does not reach once it is used.
 
 ## Must not appear
 

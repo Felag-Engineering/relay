@@ -25,7 +25,10 @@ Everything below is aimed at that.
 1. **Requester line.** A solid verified chip for the requesting Account — often the AI-agent's
    machine Account — plus dashed asserted chips for `on_behalf_of` and any ticket or change
    reference. One line explaining the difference, because this may be the reader's first
-   encounter with it.
+   encounter with it. **Where the requester line shows the requester's kind, it is read from
+   what the approval record recorded at request time**, never from the Account registry's
+   current kind (`00-foundations.md`, "Kind label"; #540). The approval record carries no
+   requester kind today, so the requester line shows none.
 2. **The action.** Operation in mono with its risk badge, then arguments, Selector, fan-out with
    cap arithmetic, grouped verdicts as a segmented bar plus counts, and the **plan hash**. The
    hash is what is being approved.
@@ -82,6 +85,17 @@ and Activity (spec 04) shows either.
 - The requester's own phrasing of what the action does. The Plan summary is **Relay-authored** —
   an agent-supplied description of its own request is exactly the thing not to trust.
 - Anything else on the page.
+
+## Decisions, and who made them
+
+Every recorded Decision is listed: the decider's chip, the answer, when, the channel and the
+note. **Each decider's chip is followed by a kind label, `human` or `machine`, read from that
+Decision's own record of whether its decider was human** — the same fact the Control API renders
+as `human` on each decision — and never from the Account registry. A Decision records an unknown
+kind as not human (the restrictive default), so `machine` there means "not recorded as human".
+A human decider is labelled as plainly as a machine one; neither is the unmarked case. Nothing on
+the card says how a decider authenticated (owner decision, 2026-09-29). Job detail's approval
+section (spec 13) draws the same label from the same record.
 
 ## States
 
