@@ -14,9 +14,15 @@ compose profile built on top of it has its own runbook — see
 > [docs/operations/relay-install.md](operations/relay-install.md) and
 > [docs/operations/relay-daemon-install.md](operations/relay-daemon-install.md).
 > Never reuse the credentials or Policy below anywhere real. The published
-> ports (`7654`, `9443`) are bound to `127.0.0.1` only: the control plane accepts
-> a committed dev credential, so exposing it on the LAN would be remote code
-> execution for anyone on your network. For the hardened production posture, see
+> ports (`7654`, `9443`) are bound to `127.0.0.1` by default: the control plane
+> accepts a committed dev credential, so exposing it on the LAN would be remote
+> code execution for anyone on your network. `RELAY_PUBLISH_ADDR=0.0.0.0` opts the
+> control plane (`9443`) in to being exposed anyway, and the `console-password`
+> service then refuses the committed default password: set a real
+> `CONSOLE_ADMIN_PASSWORD` first, or the Console cannot be signed in to. The node
+> plane (`7654`) has its own `RELAY_NODE_PUBLISH_ADDR`, needed only by a
+> relay-daemon outside this compose project. For
+> the hardened production posture, see
 > `daemon/packaging/relay-daemon.service` and
 > [docs/operations/daemon-privilege-posture.md](operations/daemon-privilege-posture.md).
 
@@ -153,10 +159,11 @@ Wait until `daemon-1`, `daemon-2`, and `daemon-3` are `healthy` (each becomes
 healthy only after it has persisted its identity, i.e. after a successful
 enrollment).
 
-> **Troubleshooting.** The Relay healthcheck probes its control port with busybox
-> `nc -w1`. If your busybox build ships an `nc` without the `-w` (timeout) flag,
-> the healthcheck never passes, so `bootstrap` never starts and no daemon enrolls
-> — check `docker compose logs relay` for a failing healthcheck.
+> **Troubleshooting.** The Relay healthcheck completes a TLS 1.3 handshake with
+> both listeners using `openssl s_client`, verified against the Relay's CA. If it
+> never passes, `bootstrap` never starts and no daemon enrolls — check
+> `docker inspect --format '{{json .State.Health}}' <relay container>` and
+> `docker compose logs relay`.
 
 ## Verify N enrolled Nodes
 

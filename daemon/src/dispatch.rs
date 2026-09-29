@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::config::MAX_OUTPUT_BYTES;
+#[cfg(test)]
 use crate::dedup::DedupStore;
 use crate::executor::{execute, ExecRequest};
 use crate::gen::{
@@ -33,6 +34,7 @@ use crate::operations::registry::{self, FnRunner, OpCtx, OpRegistration, Resolve
 use crate::operations::schema::{OP_ARG_NAME, OP_ARG_PATH, OP_ARG_UNIT, OP_ARG_VERSION};
 use crate::policy::{Decision, Policy};
 use crate::scheduler::{QueuedOutcome, Scheduler};
+use crate::services::Services;
 use crate::templates::TemplateSet;
 
 // ---------------------------------------------------------------------------
@@ -78,26 +80,16 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(300);
 /// `cancel` is forwarded through scheduling into the executor so the in-flight
 /// cancel path (ADR-0013 honest-race) is intact for Tasks that make it past the
 /// queue.
+///
+/// `services` is the process-lifetime [`Services`] bundle (Policy, templates,
+/// dedup, scheduler), shared across every reconnect (ADR-0004).
 pub async fn dispatch(
     task: &TaskRequest,
-    policy: &Policy,
-    templates: &TemplateSet,
-    dedup: &DedupStore,
-    scheduler: &Scheduler,
+    services: &Services,
     received_at: Instant,
     cancel: Option<oneshot::Receiver<()>>,
 ) -> TaskResult {
-    dispatch_scheduled_with_runner(
-        task,
-        policy,
-        templates,
-        dedup,
-        scheduler,
-        received_at,
-        execute,
-        cancel,
-    )
-    .await
+    dispatch_scheduled_with_runner(task, services, received_at, execute, cancel).await
 }
 
 // ---------------------------------------------------------------------------
@@ -165,13 +157,9 @@ where
 ///   clock never restarts at dispatch time.
 /// - The still-owned `cancel` receiver is forwarded to the executor so the
 ///   in-flight cancel path and honest-race (ADR-0013) remain intact.
-#[allow(clippy::too_many_arguments)]
 async fn dispatch_scheduled_with_runner<R, Fut>(
     task: &TaskRequest,
-    policy: &Policy,
-    templates: &TemplateSet,
-    dedup: &DedupStore,
-    scheduler: &Scheduler,
+    services: &Services,
     received_at: Instant,
     run: R,
     cancel: Option<oneshot::Receiver<()>>,
@@ -180,6 +168,12 @@ where
     R: Fn(ExecRequest) -> Fut + Sync,
     Fut: Future<Output = TaskResult> + Send + 'static,
 {
+    let Services {
+        policy,
+        templates,
+        dedup,
+        scheduler,
+    } = services;
     dedup
         .run_once(&task.task_id, move || async move {
             let effective = effective_timeout(task.timeout_seconds);
@@ -667,12 +661,23 @@ pub(crate) fn overloaded_result(task_id: String) -> TaskResult {
 // Tests — pipeline acceptance criteria (a)–(e) Rust-half
 // ---------------------------------------------------------------------------
 
+/// Test-only: the per-process [`Services`] bundle for a test that dispatches a
+/// Task — the given Policy and dedup store, no Template Operations, and a
+/// fresh scheduler, exactly what each such test used to build separately.
+#[cfg(test)]
+fn test_services(policy: Policy, dedup: DedupStore) -> Services {
+    Services {
+        policy,
+        templates: TemplateSet::empty(),
+        dedup,
+        scheduler: Scheduler::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::path::{Path, PathBuf};
+
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::SystemTime;
@@ -683,6 +688,7 @@ mod tests {
     use crate::gen::{Outcome, TaskResult};
     use crate::operations;
     use crate::policy::from_toml_str;
+    use crate::test_support::{TempDir, TempFile};
 
     // -----------------------------------------------------------------------
     // Shared helpers
@@ -692,77 +698,6 @@ mod tests {
 
     fn fixture_policy() -> Policy {
         from_toml_str(FIXTURE).expect("policy.example.toml must parse cleanly")
-    }
-
-    /// Temp directory that removes itself on drop (test isolation).
-    struct TempDir(PathBuf);
-
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-dispatch-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            fs::create_dir_all(&path).expect("create temp dir");
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Temp file created at a **requested** mode of 0600 (a ceiling the umask may
-    /// tighten), not a forced one.
-    ///
-    /// These fixtures are inputs to `file.read` dispatch tests; nothing here asserts an
-    /// exact mode, so there is no reason to chmod past the operator's umask — and doing
-    /// it in a shape copied into production code is how the pattern spread in the first
-    /// place (ADR-0036). A tighter umask simply yields a tighter fixture, which every
-    /// test using one still reads as its own owner.
-    struct TempFile(PathBuf);
-
-    impl TempFile {
-        fn new(label: &str, content: &[u8]) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-dispatch-tf-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            let mut f = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&path)
-                .expect("create temp file");
-            f.write_all(content).expect("write temp file");
-            TempFile(path)
-        }
-        fn path_str(&self) -> String {
-            self.0.to_string_lossy().into_owned()
-        }
-    }
-
-    impl Drop for TempFile {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.0);
-        }
     }
 
     fn make_task_file_read(task_id: &str, path: &str) -> TaskRequest {
@@ -832,7 +767,7 @@ mod tests {
 
     #[tokio::test]
     async fn file_read_returns_contents() {
-        let state_dir = TempDir::new("file-read");
+        let state_dir = TempDir::created("file-read");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = from_toml_str(
             r#"
@@ -844,7 +779,7 @@ allowed_args = [["*"]]
         .expect("parse policy");
 
         let content = b"hello from dispatch test\n";
-        let tmp = TempFile::new("content", content);
+        let tmp = TempFile::with_requested_mode("content", content, 0o600);
         let task = make_task_file_read("t-file-read", &tmp.path_str());
 
         let result = dispatch_with_runner(
@@ -874,7 +809,7 @@ allowed_args = [["*"]]
 
     #[tokio::test]
     async fn raw_exec_allowed_returns_success() {
-        let state_dir = TempDir::new("raw-exec-allow");
+        let state_dir = TempDir::created("raw-exec-allow");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = from_toml_str(
             r#"
@@ -909,7 +844,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn raw_exec_denied_does_not_spawn() {
-        let state_dir = TempDir::new("raw-exec-deny");
+        let state_dir = TempDir::created("raw-exec-deny");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
         // Policy that does NOT allow /bin/sh (deny-by-default).
@@ -971,7 +906,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn service_restart_nginx_calls_runner() {
-        let state_dir = TempDir::new("svc-nginx");
+        let state_dir = TempDir::created("svc-nginx");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy(); // nginx allowed, sshd denied
 
@@ -1023,7 +958,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn service_restart_sshd_denied_runner_not_called() {
-        let state_dir = TempDir::new("svc-sshd");
+        let state_dir = TempDir::created("svc-sshd");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy(); // sshd not in allowed list → deny-by-default
 
@@ -1080,7 +1015,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn pkg_install_netcat_denied_runner_not_called() {
-        let state_dir = TempDir::new("pkg-netcat");
+        let state_dir = TempDir::created("pkg-netcat");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy(); // netcat not in allowed list → deny-by-default
 
@@ -1131,7 +1066,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn dedup_same_task_id_runs_once() {
-        let state_dir = TempDir::new("dedup-once");
+        let state_dir = TempDir::created("dedup-once");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy();
 
@@ -1202,7 +1137,7 @@ allow = ["^/bin/echo hello$"]
     async fn raw_exec_editing_policy_file_is_denied() {
         // A policy with no raw_exec allow rules → deny-by-default for all raw exec.
         let policy = from_toml_str("").expect("empty policy must parse");
-        let state_dir = TempDir::new("policy-immut");
+        let state_dir = TempDir::created("policy-immut");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
         // Construct a raw_exec that would overwrite the policy file if executed.
@@ -1247,7 +1182,7 @@ allow = ["^/bin/echo hello$"]
 
     #[tokio::test]
     async fn system_facts_returns_kv_stdout() {
-        let state_dir = TempDir::new("sys-facts");
+        let state_dir = TempDir::created("sys-facts");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = from_toml_str(
             r#"
@@ -1384,7 +1319,7 @@ deny = ["secret"]
     #[tokio::test]
     async fn policy_query_verdict_matches_execution() {
         let policy = make_query_test_policy();
-        let state_dir = TempDir::new("pq-matrix");
+        let state_dir = TempDir::created("pq-matrix");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
         // Fake runner: always returns Success — hermetic for service.restart.
@@ -1569,9 +1504,9 @@ deny = ["secret"]
     #[tokio::test]
     async fn deny_reason_identical_between_verdict_and_stderr() {
         let policy = make_query_test_policy();
-        let state_dir = TempDir::new("deny-reason-identity");
+        let state_dir = TempDir::created("deny-reason-identity");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
-        let scheduler = Scheduler::new();
+        let services = test_services(policy, dedup);
 
         struct Case {
             label: &'static str,
@@ -1621,17 +1556,9 @@ deny = ["secret"]
         ];
 
         for case in &cases {
-            let verdict = evaluate_policy_query(&case.query, &policy, TemplateSet::empty_static());
-            let result = dispatch(
-                &case.task,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                tokio::time::Instant::now(),
-                None,
-            )
-            .await;
+            let verdict =
+                evaluate_policy_query(&case.query, &services.policy, TemplateSet::empty_static());
+            let result = dispatch(&case.task, &services, tokio::time::Instant::now(), None).await;
 
             assert_eq!(
                 result.outcome,
@@ -1702,7 +1629,7 @@ allow = ["^/bin/sh -c .+$"]
 
         // No-dedup: build a fresh DedupStore and verify the seen-tasks dir has
         // zero entries after calling evaluate_policy_query (which takes no store).
-        let state_dir = TempDir::new("pq-no-dedup");
+        let state_dir = TempDir::created("pq-no-dedup");
         // evaluate_policy_query is a sync fn; call it — compile-time proof that
         // it does not accept a DedupStore parameter.
         let _verdict2 = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
@@ -1766,7 +1693,7 @@ allow = ["^/bin/sh -c .+$"]
     // -----------------------------------------------------------------------
     #[tokio::test]
     async fn cancelled_task_id_is_deduped_on_resend() {
-        let state_dir = TempDir::new("dedup-cancel");
+        let state_dir = TempDir::created("dedup-cancel");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
 
         // Policy allows the sleep command via raw exec. A single-argument
@@ -1860,10 +1787,10 @@ allow = ["^/bin/sleep [0-9]+$"]
     // -----------------------------------------------------------------------
     #[tokio::test]
     async fn ac1_two_mutate_tasks_never_overlap() {
-        let state_dir = TempDir::new("sched-m-overlap");
+        let state_dir = TempDir::created("sched-m-overlap");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy(); // nginx allowed (service.restart = MUTATE)
-        let scheduler = crate::scheduler::Scheduler::new();
+        let services = test_services(policy, dedup);
         let received_at = tokio::time::Instant::now();
 
         let current = Arc::new(AtomicUsize::new(0));
@@ -1897,26 +1824,8 @@ allow = ["^/bin/sleep [0-9]+$"]
         let task2 = make_task_service_restart("sched-m2", "nginx");
 
         let (r1, r2) = tokio::join!(
-            dispatch_scheduled_with_runner(
-                &task1,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                received_at,
-                slow_run.clone(),
-                None
-            ),
-            dispatch_scheduled_with_runner(
-                &task2,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                received_at,
-                slow_run,
-                None
-            ),
+            dispatch_scheduled_with_runner(&task1, &services, received_at, slow_run.clone(), None),
+            dispatch_scheduled_with_runner(&task2, &services, received_at, slow_run, None),
         );
 
         assert_eq!(r1.outcome, Outcome::Success as i32, "task1 must succeed");
@@ -1935,11 +1844,11 @@ allow = ["^/bin/sleep [0-9]+$"]
     // -----------------------------------------------------------------------
     #[tokio::test]
     async fn queued_timeout_outcome_no_runner_then_deduped() {
-        let state_dir = TempDir::new("sched-qt");
+        let state_dir = TempDir::created("sched-qt");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         // Policy allows the operation (Policy gate must not fire before scheduler).
         let policy = fixture_policy();
-        let scheduler = crate::scheduler::Scheduler::new();
+        let services = test_services(policy, dedup);
 
         let runner_calls = Arc::new(AtomicUsize::new(0));
         let calls = Arc::clone(&runner_calls);
@@ -1964,17 +1873,9 @@ allow = ["^/bin/sleep [0-9]+$"]
         let received_at = tokio::time::Instant::now() - std::time::Duration::from_secs(100);
 
         let task = make_task_service_restart("sched-qt-1", "nginx");
-        let result = dispatch_scheduled_with_runner(
-            &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
-            received_at,
-            fake_run.clone(),
-            None,
-        )
-        .await;
+        let result =
+            dispatch_scheduled_with_runner(&task, &services, received_at, fake_run.clone(), None)
+                .await;
 
         assert_eq!(
             result.outcome,
@@ -1991,10 +1892,7 @@ allow = ["^/bin/sleep [0-9]+$"]
         // Re-dispatch same task_id → deduped benign (at-most-once: id recorded before queue).
         let result2 = dispatch_scheduled_with_runner(
             &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
+            &services,
             tokio::time::Instant::now(),
             fake_run,
             None,
@@ -2021,14 +1919,15 @@ allow = ["^/bin/sleep [0-9]+$"]
     // -----------------------------------------------------------------------
     #[tokio::test]
     async fn queued_cancel_outcome_no_runner_then_deduped() {
-        let state_dir = TempDir::new("sched-qc");
+        let state_dir = TempDir::created("sched-qc");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy();
-        let scheduler = crate::scheduler::Scheduler::new();
+        let services = test_services(policy, dedup);
 
         // Occupy the mutate gate so the Task queues (doesn't acquire immediately).
         let mut blocker_cancel = None;
-        let _blocker_permit = scheduler
+        let _blocker_permit = services
+            .scheduler
             .acquire(
                 crate::scheduler::Class::Mutate,
                 tokio::time::Instant::now() + std::time::Duration::from_secs(60),
@@ -2066,10 +1965,7 @@ allow = ["^/bin/sleep [0-9]+$"]
         let received_at = tokio::time::Instant::now();
         let result = dispatch_scheduled_with_runner(
             &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
+            &services,
             received_at,
             fake_run.clone(),
             Some(cancel_rx),
@@ -2092,10 +1988,7 @@ allow = ["^/bin/sleep [0-9]+$"]
         drop(_blocker_permit); // release the gate so the re-send can proceed
         let result2 = dispatch_scheduled_with_runner(
             &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
+            &services,
             tokio::time::Instant::now(),
             fake_run,
             None,
@@ -2144,16 +2037,17 @@ allow = ["^/bin/sleep [0-9]+$"]
     // queued_timeout_outcome_no_runner_then_deduped above.
     #[tokio::test(start_paused = true)]
     async fn queued_task_deadline_fires_while_genuinely_queued() {
-        let state_dir = TempDir::new("sched-qt-live");
+        let state_dir = TempDir::created("sched-qt-live");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy();
-        let scheduler = crate::scheduler::Scheduler::new();
+        let services = test_services(policy, dedup);
 
         // Occupy the mutate gate with a permit that is never released within
         // this test, so the Task under test genuinely queues rather than
         // acquiring immediately.
         let mut blocker_cancel = None;
-        let _blocker_permit = scheduler
+        let _blocker_permit = services
+            .scheduler
             .acquire(
                 crate::scheduler::Class::Mutate,
                 tokio::time::Instant::now() + std::time::Duration::from_secs(3600),
@@ -2190,17 +2084,8 @@ allow = ["^/bin/sleep [0-9]+$"]
         // runnable, the paused runtime auto-advances virtual time to it.
         let received_at = tokio::time::Instant::now();
         let task = make_task_service_restart("sched-qt-live-1", "nginx");
-        let result = dispatch_scheduled_with_runner(
-            &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
-            received_at,
-            fake_run,
-            None,
-        )
-        .await;
+        let result =
+            dispatch_scheduled_with_runner(&task, &services, received_at, fake_run, None).await;
 
         assert_eq!(
             result.outcome,
@@ -2230,10 +2115,10 @@ allow = ["^/bin/sleep [0-9]+$"]
     // must receive ~2s remaining, not a fresh 5s effective_timeout.
     #[tokio::test(start_paused = true)]
     async fn queued_wait_deducts_from_exec_budget_single_clock() {
-        let state_dir = TempDir::new("sched-carryover");
+        let state_dir = TempDir::created("sched-carryover");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
         let policy = fixture_policy();
-        let scheduler = crate::scheduler::Scheduler::new();
+        let services = test_services(policy, dedup);
         let received_at = tokio::time::Instant::now();
 
         // task1 (blocker): acquires the single mutate permit immediately and
@@ -2284,26 +2169,8 @@ allow = ["^/bin/sleep [0-9]+$"]
         // the earlier one (3s), releasing the permit to task2, which then
         // computes remaining = deadline(t0+5s) - now(t0+3s) = exactly 2s.
         let (r1, r2) = tokio::join!(
-            dispatch_scheduled_with_runner(
-                &task1,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                received_at,
-                blocker_run,
-                None,
-            ),
-            dispatch_scheduled_with_runner(
-                &task2,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
-                received_at,
-                probe_run,
-                None,
-            ),
+            dispatch_scheduled_with_runner(&task1, &services, received_at, blocker_run, None,),
+            dispatch_scheduled_with_runner(&task2, &services, received_at, probe_run, None,),
         );
 
         assert_eq!(
@@ -2823,12 +2690,12 @@ allowed_args = [["*"]]
 "#,
         )
         .expect("policy parses");
-        let state_dir = TempDir::new("unsupported-parity");
+        let state_dir = TempDir::created("unsupported-parity");
         let dedup = crate::dedup::DedupStore::open(state_dir.path()).expect("open dedup");
-        let scheduler = Scheduler::new();
+        let services = test_services(policy, dedup);
 
         let query = make_policy_query_operation("q-unsupported", "disk.usage", "path", "/var");
-        let verdict = evaluate_policy_query(&query, &policy, TemplateSet::empty_static());
+        let verdict = evaluate_policy_query(&query, &services.policy, TemplateSet::empty_static());
         assert!(!verdict.allowed);
         assert!(verdict.unsupported);
 
@@ -2842,16 +2709,7 @@ allowed_args = [["*"]]
                 args,
             })),
         };
-        let result = dispatch(
-            &task,
-            &policy,
-            TemplateSet::empty_static(),
-            &dedup,
-            &scheduler,
-            tokio::time::Instant::now(),
-            None,
-        )
-        .await;
+        let result = dispatch(&task, &services, tokio::time::Instant::now(), None).await;
 
         assert_eq!(result.outcome, Outcome::Unsupported as i32);
         assert_eq!(
@@ -3062,7 +2920,7 @@ allowed_args = [["*"]]
 //
 // This module is a sibling of `mod tests` above; it never edits it and
 // builds its own fixtures and its own self-cleaning temp-dir helper rather
-// than reaching into that private sibling module's `TempDir`.
+// than sharing the `crate::test_support::TempDir` that sibling uses.
 #[cfg(test)]
 mod proptests {
     use std::fs;
@@ -3080,8 +2938,8 @@ mod proptests {
 
     // -------------------------------------------------------------------
     // Self-cleaning temp dir for a fresh `DedupStore` per proptest case.
-    // Deliberately NOT the private `TempDir` in `mod tests` (disjointness:
-    // this module must not touch that sibling test module).
+    // Deliberately NOT the `crate::test_support::TempDir` that `mod tests`
+    // uses (disjointness: this module keeps its own fixtures).
     // -------------------------------------------------------------------
 
     static PT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -3238,7 +3096,7 @@ mod proptests {
             let pt_dir = PtTempDir::new();
             let dedup = DedupStore::open(pt_dir.path()).expect("open dedup");
             let policy = pipeline_policy();
-            let scheduler = Scheduler::new();
+            let services = test_services(policy, dedup);
 
             let recorded: Arc<Mutex<Option<Vec<String>>>> = Arc::new(Mutex::new(None));
             let rec = Arc::clone(&recorded);
@@ -3250,10 +3108,7 @@ mod proptests {
 
             let result = rt.block_on(dispatch_scheduled_with_runner(
                 &task,
-                &policy,
-                TemplateSet::empty_static(),
-                &dedup,
-                &scheduler,
+                &services,
                 tokio::time::Instant::now(),
                 run,
                 None,
@@ -3317,7 +3172,7 @@ mod proptests {
             let pt_dir = PtTempDir::new();
             let dedup = DedupStore::open(pt_dir.path()).expect("open dedup");
             let policy = pipeline_policy();
-            let scheduler = Scheduler::new();
+            let services = test_services(policy, dedup);
 
             let calls = Arc::new(AtomicUsize::new(0));
             let c = Arc::clone(&calls);
@@ -3330,10 +3185,7 @@ mod proptests {
             let r2 = rt.block_on(async {
                 let _r1 = dispatch_scheduled_with_runner(
                     &task,
-                    &policy,
-                    TemplateSet::empty_static(),
-                    &dedup,
-                    &scheduler,
+                    &services,
                     tokio::time::Instant::now(),
                     run.clone(),
                     None,
@@ -3341,10 +3193,7 @@ mod proptests {
                 .await;
                 dispatch_scheduled_with_runner(
                     &task,
-                    &policy,
-                    TemplateSet::empty_static(),
-                    &dedup,
-                    &scheduler,
+                    &services,
                     tokio::time::Instant::now(),
                     run,
                     None,

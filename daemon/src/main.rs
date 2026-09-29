@@ -23,6 +23,7 @@ mod raw_exec;
 mod renew;
 mod scheduler;
 mod selfref;
+mod services;
 mod shutdown;
 mod templates;
 mod tunnel;
@@ -31,6 +32,7 @@ mod version;
 use cancel::CancelRegistry;
 use config::Config;
 use scheduler::Scheduler;
+use services::Services;
 use shutdown::{Inflight, Shutdown, ShutdownContext};
 use tunnel::{Backoff, RECONNECT_BACKOFF_BASE, RECONNECT_BACKOFF_CAP};
 
@@ -233,19 +235,15 @@ const MAX_INFLIGHT_TASKS: usize = 1024;
 ///   no executor — structurally incapable of recording a marker or spawning a process.
 /// - Other message types: silently ignored for forward-compatibility.
 ///
-/// Policy, DedupStore, and Scheduler are passed as `Arc` so spawned per-Task tasks
-/// are `'static`.
-#[allow(clippy::too_many_arguments)]
+/// `services` is passed as an `Arc` so spawned per-Task tasks are `'static`;
+/// it is the process-lifetime [`Services`], never rebuilt per connection.
 async fn run_tunnel(
     channel: Channel,
     identity: &crate::identity::Identity,
     facts: Facts,
     node_labels: Vec<(String, String)>,
     interval: Duration,
-    policy: Arc<policy::Policy>,
-    templates: Arc<templates::TemplateSet>,
-    dedup: Arc<dedup::DedupStore>,
-    scheduler: Arc<Scheduler>,
+    services: Arc<Services>,
     ctx: &ShutdownContext,
 ) -> TunnelExit {
     let mut client = TunnelClient::new(channel);
@@ -266,12 +264,12 @@ async fn run_tunnel(
                 daemon_version: version::version().to_string(),
                 facts: Some(facts),
                 labels: enroll::node_labels_to_proto(&node_labels),
-                policy_fingerprint: policy.fingerprint().to_string(),
+                policy_fingerprint: services.policy.fingerprint().to_string(),
                 // Beside the Policy fingerprint, from the same live set the
                 // dispatch path resolves against (ADR-0021): the Relay's
                 // fleet-wide template-drift signal. Report-only — templates are
                 // locally rooted and never settable over the wire (ADR-0002).
-                template_set_fingerprint: templates.fingerprint().to_string(),
+                template_set_fingerprint: services.templates.fingerprint().to_string(),
             })),
         })
         .await
@@ -285,7 +283,9 @@ async fn run_tunnel(
     // is a summary; this is the full snapshot, from the same live `policy`.
     if tx
         .send(DaemonMessage {
-            body: Some(daemon_message::Body::Policy(policy_snapshot(&policy))),
+            body: Some(daemon_message::Body::Policy(policy_snapshot(
+                &services.policy,
+            ))),
         })
         .await
         .is_err()
@@ -299,7 +299,9 @@ async fn run_tunnel(
     // against, refreshed on every (re)connect exactly like the Policy view.
     if tx
         .send(DaemonMessage {
-            body: Some(daemon_message::Body::Templates(templates.snapshot())),
+            body: Some(daemon_message::Body::Templates(
+                services.templates.snapshot(),
+            )),
         })
         .await
         .is_err()
@@ -438,10 +440,7 @@ async fn run_tunnel(
                         // enqueued" signal for the graceful-shutdown drain
                         // (issue #177).
                         let guard = ctx.inflight.enter();
-                        let policy = Arc::clone(&policy);
-                        let templates = Arc::clone(&templates);
-                        let dedup = Arc::clone(&dedup);
-                        let scheduler = Arc::clone(&scheduler);
+                        let services = Arc::clone(&services);
                         let registry = registry.clone();
                         let tx = tx.clone();
                         tokio::spawn(async move {
@@ -450,16 +449,9 @@ async fn run_tunnel(
                             // timeout/cancel) → Policy → execute. The scheduler gate is
                             // held across execution; the inbound loop never touches it,
                             // so TaskCancel delivery is never blocked.
-                            let result = dispatch::dispatch(
-                                &task_req,
-                                &policy,
-                                &templates,
-                                &dedup,
-                                &scheduler,
-                                received_at,
-                                cancel_rx,
-                            )
-                            .await;
+                            let result =
+                                dispatch::dispatch(&task_req, &services, received_at, cancel_rx)
+                                    .await;
                             // Deregister before sending the result so a subsequent
                             // TaskCancel for this id is a clean no-op — but ONLY if
                             // this lifecycle owns the registration. A redelivered
@@ -491,8 +483,11 @@ async fn run_tunnel(
                     }
                     Some(relay_message::Body::PolicyQuery(query)) => {
                         // Read-only Policy evaluation (ADR-0011): no dedup, no executor.
-                        // `policy` is an Arc<Policy> here; &policy deref-coerces to &Policy.
-                        let verdict = dispatch::evaluate_policy_query(&query, &policy, &templates);
+                        let verdict = dispatch::evaluate_policy_query(
+                            &query,
+                            &services.policy,
+                            &services.templates,
+                        );
                         if tx
                             .send(DaemonMessage {
                                 body: Some(daemon_message::Body::PolicyVerdict(verdict)),
@@ -558,10 +553,11 @@ async fn run_tunnel(
 /// connect"), falling back to `startup_identity` if the reload finds nothing
 /// or errors; this NEVER re-enrolls.
 ///
-/// `policy`, `templates`, `dedup`, and `scheduler` are constructed once by the
-/// caller and shared by `Arc` across every reconnect within this process's
-/// lifetime, so the at-most-once dedup state survives reconnects (ADR-0004) and
-/// the reported Policy/template fingerprints are stable across a reconnect.
+/// `services` ([`Services`]: Policy, templates, dedup, scheduler) is constructed
+/// once by the caller and shared by `Arc` across every reconnect within this
+/// process's lifetime, so the at-most-once dedup state survives reconnects
+/// (ADR-0004) and the reported Policy/template fingerprints are stable across a
+/// reconnect.
 ///
 /// The cert-renewal background task is rebound to the fresh channel and
 /// freshly-reloaded identity on every successful connect: tonic's `Channel`
@@ -587,14 +583,10 @@ async fn run_tunnel(
 /// so the daemon never blocks past the grace period waiting on an unreachable
 /// Relay. Neither path can violate at-most-once (ADR-0004): both fire only
 /// before any Task could have been accepted.
-#[allow(clippy::too_many_arguments)]
 async fn reconnect_loop(
     config: &Config,
     startup_identity: identity::Identity,
-    policy: Arc<policy::Policy>,
-    templates: Arc<templates::TemplateSet>,
-    dedup: Arc<dedup::DedupStore>,
-    scheduler: Arc<Scheduler>,
+    services: Arc<Services>,
     interval: Duration,
     ctx: ShutdownContext,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -651,10 +643,7 @@ async fn reconnect_loop(
                     config.facts.clone(),
                     config.node_labels.clone(),
                     interval,
-                    Arc::clone(&policy),
-                    Arc::clone(&templates),
-                    Arc::clone(&dedup),
-                    Arc::clone(&scheduler),
+                    Arc::clone(&services),
                     &ctx,
                 )
                 .await
@@ -771,13 +760,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!(relay = %config.relay_addr, node_id = %identity.node_id, "relay-daemon starting");
 
     // Open the dedup store before connecting (fail closed: must be writable).
-    let dedup = Arc::new(dedup::DedupStore::open(&config.state_dir)?);
+    let dedup = dedup::DedupStore::open(&config.state_dir)?;
 
     // Load Policy from the configured path (fail closed on any error).
     // If the file is absent or unreadable, fall back to a deny-all Policy
     // with a warning rather than refusing to start. A daemon with no policy
     // file denies every Task, which is the most restrictive safe default.
-    let policy = Arc::new(match policy::load_policy(&config.policy_path) {
+    let policy = match policy::load_policy(&config.policy_path) {
         Ok(p) => {
             info!(path = %config.policy_path.display(), fingerprint = %p.fingerprint(), "policy loaded");
             p
@@ -792,7 +781,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // rules → every evaluate call returns Deny{rule: None}.
             policy::from_toml_str("").expect("empty TOML must produce deny-all Policy")
         }
-    });
+    };
 
     // Load this Node's Template Operations from the local root-owned template
     // root (ADR-0021, issue #291) — the same trust root as Policy, never the
@@ -800,9 +789,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // failure leaves the Node with NO Template Operations and an `unloadable`
     // fingerprint, so a broken set is visible fleet-wide instead of silently
     // serving a partial vocabulary (fail closed).
-    let templates = Arc::new(templates::TemplateSet::load_or_fail_closed(
-        &config.template_dir,
-    ));
+    let templates = templates::TemplateSet::load_or_fail_closed(&config.template_dir);
 
     // Per-Node concurrency scheduler (issue #91, ADR-0012):
     // mutate Tasks are strictly serial (Semaphore(1));
@@ -811,11 +798,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // never blocked by a running or queued Task.
     let scheduler = Scheduler::new();
 
-    // dedup/policy/scheduler are constructed ONCE here and shared by Arc across
-    // every reconnect inside reconnect_loop, so at-most-once dedup state
+    // dedup/policy/templates/scheduler are constructed ONCE here, bundled as
+    // the process-lifetime `Services`, and shared by Arc across every
+    // reconnect inside reconnect_loop, so at-most-once dedup state
     // (ADR-0004) survives reconnects within this process's lifetime. The renew
     // task is no longer spawned here — reconnect_loop rebinds it to the fresh
     // channel + identity on every successful connect (ADR-0006 Amendment 3).
+    let services = Arc::new(Services {
+        policy,
+        templates,
+        dedup,
+        scheduler,
+    });
     let interval = heartbeat_interval();
 
     // Graceful shutdown (issue #177): a signal listener triggers `shutdown`
@@ -832,10 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         registry: CancelRegistry::new(),
     };
 
-    reconnect_loop(
-        &config, identity, policy, templates, dedup, scheduler, interval, ctx,
-    )
-    .await?;
+    reconnect_loop(&config, identity, services, interval, ctx).await?;
 
     Ok(())
 }
@@ -1005,5 +996,164 @@ mod tests {
         // from the same policy.fingerprint() call on the same Arc<Policy>.
         let p = policy::from_toml_str(FIXTURE).expect("fixture must parse");
         assert_eq!(policy_snapshot(&p).policy_fingerprint, p.fingerprint());
+    }
+}
+
+/// Test fixtures shared by the daemon's unit-test modules: self-removing temp
+/// directories and files, and the `&[&str]` -> `Vec<String>` argv builder.
+///
+/// Inline here on purpose, never a `test_support.rs` file:
+/// `tests/policy_never_opened_for_write.rs` strips a bare `#[cfg(test)]` item
+/// from its write-site scan, but walks every file under `src/` as production
+/// however its `mod` line is gated — a separate file holding these
+/// `OpenOptions::write` calls would read as a new production writer.
+///
+/// The file constructors differ in how they set the mode, and tests depend on
+/// the difference: pick by what the test asserts, never by convenience.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A fresh path under the system temp dir,
+    /// `relay-test-<label>-<pid>-<nanos>-<seq>`. Nothing is created there. The
+    /// per-process sequence number keeps two calls in the same nanosecond
+    /// (parallel tests, same label) distinct.
+    pub(crate) fn unique_temp_path(label: &str) -> PathBuf {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "relay-test-{label}-{}-{nanos}-{seq}",
+            std::process::id()
+        ))
+    }
+
+    /// Creates or truncates `path` holding `content` at EXACTLY `mode`.
+    ///
+    /// `OpenOptions::mode` is masked by the process umask, so on a runner with
+    /// umask 022 a requested 0o664 lands as 0o644 and a group/world-writable
+    /// rejection test would spuriously pass the file. chmod is not
+    /// umask-masked, so the exact mode is forced afterwards.
+    pub(crate) fn write_forced_mode(path: &Path, content: &[u8], mode: u32) {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(mode)
+            .open(path)
+            .unwrap();
+        f.write_all(content).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Builds an argv (or argument list) from string literals.
+    pub(crate) fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// A temp directory that removes itself, recursively, on drop.
+    pub(crate) struct TempDir(PathBuf);
+
+    impl TempDir {
+        /// Names a fresh directory WITHOUT creating it — for code under test
+        /// that creates its own state dir (identity, enrollment, dedup).
+        pub(crate) fn new(label: &str) -> Self {
+            TempDir(unique_temp_path(label))
+        }
+
+        /// Names a fresh directory and creates it.
+        pub(crate) fn created(label: &str) -> Self {
+            let path = unique_temp_path(label);
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            TempDir(path)
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+
+        pub(crate) fn path_str(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+
+        /// Writes a file into this directory at a FORCED 0o600, for use as a
+        /// Template root. `std::fs::write` is umask-masked, the hardened read
+        /// refuses any file with `mode & 0o022 != 0` (`hardened_open`), and
+        /// chmod is NOT umask-masked, so the mode is set explicitly.
+        pub(crate) fn write(&self, name: &str, content: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, content).expect("write template file");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .expect("set template file mode");
+            path
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A temp file that removes itself on drop. One constructor per mode
+    /// behaviour a test can depend on.
+    pub(crate) struct TempFile(PathBuf);
+
+    impl TempFile {
+        /// Create-or-truncate at the default 0o666 masked by the umask — for
+        /// fixtures whose mode no test looks at.
+        pub(crate) fn new(label: &str, content: impl AsRef<[u8]>) -> Self {
+            let path = unique_temp_path(label);
+            std::fs::write(&path, content).expect("create temp file");
+            TempFile(path)
+        }
+
+        /// `create_new` at a REQUESTED `mode` — a ceiling the umask may
+        /// tighten, not a forced one. For fixtures that are inputs to a read
+        /// and assert no exact mode: there is no reason to chmod past the
+        /// operator's umask, and doing it in a shape copied into production
+        /// code is how that pattern spread in the first place (ADR-0036). A
+        /// tighter umask simply yields a tighter fixture, which the test
+        /// still reads as its own owner.
+        pub(crate) fn with_requested_mode(label: &str, content: &[u8], mode: u32) -> Self {
+            let path = unique_temp_path(label);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(mode)
+                .open(&path)
+                .expect("create temp file");
+            f.write_all(content).expect("write temp file");
+            TempFile(path)
+        }
+
+        /// Create-or-truncate at EXACTLY `mode` (see [`write_forced_mode`]) —
+        /// for tests whose verdict depends on the mode bits.
+        pub(crate) fn with_forced_mode(label: &str, content: &[u8], mode: u32) -> Self {
+            let path = unique_temp_path(label);
+            write_forced_mode(&path, content, mode);
+            TempFile(path)
+        }
+
+        pub(crate) fn path(&self) -> &Path {
+            &self.0
+        }
+
+        pub(crate) fn path_str(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for TempFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 }

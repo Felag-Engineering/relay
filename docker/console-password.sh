@@ -20,6 +20,23 @@ PASSWORD="${CONSOLE_ADMIN_PASSWORD:-}"
 
 test -n "${PASSWORD}" || { echo "console-password: CONSOLE_ADMIN_PASSWORD is unset" >&2; exit 1; }
 
+# The committed default below is fine on loopback and nowhere else: it is in
+# this repository, so once the control plane is published beyond loopback
+# (RELAY_PUBLISH_ADDR) it is a known password in front of a fleet-execution
+# surface. Refuse it there rather than trust the reader of the docs. Failing
+# here leaves the Console account with no password, so it cannot be signed in
+# to — fail closed. Keep this literal in step with docker-compose.yml's default.
+DEFAULT_PASSWORD="admin1234567"
+case "${RELAY_PUBLISH_ADDR:-127.0.0.1}" in
+    127.* | localhost | ::1 | "[::1]") ;;
+    *)
+        if [ "${PASSWORD}" = "${DEFAULT_PASSWORD}" ]; then
+            echo "console-password: refusing the committed default CONSOLE_ADMIN_PASSWORD: the control plane is published on ${RELAY_PUBLISH_ADDR}, beyond loopback. Set a real CONSOLE_ADMIN_PASSWORD (12+ characters) and recreate this service." >&2
+            exit 1
+        fi
+        ;;
+esac
+
 PW_FILE="$(mktemp)"
 chmod 0600 "${PW_FILE}"
 trap 'rm -f "${PW_FILE}"' EXIT INT TERM

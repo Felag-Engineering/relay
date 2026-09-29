@@ -11,6 +11,12 @@ import (
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/registry"
 )
 
+// toolApprovalReattach names the KindRead tool/OperationName recorded when a
+// re-drive re-attaches to a Request's already-released Job instead of
+// dispatching (AP-77), alongside readlane.go's tool constants. The join from
+// this read to the approval is approval_requests.job_id = jobID.
+const toolApprovalReattach = "approval_reattach"
+
 // ApprovalGate decides whether a resolved dispatch must wait for a human
 // (ADR-0027). It is a seam, like FreezeStore and CapChecker, so the
 // composition root owns the loaded rules and this package owns only the
@@ -34,7 +40,7 @@ func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []str
 }
 
 // ApprovalStore is the subset of approval.Repository the capability layer
-// needs: the dispatch path's create/lookup/bind, plus the queue reads and the
+// needs: the dispatch path's create/lookup/claim, plus the queue reads and the
 // decision write the surfaces adapt ([3/6], #270).
 //
 // Decisions land HERE rather than in the Control API handler for the same
@@ -45,7 +51,11 @@ func (noopApprovalGate) Evaluate(approval.Dispatch) (approval.Requirement, []str
 type ApprovalStore interface {
 	Create(ctx context.Context, r approval.Request) error
 	ByPlanHash(ctx context.Context, planHash string) (approval.Request, error)
-	BindJob(ctx context.Context, id, jobID string) error
+	// BindJob is the release claim (AP-77): it binds jobID to the Request only
+	// if the Request is Satisfied at now AND has no Job already bound. On
+	// ErrAlreadyReleased the returned Request carries the bound JobID a loser
+	// re-attaches to; see approval.Repository.BindJob.
+	BindJob(ctx context.Context, id, jobID string, now time.Time) (approval.Request, error)
 	Get(ctx context.Context, id string) (approval.Request, error)
 	Pending(ctx context.Context) ([]approval.Request, error)
 	// LastApprovedByShape is the approval object's anti-fatigue read (#415,
@@ -233,9 +243,17 @@ type approvalDecision struct {
 	// proceed reports whether dispatch may continue now.
 	proceed bool
 	// requestID is the satisfied Request that released this dispatch, empty
-	// when no approval was required. Bound to the Job after dispatch so audit
-	// can join "what ran" to "who approved it".
+	// when no approval was required — the satisfied Request whose release this
+	// dispatch must claim (or re-attach to). For a single-Plan approval,
+	// Service.Run must claim it with approvals.BindJob before dispatching
+	// (AP-77); for a grant-released dispatch (grantID non-empty) it is never
+	// claimed — see Run's grant-rationale comment.
 	requestID string
+	// reattachJobID is set when the satisfied Request named by requestID has
+	// ALREADY bound a Job (AP-77: an approval releases one execution). Set
+	// only together with requestID. Service.Run must re-attach to this Job and
+	// dispatch nothing.
+	reattachJobID string
 	// parked is set when the dispatch was parked instead.
 	parked *ParkedError
 	// grantID is the batch/window Grant that released this dispatch, empty when
@@ -300,11 +318,60 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		now = s.now()
 	}
 
+	planHash := approval.HashPlan(act, nodes)
+
+	// An already-satisfied approval for exactly this Plan releases the
+	// dispatch. Anything else — pending, denied, expired, or absent — does not.
+	//
+	// The lookup is by PLAN HASH and nothing else. The shape key (#415) is
+	// never consulted here and must never be: it deliberately excludes the
+	// resolved fan-out, so releasing on it would release a dispatch over a Node
+	// set nobody approved.
+	existing, lookupErr := s.approvals.ByPlanHash(ctx, planHash)
+
+	// An approval releases one execution (AP-77), and that check runs BEFORE a
+	// batch/window Grant is even consulted — deliberately ahead of the Grant
+	// check below, not folded into the switch after it. AP-77's text is
+	// unconditional ("any later dispatch ... re-attaches"): if a Grant covering
+	// this exact plan were claimed first, a timeout re-drive of an
+	// already-released approval would run a genuinely new Job under the Grant
+	// whenever one happened to exist, which is exactly the second execution
+	// AP-77 forbids. Re-attaching first is the more restrictive reading, and it
+	// costs a covering Grant nothing it needed: the Grant's OWN uses are
+	// untouched (a re-attach consumes no Grant use), and the Grant still
+	// releases every dispatch that does NOT match an already-released Request.
+	//
+	// Checked only while the Request is Satisfied (approved, inside its
+	// deadline, quorum met) — a Request that has already bound a Job never
+	// falls into the unbound case below. Once the deadline passes, Satisfied
+	// is false, the approved row is not pending, and the dispatch falls through
+	// to the Grant check and then a fresh park. That keeps a spent approval
+	// from becoming a permanent replay of one Job (the concern #646 and this
+	// issue's body record).
+	if lookupErr == nil && existing.Satisfied(now) && existing.Released() {
+		return approvalDecision{requestID: existing.ID, reattachJobID: existing.JobID}, nil
+	}
+
+	// A store failure reading THIS plan's existing Request is refused HERE,
+	// before a Grant is ever consulted (SEC-2/C2-S1, #713 security review): a
+	// released Request the Relay cannot currently read must never be silently
+	// shadowed by a covering Grant that goes on to run the plan a second time.
+	// Only ErrNotFound — "no Request exists for this plan" — falls through to
+	// the Grant check and the switch below; any other error fails the
+	// dispatch closed, and a covering Grant's own uses are left untouched
+	// (ClaimGrant below is never reached).
+	if lookupErr != nil && lookupErr != approval.ErrNotFound {
+		return approvalDecision{}, fmt.Errorf("capability: read approval for plan: %w", lookupErr)
+	}
+
 	// A batch/window Grant (ADR-0027 decision 12) is consulted only AFTER the
-	// gate said this dispatch is gated, and that order is the point: a Grant
-	// answers a requirement that already exists. It can never create one, and
-	// it can never reach a dispatch the gate did not gate — so an ungated
-	// deployment is unaffected by grants entirely.
+	// gate said this dispatch is gated AND after the checks above found no
+	// already-released Request for this exact plan (and no store failure
+	// reading for one), and that order is the point: a Grant answers a
+	// requirement that already exists, and it must never re-run a plan an
+	// approval already spent (AP-77, above). It can never create a
+	// requirement, and it can never reach a dispatch the gate did not gate —
+	// so an ungated deployment is unaffected by grants entirely.
 	//
 	// Everything before this line still ran: Freeze, Selector resolution,
 	// authz, and the blast cap. A Grant substitutes for the HUMAN, not for the
@@ -323,20 +390,12 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		}
 	}
 
-	planHash := approval.HashPlan(act, nodes)
-
-	// An already-satisfied approval for exactly this Plan releases the
-	// dispatch. Anything else — pending, denied, expired, or absent — does not.
-	//
-	// The lookup is by PLAN HASH and nothing else. The shape key (#415) is
-	// never consulted here and must never be: it deliberately excludes the
-	// resolved fan-out, so releasing on it would release a dispatch over a Node
-	// set nobody approved.
-	existing, err := s.approvals.ByPlanHash(ctx, planHash)
+	// lookupErr is nil or approval.ErrNotFound here — anything else already
+	// returned above, before the Grant was ever consulted.
 	switch {
-	case err == nil && existing.Satisfied(now):
+	case lookupErr == nil && existing.Satisfied(now):
 		return approvalDecision{proceed: true, requestID: existing.ID}, nil
-	case err == nil && existing.State == approval.StatePending && !existing.Expired(now):
+	case lookupErr == nil && existing.State == approval.StatePending && !existing.Expired(now):
 		// Already waiting. Return the same park rather than creating a second
 		// Request for the same Plan: two Requests for one Plan would let a
 		// requester farm a second opinion after the first approver said no
@@ -347,8 +406,6 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 		// parkedErrorFor leaves Askable at its zero value, false, and nothing
 		// below sets it for this branch.
 		return approvalDecision{parked: parkedErrorFor(existing)}, nil
-	case err != nil && err != approval.ErrNotFound:
-		return approvalDecision{}, fmt.Errorf("capability: read approval for plan: %w", err)
 	}
 
 	// Park: create the Request and report it. No Job and no Task exist yet, by
@@ -382,6 +439,37 @@ func (s *Service) checkApproval(ctx context.Context, p Principal, sel Selector, 
 	pe := parkedErrorFor(r)
 	pe.Askable = askableBy(r, p)
 	return approvalDecision{parked: pe, created: &r}, nil
+}
+
+// reattach re-attaches a dispatch to a Job an approval already released
+// (AP-77), recording an audited read instead of dispatching anything.
+//
+// It is reached two ways: checkApproval found a Satisfied, Released Request
+// (a sequential re-drive), or Service.Run lost the release claim to a
+// concurrent winner (BindJob's ErrAlreadyReleased). Either way nothing may be
+// dispatched — the plan hash matched, so nodes are exactly the approved
+// Nodes, and their outcomes live on the Job identified by jobID, which every
+// adapter already re-reads (renderJob).
+//
+// The read is recorded BEFORE anything is returned, and fails closed
+// (ErrReadUnaudited): an unaudited re-attach must not hand out a Job
+// (ADR-0025), the same precedent AP-67's adapter-level re-attach set. The
+// join from this read to the approval is approval_requests.job_id = jobID.
+func (s *Service) reattach(ctx context.Context, p Principal, sel Selector, nodes []registry.Node, requestID, jobID string) ([]NodeResult, error) {
+	if err := s.recordQueryRead(ctx, p, toolApprovalReattach, sel.String(), "", jobID); err != nil {
+		return nil, fmt.Errorf("capability: re-attach to approval %s's released job: %w", requestID, err)
+	}
+	// One NodeResult per resolved Node, carrying the bound JobID: these are
+	// exactly the approved Nodes, and outcomes/output are read from the Job
+	// by the caller, as every surface already does via renderJob. This call
+	// ran nothing, so it reports no outcome of its own — Outcome stays
+	// OutcomeUnspecified rather than fabricating a result this call never
+	// produced.
+	out := make([]NodeResult, 0, len(nodes))
+	for _, n := range nodes {
+		out = append(out, NodeResult{NodeID: n.NodeID, JobID: jobID, Outcome: jobs.OutcomeUnspecified})
+	}
+	return out, nil
 }
 
 // askableBy decides ParkedError.Askable's non-channel, non-created terms: does

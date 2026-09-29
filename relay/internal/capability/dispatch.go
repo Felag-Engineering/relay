@@ -21,6 +21,12 @@ type dispatch struct {
 	selector  Selector
 	nodes     []registry.Node
 	action    jobs.Action
+
+	// jobID is a Job ID reserved — and already bound to the releasing
+	// approval — before dispatch (AP-77). When empty, the dispatcher mints
+	// its own, exactly as before. Set by Service.Run after the release claim
+	// wins, never by newDispatch itself.
+	jobID string
 }
 
 // newDispatch builds a dispatch from an already-authorized, already-resolved
@@ -102,6 +108,13 @@ type dispatcher interface {
 	// but persists NOTHING: no Job, no Stage, no Task, no MarkDispatched —
 	// a Plan creates no dedup entry by construction.
 	query(ctx context.Context, d dispatch) (planResult, error)
+
+	// reserveJobID returns an ID in the dispatcher's own Job-ID format, so an
+	// approval's release claim (AP-77) can be bound to it before the Job
+	// exists. It persists nothing: a reserved ID that no Job ever ends up
+	// carrying (a claim that wins and then fails to dispatch) is harmless by
+	// construction.
+	reserveJobID() (string, error)
 }
 
 // noopDispatcher is the v0.0.5 default. It performs no execution and says
@@ -119,6 +132,17 @@ func (noopDispatcher) run(_ context.Context, d dispatch) (dispatchResult, error)
 
 func (noopDispatcher) cancel(context.Context, string) error {
 	return nil
+}
+
+// reserveJobID implements dispatcher. It runs nothing, so a bound ID that no
+// Job ever carries is harmless, and the claim path in Service.Run stays
+// unconditional whether or not a real dispatcher is wired.
+func (noopDispatcher) reserveJobID() (string, error) {
+	id, err := defaultID()
+	if err != nil {
+		return "", err
+	}
+	return "job-" + id, nil
 }
 
 // query implements dispatcher honestly: it performs no PolicyQuery and says

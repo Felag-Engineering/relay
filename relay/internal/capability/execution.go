@@ -133,11 +133,57 @@ var _ dispatcher = (*jobEngine)(nil)
 // IDs are minted before persistence and every Task is persisted (Pending)
 // before any Task is dispatched.
 func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error) {
-	jobID, err := e.prefixedID("job-")
-	if err != nil {
-		return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
+	// d.jobID carries a Job ID already reserved and bound to a releasing
+	// approval (AP-77, checkApproval/Service.Run). Using it here, rather than
+	// minting a fresh one, is what makes the release claim and the Job it
+	// authorizes the SAME id — the join a re-attach depends on.
+	jobID := d.jobID
+	reserved := jobID != ""
+	if !reserved {
+		var err error
+		jobID, err = e.prefixedID("job-")
+		if err != nil {
+			return dispatchResult{}, fmt.Errorf("capability: generate job id: %w", err)
+		}
 	}
-	if err := e.jobsRepo.CreateJob(ctx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
+
+	// runCtx: for a RESERVED id, the approval's release claim (BindJob)
+	// already committed before run was ever called — there is no un-claim
+	// path (store/approvals.go). An earlier review pass detached only the
+	// CreateJob call below from the request ctx's own cancellation; Codex
+	// (#713, "final diff" review) found that left every step AFTER
+	// CreateJob — AddStage, Task persistence, and dispatch — still resuming
+	// on the (possibly by-then-cancelled) request ctx, so a timeout/drop
+	// landing just after CreateJob commits could leave a Job with no
+	// Stage/Tasks: the approval stays bound and every re-drive re-attaches
+	// to that empty Job until it expires, and the approved work never runs.
+	// So for a reserved id the WHOLE persist-then-dispatch pipeline —
+	// CreateJob, AddStage, every CreateTask, and every dispatchOne — runs on
+	// a context detached from the caller's own cancellation
+	// (context.WithoutCancel): once the claim commits, a client
+	// timeout/drop/cancel can neither strand the approval nor abandon the
+	// approved work. The Job runs to completion, and a re-drive re-attaches
+	// to the running or finished Job. The claim itself (Service.Run's
+	// BindJob, before run is ever called) stays on the request ctx
+	// unchanged: a call cancelled before the claim commits dispatches
+	// nothing.
+	//
+	// This needs no NEW upper bound of its own: Conduit.Dispatch's wait for
+	// each Task's Result is already bounded by the daemon's own hard
+	// per-Task wall-clock cap (daemon/src/dispatch.rs's MAX_TIMEOUT, 300s,
+	// ADR-0004) — the daemon always answers within it, and a Node that
+	// disconnects mid-wait unblocks Dispatch immediately (the waiter
+	// channel close in dispatch/router.go) — so looping over a
+	// blast-cap-bounded node set (invariant 5) finishes in bounded time even
+	// on a ctx with no deadline of its own. The store calls above and below
+	// (CreateJob/AddStage/CreateTask/MarkDispatched/Resolve) are local
+	// SQLite calls already bounded by the driver's own busy_timeout
+	// (store.go's busyTimeoutMillis).
+	runCtx := ctx
+	if reserved {
+		runCtx = context.WithoutCancel(ctx)
+	}
+	if err := e.jobsRepo.CreateJob(runCtx, jobs.Job{ID: jobID, CreatedAt: e.now(), Requester: requesterOf(d.principal)}); err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: create job %q: %w", jobID, err)
 	}
 	// Published error-free by construction (#416): the sink is
@@ -156,7 +202,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	if err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: generate stage id: %w", err)
 	}
-	if err := e.jobsRepo.AddStage(ctx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
+	if err := e.jobsRepo.AddStage(runCtx, jobs.Stage{ID: stageID, JobID: jobID, Index: 0}); err != nil {
 		return dispatchResult{}, fmt.Errorf("capability: add stage %q to job %q: %w", stageID, jobID, err)
 	}
 
@@ -179,7 +225,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 			TimeoutSeconds: d.action.TimeoutSeconds,
 			CreatedAt:      e.now(),
 		}
-		if err := e.tasksRepo.CreateTask(ctx, task); err != nil {
+		if err := e.tasksRepo.CreateTask(runCtx, task); err != nil {
 			return dispatchResult{}, fmt.Errorf("capability: create task %q for node %q: %w", taskID, n.NodeID, err)
 		}
 		pending = append(pending, pendingTask{task: task, outdated: n.Outdated})
@@ -188,7 +234,7 @@ func (e *jobEngine) run(ctx context.Context, d dispatch) (dispatchResult, error)
 	results := make([]NodeResult, 0, len(pending))
 	var errs []error
 	for _, pt := range pending {
-		res, err := e.dispatchOne(ctx, pt.task, pt.outdated)
+		res, err := e.dispatchOne(runCtx, pt.task, pt.outdated)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -356,6 +402,13 @@ func (e *jobEngine) cancel(ctx context.Context, jobID string) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// reserveJobID implements dispatcher (AP-77): it returns a fresh "job-"
+// prefixed ID in the same format run mints, so an approval's release claim
+// can be bound to it before the Job exists. It persists nothing.
+func (e *jobEngine) reserveJobID() (string, error) {
+	return e.prefixedID("job-")
 }
 
 // prefixedID mints a new ID via e.newID and adds prefix ("job-", "stage-",

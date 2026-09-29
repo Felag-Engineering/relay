@@ -134,8 +134,8 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU32, Ordering};
 
-    /// A self-cleaning temp directory (no dev-dep on tempfile; same
-    /// hand-rolled pattern as policy.rs and templates.rs).
+    /// A self-cleaning temp directory (no dev-dep on tempfile; the same
+    /// counter-named, pre-cleared shape as templates.rs's).
     struct TempDir(PathBuf);
 
     impl TempDir {

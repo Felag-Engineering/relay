@@ -8,38 +8,14 @@
 //! can only drive it through its compiled binary — `env!("CARGO_BIN_EXE_relay-daemon")`
 //! — never by importing its internals directly.
 
+mod common;
+
+use common::TempDir;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-/// A unique scratch directory that removes itself on drop.
-struct TempDir(PathBuf);
-
-impl TempDir {
-    fn new(label: &str) -> Self {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "relay-daemon-shutdown-test-{label}-{}-{nanos}",
-            std::process::id()
-        ));
-        TempDir(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
+use std::time::{Duration, Instant};
 
 fn write_file(path: PathBuf, content: &str, mode: u32) {
     let mut f = std::fs::OpenOptions::new()

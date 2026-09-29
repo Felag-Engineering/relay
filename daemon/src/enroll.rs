@@ -302,7 +302,9 @@ mod tests {
     use crate::config::Config;
     use crate::gen::Facts;
     use crate::identity::mode_assert;
-    use crate::identity::{load_identity, persist_identity, Identity, IdentityError};
+    use crate::identity::test_ca::self_signed_identity;
+    use crate::identity::{load_identity, persist_identity, IdentityError};
+    use crate::test_support::TempDir;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
@@ -313,53 +315,6 @@ mod tests {
     fn _assert_enroll_error_send_sync() {
         fn _assert<T: Send + Sync>() {}
         _assert::<EnrollError>();
-    }
-
-    // A temp dir that removes itself on drop, for test isolation.
-    struct TempDir(PathBuf);
-    impl TempDir {
-        fn new(label: &str) -> Self {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let path = std::env::temp_dir().join(format!(
-                "relay-test-{}-{}-{}",
-                label,
-                std::process::id(),
-                nanos
-            ));
-            TempDir(path)
-        }
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-
-    /// Build a well-formed self-signed Identity using rcgen, so that
-    /// `load_identity`'s PEM validation passes.
-    ///
-    /// Returns `Identity` directly (panics on failure) because the module
-    /// `Result` alias is `EnrollError` and rcgen errors don't belong there.
-    fn make_test_identity() -> Identity {
-        let kp = rcgen::KeyPair::generate().expect("keygen");
-        let cert_pem = rcgen::CertificateParams::new(vec![])
-            .expect("params")
-            .self_signed(&kp)
-            .expect("self_signed")
-            .pem();
-        Identity {
-            node_id: "node-test-aabbccdd".to_string(),
-            key_pem: kp.serialize_pem(),
-            cert_pem: cert_pem.clone(),
-            ca_bundle_pem: cert_pem,
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -478,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn idempotency_no_op_when_identity_present() {
         let dir = TempDir::new("idempotent");
-        let id = make_test_identity();
+        let id = self_signed_identity("node-test-aabbccdd");
         persist_identity(dir.path(), &id).expect("persist_identity");
 
         let enroller_called = Arc::new(AtomicBool::new(false));

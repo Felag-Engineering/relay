@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/Felag-Engineering/gleipnir-relay/relay/internal/approval"
@@ -147,7 +148,14 @@ func (s *Service) bindTaskHandleJob(ctx context.Context, requestID, jobID string
 	if err != nil {
 		return
 	}
-	_ = s.mcpTasks.BindJob(ctx, h.ID, jobID, mcptask.StatusCompleted, s.clock())
+	if err := s.mcpTasks.BindJob(ctx, h.ID, jobID, mcptask.StatusCompleted, s.clock()); err != nil {
+		// Still non-fatal — see the doc comment above — but a client left
+		// polling a handle that never reports its Job is a symptom an
+		// operator should be able to find, so it goes to the log rather
+		// than vanishing the way it did before.
+		slog.WarnContext(ctx, "capability: binding the MCP task handle to its Job failed",
+			"job_id", jobID, "approval_id", requestID, "error", err)
+	}
 }
 
 // ResolveTask answers "what is this task handle doing now?" for p.

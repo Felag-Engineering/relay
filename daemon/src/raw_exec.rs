@@ -100,9 +100,7 @@ mod tests {
         64 * 1024 * 1024
     }
 
-    fn argv(v: &[&str]) -> Vec<String> {
-        v.iter().map(|s| s.to_string()).collect()
-    }
+    use crate::test_support::args as argv;
 
     fn make_raw_exec(argv: Vec<String>) -> RawExec {
         RawExec { argv }

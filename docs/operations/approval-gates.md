@@ -263,6 +263,16 @@ deadline. Expiry is enforced by the clock at read time, so it holds even if the
 background sweeper is not running; the sweeper's job is to retire lapsed
 requests from the queue and record an `approval_expired` audit entry.
 
+An approved single-Plan request releases exactly one execution (AP-77).
+Re-driving the same call once it has been released (including while it is
+still running) — on any surface, and by any caller, not only the one who
+requested it — returns the Job it already released and runs nothing, right up
+to the approval's deadline. That holds even if an Approval grant covering the
+same plan is issued afterward: while the approval is still in force, the
+released request is what a re-drive finds, not the grant, so the grant does
+not run it a second time. After the deadline the same call parks for a fresh
+approval rather than replaying the old one forever.
+
 ## How an agent waits: three envelopes, one decision
 
 An operator meeting this system for the first time should be clear that the
