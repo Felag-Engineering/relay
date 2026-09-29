@@ -66,7 +66,8 @@ func TestElicit_AskableParkFromMRTRClientGetsAQuestion(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesInBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
 	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: relaytest.ElicitingClientOptions(),
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: relaytest.GleipnirClientName,
 	})
 
 	// The FIRST call creates the park (rather than observing one already
@@ -182,7 +183,8 @@ func TestElicit_OutOfBandParkNeverAsks(t *testing.T) {
 	f := startGatedRelay(t, gateAllMutatesOutOfBandAskable, WithMCPServerOptions(mcp.WithApprovalElicitation()))
 
 	asked := relaytest.ConnectWithOptions(t, f.ControlBase, f.Client(), relaytest.ConnectOptions{
-		Client: relaytest.ElicitingClientOptions(),
+		Client:     relaytest.ElicitingClientOptions(),
+		ClientName: relaytest.GleipnirClientName,
 	})
 
 	// The FIRST call, so a pass here cannot be explained by "the park was
@@ -223,7 +225,8 @@ func TestElicit_OutOfBandParkNeverAsks(t *testing.T) {
 				return &sdkmcp.ElicitResult{Action: "decline"}, nil
 			},
 		},
-		Session: &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		Session:    &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		ClientName: relaytest.GleipnirClientName,
 	})
 	legacyRes := relaytest.CallTool(t, legacy, "run_operation", restartNginxArgs())
 	var legacyOut mcp.RunOrPlanOutput
@@ -253,7 +256,7 @@ func TestElicit_ElicitedParkEmitsNoTaskEnvelope_E2E(t *testing.T) {
 		"params": map[string]any{
 			"_meta": map[string]any{
 				"io.modelcontextprotocol/protocolVersion": "2026-07-28",
-				"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "elicit-tasks-client", "version": "0.0.1"},
+				"io.modelcontextprotocol/clientInfo":      map[string]any{"name": "gleipnir", "version": "0.0.1"},
 				"io.modelcontextprotocol/clientCapabilities": map[string]any{
 					"elicitation": map[string]any{"form": map[string]any{}},
 					"extensions":  map[string]any{"io.modelcontextprotocol/tasks": map[string]any{}},
@@ -396,7 +399,8 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 	// (caps.Elicitation == nil), so Relay renders today's pending_approval
 	// and never builds an input-required result.
 	clientA := relaytest.ConnectWithOptions(t, f.ControlBase, f.ClientFor(token), relaytest.ConnectOptions{
-		Client: &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		Client:     &sdkmcp.ClientOptions{MultiRoundTrip: &sdkmcp.MultiRoundTripOptions{Disabled: true}},
+		ClientName: relaytest.GleipnirClientName,
 	})
 	resA := relaytest.CallTool(t, clientA, "run_operation", sshdRestartArgs())
 	if resA.NeedsInput() || resA.IsError {
@@ -445,7 +449,8 @@ func TestCompositionRoot_ClientThatCannotBeAskedSeesNoChange(t *testing.T) {
 				return &sdkmcp.ElicitResult{Action: "decline"}, nil
 			},
 		},
-		Session: &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		Session:    &sdkmcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"},
+		ClientName: relaytest.GleipnirClientName,
 	})
 	resB := relaytest.CallTool(t, clientB, "run_operation", restartNginxArgs())
 	var outB mcp.RunOrPlanOutput

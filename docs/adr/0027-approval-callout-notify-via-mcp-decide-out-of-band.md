@@ -573,3 +573,16 @@ client's own UI which the model never sees, counts as the human's. The caveat is
 configured Claude Code hook can answer with no human present, so the verified approver proves who
 owns the session, not that a human read the question — the same limit decision 5's reasoning
 names for session authorization, now accepted for one answer path rather than argued away.
+
+## Amendment (2026-09-29): the answer on a human's OAuth session is built, and keyed on identity
+
+A note, not a change to any decision here; the note of 2026-09-28 above stands as the record of
+that date. The answer path it cross-references is now **built** (`docs/specs/approval.md` AP-78
+and AP-79, PR #765), and by owner decision of 2026-09-29, recorded in ADR-0029's note of that
+date, it turns on the signed-in identity rather than the client's declared name: any in-band MRTR
+answer on an OAuth session of a human Account is that human's verified decision, whatever the
+client calls itself, and a responder assertion on it is ignored. The declared name decides only
+whether Relay asks. Decision 5 is untouched: every MCP *request* stays agent-grade for rung
+selection. The accepted caveats are the same — a hook can answer with no human present, and
+anything holding the human's OAuth token answers as that human — and OAuth has never run live
+against a real identity provider (#351).

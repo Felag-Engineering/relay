@@ -65,13 +65,15 @@ func authedContext(t *testing.T) context.Context {
 }
 
 // elicitModernMeta is a `_meta` map shaped exactly like a real >= 2026-07-28
-// client would send: protocolVersion at mrtrProtocolVersion, plus
-// clientCapabilities carrying form elicitation. Built as a map (the wire
-// shape decodeMetaValue's remarshal path expects), not the typed Go struct,
-// so it exercises the same JSON round trip a real request would.
+// client would send: protocolVersion at mrtrProtocolVersion, clientInfo
+// declaring the recognised name "gleipnir" (AP-78), plus clientCapabilities
+// carrying form elicitation. Built as a map (the wire shape decodeMetaValue's
+// remarshal path expects), not the typed Go struct, so it exercises the same
+// JSON round trip a real request would.
 func elicitModernMeta() map[string]any {
 	return map[string]any{
 		sdkmcp.MetaKeyProtocolVersion:    mrtrProtocolVersion,
+		sdkmcp.MetaKeyClientInfo:         map[string]any{"name": clientNameGleipnir, "version": "0.0.1"},
 		sdkmcp.MetaKeyClientCapabilities: map[string]any{"elicitation": map[string]any{"form": map[string]any{}}},
 	}
 }
@@ -258,11 +260,13 @@ func TestElicit_PredicateMirrorsTheSDK(t *testing.T) {
 			// Our own condition-2 judgment, computed from the SAME real
 			// session clientCanBeAsked would see — condition 3 is held
 			// always-true by construction (elicitModernMeta), so this
-			// return value IS condition 2 alone.
+			// return value IS condition 2 alone. The Principal is an
+			// arbitrary API Token human: elicitModernMeta declares gleipnir,
+			// which is asked on any session, so it plays no part here.
 			gotCondition2 := clientCanBeAsked(&sdkmcp.CallToolRequest{
 				Session: ss,
 				Params:  probeAlwaysAskableParams(),
-			})
+			}, capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: capability.PrincipalKindHuman})
 
 			res, err := cs.CallTool(ctx, &sdkmcp.CallToolParams{Name: "probe"})
 			if err != nil {
@@ -295,4 +299,137 @@ func probeAlwaysAskableParams() *sdkmcp.CallToolParamsRaw {
 	p := &sdkmcp.CallToolParamsRaw{Name: "probe"}
 	p.SetMeta(elicitModernMeta())
 	return p
+}
+
+// oauthHumanInternalPrincipal is the session shape AP-78 admits for a
+// claude-code ask: an OAuth session of a human Account.
+func oauthHumanInternalPrincipal() capability.Principal {
+	return capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: capability.PrincipalKindHuman}
+}
+
+// TestElicit_WhoIsAskedByNameAndSession is AP-78's clientCanBeAsked unit
+// seam: a real MODERN session holds condition 2 always true, and every row's
+// `_meta` carries a modern protocolVersion and form elicitation (so
+// condition 3 always holds too), leaving the declared client name — read from
+// the raw io.modelcontextprotocol/clientInfo entry, condition 5 — and, for
+// claude-code, the calling Principal's own session shape, as the only things
+// that vary.
+func TestElicit_WhoIsAskedByNameAndSession(t *testing.T) {
+	srv := sdkmcp.NewServer(&sdkmcp.Implementation{Name: "relay-name-probe", Version: "0.0.1"}, nil)
+	registerProbeTool(srv)
+	serverTransport, clientTransport := sdkmcp.NewInMemoryTransports()
+
+	client := sdkmcp.NewClient(&sdkmcp.Implementation{Name: "probe-client", Version: "0.0.1"}, &sdkmcp.ClientOptions{
+		Capabilities: &sdkmcp.ClientCapabilities{
+			Elicitation: &sdkmcp.ElicitationCapabilities{Form: &sdkmcp.FormElicitationCapabilities{}},
+		},
+	})
+
+	ctx := authedContext(t)
+	ss, err := srv.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server Connect: %v", err)
+	}
+	defer ss.Close() //nolint:errcheck
+	cs, err := client.Connect(ctx, clientTransport, &sdkmcp.ClientSessionOptions{ProtocolVersion: mrtrProtocolVersion})
+	if err != nil {
+		t.Fatalf("client Connect: %v", err)
+	}
+	defer cs.Close() //nolint:errcheck
+
+	// metaWith builds a `_meta` map that always satisfies conditions 2/3
+	// (protocolVersion and form elicitation present), varying only clientInfo
+	// — nil omits the key entirely.
+	metaWith := func(clientInfo any) map[string]any {
+		m := map[string]any{
+			sdkmcp.MetaKeyProtocolVersion:    mrtrProtocolVersion,
+			sdkmcp.MetaKeyClientCapabilities: map[string]any{"elicitation": map[string]any{"form": map[string]any{}}},
+		}
+		if clientInfo != nil {
+			m[sdkmcp.MetaKeyClientInfo] = clientInfo
+		}
+		return m
+	}
+
+	cases := []struct {
+		name       string
+		clientInfo any
+		wantAsked  bool
+	}{
+		{"gleipnir", map[string]any{"name": "gleipnir", "version": "1"}, true},
+		{"claude-code", map[string]any{"name": "claude-code", "version": "1"}, true},
+		{"typed Implementation pointer named gleipnir", &sdkmcp.Implementation{Name: "gleipnir"}, true},
+		{"Gleipnir (wrong case)", map[string]any{"name": "Gleipnir", "version": "1"}, false},
+		{"leading space", map[string]any{"name": " gleipnir", "version": "1"}, false},
+		{"trailing space", map[string]any{"name": "claude-code ", "version": "1"}, false},
+		{"some-other-client", map[string]any{"name": "some-other-client", "version": "1"}, false},
+		{"empty name", map[string]any{"name": "", "version": "1"}, false},
+		{"name not a string", map[string]any{"name": 42, "version": "1"}, false},
+		{"clientInfo not an object", "gleipnir", false},
+		{"key Name only (case-variant)", map[string]any{"Name": "gleipnir"}, false},
+		{"clientInfo absent", nil, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			params := &sdkmcp.CallToolParamsRaw{Name: "probe"}
+			params.SetMeta(metaWith(tc.clientInfo))
+			got := clientCanBeAsked(&sdkmcp.CallToolRequest{Session: ss, Params: params}, oauthHumanInternalPrincipal())
+			if got != tc.wantAsked {
+				t.Errorf("clientCanBeAsked = %v, want %v", got, tc.wantAsked)
+			}
+		})
+	}
+
+	// claude-code's OWN name row above is asked only because the Principal
+	// there is an OAuth human session (AP-78) — this table pins that the
+	// session shape, not just the name, decides it: every other shape is not
+	// asked, decided by oauthHumanSession (tools_approval.go), the same
+	// function the acceptor uses for the verified form, and never inferred
+	// from AuthMethod alone. The assertions do not change, because asking
+	// does not change.
+	claudeCodeMeta := metaWith(map[string]any{"name": "claude-code", "version": "1"})
+	sessionCases := []struct {
+		name      string
+		principal capability.Principal
+		wantAsked bool
+	}{
+		{"OAuth + human", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: capability.PrincipalKindHuman}, true},
+		{"API Token + human", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: capability.PrincipalKindHuman}, false},
+		{"API Token + machine", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: "machine"}, false},
+		{"OAuth + machine", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: "machine"}, false},
+		{"OAuth + unset kind", capability.Principal{AuthMethod: capability.AuthMethodOAuth}, false},
+		{"Console session + human", capability.Principal{AuthMethod: capability.AuthMethodConsoleSession, Kind: capability.PrincipalKindHuman}, false},
+		{"Unspecified + human", capability.Principal{Kind: capability.PrincipalKindHuman}, false},
+	}
+	for _, tc := range sessionCases {
+		t.Run("claude-code, "+tc.name, func(t *testing.T) {
+			params := &sdkmcp.CallToolParamsRaw{Name: "probe"}
+			params.SetMeta(claudeCodeMeta)
+			got := clientCanBeAsked(&sdkmcp.CallToolRequest{Session: ss, Params: params}, tc.principal)
+			if got != tc.wantAsked {
+				t.Errorf("clientCanBeAsked = %v, want %v", got, tc.wantAsked)
+			}
+		})
+	}
+
+	// gleipnir's path is unaffected by the session: it is asked whatever the
+	// Principal, including a machine Account on either auth method.
+	gleipnirMeta := metaWith(map[string]any{"name": "gleipnir", "version": "1"})
+	gleipnirCases := []struct {
+		name      string
+		principal capability.Principal
+	}{
+		{"API Token + machine", capability.Principal{AuthMethod: capability.AuthMethodAPIToken, Kind: "machine"}},
+		{"OAuth + machine", capability.Principal{AuthMethod: capability.AuthMethodOAuth, Kind: "machine"}},
+	}
+	for _, tc := range gleipnirCases {
+		t.Run("gleipnir, "+tc.name, func(t *testing.T) {
+			params := &sdkmcp.CallToolParamsRaw{Name: "probe"}
+			params.SetMeta(gleipnirMeta)
+			if got := clientCanBeAsked(&sdkmcp.CallToolRequest{Session: ss, Params: params}, tc.principal); !got {
+				t.Errorf("clientCanBeAsked = %v, want true (gleipnir is asked on any session)", got)
+			}
+		})
+	}
 }
