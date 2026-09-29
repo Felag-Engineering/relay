@@ -1,12 +1,14 @@
 package console
 
-// agents_console_calls_test.go proves spec 03's "Calls made from this
+// agents_console_calls_test.go proves spec 03's "Reads made from this
 // Console": where the Agents screen lists calls and counts them on the rail,
-// a call whose verified lane records a Console session is left out by
-// default, read from the record as written; the exclusion is stated beside
-// the feed with a link that shows them; ?account= composes with it.
+// a call whose record says BOTH that a Console session authenticated it AND
+// that it was a read is left out by default; everything else stays listed;
+// the exclusion is stated beside the feed with a link that shows them;
+// ?account= composes with it.
 
 import (
+	"context"
 	"net/url"
 	"strings"
 	"testing"
@@ -140,16 +142,16 @@ func TestAgents_TheExclusionIsStatedBesideTheFeedWithALink(t *testing.T) {
 	h := newTestHandler(consoleCallsDeps(), accounts.RoleAdmin)
 
 	body := contentOf(get(t, h, "/console/agents").Body.String())
-	if !strings.Contains(body, "Calls made from this Console are left out: 3 of the 5 calls on this page.") {
+	if !strings.Contains(body, "Reads made from this Console are left out: 3 of the 5 calls on this page.") {
 		t.Errorf("the default does not say how many Console calls it left out:\n%s", body)
 	}
 	if !strings.Contains(body, `href="/console/agents?console=show">Show them</a>`) {
 		t.Error("the sentence does not link to the view that shows them")
 	}
-	mustBeSituational(t, body, "Calls made from this Console are left out")
+	mustBeSituational(t, body, "Reads made from this Console are left out")
 
 	shown := contentOf(get(t, h, "/console/agents?console=show").Body.String())
-	if !strings.Contains(shown, "Calls made from this Console are shown.") ||
+	if !strings.Contains(shown, "Reads made from this Console are shown.") ||
 		!strings.Contains(shown, `href="/console/agents">Leave them out</a>`) {
 		t.Errorf("with ?console=show the sentence does not offer the way back:\n%s", shown)
 	}
@@ -158,7 +160,7 @@ func TestAgents_TheExclusionIsStatedBesideTheFeedWithALink(t *testing.T) {
 	d := renderableDeps()
 	d.Queries = &fakeQueries{rows: consoleCallsRows()[2:3]}
 	none := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String())
-	if !strings.Contains(none, "Calls made from this Console are left out. <a") {
+	if !strings.Contains(none, "Reads made from this Console are left out. <a") {
 		t.Errorf("with nothing to leave out the rule is not stated:\n%s", none)
 	}
 }
@@ -230,10 +232,10 @@ func TestAgents_ARailEmptiedByTheDefaultSaysWhy(t *testing.T) {
 	if strings.Contains(body, "No Account has called a control surface yet.") {
 		t.Error("the rail claims nobody called, when the operator did from this Console")
 	}
-	if !strings.Contains(body, "Every call on this page was made from this Console, and those are left out.") {
+	if !strings.Contains(body, "Every call on this page is a read made from this Console, and those are left out.") {
 		t.Errorf("the rail does not say why it is empty:\n%s", body)
 	}
-	if !strings.Contains(body, "No calls on this page other than calls made from this Console.") {
+	if !strings.Contains(body, "No calls on this page other than reads made from this Console.") {
 		t.Errorf("the feed does not say why it is empty:\n%s", body)
 	}
 }
@@ -255,6 +257,162 @@ func TestAgents_TheDefaultAddsNoRead(t *testing.T) {
 		}
 		if q.auditLimits[0] != agentsPageSize {
 			t.Errorf("%s asked for %d rows, want %d", path, q.auditLimits[0], agentsPageSize)
+		}
+	}
+}
+
+// consoleActor is a Console-session identity: what a session cookie
+// establishes, whoever or whatever is driving the browser.
+var consoleActor = capability.VerifiedIdentity{
+	AccountID: "acct-mike", AccountName: "mike", Role: "admin",
+	Method: string(capability.AuthMethodConsoleSession),
+}
+
+// TestAgents_OnlyConsoleSessionReadsAreLeftOut: a Console session proves a
+// cookie, not a person, so a mutate, an approval decision, a cancel, a
+// refusal and a Preflight made from one stay listed by default. Only a read
+// is left out.
+func TestAgents_OnlyConsoleSessionReadsAreLeftOut(t *testing.T) {
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: []capability.AuditRow{
+		{Kind: audit.KindRead, OperationName: "query_audit", Timestamp: testNow, Verified: consoleActor},
+		{Kind: audit.KindDispatch, ActionKind: "operation", OperationName: "service.restart", JobID: "job-m",
+			NodeID: "node-a", Outcome: jobs.OutcomeSuccess, Timestamp: testNow, Verified: consoleActor},
+		{Kind: audit.KindApprovalDecided, ApprovalID: "ap-9", Reason: "approved over out-of-band",
+			Timestamp: testNow, Verified: consoleActor},
+		{Kind: audit.KindJobCancel, JobID: "job-c", Timestamp: testNow, Verified: consoleActor},
+		{Kind: audit.KindRefusal, ActionKind: "raw_exec", Reason: "role floor", Timestamp: testNow, Verified: consoleActor},
+		{Kind: audit.KindPlan, ActionKind: "operation", OperationName: "pkg.install", Timestamp: testNow, Verified: consoleActor},
+	}}
+	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String())
+
+	if strings.Contains(body, "query_audit") {
+		t.Error("a Console-session read is listed by default")
+	}
+	for _, want := range []string{"service.restart", "approval decision", "cancel_job", "refused", "pkg.install"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("a Console-session %s is not listed by default", want)
+		}
+	}
+	if !strings.Contains(body, "Reads made from this Console are left out: 1 of the 6 calls on this page.") {
+		t.Errorf("the sentence does not count the one read:\n%s", body)
+	}
+	if !strings.Contains(body, "<b>5</b> calls") {
+		t.Errorf("the rail does not count the five Console-session non-reads:\n%s", body)
+	}
+}
+
+// TestConsoleRead_ARowThatCannotTellIsNotARead: both halves come from the
+// row, and a row that does not say it was a read stays listed.
+func TestConsoleRead_ARowThatCannotTellIsNotARead(t *testing.T) {
+	for name, row := range map[string]capability.AuditRow{
+		"no kind":             {Verified: consoleActor},
+		"unknown kind":        {Kind: "something_new", Verified: consoleActor},
+		"read kind, raw argv": {Kind: audit.KindRead, RawExecArgv: []string{"/bin/true"}, Verified: consoleActor},
+		"read, not console": {Kind: audit.KindRead, OperationName: "list_nodes",
+			Verified: capability.VerifiedIdentity{AccountName: "x", Method: string(capability.AuthMethodAPIToken)}},
+		"read, no method": {Kind: audit.KindRead, OperationName: "list_nodes"},
+	} {
+		if consoleRead(row) {
+			t.Errorf("%s: treated as a Console-session read", name)
+		}
+	}
+	if !consoleRead(capability.AuditRow{Kind: audit.KindRead, OperationName: "list_nodes", Verified: consoleActor}) {
+		t.Error("a Console-session read is not recognised")
+	}
+}
+
+// TestAgents_AFilteredAccountWhoseCallsWereAllLeftOutSaysSo: under
+// ?account=, the sentence counts that Account's calls, and an empty feed
+// does not claim the Account has none.
+func TestAgents_AFilteredAccountWhoseCallsWereAllLeftOutSaysSo(t *testing.T) {
+	h := newTestHandler(consoleCallsDeps(), accounts.RoleAdmin)
+	body := contentOf(get(t, h, "/console/agents?account=mike").Body.String())
+
+	if !strings.Contains(body, "Reads made from this Console are left out: 3 of the 3 calls by <b>mike</b> on this page.") {
+		t.Errorf("the sentence does not give the filtered Account's count:\n%s", body)
+	}
+	if strings.Contains(body, "No calls on this page.") {
+		t.Error("the feed says the filtered Account has no calls on this page, and it has three")
+	}
+	if !strings.Contains(body, "This Account has no calls on this page other than reads made from this Console.") {
+		t.Errorf("the empty feed does not say why:\n%s", body)
+	}
+
+	agent := contentOf(get(t, h, "/console/agents?account=gleipnir-prod").Body.String())
+	if !strings.Contains(agent, "Reads made from this Console are left out. <a") {
+		t.Errorf("an Account with nothing left out is given a count:\n%s", agent)
+	}
+}
+
+// TestAgents_AnAllExcludedPageReadsCoherently: every call on the page is a
+// Console-session read and there are older calls. From top to bottom: the
+// rail and the sentence say what was left out, the feed says why it is
+// empty, and the page note says what the page holds rather than what it
+// shows.
+func TestAgents_AnAllExcludedPageReadsCoherently(t *testing.T) {
+	var rows []capability.AuditRow
+	for i := 0; i < 3; i++ {
+		rows = append(rows, capability.AuditRow{Kind: audit.KindRead, OperationName: "query_audit",
+			Timestamp: testNow.Add(-time.Duration(i) * time.Second), Verified: consoleActor})
+	}
+	d := renderableDeps()
+	d.Queries = &fakeQueries{rows: rows, auditNext: "c2"}
+	body := contentOf(get(t, newTestHandler(d, accounts.RoleAdmin), "/console/agents").Body.String())
+
+	order := []string{
+		"Every call on this page is a read made from this Console, and those are left out.",
+		"Reads made from this Console are left out: 3 of the 3 calls on this page.",
+		"No calls on this page other than reads made from this Console.",
+		"This page holds the most recent 200 calls. There are older calls.",
+		">Older<",
+	}
+	at := 0
+	for _, s := range order {
+		i := strings.Index(body[at:], s)
+		if i < 0 {
+			t.Fatalf("missing, or out of order: %q\n%s", s, body)
+		}
+		at += i
+	}
+	if strings.Contains(body, "Showing the most recent") {
+		t.Error("the page note claims to show calls it left out")
+	}
+}
+
+// countingAccounts counts every call into the Account registry seam.
+type countingAccounts struct{ calls int }
+
+func (c *countingAccounts) Accounts(context.Context, capability.Principal) ([]accounts.Account, error) {
+	c.calls++
+	return nil, nil
+}
+
+func (c *countingAccounts) Account(context.Context, capability.Principal, string) (accounts.Account, error) {
+	c.calls++
+	return accounts.Account{}, nil
+}
+
+func (c *countingAccounts) APITokens(context.Context, capability.Principal, string) ([]accounts.APIToken, error) {
+	c.calls++
+	return nil, nil
+}
+
+// TestAgents_NeverReadsTheAccountRegistry: the exclusion is read from the
+// record as written (#540), in every view of the screen.
+func TestAgents_NeverReadsTheAccountRegistry(t *testing.T) {
+	for _, path := range []string{
+		"/console/agents", "/console/agents?console=show",
+		"/console/agents?account=mike", "/console/agents?account=mike&console=show",
+	} {
+		reg := &countingAccounts{}
+		d := consoleCallsDeps()
+		d.Accounts = reg
+		if rec := get(t, newTestHandler(d, accounts.RoleAdmin), path); rec.Code != 200 {
+			t.Fatalf("%s: status %d", path, rec.Code)
+		}
+		if reg.calls != 0 {
+			t.Errorf("%s consulted the Account registry %d times", path, reg.calls)
 		}
 	}
 }

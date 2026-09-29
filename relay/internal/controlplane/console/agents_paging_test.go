@@ -166,7 +166,7 @@ func TestAgents_AnOlderPageDoesNotClaimToBeTheMostRecent(t *testing.T) {
 	// is the sentence this page must say — checked for
 	// the phrase page one uses to claim freshness, not the bare substring
 	// "most recent", which that very sentence also contains.
-	if strings.Contains(body, "Showing the most recent") {
+	if strings.Contains(body, "This page holds the most recent") {
 		t.Errorf("a page reached by following Older still claims to hold the most recent calls:\n%s", body)
 	}
 	if !strings.Contains(body, "not the most recent calls. This page was reached by following Older") {

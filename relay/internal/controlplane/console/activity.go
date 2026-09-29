@@ -1349,7 +1349,7 @@ slice of it. Pick a kind above, or <a href="{{.ResetHref}}">clear the filter</a>
         {{if .NodeHref}}<a href="{{.NodeHref}}"><code>{{.NodeID}}</code></a>{{end}}
         {{if and .JobHref (not .OpIsLink)}}<a href="{{.JobHref}}">Job <code>{{short .JobID}}</code></a>{{end}}
         {{with .ApprovalHref}}<a href="{{.}}">approval</a>{{end}}
-        {{with .GrantID}}<span class="grant" title="A Grant released this: a human approved a window that this Plan fell inside, not this Plan itself.">grant {{short .}}</span>{{end}}
+        {{with .GrantID}}<span class="grant" title="An Approval grant released this: a human approved a window that this plan fell inside, not this plan itself.">grant {{short .}}</span>{{end}}
       </div>
       {{if .Outcomes.Total}}{{template "outcome-bar" .Outcomes}}{{end}}
       {{if .LiveHandle}}<div class="evliveslot">
@@ -1400,18 +1400,18 @@ that included them would fill with the operator&#39;s own reloads. They are one 
 <a href="/console/activity?kind=read">kind=read</a>, and their home is
 <a href="{{.ReadsHref}}">Read egress</a>. Nothing is hidden.</p>
 
-<p class="gap"><b>Two row kinds cannot be shown here yet: enrollments and label changes.</b> The
+<p class="gap"><b>Two row kinds are not built here yet: enrollments and label changes.</b> The
 audit trail holds no record of either. An enrollment exists only on the live event stream, for a few
-minutes, and label management is not built. Splicing those few minutes into a feed you can scroll
+minutes (#444), and label management is not built (#430). Splicing those few minutes into a feed you can scroll
 back through would put rows on this screen that vanish as you read, which is worse than leaving them
 out.</p>
 
-<p class="gap"><b>The filter box carries no Selector and no Node.</b> The Job query has a field for
-neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
+<p class="gap"><b>The filter box carries no Selector and no Node.</b> Neither filter is built yet:
+the Job query has a field for neither. A Job spans its Selector&#39;s whole fan-out, so it has no single Node. A Node filter that
 narrowed only the other events would silently drop every dispatch row from the page.</p>
 
-<p class="gap"><b>Every reload is an audited read</b>, whether you use the reload button above or
-the browser&#39;s own.</p>
+<p class="gap"><b>Every reload is an audited read</b>, whether it comes from the reload button, which
+appears above the feed once new events have queued, or from the browser.</p>
 
 <p class="gap"><b>The chips above list every family this Relay records, including empty ones.</b>
 They carry no counts. Counting each family across the whole trail would take one query per family,

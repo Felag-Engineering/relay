@@ -103,7 +103,7 @@ func TestActivity_StandingNotesAreInOneClosedDisclosure(t *testing.T) {
 	mustBeStanding(t, inside, outside,
 		"Each page holds up to",
 		"The default feed leaves out the trail&#39;s own read records.",
-		"Two row kinds cannot be shown here yet: enrollments and label changes.",
+		"Two row kinds are not built here yet: enrollments and label changes.",
 		"The filter box carries no Selector and no Node.",
 		"The chips above list every family this Relay records, including empty ones.",
 	)

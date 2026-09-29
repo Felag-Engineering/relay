@@ -358,7 +358,7 @@ func pageNote(foldedCalls, foldedRows, pageSize int, older, scrolled bool) strin
 	case scrolled:
 		clause = "These are not the most recent calls. This page was reached by following Older."
 	case older:
-		clause = "Showing the most recent " + strconv.Itoa(pageSize) + " calls. There are older calls."
+		clause = "This page holds the most recent " + strconv.Itoa(pageSize) + " calls. There are older calls."
 	}
 	if foldedRows > 0 {
 		collapse := countOf(foldedCalls, "call", "calls") + " on this page are collapsed into " +
@@ -441,15 +441,16 @@ type agentsView struct {
 	// that constant ever changes.
 	RunningLimit int
 
-	// ShowConsole is ?console=show: calls made from a Console session are
+	// ShowConsole is ?console=show: reads made from a Console session are
 	// listed and counted, exactly as before that default existed. False is
-	// the default (spec 03, "Calls made from this Console").
+	// the default (spec 03, "Reads made from this Console").
 	ShowConsole bool
 
-	// ConsoleLeftOut is how many of the page's PageCalls calls the default
-	// left out. Counted over the whole fetched page, before ?account=
-	// narrows it, because it reconciles the page's own size: "12 of the 200
-	// calls on this page".
+	// ConsoleLeftOut is how many of PageCalls calls the default left out.
+	// Without ?account= both count the whole fetched page ("12 of the 200
+	// calls on this page"); with it, both count that Account's calls on the
+	// page, so the sentence and the empty feed describe what the operator
+	// filtered to rather than the page as a whole.
 	ConsoleLeftOut int
 	PageCalls      int
 
@@ -465,7 +466,7 @@ type agentsView struct {
 	Refresh Refresh
 }
 
-// consoleParam and consoleShow spell the one link that lists calls made
+// consoleParam and consoleShow spell the one link that lists reads made
 // from a Console session. Only the exact value shows them; anything else is
 // the default, which the page states beside the feed either way.
 const (
@@ -473,35 +474,63 @@ const (
 	consoleShow  = "show"
 )
 
-// madeFromConsole reports whether an audited call's identity was established
-// by a Console session, READ FROM THE RECORD AS WRITTEN: the verified lane's
-// Method is what the authentication boundary recorded when the call was made
-// (capability.AuthMethodConsoleSession), so no later change to an Account
-// can move a call in or out of this screen.
+// consoleRead reports whether the default leaves this call out (spec 03,
+// "Reads made from this Console" — a rule proposed in this change and
+// awaiting a human's review). BOTH halves must hold, and each is read from
+// the row as the lane returned it, never from anything else:
 //
-// It deliberately reads nothing else. Not the Account registry, and not the
-// Account's kind: #540's reasoning (spec 03, "Kind (machine or human) is not
-// on the rail") stands, and this rule does not depend on it — a call made
-// from a Console session is a person using this Console whatever kind of
-// Account they signed in with. And the method is never rendered: it decides
-// what is listed and nothing else (owner decision, 2026-09-29).
-func madeFromConsole(row capability.AuditRow) bool {
-	return capability.AuthMethod(row.Verified.Method) == capability.AuthMethodConsoleSession
+//   - made from a Console session: the verified lane's Method is what the
+//     authentication boundary recorded when the call was made
+//     (capability.AuthMethodConsoleSession). It proves a Console session
+//     cookie authenticated the call — not that a person was at the keyboard.
+//     A stolen cookie, or software driving an operator's browser, records
+//     the same thing, which is why only reads are ever left out.
+//   - a read: the record kind is audit.KindRead (the non-dispatching read
+//     tools this Console's own page loads are recorded as) AND riskOf — the
+//     one inference behind the risk chip the row renders — answers read.
+//     Where the row cannot tell, the answer is "not a read" and the call
+//     stays listed: a mutate, an approval decision, a Cancel, a refusal or a
+//     Preflight is never left out, whatever its method.
+//
+// Nothing here reads the Account registry or an Account's kind: #540's
+// reasoning (spec 03, "Kind (machine or human) is not on the rail") stands,
+// and this rule does not depend on it. The method is never rendered; it
+// decides what is listed and nothing else.
+func consoleRead(row capability.AuditRow) bool {
+	if capability.AuthMethod(row.Verified.Method) != capability.AuthMethodConsoleSession {
+		return false
+	}
+	if row.Kind != audit.KindRead {
+		return false
+	}
+	return riskOf(factsOfRow(row)) == jobs.RiskClassRead
 }
 
-// withoutConsoleCalls drops the page's Console-session calls, preserving
-// order, and reports how many it dropped. It is presentation over the page
-// the lane already returned, like collapseRuns: the query, its filter and
-// its page size are untouched, so no read is added or widened.
-func withoutConsoleCalls(rows []capability.AuditRow) ([]capability.AuditRow, int) {
-	out := make([]capability.AuditRow, 0, len(rows))
+// withoutConsoleReads drops the page's Console-session reads, preserving
+// order. It reports how many it dropped, and — for the ?account= view — how
+// many calls the named Account has on the page and how many of those it
+// dropped, naming Accounts exactly as buildAgents does (principalText).
+//
+// It is presentation over the page the lane already returned, like
+// collapseRuns: the query, its filter and its page size are untouched, so
+// no read is added or widened.
+func withoutConsoleReads(rows []capability.AuditRow, account string) (kept []capability.AuditRow, dropped, accountCalls, accountDropped int) {
+	kept = make([]capability.AuditRow, 0, len(rows))
 	for _, row := range rows {
-		if madeFromConsole(row) {
+		mine := account != "" && principalText(factsOfRow(row)) == account
+		if mine {
+			accountCalls++
+		}
+		if consoleRead(row) {
+			dropped++
+			if mine {
+				accountDropped++
+			}
 			continue
 		}
-		out = append(out, row)
+		kept = append(kept, row)
 	}
-	return out, len(rows) - len(out)
+	return kept, dropped, accountCalls, accountDropped
 }
 
 // agentsLink is the part of this screen's URL every link it draws carries:
@@ -591,15 +620,20 @@ func handleAgents(d Deps) http.HandlerFunc {
 			Account:     account,
 			Scrolled:    cursor != "",
 			ShowConsole: link.ShowConsole,
-			PageCalls:   len(pg.Rows),
 		}
-		// Calls made from a Console session are left out by default, over
-		// the page the lane returned (withoutConsoleCalls) — BEFORE
+		// Reads made from a Console session are left out by default, over
+		// the page the lane returned (withoutConsoleReads) — BEFORE
 		// buildAgents, so they are absent from the rail's membership and
 		// every rail counter as well as from the feed.
 		rows := pg.Rows
+		pageDropped := 0
 		if !link.ShowConsole {
-			rows, v.ConsoleLeftOut = withoutConsoleCalls(rows)
+			var accountCalls, accountDropped int
+			rows, pageDropped, accountCalls, accountDropped = withoutConsoleReads(rows, account)
+			v.ConsoleLeftOut, v.PageCalls = pageDropped, len(pg.Rows)
+			if account != "" {
+				v.ConsoleLeftOut, v.PageCalls = accountDropped, accountCalls
+			}
 		}
 		toggle := link
 		toggle.ShowConsole = !link.ShowConsole
@@ -674,12 +708,12 @@ func handleAgents(d Deps) http.HandlerFunc {
 		// operator did. Done here, beside the Running override, for the same
 		// reason: railNote's CONTRACT and its pinned sentences stay as they
 		// are.
-		if v.ConsoleLeftOut > 0 {
+		if pageDropped > 0 {
 			switch {
 			case v.RailNote == railNote(0, 0, v.Scrolled):
-				v.RailNote = "Every call on this page was made from this Console, and those are left out."
+				v.RailNote = "Every call on this page is a read made from this Console, and those are left out."
 			case v.RailNote != "":
-				v.RailNote += " Calls made from this Console are not counted."
+				v.RailNote += " Reads made from this Console are not counted."
 			}
 		}
 
@@ -1428,8 +1462,8 @@ func timeSince(t, now time.Time) string {
 }
 
 var agentsTmpl = newScreen("agents", `
-<p class="lede">Calls made to the Relay from outside this Console, as the Relay received them. An
-AI-agent&#39;s calls arrive this way, and so does a person&#39;s call through MCP or the Control API.
+<p class="lede">Calls made to the Relay, as the Relay received them, apart from reads made from this
+Console. An AI-agent&#39;s calls arrive over MCP or the Control API, and so does a person&#39;s.
 This screen shows the <b>request</b> and never the reasoning. The Relay sees tool calls, not
 intent, and an account of <em>why</em> is exactly what an AI-agent under prompt injection would
 fabricate.</p>
@@ -1455,9 +1489,9 @@ fabricate.</p>
 
   <div class="agentfeed">
     <p class="scoped consolecalls">{{if .ShowConsole -}}
-      Calls made from this Console are shown. <a href="{{.ConsoleToggleHref}}">Leave them out</a>.
+      Reads made from this Console are shown. <a href="{{.ConsoleToggleHref}}">Leave them out</a>.
     {{- else -}}
-      Calls made from this Console are left out{{if .ConsoleLeftOut}}: {{.ConsoleLeftOut}} of the {{.PageCalls}} {{plural .PageCalls "call" "calls"}} on this page{{end}}. <a href="{{.ConsoleToggleHref}}">Show them</a>.
+      Reads made from this Console are left out{{if .ConsoleLeftOut}}: {{.ConsoleLeftOut}} of the {{.PageCalls}} {{plural .PageCalls "call" "calls"}}{{with .Account}} by <b>{{.}}</b>{{end}} on this page{{end}}. <a href="{{.ConsoleToggleHref}}">Show them</a>.
     {{- end}}</p>
     {{if .Account}}<p class="scoped">Showing <b>{{.Account}}</b> only. <a href="{{.AllAccountsHref}}">Show every Account</a>.</p>{{end}}
     {{if .Running}}
@@ -1512,7 +1546,7 @@ fabricate.</p>
       </div>
     </article>
     {{else}}
-    <p class="dim">{{if and .ConsoleLeftOut (not .Account)}}No calls on this page other than calls made from this Console.{{else}}No calls on this page.{{end}}</p>
+    <p class="dim">{{if .ConsoleLeftOut}}{{if .Account}}This Account has no calls on this page other than reads made from this Console.{{else}}No calls on this page other than reads made from this Console.{{end}}{{else}}No calls on this page.{{end}}</p>
     {{end}}
     {{if .PageNote}}
     <p class="gap">{{.PageNote}}{{if .Scrolled}} <a href="{{.NewestHref}}">Newest</a>{{if .Older}} · <a href="{{.OlderHref}}">Older</a>{{end}}.{{else if .Older}} <a href="{{.OlderHref}}">Older</a>.{{end}}</p>
@@ -1528,7 +1562,7 @@ fabricate.</p>
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>Every Refresh is an audited read</b>, and like every call made from this Console it
-is left out of this screen unless you show those calls.</p>
+<p class="gap"><b>Every Refresh is an audited read</b>, and like every read made from this Console it
+is left out of this screen unless you show those reads.</p>
 </details>
 `)

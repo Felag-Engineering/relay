@@ -270,9 +270,14 @@ func handleApprovals(d Deps) http.HandlerFunc {
 			renderScreen(w, p, approvalsTmpl, approvalsView{})
 			return
 		}
-		// The queue's trail reads (the Scope lines a Grant row carries) go
-		// through the latch, so a queue whose reads cannot be audited is not
-		// served — one rule, no per-screen exception (screen.go).
+		// The queue makes NO read through the audited lane today: the pending
+		// Requests and the live Approval grants below (the Scope lines a
+		// grant row carries) come from d.Approvals, whose methods write no
+		// read record, so neither this page nor a Refresh of it is audited.
+		// That is a known gap, #779, and the screen says so beside Refresh.
+		// The latch is still applied so that any read-lane call added here
+		// later is refused when it cannot be audited, the rule every other
+		// screen follows (screen.go).
 		d, lane := latched(d)
 		ctx := r.Context()
 		reqs, err := d.Approvals.PendingApprovals(ctx)
@@ -1715,6 +1720,7 @@ var approvalsTmpl = newScreen("approvals", `
 <p class="dim">The approval queue is not wired into this Console.</p>
 {{else}}
 {{template "refresh" .Refresh}}
+<p class="refreshlimit">Reloading this queue is not recorded on the audit trail; that is a known gap (#779).</p>
 {{if not .Count}}
 <div class="empty">
   <h2>Nothing is waiting.</h2>
@@ -1790,9 +1796,10 @@ Control API.</p>
 
 <details class="about">
 <summary>About this screen</summary>
-<p class="gap"><b>Reloading this queue is not recorded on the audit trail</b>: the pending requests
-are read without writing a read record, so Refresh adds nothing to it, although opening a request
-is recorded.</p>
+<p class="gap"><b>Why reloading this queue leaves no record.</b> The pending requests and the live
+Approval grants are read through methods that write no read record, so neither opening this queue
+nor a Refresh adds anything to the audit trail. Opening one request is recorded. This is a known
+gap, tracked in #779.</p>
 </details>
 {{end}}
 `)
@@ -1861,7 +1868,7 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
   <h3>The Scope</h3>
   {{if .Grant.LegacyNamespacePin}}
   <p class="note"><b>This Grant covers nothing.</b> It was stored before namespace pinning was
-  removed from a Scope, and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
+  removed from a Scope (#482), and carries a retired pin (<code>{{.Grant.LegacyNamespacePin}}</code>).
   Ignoring the pin would widen what it covers, so approving it releases no dispatch; revoke it to
   close it for the record.</p>
   {{else}}
@@ -2007,8 +2014,8 @@ Relay.</p><p><a href="/console/approvals">Back to the queue</a>.</p></div>
     <p class="gap"><b>This Console does not decide a Grant.</b> {{if .GrantUnreadable}}The Grant store
     could not be read, so this Console cannot tell whether this Request authorizes a Scope or a single
     Plan, and will not decide either while that is unknown.{{else}}This Request authorizes a Scope, not
-    one Plan. A Grant's Scope must be expanded at least once before it is approved, and this Console
-    does not enforce that yet.{{end}} Answer it through the Control API.</p>
+    one Plan. An Approval grant's Scope must be expanded at least once before it is approved, and this
+    Console does not enforce that yet.{{end}} Answer it through the Control API.</p>
     {{else if .DecideSeamsUnwired}}
     <p class="gap"><b>Deciding is not wired into this Relay's Console.</b> Answer through the Control
     API's decision endpoint instead — the same code path, and the one that always decides.</p>

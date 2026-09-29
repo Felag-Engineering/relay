@@ -144,10 +144,26 @@ func TestRefresh_TheDisclosureSaysWhetherAReloadIsAudited(t *testing.T) {
 	for path, note := range map[string]string{
 		"/console/agents":    "<b>Every Refresh is an audited read</b>",
 		"/console/activity":  "<b>Every reload is an audited read</b>",
-		"/console/approvals": "<b>Reloading this queue is not recorded on the audit trail</b>",
+		"/console/approvals": "<b>Why reloading this queue leaves no record.</b>",
 	} {
 		inside, outside := splitAbout(t, get(t, h, path).Body.String())
 		mustBeStanding(t, inside, outside, note)
+	}
+}
+
+// TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh: the limit is a
+// security property, so it is visible beside the control, not only in the
+// disclosure (00-foundations.md; #779).
+func TestRefresh_TheQueueStatesItsUnauditedReadBesideRefresh(t *testing.T) {
+	d, _ := refreshScreens()
+	for name, fa := range map[string]*fakeApprovals{"empty": {}, "populated": d.Approvals.(*fakeApprovals)} {
+		d.Approvals = fa
+		body := get(t, newTestHandler(d, accounts.RoleAdmin), "/console/approvals").Body.String()
+		mustBeSituational(t, body, "Reloading this queue is not recorded on the audit trail; that is a known gap (#779).")
+		content := contentOf(body)
+		if strings.Index(content, "refreshlimit") < strings.Index(content, "refreshbtn") {
+			t.Errorf("%s: the sentence is not beside the Refresh control", name)
+		}
 	}
 }
 
