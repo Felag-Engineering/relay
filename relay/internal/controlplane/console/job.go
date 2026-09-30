@@ -296,10 +296,13 @@ type jobView struct {
 	State   string
 
 	Operation string
-	Args      string
-	Risk      string
-	RiskClass jobs.RiskClass
-	ReadClass bool
+	// RawExecTier is set only from the recorded ActionKind through
+	// jobRowName, never from a name — the same rule as activityRow.
+	RawExecTier bool
+	Args        string
+	Risk        string
+	RiskClass   jobs.RiskClass
+	ReadClass   bool
 
 	Principal  string
 	Verified   bool
@@ -574,11 +577,10 @@ func renderMissingJob(w http.ResponseWriter, pg Page, jobID string) {
 
 func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capability.Principal, role accounts.Role, csrfToken string, sum capability.JobSummary) jobView {
 	v := jobView{
-		Found:     true,
-		ID:        sum.JobID,
-		Created:   sum.CreatedAt,
-		State:     jobStateText(sum.State),
-		Operation: jobOperationText(sum.OperationName, sum.ActionKind),
+		Found:   true,
+		ID:      sum.JobID,
+		Created: sum.CreatedAt,
+		State:   jobStateText(sum.State),
 		// The DECLARED class, from tasks.risk_class — not this package's
 		// name-list inference. A Template Operation the Console has never
 		// heard of is still classified by the catalog that dispatched it.
@@ -593,6 +595,7 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		Bar:            barFrom(sum.Counts),
 		CancelledCount: sum.Counts[jobs.OutcomeCancelled],
 	}
+	v.Operation, v.RawExecTier = jobRowName(sum)
 
 	if sum.Requester == "" {
 		// The chip below falls back to the dispatch record's principal, which
@@ -634,7 +637,12 @@ func buildJobView(ctx context.Context, d Deps, r *http.Request, caller capabilit
 		v.ApprovalID = row.ApprovalID
 		v.GrantID = row.GrantID
 		if v.Operation == "" {
-			v.Operation = row.OperationName
+			// Not Raw Exec here: that would already have filled v.Operation.
+			// A Job whose summary is unspecified but whose dispatch record is
+			// really Raw Exec reads "dispatch" with no chip, as it was blank before.
+			fb := sum
+			fb.OperationName = row.OperationName
+			v.Operation, v.RawExecTier = jobRowName(fb)
 		}
 		// JobSummary.Requester is the VERIFIED lane only. A principal with no
 		// Account renders blank rather than "unattributed" unless the trail's
@@ -1072,7 +1080,9 @@ func jobStateText(st jobs.JobState) string {
 	return "complete"
 }
 
-// jobOperationText names what ran. Raw Exec has no Operation name by
+// jobOperationText names what ran. It is kept for the Agents screen alone
+// (deleted with it in #787) and does not guard the tier against an Operation
+// named raw_exec; Job detail uses jobRowName. Raw Exec has no Operation name by
 // definition, and the ActionKind is how the Job knows it was one.
 func jobOperationText(name string, kind jobs.ActionKind) string {
 	if name != "" {
@@ -1093,7 +1103,8 @@ var jobTmpl = newScreen("job", `
 <section class="jobhead">
   <div class="jhrow">
     <span class="chip risk" data-risk="{{.Risk}}">{{.Risk}}</span>
-    <code class="jobop">{{.Operation}}</code>
+    {{if .RawExecTier}}<span class="chip" data-tier="raw_exec">Raw Exec</span>{{end}}
+    {{if .Operation}}<code class="jobop">{{.Operation}}</code>{{else}}<span class="dim">dispatch</span>{{end}}
     {{with .Args}}<span class="mono dim">{{.}}</span>{{end}}
   </div>
   <div class="jhrow">
